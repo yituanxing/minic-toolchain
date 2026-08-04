@@ -47,3 +47,6 @@ run_case arithmetic_precedence 7 arithmetic -DCASE=1
 run_case arithmetic_parentheses 10 arithmetic -DCASE=2
 run_case arithmetic_divrem 8 arithmetic -DCASE=3
 run_case arithmetic_unary 9 arithmetic -DCASE=4
+run_case local_init 7 locals -DCASE=1
+run_case local_assign 11 locals -DCASE=2
+run_case local_reassign 15 locals -DCASE=3
