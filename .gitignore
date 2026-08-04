@@ -1,0 +1,48 @@
+# Build outputs
+/build/
+
+# Native objects and libraries
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+
+# Generated compiler outputs
+*.s
+*.i
+*.ii
+*.bc
+
+# Coverage and profiling
+*.gcda
+*.gcno
+*.gcov
+*.profraw
+*.profdata
+
+# Sanitizer, test, and benchmark artifacts
+*.log
+*.tmp
+*.trace
+*.time
+
+# Python oracle caches and environments
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Editor and operating-system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*~
+*.swp
+
+# Large workload corpora and local evidence
+/corpus/
+/evidence/
+/workloads/local/
