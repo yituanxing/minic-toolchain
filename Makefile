@@ -8,6 +8,9 @@ MODE          ?= debug
 BUILD_DIR     ?= build/$(MODE)
 CC            ?= cc
 AR            ?= ar
+RISCV_CC      ?= riscv64-buildroot-linux-musl-gcc
+QEMU_RISCV64  ?= qemu-riscv64
+REQUIRE_RISCV_RUNTIME ?= 0
 
 CPPFLAGS      ?=
 CFLAGS        ?=
@@ -84,7 +87,6 @@ check: check-fast
 
 check-c0-runtime: $(MINIC_BINARY)
 	MINIC="$(abspath $(MINIC_BINARY))" \
-	HOST_CC="$(CC)" \
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
 	RISCV_CC="$(RISCV_CC)" \
 	QEMU_RISCV64="$(QEMU_RISCV64)" \
@@ -113,6 +115,9 @@ print-config:
 		"BUILD_DIR=$(BUILD_DIR)" \
 		"CC=$(CC)" \
 		"AR=$(AR)" \
+		"RISCV_CC=$(RISCV_CC)" \
+		"QEMU_RISCV64=$(QEMU_RISCV64)" \
+		"REQUIRE_RISCV_RUNTIME=$(REQUIRE_RISCV_RUNTIME)" \
 		"CPPFLAGS=$(CPPFLAGS)" \
 		"MINIC_CFLAGS=$(MINIC_CFLAGS)" \
 		"MINIC_LDFLAGS=$(MINIC_LDFLAGS)" \
