@@ -17,6 +17,7 @@ COMMON_WARNINGS := \
 	-Wall \
 	-Wextra \
 	-Wpedantic \
+	-Wconversion \
 	-Wshadow \
 	-Wstrict-prototypes \
 	-Wmissing-prototypes
@@ -35,52 +36,75 @@ endif
 MINIC_CFLAGS  := -std=c11 $(COMMON_WARNINGS) $(MODE_CFLAGS) $(CFLAGS)
 MINIC_LDFLAGS := $(MODE_LDFLAGS) $(LDFLAGS)
 
-.PHONY: all help prepare check check-fast sanitize bootstrap bootstrap-compare \
-	format format-check clean distclean print-config
+MINIC_SOURCES := \
+	src/compiler/compiler.c \
+	tools/minic/main.c
+MINIC_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINIC_SOURCES))
+MINIC_BINARY  := $(BUILD_DIR)/bin/minic
 
-all: prepare
-	@printf '%s\n' "MiniC repository initialized; production C sources are not imported yet."
-	@printf '%s\n' "Run 'make help' to list the stable entry points."
+.PHONY: all help prepare check check-fast check-c0-runtime sanitize \
+	bootstrap bootstrap-compare format format-check clean distclean print-config
+
+all: $(MINIC_BINARY)
 
 help:
 	@printf '%s\n' \
 		"MiniC Toolchain build targets:" \
-		"  make                 Prepare the selected build directory" \
-		"  make check-fast      Run the fast pre-commit gate" \
-		"  make check           Run the normal test gate" \
-		"  make sanitize        Run checks with ASan and UBSan" \
-		"  make bootstrap       Build the staged bootstrap pipeline" \
+		"  make                    Build the active MiniC compiler" \
+		"  make check-fast         Build and run the C0 compiler gate" \
+		"  make check              Run the normal test gate" \
+		"  make check-c0-runtime   Use external RISC-V GCC and QEMU when available" \
+		"  make sanitize           Run checks with ASan and UBSan" \
+		"  make bootstrap          Build the staged bootstrap pipeline" \
 		"  make bootstrap-compare  Compare bootstrap stages" \
-		"  make format          Format supported source files" \
-		"  make format-check    Verify formatting without changes" \
-		"  make print-config    Print the active toolchain configuration" \
-		"  make clean           Remove the active build directory" \
-		"  make distclean       Remove all generated build directories"
+		"  make format             Format supported source files" \
+		"  make format-check       Verify formatting without changes" \
+		"  make print-config       Print the active toolchain configuration" \
+		"  make clean              Remove the active build directory" \
+		"  make distclean          Remove all generated build directories"
 
 prepare:
 	@mkdir -p "$(BUILD_DIR)"
-	@printf '%s\n' "$(PROJECT) $(MODE) build directory: $(BUILD_DIR)"
 
-check-fast: prepare
-	@printf '%s\n' "check-fast: no production sources imported yet"
+$(BUILD_DIR)/obj/%.o: %.c
+	@mkdir -p "$(dir $@)"
+	$(CC) $(CPPFLAGS) -Iinclude $(MINIC_CFLAGS) -MMD -MP -c "$<" -o "$@"
+
+$(MINIC_BINARY): $(MINIC_OBJECTS)
+	@mkdir -p "$(dir $@)"
+	$(CC) $(MINIC_OBJECTS) $(MINIC_LDFLAGS) -o "$@"
+
+check-fast: $(MINIC_BINARY)
+	MINIC="$(abspath $(MINIC_BINARY))" \
+	HOST_CC="$(CC)" \
+	BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/compiler/c0/run.sh
 
 check: check-fast
-	@printf '%s\n' "check: no extended test suites imported yet"
+
+check-c0-runtime: $(MINIC_BINARY)
+	MINIC="$(abspath $(MINIC_BINARY))" \
+	HOST_CC="$(CC)" \
+	BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	RISCV_CC="$(RISCV_CC)" \
+	QEMU_RISCV64="$(QEMU_RISCV64)" \
+	REQUIRE_RISCV_RUNTIME="$(REQUIRE_RISCV_RUNTIME)" \
+	sh tests/compiler/c0/run-runtime.sh
 
 sanitize:
 	@$(MAKE) MODE=sanitize check
 
-bootstrap: prepare
-	@printf '%s\n' "bootstrap: pending import of the validated Python oracle and C implementation"
+bootstrap: $(MINIC_BINARY)
+	@printf '%s\n' "bootstrap: deferred until the compiler capability ladder reaches its source profile"
 
 bootstrap-compare: bootstrap
-	@printf '%s\n' "bootstrap-compare: pending staged compiler outputs"
+	@printf '%s\n' "bootstrap-compare: no bootstrap stages exist yet"
 
 format:
-	@printf '%s\n' "format: formatter policy will be added with the first production C source"
+	@printf '%s\n' "format: formatter policy is not automated yet"
 
 format-check:
-	@printf '%s\n' "format-check: formatter policy will be added with the first production C source"
+	@printf '%s\n' "format-check: formatter policy is not automated yet"
 
 print-config:
 	@printf '%s\n' \
@@ -91,10 +115,13 @@ print-config:
 		"AR=$(AR)" \
 		"CPPFLAGS=$(CPPFLAGS)" \
 		"MINIC_CFLAGS=$(MINIC_CFLAGS)" \
-		"MINIC_LDFLAGS=$(MINIC_LDFLAGS)"
+		"MINIC_LDFLAGS=$(MINIC_LDFLAGS)" \
+		"MINIC_BINARY=$(MINIC_BINARY)"
 
 clean:
 	@rm -rf "$(BUILD_DIR)"
 
 distclean:
 	@rm -rf build
+
+-include $(MINIC_OBJECTS:.o=.d)
