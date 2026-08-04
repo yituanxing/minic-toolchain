@@ -414,11 +414,115 @@ static bool minic_parser_parse_additive(
     return true;
 }
 
+static bool minic_parser_parse_relational(
+    MinicParser *parser,
+    MinicExpressionId *expression_id)
+{
+    MinicExpressionId left;
+
+    if (!minic_parser_parse_additive(parser, &left)) {
+        return false;
+    }
+    while (parser->current.kind == MINIC_TOKEN_LESS ||
+           parser->current.kind == MINIC_TOKEN_LESS_EQUAL ||
+           parser->current.kind == MINIC_TOKEN_GREATER ||
+           parser->current.kind == MINIC_TOKEN_GREATER_EQUAL) {
+        MinicTokenKind operator_kind;
+        MinicExpression expression;
+        MinicExpressionId right;
+        const MinicExpression *left_expression;
+        const MinicExpression *right_expression;
+
+        operator_kind = parser->current.kind;
+        if (!minic_parser_advance(parser) ||
+            !minic_parser_parse_additive(parser, &right)) {
+            return false;
+        }
+        left_expression = minic_c0_program_expression(parser->program, left);
+        right_expression = minic_c0_program_expression(parser->program, right);
+        if (left_expression == NULL || right_expression == NULL) {
+            minic_parser_set_diagnostic(parser, "invalid comparison operand");
+            return false;
+        }
+        expression.kind = MINIC_EXPRESSION_BINARY;
+        expression.span.begin = left_expression->span.begin;
+        expression.span.end = right_expression->span.end;
+        expression.value.binary.left = left;
+        expression.value.binary.right = right;
+        switch (operator_kind) {
+        case MINIC_TOKEN_LESS:
+            expression.value.binary.operator_kind = MINIC_BINARY_LESS;
+            break;
+        case MINIC_TOKEN_LESS_EQUAL:
+            expression.value.binary.operator_kind = MINIC_BINARY_LESS_EQUAL;
+            break;
+        case MINIC_TOKEN_GREATER:
+            expression.value.binary.operator_kind = MINIC_BINARY_GREATER;
+            break;
+        case MINIC_TOKEN_GREATER_EQUAL:
+            expression.value.binary.operator_kind = MINIC_BINARY_GREATER_EQUAL;
+            break;
+        default:
+            return false;
+        }
+        if (!minic_parser_add_expression(parser, &expression, &left)) {
+            return false;
+        }
+    }
+    *expression_id = left;
+    return true;
+}
+
+static bool minic_parser_parse_equality(
+    MinicParser *parser,
+    MinicExpressionId *expression_id)
+{
+    MinicExpressionId left;
+
+    if (!minic_parser_parse_relational(parser, &left)) {
+        return false;
+    }
+    while (parser->current.kind == MINIC_TOKEN_EQUAL_EQUAL ||
+           parser->current.kind == MINIC_TOKEN_BANG_EQUAL) {
+        MinicTokenKind operator_kind;
+        MinicExpression expression;
+        MinicExpressionId right;
+        const MinicExpression *left_expression;
+        const MinicExpression *right_expression;
+
+        operator_kind = parser->current.kind;
+        if (!minic_parser_advance(parser) ||
+            !minic_parser_parse_relational(parser, &right)) {
+            return false;
+        }
+        left_expression = minic_c0_program_expression(parser->program, left);
+        right_expression = minic_c0_program_expression(parser->program, right);
+        if (left_expression == NULL || right_expression == NULL) {
+            minic_parser_set_diagnostic(parser, "invalid equality operand");
+            return false;
+        }
+        expression.kind = MINIC_EXPRESSION_BINARY;
+        expression.span.begin = left_expression->span.begin;
+        expression.span.end = right_expression->span.end;
+        expression.value.binary.operator_kind =
+            operator_kind == MINIC_TOKEN_EQUAL_EQUAL
+                ? MINIC_BINARY_EQUAL
+                : MINIC_BINARY_NOT_EQUAL;
+        expression.value.binary.left = left;
+        expression.value.binary.right = right;
+        if (!minic_parser_add_expression(parser, &expression, &left)) {
+            return false;
+        }
+    }
+    *expression_id = left;
+    return true;
+}
+
 static bool minic_parser_parse_expression(
     MinicParser *parser,
     MinicExpressionId *expression_id)
 {
-    return minic_parser_parse_additive(parser, expression_id);
+    return minic_parser_parse_equality(parser, expression_id);
 }
 
 static bool minic_parser_parse_declaration(MinicParser *parser)
