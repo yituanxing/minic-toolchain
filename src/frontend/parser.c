@@ -273,7 +273,8 @@ static bool minic_parser_parse_unary(
     const MinicExpression *operand_expression;
 
     if (parser->current.kind != MINIC_TOKEN_PLUS &&
-        parser->current.kind != MINIC_TOKEN_MINUS) {
+        parser->current.kind != MINIC_TOKEN_MINUS &&
+        parser->current.kind != MINIC_TOKEN_BANG) {
         return minic_parser_parse_primary(parser, expression_id);
     }
 
@@ -293,10 +294,13 @@ static bool minic_parser_parse_unary(
     expression.kind = MINIC_EXPRESSION_UNARY;
     expression.span.begin = operator_token.span.begin;
     expression.span.end = operand_expression->span.end;
-    expression.value.unary.operator_kind =
-        operator_token.kind == MINIC_TOKEN_PLUS
-            ? MINIC_UNARY_PLUS
-            : MINIC_UNARY_NEGATE;
+    if (operator_token.kind == MINIC_TOKEN_PLUS) {
+        expression.value.unary.operator_kind = MINIC_UNARY_PLUS;
+    } else if (operator_token.kind == MINIC_TOKEN_MINUS) {
+        expression.value.unary.operator_kind = MINIC_UNARY_NEGATE;
+    } else {
+        expression.value.unary.operator_kind = MINIC_UNARY_LOGICAL_NOT;
+    }
     expression.value.unary.operand = operand;
     return minic_parser_add_expression(
         parser,
