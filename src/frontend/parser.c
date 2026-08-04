@@ -421,6 +421,75 @@ static bool parse_assignment(MinicParser *parser)
            add_statement(parser, &statement);
 }
 
+static bool parse_statement(
+    MinicParser *parser,
+    bool allow_declaration);
+
+static bool parse_branch(
+    MinicParser *parser,
+    MinicBlockId *block_id)
+{
+    MinicBlockId parent_block;
+    bool success;
+
+    parent_block = parser->current_block;
+    if (!minic_c0_program_add_block(parser->program, block_id)) {
+        parser_error(parser, "out of memory while adding branch block");
+        return false;
+    }
+    parser->current_block = *block_id;
+
+    if (parser->current.kind == MINIC_TOKEN_LBRACE) {
+        success = parser_advance(parser);
+        while (success && parser->current.kind != MINIC_TOKEN_RBRACE) {
+            if (parser->current.kind == MINIC_TOKEN_EOF) {
+                parser_error(parser, "expected '}' before end of file");
+                success = false;
+                break;
+            }
+            success = parse_statement(parser, false);
+        }
+        if (success) {
+            success = parser_expect(
+                parser,
+                MINIC_TOKEN_RBRACE,
+                "expected '}'");
+        }
+    } else {
+        success = parse_statement(parser, false);
+    }
+
+    parser->current_block = parent_block;
+    return success;
+}
+
+static bool parse_if(MinicParser *parser)
+{
+    MinicStatement statement;
+
+    (void)memset(&statement, 0, sizeof(statement));
+    statement.kind = MINIC_STATEMENT_IF;
+    statement.span.begin = parser->current.span.begin;
+    statement.local_id = MINIC_LOCAL_INVALID;
+    statement.else_block = MINIC_BLOCK_INVALID;
+
+    if (!parser_advance(parser) ||
+        !parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '('") ||
+        !parse_expression(parser, &statement.expression, 0U) ||
+        !parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')'") ||
+        !parse_branch(parser, &statement.then_block)) {
+        return false;
+    }
+    if (parser->current.kind == MINIC_TOKEN_KW_ELSE) {
+        if (!parser_advance(parser) ||
+            !parse_branch(parser, &statement.else_block)) {
+            return false;
+        }
+    }
+    statement.span.end = parser->current.span.begin;
+    return add_statement(parser, &statement);
+}
+
 static bool parse_return(MinicParser *parser)
 {
     MinicStatement statement;
@@ -463,9 +532,20 @@ static bool add_default_return(MinicParser *parser)
     return add_statement(parser, &statement);
 }
 
-static bool parse_statement(MinicParser *parser)
+static bool parse_statement(
+    MinicParser *parser,
+    bool allow_declaration)
 {
+    if (parser->current.kind == MINIC_TOKEN_KW_IF) {
+        return parse_if(parser);
+    }
     if (parser->current.kind == MINIC_TOKEN_KW_INT) {
+        if (!allow_declaration) {
+            parser_error(
+                parser,
+                "declarations inside branch blocks are not supported yet");
+            return false;
+        }
         return parse_declaration(parser);
     }
     if (parser->current.kind == MINIC_TOKEN_KW_RETURN) {
@@ -474,7 +554,9 @@ static bool parse_statement(MinicParser *parser)
     if (parser->current.kind == MINIC_TOKEN_IDENTIFIER) {
         return parse_assignment(parser);
     }
-    parser_error(parser, "expected declaration, assignment, return, or '}'");
+    parser_error(
+        parser,
+        "expected if, declaration, assignment, return, or '}'");
     return false;
 }
 
@@ -522,7 +604,7 @@ bool minic_parse_c0_program(
     parser.current_block = program->body_block;
 
     while (parser.current.kind != MINIC_TOKEN_RBRACE) {
-        if (!parse_statement(&parser)) {
+        if (!parse_statement(&parser, true)) {
             return false;
         }
     }
