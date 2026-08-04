@@ -83,15 +83,16 @@ static int test_c0_sequence(void)
     return 0;
 }
 
-static int test_arithmetic_operators(void)
+static int test_operator_sequence(void)
 {
-    static const char source[] = "+ - * / %";
+    static const char source[] = "+ - * / % =";
     static const MinicTokenKind expected[] = {
         MINIC_TOKEN_PLUS,
         MINIC_TOKEN_MINUS,
         MINIC_TOKEN_STAR,
         MINIC_TOKEN_SLASH,
         MINIC_TOKEN_PERCENT,
+        MINIC_TOKEN_EQUAL,
         MINIC_TOKEN_EOF
     };
     MinicLexer lexer;
@@ -101,7 +102,7 @@ static int test_arithmetic_operators(void)
     for (index = 0U; index < sizeof(expected) / sizeof(expected[0]); ++index) {
         size_t column;
 
-        column = index < 5U ? index * 2U + 1U : 10U;
+        column = index < 6U ? index * 2U + 1U : 12U;
         if (expect_token(&lexer, expected[index], 1U, column) != 0) {
             return 1;
         }
@@ -154,7 +155,7 @@ static int test_invalid_character(void)
 int main(void)
 {
     if (test_c0_sequence() != 0 ||
-        test_arithmetic_operators() != 0 ||
+        test_operator_sequence() != 0 ||
         test_keyword_boundaries() != 0 ||
         test_invalid_character() != 0) {
         return 1;
