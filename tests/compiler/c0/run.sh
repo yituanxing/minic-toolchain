@@ -18,9 +18,29 @@ compile_case() {
     printf '%s\n' "PASS compiler/c0/$name"
 }
 
+compile_arithmetic_case() {
+    name=$1
+    case_number=$2
+    shift 2
+
+    "$host_cc" -E -P -x c -DCASE="$case_number" \
+        "$root/tests/compiler/c0/arithmetic.c" -o "$work/$name.i"
+    "$minic" -S "$work/$name.i" -o "$work/$name.s"
+    for instruction in "$@"; do
+        grep -F "  $instruction" "$work/$name.s" >/dev/null
+    done
+    printf '%s\n' "PASS compiler/c0/$name"
+}
+
 compile_case empty_main return_0
 compile_case return_0 return_0
 compile_case return_42 return_42
+
+compile_arithmetic_case arithmetic_precedence 1 "mulw a0, t0, a0" "addw a0, t0, a0"
+compile_arithmetic_case arithmetic_parentheses 2 "subw a0, t0, a0" "mulw a0, t0, a0"
+compile_arithmetic_case arithmetic_divrem 3 \
+    "divw a0, t0, a0" "remw a0, t0, a0" "addw a0, t0, a0"
+compile_arithmetic_case arithmetic_unary 4 "negw a0, a0" "addw a0, t0, a0"
 
 "$host_cc" -E -P -x c "$root/tests/compiler/c0/invalid_return.c" -o "$work/invalid_return.i"
 if "$minic" -S "$work/invalid_return.i" -o "$work/invalid_return.s" \
@@ -28,5 +48,5 @@ if "$minic" -S "$work/invalid_return.i" -o "$work/invalid_return.s" \
     printf '%s\n' "FAIL compiler/c0/invalid_return: compilation unexpectedly succeeded" >&2
     exit 1
 fi
-grep -F "expected decimal integer constant" "$work/invalid_return.stderr" >/dev/null
+grep -F "expected expression" "$work/invalid_return.stderr" >/dev/null
 printf '%s\n' "PASS compiler/c0/invalid_return"
