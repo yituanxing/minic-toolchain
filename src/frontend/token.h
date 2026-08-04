@@ -36,6 +36,7 @@ typedef enum MinicTokenKind {
     MINIC_TOKEN_STAR,
     MINIC_TOKEN_SLASH,
     MINIC_TOKEN_PERCENT,
+    MINIC_TOKEN_EQUAL,
     MINIC_TOKEN_KIND_COUNT
 } MinicTokenKind;
 
