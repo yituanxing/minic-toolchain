@@ -1,0 +1,15 @@
+<subsystem>: <concise English action>
+
+Explain what changed and why. Describe the affected behavior, ownership,
+invariants, architecture boundary, or algorithm choice when relevant.
+
+中文说明：
+说明修改内容和原因。必要时说明受影响的行为、所有权、不变量、
+架构边界或算法选择。
+
+Validation / 验证：
+- <command or gate>: PASS | FAIL | NOT RUN (<reason>)
+
+Deviation / 架构偏离：
+- None / 无
+# Or reference: DEV-0001
