@@ -123,10 +123,15 @@ static bool minic_riscv64_emit_expression(
                 expression->value.unary.operand)) {
             return false;
         }
-        if (expression->value.unary.operator_kind == MINIC_UNARY_NEGATE) {
+        switch (expression->value.unary.operator_kind) {
+        case MINIC_UNARY_PLUS:
+            return true;
+        case MINIC_UNARY_NEGATE:
             return fprintf(file, "  negw a0, a0\n") >= 0;
+        case MINIC_UNARY_LOGICAL_NOT:
+            return fprintf(file, "  seqz a0, a0\n") >= 0;
         }
-        return true;
+        return false;
 
     case MINIC_EXPRESSION_BINARY:
         if (!minic_riscv64_emit_expression(
