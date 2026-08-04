@@ -97,6 +97,24 @@ compile_source comparison_local comparisons -DCASE=8
 expect_instructions comparison_local \
     "sw a0, 0(t1)" "lw a0, 0(t1)" "slt a0, t0, a0"
 
+compile_source logical_not_zero logical_not -DCASE=1
+expect_instructions logical_not_zero "seqz a0, a0"
+
+compile_source logical_not_nonzero logical_not -DCASE=2
+expect_instructions logical_not_nonzero "seqz a0, a0"
+
+compile_source logical_not_recursive logical_not -DCASE=3
+expect_instructions logical_not_recursive "seqz a0, a0"
+test "$(grep -c -F '  seqz a0, a0' "$work/logical_not_recursive.s")" -eq 2
+
+compile_source logical_not_comparison logical_not -DCASE=4
+expect_instructions logical_not_comparison \
+    "slt a0, t0, a0" "seqz a0, a0"
+
+compile_source logical_not_local logical_not -DCASE=5
+expect_instructions logical_not_local \
+    "lw a0, 0(t1)" "seqz a0, a0"
+
 "$host_cc" -E -P -x c "$root/tests/compiler/c0/invalid_return.c" -o "$work/invalid_return.i"
 if "$minic" -S "$work/invalid_return.i" -o "$work/invalid_return.s" \
     >"$work/invalid_return.stdout" 2>"$work/invalid_return.stderr"; then
