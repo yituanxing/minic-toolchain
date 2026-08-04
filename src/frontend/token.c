@@ -21,6 +21,8 @@ const char *minic_token_kind_name(MinicTokenKind kind)
         return "if";
     case MINIC_TOKEN_KW_ELSE:
         return "else";
+    case MINIC_TOKEN_KW_WHILE:
+        return "while";
     case MINIC_TOKEN_LPAREN:
         return "(";
     case MINIC_TOKEN_RPAREN:
