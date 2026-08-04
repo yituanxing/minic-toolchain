@@ -147,6 +147,22 @@ static int test_comparison_operators(void)
     return 0;
 }
 
+static int test_control_keyword_boundaries(void)
+{
+    static const char source[] = "if else if_value elsewhere";
+    MinicLexer lexer;
+
+    minic_lexer_initialize(&lexer, "control.c", source, sizeof(source) - 1U);
+    if (expect_token(&lexer, MINIC_TOKEN_KW_IF, 1U, 1U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_KW_ELSE, 1U, 4U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_IDENTIFIER, 1U, 9U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_IDENTIFIER, 1U, 18U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_EOF, 1U, 27U) != 0) {
+        return 1;
+    }
+    return 0;
+}
+
 static int test_keyword_boundaries(void)
 {
     static const char source[] = "integer return_value voided";
@@ -194,6 +210,7 @@ int main(void)
     if (test_c0_sequence() != 0 ||
         test_operator_sequence() != 0 ||
         test_comparison_operators() != 0 ||
+        test_control_keyword_boundaries() != 0 ||
         test_keyword_boundaries() != 0 ||
         test_invalid_character() != 0) {
         return 1;
