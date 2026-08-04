@@ -20,8 +20,11 @@ mkdir -p "$work"
 run_case() {
     name=$1
     expected=$2
+    source_name=$3
+    shift 3
 
-    "$riscv_cc" -E -P -x c "$root/tests/compiler/c0/$name.c" -o "$work/$name.i"
+    "$riscv_cc" -E -P -x c "$@" \
+        "$root/tests/compiler/c0/$source_name.c" -o "$work/$name.i"
     "$minic" -S "$work/$name.i" -o "$work/$name.s"
     "$riscv_cc" -static "$work/$name.s" -o "$work/$name.elf"
 
@@ -37,6 +40,10 @@ run_case() {
     printf '%s\n' "PASS compiler/c0/runtime/$name exit=$status"
 }
 
-run_case empty_main 0
-run_case return_0 0
-run_case return_42 42
+run_case empty_main 0 empty_main
+run_case return_0 0 return_0
+run_case return_42 42 return_42
+run_case arithmetic_precedence 7 arithmetic -DCASE=1
+run_case arithmetic_parentheses 10 arithmetic -DCASE=2
+run_case arithmetic_divrem 8 arithmetic -DCASE=3
+run_case arithmetic_unary 9 arithmetic -DCASE=4
