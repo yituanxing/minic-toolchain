@@ -39,6 +39,20 @@ const char *minic_token_kind_name(MinicTokenKind kind)
         return "%";
     case MINIC_TOKEN_EQUAL:
         return "=";
+    case MINIC_TOKEN_EQUAL_EQUAL:
+        return "==";
+    case MINIC_TOKEN_BANG:
+        return "!";
+    case MINIC_TOKEN_BANG_EQUAL:
+        return "!=";
+    case MINIC_TOKEN_LESS:
+        return "<";
+    case MINIC_TOKEN_LESS_EQUAL:
+        return "<=";
+    case MINIC_TOKEN_GREATER:
+        return ">";
+    case MINIC_TOKEN_GREATER_EQUAL:
+        return ">=";
     case MINIC_TOKEN_KIND_COUNT:
         break;
     }
