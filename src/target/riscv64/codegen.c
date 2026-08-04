@@ -164,29 +164,17 @@ static bool minic_riscv64_emit_expression(
         case MINIC_BINARY_REMAINDER:
             return fprintf(file, "  remw a0, t0, a0\n") >= 0;
         case MINIC_BINARY_EQUAL:
-            return fprintf(
-                file,
-                "  xor a0, t0, a0\n"
-                "  seqz a0, a0\n") >= 0;
+            return fprintf(file, "  xor a0, t0, a0\n  seqz a0, a0\n") >= 0;
         case MINIC_BINARY_NOT_EQUAL:
-            return fprintf(
-                file,
-                "  xor a0, t0, a0\n"
-                "  snez a0, a0\n") >= 0;
+            return fprintf(file, "  xor a0, t0, a0\n  snez a0, a0\n") >= 0;
         case MINIC_BINARY_LESS:
             return fprintf(file, "  slt a0, t0, a0\n") >= 0;
         case MINIC_BINARY_LESS_EQUAL:
-            return fprintf(
-                file,
-                "  slt a0, a0, t0\n"
-                "  xori a0, a0, 1\n") >= 0;
+            return fprintf(file, "  slt a0, a0, t0\n  xori a0, a0, 1\n") >= 0;
         case MINIC_BINARY_GREATER:
             return fprintf(file, "  slt a0, a0, t0\n") >= 0;
         case MINIC_BINARY_GREATER_EQUAL:
-            return fprintf(
-                file,
-                "  slt a0, t0, a0\n"
-                "  xori a0, a0, 1\n") >= 0;
+            return fprintf(file, "  slt a0, t0, a0\n  xori a0, a0, 1\n") >= 0;
         }
         return false;
     }
@@ -208,37 +196,119 @@ static bool minic_riscv64_frame_size(
     return true;
 }
 
-static bool minic_riscv64_emit_statements(
+static bool minic_riscv64_emit_block(
     FILE *file,
-    const MinicC0Program *program)
+    const MinicC0Program *program,
+    MinicBlockId block_id,
+    size_t *label_counter);
+
+static bool minic_riscv64_emit_statement(
+    FILE *file,
+    const MinicC0Program *program,
+    const MinicStatement *statement,
+    size_t *label_counter)
+{
+    if (statement == NULL) {
+        return false;
+    }
+
+    switch (statement->kind) {
+    case MINIC_STATEMENT_ASSIGN:
+        return minic_riscv64_emit_expression(
+                   file,
+                   program,
+                   statement->expression) &&
+               minic_riscv64_emit_local_store(file, statement->local_id);
+
+    case MINIC_STATEMENT_RETURN:
+        return minic_riscv64_emit_expression(
+                   file,
+                   program,
+                   statement->expression) &&
+               fprintf(file, "  j .Lmain_return\n") >= 0;
+
+    case MINIC_STATEMENT_IF: {
+        size_t label;
+
+        label = *label_counter;
+        *label_counter += 1U;
+        if (!minic_riscv64_emit_expression(
+                file,
+                program,
+                statement->expression) ||
+            fprintf(file, "  beqz a0, .Lif_else_%zu\n", label) < 0 ||
+            !minic_riscv64_emit_block(
+                file,
+                program,
+                statement->then_block,
+                label_counter) ||
+            fprintf(
+                file,
+                "  j .Lif_end_%zu\n"
+                ".Lif_else_%zu:\n",
+                label,
+                label) < 0) {
+            return false;
+        }
+        if (statement->else_block != MINIC_BLOCK_INVALID &&
+            !minic_riscv64_emit_block(
+                file,
+                program,
+                statement->else_block,
+                label_counter)) {
+            return false;
+        }
+        return fprintf(file, ".Lif_end_%zu:\n", label) >= 0;
+    }
+    }
+
+    return false;
+}
+
+static bool minic_riscv64_emit_block(
+    FILE *file,
+    const MinicC0Program *program,
+    MinicBlockId block_id,
+    size_t *label_counter)
+{
+    const MinicBlock *block;
+    size_t index;
+
+    block = minic_c0_program_block(program, block_id);
+    if (block == NULL) {
+        return false;
+    }
+    for (index = 0U; index < block->statement_count; ++index) {
+        const MinicStatement *statement;
+
+        statement = minic_c0_program_statement(
+            program,
+            block->statements[index]);
+        if (!minic_riscv64_emit_statement(
+                file,
+                program,
+                statement,
+                label_counter)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool minic_riscv64_emit_legacy_statements(
+    FILE *file,
+    const MinicC0Program *program,
+    size_t *label_counter)
 {
     size_t index;
 
     for (index = 0U; index < program->statement_count; ++index) {
-        const MinicStatement *statement;
-
-        statement = minic_c0_program_statement(program, index);
-        if (statement == NULL ||
-            !minic_riscv64_emit_expression(
+        if (!minic_riscv64_emit_statement(
                 file,
                 program,
-                statement->expression)) {
+                minic_c0_program_statement(program, index),
+                label_counter)) {
             return false;
-        }
-
-        switch (statement->kind) {
-        case MINIC_STATEMENT_ASSIGN:
-            if (!minic_riscv64_emit_local_store(
-                    file,
-                    statement->local_id)) {
-                return false;
-            }
-            break;
-        case MINIC_STATEMENT_RETURN:
-            if (fprintf(file, "  j .Lmain_return\n") < 0) {
-                return false;
-            }
-            break;
         }
     }
     return true;
@@ -251,6 +321,7 @@ bool minic_riscv64_write_c0_program(
 {
     FILE *file;
     size_t frame_size;
+    size_t label_counter;
     bool success;
 
     if (!minic_riscv64_frame_size(program, &frame_size)) {
@@ -286,8 +357,18 @@ bool minic_riscv64_write_c0_program(
     if (success && frame_size != 0U) {
         success = fprintf(file, "  mv t1, sp\n") >= 0;
     }
-    if (success) {
-        success = minic_riscv64_emit_statements(file, program);
+    label_counter = 0U;
+    if (success && program->body_block != MINIC_BLOCK_INVALID) {
+        success = minic_riscv64_emit_block(
+            file,
+            program,
+            program->body_block,
+            &label_counter);
+    } else if (success) {
+        success = minic_riscv64_emit_legacy_statements(
+            file,
+            program,
+            &label_counter);
     }
     if (success) {
         success = fprintf(
