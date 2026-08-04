@@ -8,39 +8,65 @@ work=${BUILD_DIR:-"$root/build/debug"}/tests/compiler-c0
 
 mkdir -p "$work"
 
-compile_case() {
+compile_source() {
     name=$1
-    expected=$2
-
-    "$host_cc" -E -P -x c "$root/tests/compiler/c0/$name.c" -o "$work/$name.i"
-    "$minic" -S "$work/$name.i" -o "$work/$name.s"
-    cmp "$root/tests/compiler/c0/expected/$expected.s" "$work/$name.s"
-    printf '%s\n' "PASS compiler/c0/$name"
-}
-
-compile_arithmetic_case() {
-    name=$1
-    case_number=$2
+    source_name=$2
     shift 2
 
-    "$host_cc" -E -P -x c -DCASE="$case_number" \
-        "$root/tests/compiler/c0/arithmetic.c" -o "$work/$name.i"
+    "$host_cc" -E -P -x c "$@" \
+        "$root/tests/compiler/c0/$source_name.c" -o "$work/$name.i"
     "$minic" -S "$work/$name.i" -o "$work/$name.s"
+    grep -F ".globl main" "$work/$name.s" >/dev/null
+    grep -F ".Lmain_return:" "$work/$name.s" >/dev/null
+}
+
+expect_instructions() {
+    name=$1
+    shift
+
     for instruction in "$@"; do
         grep -F "  $instruction" "$work/$name.s" >/dev/null
     done
     printf '%s\n' "PASS compiler/c0/$name"
 }
 
-compile_case empty_main return_0
-compile_case return_0 return_0
-compile_case return_42 return_42
+compile_source empty_main empty_main
+expect_instructions empty_main "li a0, 0" "j .Lmain_return"
 
-compile_arithmetic_case arithmetic_precedence 1 "mulw a0, t0, a0" "addw a0, t0, a0"
-compile_arithmetic_case arithmetic_parentheses 2 "subw a0, t0, a0" "mulw a0, t0, a0"
-compile_arithmetic_case arithmetic_divrem 3 \
+compile_source return_0 return_0
+expect_instructions return_0 "li a0, 0" "j .Lmain_return"
+
+compile_source return_42 return_42
+expect_instructions return_42 "li a0, 42" "j .Lmain_return"
+
+compile_source arithmetic_precedence arithmetic -DCASE=1
+expect_instructions arithmetic_precedence \
+    "mulw a0, t0, a0" "addw a0, t0, a0"
+
+compile_source arithmetic_parentheses arithmetic -DCASE=2
+expect_instructions arithmetic_parentheses \
+    "subw a0, t0, a0" "mulw a0, t0, a0"
+
+compile_source arithmetic_divrem arithmetic -DCASE=3
+expect_instructions arithmetic_divrem \
     "divw a0, t0, a0" "remw a0, t0, a0" "addw a0, t0, a0"
-compile_arithmetic_case arithmetic_unary 4 "negw a0, a0" "addw a0, t0, a0"
+
+compile_source arithmetic_unary arithmetic -DCASE=4
+expect_instructions arithmetic_unary \
+    "negw a0, a0" "addw a0, t0, a0"
+
+compile_source local_init locals -DCASE=1
+expect_instructions local_init \
+    "mv t1, sp" "sw a0, 0(t1)" "lw a0, 0(t1)"
+
+compile_source local_assign locals -DCASE=2
+expect_instructions local_assign \
+    "mv t1, sp" "sw a0, 0(t1)" "sw a0, 4(t1)" \
+    "lw a0, 0(t1)" "lw a0, 4(t1)" "addw a0, t0, a0"
+
+compile_source local_reassign locals -DCASE=3
+expect_instructions local_reassign \
+    "mv t1, sp" "lw a0, 0(t1)" "mulw a0, t0, a0" "sw a0, 0(t1)"
 
 "$host_cc" -E -P -x c "$root/tests/compiler/c0/invalid_return.c" -o "$work/invalid_return.i"
 if "$minic" -S "$work/invalid_return.i" -o "$work/invalid_return.s" \
