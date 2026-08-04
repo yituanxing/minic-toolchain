@@ -7,11 +7,15 @@
 #include <stddef.h>
 
 typedef size_t MinicExpressionId;
+typedef size_t MinicLocalId;
+typedef size_t MinicStatementId;
 
 #define MINIC_EXPRESSION_INVALID ((MinicExpressionId)-1)
+#define MINIC_LOCAL_INVALID ((MinicLocalId)-1)
 
 typedef enum MinicExpressionKind {
     MINIC_EXPRESSION_INTEGER = 0,
+    MINIC_EXPRESSION_LOCAL,
     MINIC_EXPRESSION_UNARY,
     MINIC_EXPRESSION_BINARY
 } MinicExpressionKind;
@@ -34,6 +38,7 @@ typedef struct MinicExpression {
     MinicSourceSpan span;
     union {
         int integer_value;
+        MinicLocalId local_id;
         struct {
             MinicUnaryOperator operator_kind;
             MinicExpressionId operand;
@@ -46,21 +51,63 @@ typedef struct MinicExpression {
     } value;
 } MinicExpression;
 
+typedef struct MinicLocal {
+    MinicSourceSpan name_span;
+} MinicLocal;
+
+typedef enum MinicStatementKind {
+    MINIC_STATEMENT_ASSIGN = 0,
+    MINIC_STATEMENT_RETURN
+} MinicStatementKind;
+
+typedef struct MinicStatement {
+    MinicStatementKind kind;
+    MinicSourceSpan span;
+    MinicExpressionId expression;
+    MinicLocalId local_id;
+} MinicStatement;
+
 typedef struct MinicC0Program {
     MinicExpression *expressions;
     size_t expression_count;
     size_t expression_capacity;
+
+    MinicLocal *locals;
+    size_t local_count;
+    size_t local_capacity;
+
+    MinicStatement *statements;
+    size_t statement_count;
+    size_t statement_capacity;
+
+    /* Retained during the expression-to-statement migration. */
     MinicExpressionId return_expression;
 } MinicC0Program;
 
 void minic_c0_program_initialize(MinicC0Program *program);
 void minic_c0_program_destroy(MinicC0Program *program);
+
 bool minic_c0_program_add_expression(
     MinicC0Program *program,
     const MinicExpression *expression,
     MinicExpressionId *expression_id);
+bool minic_c0_program_add_local(
+    MinicC0Program *program,
+    const MinicLocal *local,
+    MinicLocalId *local_id);
+bool minic_c0_program_add_statement(
+    MinicC0Program *program,
+    const MinicStatement *statement,
+    MinicStatementId *statement_id);
+
 const MinicExpression *minic_c0_program_expression(
     const MinicC0Program *program,
     MinicExpressionId expression_id);
+const MinicLocal *minic_c0_program_local(
+    const MinicC0Program *program,
+    MinicLocalId local_id);
+const MinicStatement *minic_c0_program_statement(
+    const MinicC0Program *program,
+    MinicStatementId statement_id);
 
 #endif
