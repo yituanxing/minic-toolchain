@@ -67,7 +67,8 @@ typedef struct MinicLocal {
 
 typedef enum MinicStatementKind {
     MINIC_STATEMENT_ASSIGN = 0,
-    MINIC_STATEMENT_RETURN
+    MINIC_STATEMENT_RETURN,
+    MINIC_STATEMENT_IF
 } MinicStatementKind;
 
 typedef struct MinicStatement {
@@ -75,6 +76,8 @@ typedef struct MinicStatement {
     MinicSourceSpan span;
     MinicExpressionId expression;
     MinicLocalId local_id;
+    MinicBlockId then_block;
+    MinicBlockId else_block;
 } MinicStatement;
 
 typedef struct MinicBlock {
@@ -101,7 +104,6 @@ typedef struct MinicC0Program {
     size_t block_capacity;
     MinicBlockId body_block;
 
-    /* Retained during the expression-to-statement migration. */
     MinicExpressionId return_expression;
 } MinicC0Program;
 
