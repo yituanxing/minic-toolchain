@@ -9,10 +9,6 @@ typedef struct MinicSourcePosition {
     size_t column;
 } MinicSourcePosition;
 
-/*
- * Source spans use an inclusive begin and exclusive end position.
- * SourceSpan 使用包含起点、不包含终点的半开区间。
- */
 typedef struct MinicSourceSpan {
     MinicSourcePosition begin;
     MinicSourcePosition end;
@@ -26,6 +22,8 @@ typedef enum MinicTokenKind {
     MINIC_TOKEN_KW_INT,
     MINIC_TOKEN_KW_VOID,
     MINIC_TOKEN_KW_RETURN,
+    MINIC_TOKEN_KW_IF,
+    MINIC_TOKEN_KW_ELSE,
     MINIC_TOKEN_LPAREN,
     MINIC_TOKEN_RPAREN,
     MINIC_TOKEN_LBRACE,
