@@ -110,6 +110,43 @@ static int test_operator_sequence(void)
     return 0;
 }
 
+static int test_comparison_operators(void)
+{
+    static const char source[] = "= == ! != < <= > >=";
+    static const struct {
+        MinicTokenKind kind;
+        size_t column;
+    } expected[] = {
+        {MINIC_TOKEN_EQUAL, 1U},
+        {MINIC_TOKEN_EQUAL_EQUAL, 3U},
+        {MINIC_TOKEN_BANG, 6U},
+        {MINIC_TOKEN_BANG_EQUAL, 8U},
+        {MINIC_TOKEN_LESS, 11U},
+        {MINIC_TOKEN_LESS_EQUAL, 13U},
+        {MINIC_TOKEN_GREATER, 16U},
+        {MINIC_TOKEN_GREATER_EQUAL, 18U},
+        {MINIC_TOKEN_EOF, 20U}
+    };
+    MinicLexer lexer;
+    size_t index;
+
+    minic_lexer_initialize(
+        &lexer,
+        "comparisons.c",
+        source,
+        sizeof(source) - 1U);
+    for (index = 0U; index < sizeof(expected) / sizeof(expected[0]); ++index) {
+        if (expect_token(
+                &lexer,
+                expected[index].kind,
+                1U,
+                expected[index].column) != 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static int test_keyword_boundaries(void)
 {
     static const char source[] = "integer return_value voided";
@@ -156,6 +193,7 @@ int main(void)
 {
     if (test_c0_sequence() != 0 ||
         test_operator_sequence() != 0 ||
+        test_comparison_operators() != 0 ||
         test_keyword_boundaries() != 0 ||
         test_invalid_character() != 0) {
         return 1;
