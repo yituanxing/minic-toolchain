@@ -42,6 +42,7 @@ MINIC_INCLUDES := -Iinclude -Isrc
 
 MINIC_SOURCES := \
 	src/compiler/compiler.c \
+	src/frontend/lexer.c \
 	src/frontend/token.c \
 	tools/minic/main.c
 MINIC_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINIC_SOURCES))
@@ -53,7 +54,14 @@ TOKEN_MODEL_TEST_SOURCES := \
 TOKEN_MODEL_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(TOKEN_MODEL_TEST_SOURCES))
 TOKEN_MODEL_TEST_BINARY  := $(BUILD_DIR)/tests/frontend/token-model-test
 
-.PHONY: all help prepare check check-fast check-token-model check-c0-runtime \
+LEXER_TEST_SOURCES := \
+	src/frontend/lexer.c \
+	src/frontend/token.c \
+	tests/frontend/lexer_test.c
+LEXER_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(LEXER_TEST_SOURCES))
+LEXER_TEST_BINARY  := $(BUILD_DIR)/tests/frontend/lexer-test
+
+.PHONY: all help prepare check check-fast check-token-model check-lexer check-c0-runtime \
 	sanitize bootstrap bootstrap-compare format format-check clean distclean print-config
 
 all: $(MINIC_BINARY)
@@ -64,6 +72,7 @@ help:
 		"  make                    Build the active MiniC compiler" \
 		"  make check-fast         Run the fast frontend and C0 gates" \
 		"  make check-token-model  Run the token data-model unit gate" \
+		"  make check-lexer        Run the C0 lexer unit gate" \
 		"  make check              Run the normal test gate" \
 		"  make check-c0-runtime   Use external RISC-V GCC and QEMU when available" \
 		"  make sanitize           Run checks with ASan and UBSan" \
@@ -86,10 +95,17 @@ $(TOKEN_MODEL_TEST_BINARY): $(TOKEN_MODEL_TEST_OBJECTS)
 	@mkdir -p "$(dir $@)"
 	$(CC) $(TOKEN_MODEL_TEST_OBJECTS) $(MINIC_LDFLAGS) -o "$@"
 
+$(LEXER_TEST_BINARY): $(LEXER_TEST_OBJECTS)
+	@mkdir -p "$(dir $@)"
+	$(CC) $(LEXER_TEST_OBJECTS) $(MINIC_LDFLAGS) -o "$@"
+
 check-token-model: $(TOKEN_MODEL_TEST_BINARY)
 	"$(abspath $(TOKEN_MODEL_TEST_BINARY))"
 
-check-fast: check-token-model $(MINIC_BINARY)
+check-lexer: $(LEXER_TEST_BINARY)
+	"$(abspath $(LEXER_TEST_BINARY))"
+
+check-fast: check-token-model check-lexer $(MINIC_BINARY)
 	MINIC="$(abspath $(MINIC_BINARY))" \
 	HOST_CC="$(CC)" \
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
@@ -143,3 +159,4 @@ distclean:
 
 -include $(MINIC_OBJECTS:.o=.d)
 -include $(TOKEN_MODEL_TEST_OBJECTS:.o=.d)
+-include $(LEXER_TEST_OBJECTS:.o=.d)
