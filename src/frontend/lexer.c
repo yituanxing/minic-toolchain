@@ -187,6 +187,21 @@ bool minic_lexer_next(
     case ';':
         token->kind = MINIC_TOKEN_SEMICOLON;
         break;
+    case '+':
+        token->kind = MINIC_TOKEN_PLUS;
+        break;
+    case '-':
+        token->kind = MINIC_TOKEN_MINUS;
+        break;
+    case '*':
+        token->kind = MINIC_TOKEN_STAR;
+        break;
+    case '/':
+        token->kind = MINIC_TOKEN_SLASH;
+        break;
+    case '%':
+        token->kind = MINIC_TOKEN_PERCENT;
+        break;
     default:
         minic_lexer_advance(lexer);
         token->span.end = minic_lexer_position(lexer);
