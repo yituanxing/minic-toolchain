@@ -68,7 +68,8 @@ typedef struct MinicLocal {
 typedef enum MinicStatementKind {
     MINIC_STATEMENT_ASSIGN = 0,
     MINIC_STATEMENT_RETURN,
-    MINIC_STATEMENT_IF
+    MINIC_STATEMENT_IF,
+    MINIC_STATEMENT_WHILE
 } MinicStatementKind;
 
 typedef struct MinicStatement {
