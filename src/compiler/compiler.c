@@ -1,6 +1,8 @@
 #include "minic/compiler.h"
 
+#include "frontend/ast.h"
 #include "frontend/parser.h"
+#include "target/riscv64/codegen.h"
 
 #include <errno.h>
 #include <stdbool.h>
@@ -28,11 +30,9 @@ static void minic_set_diagnostic(
     if (diagnostic == NULL) {
         return;
     }
-
     diagnostic->path = path;
     diagnostic->line = line;
     diagnostic->column = column;
-
     va_start(arguments, format);
     (void)vsnprintf(
         diagnostic->message,
@@ -63,8 +63,9 @@ static bool minic_read_file(
             strerror(errno));
         return false;
     }
-
-    if (fseek(file, 0L, SEEK_END) != 0) {
+    if (fseek(file, 0L, SEEK_END) != 0 ||
+        (end_position = ftell(file)) < 0L ||
+        fseek(file, 0L, SEEK_SET) != 0) {
         minic_set_diagnostic(
             diagnostic,
             path,
@@ -75,20 +76,6 @@ static bool minic_read_file(
         (void)fclose(file);
         return false;
     }
-
-    end_position = ftell(file);
-    if (end_position < 0L) {
-        minic_set_diagnostic(
-            diagnostic,
-            path,
-            1U,
-            1U,
-            "cannot measure input: %s",
-            strerror(errno));
-        (void)fclose(file);
-        return false;
-    }
-
     if ((unsigned long)end_position > (unsigned long)(SIZE_MAX - 1U)) {
         minic_set_diagnostic(
             diagnostic,
@@ -101,18 +88,6 @@ static bool minic_read_file(
     }
 
     size = (size_t)end_position;
-    if (fseek(file, 0L, SEEK_SET) != 0) {
-        minic_set_diagnostic(
-            diagnostic,
-            path,
-            1U,
-            1U,
-            "cannot rewind input: %s",
-            strerror(errno));
-        (void)fclose(file);
-        return false;
-    }
-
     data = (char *)malloc(size + 1U);
     if (data == NULL) {
         minic_set_diagnostic(
@@ -124,20 +99,17 @@ static bool minic_read_file(
         (void)fclose(file);
         return false;
     }
-
     if (size != 0U && fread(data, 1U, size, file) != size) {
         minic_set_diagnostic(
             diagnostic,
             path,
             1U,
             1U,
-            "cannot read input: %s",
-            ferror(file) != 0 ? strerror(errno) : "unexpected end of file");
+            "cannot read input");
         free(data);
         (void)fclose(file);
         return false;
     }
-
     data[size] = '\0';
     if (fclose(file) != 0) {
         minic_set_diagnostic(
@@ -156,67 +128,13 @@ static bool minic_read_file(
     return true;
 }
 
-static bool minic_write_riscv_assembly(
-    const char *path,
-    int return_value,
-    MinicDiagnostic *diagnostic)
-{
-    FILE *file;
-
-    file = fopen(path, "wb");
-    if (file == NULL) {
-        minic_set_diagnostic(
-            diagnostic,
-            path,
-            1U,
-            1U,
-            "cannot open output: %s",
-            strerror(errno));
-        return false;
-    }
-
-    if (fprintf(
-            file,
-            ".text\n"
-            ".globl main\n"
-            ".type main, @function\n"
-            "main:\n"
-            "  li a0, %d\n"
-            "  ret\n"
-            ".size main, .-main\n",
-            return_value) < 0) {
-        minic_set_diagnostic(
-            diagnostic,
-            path,
-            1U,
-            1U,
-            "cannot write output: %s",
-            strerror(errno));
-        (void)fclose(file);
-        return false;
-    }
-
-    if (fclose(file) != 0) {
-        minic_set_diagnostic(
-            diagnostic,
-            path,
-            1U,
-            1U,
-            "cannot close output: %s",
-            strerror(errno));
-        return false;
-    }
-
-    return true;
-}
-
 int minic_compile_preprocessed_file(
     const char *input_path,
     const char *output_path,
     MinicDiagnostic *diagnostic)
 {
     MinicSourceBuffer buffer;
-    int return_value;
+    MinicC0Program program;
     bool success;
 
     if (input_path == NULL || output_path == NULL) {
@@ -228,7 +146,6 @@ int minic_compile_preprocessed_file(
             "input and output paths are required");
         return 1;
     }
-
     if (diagnostic != NULL) {
         diagnostic->path = input_path;
         diagnostic->line = 1U;
@@ -242,19 +159,21 @@ int minic_compile_preprocessed_file(
         return 1;
     }
 
-    success = minic_parse_c0_translation_unit(
+    minic_c0_program_initialize(&program);
+    success = minic_parse_c0_program(
         input_path,
         buffer.data,
         buffer.size,
-        &return_value,
+        &program,
         diagnostic);
     if (success) {
-        success = minic_write_riscv_assembly(
+        success = minic_riscv64_write_c0_program(
             output_path,
-            return_value,
+            &program,
             diagnostic);
     }
 
+    minic_c0_program_destroy(&program);
     free(buffer.data);
     return success ? 0 : 1;
 }
