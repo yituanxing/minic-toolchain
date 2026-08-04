@@ -35,14 +35,21 @@ static bool minic_grow_array(
 void minic_c0_program_initialize(MinicC0Program *program)
 {
     (void)memset(program, 0, sizeof(*program));
+    program->body_block = MINIC_BLOCK_INVALID;
     program->return_expression = MINIC_EXPRESSION_INVALID;
 }
 
 void minic_c0_program_destroy(MinicC0Program *program)
 {
+    size_t index;
+
+    for (index = 0U; index < program->block_count; ++index) {
+        free(program->blocks[index].statements);
+    }
     free(program->expressions);
     free(program->locals);
     free(program->statements);
+    free(program->blocks);
     minic_c0_program_initialize(program);
 }
 
@@ -103,6 +110,53 @@ bool minic_c0_program_add_statement(
     return true;
 }
 
+bool minic_c0_program_add_block(
+    MinicC0Program *program,
+    MinicBlockId *block_id)
+{
+    MinicBlock block;
+
+    if (!minic_grow_array(
+            (void **)&program->blocks,
+            &program->block_capacity,
+            program->block_count,
+            sizeof(*program->blocks))) {
+        return false;
+    }
+
+    (void)memset(&block, 0, sizeof(block));
+    *block_id = program->block_count;
+    program->blocks[program->block_count] = block;
+    program->block_count += 1U;
+    return true;
+}
+
+bool minic_c0_block_add_statement(
+    MinicC0Program *program,
+    MinicBlockId block_id,
+    MinicStatementId statement_id)
+{
+    MinicBlock *block;
+
+    if (block_id >= program->block_count ||
+        statement_id >= program->statement_count) {
+        return false;
+    }
+
+    block = &program->blocks[block_id];
+    if (!minic_grow_array(
+            (void **)&block->statements,
+            &block->statement_capacity,
+            block->statement_count,
+            sizeof(*block->statements))) {
+        return false;
+    }
+
+    block->statements[block->statement_count] = statement_id;
+    block->statement_count += 1U;
+    return true;
+}
+
 const MinicExpression *minic_c0_program_expression(
     const MinicC0Program *program,
     MinicExpressionId expression_id)
@@ -131,4 +185,14 @@ const MinicStatement *minic_c0_program_statement(
         return NULL;
     }
     return &program->statements[statement_id];
+}
+
+const MinicBlock *minic_c0_program_block(
+    const MinicC0Program *program,
+    MinicBlockId block_id)
+{
+    if (block_id >= program->block_count) {
+        return NULL;
+    }
+    return &program->blocks[block_id];
 }
