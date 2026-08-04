@@ -83,6 +83,32 @@ static int test_c0_sequence(void)
     return 0;
 }
 
+static int test_arithmetic_operators(void)
+{
+    static const char source[] = "+ - * / %";
+    static const MinicTokenKind expected[] = {
+        MINIC_TOKEN_PLUS,
+        MINIC_TOKEN_MINUS,
+        MINIC_TOKEN_STAR,
+        MINIC_TOKEN_SLASH,
+        MINIC_TOKEN_PERCENT,
+        MINIC_TOKEN_EOF
+    };
+    MinicLexer lexer;
+    size_t index;
+
+    minic_lexer_initialize(&lexer, "operators.c", source, sizeof(source) - 1U);
+    for (index = 0U; index < sizeof(expected) / sizeof(expected[0]); ++index) {
+        size_t column;
+
+        column = index < 5U ? index * 2U + 1U : 10U;
+        if (expect_token(&lexer, expected[index], 1U, column) != 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static int test_keyword_boundaries(void)
 {
     static const char source[] = "integer return_value voided";
@@ -128,6 +154,7 @@ static int test_invalid_character(void)
 int main(void)
 {
     if (test_c0_sequence() != 0 ||
+        test_arithmetic_operators() != 0 ||
         test_keyword_boundaries() != 0 ||
         test_invalid_character() != 0) {
         return 1;
