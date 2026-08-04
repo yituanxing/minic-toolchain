@@ -38,19 +38,27 @@ Each entry must contain:
 
 ## Active deviations / 活跃偏离
 
+None.
+
+暂无。
+
+## Resolved deviations / 已解决偏离
+
 ## DEV-0001: C0 parser performs direct lexical matching / C0 Parser 直接匹配源码字符
 
-- Status / 状态: Active
+- Status / 状态: Resolved
 - Rule / 规则: Lexer and Parser should have separate responsibilities; Parser should consume a token stream rather than raw source bytes. Lexer 与 Parser 应职责分离；Parser 应消费 TokenStream，而不是直接读取源码字节。
-- Scope / 范围: `src/compiler/compiler.c`, C0-only parsing path / 仅限 C0 解析路径。
-- Reason / 原因: The first milestone establishes a complete, executable `.i → .s` compiler path before importing or rebuilding the validated lexer/token infrastructure. 第一里程碑先建立能够完整执行的 `.i → .s` 编译链路，再导入或重建已验证的 Lexer/Token 基础设施。
-- Risk / 风险: Lexical rules and grammar are temporarily coupled; extending this path directly would duplicate token logic and make diagnostics harder to maintain. 词法规则与语法暂时耦合；若直接扩展，会重复 Token 逻辑并增加诊断维护难度。
+- Original scope / 原范围: `src/compiler/compiler.c`, C0-only parsing path / 仅限 C0 解析路径。
+- Reason / 原因: The first milestone established a complete executable `.i → .s` compiler path before rebuilding the lexer/token infrastructure. 第一里程碑先建立可完整执行的 `.i → .s` 编译链路，再重建 Lexer/Token 基础设施。
+- Risk / 风险: Lexical rules and grammar were temporarily coupled; directly extending that path would have duplicated token logic and weakened diagnostics. 词法规则与语法曾暂时耦合；若继续扩展旧路径，会重复 Token 逻辑并削弱诊断结构。
 - Exit criteria / 退出条件:
-  1. Introduce explicit token kinds, source spans, and a lexer with focused positive and negative tests. 建立明确的 Token kind、源码范围和带聚焦正负测试的 Lexer。
-  2. Make the C0/C1 Parser consume only the token stream; remove keyword and punctuation matching against raw source. 让 C0/C1 Parser 仅消费 TokenStream，并删除对原始源码的关键字和标点匹配。
-  3. Pass `make check-fast`, sanitizer gates, and the available external RISC-V runtime gate after the replacement. 替换后通过 `make check-fast`、Sanitizer 门禁及可用的外部 RISC-V 运行门禁。
+  1. Completed: explicit token kinds and half-open source spans were introduced. 已完成：建立明确的 TokenKind 与半开 SourceSpan。
+  2. Completed: a focused Lexer with positive and negative tests was introduced. 已完成：建立带聚焦正负测试的 Lexer。
+  3. Completed: the production C0 Parser now consumes only Lexer/Token output; raw keyword and punctuation matching was removed from `compiler.c`. 已完成：生产 C0 Parser 只消费 Lexer/Token 输出，`compiler.c` 中的原始关键字与标点匹配已经删除。
+  4. Completed: `make check-fast`, ASan/UBSan, and the pinned RISC-V GCC/QEMU runtime gate passed after replacement. 已完成：替换后通过 `make check-fast`、ASan/UBSan 和固定 RISC-V GCC/QEMU 运行门禁。
 - Target milestone / 目标里程碑: C1 lexer and token-stream integration / C1 Lexer 与 TokenStream 接入。
-- Related commits or issues / 相关提交或 Issue: C0 executable compiler slice / C0 可执行编译器切片。
+- Resolution / 解决结果: Production flow is now file input → Lexer → Token → Parser → RISC-V assembly output. 当前生产流程为：文件输入 → Lexer → Token → Parser → RISC-V 汇编输出。
+- Related commits / 相关提交: `bcfa392`, `ae3bc7d`, `197e175`, `fbbd805`, `4d57665`.
 
 ## Entry template / 条目模板
 
