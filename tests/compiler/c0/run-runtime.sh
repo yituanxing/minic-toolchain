@@ -3,8 +3,7 @@ set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 minic=${MINIC:-"$root/build/debug/bin/minic"}
-host_cc=${HOST_CC:-${CC:-cc}}
-riscv_cc=${RISCV_CC:-riscv64-linux-gnu-gcc}
+riscv_cc=${RISCV_CC:-riscv64-buildroot-linux-musl-gcc}
 qemu=${QEMU_RISCV64:-qemu-riscv64}
 work=${BUILD_DIR:-"$root/build/debug"}/tests/compiler-c0-runtime
 
@@ -15,12 +14,14 @@ if ! command -v "$riscv_cc" >/dev/null 2>&1 || ! command -v "$qemu" >/dev/null 2
 fi
 
 mkdir -p "$work"
+"$riscv_cc" --version | sed -n '1p'
+"$qemu" --version | sed -n '1p'
 
 run_case() {
     name=$1
     expected=$2
 
-    "$host_cc" -E -P -x c "$root/tests/compiler/c0/$name.c" -o "$work/$name.i"
+    "$riscv_cc" -E -P -x c "$root/tests/compiler/c0/$name.c" -o "$work/$name.i"
     "$minic" -S "$work/$name.i" -o "$work/$name.s"
     "$riscv_cc" -static "$work/$name.s" -o "$work/$name.elf"
 
