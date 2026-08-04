@@ -37,6 +37,8 @@ const char *minic_token_kind_name(MinicTokenKind kind)
         return "/";
     case MINIC_TOKEN_PERCENT:
         return "%";
+    case MINIC_TOKEN_EQUAL:
+        return "=";
     case MINIC_TOKEN_KIND_COUNT:
         break;
     }
