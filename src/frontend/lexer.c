@@ -94,6 +94,9 @@ static MinicTokenKind minic_classify_identifier(
     if (length == 4U && memcmp(text, "else", 4U) == 0) {
         return MINIC_TOKEN_KW_ELSE;
     }
+    if (length == 5U && memcmp(text, "while", 5U) == 0) {
+        return MINIC_TOKEN_KW_WHILE;
+    }
     return MINIC_TOKEN_IDENTIFIER;
 }
 
