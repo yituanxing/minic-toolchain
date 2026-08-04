@@ -9,9 +9,12 @@
 typedef size_t MinicExpressionId;
 typedef size_t MinicLocalId;
 typedef size_t MinicStatementId;
+typedef size_t MinicBlockId;
 
 #define MINIC_EXPRESSION_INVALID ((MinicExpressionId)-1)
 #define MINIC_LOCAL_INVALID ((MinicLocalId)-1)
+#define MINIC_STATEMENT_INVALID ((MinicStatementId)-1)
+#define MINIC_BLOCK_INVALID ((MinicBlockId)-1)
 
 typedef enum MinicExpressionKind {
     MINIC_EXPRESSION_INTEGER = 0,
@@ -74,6 +77,12 @@ typedef struct MinicStatement {
     MinicLocalId local_id;
 } MinicStatement;
 
+typedef struct MinicBlock {
+    MinicStatementId *statements;
+    size_t statement_count;
+    size_t statement_capacity;
+} MinicBlock;
+
 typedef struct MinicC0Program {
     MinicExpression *expressions;
     size_t expression_count;
@@ -86,6 +95,11 @@ typedef struct MinicC0Program {
     MinicStatement *statements;
     size_t statement_count;
     size_t statement_capacity;
+
+    MinicBlock *blocks;
+    size_t block_count;
+    size_t block_capacity;
+    MinicBlockId body_block;
 
     /* Retained during the expression-to-statement migration. */
     MinicExpressionId return_expression;
@@ -106,6 +120,13 @@ bool minic_c0_program_add_statement(
     MinicC0Program *program,
     const MinicStatement *statement,
     MinicStatementId *statement_id);
+bool minic_c0_program_add_block(
+    MinicC0Program *program,
+    MinicBlockId *block_id);
+bool minic_c0_block_add_statement(
+    MinicC0Program *program,
+    MinicBlockId block_id,
+    MinicStatementId statement_id);
 
 const MinicExpression *minic_c0_program_expression(
     const MinicC0Program *program,
@@ -116,5 +137,8 @@ const MinicLocal *minic_c0_program_local(
 const MinicStatement *minic_c0_program_statement(
     const MinicC0Program *program,
     MinicStatementId statement_id);
+const MinicBlock *minic_c0_program_block(
+    const MinicC0Program *program,
+    MinicBlockId block_id);
 
 #endif
