@@ -115,6 +115,53 @@ compile_source logical_not_local logical_not -DCASE=5
 expect_instructions logical_not_local \
     "lw a0, 0(t1)" "seqz a0, a0"
 
+compile_source if_true_assignment if_else -DCASE=1
+expect_instructions if_true_assignment \
+    "beqz a0, .Lif_else_0" "sw a0, 0(t1)" \
+    "j .Lif_end_0"
+
+compile_source if_false_else if_else -DCASE=2
+expect_instructions if_false_else \
+    "beqz a0, .Lif_else_0" "j .Lif_end_0"
+
+compile_source if_comparison_block if_else -DCASE=3
+expect_instructions if_comparison_block \
+    "slt a0, t0, a0" "beqz a0, .Lif_else_0" \
+    "addw a0, t0, a0"
+
+compile_source if_nested_dangling_else if_else -DCASE=4
+expect_instructions if_nested_dangling_else \
+    "beqz a0, .Lif_else_0" "beqz a0, .Lif_else_1"
+test "$(grep -c -F '  beqz a0, .Lif_else_' "$work/if_nested_dangling_else.s")" -eq 2
+
+compile_source if_branch_return if_else -DCASE=5
+expect_instructions if_branch_return \
+    "beqz a0, .Lif_else_0" "j .Lmain_return"
+
+compile_source if_false_fallthrough if_else -DCASE=6
+expect_instructions if_false_fallthrough \
+    "beqz a0, .Lif_else_0" "lw a0, 0(t1)"
+
+compile_source if_multi_statement if_else -DCASE=7
+expect_instructions if_multi_statement \
+    "beqz a0, .Lif_else_0" "addw a0, t0, a0" \
+    "mulw a0, t0, a0"
+
+"$host_cc" -E -P -x c \
+    "$root/tests/compiler/c0/invalid_nested_declaration.c" \
+    -o "$work/invalid_nested_declaration.i"
+if "$minic" -S "$work/invalid_nested_declaration.i" \
+    -o "$work/invalid_nested_declaration.s" \
+    >"$work/invalid_nested_declaration.stdout" \
+    2>"$work/invalid_nested_declaration.stderr"; then
+    printf '%s\n' \
+        "FAIL compiler/c0/invalid_nested_declaration: compilation unexpectedly succeeded" >&2
+    exit 1
+fi
+grep -F "declarations inside branch blocks are not supported yet" \
+    "$work/invalid_nested_declaration.stderr" >/dev/null
+printf '%s\n' "PASS compiler/c0/invalid_nested_declaration"
+
 "$host_cc" -E -P -x c "$root/tests/compiler/c0/invalid_return.c" -o "$work/invalid_return.i"
 if "$minic" -S "$work/invalid_return.i" -o "$work/invalid_return.s" \
     >"$work/invalid_return.stdout" 2>"$work/invalid_return.stderr"; then
