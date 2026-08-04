@@ -27,6 +27,16 @@ const char *minic_token_kind_name(MinicTokenKind kind)
         return "}";
     case MINIC_TOKEN_SEMICOLON:
         return ";";
+    case MINIC_TOKEN_PLUS:
+        return "+";
+    case MINIC_TOKEN_MINUS:
+        return "-";
+    case MINIC_TOKEN_STAR:
+        return "*";
+    case MINIC_TOKEN_SLASH:
+        return "/";
+    case MINIC_TOKEN_PERCENT:
+        return "%";
     case MINIC_TOKEN_KIND_COUNT:
         break;
     }
