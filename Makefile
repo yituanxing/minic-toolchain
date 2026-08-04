@@ -43,6 +43,7 @@ MINIC_INCLUDES := -Iinclude -Isrc
 MINIC_SOURCES := \
 	src/compiler/compiler.c \
 	src/frontend/lexer.c \
+	src/frontend/parser.c \
 	src/frontend/token.c \
 	tools/minic/main.c
 MINIC_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINIC_SOURCES))
