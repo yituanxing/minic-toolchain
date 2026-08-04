@@ -295,25 +295,6 @@ static bool minic_riscv64_emit_block(
     return true;
 }
 
-static bool minic_riscv64_emit_legacy_statements(
-    FILE *file,
-    const MinicC0Program *program,
-    size_t *label_counter)
-{
-    size_t index;
-
-    for (index = 0U; index < program->statement_count; ++index) {
-        if (!minic_riscv64_emit_statement(
-                file,
-                program,
-                minic_c0_program_statement(program, index),
-                label_counter)) {
-            return false;
-        }
-    }
-    return true;
-}
-
 bool minic_riscv64_write_c0_program(
     const char *path,
     const MinicC0Program *program,
@@ -358,16 +339,11 @@ bool minic_riscv64_write_c0_program(
         success = fprintf(file, "  mv t1, sp\n") >= 0;
     }
     label_counter = 0U;
-    if (success && program->body_block != MINIC_BLOCK_INVALID) {
+    if (success) {
         success = minic_riscv64_emit_block(
             file,
             program,
             program->body_block,
-            &label_counter);
-    } else if (success) {
-        success = minic_riscv64_emit_legacy_statements(
-            file,
-            program,
             &label_counter);
     }
     if (success) {
