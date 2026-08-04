@@ -2,23 +2,33 @@
 
 const char *minic_token_kind_name(MinicTokenKind kind)
 {
-    static const char *const names[MINIC_TOKEN_KIND_COUNT] = {
-        "invalid",
-        "end of file",
-        "identifier",
-        "integer constant",
-        "int",
-        "void",
-        "return",
-        "(",
-        ")",
-        "{",
-        "}",
-        ";"
-    };
-
-    if (kind < MINIC_TOKEN_INVALID || kind >= MINIC_TOKEN_KIND_COUNT) {
-        return "unknown token";
+    switch (kind) {
+    case MINIC_TOKEN_INVALID:
+        return "invalid";
+    case MINIC_TOKEN_EOF:
+        return "end of file";
+    case MINIC_TOKEN_IDENTIFIER:
+        return "identifier";
+    case MINIC_TOKEN_INTEGER_CONSTANT:
+        return "integer constant";
+    case MINIC_TOKEN_KW_INT:
+        return "int";
+    case MINIC_TOKEN_KW_VOID:
+        return "void";
+    case MINIC_TOKEN_KW_RETURN:
+        return "return";
+    case MINIC_TOKEN_LPAREN:
+        return "(";
+    case MINIC_TOKEN_RPAREN:
+        return ")";
+    case MINIC_TOKEN_LBRACE:
+        return "{";
+    case MINIC_TOKEN_RBRACE:
+        return "}";
+    case MINIC_TOKEN_SEMICOLON:
+        return ";";
+    case MINIC_TOKEN_KIND_COUNT:
+        break;
     }
-    return names[kind];
+    return "unknown token";
 }
