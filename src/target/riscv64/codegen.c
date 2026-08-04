@@ -158,6 +158,30 @@ static bool minic_riscv64_emit_expression(
             return fprintf(file, "  divw a0, t0, a0\n") >= 0;
         case MINIC_BINARY_REMAINDER:
             return fprintf(file, "  remw a0, t0, a0\n") >= 0;
+        case MINIC_BINARY_EQUAL:
+            return fprintf(
+                file,
+                "  xor a0, t0, a0\n"
+                "  seqz a0, a0\n") >= 0;
+        case MINIC_BINARY_NOT_EQUAL:
+            return fprintf(
+                file,
+                "  xor a0, t0, a0\n"
+                "  snez a0, a0\n") >= 0;
+        case MINIC_BINARY_LESS:
+            return fprintf(file, "  slt a0, t0, a0\n") >= 0;
+        case MINIC_BINARY_LESS_EQUAL:
+            return fprintf(
+                file,
+                "  slt a0, a0, t0\n"
+                "  xori a0, a0, 1\n") >= 0;
+        case MINIC_BINARY_GREATER:
+            return fprintf(file, "  slt a0, a0, t0\n") >= 0;
+        case MINIC_BINARY_GREATER_EQUAL:
+            return fprintf(
+                file,
+                "  slt a0, t0, a0\n"
+                "  xori a0, a0, 1\n") >= 0;
         }
         return false;
     }
