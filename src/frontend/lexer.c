@@ -202,6 +202,9 @@ bool minic_lexer_next(
     case '%':
         token->kind = MINIC_TOKEN_PERCENT;
         break;
+    case '=':
+        token->kind = MINIC_TOKEN_EQUAL;
+        break;
     default:
         minic_lexer_advance(lexer);
         token->span.end = minic_lexer_position(lexer);
