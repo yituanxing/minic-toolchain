@@ -88,6 +88,12 @@ static MinicTokenKind minic_classify_identifier(
     if (length == 6U && memcmp(text, "return", 6U) == 0) {
         return MINIC_TOKEN_KW_RETURN;
     }
+    if (length == 2U && memcmp(text, "if", 2U) == 0) {
+        return MINIC_TOKEN_KW_IF;
+    }
+    if (length == 4U && memcmp(text, "else", 4U) == 0) {
+        return MINIC_TOKEN_KW_ELSE;
+    }
     return MINIC_TOKEN_IDENTIFIER;
 }
 
