@@ -21,6 +21,14 @@ static char minic_lexer_peek(const MinicLexer *lexer)
     return lexer->source[lexer->cursor];
 }
 
+static char minic_lexer_peek_next(const MinicLexer *lexer)
+{
+    if (lexer->cursor + 1U >= lexer->length) {
+        return '\0';
+    }
+    return lexer->source[lexer->cursor + 1U];
+}
+
 static void minic_lexer_advance(MinicLexer *lexer)
 {
     char character;
@@ -203,7 +211,36 @@ bool minic_lexer_next(
         token->kind = MINIC_TOKEN_PERCENT;
         break;
     case '=':
-        token->kind = MINIC_TOKEN_EQUAL;
+        if (minic_lexer_peek_next(lexer) == '=') {
+            token->kind = MINIC_TOKEN_EQUAL_EQUAL;
+            minic_lexer_advance(lexer);
+        } else {
+            token->kind = MINIC_TOKEN_EQUAL;
+        }
+        break;
+    case '!':
+        if (minic_lexer_peek_next(lexer) == '=') {
+            token->kind = MINIC_TOKEN_BANG_EQUAL;
+            minic_lexer_advance(lexer);
+        } else {
+            token->kind = MINIC_TOKEN_BANG;
+        }
+        break;
+    case '<':
+        if (minic_lexer_peek_next(lexer) == '=') {
+            token->kind = MINIC_TOKEN_LESS_EQUAL;
+            minic_lexer_advance(lexer);
+        } else {
+            token->kind = MINIC_TOKEN_LESS;
+        }
+        break;
+    case '>':
+        if (minic_lexer_peek_next(lexer) == '=') {
+            token->kind = MINIC_TOKEN_GREATER_EQUAL;
+            minic_lexer_advance(lexer);
+        } else {
+            token->kind = MINIC_TOKEN_GREATER;
+        }
         break;
     default:
         minic_lexer_advance(lexer);
