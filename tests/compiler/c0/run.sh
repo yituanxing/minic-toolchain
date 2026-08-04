@@ -68,6 +68,35 @@ compile_source local_reassign locals -DCASE=3
 expect_instructions local_reassign \
     "mv t1, sp" "lw a0, 0(t1)" "mulw a0, t0, a0" "sw a0, 0(t1)"
 
+compile_source comparison_equal comparisons -DCASE=1
+expect_instructions comparison_equal "xor a0, t0, a0" "seqz a0, a0"
+
+compile_source comparison_not_equal comparisons -DCASE=2
+expect_instructions comparison_not_equal "xor a0, t0, a0" "snez a0, a0"
+
+compile_source comparison_less comparisons -DCASE=3
+expect_instructions comparison_less "slt a0, t0, a0"
+
+compile_source comparison_less_equal comparisons -DCASE=4
+expect_instructions comparison_less_equal \
+    "slt a0, a0, t0" "xori a0, a0, 1"
+
+compile_source comparison_greater comparisons -DCASE=5
+expect_instructions comparison_greater "slt a0, a0, t0"
+
+compile_source comparison_greater_equal comparisons -DCASE=6
+expect_instructions comparison_greater_equal \
+    "slt a0, t0, a0" "xori a0, a0, 1"
+
+compile_source comparison_precedence comparisons -DCASE=7
+expect_instructions comparison_precedence \
+    "mulw a0, t0, a0" "addw a0, t0, a0" \
+    "xor a0, t0, a0" "seqz a0, a0"
+
+compile_source comparison_local comparisons -DCASE=8
+expect_instructions comparison_local \
+    "sw a0, 0(t1)" "lw a0, 0(t1)" "slt a0, t0, a0"
+
 "$host_cc" -E -P -x c "$root/tests/compiler/c0/invalid_return.c" -o "$work/invalid_return.i"
 if "$minic" -S "$work/invalid_return.i" -o "$work/invalid_return.s" \
     >"$work/invalid_return.stdout" 2>"$work/invalid_return.stderr"; then
