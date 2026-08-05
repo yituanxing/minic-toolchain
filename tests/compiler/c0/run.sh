@@ -18,6 +18,15 @@ compile_source() {
     "$minic" -S "$work/$name.i" -o "$work/$name.s"
     grep -F ".globl main" "$work/$name.s" >/dev/null
     grep -F ".Lmain_return:" "$work/$name.s" >/dev/null
+    grep -F "  sd ra, " "$work/$name.s" >/dev/null
+    grep -F "  sd s0, " "$work/$name.s" >/dev/null
+    grep -F "  mv s0, sp" "$work/$name.s" >/dev/null
+    grep -F "  ld ra, " "$work/$name.s" >/dev/null
+    grep -F "  ld s0, " "$work/$name.s" >/dev/null
+    if grep -F "(t1)" "$work/$name.s" >/dev/null; then
+        printf '%s\n' "FAIL compiler/c0/$name: caller-saved t1 used as local base" >&2
+        exit 1
+    fi
 }
 
 expect_instructions() {
@@ -57,16 +66,16 @@ expect_instructions arithmetic_unary \
 
 compile_source local_init locals -DCASE=1
 expect_instructions local_init \
-    "mv t1, sp" "sw a0, 0(t1)" "lw a0, 0(t1)"
+    "mv s0, sp" "sw a0, 0(s0)" "lw a0, 0(s0)"
 
 compile_source local_assign locals -DCASE=2
 expect_instructions local_assign \
-    "mv t1, sp" "sw a0, 0(t1)" "sw a0, 4(t1)" \
-    "lw a0, 0(t1)" "lw a0, 4(t1)" "addw a0, t0, a0"
+    "mv s0, sp" "sw a0, 0(s0)" "sw a0, 4(s0)" \
+    "lw a0, 0(s0)" "lw a0, 4(s0)" "addw a0, t0, a0"
 
 compile_source local_reassign locals -DCASE=3
 expect_instructions local_reassign \
-    "mv t1, sp" "lw a0, 0(t1)" "mulw a0, t0, a0" "sw a0, 0(t1)"
+    "mv s0, sp" "lw a0, 0(s0)" "mulw a0, t0, a0" "sw a0, 0(s0)"
 
 compile_source comparison_equal comparisons -DCASE=1
 expect_instructions comparison_equal "xor a0, t0, a0" "seqz a0, a0"
@@ -95,7 +104,7 @@ expect_instructions comparison_precedence \
 
 compile_source comparison_local comparisons -DCASE=8
 expect_instructions comparison_local \
-    "sw a0, 0(t1)" "lw a0, 0(t1)" "slt a0, t0, a0"
+    "sw a0, 0(s0)" "lw a0, 0(s0)" "slt a0, t0, a0"
 
 compile_source logical_not_zero logical_not -DCASE=1
 expect_instructions logical_not_zero "seqz a0, a0"
@@ -113,11 +122,11 @@ expect_instructions logical_not_comparison \
 
 compile_source logical_not_local logical_not -DCASE=5
 expect_instructions logical_not_local \
-    "lw a0, 0(t1)" "seqz a0, a0"
+    "lw a0, 0(s0)" "seqz a0, a0"
 
 compile_source if_true_assignment if_else -DCASE=1
 expect_instructions if_true_assignment \
-    "beqz a0, .Lif_else_0" "sw a0, 0(t1)" \
+    "beqz a0, .Lif_else_0" "sw a0, 0(s0)" \
     "j .Lif_end_0"
 
 compile_source if_false_else if_else -DCASE=2
@@ -140,7 +149,7 @@ expect_instructions if_branch_return \
 
 compile_source if_false_fallthrough if_else -DCASE=6
 expect_instructions if_false_fallthrough \
-    "beqz a0, .Lif_else_0" "lw a0, 0(t1)"
+    "beqz a0, .Lif_else_0" "lw a0, 0(s0)"
 
 compile_source if_multi_statement if_else -DCASE=7
 expect_instructions if_multi_statement \
