@@ -119,6 +119,9 @@ static MinicTokenKind minic_classify_identifier(
     if (length == 5U && memcmp(text, "while", 5U) == 0) {
         return MINIC_TOKEN_KW_WHILE;
     }
+    if (length == 3U && memcmp(text, "for", 3U) == 0) {
+        return MINIC_TOKEN_KW_FOR;
+    }
     return MINIC_TOKEN_IDENTIFIER;
 }
 
@@ -274,7 +277,12 @@ bool minic_lexer_next(
         token->kind = MINIC_TOKEN_COMMA;
         break;
     case '+':
-        token->kind = MINIC_TOKEN_PLUS;
+        if (minic_lexer_peek_next(lexer) == '+') {
+            token->kind = MINIC_TOKEN_PLUS_PLUS;
+            minic_lexer_advance(lexer);
+        } else {
+            token->kind = MINIC_TOKEN_PLUS;
+        }
         break;
     case '-':
         token->kind = MINIC_TOKEN_MINUS;
