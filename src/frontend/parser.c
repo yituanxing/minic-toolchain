@@ -490,6 +490,27 @@ static bool parse_if(MinicParser *parser)
     return add_statement(parser, &statement);
 }
 
+static bool parse_while(MinicParser *parser)
+{
+    MinicStatement statement;
+
+    (void)memset(&statement, 0, sizeof(statement));
+    statement.kind = MINIC_STATEMENT_WHILE;
+    statement.span.begin = parser->current.span.begin;
+    statement.local_id = MINIC_LOCAL_INVALID;
+    statement.else_block = MINIC_BLOCK_INVALID;
+
+    if (!parser_advance(parser) ||
+        !parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '('") ||
+        !parse_expression(parser, &statement.expression, 0U) ||
+        !parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')'") ||
+        !parse_branch(parser, &statement.then_block)) {
+        return false;
+    }
+    statement.span.end = parser->current.span.begin;
+    return add_statement(parser, &statement);
+}
+
 static bool parse_return(MinicParser *parser)
 {
     MinicStatement statement;
@@ -539,6 +560,9 @@ static bool parse_statement(
     if (parser->current.kind == MINIC_TOKEN_KW_IF) {
         return parse_if(parser);
     }
+    if (parser->current.kind == MINIC_TOKEN_KW_WHILE) {
+        return parse_while(parser);
+    }
     if (parser->current.kind == MINIC_TOKEN_KW_INT) {
         if (!allow_declaration) {
             parser_error(
@@ -556,7 +580,7 @@ static bool parse_statement(
     }
     parser_error(
         parser,
-        "expected if, declaration, assignment, return, or '}'");
+        "expected if, while, declaration, assignment, return, or '}'");
     return false;
 }
 
