@@ -54,6 +54,40 @@ static bool minic_riscv64_emit_stack_release(FILE *file, size_t size)
         size) >= 0;
 }
 
+static bool minic_riscv64_emit_sp_store64(
+    FILE *file,
+    const char *register_name,
+    size_t offset)
+{
+    if (offset <= 2047U) {
+        return fprintf(file, "  sd %s, %zu(sp)\n", register_name, offset) >= 0;
+    }
+    return fprintf(
+        file,
+        "  li t2, %zu\n"
+        "  add t2, sp, t2\n"
+        "  sd %s, 0(t2)\n",
+        offset,
+        register_name) >= 0;
+}
+
+static bool minic_riscv64_emit_sp_load64(
+    FILE *file,
+    const char *register_name,
+    size_t offset)
+{
+    if (offset <= 2047U) {
+        return fprintf(file, "  ld %s, %zu(sp)\n", register_name, offset) >= 0;
+    }
+    return fprintf(
+        file,
+        "  li t2, %zu\n"
+        "  add t2, sp, t2\n"
+        "  ld %s, 0(t2)\n",
+        offset,
+        register_name) >= 0;
+}
+
 static bool minic_riscv64_emit_local_load(FILE *file, MinicLocalId local_id)
 {
     size_t offset;
@@ -63,12 +97,12 @@ static bool minic_riscv64_emit_local_load(FILE *file, MinicLocalId local_id)
     }
     offset = local_id * 4U;
     if (offset <= 2047U) {
-        return fprintf(file, "  lw a0, %zu(t1)\n", offset) >= 0;
+        return fprintf(file, "  lw a0, %zu(s0)\n", offset) >= 0;
     }
     return fprintf(
         file,
         "  li t2, %zu\n"
-        "  add t2, t1, t2\n"
+        "  add t2, s0, t2\n"
         "  lw a0, 0(t2)\n",
         offset) >= 0;
 }
@@ -82,12 +116,12 @@ static bool minic_riscv64_emit_local_store(FILE *file, MinicLocalId local_id)
     }
     offset = local_id * 4U;
     if (offset <= 2047U) {
-        return fprintf(file, "  sw a0, %zu(t1)\n", offset) >= 0;
+        return fprintf(file, "  sw a0, %zu(s0)\n", offset) >= 0;
     }
     return fprintf(
         file,
         "  li t2, %zu\n"
-        "  add t2, t1, t2\n"
+        "  add t2, s0, t2\n"
         "  sw a0, 0(t2)\n",
         offset) >= 0;
 }
@@ -187,12 +221,14 @@ static bool minic_riscv64_frame_size(
     size_t *frame_size)
 {
     size_t local_bytes;
+    size_t required_bytes;
 
-    if (program->local_count > (SIZE_MAX - 15U) / 4U) {
+    if (program->local_count > (SIZE_MAX - 31U) / 4U) {
         return false;
     }
     local_bytes = program->local_count * 4U;
-    *frame_size = (local_bytes + 15U) & ~(size_t)15U;
+    required_bytes = local_bytes + 16U;
+    *frame_size = (required_bytes + 15U) & ~(size_t)15U;
     return true;
 }
 
@@ -260,6 +296,9 @@ static bool minic_riscv64_emit_statement(
         }
         return fprintf(file, ".Lif_end_%zu:\n", label) >= 0;
     }
+
+    case MINIC_STATEMENT_WHILE:
+        return false;
     }
 
     return false;
@@ -335,8 +374,10 @@ bool minic_riscv64_write_c0_program(
     if (success) {
         success = minic_riscv64_emit_stack_allocate(file, frame_size);
     }
-    if (success && frame_size != 0U) {
-        success = fprintf(file, "  mv t1, sp\n") >= 0;
+    if (success) {
+        success = minic_riscv64_emit_sp_store64(file, "ra", frame_size - 8U) &&
+                  minic_riscv64_emit_sp_store64(file, "s0", frame_size - 16U) &&
+                  fprintf(file, "  mv s0, sp\n") >= 0;
     }
     label_counter = 0U;
     if (success) {
@@ -351,6 +392,10 @@ bool minic_riscv64_write_c0_program(
             file,
             "  li a0, 0\n"
             ".Lmain_return:\n") >= 0;
+    }
+    if (success) {
+        success = minic_riscv64_emit_sp_load64(file, "ra", frame_size - 8U) &&
+                  minic_riscv64_emit_sp_load64(file, "s0", frame_size - 16U);
     }
     if (success) {
         success = minic_riscv64_emit_stack_release(file, frame_size);
