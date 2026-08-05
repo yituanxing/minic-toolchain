@@ -2,9 +2,9 @@
 
 ## Status / 状态
 
-The compiler-first track now compiles complete single- and multi-function algorithm programs, including legal C11 forward calls through explicit zero-argument prototypes. Development is driven by executable behavior rather than isolated syntax acceptance.
+The compiler-first track now compiles complete single- and multi-function algorithm programs, legal C11 forward calls through explicit prototypes, and functions with one signed `int` parameter passed through the RV64 `a0` boundary.
 
-编译器优先主线现在可以编译完整的单函数和多函数算法程序，并支持通过显式零参数原型完成合法 C11 前向调用。开发以可执行行为为驱动，而不再只验证孤立语法。
+编译器优先主线现在可以编译完整的单函数和多函数算法程序、通过显式原型完成合法 C11 前向调用，并支持通过 RV64 `a0` 传递一个有符号 `int` 参数。
 
 ## Differential oracle / 差分 Oracle
 
@@ -28,16 +28,17 @@ MiniC 被测线中只有 MiniC 承担 C 编译。外部 GCC 提供目标预处�
 
 | Program / 程序 | Main stress / 主要覆盖 | GCC/MiniC result / 结果 |
 |---|---|---:|
-| Euclidean GCD / 欧几里得最大公约数 | remainder loop, state rotation / 取余循环、状态轮转 | exit 21 |
+| Euclidean GCD / 欧几里得最大公约数 | remainder loop and state rotation / 取余循环与状态轮转 | exit 21 |
 | Fibonacci / 斐波那契 | ordered local assignments / 有顺序依赖的局部赋值 | exit 55 |
 | Prime count / 素数计数 | nested loops and conditions / 嵌套循环与条件 | exit 15 |
 | Collatz iteration / Collatz 迭代 | long data-dependent loop / 长数据相关循环 | exit 111 |
-| Function composition / 函数组合 | direct calls, nested calls, caller-local preservation / 直接调用、嵌套调用、调用者局部变量保持 | exit 19 |
+| Function composition / 函数组合 | direct and nested calls, caller-local preservation / 直接和嵌套调用、调用者局部保持 | exit 19 |
 | Function prototype / 函数原型 | repeated declarations and legal forward call / 重复声明与合法前向调用 | exit 9 |
+| Function parameter / 函数参数 | `a0` argument, callee parameter slot, extra callee local / `a0` 实参、参数槽和被调用者额外局部 | exit 43 |
 
-All six programs have equal exit status, stdout, and stderr across the GCC and MiniC lanes.
+All seven programs have equal exit status, stdout, and stderr across the GCC and MiniC lanes. All seven preprocessed units also compile under the host ASan/UBSan MiniC build.
 
-六个程序在 GCC 与 MiniC 两条流水线上的退出码、stdout 和 stderr 均一致。
+七个程序在 GCC 与 MiniC 两条流水线上的退出码、stdout 和 stderr 均一致；七个预处理翻译单元也都通过宿主 ASan/UBSan 版本 MiniC 编译。
 
 ## Implemented capability base / 已实现能力基础
 
@@ -47,21 +48,19 @@ Current production support includes:
 
 - decimal signed `int` constants and RV64 word arithmetic / 十进制有符号 `int` 常量和 RV64 word 算术；
 - function-local declaration, initialization, load, assignment, and reassignment / 函数局部声明、初始化、读取和重新赋值；
-- `+ - * / %`, unary `+ - !`, and signed comparisons / 算术、一元运算和有符号比较；
-- `if/else` and `while`, including nested control flow / 条件、循环及嵌套控制流；
-- program-owned expressions, statements, blocks, locals, and function names / Program 自有表达式、语句、Block、局部变量和函数名；
-- multiple zero-argument function definitions and compatible repeated prototypes / 多个零参数函数定义和兼容原型重复声明；
-- declaration-to-definition state transitions with exactly one emitted body / 声明转定义状态迁移及唯一函数体生成；
-- legal forward calls through explicit prototypes / 通过显式原型完成合法前向调用；
-- independent local ranges and call-safe RV64 frames / 独立局部范围和调用安全 RV64 栈帧；
-- resolved zero-argument direct calls, nested calls, and self-reference syntax / 已解析零参数直接调用、嵌套调用和自引用语法；
-- preservation and restoration of `ra` and `s0` / `ra` 与 `s0` 的保存和恢复。
+- arithmetic, unary operations, signed comparisons, `if/else`, and `while` / 算术、一元运算、有符号比较、条件和循环；
+- program-owned expressions, statements, blocks, locals, function names, and declarations / Program 自有表达式、语句、Block、局部变量、函数名和声明；
+- compatible prototypes, declaration-to-definition transitions, and legal forward calls / 兼容原型、声明转定义和合法前向调用；
+- modular Parser and modular RV64 backend boundaries / 模块化 Parser 与模块化 RV64 后端边界；
+- zero- or one-parameter `int` functions and calls / 零个或一个 `int` 参数的函数与调用；
+- argument evaluation into `a0` and callee spill to the first function-local slot / 实参求值到 `a0`，被调用者保存到首个函数局部槽；
+- independent local ranges and call-safe RV64 frames preserving `ra` and `s0` / 独立局部范围和保存 `ra`、`s0` 的调用安全栈帧。
 
-## C language boundary / C 语言边界
+## Current boundary / 当前边界
 
-MiniC rejects undeclared calls instead of accepting implicit function declarations. A forward call must be preceded by a compatible explicit prototype. Prototype-only records do not emit RV64 function bodies, and `main` must be a definition.
+MiniC rejects undeclared calls and incompatible function declarations. A forward call must be preceded by a compatible prototype. Calls and definitions currently accept at most one `int` parameter; `main` parameters are not supported yet.
 
-MiniC 会拒绝未声明调用，而不是接受隐式函数声明。前向调用必须先出现兼容的显式原型。只有原型的记录不会生成 RV64 函数体，`main` 必须是真实定义。
+MiniC 会拒绝未声明调用和不兼容函数声明。前向调用必须先有兼容原型。当前函数定义与调用最多接受一个 `int` 参数，暂不支持 `main` 参数。
 
 ## Remaining limitations / 剩余限制
 
@@ -69,8 +68,8 @@ Not yet implemented:
 
 尚未实现：
 
-- integer parameters and RV64 `a0`–`a7` argument passing / 整数参数及 RV64 `a0`–`a7` 传参；
-- meaningful recursive algorithms with parameters / 带参数的实际递归算法；
+- two to eight integer parameters using `a0`–`a7` / 使用 `a0`–`a7` 的二至八个整数参数；
+- meaningful recursive and mutually recursive algorithms / 有实际意义的递归与互递归算法；
 - block scopes and declarations inside nested blocks / 块作用域和嵌套块声明；
 - pointers, arrays, global objects, structs, and richer integer types / 指针、数组、全局对象、结构体和更丰富的整数类型；
 - hosted-library output programs / 使用宿主库输出的程序。
@@ -85,8 +84,8 @@ The next ordered sequence is:
 
 下一阶段顺序为：
 
-1. one integer parameter and the RV64 `a0` boundary;
-2. two to eight integer parameters with `a0`–`a7`;
+1. two integer parameters with `a0` and `a1`;
+2. extend the same checked model through `a7`;
 3. recursive and mutually recursive algorithm programs;
 4. block scopes;
 5. arrays and pointers;
