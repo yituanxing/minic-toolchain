@@ -137,6 +137,10 @@ static bool parse_primary(
                 minic_parser_error(parser, "invalid local reference");
                 return false;
             }
+            if (local->element_count != 1U) {
+                minic_parser_error(parser, "array object requires a subscript");
+                return false;
+            }
             (void)memset(&expression, 0, sizeof(expression));
             expression.kind = MINIC_EXPRESSION_LOCAL;
             expression.span = name_span;
