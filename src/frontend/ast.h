@@ -12,12 +12,14 @@ typedef size_t MinicLocalId;
 typedef size_t MinicStatementId;
 typedef size_t MinicBlockId;
 typedef size_t MinicFunctionId;
+typedef size_t MinicTypeAliasId;
 
 #define MINIC_EXPRESSION_INVALID ((MinicExpressionId)-1)
 #define MINIC_LOCAL_INVALID ((MinicLocalId)-1)
 #define MINIC_STATEMENT_INVALID ((MinicStatementId)-1)
 #define MINIC_BLOCK_INVALID ((MinicBlockId)-1)
 #define MINIC_FUNCTION_INVALID ((MinicFunctionId)-1)
+#define MINIC_TYPE_ALIAS_INVALID ((MinicTypeAliasId)-1)
 
 typedef enum MinicValueCategory {
     MINIC_VALUE_RVALUE = 0,
@@ -145,6 +147,17 @@ typedef struct MinicRecord {
     bool is_complete;
 } MinicRecord;
 
+typedef struct MinicArrayType {
+    MinicType element_type;
+    size_t element_count;
+} MinicArrayType;
+
+typedef struct MinicTypeAlias {
+    char *name;
+    size_t name_length;
+    MinicType type;
+} MinicTypeAlias;
+
 typedef struct MinicC0Program {
     MinicExpression *expressions;
     size_t expression_count;
@@ -171,6 +184,14 @@ typedef struct MinicC0Program {
     MinicRecord *records;
     size_t record_count;
     size_t record_capacity;
+
+    MinicArrayType *array_types;
+    size_t array_type_count;
+    size_t array_type_capacity;
+
+    MinicTypeAlias *type_aliases;
+    size_t type_alias_count;
+    size_t type_alias_capacity;
 
     MinicExpressionId return_expression;
 } MinicC0Program;
@@ -239,6 +260,17 @@ bool minic_c0_record_add_field(
 bool minic_c0_program_finish_record(
     MinicC0Program *program,
     MinicRecordId record_id);
+bool minic_c0_program_add_array_type(
+    MinicC0Program *program,
+    MinicType element_type,
+    size_t element_count,
+    MinicType *array_type);
+bool minic_c0_program_add_type_alias(
+    MinicC0Program *program,
+    const char *name,
+    size_t name_length,
+    MinicType type,
+    MinicTypeAliasId *alias_id);
 
 const MinicExpression *minic_c0_program_expression(
     const MinicC0Program *program,
@@ -261,5 +293,11 @@ const MinicRecord *minic_c0_program_record(
 const MinicRecordField *minic_c0_record_field(
     const MinicRecord *record,
     size_t field_index);
+const MinicArrayType *minic_c0_program_array_type(
+    const MinicC0Program *program,
+    MinicArrayTypeId array_type_id);
+const MinicTypeAlias *minic_c0_program_type_alias(
+    const MinicC0Program *program,
+    MinicTypeAliasId alias_id);
 
 #endif
