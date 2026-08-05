@@ -22,6 +22,16 @@ bool minic_type_pointer_to(MinicType pointee, MinicType *result)
     return true;
 }
 
+bool minic_type_pointee(MinicType pointer, MinicType *result)
+{
+    if (result == NULL || pointer.pointer_depth == 0U) {
+        return false;
+    }
+    *result = pointer;
+    result->pointer_depth -= 1U;
+    return true;
+}
+
 bool minic_type_equal(MinicType left, MinicType right)
 {
     return left.builtin_kind == right.builtin_kind &&
