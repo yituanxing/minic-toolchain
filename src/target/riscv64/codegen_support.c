@@ -208,62 +208,6 @@ bool minic_riscv64_emit_object_store(
         "a0");
 }
 
-bool minic_riscv64_emit_local_load(
-    FILE *file,
-    const MinicFunction *function,
-    MinicLocalId local_id)
-{
-    size_t relative_id;
-    size_t offset;
-
-    if (local_id < function->local_begin ||
-        local_id - function->local_begin >= function->local_count) {
-        return false;
-    }
-    relative_id = local_id - function->local_begin;
-    if (relative_id > SIZE_MAX / 4U) {
-        return false;
-    }
-    offset = relative_id * 4U;
-    if (offset <= 2047U) {
-        return fprintf(file, "  lw a0, %zu(s0)\n", offset) >= 0;
-    }
-    return fprintf(
-        file,
-        "  li t2, %zu\n"
-        "  add t2, s0, t2\n"
-        "  lw a0, 0(t2)\n",
-        offset) >= 0;
-}
-
-bool minic_riscv64_emit_local_store(
-    FILE *file,
-    const MinicFunction *function,
-    MinicLocalId local_id)
-{
-    size_t relative_id;
-    size_t offset;
-
-    if (local_id < function->local_begin ||
-        local_id - function->local_begin >= function->local_count) {
-        return false;
-    }
-    relative_id = local_id - function->local_begin;
-    if (relative_id > SIZE_MAX / 4U) {
-        return false;
-    }
-    offset = relative_id * 4U;
-    if (offset <= 2047U) {
-        return fprintf(file, "  sw a0, %zu(s0)\n", offset) >= 0;
-    }
-    return fprintf(
-        file,
-        "  li t2, %zu\n"
-        "  add t2, s0, t2\n"
-        "  sw a0, 0(t2)\n",
-        offset) >= 0;
-}
-
 bool minic_riscv64_frame_size(
     const MinicFunction *function,
     size_t *frame_size)
