@@ -201,6 +201,12 @@ bool minic_lexer_next(
     case '}':
         token->kind = MINIC_TOKEN_RBRACE;
         break;
+    case '[':
+        token->kind = MINIC_TOKEN_LBRACKET;
+        break;
+    case ']':
+        token->kind = MINIC_TOKEN_RBRACKET;
+        break;
     case ';':
         token->kind = MINIC_TOKEN_SEMICOLON;
         break;
