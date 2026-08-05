@@ -110,8 +110,9 @@ LAYOUT_TEST_BINARY  := $(BUILD_DIR)/tests/target/riscv64/layout-test
 
 .PHONY: all help prepare check check-fast check-token-model check-lexer \
 	check-type check-record check-type-alias check-layout check-static-functions \
-	check-c0-runtime check-programs-c0 check-runtime sanitize bootstrap \
-	bootstrap-compare format format-check clean distclean print-config
+	check-unsigned-declarations check-c0-runtime check-programs-c0 check-runtime \
+	sanitize bootstrap bootstrap-compare format format-check clean distclean \
+	print-config
 
 all: $(MINIC_BINARY)
 
@@ -127,6 +128,7 @@ help:
 		"  make check-type-alias   Run recursive array and typedef ownership gates" \
 		"  make check-layout       Run the RV64 object-layout unit gate" \
 		"  make check-static-functions Run internal-linkage and typed-return gates" \
+		"  make check-unsigned-declarations Run unsigned declaration-list gates" \
 		"  make check              Run the normal host-side test gate" \
 		"  make check-c0-runtime   Run focused RISC-V/QEMU microprogram gates" \
 		"  make check-programs-c0  Differentially compare real programs: GCC vs MiniC" \
@@ -195,7 +197,13 @@ check-static-functions: $(MINIC_BINARY)
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
 	sh tests/compiler/c0/run-static-functions.sh
 
-check-fast: check-token-model check-lexer check-type check-record check-type-alias check-layout check-static-functions $(MINIC_BINARY)
+check-unsigned-declarations: $(MINIC_BINARY)
+	MINIC="$(abspath $(MINIC_BINARY))" \
+	HOST_CC="$(CC)" \
+	BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/compiler/c0/run-unsigned-declarations.sh
+
+check-fast: check-token-model check-lexer check-type check-record check-type-alias check-layout check-static-functions check-unsigned-declarations $(MINIC_BINARY)
 	MINIC="$(abspath $(MINIC_BINARY))" \
 	HOST_CC="$(CC)" \
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
