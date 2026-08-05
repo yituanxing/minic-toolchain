@@ -46,11 +46,19 @@ static bool minic_riscv64_emit_function(
         for (parameter_index = 0U;
              success && parameter_index < function->parameter_count;
              ++parameter_index) {
-            success = fprintf(
+            char register_name[4];
+
+            (void)snprintf(
+                register_name,
+                sizeof(register_name),
+                "a%zu",
+                parameter_index);
+            success = minic_riscv64_emit_object_store_register(
                 file,
-                "  sw a%zu, %zu(s0)\n",
-                parameter_index,
-                parameter_index * 4U) >= 0;
+                program,
+                function,
+                function->local_begin + parameter_index,
+                register_name);
         }
     }
     if (success) {
