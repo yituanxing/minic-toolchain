@@ -6,7 +6,7 @@
 static bool parse_function(MinicParser *parser)
 {
     MinicSourceSpan name_span;
-    MinicSourceSpan parameter_name_span;
+    MinicSourceSpan parameter_name_spans[2];
     MinicBlockId body_block;
     MinicFunctionId function_id;
     const MinicFunction *existing_function;
@@ -19,11 +19,8 @@ static bool parse_function(MinicParser *parser)
 
     body_block = MINIC_BLOCK_INVALID;
     parameter_count = 0U;
-    (void)memset(&parameter_name_span, 0, sizeof(parameter_name_span));
-    if (!minic_parser_expect(
-            parser,
-            MINIC_TOKEN_KW_INT,
-            "expected keyword 'int'")) {
+    (void)memset(parameter_name_spans, 0, sizeof(parameter_name_spans));
+    if (!minic_parser_expect(parser, MINIC_TOKEN_KW_INT, "expected keyword 'int'")) {
         return false;
     }
     if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
@@ -48,15 +45,30 @@ static bool parse_function(MinicParser *parser)
             return false;
         }
     } else if (parser->current.kind == MINIC_TOKEN_KW_INT) {
-        if (!minic_parser_advance(parser) ||
-            parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
-            minic_parser_error(parser, "expected parameter name after 'int'");
-            return false;
-        }
-        parameter_name_span = parser->current.span;
-        parameter_count = 1U;
-        if (!minic_parser_advance(parser)) {
-            return false;
+        for (;;) {
+            if (parameter_count >= 2U ||
+                !minic_parser_advance(parser) ||
+                parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
+                minic_parser_error(
+                    parser,
+                    parameter_count >= 2U
+                        ? "at most two int parameters are supported"
+                        : "expected parameter name after 'int'");
+                return false;
+            }
+            parameter_name_spans[parameter_count] = parser->current.span;
+            parameter_count += 1U;
+            if (!minic_parser_advance(parser)) {
+                return false;
+            }
+            if (parser->current.kind != MINIC_TOKEN_COMMA) {
+                break;
+            }
+            if (!minic_parser_advance(parser) ||
+                parser->current.kind != MINIC_TOKEN_KW_INT) {
+                minic_parser_error(parser, "expected 'int' after ','");
+                return false;
+            }
         }
     } else if (parser->current.kind != MINIC_TOKEN_RPAREN) {
         minic_parser_error(parser, "expected 'void', 'int', or ')'");
@@ -95,9 +107,7 @@ static bool parse_function(MinicParser *parser)
                     parser->program,
                     function_id,
                     parameter_count)) {
-                minic_parser_error(
-                    parser,
-                    "out of memory while declaring function");
+                minic_parser_error(parser, "out of memory while declaring function");
                 return false;
             }
         }
@@ -105,9 +115,7 @@ static bool parse_function(MinicParser *parser)
     }
 
     if (parser->current.kind != MINIC_TOKEN_LBRACE) {
-        minic_parser_error(
-            parser,
-            "expected ';' or '{' after function declarator");
+        minic_parser_error(parser, "expected ';' or '{' after function declarator");
         return false;
     }
     if (function_id != MINIC_FUNCTION_INVALID) {
@@ -123,22 +131,32 @@ static bool parse_function(MinicParser *parser)
     if (!minic_parser_advance(parser) ||
         !minic_c0_program_add_block(parser->program, &body_block)) {
         if (body_block == MINIC_BLOCK_INVALID) {
-            minic_parser_error(
-                parser,
-                "out of memory while adding function body");
+            minic_parser_error(parser, "out of memory while adding function body");
         }
         return false;
     }
 
     local_begin = parser->program->local_count;
-    if (parameter_count == 1U) {
-        parameter_local.name_span = parameter_name_span;
-        if (!minic_c0_program_add_local(
-                parser->program,
-                &parameter_local,
-                &parameter_local_id)) {
-            minic_parser_error(parser, "out of memory while adding parameter");
-            return false;
+    {
+        size_t parameter_index;
+
+        for (parameter_index = 0U;
+             parameter_index < parameter_count;
+             ++parameter_index) {
+            parameter_local.name_span = parameter_name_spans[parameter_index];
+            if (minic_parser_find_local(
+                    parser,
+                    parameter_local.name_span) != MINIC_LOCAL_INVALID) {
+                minic_parser_error(parser, "duplicate parameter name");
+                return false;
+            }
+            if (!minic_c0_program_add_local(
+                    parser->program,
+                    &parameter_local,
+                    &parameter_local_id)) {
+                minic_parser_error(parser, "out of memory while adding parameter");
+                return false;
+            }
         }
     }
 
@@ -163,9 +181,7 @@ static bool parse_function(MinicParser *parser)
                    function_id,
                    local_begin,
                    body_block)) {
-        minic_parser_error(
-            parser,
-            "cannot define previously declared function");
+        minic_parser_error(parser, "cannot define previously declared function");
         return false;
     }
     if (is_main) {
@@ -194,9 +210,7 @@ static bool parse_function(MinicParser *parser)
             parser->program,
             function_id,
             local_count)) {
-        minic_parser_error(
-            parser,
-            "invalid local range while finishing function");
+        minic_parser_error(parser, "invalid local range while finishing function");
         return false;
     }
     return true;
@@ -228,9 +242,7 @@ bool minic_parse_c0_program(
         }
     }
     if (program->entry_function == MINIC_FUNCTION_INVALID) {
-        minic_parser_error(
-            &parser,
-            "translation unit requires an int main function");
+        minic_parser_error(&parser, "translation unit requires an int main function");
         return false;
     }
     return true;
