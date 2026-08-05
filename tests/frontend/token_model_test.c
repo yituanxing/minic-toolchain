@@ -39,6 +39,7 @@ int main(void)
         expect_name(MINIC_TOKEN_IDENTIFIER, "identifier") != 0 ||
         expect_name(MINIC_TOKEN_INTEGER_CONSTANT, "integer constant") != 0 ||
         expect_name(MINIC_TOKEN_KW_STRUCT, "struct") != 0 ||
+        expect_name(MINIC_TOKEN_KW_CONST, "const") != 0 ||
         expect_name(MINIC_TOKEN_KW_RETURN, "return") != 0 ||
         expect_name(MINIC_TOKEN_SEMICOLON, ";") != 0 ||
         expect_name((MinicTokenKind)MINIC_TOKEN_KIND_COUNT, "unknown token") != 0) {
