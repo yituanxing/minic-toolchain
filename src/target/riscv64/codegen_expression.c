@@ -74,6 +74,8 @@ bool minic_riscv64_emit_expression(
             return fprintf(file, "  ld a0, 0(a0)\n") >= 0;
         }
         return false;
+    case MINIC_EXPRESSION_SUBSCRIPT:
+        return false;
     case MINIC_EXPRESSION_UNARY:
         if (!minic_riscv64_emit_expression(file, program, function, expression->value.unary.operand)) {
             return false;
