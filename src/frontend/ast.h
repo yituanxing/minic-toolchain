@@ -19,9 +19,16 @@ typedef size_t MinicFunctionId;
 #define MINIC_BLOCK_INVALID ((MinicBlockId)-1)
 #define MINIC_FUNCTION_INVALID ((MinicFunctionId)-1)
 
+typedef enum MinicValueCategory {
+    MINIC_VALUE_RVALUE = 0,
+    MINIC_VALUE_LVALUE
+} MinicValueCategory;
+
 typedef enum MinicExpressionKind {
     MINIC_EXPRESSION_INTEGER = 0,
     MINIC_EXPRESSION_LOCAL,
+    MINIC_EXPRESSION_ADDRESS_OF,
+    MINIC_EXPRESSION_DEREFERENCE,
     MINIC_EXPRESSION_UNARY,
     MINIC_EXPRESSION_BINARY,
     MINIC_EXPRESSION_CALL
@@ -51,6 +58,7 @@ typedef struct MinicExpression {
     MinicExpressionKind kind;
     MinicSourceSpan span;
     MinicType type;
+    MinicValueCategory value_category;
     union {
         int integer_value;
         MinicLocalId local_id;
