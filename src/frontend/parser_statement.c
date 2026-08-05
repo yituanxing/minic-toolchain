@@ -1,0 +1,238 @@
+#include "frontend/parser_internal.h"
+
+#include <string.h>
+
+static bool parse_declaration(MinicParser *parser)
+{
+    MinicLocal local;
+    MinicLocalId local_id;
+
+    if (!minic_parser_expect(parser, MINIC_TOKEN_KW_INT, "expected keyword 'int'") ||
+        parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
+        if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
+            minic_parser_error(parser, "expected local name");
+        }
+        return false;
+    }
+
+    local.name_span = parser->current.span;
+    if (minic_parser_find_local(parser, local.name_span) != MINIC_LOCAL_INVALID) {
+        minic_parser_error(parser, "duplicate local declaration");
+        return false;
+    }
+    if (!minic_c0_program_add_local(parser->program, &local, &local_id)) {
+        minic_parser_error(parser, "out of memory while adding local");
+        return false;
+    }
+    if (!minic_parser_advance(parser)) {
+        return false;
+    }
+
+    if (parser->current.kind == MINIC_TOKEN_EQUAL) {
+        MinicStatement statement;
+
+        (void)memset(&statement, 0, sizeof(statement));
+        statement.kind = MINIC_STATEMENT_ASSIGN;
+        statement.span.begin = local.name_span.begin;
+        statement.local_id = local_id;
+        if (!minic_parser_advance(parser) ||
+            !minic_parser_parse_expression(parser, &statement.expression, 0U)) {
+            return false;
+        }
+        statement.span.end =
+            minic_c0_program_expression(
+                parser->program,
+                statement.expression)->span.end;
+        if (!minic_parser_add_statement(parser, &statement)) {
+            return false;
+        }
+    }
+    return minic_parser_expect(parser, MINIC_TOKEN_SEMICOLON, "expected ';'");
+}
+
+static bool parse_assignment(MinicParser *parser)
+{
+    MinicStatement statement;
+    MinicSourceSpan name_span;
+
+    (void)memset(&statement, 0, sizeof(statement));
+    name_span = parser->current.span;
+    statement.kind = MINIC_STATEMENT_ASSIGN;
+    statement.span.begin = name_span.begin;
+    statement.local_id = minic_parser_find_local(parser, name_span);
+    if (statement.local_id == MINIC_LOCAL_INVALID) {
+        minic_parser_error(parser, "assignment to undeclared local");
+        return false;
+    }
+    if (!minic_parser_advance(parser) ||
+        !minic_parser_expect(parser, MINIC_TOKEN_EQUAL, "expected '='") ||
+        !minic_parser_parse_expression(parser, &statement.expression, 0U)) {
+        return false;
+    }
+    statement.span.end =
+        minic_c0_program_expression(
+            parser->program,
+            statement.expression)->span.end;
+    return minic_parser_expect(parser, MINIC_TOKEN_SEMICOLON, "expected ';'") &&
+           minic_parser_add_statement(parser, &statement);
+}
+
+static bool parse_branch(MinicParser *parser, MinicBlockId *block_id)
+{
+    MinicBlockId parent_block;
+    bool success;
+
+    parent_block = parser->current_block;
+    if (!minic_c0_program_add_block(parser->program, block_id)) {
+        minic_parser_error(parser, "out of memory while adding branch block");
+        return false;
+    }
+    parser->current_block = *block_id;
+
+    if (parser->current.kind == MINIC_TOKEN_LBRACE) {
+        success = minic_parser_advance(parser);
+        while (success && parser->current.kind != MINIC_TOKEN_RBRACE) {
+            if (parser->current.kind == MINIC_TOKEN_EOF) {
+                minic_parser_error(parser, "expected '}' before end of file");
+                success = false;
+                break;
+            }
+            success = minic_parser_parse_statement(parser, false);
+        }
+        if (success) {
+            success = minic_parser_expect(
+                parser,
+                MINIC_TOKEN_RBRACE,
+                "expected '}'");
+        }
+    } else {
+        success = minic_parser_parse_statement(parser, false);
+    }
+
+    parser->current_block = parent_block;
+    return success;
+}
+
+static bool parse_if(MinicParser *parser)
+{
+    MinicStatement statement;
+
+    (void)memset(&statement, 0, sizeof(statement));
+    statement.kind = MINIC_STATEMENT_IF;
+    statement.span.begin = parser->current.span.begin;
+    statement.local_id = MINIC_LOCAL_INVALID;
+    statement.else_block = MINIC_BLOCK_INVALID;
+
+    if (!minic_parser_advance(parser) ||
+        !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '('") ||
+        !minic_parser_parse_expression(parser, &statement.expression, 0U) ||
+        !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')'") ||
+        !parse_branch(parser, &statement.then_block)) {
+        return false;
+    }
+    if (parser->current.kind == MINIC_TOKEN_KW_ELSE) {
+        if (!minic_parser_advance(parser) ||
+            !parse_branch(parser, &statement.else_block)) {
+            return false;
+        }
+    }
+    statement.span.end = parser->current.span.begin;
+    return minic_parser_add_statement(parser, &statement);
+}
+
+static bool parse_while(MinicParser *parser)
+{
+    MinicStatement statement;
+
+    (void)memset(&statement, 0, sizeof(statement));
+    statement.kind = MINIC_STATEMENT_WHILE;
+    statement.span.begin = parser->current.span.begin;
+    statement.local_id = MINIC_LOCAL_INVALID;
+    statement.else_block = MINIC_BLOCK_INVALID;
+
+    if (!minic_parser_advance(parser) ||
+        !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '('") ||
+        !minic_parser_parse_expression(parser, &statement.expression, 0U) ||
+        !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')'") ||
+        !parse_branch(parser, &statement.then_block)) {
+        return false;
+    }
+    statement.span.end = parser->current.span.begin;
+    return minic_parser_add_statement(parser, &statement);
+}
+
+static bool parse_return(MinicParser *parser)
+{
+    MinicStatement statement;
+
+    (void)memset(&statement, 0, sizeof(statement));
+    statement.kind = MINIC_STATEMENT_RETURN;
+    statement.span.begin = parser->current.span.begin;
+    statement.local_id = MINIC_LOCAL_INVALID;
+    if (!minic_parser_advance(parser) ||
+        !minic_parser_parse_expression(parser, &statement.expression, 0U)) {
+        return false;
+    }
+    statement.span.end =
+        minic_c0_program_expression(
+            parser->program,
+            statement.expression)->span.end;
+    if (!minic_parser_expect(parser, MINIC_TOKEN_SEMICOLON, "expected ';'") ||
+        !minic_parser_add_statement(parser, &statement)) {
+        return false;
+    }
+    parser->program->return_expression = statement.expression;
+    return true;
+}
+
+bool minic_parser_add_default_return(MinicParser *parser)
+{
+    MinicExpression expression;
+    MinicStatement statement;
+
+    (void)memset(&expression, 0, sizeof(expression));
+    (void)memset(&statement, 0, sizeof(statement));
+    expression.kind = MINIC_EXPRESSION_INTEGER;
+    expression.span = parser->current.span;
+    expression.value.integer_value = 0;
+    if (!minic_parser_add_expression(
+            parser,
+            &expression,
+            &statement.expression)) {
+        return false;
+    }
+    statement.kind = MINIC_STATEMENT_RETURN;
+    statement.span = parser->current.span;
+    statement.local_id = MINIC_LOCAL_INVALID;
+    parser->program->return_expression = statement.expression;
+    return minic_parser_add_statement(parser, &statement);
+}
+
+bool minic_parser_parse_statement(MinicParser *parser, bool allow_declaration)
+{
+    if (parser->current.kind == MINIC_TOKEN_KW_IF) {
+        return parse_if(parser);
+    }
+    if (parser->current.kind == MINIC_TOKEN_KW_WHILE) {
+        return parse_while(parser);
+    }
+    if (parser->current.kind == MINIC_TOKEN_KW_INT) {
+        if (!allow_declaration) {
+            minic_parser_error(
+                parser,
+                "declarations inside branch blocks are not supported yet");
+            return false;
+        }
+        return parse_declaration(parser);
+    }
+    if (parser->current.kind == MINIC_TOKEN_KW_RETURN) {
+        return parse_return(parser);
+    }
+    if (parser->current.kind == MINIC_TOKEN_IDENTIFIER) {
+        return parse_assignment(parser);
+    }
+    minic_parser_error(
+        parser,
+        "expected if, while, declaration, assignment, return, or '}'");
+    return false;
+}
