@@ -21,6 +21,8 @@ const char *minic_token_kind_name(MinicTokenKind kind)
         return "const";
     case MINIC_TOKEN_KW_TYPEDEF:
         return "typedef";
+    case MINIC_TOKEN_KW_STATIC:
+        return "static";
     case MINIC_TOKEN_KW_RETURN:
         return "return";
     case MINIC_TOKEN_KW_IF:
