@@ -101,14 +101,18 @@ static bool minic_riscv64_emit_function(
         return false;
     }
 
-    success = fprintf(
-        file,
-        ".globl %s\n"
-        ".type %s, @function\n"
-        "%s:\n",
-        function->name,
-        function->name,
-        function->name) >= 0;
+    success = true;
+    if (!function->is_internal) {
+        success = fprintf(file, ".globl %s\n", function->name) >= 0;
+    }
+    if (success) {
+        success = fprintf(
+            file,
+            ".type %s, @function\n"
+            "%s:\n",
+            function->name,
+            function->name) >= 0;
+    }
     if (success) {
         success = minic_riscv64_emit_stack_allocate(file, frame_size);
     }
