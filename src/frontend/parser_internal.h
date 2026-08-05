@@ -22,6 +22,7 @@ typedef struct MinicParser {
     MinicDiagnostic *diagnostic;
     MinicC0Program *program;
     MinicBlockId current_block;
+    MinicFunctionId current_function;
     size_t local_begin;
 
     MinicParserLocalBinding *local_bindings;
