@@ -137,6 +137,7 @@ static bool parse_function(MinicParser *parser)
     }
 
     local_begin = parser->program->local_count;
+    parser->local_begin = local_begin;
     {
         size_t parameter_index;
 
@@ -189,7 +190,6 @@ static bool parse_function(MinicParser *parser)
         parser->program->body_block = body_block;
     }
 
-    parser->local_begin = local_begin;
     parser->current_block = body_block;
     while (parser->current.kind != MINIC_TOKEN_RBRACE) {
         if (parser->current.kind == MINIC_TOKEN_EOF) {
