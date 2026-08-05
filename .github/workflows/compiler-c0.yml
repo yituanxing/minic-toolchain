@@ -14,42 +14,74 @@ on:
       - '.github/workflows/compiler-c0.yml'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: compiler-c0-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  host-gates:
-    name: Host C11 and sanitizers
-    runs-on: ubuntu-latest
+  host-fast:
+    name: Host C11 fast gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Fast host gate
-        run: make check
+        run: make -j"$(nproc)" check
 
-      - name: ASan and UBSan gate
-        run: make sanitize
-
-  rv64-differential:
-    name: RV64 GCC versus MiniC
-    runs-on: ubuntu-latest
+  host-sanitize:
+    name: ASan and UBSan gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: ASan and UBSan gate
+        run: make -j"$(nproc)" sanitize
+
+  rv64-gates:
+    name: RV64 ${{ matrix.gate.name }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        gate:
+          - name: focused gate
+            make_target: check-c0-runtime
+          - name: GCC versus MiniC programs
+            make_target: check-programs-c0
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Restore RISC-V package archives
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/minic-apt/archives
+          key: rv64-apt-${{ runner.os }}-${{ runner.arch }}-noble-v1
+
       - name: Install RISC-V user-mode validation tools
         run: |
+          mkdir -p "$HOME/.cache/minic-apt/archives/partial"
           sudo apt-get update
-          sudo apt-get install -y \
-            gcc-riscv64-linux-gnu \
-            libc6-dev-riscv64-cross \
-            qemu-user
+          sudo apt-get \
+            -o Dir::Cache::archives="$HOME/.cache/minic-apt/archives" \
+            -o APT::Keep-Downloaded-Packages=true \
+            install -y --no-install-recommends \
+              gcc-riscv64-linux-gnu \
+              libc6-dev-riscv64-cross \
+              qemu-user
+          sudo chown -R "$USER:$USER" "$HOME/.cache/minic-apt"
 
-      - name: Run focused and real-program gates
+      - name: Run ${{ matrix.gate.name }}
         run: |
-          make check-runtime \
+          make -j"$(nproc)" "${{ matrix.gate.make_target }}" \
             RISCV_CC=riscv64-linux-gnu-gcc \
             QEMU_RISCV64=qemu-riscv64 \
             REQUIRE_RISCV_RUNTIME=1
