@@ -28,8 +28,10 @@ Pinned Git blob identities:
 
 ## Current frontier
 
-MiniC now passes the upstream declarations, `struct AES_ctx`, typed and `const` prototypes, multidimensional typedef arrays, static read-only lookup tables, static internal functions, `void` definitions, explicit unsigned integer identity, and the comma-separated `unsigned i, j, k` declaration in `KeyExpansion`.
+MiniC now passes the upstream declarations, `struct AES_ctx`, typed and `const` prototypes, multidimensional typedef arrays, static read-only lookup tables, static internal functions, `void` definitions, explicit unsigned integer identity, comma-separated unsigned declarations, and the first `for` loop in `KeyExpansion`.
 
-The exact pinned failure is the first `for` statement in `KeyExpansion`. This is deliberately the boundary of the unsigned-declaration milestone; loop syntax, increment operators, implicit integer conversions, and unsigned operator lowering are handled in the next short integration stage.
+The exact pinned failure is the first assignment that subscripts the `RoundKey` and `Key` pointer parameters. Fixed local arrays already support indexing; the next stage generalizes the same subscript expression and RV64 address calculation to pointer-valued bases.
+
+The for-loop milestone is protected by focused positive and negative gates plus twenty-three GCC/MiniC differential programs, including isolated loop-count tests and high-bit unsigned comparison, division, and remainder.
 
 This probe is intentionally a moving frontier, not an execution acceptance test. Once the upstream core compiles, it must be replaced by assembly/linking and a real AES-128 ECB differential execution harness.
