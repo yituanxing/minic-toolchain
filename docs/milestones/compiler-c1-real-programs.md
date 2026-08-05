@@ -2,9 +2,9 @@
 
 ## Status / 状态
 
-The compiler-first track now compiles complete single- and multi-function algorithm programs, legal C11 forward calls through explicit prototypes, and functions with one signed `int` parameter passed through the RV64 `a0` boundary.
+The compiler-first track now compiles complete single- and multi-function algorithm programs, legal C11 forward calls through explicit prototypes, and functions with up to two signed `int` parameters passed through the RV64 `a0` and `a1` boundaries.
 
-编译器优先主线现在可以编译完整的单函数和多函数算法程序、通过显式原型完成合法 C11 前向调用，并支持通过 RV64 `a0` 传递一个有符号 `int` 参数。
+编译器优先主线现在可以编译完整的单函数和多函数算法程序、通过显式原型完成合法 C11 前向调用，并支持通过 RV64 `a0`、`a1` 传递最多两个有符号 `int` 参数。
 
 ## Differential oracle / 差分 Oracle
 
@@ -34,11 +34,12 @@ MiniC 被测线中只有 MiniC 承担 C 编译。外部 GCC 提供目标预处�
 | Collatz iteration / Collatz 迭代 | long data-dependent loop / 长数据相关循环 | exit 111 |
 | Function composition / 函数组合 | direct and nested calls, caller-local preservation / 直接和嵌套调用、调用者局部保持 | exit 19 |
 | Function prototype / 函数原型 | repeated declarations and legal forward call / 重复声明与合法前向调用 | exit 9 |
-| Function parameter / 函数参数 | `a0` argument, callee parameter slot, extra callee local / `a0` 实参、参数槽和被调用者额外局部 | exit 43 |
+| Function parameter / 单参数函数 | `a0`, parameter slot, extra callee local / `a0`、参数槽和被调用者额外局部 | exit 43 |
+| Two parameters / 双参数函数 | nested argument calls, `a0/a1`, caller-local preservation / 嵌套实参调用、`a0/a1`、调用者局部保持 | exit 48 |
 
-All seven programs have equal exit status, stdout, and stderr across the GCC and MiniC lanes. All seven preprocessed units also compile under the host ASan/UBSan MiniC build.
+All eight programs have equal exit status, stdout, and stderr across the GCC and MiniC lanes. All eight preprocessed units also compile under the host ASan/UBSan MiniC build.
 
-七个程序在 GCC 与 MiniC 两条流水线上的退出码、stdout 和 stderr 均一致；七个预处理翻译单元也都通过宿主 ASan/UBSan 版本 MiniC 编译。
+八个程序在 GCC 与 MiniC 两条流水线上的退出码、stdout 和 stderr 均一致；八个预处理翻译单元也都通过宿主 ASan/UBSan 版本 MiniC 编译。
 
 ## Implemented capability base / 已实现能力基础
 
@@ -46,21 +47,21 @@ Current production support includes:
 
 当前生产能力包括：
 
-- decimal signed `int` constants and RV64 word arithmetic / 十进制有符号 `int` 常量和 RV64 word 算术；
-- function-local declaration, initialization, load, assignment, and reassignment / 函数局部声明、初始化、读取和重新赋值；
-- arithmetic, unary operations, signed comparisons, `if/else`, and `while` / 算术、一元运算、有符号比较、条件和循环；
-- program-owned expressions, statements, blocks, locals, function names, and declarations / Program 自有表达式、语句、Block、局部变量、函数名和声明；
+- signed `int` constants, RV64 word arithmetic, comparisons, `if/else`, and `while` / 有符号 `int` 常量、RV64 word 算术、比较、条件和循环；
+- function-local declarations, assignments, and independent owned local ranges / 函数局部声明、赋值和独立自有局部范围；
 - compatible prototypes, declaration-to-definition transitions, and legal forward calls / 兼容原型、声明转定义和合法前向调用；
 - modular Parser and modular RV64 backend boundaries / 模块化 Parser 与模块化 RV64 后端边界；
-- zero- or one-parameter `int` functions and calls / 零个或一个 `int` 参数的函数与调用；
-- argument evaluation into `a0` and callee spill to the first function-local slot / 实参求值到 `a0`，被调用者保存到首个函数局部槽；
-- independent local ranges and call-safe RV64 frames preserving `ra` and `s0` / 独立局部范围和保存 `ra`、`s0` 的调用安全栈帧。
+- zero-, one-, or two-parameter `int` functions and calls / 零个、一个或两个 `int` 参数的函数与调用；
+- comma-separated parameter and argument lists / 逗号分隔的形参和实参列表；
+- nested argument evaluation that preserves earlier arguments on aligned temporary stack slots / 使用对齐临时栈槽保护较早实参的嵌套实参求值；
+- argument placement in `a0/a1` and callee spills to the first two function-local slots / 实参装载到 `a0/a1`，被调用者保存到前两个函数局部槽；
+- call-safe frames preserving `ra` and `s0` / 保存 `ra`、`s0` 的调用安全栈帧。
 
 ## Current boundary / 当前边界
 
-MiniC rejects undeclared calls and incompatible function declarations. A forward call must be preceded by a compatible prototype. Calls and definitions currently accept at most one `int` parameter; `main` parameters are not supported yet.
+MiniC rejects undeclared calls, incompatible function declarations, duplicate parameter names, and argument-count mismatches. Functions and calls currently accept at most two `int` parameters; `main` parameters are not supported yet.
 
-MiniC 会拒绝未声明调用和不兼容函数声明。前向调用必须先有兼容原型。当前函数定义与调用最多接受一个 `int` 参数，暂不支持 `main` 参数。
+MiniC 会拒绝未声明调用、不兼容函数声明、重复参数名和实参数量不匹配。当前函数与调用最多接受两个 `int` 参数，暂不支持 `main` 参数。
 
 ## Remaining limitations / 剩余限制
 
@@ -68,7 +69,7 @@ Not yet implemented:
 
 尚未实现：
 
-- two to eight integer parameters using `a0`–`a7` / 使用 `a0`–`a7` 的二至八个整数参数；
+- three to eight integer parameters using `a2`–`a7` / 使用 `a2`–`a7` 的三至八个整数参数；
 - meaningful recursive and mutually recursive algorithms / 有实际意义的递归与互递归算法；
 - block scopes and declarations inside nested blocks / 块作用域和嵌套块声明；
 - pointers, arrays, global objects, structs, and richer integer types / 指针、数组、全局对象、结构体和更丰富的整数类型；
@@ -84,7 +85,7 @@ The next ordered sequence is:
 
 下一阶段顺序为：
 
-1. two integer parameters with `a0` and `a1`;
+1. generalize argument preservation and register loading for four integer parameters;
 2. extend the same checked model through `a7`;
 3. recursive and mutually recursive algorithm programs;
 4. block scopes;
