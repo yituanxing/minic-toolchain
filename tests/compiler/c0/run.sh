@@ -179,6 +179,9 @@ expect_instructions if_multi_statement \
     "beqz a0, .Lif_else_0" "addw a0, t0, a0" \
     "mulw a0, t0, a0"
 
+compile_source array_declaration array_declaration
+expect_instructions array_declaration "mv s0, sp" "li a0, 0" "j .Lmain_return"
+
 expect_compile_failure \
     invalid_duplicate_block_local \
     "duplicate local declaration"
@@ -200,4 +203,13 @@ expect_compile_failure \
 expect_compile_failure \
     invalid_pointer_assignment_type \
     "assignment type does not match target type"
+expect_compile_failure \
+    invalid_zero_length_array \
+    "array bound must be greater than zero"
+expect_compile_failure \
+    invalid_array_initializer \
+    "array initializers are not supported yet"
+expect_compile_failure \
+    invalid_bare_array_use \
+    "array object requires a subscript"
 expect_compile_failure invalid_return "expected expression"
