@@ -57,7 +57,7 @@ bool minic_riscv64_emit_expression(
         callee = minic_c0_program_function(program, expression->value.call.function_id);
         if (callee == NULL || callee->name_length == 0U ||
             expression->value.call.argument_count != callee->parameter_count ||
-            callee->parameter_count > 4U) {
+            callee->parameter_count > 8U) {
             return false;
         }
         for (argument_index = 0U; argument_index < callee->parameter_count; ++argument_index) {
