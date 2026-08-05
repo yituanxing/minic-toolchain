@@ -95,6 +95,7 @@ typedef enum MinicStatementKind {
 typedef struct MinicStatement {
     MinicStatementKind kind;
     MinicSourceSpan span;
+    MinicExpressionId target_expression;
     MinicExpressionId expression;
     MinicLocalId local_id;
     MinicBlockId then_block;
