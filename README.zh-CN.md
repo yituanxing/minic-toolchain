@@ -1,20 +1,84 @@
 # MiniC 工具链
 
-MiniC 是一套由真实软件驱动、面向自举、兼顾实际使用、可扩展性与编译器教学的工具链。
+MiniC 是一套由真实软件驱动、使用 ISO C11 重写的编译器工具链，目标同时包括真实可用、分阶段自举、长期可扩展和编译器教学。
 
-项目正在基于已经得到真实软件验证的 Python 实现，使用 ISO C11 分阶段重写。Linux、musl、BusyBox、SQLite、Lua 等真实负载决定开发优先级；语言标准、目标 ABI、差分验证以及明确记录的架构规则负责约束正确性。
+真实负载决定下一项开发优先级；语言标准、目标 ABI、差分验证、明确的所有权规则和架构边界负责判断实现是否正确。
 
-## 项目目标
+英文介绍：[`README.md`](README.md)
 
-- 建立一套能够编译真实软件的编译器工具链。
-- 保持实现足够清晰，使学习者能够在源码中找到词法分析、语法分析、语义分析、IR、数据流分析、代码生成和对象文件等真实实现。
-- 完成分阶段自举，而不是把自建 libc 作为编译器自举的前置条件。
-- 保持前端、IR、目标后端、对象格式和宿主平台之间的明确边界。
-- 只有在所有权、生命周期、平台差异或多个真实实现确实需要时才增加抽象层。
-- 允许为了推进真实工作负载而暂时偏离架构规范，但偏离必须登记、限制范围并给出退出条件。
+## 当前编译边界
 
-## 当前状态
+当前主线只替换 C 编译阶段：
 
-仓库正在初始化。经过验证的 Python Oracle 和当前 C Lexer shadow 实现将通过后续独立、可审查的提交导入。
+```text
+C 源码
+  -> 外部 RISC-V GCC 预处理
+  -> MiniC 编译器：预处理 C（.i）生成 RV64 汇编（.s）
+  -> 外部 GNU 汇编和链接
+  -> QEMU RISC-V 用户态执行
+```
 
-英文介绍见 `README.md`。
+外部 GCC 是明确记录的辅助工具。它可以负责预处理、汇编、链接和提供 CRT/libc，但不得替 MiniC 编译任何 C 函数。
+
+原生预处理器、汇编器、链接器、libc 替换和完整自举属于后续独立里程碑。
+
+## 当前实现
+
+C 版本现在已经具备：
+
+- Token、源码位置模型和独立 Lexer；
+- 按表达式、语句、函数、类型、记录、typedef、全局对象和常量拆分的模块化 Parser；
+- 带左值/右值区分的类型化表达式；
+- 词法块作用域，以及由 Program 稳定持有的局部对象；
+- 整数表达式、比较、条件、循环、赋值、指针、固定数组和指针算术；
+- 函数原型、合法前向调用、直接与嵌套调用、递归、互递归，以及 0～8 个整数寄存器参数；
+- `void`、`const`、命名结构、递归数组 typedef、静态只读全局数组和内部函数；
+- RV64 对象布局、调用安全栈帧、类型化加载/存储、汇编发射和内部符号可见性；
+- Debug、Release `-Werror`、ASan/UBSan、RV64/QEMU 和 GCC/MiniC 双轨差分门禁。
+
+当前有 19 个可执行 C 程序永久运行两条流水线，并比较退出码、标准输出和标准错误。
+
+## 第一个外部真实项目
+
+第一个固定上游驱动项目是 `kokke/tiny-AES-c`，当前配置为 AES-128 ECB。CI 会按固定 Git Blob 校验上游源码，不允许为 MiniC 修改上游文件。
+
+编译器已经越过上游的声明、typedef 数组、静态查找表、内部函数和 `void` 函数定义。当前精确前沿位于 `KeyExpansion` 中第一处 `unsigned` 局部声明。
+
+该项目尚未完成。完成标准是：固定版本的 AES-128 ECB 核心和测试向量驱动，在不加入 MiniC 专用源码补丁的前提下，通过 GCC/MiniC 双轨差分。
+
+## 构建与验证
+
+```sh
+make
+make check-fast
+make sanitize
+```
+
+提供 RISC-V Linux 编译器和 QEMU 用户态执行器时：
+
+```sh
+make check-runtime \
+  RISCV_CC=riscv64-linux-gnu-gcc \
+  QEMU_RISCV64=qemu-riscv64 \
+  REQUIRE_RISCV_RUNTIME=1
+```
+
+GitHub Actions 会在 Ubuntu 24.04 干净虚拟机中运行完整门禁，包括固定的 tiny-AES 前沿检查。
+
+## 项目规则
+
+- 真实软件决定优先级，标准和 ABI 文档决定语义。
+- 当前采用模块化单体，不建立保存所有状态的万能编译器对象。
+- 公共接口保持精简，子系统内部可以拆成聚焦文件。
+- 只有所有权、生命周期、平台差异或多个真实实现提供证据时才增加抽象。
+- 临时架构债务必须可见、范围受限，并具有具体退出条件。
+- 生产、架构、构建和迁移类提交使用中英双语正文，并记录实际执行的验证。
+
+相关文档：
+
+- [`docs/architecture/principles.md`](docs/architecture/principles.md)
+- [`docs/architecture/compiler-development-roadmap.md`](docs/architecture/compiler-development-roadmap.md)
+- [`docs/standards/implementation-language.md`](docs/standards/implementation-language.md)
+- [`docs/standards/validation-toolchain.md`](docs/standards/validation-toolchain.md)
+- [`docs/DEVIATIONS.md`](docs/DEVIATIONS.md)
+- [`docs/milestones/compiler-c3-tiny-aes-frontier.md`](docs/milestones/compiler-c3-tiny-aes-frontier.md)

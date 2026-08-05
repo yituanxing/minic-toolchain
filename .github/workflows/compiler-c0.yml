@@ -1,0 +1,43 @@
+name: Compiler C0 Gates
+
+on:
+  pull_request:
+    paths:
+      - 'Makefile'
+      - 'include/**'
+      - 'src/**'
+      - 'tools/**'
+      - 'tests/**'
+      - '.github/scripts/**'
+      - '.github/workflows/compiler-c0.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: compiler-c0-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  full-validation:
+    name: Full compiler validation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Restore RISC-V package archives
+        id: rv64-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/minic-apt/archives
+          key: rv64-apt-${{ runner.os }}-${{ runner.arch }}-noble-v1
+
+      - name: Run the complete compiler gate
+        env:
+          RV64_CACHE_HIT: ${{ steps.rv64-cache.outputs.cache-hit }}
+        run: bash .github/scripts/compiler-c0-full-gate.sh

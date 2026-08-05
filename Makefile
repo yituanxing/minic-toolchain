@@ -8,6 +8,10 @@ MODE          ?= debug
 BUILD_DIR     ?= build/$(MODE)
 CC            ?= cc
 AR            ?= ar
+RISCV_CC      ?= riscv64-buildroot-linux-musl-gcc
+QEMU_RISCV64  ?= qemu-riscv64
+RISCV_OBJDUMP ?=
+REQUIRE_RISCV_RUNTIME ?= 0
 
 CPPFLAGS      ?=
 CFLAGS        ?=
@@ -17,6 +21,7 @@ COMMON_WARNINGS := \
 	-Wall \
 	-Wextra \
 	-Wpedantic \
+	-Wconversion \
 	-Wshadow \
 	-Wstrict-prototypes \
 	-Wmissing-prototypes
@@ -34,53 +39,203 @@ endif
 
 MINIC_CFLAGS  := -std=c11 $(COMMON_WARNINGS) $(MODE_CFLAGS) $(CFLAGS)
 MINIC_LDFLAGS := $(MODE_LDFLAGS) $(LDFLAGS)
+MINIC_INCLUDES := -Iinclude -Isrc
 
-.PHONY: all help prepare check check-fast sanitize bootstrap bootstrap-compare \
-	format format-check clean distclean print-config
+MINIC_SOURCES := \
+	src/compiler/compiler.c \
+	src/frontend/ast.c \
+	src/frontend/ast_function.c \
+	src/frontend/ast_global.c \
+	src/frontend/lexer.c \
+	src/frontend/parser_constant.c \
+	src/frontend/parser_core.c \
+	src/frontend/parser_expression.c \
+	src/frontend/parser_function.c \
+	src/frontend/parser_global.c \
+	src/frontend/parser_record.c \
+	src/frontend/parser_statement.c \
+	src/frontend/parser_type.c \
+	src/frontend/parser_typedef.c \
+	src/frontend/token.c \
+	src/frontend/type.c \
+	src/target/riscv64/layout.c \
+	src/target/riscv64/codegen_support.c \
+	src/target/riscv64/codegen_expression.c \
+	src/target/riscv64/codegen_statement.c \
+	src/target/riscv64/codegen_function.c \
+	tools/minic/main.c
+MINIC_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINIC_SOURCES))
+MINIC_BINARY  := $(BUILD_DIR)/bin/minic
 
-all: prepare
-	@printf '%s\n' "MiniC repository initialized; production C sources are not imported yet."
-	@printf '%s\n' "Run 'make help' to list the stable entry points."
+TOKEN_MODEL_TEST_SOURCES := \
+	src/frontend/token.c \
+	tests/frontend/token_model_test.c
+TOKEN_MODEL_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(TOKEN_MODEL_TEST_SOURCES))
+TOKEN_MODEL_TEST_BINARY  := $(BUILD_DIR)/tests/frontend/token-model-test
+
+LEXER_TEST_SOURCES := \
+	src/frontend/lexer.c \
+	src/frontend/token.c \
+	tests/frontend/lexer_test.c
+LEXER_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(LEXER_TEST_SOURCES))
+LEXER_TEST_BINARY  := $(BUILD_DIR)/tests/frontend/lexer-test
+
+TYPE_TEST_SOURCES := \
+	src/frontend/type.c \
+	tests/frontend/type_test.c
+TYPE_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(TYPE_TEST_SOURCES))
+TYPE_TEST_BINARY  := $(BUILD_DIR)/tests/frontend/type-test
+
+RECORD_TEST_SOURCES := \
+	src/frontend/ast.c \
+	src/frontend/type.c \
+	tests/frontend/record_test.c
+RECORD_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(RECORD_TEST_SOURCES))
+RECORD_TEST_BINARY  := $(BUILD_DIR)/tests/frontend/record-test
+
+TYPE_ALIAS_TEST_SOURCES := \
+	src/frontend/ast.c \
+	src/frontend/type.c \
+	tests/frontend/type_alias_test.c
+TYPE_ALIAS_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(TYPE_ALIAS_TEST_SOURCES))
+TYPE_ALIAS_TEST_BINARY  := $(BUILD_DIR)/tests/frontend/type-alias-test
+
+LAYOUT_TEST_SOURCES := \
+	src/frontend/ast.c \
+	src/frontend/type.c \
+	src/target/riscv64/layout.c \
+	tests/target/riscv64/layout_test.c
+LAYOUT_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(LAYOUT_TEST_SOURCES))
+LAYOUT_TEST_BINARY  := $(BUILD_DIR)/tests/target/riscv64/layout-test
+
+.PHONY: all help prepare check check-fast check-token-model check-lexer \
+	check-type check-record check-type-alias check-layout check-static-functions \
+	check-c0-runtime check-programs-c0 check-runtime sanitize bootstrap \
+	bootstrap-compare format format-check clean distclean print-config
+
+all: $(MINIC_BINARY)
 
 help:
 	@printf '%s\n' \
 		"MiniC Toolchain build targets:" \
-		"  make                 Prepare the selected build directory" \
-		"  make check-fast      Run the fast pre-commit gate" \
-		"  make check           Run the normal test gate" \
-		"  make sanitize        Run checks with ASan and UBSan" \
-		"  make bootstrap       Build the staged bootstrap pipeline" \
-		"  make bootstrap-compare  Compare bootstrap stages" \
-		"  make format          Format supported source files" \
-		"  make format-check    Verify formatting without changes" \
-		"  make print-config    Print the active toolchain configuration" \
-		"  make clean           Remove the active build directory" \
-		"  make distclean       Remove all generated build directories"
+		"  make                    Build the active MiniC compiler" \
+		"  make check-fast         Run the fast frontend and C0 gates" \
+		"  make check-token-model  Run the token data-model unit gate" \
+		"  make check-lexer        Run the C0 lexer unit gate" \
+		"  make check-type         Run the frontend type-value unit gate" \
+		"  make check-record       Run the record ownership unit gate" \
+		"  make check-type-alias   Run recursive array and typedef ownership gates" \
+		"  make check-layout       Run the RV64 object-layout unit gate" \
+		"  make check-static-functions Run internal-linkage and typed-return gates" \
+		"  make check              Run the normal host-side test gate" \
+		"  make check-c0-runtime   Run focused RISC-V/QEMU microprogram gates" \
+		"  make check-programs-c0  Differentially compare real programs: GCC vs MiniC" \
+		"  make check-runtime      Run all available target runtime gates" \
+		"  make sanitize           Run host checks with ASan and UBSan" \
+		"  make print-config       Print the active toolchain configuration" \
+		"  make clean              Remove the active build directory" \
+		"  make distclean          Remove all generated build directories"
 
 prepare:
 	@mkdir -p "$(BUILD_DIR)"
-	@printf '%s\n' "$(PROJECT) $(MODE) build directory: $(BUILD_DIR)"
 
-check-fast: prepare
-	@printf '%s\n' "check-fast: no production sources imported yet"
+$(BUILD_DIR)/obj/%.o: %.c
+	@mkdir -p "$(dir $@)"
+	$(CC) $(CPPFLAGS) $(MINIC_INCLUDES) $(MINIC_CFLAGS) -MMD -MP -c "$<" -o "$@"
+
+$(MINIC_BINARY): $(MINIC_OBJECTS)
+	@mkdir -p "$(dir $@)"
+	$(CC) $(MINIC_OBJECTS) $(MINIC_LDFLAGS) -o "$@"
+
+$(TOKEN_MODEL_TEST_BINARY): $(TOKEN_MODEL_TEST_OBJECTS)
+	@mkdir -p "$(dir $@)"
+	$(CC) $(TOKEN_MODEL_TEST_OBJECTS) $(MINIC_LDFLAGS) -o "$@"
+
+$(LEXER_TEST_BINARY): $(LEXER_TEST_OBJECTS)
+	@mkdir -p "$(dir $@)"
+	$(CC) $(LEXER_TEST_OBJECTS) $(MINIC_LDFLAGS) -o "$@"
+
+$(TYPE_TEST_BINARY): $(TYPE_TEST_OBJECTS)
+	@mkdir -p "$(dir $@)"
+	$(CC) $(TYPE_TEST_OBJECTS) $(MINIC_LDFLAGS) -o "$@"
+
+$(RECORD_TEST_BINARY): $(RECORD_TEST_OBJECTS)
+	@mkdir -p "$(dir $@)"
+	$(CC) $(RECORD_TEST_OBJECTS) $(MINIC_LDFLAGS) -o "$@"
+
+$(TYPE_ALIAS_TEST_BINARY): $(TYPE_ALIAS_TEST_OBJECTS)
+	@mkdir -p "$(dir $@)"
+	$(CC) $(TYPE_ALIAS_TEST_OBJECTS) $(MINIC_LDFLAGS) -o "$@"
+
+$(LAYOUT_TEST_BINARY): $(LAYOUT_TEST_OBJECTS)
+	@mkdir -p "$(dir $@)"
+	$(CC) $(LAYOUT_TEST_OBJECTS) $(MINIC_LDFLAGS) -o "$@"
+
+check-token-model: $(TOKEN_MODEL_TEST_BINARY)
+	"$(abspath $(TOKEN_MODEL_TEST_BINARY))"
+
+check-lexer: $(LEXER_TEST_BINARY)
+	"$(abspath $(LEXER_TEST_BINARY))"
+
+check-type: $(TYPE_TEST_BINARY)
+	"$(abspath $(TYPE_TEST_BINARY))"
+
+check-record: $(RECORD_TEST_BINARY)
+	"$(abspath $(RECORD_TEST_BINARY))"
+
+check-type-alias: $(TYPE_ALIAS_TEST_BINARY)
+	"$(abspath $(TYPE_ALIAS_TEST_BINARY))"
+
+check-layout: $(LAYOUT_TEST_BINARY)
+	"$(abspath $(LAYOUT_TEST_BINARY))"
+
+check-static-functions: $(MINIC_BINARY)
+	MINIC="$(abspath $(MINIC_BINARY))" \
+	HOST_CC="$(CC)" \
+	BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/compiler/c0/run-static-functions.sh
+
+check-fast: check-token-model check-lexer check-type check-record check-type-alias check-layout check-static-functions $(MINIC_BINARY)
+	MINIC="$(abspath $(MINIC_BINARY))" \
+	HOST_CC="$(CC)" \
+	BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/compiler/c0/run.sh
 
 check: check-fast
-	@printf '%s\n' "check: no extended test suites imported yet"
+
+check-c0-runtime: $(MINIC_BINARY)
+	MINIC="$(abspath $(MINIC_BINARY))" \
+	BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	RISCV_CC="$(RISCV_CC)" \
+	QEMU_RISCV64="$(QEMU_RISCV64)" \
+	REQUIRE_RISCV_RUNTIME="$(REQUIRE_RISCV_RUNTIME)" \
+	sh tests/compiler/c0/run-runtime.sh
+
+check-programs-c0: $(MINIC_BINARY)
+	MINIC="$(abspath $(MINIC_BINARY))" \
+	BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	RISCV_CC="$(RISCV_CC)" \
+	RISCV_OBJDUMP="$(RISCV_OBJDUMP)" \
+	QEMU_RISCV64="$(QEMU_RISCV64)" \
+	REQUIRE_RISCV_RUNTIME="$(REQUIRE_RISCV_RUNTIME)" \
+	sh tests/programs/c0/run.sh
+
+check-runtime: check-c0-runtime check-programs-c0
 
 sanitize:
 	@$(MAKE) MODE=sanitize check
 
-bootstrap: prepare
-	@printf '%s\n' "bootstrap: pending import of the validated Python oracle and C implementation"
+bootstrap: $(MINIC_BINARY)
+	@printf '%s\n' "bootstrap: deferred until the compiler capability ladder reaches its source profile"
 
 bootstrap-compare: bootstrap
-	@printf '%s\n' "bootstrap-compare: pending staged compiler outputs"
+	@printf '%s\n' "bootstrap-compare: no bootstrap stages exist yet"
 
 format:
-	@printf '%s\n' "format: formatter policy will be added with the first production C source"
+	@printf '%s\n' "format: formatter policy is not automated yet"
 
 format-check:
-	@printf '%s\n' "format-check: formatter policy will be added with the first production C source"
+	@printf '%s\n' "format-check: formatter policy is not automated yet"
 
 print-config:
 	@printf '%s\n' \
@@ -89,12 +244,25 @@ print-config:
 		"BUILD_DIR=$(BUILD_DIR)" \
 		"CC=$(CC)" \
 		"AR=$(AR)" \
+		"RISCV_CC=$(RISCV_CC)" \
+		"RISCV_OBJDUMP=$(RISCV_OBJDUMP)" \
+		"QEMU_RISCV64=$(QEMU_RISCV64)" \
+		"REQUIRE_RISCV_RUNTIME=$(REQUIRE_RISCV_RUNTIME)" \
 		"CPPFLAGS=$(CPPFLAGS)" \
 		"MINIC_CFLAGS=$(MINIC_CFLAGS)" \
-		"MINIC_LDFLAGS=$(MINIC_LDFLAGS)"
+		"MINIC_LDFLAGS=$(MINIC_LDFLAGS)" \
+		"MINIC_BINARY=$(MINIC_BINARY)"
 
 clean:
 	@rm -rf "$(BUILD_DIR)"
 
 distclean:
 	@rm -rf build
+
+-include $(MINIC_OBJECTS:.o=.d)
+-include $(TOKEN_MODEL_TEST_OBJECTS:.o=.d)
+-include $(LEXER_TEST_OBJECTS:.o=.d)
+-include $(TYPE_TEST_OBJECTS:.o=.d)
+-include $(RECORD_TEST_OBJECTS:.o=.d)
+-include $(TYPE_ALIAS_TEST_OBJECTS:.o=.d)
+-include $(LAYOUT_TEST_OBJECTS:.o=.d)
