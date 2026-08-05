@@ -46,10 +46,17 @@ static bool parse_function(MinicParser *parser)
 
     body_block = MINIC_BLOCK_INVALID;
     parameter_count = 0U;
-    return_type = minic_type_int();
     (void)memset(parameter_name_spans, 0, sizeof(parameter_name_spans));
     (void)memset(parameter_types, 0, sizeof(parameter_types));
-    if (!minic_parser_expect(parser, MINIC_TOKEN_KW_INT, "expected keyword 'int'")) {
+    if (parser->current.kind == MINIC_TOKEN_KW_INT) {
+        return_type = minic_type_int();
+    } else if (parser->current.kind == MINIC_TOKEN_KW_VOID) {
+        return_type = minic_type_void();
+    } else {
+        minic_parser_error(parser, "expected function return type");
+        return false;
+    }
+    if (!minic_parser_advance(parser)) {
         return false;
     }
     if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
@@ -61,6 +68,10 @@ static bool parse_function(MinicParser *parser)
     function_id = minic_parser_find_function(parser, name_span);
     is_main = minic_parser_span_length(name_span) == 4U &&
               memcmp(parser->source + name_span.begin.offset, "main", 4U) == 0;
+    if (is_main && !minic_type_is_integer(return_type)) {
+        minic_parser_error(parser, "main must return int");
+        return false;
+    }
 
     if (!minic_parser_advance(parser) ||
         !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '('") ) {
@@ -144,6 +155,10 @@ static bool parse_function(MinicParser *parser)
         return minic_parser_advance(parser);
     }
 
+    if (minic_type_is_void(return_type)) {
+        minic_parser_error(parser, "void function definitions are not supported yet");
+        return false;
+    }
     if (parser->current.kind != MINIC_TOKEN_LBRACE) {
         minic_parser_error(parser, "expected ';' or '{' after function declarator");
         return false;
