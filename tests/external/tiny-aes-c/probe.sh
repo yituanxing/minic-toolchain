@@ -45,8 +45,8 @@ if "$minic" -S "$work/aes-ecb.i" -o "$work/aes-ecb.s" \
     exit 1
 fi
 
-if ! grep -F ":47:12:" "$work/minic.stderr" >/dev/null ||
-   ! grep -F "use of undeclared local" "$work/minic.stderr" >/dev/null; then
+if ! grep -F ":49:7:" "$work/minic.stderr" >/dev/null ||
+   ! grep -F "call to function not yet declared" "$work/minic.stderr" >/dev/null; then
     printf '%s\n' \
         "FAIL external/tiny-aes-c: unexpected compiler frontier" >&2
     cat "$work/minic.stderr" >&2
@@ -55,4 +55,4 @@ fi
 
 frontier=$(sed -n '1p' "$work/minic.stderr")
 printf '%s\n' \
-    "PASS external/tiny-aes-c frontier=KeyExpansion-unsigned-locals diagnostic=$frontier"
+    "PASS external/tiny-aes-c frontier=KeyExpansion-for-loop diagnostic=$frontier"

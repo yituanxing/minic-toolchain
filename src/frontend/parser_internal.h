@@ -43,6 +43,13 @@ bool minic_parser_expect(
 bool minic_parser_parse_integer_value(
     MinicParser *parser,
     int *value);
+bool minic_parser_parse_type_specifiers(
+    MinicParser *parser,
+    MinicType *type);
+bool minic_parser_parse_pointer_declarator(
+    MinicParser *parser,
+    MinicType base_type,
+    MinicType *type);
 bool minic_parser_parse_type_name(
     MinicParser *parser,
     MinicType *type);

@@ -1,6 +1,6 @@
 #include "frontend/parser_internal.h"
 
-bool minic_parser_parse_type_name(
+bool minic_parser_parse_type_specifiers(
     MinicParser *parser,
     MinicType *type)
 {
@@ -23,6 +23,15 @@ bool minic_parser_parse_type_name(
     if (parser->current.kind == MINIC_TOKEN_KW_INT) {
         parsed_type = minic_type_int();
         if (!minic_parser_advance(parser)) {
+            return false;
+        }
+    } else if (parser->current.kind == MINIC_TOKEN_KW_UNSIGNED) {
+        parsed_type = minic_type_unsigned_int();
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
+        if (parser->current.kind == MINIC_TOKEN_KW_INT &&
+            !minic_parser_advance(parser)) {
             return false;
         }
     } else if (parser->current.kind == MINIC_TOKEN_KW_VOID) {
@@ -72,6 +81,22 @@ bool minic_parser_parse_type_name(
         minic_parser_error(parser, "cannot apply const qualifier");
         return false;
     }
+    *type = parsed_type;
+    return true;
+}
+
+bool minic_parser_parse_pointer_declarator(
+    MinicParser *parser,
+    MinicType base_type,
+    MinicType *type)
+{
+    MinicType parsed_type;
+
+    if (type == NULL) {
+        minic_parser_error(parser, "internal error: missing declarator type output");
+        return false;
+    }
+    parsed_type = base_type;
     while (parser->current.kind == MINIC_TOKEN_STAR) {
         if (!minic_type_pointer_to(parsed_type, &parsed_type) ||
             !minic_parser_advance(parser)) {
@@ -79,7 +104,16 @@ bool minic_parser_parse_type_name(
             return false;
         }
     }
-
     *type = parsed_type;
     return true;
+}
+
+bool minic_parser_parse_type_name(
+    MinicParser *parser,
+    MinicType *type)
+{
+    MinicType base_type;
+
+    return minic_parser_parse_type_specifiers(parser, &base_type) &&
+           minic_parser_parse_pointer_declarator(parser, base_type, type);
 }

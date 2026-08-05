@@ -3,6 +3,19 @@
 #include <limits.h>
 #include <stddef.h>
 
+static MinicType minic_type_integer(MinicIntegerSign sign)
+{
+    MinicType type;
+
+    type.base_kind = MINIC_TYPE_BASE_INT;
+    type.record_id = MINIC_RECORD_INVALID;
+    type.array_type_id = MINIC_ARRAY_TYPE_INVALID;
+    type.integer_sign = sign;
+    type.base_qualifiers = MINIC_TYPE_QUALIFIER_NONE;
+    type.pointer_depth = 0U;
+    return type;
+}
+
 MinicType minic_type_void(void)
 {
     MinicType type;
@@ -10,6 +23,7 @@ MinicType minic_type_void(void)
     type.base_kind = MINIC_TYPE_BASE_VOID;
     type.record_id = MINIC_RECORD_INVALID;
     type.array_type_id = MINIC_ARRAY_TYPE_INVALID;
+    type.integer_sign = MINIC_INTEGER_SIGN_NONE;
     type.base_qualifiers = MINIC_TYPE_QUALIFIER_NONE;
     type.pointer_depth = 0U;
     return type;
@@ -17,14 +31,12 @@ MinicType minic_type_void(void)
 
 MinicType minic_type_int(void)
 {
-    MinicType type;
+    return minic_type_integer(MINIC_INTEGER_SIGN_SIGNED);
+}
 
-    type.base_kind = MINIC_TYPE_BASE_INT;
-    type.record_id = MINIC_RECORD_INVALID;
-    type.array_type_id = MINIC_ARRAY_TYPE_INVALID;
-    type.base_qualifiers = MINIC_TYPE_QUALIFIER_NONE;
-    type.pointer_depth = 0U;
-    return type;
+MinicType minic_type_unsigned_int(void)
+{
+    return minic_type_integer(MINIC_INTEGER_SIGN_UNSIGNED);
 }
 
 MinicType minic_type_record(MinicRecordId record_id)
@@ -34,6 +46,7 @@ MinicType minic_type_record(MinicRecordId record_id)
     type.base_kind = MINIC_TYPE_BASE_RECORD;
     type.record_id = record_id;
     type.array_type_id = MINIC_ARRAY_TYPE_INVALID;
+    type.integer_sign = MINIC_INTEGER_SIGN_NONE;
     type.base_qualifiers = MINIC_TYPE_QUALIFIER_NONE;
     type.pointer_depth = 0U;
     return type;
@@ -46,6 +59,7 @@ MinicType minic_type_array(MinicArrayTypeId array_type_id)
     type.base_kind = MINIC_TYPE_BASE_ARRAY;
     type.record_id = MINIC_RECORD_INVALID;
     type.array_type_id = array_type_id;
+    type.integer_sign = MINIC_INTEGER_SIGN_NONE;
     type.base_qualifiers = MINIC_TYPE_QUALIFIER_NONE;
     type.pointer_depth = 0U;
     return type;
@@ -86,6 +100,7 @@ bool minic_type_equal(MinicType left, MinicType right)
     return left.base_kind == right.base_kind &&
            left.record_id == right.record_id &&
            left.array_type_id == right.array_type_id &&
+           left.integer_sign == right.integer_sign &&
            left.base_qualifiers == right.base_qualifiers &&
            left.pointer_depth == right.pointer_depth;
 }
@@ -100,6 +115,7 @@ bool minic_type_is_void(MinicType type)
     return type.base_kind == MINIC_TYPE_BASE_VOID &&
            type.record_id == MINIC_RECORD_INVALID &&
            type.array_type_id == MINIC_ARRAY_TYPE_INVALID &&
+           type.integer_sign == MINIC_INTEGER_SIGN_NONE &&
            type.pointer_depth == 0U;
 }
 
@@ -108,7 +124,21 @@ bool minic_type_is_integer(MinicType type)
     return type.base_kind == MINIC_TYPE_BASE_INT &&
            type.record_id == MINIC_RECORD_INVALID &&
            type.array_type_id == MINIC_ARRAY_TYPE_INVALID &&
+           (type.integer_sign == MINIC_INTEGER_SIGN_SIGNED ||
+            type.integer_sign == MINIC_INTEGER_SIGN_UNSIGNED) &&
            type.pointer_depth == 0U;
+}
+
+bool minic_type_is_signed_integer(MinicType type)
+{
+    return minic_type_is_integer(type) &&
+           type.integer_sign == MINIC_INTEGER_SIGN_SIGNED;
+}
+
+bool minic_type_is_unsigned_integer(MinicType type)
+{
+    return minic_type_is_integer(type) &&
+           type.integer_sign == MINIC_INTEGER_SIGN_UNSIGNED;
 }
 
 bool minic_type_is_record(MinicType type)
@@ -116,6 +146,7 @@ bool minic_type_is_record(MinicType type)
     return type.base_kind == MINIC_TYPE_BASE_RECORD &&
            type.record_id != MINIC_RECORD_INVALID &&
            type.array_type_id == MINIC_ARRAY_TYPE_INVALID &&
+           type.integer_sign == MINIC_INTEGER_SIGN_NONE &&
            type.pointer_depth == 0U;
 }
 
@@ -124,6 +155,7 @@ bool minic_type_is_array(MinicType type)
     return type.base_kind == MINIC_TYPE_BASE_ARRAY &&
            type.record_id == MINIC_RECORD_INVALID &&
            type.array_type_id != MINIC_ARRAY_TYPE_INVALID &&
+           type.integer_sign == MINIC_INTEGER_SIGN_NONE &&
            type.pointer_depth == 0U;
 }
 
