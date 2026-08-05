@@ -133,6 +133,13 @@ rv64_programs() {
         sh tests/programs/c0/run.sh
 }
 
+external_tiny_aes() {
+    MINIC="$root/build/ci-release/bin/minic" \
+    BUILD_DIR="$root/build/ci-external" \
+    RISCV_CC=riscv64-linux-gnu-gcc \
+        sh tests/external/tiny-aes-c/probe.sh
+}
+
 printf 'Runner CPUs=%s\n' "$cpu_count"
 printf '%s\n' 'Phase 1: tool preparation plus three host configurations'
 start_gate rv64-tools install_rv64_tools
@@ -143,7 +150,8 @@ if ! wait_phase; then
     exit 1
 fi
 
-printf '%s\n' 'Phase 2: two isolated RV64 suites on the same runner'
+printf '%s\n' 'Phase 2: two RV64 suites plus the first external frontier'
 start_gate rv64-focused rv64_focused
 start_gate rv64-programs rv64_programs
+start_gate external-tiny-aes external_tiny_aes
 wait_phase
