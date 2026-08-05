@@ -155,6 +155,10 @@ bool minic_c0_program_add_function(
     size_t local_count,
     MinicBlockId body_block,
     MinicFunctionId *function_id);
+bool minic_c0_program_finish_function(
+    MinicC0Program *program,
+    MinicFunctionId function_id,
+    size_t local_count);
 
 const MinicExpression *minic_c0_program_expression(
     const MinicC0Program *program,
