@@ -52,8 +52,6 @@ typedef struct MinicExpression {
     union {
         int integer_value;
         MinicLocalId local_id;
-        /* Temporary source-compatible alias for the zero-argument backend. */
-        MinicFunctionId function_id;
         struct {
             MinicFunctionId function_id;
             size_t argument_count;
