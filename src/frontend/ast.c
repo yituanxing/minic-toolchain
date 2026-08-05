@@ -82,6 +82,10 @@ void minic_c0_program_destroy(MinicC0Program *program)
     for (index = 0U; index < program->type_alias_count; ++index) {
         free(program->type_aliases[index].name);
     }
+    for (index = 0U; index < program->global_object_count; ++index) {
+        free(program->global_objects[index].name);
+        free(program->global_objects[index].initializer_values);
+    }
     free(program->expressions);
     free(program->locals);
     free(program->statements);
@@ -90,6 +94,7 @@ void minic_c0_program_destroy(MinicC0Program *program)
     free(program->records);
     free(program->array_types);
     free(program->type_aliases);
+    free(program->global_objects);
     minic_c0_program_initialize(program);
 }
 
