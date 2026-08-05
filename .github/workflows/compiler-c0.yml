@@ -1,0 +1,55 @@
+name: Compiler C0 Gates
+
+on:
+  push:
+    branches:
+      - compiler/c0-external-toolchain
+  pull_request:
+    paths:
+      - 'Makefile'
+      - 'include/**'
+      - 'src/**'
+      - 'tools/**'
+      - 'tests/**'
+      - '.github/workflows/compiler-c0.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: compiler-c0-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  host-gates:
+    name: Host C11 and sanitizers
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Fast host gate
+        run: make check
+
+      - name: ASan and UBSan gate
+        run: make sanitize
+
+  rv64-differential:
+    name: RV64 GCC versus MiniC
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install RISC-V user-mode validation tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            gcc-riscv64-linux-gnu \
+            libc6-dev-riscv64-cross \
+            qemu-user
+
+      - name: Run focused and real-program gates
+        run: |
+          make check-runtime \
+            RISCV_CC=riscv64-linux-gnu-gcc \
+            QEMU_RISCV64=qemu-riscv64 \
+            REQUIRE_RISCV_RUNTIME=1
