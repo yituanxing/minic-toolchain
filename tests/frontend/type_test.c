@@ -14,6 +14,7 @@ int main(void)
     MinicType integer_type;
     MinicType pointer_type;
     MinicType pointer_to_pointer_type;
+    MinicType recovered_type;
     MinicType overflow_type;
 
     integer_type = minic_type_int();
@@ -33,8 +34,18 @@ int main(void)
         minic_type_equal(pointer_type, pointer_to_pointer_type)) {
         return fail("nested pointer construction");
     }
+    if (!minic_type_pointee(pointer_type, &recovered_type) ||
+        !minic_type_equal(recovered_type, integer_type) ||
+        !minic_type_pointee(pointer_to_pointer_type, &recovered_type) ||
+        !minic_type_equal(recovered_type, pointer_type)) {
+        return fail("pointee recovery");
+    }
     if (minic_type_pointer_to(integer_type, NULL)) {
-        return fail("NULL output accepted");
+        return fail("NULL pointer output accepted");
+    }
+    if (minic_type_pointee(integer_type, &recovered_type) ||
+        minic_type_pointee(pointer_type, NULL)) {
+        return fail("invalid pointee request accepted");
     }
     overflow_type = integer_type;
     overflow_type.pointer_depth = UINT_MAX;
