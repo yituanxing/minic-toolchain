@@ -7,7 +7,18 @@ MinicType minic_type_int(void)
 {
     MinicType type;
 
-    type.builtin_kind = MINIC_BUILTIN_TYPE_INT;
+    type.base_kind = MINIC_TYPE_BASE_INT;
+    type.record_id = MINIC_RECORD_INVALID;
+    type.pointer_depth = 0U;
+    return type;
+}
+
+MinicType minic_type_record(MinicRecordId record_id)
+{
+    MinicType type;
+
+    type.base_kind = MINIC_TYPE_BASE_RECORD;
+    type.record_id = record_id;
     type.pointer_depth = 0U;
     return type;
 }
@@ -34,13 +45,22 @@ bool minic_type_pointee(MinicType pointer, MinicType *result)
 
 bool minic_type_equal(MinicType left, MinicType right)
 {
-    return left.builtin_kind == right.builtin_kind &&
+    return left.base_kind == right.base_kind &&
+           left.record_id == right.record_id &&
            left.pointer_depth == right.pointer_depth;
 }
 
 bool minic_type_is_integer(MinicType type)
 {
-    return type.builtin_kind == MINIC_BUILTIN_TYPE_INT &&
+    return type.base_kind == MINIC_TYPE_BASE_INT &&
+           type.record_id == MINIC_RECORD_INVALID &&
+           type.pointer_depth == 0U;
+}
+
+bool minic_type_is_record(MinicType type)
+{
+    return type.base_kind == MINIC_TYPE_BASE_RECORD &&
+           type.record_id != MINIC_RECORD_INVALID &&
            type.pointer_depth == 0U;
 }
 
