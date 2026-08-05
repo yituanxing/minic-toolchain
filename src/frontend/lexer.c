@@ -91,6 +91,9 @@ static MinicTokenKind minic_classify_identifier(
     if (length == 5U && memcmp(text, "const", 5U) == 0) {
         return MINIC_TOKEN_KW_CONST;
     }
+    if (length == 7U && memcmp(text, "typedef", 7U) == 0) {
+        return MINIC_TOKEN_KW_TYPEDEF;
+    }
     if (length == 6U && memcmp(text, "return", 6U) == 0) {
         return MINIC_TOKEN_KW_RETURN;
     }
