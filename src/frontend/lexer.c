@@ -75,6 +75,13 @@ static bool minic_is_decimal_digit(char character)
     return character >= '0' && character <= '9';
 }
 
+static bool minic_is_hexadecimal_digit(char character)
+{
+    return minic_is_decimal_digit(character) ||
+           (character >= 'a' && character <= 'f') ||
+           (character >= 'A' && character <= 'F');
+}
+
 static MinicTokenKind minic_classify_identifier(
     const char *text,
     size_t length)
@@ -93,6 +100,9 @@ static MinicTokenKind minic_classify_identifier(
     }
     if (length == 7U && memcmp(text, "typedef", 7U) == 0) {
         return MINIC_TOKEN_KW_TYPEDEF;
+    }
+    if (length == 6U && memcmp(text, "static", 6U) == 0) {
+        return MINIC_TOKEN_KW_STATIC;
     }
     if (length == 6U && memcmp(text, "return", 6U) == 0) {
         return MINIC_TOKEN_KW_RETURN;
@@ -135,6 +145,25 @@ static void minic_lexer_set_diagnostic(
             "unexpected byte 0x%02x",
             (unsigned int)(unsigned char)character);
     }
+}
+
+static void minic_lexer_set_message(
+    const MinicLexer *lexer,
+    MinicDiagnostic *diagnostic,
+    MinicSourcePosition position,
+    const char *message)
+{
+    if (diagnostic == NULL) {
+        return;
+    }
+    diagnostic->path = lexer->path;
+    diagnostic->line = position.line;
+    diagnostic->column = position.column;
+    (void)snprintf(
+        diagnostic->message,
+        sizeof(diagnostic->message),
+        "%s",
+        message);
 }
 
 void minic_lexer_initialize(
@@ -189,9 +218,28 @@ bool minic_lexer_next(
     }
 
     if (minic_is_decimal_digit(character)) {
-        do {
+        if (character == '0' &&
+            (minic_lexer_peek_next(lexer) == 'x' ||
+             minic_lexer_peek_next(lexer) == 'X')) {
             minic_lexer_advance(lexer);
-        } while (minic_is_decimal_digit(minic_lexer_peek(lexer)));
+            minic_lexer_advance(lexer);
+            if (!minic_is_hexadecimal_digit(minic_lexer_peek(lexer))) {
+                token->span.end = minic_lexer_position(lexer);
+                minic_lexer_set_message(
+                    lexer,
+                    diagnostic,
+                    begin,
+                    "expected hexadecimal digit after 0x");
+                return false;
+            }
+            do {
+                minic_lexer_advance(lexer);
+            } while (minic_is_hexadecimal_digit(minic_lexer_peek(lexer)));
+        } else {
+            do {
+                minic_lexer_advance(lexer);
+            } while (minic_is_decimal_digit(minic_lexer_peek(lexer)));
+        }
         token->kind = MINIC_TOKEN_INTEGER_CONSTANT;
         token->span.end = minic_lexer_position(lexer);
         return true;
