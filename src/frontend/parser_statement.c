@@ -105,38 +105,34 @@ static bool parse_declaration(MinicParser *parser)
 static bool parse_assignment(MinicParser *parser)
 {
     MinicStatement statement;
-    MinicSourceSpan name_span;
-    MinicLocalId target_local_id;
     const MinicExpression *target_expression;
     const MinicExpression *assigned_expression;
 
     (void)memset(&statement, 0, sizeof(statement));
-    name_span = parser->current.span;
-    target_local_id = minic_parser_find_local(parser, name_span);
-    if (target_local_id == MINIC_LOCAL_INVALID) {
-        minic_parser_error(parser, "assignment to undeclared local");
-        return false;
-    }
     statement.kind = MINIC_STATEMENT_ASSIGN;
-    statement.span.begin = name_span.begin;
-    if (!add_local_lvalue_expression(
+    statement.span.begin = parser->current.span.begin;
+    if (!minic_parser_parse_expression(
             parser,
-            target_local_id,
-            name_span,
-            &statement.target_expression) ||
-        !minic_parser_advance(parser) ||
-        !minic_parser_expect(parser, MINIC_TOKEN_EQUAL, "expected '='") ||
-        !minic_parser_parse_expression(parser, &statement.expression, 0U)) {
+            &statement.target_expression,
+            0U)) {
         return false;
     }
     target_expression = minic_c0_program_expression(
         parser->program,
         statement.target_expression);
+    if (target_expression == NULL ||
+        target_expression->value_category != MINIC_VALUE_LVALUE) {
+        minic_parser_error(parser, "assignment target must be an lvalue");
+        return false;
+    }
+    if (!minic_parser_expect(parser, MINIC_TOKEN_EQUAL, "expected '='") ||
+        !minic_parser_parse_expression(parser, &statement.expression, 0U)) {
+        return false;
+    }
     assigned_expression = minic_c0_program_expression(
         parser->program,
         statement.expression);
-    if (target_expression == NULL || assigned_expression == NULL ||
-        target_expression->value_category != MINIC_VALUE_LVALUE ||
+    if (assigned_expression == NULL ||
         !minic_type_equal(target_expression->type, assigned_expression->type)) {
         minic_parser_error(parser, "assignment type does not match target type");
         return false;
@@ -326,7 +322,9 @@ bool minic_parser_parse_statement(MinicParser *parser, bool allow_declaration)
     if (parser->current.kind == MINIC_TOKEN_KW_RETURN) {
         return parse_return(parser);
     }
-    if (parser->current.kind == MINIC_TOKEN_IDENTIFIER) {
+    if (parser->current.kind == MINIC_TOKEN_IDENTIFIER ||
+        parser->current.kind == MINIC_TOKEN_STAR ||
+        parser->current.kind == MINIC_TOKEN_LPAREN) {
         return parse_assignment(parser);
     }
     minic_parser_error(
