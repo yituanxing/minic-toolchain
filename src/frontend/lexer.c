@@ -85,6 +85,9 @@ static MinicTokenKind minic_classify_identifier(
     if (length == 4U && memcmp(text, "void", 4U) == 0) {
         return MINIC_TOKEN_KW_VOID;
     }
+    if (length == 6U && memcmp(text, "struct", 6U) == 0) {
+        return MINIC_TOKEN_KW_STRUCT;
+    }
     if (length == 6U && memcmp(text, "return", 6U) == 0) {
         return MINIC_TOKEN_KW_RETURN;
     }
