@@ -3,6 +3,65 @@
 #include <stdint.h>
 #include <stdio.h>
 
+static bool minic_riscv64_object_access(
+    const MinicC0Program *program,
+    const MinicFunction *function,
+    MinicLocalId local_id,
+    const MinicLocal **local,
+    size_t *width)
+{
+    const MinicLocal *object;
+    size_t object_width;
+
+    if (program == NULL || function == NULL || local == NULL || width == NULL ||
+        local_id < function->local_begin ||
+        local_id - function->local_begin >= function->local_count) {
+        return false;
+    }
+    object = minic_c0_program_local(program, local_id);
+    if (object == NULL) {
+        return false;
+    }
+    if (minic_type_is_integer(object->type)) {
+        object_width = 4U;
+    } else if (minic_type_is_pointer(object->type)) {
+        object_width = 8U;
+    } else {
+        return false;
+    }
+    if (object->storage_offset > function->local_storage_size ||
+        object_width > function->local_storage_size - object->storage_offset) {
+        return false;
+    }
+    *local = object;
+    *width = object_width;
+    return true;
+}
+
+static bool minic_riscv64_emit_s0_access(
+    FILE *file,
+    const char *instruction,
+    const char *register_name,
+    size_t offset)
+{
+    if (offset <= 2047U) {
+        return fprintf(
+            file,
+            "  %s %s, %zu(s0)\n",
+            instruction,
+            register_name,
+            offset) >= 0;
+    }
+    return fprintf(
+        file,
+        "  li t2, %zu\n"
+        "  add t2, s0, t2\n"
+        "  %s %s, 0(t2)\n",
+        offset,
+        instruction,
+        register_name) >= 0;
+}
+
 void minic_riscv64_set_diagnostic(
     MinicDiagnostic *diagnostic,
     const char *path,
@@ -85,6 +144,70 @@ bool minic_riscv64_emit_sp_load64(
         register_name) >= 0;
 }
 
+bool minic_riscv64_emit_object_load(
+    FILE *file,
+    const MinicC0Program *program,
+    const MinicFunction *function,
+    MinicLocalId local_id)
+{
+    const MinicLocal *local;
+    size_t width;
+
+    if (!minic_riscv64_object_access(
+            program,
+            function,
+            local_id,
+            &local,
+            &width)) {
+        return false;
+    }
+    return minic_riscv64_emit_s0_access(
+        file,
+        width == 4U ? "lw" : "ld",
+        "a0",
+        local->storage_offset);
+}
+
+bool minic_riscv64_emit_object_store_register(
+    FILE *file,
+    const MinicC0Program *program,
+    const MinicFunction *function,
+    MinicLocalId local_id,
+    const char *register_name)
+{
+    const MinicLocal *local;
+    size_t width;
+
+    if (register_name == NULL ||
+        !minic_riscv64_object_access(
+            program,
+            function,
+            local_id,
+            &local,
+            &width)) {
+        return false;
+    }
+    return minic_riscv64_emit_s0_access(
+        file,
+        width == 4U ? "sw" : "sd",
+        register_name,
+        local->storage_offset);
+}
+
+bool minic_riscv64_emit_object_store(
+    FILE *file,
+    const MinicC0Program *program,
+    const MinicFunction *function,
+    MinicLocalId local_id)
+{
+    return minic_riscv64_emit_object_store_register(
+        file,
+        program,
+        function,
+        local_id,
+        "a0");
+}
+
 bool minic_riscv64_emit_local_load(
     FILE *file,
     const MinicFunction *function,
@@ -145,14 +268,13 @@ bool minic_riscv64_frame_size(
     const MinicFunction *function,
     size_t *frame_size)
 {
-    size_t local_bytes;
     size_t required_bytes;
 
-    if (function->local_count > (SIZE_MAX - 31U) / 4U) {
+    if (function == NULL || frame_size == NULL ||
+        function->local_storage_size > SIZE_MAX - 31U) {
         return false;
     }
-    local_bytes = function->local_count * 4U;
-    required_bytes = local_bytes + 16U;
+    required_bytes = function->local_storage_size + 16U;
     *frame_size = (required_bytes + 15U) & ~(size_t)15U;
     return true;
 }
