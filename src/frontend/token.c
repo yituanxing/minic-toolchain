@@ -41,6 +41,8 @@ const char *minic_token_kind_name(MinicTokenKind kind)
         return "-";
     case MINIC_TOKEN_STAR:
         return "*";
+    case MINIC_TOKEN_AMPERSAND:
+        return "&";
     case MINIC_TOKEN_SLASH:
         return "/";
     case MINIC_TOKEN_PERCENT:
