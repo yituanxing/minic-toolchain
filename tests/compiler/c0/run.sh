@@ -189,6 +189,10 @@ compile_source function_typed_prototype function_typed_prototype
 expect_instructions function_typed_prototype \
     "mv s0, sp" "li a0, 0" "j .Lmain_return"
 
+compile_source typedef_multidimensional_array typedef_multidimensional_array
+expect_instructions typedef_multidimensional_array \
+    "mv s0, sp" "li a0, 0" "j .Lmain_return"
+
 expect_compile_failure \
     invalid_duplicate_block_local \
     "duplicate local declaration"
@@ -243,4 +247,13 @@ expect_compile_failure \
 expect_compile_failure \
     invalid_named_void_parameter \
     "parameter type cannot be bare void"
+expect_compile_failure \
+    invalid_duplicate_typedef \
+    "duplicate typedef name"
+expect_compile_failure \
+    invalid_zero_length_typedef_array \
+    "array bound must be greater than zero"
+expect_compile_failure \
+    invalid_void_typedef \
+    "typedef cannot name bare void"
 expect_compile_failure invalid_return "expected expression"
