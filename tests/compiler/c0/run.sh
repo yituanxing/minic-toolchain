@@ -194,4 +194,10 @@ expect_compile_failure \
 expect_compile_failure \
     invalid_pointer_initializer \
     "initializer type does not match local type"
+expect_compile_failure \
+    invalid_assignment_rvalue \
+    "assignment target must be an lvalue"
+expect_compile_failure \
+    invalid_pointer_assignment_type \
+    "assignment type does not match target type"
 expect_compile_failure invalid_return "expected expression"
