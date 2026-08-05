@@ -3,10 +3,37 @@
 
 #include <string.h>
 
+static bool function_signature_matches(
+    const MinicFunction *function,
+    MinicType return_type,
+    const MinicType *parameter_types,
+    size_t parameter_count)
+{
+    size_t parameter_index;
+
+    if (function == NULL ||
+        !minic_type_equal(function->return_type, return_type) ||
+        function->parameter_count != parameter_count) {
+        return false;
+    }
+    for (parameter_index = 0U;
+         parameter_index < parameter_count;
+         ++parameter_index) {
+        if (!minic_type_equal(
+                function->parameter_types[parameter_index],
+                parameter_types[parameter_index])) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool parse_function(MinicParser *parser)
 {
     MinicSourceSpan name_span;
     MinicSourceSpan parameter_name_spans[8];
+    MinicType parameter_types[8];
+    MinicType return_type;
     MinicBlockId body_block;
     MinicFunctionId function_id;
     const MinicFunction *existing_function;
@@ -19,7 +46,9 @@ static bool parse_function(MinicParser *parser)
 
     body_block = MINIC_BLOCK_INVALID;
     parameter_count = 0U;
+    return_type = minic_type_int();
     (void)memset(parameter_name_spans, 0, sizeof(parameter_name_spans));
+    (void)memset(parameter_types, 0, sizeof(parameter_types));
     if (!minic_parser_expect(parser, MINIC_TOKEN_KW_INT, "expected keyword 'int'")) {
         return false;
     }
@@ -54,6 +83,7 @@ static bool parse_function(MinicParser *parser)
                 return false;
             }
             parameter_name_spans[parameter_count] = parser->current.span;
+            parameter_types[parameter_count] = minic_type_int();
             parameter_count += 1U;
             if (!minic_parser_advance(parser)) {
                 return false;
@@ -81,8 +111,11 @@ static bool parse_function(MinicParser *parser)
 
     if (function_id != MINIC_FUNCTION_INVALID) {
         existing_function = minic_c0_program_function(parser->program, function_id);
-        if (existing_function == NULL ||
-            existing_function->parameter_count != parameter_count) {
+        if (!function_signature_matches(
+                existing_function,
+                return_type,
+                parameter_types,
+                parameter_count)) {
             minic_parser_error(parser, "conflicting function declaration");
             return false;
         }
@@ -98,9 +131,11 @@ static bool parse_function(MinicParser *parser)
                     0U,
                     MINIC_BLOCK_INVALID,
                     &function_id) ||
-                !minic_c0_program_set_function_parameter_count(
+                !minic_c0_program_set_function_signature(
                     parser->program,
                     function_id,
+                    return_type,
+                    parameter_types,
                     parameter_count)) {
                 minic_parser_error(parser, "out of memory while declaring function");
                 return false;
@@ -141,7 +176,7 @@ static bool parse_function(MinicParser *parser)
              parameter_index < parameter_count;
              ++parameter_index) {
             parameter_local.name_span = parameter_name_spans[parameter_index];
-            parameter_local.type = minic_type_int();
+            parameter_local.type = parameter_types[parameter_index];
             parameter_local.element_count = 1U;
             parameter_local.storage_offset = 0U;
             if (minic_parser_find_local_in_current_scope(
@@ -175,9 +210,11 @@ static bool parse_function(MinicParser *parser)
                 parameter_count,
                 body_block,
                 &function_id) ||
-            !minic_c0_program_set_function_parameter_count(
+            !minic_c0_program_set_function_signature(
                 parser->program,
                 function_id,
+                return_type,
+                parameter_types,
                 parameter_count)) {
             minic_parser_error(parser, "out of memory while adding function");
             return false;
