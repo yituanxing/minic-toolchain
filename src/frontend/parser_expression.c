@@ -65,7 +65,7 @@ static bool parse_primary(
                 return false;
             }
             callee = minic_c0_program_function(parser->program, function_id);
-            if (callee == NULL || callee->parameter_count > 1U ||
+            if (callee == NULL || callee->parameter_count > 2U ||
                 !minic_parser_advance(parser)) {
                 minic_parser_error(parser, "unsupported function call signature");
                 return false;
@@ -76,18 +76,35 @@ static bool parse_primary(
             expression.span.begin = name_span.begin;
             expression.value.call.function_id = function_id;
             expression.value.call.argument_count = callee->parameter_count;
-            if (callee->parameter_count == 1U) {
-                if (parser->current.kind == MINIC_TOKEN_RPAREN) {
-                    minic_parser_error(
-                        parser,
-                        "call argument count does not match declaration");
-                    return false;
-                }
-                if (!minic_parser_parse_expression(
-                        parser,
-                        &expression.value.call.arguments[0],
-                        0U)) {
-                    return false;
+            {
+                size_t argument_index;
+
+                for (argument_index = 0U;
+                     argument_index < callee->parameter_count;
+                     ++argument_index) {
+                    if (parser->current.kind == MINIC_TOKEN_RPAREN) {
+                        minic_parser_error(
+                            parser,
+                            "call argument count does not match declaration");
+                        return false;
+                    }
+                    if (!minic_parser_parse_expression(
+                            parser,
+                            &expression.value.call.arguments[argument_index],
+                            0U)) {
+                        return false;
+                    }
+                    if (argument_index + 1U < callee->parameter_count) {
+                        if (parser->current.kind != MINIC_TOKEN_COMMA) {
+                            minic_parser_error(
+                                parser,
+                                "call argument count does not match declaration");
+                            return false;
+                        }
+                        if (!minic_parser_advance(parser)) {
+                            return false;
+                        }
+                    }
                 }
             }
             if (parser->current.kind != MINIC_TOKEN_RPAREN) {
