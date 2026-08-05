@@ -40,5 +40,4 @@ jobs:
       - name: Run the complete compiler gate
         env:
           RV64_CACHE_HIT: ${{ steps.rv64-cache.outputs.cache-hit }}
-          APT_CACHE_DIR: ~/.cache/minic-apt/archives
         run: bash .github/scripts/compiler-c0-full-gate.sh
