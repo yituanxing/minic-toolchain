@@ -88,14 +88,23 @@ static bool minic_riscv64_emit_sp_load64(
         register_name) >= 0;
 }
 
-static bool minic_riscv64_emit_local_load(FILE *file, MinicLocalId local_id)
+static bool minic_riscv64_emit_local_load(
+    FILE *file,
+    const MinicFunction *function,
+    MinicLocalId local_id)
 {
+    size_t relative_id;
     size_t offset;
 
-    if (local_id > SIZE_MAX / 4U) {
+    if (local_id < function->local_begin ||
+        local_id - function->local_begin >= function->local_count) {
         return false;
     }
-    offset = local_id * 4U;
+    relative_id = local_id - function->local_begin;
+    if (relative_id > SIZE_MAX / 4U) {
+        return false;
+    }
+    offset = relative_id * 4U;
     if (offset <= 2047U) {
         return fprintf(file, "  lw a0, %zu(s0)\n", offset) >= 0;
     }
@@ -107,14 +116,23 @@ static bool minic_riscv64_emit_local_load(FILE *file, MinicLocalId local_id)
         offset) >= 0;
 }
 
-static bool minic_riscv64_emit_local_store(FILE *file, MinicLocalId local_id)
+static bool minic_riscv64_emit_local_store(
+    FILE *file,
+    const MinicFunction *function,
+    MinicLocalId local_id)
 {
+    size_t relative_id;
     size_t offset;
 
-    if (local_id > SIZE_MAX / 4U) {
+    if (local_id < function->local_begin ||
+        local_id - function->local_begin >= function->local_count) {
         return false;
     }
-    offset = local_id * 4U;
+    relative_id = local_id - function->local_begin;
+    if (relative_id > SIZE_MAX / 4U) {
+        return false;
+    }
+    offset = relative_id * 4U;
     if (offset <= 2047U) {
         return fprintf(file, "  sw a0, %zu(s0)\n", offset) >= 0;
     }
@@ -129,6 +147,7 @@ static bool minic_riscv64_emit_local_store(FILE *file, MinicLocalId local_id)
 static bool minic_riscv64_emit_expression(
     FILE *file,
     const MinicC0Program *program,
+    const MinicFunction *function,
     MinicExpressionId expression_id)
 {
     const MinicExpression *expression;
@@ -148,12 +167,14 @@ static bool minic_riscv64_emit_expression(
     case MINIC_EXPRESSION_LOCAL:
         return minic_riscv64_emit_local_load(
             file,
+            function,
             expression->value.local_id);
 
     case MINIC_EXPRESSION_UNARY:
         if (!minic_riscv64_emit_expression(
                 file,
                 program,
+                function,
                 expression->value.unary.operand)) {
             return false;
         }
@@ -171,6 +192,7 @@ static bool minic_riscv64_emit_expression(
         if (!minic_riscv64_emit_expression(
                 file,
                 program,
+                function,
                 expression->value.binary.left) ||
             fprintf(
                 file,
@@ -179,6 +201,7 @@ static bool minic_riscv64_emit_expression(
             !minic_riscv64_emit_expression(
                 file,
                 program,
+                function,
                 expression->value.binary.right) ||
             fprintf(
                 file,
@@ -217,16 +240,16 @@ static bool minic_riscv64_emit_expression(
 }
 
 static bool minic_riscv64_frame_size(
-    const MinicC0Program *program,
+    const MinicFunction *function,
     size_t *frame_size)
 {
     size_t local_bytes;
     size_t required_bytes;
 
-    if (program->local_count > (SIZE_MAX - 31U) / 4U) {
+    if (function->local_count > (SIZE_MAX - 31U) / 4U) {
         return false;
     }
-    local_bytes = program->local_count * 4U;
+    local_bytes = function->local_count * 4U;
     required_bytes = local_bytes + 16U;
     *frame_size = (required_bytes + 15U) & ~(size_t)15U;
     return true;
@@ -235,12 +258,14 @@ static bool minic_riscv64_frame_size(
 static bool minic_riscv64_emit_block(
     FILE *file,
     const MinicC0Program *program,
+    const MinicFunction *function,
     MinicBlockId block_id,
     size_t *label_counter);
 
 static bool minic_riscv64_emit_statement(
     FILE *file,
     const MinicC0Program *program,
+    const MinicFunction *function,
     const MinicStatement *statement,
     size_t *label_counter)
 {
@@ -253,15 +278,17 @@ static bool minic_riscv64_emit_statement(
         return minic_riscv64_emit_expression(
                    file,
                    program,
+                   function,
                    statement->expression) &&
-               minic_riscv64_emit_local_store(file, statement->local_id);
+               minic_riscv64_emit_local_store(file, function, statement->local_id);
 
     case MINIC_STATEMENT_RETURN:
         return minic_riscv64_emit_expression(
                    file,
                    program,
+                   function,
                    statement->expression) &&
-               fprintf(file, "  j .Lmain_return\n") >= 0;
+               fprintf(file, "  j .L%s_return\n", function->name) >= 0;
 
     case MINIC_STATEMENT_IF: {
         size_t label;
@@ -271,11 +298,13 @@ static bool minic_riscv64_emit_statement(
         if (!minic_riscv64_emit_expression(
                 file,
                 program,
+                function,
                 statement->expression) ||
             fprintf(file, "  beqz a0, .Lif_else_%zu\n", label) < 0 ||
             !minic_riscv64_emit_block(
                 file,
                 program,
+                function,
                 statement->then_block,
                 label_counter) ||
             fprintf(
@@ -290,6 +319,7 @@ static bool minic_riscv64_emit_statement(
             !minic_riscv64_emit_block(
                 file,
                 program,
+                function,
                 statement->else_block,
                 label_counter)) {
             return false;
@@ -306,11 +336,13 @@ static bool minic_riscv64_emit_statement(
                minic_riscv64_emit_expression(
                    file,
                    program,
+                   function,
                    statement->expression) &&
                fprintf(file, "  beqz a0, .Lwhile_end_%zu\n", label) >= 0 &&
                minic_riscv64_emit_block(
                    file,
                    program,
+                   function,
                    statement->then_block,
                    label_counter) &&
                fprintf(
@@ -328,6 +360,7 @@ static bool minic_riscv64_emit_statement(
 static bool minic_riscv64_emit_block(
     FILE *file,
     const MinicC0Program *program,
+    const MinicFunction *function,
     MinicBlockId block_id,
     size_t *label_counter)
 {
@@ -347,6 +380,7 @@ static bool minic_riscv64_emit_block(
         if (!minic_riscv64_emit_statement(
                 file,
                 program,
+                function,
                 statement,
                 label_counter)) {
             return false;
@@ -361,11 +395,22 @@ bool minic_riscv64_write_c0_program(
     MinicDiagnostic *diagnostic)
 {
     FILE *file;
+    const MinicFunction *function;
     size_t frame_size;
     size_t label_counter;
     bool success;
 
-    if (!minic_riscv64_frame_size(program, &frame_size)) {
+    function = minic_c0_program_function(program, program->entry_function);
+    if (function == NULL || function->name_length == 0U ||
+        function->body_block >= program->block_count) {
+        minic_codegen_set_diagnostic(
+            diagnostic,
+            path,
+            "entry function is missing or invalid");
+        return false;
+    }
+
+    if (!minic_riscv64_frame_size(function, &frame_size)) {
         minic_codegen_set_diagnostic(
             diagnostic,
             path,
@@ -389,9 +434,12 @@ bool minic_riscv64_write_c0_program(
     success = fprintf(
         file,
         ".text\n"
-        ".globl main\n"
-        ".type main, @function\n"
-        "main:\n") >= 0;
+        ".globl %s\n"
+        ".type %s, @function\n"
+        "%s:\n",
+        function->name,
+        function->name,
+        function->name) >= 0;
     if (success) {
         success = minic_riscv64_emit_stack_allocate(file, frame_size);
     }
@@ -405,14 +453,16 @@ bool minic_riscv64_write_c0_program(
         success = minic_riscv64_emit_block(
             file,
             program,
-            program->body_block,
+            function,
+            function->body_block,
             &label_counter);
     }
     if (success) {
         success = fprintf(
             file,
             "  li a0, 0\n"
-            ".Lmain_return:\n") >= 0;
+            ".L%s_return:\n",
+            function->name) >= 0;
     }
     if (success) {
         success = minic_riscv64_emit_sp_load64(file, "ra", frame_size - 8U) &&
@@ -425,7 +475,9 @@ bool minic_riscv64_write_c0_program(
         success = fprintf(
             file,
             "  ret\n"
-            ".size main, .-main\n") >= 0;
+            ".size %s, .-%s\n",
+            function->name,
+            function->name) >= 0;
     }
 
     if (!success) {
