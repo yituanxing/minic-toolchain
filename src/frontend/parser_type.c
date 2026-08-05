@@ -5,10 +5,19 @@ bool minic_parser_parse_type_name(
     MinicType *type)
 {
     MinicType parsed_type;
+    bool is_const;
 
     if (type == NULL) {
         minic_parser_error(parser, "internal error: missing parsed type output");
         return false;
+    }
+
+    is_const = false;
+    if (parser->current.kind == MINIC_TOKEN_KW_CONST) {
+        is_const = true;
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
     }
 
     if (parser->current.kind == MINIC_TOKEN_KW_INT) {
@@ -45,6 +54,10 @@ bool minic_parser_parse_type_name(
         return false;
     }
 
+    if (is_const && !minic_type_add_const(parsed_type, &parsed_type)) {
+        minic_parser_error(parser, "cannot apply const qualifier");
+        return false;
+    }
     while (parser->current.kind == MINIC_TOKEN_STAR) {
         if (!minic_type_pointer_to(parsed_type, &parsed_type) ||
             !minic_parser_advance(parser)) {
