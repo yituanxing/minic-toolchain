@@ -13,6 +13,7 @@ typedef size_t MinicStatementId;
 typedef size_t MinicBlockId;
 typedef size_t MinicFunctionId;
 typedef size_t MinicTypeAliasId;
+typedef size_t MinicGlobalObjectId;
 
 #define MINIC_EXPRESSION_INVALID ((MinicExpressionId)-1)
 #define MINIC_LOCAL_INVALID ((MinicLocalId)-1)
@@ -20,6 +21,7 @@ typedef size_t MinicTypeAliasId;
 #define MINIC_BLOCK_INVALID ((MinicBlockId)-1)
 #define MINIC_FUNCTION_INVALID ((MinicFunctionId)-1)
 #define MINIC_TYPE_ALIAS_INVALID ((MinicTypeAliasId)-1)
+#define MINIC_GLOBAL_OBJECT_INVALID ((MinicGlobalObjectId)-1)
 
 typedef enum MinicValueCategory {
     MINIC_VALUE_RVALUE = 0,
@@ -158,6 +160,19 @@ typedef struct MinicTypeAlias {
     MinicType type;
 } MinicTypeAlias;
 
+typedef struct MinicGlobalObject {
+    char *name;
+    size_t name_length;
+    MinicType type;
+    int *initializer_values;
+    size_t initializer_count;
+    size_t initializer_capacity;
+    size_t storage_size;
+    size_t alignment;
+    bool is_internal;
+    bool is_read_only;
+} MinicGlobalObject;
+
 typedef struct MinicC0Program {
     MinicExpression *expressions;
     size_t expression_count;
@@ -192,6 +207,10 @@ typedef struct MinicC0Program {
     MinicTypeAlias *type_aliases;
     size_t type_alias_count;
     size_t type_alias_capacity;
+
+    MinicGlobalObject *global_objects;
+    size_t global_object_count;
+    size_t global_object_capacity;
 
     MinicExpressionId return_expression;
 } MinicC0Program;
@@ -271,6 +290,18 @@ bool minic_c0_program_add_type_alias(
     size_t name_length,
     MinicType type,
     MinicTypeAliasId *alias_id);
+bool minic_c0_program_add_global_object(
+    MinicC0Program *program,
+    const char *name,
+    size_t name_length,
+    MinicType type,
+    bool is_internal,
+    bool is_read_only,
+    MinicGlobalObjectId *global_object_id);
+bool minic_c0_global_object_add_initializer(
+    MinicC0Program *program,
+    MinicGlobalObjectId global_object_id,
+    int value);
 
 const MinicExpression *minic_c0_program_expression(
     const MinicC0Program *program,
@@ -299,5 +330,8 @@ const MinicArrayType *minic_c0_program_array_type(
 const MinicTypeAlias *minic_c0_program_type_alias(
     const MinicC0Program *program,
     MinicTypeAliasId alias_id);
+const MinicGlobalObject *minic_c0_program_global_object(
+    const MinicC0Program *program,
+    MinicGlobalObjectId global_object_id);
 
 #endif
