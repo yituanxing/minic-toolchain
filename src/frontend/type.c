@@ -126,9 +126,6 @@ bool minic_type_integer_common(
 
 bool minic_type_assignment_compatible(MinicType target, MinicType source)
 {
-    if (minic_type_is_const(target)) {
-        return false;
-    }
     if (minic_type_is_integer(target) && minic_type_is_integer(source)) {
         return true;
     }
