@@ -112,3 +112,6 @@ run_program function_prototype
 run_program function_parameter
 run_program function_two_parameters
 run_program function_four_parameters
+run_program function_eight_parameters
+run_program recursive_factorial
+run_program mutual_recursion
