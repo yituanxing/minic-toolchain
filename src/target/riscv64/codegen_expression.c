@@ -17,7 +17,11 @@ bool minic_riscv64_emit_expression(
     case MINIC_EXPRESSION_INTEGER:
         return fprintf(file, "  li a0, %d\n", expression->value.integer_value) >= 0;
     case MINIC_EXPRESSION_LOCAL:
-        return minic_riscv64_emit_local_load(file, function, expression->value.local_id);
+        return minic_riscv64_emit_object_load(
+            file,
+            program,
+            function,
+            expression->value.local_id);
     case MINIC_EXPRESSION_UNARY:
         if (!minic_riscv64_emit_expression(file, program, function, expression->value.unary.operand)) {
             return false;
