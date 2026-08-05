@@ -28,9 +28,9 @@ The C implementation now includes:
 
 - token and source-span models plus a dedicated lexer;
 - a modular parser split by expressions, statements, functions, types, records, typedefs, globals, and constants;
-- typed expressions with lvalue/rvalue distinctions;
+- typed expressions with lvalue/rvalue distinctions and explicit signed/unsigned integer identity;
 - lexical block scopes and stable Program-owned local objects;
-- integer expressions, comparisons, conditions, loops, assignments, pointers, fixed arrays, and pointer arithmetic;
+- integer expressions, comparisons, conditions, loops, assignments, pointers, fixed arrays, pointer arithmetic, and comma-separated local declarations;
 - function prototypes, legal forward calls, direct and nested calls, recursion, mutual recursion, and zero through eight integer register arguments;
 - `void`, `const`, named records, recursive array typedefs, static read-only global arrays, and internal functions;
 - RV64 object layout, call-safe stack frames, typed loads/stores, assembly emission, and internal symbol visibility;
@@ -42,7 +42,7 @@ Nineteen executable C programs are permanently compared between a full GCC refer
 
 The first pinned upstream driver is `kokke/tiny-AES-c`, AES-128 ECB configuration. Upstream source files are downloaded at fixed Git blob identities and are not patched for MiniC.
 
-The compiler has progressed through the upstream declarations, typedef arrays, static lookup tables, internal functions, and `void` definitions. The current verified frontier is the first `unsigned` local declaration in `KeyExpansion`.
+The compiler has progressed through the upstream declarations, typedef arrays, static lookup tables, internal functions, `void` definitions, and the comma-separated `unsigned i, j, k` declaration in `KeyExpansion`. The current verified frontier is that function's first `for` statement.
 
 The external project is not complete yet. Completion requires the pinned AES-128 ECB core and a test-vector harness to pass the GCC/MiniC differential oracle without MiniC-specific source changes.
 
