@@ -83,16 +83,21 @@ expect_instructions arithmetic_unary \
 
 compile_source local_init locals -DCASE=1
 expect_instructions local_init \
-    "mv s0, sp" "sw a0, 0(s0)" "lw a0, 0(s0)"
+    "mv s0, sp" "sd a0, 0(sp)" "addi a0, s0, 0" \
+    "ld t0, 0(sp)" "sw t0, 0(a0)" "lw a0, 0(s0)"
 
 compile_source local_assign locals -DCASE=2
 expect_instructions local_assign \
-    "mv s0, sp" "sw a0, 0(s0)" "sw a0, 4(s0)" \
-    "lw a0, 0(s0)" "lw a0, 4(s0)" "addw a0, t0, a0"
+    "mv s0, sp" "addi a0, s0, 0" "addi a0, s0, 4" \
+    "sw t0, 0(a0)" "lw a0, 0(s0)" "lw a0, 4(s0)" \
+    "addw a0, t0, a0"
+test "$(grep -c -F '  sw t0, 0(a0)' "$work/local_assign.s")" -eq 2
 
 compile_source local_reassign locals -DCASE=3
 expect_instructions local_reassign \
-    "mv s0, sp" "lw a0, 0(s0)" "mulw a0, t0, a0" "sw a0, 0(s0)"
+    "mv s0, sp" "lw a0, 0(s0)" "mulw a0, t0, a0" \
+    "addi a0, s0, 0" "sw t0, 0(a0)"
+test "$(grep -c -F '  sw t0, 0(a0)' "$work/local_reassign.s")" -eq 2
 
 compile_source comparison_equal comparisons -DCASE=1
 expect_instructions comparison_equal "xor a0, t0, a0" "seqz a0, a0"
@@ -121,7 +126,8 @@ expect_instructions comparison_precedence \
 
 compile_source comparison_local comparisons -DCASE=8
 expect_instructions comparison_local \
-    "sw a0, 0(s0)" "lw a0, 0(s0)" "slt a0, t0, a0"
+    "addi a0, s0, 0" "sw t0, 0(a0)" \
+    "lw a0, 0(s0)" "slt a0, t0, a0"
 
 compile_source logical_not_zero logical_not -DCASE=1
 expect_instructions logical_not_zero "seqz a0, a0"
@@ -143,7 +149,7 @@ expect_instructions logical_not_local \
 
 compile_source if_true_assignment if_else -DCASE=1
 expect_instructions if_true_assignment \
-    "beqz a0, .Lif_else_0" "sw a0, 0(s0)" \
+    "beqz a0, .Lif_else_0" "sw t0, 0(a0)" \
     "j .Lif_end_0"
 
 compile_source if_false_else if_else -DCASE=2
