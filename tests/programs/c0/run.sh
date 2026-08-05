@@ -110,6 +110,7 @@ run_program collatz
 run_program block_scope
 run_program standalone_block
 run_program array_subscript
+run_program pointer_arithmetic
 run_program pointer_read
 run_program pointer_write
 run_program pointer_chain_write
