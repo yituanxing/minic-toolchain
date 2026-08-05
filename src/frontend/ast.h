@@ -116,10 +116,12 @@ typedef struct MinicBlock {
 typedef struct MinicFunction {
     char *name;
     size_t name_length;
+    MinicType return_type;
+    MinicType parameter_types[8];
+    size_t parameter_count;
     size_t local_begin;
     size_t local_count;
     size_t local_storage_size;
-    size_t parameter_count;
     MinicBlockId body_block;
     bool is_defined;
 } MinicFunction;
@@ -203,6 +205,12 @@ bool minic_c0_program_add_function(
     size_t local_count,
     MinicBlockId body_block,
     MinicFunctionId *function_id);
+bool minic_c0_program_set_function_signature(
+    MinicC0Program *program,
+    MinicFunctionId function_id,
+    MinicType return_type,
+    const MinicType *parameter_types,
+    size_t parameter_count);
 bool minic_c0_program_set_function_parameter_count(
     MinicC0Program *program,
     MinicFunctionId function_id,
