@@ -202,6 +202,7 @@ bool minic_c0_program_add_function(
     MinicFunctionId *function_id)
 {
     MinicFunction function;
+    size_t parameter_index;
 
     if (name == NULL || function_id == NULL ||
         (body_block != MINIC_BLOCK_INVALID &&
@@ -218,11 +219,19 @@ bool minic_c0_program_add_function(
         return false;
     }
 
+    (void)memset(&function, 0, sizeof(function));
     function.name = minic_copy_name(name, name_length);
     if (function.name == NULL) {
         return false;
     }
     function.name_length = name_length;
+    function.return_type = minic_type_int();
+    for (parameter_index = 0U;
+         parameter_index < sizeof(function.parameter_types) /
+                               sizeof(function.parameter_types[0]);
+         ++parameter_index) {
+        function.parameter_types[parameter_index] = minic_type_int();
+    }
     function.local_begin = local_begin;
     function.local_count = local_count;
     function.local_storage_size = 0U;
@@ -236,24 +245,68 @@ bool minic_c0_program_add_function(
     return true;
 }
 
-bool minic_c0_program_set_function_parameter_count(
+bool minic_c0_program_set_function_signature(
     MinicC0Program *program,
     MinicFunctionId function_id,
+    MinicType return_type,
+    const MinicType *parameter_types,
     size_t parameter_count)
 {
     MinicFunction *function;
+    size_t parameter_index;
 
-    if (function_id >= program->function_count || parameter_count > 8U) {
+    if (program == NULL || function_id >= program->function_count ||
+        parameter_count > 8U ||
+        (parameter_count != 0U && parameter_types == NULL)) {
         return false;
     }
+    for (parameter_index = 0U;
+         parameter_index < parameter_count;
+         ++parameter_index) {
+        if (minic_type_is_void(parameter_types[parameter_index])) {
+            return false;
+        }
+    }
+
     function = &program->functions[function_id];
     if (function->is_defined &&
         (function->local_begin > program->local_count ||
          parameter_count > program->local_count - function->local_begin)) {
         return false;
     }
+    function->return_type = return_type;
     function->parameter_count = parameter_count;
+    for (parameter_index = 0U; parameter_index < 8U; ++parameter_index) {
+        function->parameter_types[parameter_index] =
+            parameter_index < parameter_count
+                ? parameter_types[parameter_index]
+                : minic_type_void();
+    }
     return true;
+}
+
+bool minic_c0_program_set_function_parameter_count(
+    MinicC0Program *program,
+    MinicFunctionId function_id,
+    size_t parameter_count)
+{
+    MinicType parameter_types[8];
+    size_t parameter_index;
+
+    if (parameter_count > 8U) {
+        return false;
+    }
+    for (parameter_index = 0U;
+         parameter_index < parameter_count;
+         ++parameter_index) {
+        parameter_types[parameter_index] = minic_type_int();
+    }
+    return minic_c0_program_set_function_signature(
+        program,
+        function_id,
+        minic_type_int(),
+        parameter_types,
+        parameter_count);
 }
 
 bool minic_c0_program_define_function(
