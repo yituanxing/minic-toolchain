@@ -107,12 +107,12 @@ int main(void)
         !minic_type_is_integer(const_integer_type) ||
         !minic_type_is_signed_integer(const_integer_type) ||
         minic_type_equal(integer_type, const_integer_type) ||
-        minic_type_assignment_compatible(const_integer_type, integer_type) ||
+        !minic_type_assignment_compatible(const_integer_type, integer_type) ||
         !minic_type_pointer_to(const_integer_type, &const_pointer_type) ||
         !minic_type_is_const(const_pointer_type) ||
         !minic_type_pointee(const_pointer_type, &recovered_type) ||
         !minic_type_equal(recovered_type, const_integer_type)) {
-        return fail("const int pointer preservation");
+        return fail("const int conversion and pointer preservation");
     }
     if (!minic_type_pointer_to(integer_type, &pointer_type) ||
         !minic_type_is_pointer(pointer_type) ||
