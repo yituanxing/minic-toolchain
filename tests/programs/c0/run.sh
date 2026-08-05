@@ -110,6 +110,7 @@ run_program collatz
 run_program block_scope
 run_program standalone_block
 run_program pointer_read
+run_program pointer_write
 run_program function_calls
 run_program function_prototype
 run_program function_parameter
