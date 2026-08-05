@@ -141,6 +141,8 @@ static bool parse_function(MinicParser *parser)
              parameter_index < parameter_count;
              ++parameter_index) {
             parameter_local.name_span = parameter_name_spans[parameter_index];
+            parameter_local.type = minic_type_int();
+            parameter_local.storage_offset = parameter_index * 4U;
             if (minic_parser_find_local_in_current_scope(
                     parser,
                     parameter_local.name_span) != MINIC_LOCAL_INVALID) {
