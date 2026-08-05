@@ -65,7 +65,7 @@ static bool parse_primary(
                 return false;
             }
             callee = minic_c0_program_function(parser->program, function_id);
-            if (callee == NULL || callee->parameter_count > 4U ||
+            if (callee == NULL || callee->parameter_count > 8U ||
                 !minic_parser_advance(parser)) {
                 minic_parser_error(parser, "unsupported function call signature");
                 return false;
