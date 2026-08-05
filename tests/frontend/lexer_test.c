@@ -170,6 +170,22 @@ static int test_control_keyword_boundaries(void)
     return 0;
 }
 
+static int test_struct_keyword_boundaries(void)
+{
+    static const char source[] = "struct AES_ctx structure struct_value";
+    MinicLexer lexer;
+
+    minic_lexer_initialize(&lexer, "struct.c", source, sizeof(source) - 1U);
+    if (expect_token(&lexer, MINIC_TOKEN_KW_STRUCT, 1U, 1U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_IDENTIFIER, 1U, 8U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_IDENTIFIER, 1U, 16U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_IDENTIFIER, 1U, 26U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_EOF, 1U, 38U) != 0) {
+        return 1;
+    }
+    return 0;
+}
+
 static int test_keyword_boundaries(void)
 {
     static const char source[] = "integer return_value voided";
@@ -218,6 +234,7 @@ int main(void)
         test_operator_sequence() != 0 ||
         test_comparison_operators() != 0 ||
         test_control_keyword_boundaries() != 0 ||
+        test_struct_keyword_boundaries() != 0 ||
         test_keyword_boundaries() != 0 ||
         test_invalid_character() != 0) {
         return 1;
