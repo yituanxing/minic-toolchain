@@ -41,6 +41,29 @@ static bool minic_riscv64_emit_assignment(
     return false;
 }
 
+static bool minic_riscv64_emit_return(
+    FILE *file,
+    const MinicC0Program *program,
+    const MinicFunction *function,
+    const MinicStatement *statement)
+{
+    if (statement->expression == MINIC_EXPRESSION_INVALID) {
+        if (!minic_type_is_void(function->return_type)) {
+            return false;
+        }
+    } else {
+        if (minic_type_is_void(function->return_type) ||
+            !minic_riscv64_emit_expression(
+                file,
+                program,
+                function,
+                statement->expression)) {
+            return false;
+        }
+    }
+    return fprintf(file, "  j .L%s_return\n", function->name) >= 0;
+}
+
 static bool minic_riscv64_emit_statement(
     FILE *file,
     const MinicC0Program *program,
@@ -61,12 +84,11 @@ static bool minic_riscv64_emit_statement(
             statement);
 
     case MINIC_STATEMENT_RETURN:
-        return minic_riscv64_emit_expression(
-                   file,
-                   program,
-                   function,
-                   statement->expression) &&
-               fprintf(file, "  j .L%s_return\n", function->name) >= 0;
+        return minic_riscv64_emit_return(
+            file,
+            program,
+            function,
+            statement);
 
     case MINIC_STATEMENT_IF: {
         size_t label;
