@@ -82,6 +82,38 @@ static bool parse_assignment(MinicParser *parser)
            minic_parser_add_statement(parser, &statement);
 }
 
+static bool parse_compound_statement(MinicParser *parser)
+{
+    bool success;
+
+    if (parser->current.kind != MINIC_TOKEN_LBRACE) {
+        minic_parser_error(parser, "expected '{'");
+        return false;
+    }
+    if (!minic_parser_begin_scope(parser)) {
+        return false;
+    }
+
+    success = minic_parser_advance(parser);
+    while (success && parser->current.kind != MINIC_TOKEN_RBRACE) {
+        if (parser->current.kind == MINIC_TOKEN_EOF) {
+            minic_parser_error(parser, "expected '}' before end of file");
+            success = false;
+            break;
+        }
+        success = minic_parser_parse_statement(parser, true);
+    }
+    if (success) {
+        success = minic_parser_expect(
+            parser,
+            MINIC_TOKEN_RBRACE,
+            "expected '}'");
+    }
+
+    minic_parser_end_scope(parser);
+    return success;
+}
+
 static bool parse_branch(MinicParser *parser, MinicBlockId *block_id)
 {
     MinicBlockId parent_block;
@@ -95,25 +127,7 @@ static bool parse_branch(MinicParser *parser, MinicBlockId *block_id)
     parser->current_block = *block_id;
 
     if (parser->current.kind == MINIC_TOKEN_LBRACE) {
-        success = minic_parser_begin_scope(parser);
-        if (success) {
-            success = minic_parser_advance(parser);
-            while (success && parser->current.kind != MINIC_TOKEN_RBRACE) {
-                if (parser->current.kind == MINIC_TOKEN_EOF) {
-                    minic_parser_error(parser, "expected '}' before end of file");
-                    success = false;
-                    break;
-                }
-                success = minic_parser_parse_statement(parser, true);
-            }
-            if (success) {
-                success = minic_parser_expect(
-                    parser,
-                    MINIC_TOKEN_RBRACE,
-                    "expected '}'");
-            }
-            minic_parser_end_scope(parser);
-        }
+        success = parse_compound_statement(parser);
     } else {
         success = minic_parser_parse_statement(parser, false);
     }
@@ -219,6 +233,9 @@ bool minic_parser_add_default_return(MinicParser *parser)
 
 bool minic_parser_parse_statement(MinicParser *parser, bool allow_declaration)
 {
+    if (parser->current.kind == MINIC_TOKEN_LBRACE) {
+        return parse_compound_statement(parser);
+    }
     if (parser->current.kind == MINIC_TOKEN_KW_IF) {
         return parse_if(parser);
     }
@@ -242,6 +259,6 @@ bool minic_parser_parse_statement(MinicParser *parser, bool allow_declaration)
     }
     minic_parser_error(
         parser,
-        "expected if, while, declaration, assignment, return, or '}'");
+        "expected compound, if, while, declaration, assignment, return, or '}'");
     return false;
 }
