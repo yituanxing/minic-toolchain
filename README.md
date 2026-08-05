@@ -28,21 +28,21 @@ The C implementation now includes:
 
 - token and source-span models plus a dedicated lexer;
 - a modular parser split by expressions, statements, functions, types, records, typedefs, globals, and constants;
-- typed expressions with lvalue/rvalue distinctions and explicit signed/unsigned integer identity;
+- typed expressions with lvalue/rvalue distinctions, explicit signed/unsigned integer identity, and equal-rank integer conversions;
 - lexical block scopes and stable Program-owned local objects;
-- integer expressions, comparisons, conditions, loops, assignments, pointers, fixed arrays, pointer arithmetic, and comma-separated local declarations;
+- integer expressions, comparisons, conditions, `if`, `while`, normalized bounded `for` loops, assignments, prefix increment, pointers, fixed arrays, pointer arithmetic, and comma-separated local declarations;
 - function prototypes, legal forward calls, direct and nested calls, recursion, mutual recursion, and zero through eight integer register arguments;
 - `void`, `const`, named records, recursive array typedefs, static read-only global arrays, and internal functions;
-- RV64 object layout, call-safe stack frames, typed loads/stores, assembly emission, and internal symbol visibility;
+- RV64 object layout, call-safe stack frames, signed/unsigned loads and arithmetic, assembly emission, and internal symbol visibility;
 - debug, release `-Werror`, ASan/UBSan, RV64/QEMU, and GCC/MiniC differential gates.
 
-Nineteen executable C programs are permanently compared between a full GCC reference lane and the MiniC lane by exit status, standard output, and standard error.
+Twenty-three executable C programs are permanently compared between a full GCC reference lane and the MiniC lane by exit status, standard output, and standard error. The matrix includes isolated loop-counter/body tests and high-bit unsigned comparison, division, and remainder coverage.
 
 ## First external project
 
 The first pinned upstream driver is `kokke/tiny-AES-c`, AES-128 ECB configuration. Upstream source files are downloaded at fixed Git blob identities and are not patched for MiniC.
 
-The compiler has progressed through the upstream declarations, typedef arrays, static lookup tables, internal functions, `void` definitions, and the comma-separated `unsigned i, j, k` declaration in `KeyExpansion`. The current verified frontier is that function's first `for` statement.
+The compiler has progressed through the upstream declarations, typedef arrays, static lookup tables, internal functions, `void` definitions, unsigned declaration lists, and the first `KeyExpansion` loop. The current verified frontier is the first assignment that subscripts the `RoundKey` and `Key` pointer parameters.
 
 The external project is not complete yet. Completion requires the pinned AES-128 ECB core and a test-vector harness to pass the GCC/MiniC differential oracle without MiniC-specific source changes.
 
