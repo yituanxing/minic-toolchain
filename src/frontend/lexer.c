@@ -89,6 +89,9 @@ static MinicTokenKind minic_classify_identifier(
     if (length == 3U && memcmp(text, "int", 3U) == 0) {
         return MINIC_TOKEN_KW_INT;
     }
+    if (length == 8U && memcmp(text, "unsigned", 8U) == 0) {
+        return MINIC_TOKEN_KW_UNSIGNED;
+    }
     if (length == 4U && memcmp(text, "void", 4U) == 0) {
         return MINIC_TOKEN_KW_VOID;
     }
