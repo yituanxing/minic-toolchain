@@ -128,6 +128,7 @@ typedef struct MinicFunction {
     size_t local_storage_size;
     MinicBlockId body_block;
     bool is_defined;
+    bool is_internal;
 } MinicFunction;
 
 typedef struct MinicRecordField {
@@ -255,6 +256,10 @@ bool minic_c0_program_set_function_parameter_count(
     MinicC0Program *program,
     MinicFunctionId function_id,
     size_t parameter_count);
+bool minic_c0_program_set_function_internal(
+    MinicC0Program *program,
+    MinicFunctionId function_id,
+    bool is_internal);
 bool minic_c0_program_define_function(
     MinicC0Program *program,
     MinicFunctionId function_id,
