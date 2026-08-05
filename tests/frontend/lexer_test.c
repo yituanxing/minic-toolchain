@@ -85,21 +85,22 @@ static int test_c0_sequence(void)
 
 static int test_operator_sequence(void)
 {
-    static const char source[] = "+ - * & / % = [ ]";
+    static const char source[] = "+ ++ - * & / % = [ ]";
     static const struct {
         MinicTokenKind kind;
         size_t column;
     } expected[] = {
         {MINIC_TOKEN_PLUS, 1U},
-        {MINIC_TOKEN_MINUS, 3U},
-        {MINIC_TOKEN_STAR, 5U},
-        {MINIC_TOKEN_AMPERSAND, 7U},
-        {MINIC_TOKEN_SLASH, 9U},
-        {MINIC_TOKEN_PERCENT, 11U},
-        {MINIC_TOKEN_EQUAL, 13U},
-        {MINIC_TOKEN_LBRACKET, 15U},
-        {MINIC_TOKEN_RBRACKET, 17U},
-        {MINIC_TOKEN_EOF, 18U}
+        {MINIC_TOKEN_PLUS_PLUS, 3U},
+        {MINIC_TOKEN_MINUS, 6U},
+        {MINIC_TOKEN_STAR, 8U},
+        {MINIC_TOKEN_AMPERSAND, 10U},
+        {MINIC_TOKEN_SLASH, 12U},
+        {MINIC_TOKEN_PERCENT, 14U},
+        {MINIC_TOKEN_EQUAL, 16U},
+        {MINIC_TOKEN_LBRACKET, 18U},
+        {MINIC_TOKEN_RBRACKET, 20U},
+        {MINIC_TOKEN_EOF, 21U}
     };
     MinicLexer lexer;
     size_t index;
@@ -165,6 +166,21 @@ static int test_control_keyword_boundaries(void)
         expect_token(&lexer, MINIC_TOKEN_IDENTIFIER, 1U, 9U) != 0 ||
         expect_token(&lexer, MINIC_TOKEN_IDENTIFIER, 1U, 18U) != 0 ||
         expect_token(&lexer, MINIC_TOKEN_EOF, 1U, 27U) != 0) {
+        return 1;
+    }
+    return 0;
+}
+
+static int test_for_keyword_boundaries(void)
+{
+    static const char source[] = "for format for_value";
+    MinicLexer lexer;
+
+    minic_lexer_initialize(&lexer, "for.c", source, sizeof(source) - 1U);
+    if (expect_token(&lexer, MINIC_TOKEN_KW_FOR, 1U, 1U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_IDENTIFIER, 1U, 5U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_IDENTIFIER, 1U, 12U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_EOF, 1U, 21U) != 0) {
         return 1;
     }
     return 0;
@@ -264,6 +280,7 @@ int main(void)
         test_operator_sequence() != 0 ||
         test_comparison_operators() != 0 ||
         test_control_keyword_boundaries() != 0 ||
+        test_for_keyword_boundaries() != 0 ||
         test_struct_keyword_boundaries() != 0 ||
         test_const_keyword_boundaries() != 0 ||
         test_unsigned_keyword_boundaries() != 0 ||
