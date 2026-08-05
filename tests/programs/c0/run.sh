@@ -116,3 +116,4 @@ run_program prime_count
 run_program collatz
 run_program function_calls
 run_program function_prototype
+run_program function_parameter
