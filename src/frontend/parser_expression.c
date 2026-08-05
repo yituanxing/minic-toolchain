@@ -14,6 +14,7 @@ static bool parse_integer(
     (void)memset(&expression, 0, sizeof(expression));
     expression.kind = MINIC_EXPRESSION_INTEGER;
     expression.span = parser->current.span;
+    expression.type = minic_type_int();
     value = 0UL;
     for (offset = expression.span.begin.offset;
          offset < expression.span.end.offset;
@@ -74,6 +75,7 @@ static bool parse_primary(
             (void)memset(&expression, 0, sizeof(expression));
             expression.kind = MINIC_EXPRESSION_CALL;
             expression.span.begin = name_span.begin;
+            expression.type = minic_type_int();
             expression.value.call.function_id = function_id;
             expression.value.call.argument_count = callee->parameter_count;
             {
@@ -125,10 +127,20 @@ static bool parse_primary(
             minic_parser_error(parser, "use of undeclared local");
             return false;
         }
-        (void)memset(&expression, 0, sizeof(expression));
-        expression.kind = MINIC_EXPRESSION_LOCAL;
-        expression.span = name_span;
-        expression.value.local_id = local_id;
+        {
+            const MinicLocal *local;
+
+            local = minic_c0_program_local(parser->program, local_id);
+            if (local == NULL) {
+                minic_parser_error(parser, "invalid local reference");
+                return false;
+            }
+            (void)memset(&expression, 0, sizeof(expression));
+            expression.kind = MINIC_EXPRESSION_LOCAL;
+            expression.span = name_span;
+            expression.type = local->type;
+            expression.value.local_id = local_id;
+        }
         return minic_parser_add_expression(parser, &expression, expression_id);
     }
     if (parser->current.kind == MINIC_TOKEN_LPAREN) {
@@ -158,8 +170,9 @@ static bool parse_unary(MinicParser *parser, MinicExpressionId *expression_id)
         return false;
     }
     operand_expression = minic_c0_program_expression(parser->program, operand);
-    if (operand_expression == NULL) {
-        minic_parser_error(parser, "invalid unary operand");
+    if (operand_expression == NULL ||
+        !minic_type_is_integer(operand_expression->type)) {
+        minic_parser_error(parser, "unary operator requires an int operand");
         return false;
     }
 
@@ -167,6 +180,7 @@ static bool parse_unary(MinicParser *parser, MinicExpressionId *expression_id)
     expression.kind = MINIC_EXPRESSION_UNARY;
     expression.span.begin = operator_token.span.begin;
     expression.span.end = operand_expression->span.end;
+    expression.type = minic_type_int();
     expression.value.unary.operand = operand;
     if (operator_token.kind == MINIC_TOKEN_PLUS) {
         expression.value.unary.operator_kind = MINIC_UNARY_PLUS;
@@ -248,8 +262,10 @@ bool minic_parser_parse_expression(
         }
         left_expression = minic_c0_program_expression(parser->program, left);
         right_expression = minic_c0_program_expression(parser->program, right);
-        if (left_expression == NULL || right_expression == NULL) {
-            minic_parser_error(parser, "invalid binary operand");
+        if (left_expression == NULL || right_expression == NULL ||
+            !minic_type_is_integer(left_expression->type) ||
+            !minic_type_is_integer(right_expression->type)) {
+            minic_parser_error(parser, "binary operator requires int operands");
             return false;
         }
 
@@ -257,6 +273,7 @@ bool minic_parser_parse_expression(
         expression.kind = MINIC_EXPRESSION_BINARY;
         expression.span.begin = left_expression->span.begin;
         expression.span.end = right_expression->span.end;
+        expression.type = minic_type_int();
         expression.value.binary.operator_kind = binary_operator(token_kind);
         expression.value.binary.left = left;
         expression.value.binary.right = right;
