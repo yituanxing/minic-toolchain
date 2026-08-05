@@ -46,6 +46,11 @@ bool minic_type_add_const(MinicType type, MinicType *result);
 bool minic_type_pointer_to(MinicType pointee, MinicType *result);
 bool minic_type_pointee(MinicType pointer, MinicType *result);
 bool minic_type_equal(MinicType left, MinicType right);
+bool minic_type_integer_common(
+    MinicType left,
+    MinicType right,
+    MinicType *result);
+bool minic_type_assignment_compatible(MinicType target, MinicType source);
 bool minic_type_is_const(MinicType type);
 bool minic_type_is_void(MinicType type);
 bool minic_type_is_integer(MinicType type);

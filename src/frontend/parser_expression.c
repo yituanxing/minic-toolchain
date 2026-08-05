@@ -157,7 +157,7 @@ static bool parse_primary(
             (void)memset(&expression, 0, sizeof(expression));
             expression.kind = MINIC_EXPRESSION_CALL;
             expression.span.begin = name_span.begin;
-            expression.type = minic_type_int();
+            expression.type = callee->return_type;
             expression.value_category = MINIC_VALUE_RVALUE;
             expression.value.call.function_id = function_id;
             expression.value.call.argument_count = callee->parameter_count;
@@ -167,6 +167,8 @@ static bool parse_primary(
                 for (argument_index = 0U;
                      argument_index < callee->parameter_count;
                      ++argument_index) {
+                    const MinicExpression *argument;
+
                     if (parser->current.kind == MINIC_TOKEN_RPAREN) {
                         minic_parser_error(
                             parser,
@@ -177,6 +179,18 @@ static bool parse_primary(
                             parser,
                             &expression.value.call.arguments[argument_index],
                             0U)) {
+                        return false;
+                    }
+                    argument = minic_c0_program_expression(
+                        parser->program,
+                        expression.value.call.arguments[argument_index]);
+                    if (argument == NULL ||
+                        !minic_type_assignment_compatible(
+                            callee->parameter_types[argument_index],
+                            argument->type)) {
+                        minic_parser_error(
+                            parser,
+                            "call argument type does not match declaration");
                         return false;
                     }
                     if (argument_index + 1U < callee->parameter_count) {
@@ -281,14 +295,26 @@ static bool parse_unary(MinicParser *parser, MinicExpressionId *expression_id)
         return false;
     }
     expression.kind = MINIC_EXPRESSION_UNARY;
-    expression.type = minic_type_int();
     expression.value_category = MINIC_VALUE_RVALUE;
     if (operator_token.kind == MINIC_TOKEN_PLUS) {
         expression.value.unary.operator_kind = MINIC_UNARY_PLUS;
+        if (!minic_type_integer_common(
+                operand_expression->type,
+                operand_expression->type,
+                &expression.type)) {
+            return false;
+        }
     } else if (operator_token.kind == MINIC_TOKEN_MINUS) {
         expression.value.unary.operator_kind = MINIC_UNARY_NEGATE;
+        if (!minic_type_integer_common(
+                operand_expression->type,
+                operand_expression->type,
+                &expression.type)) {
+            return false;
+        }
     } else {
         expression.value.unary.operator_kind = MINIC_UNARY_LOGICAL_NOT;
+        expression.type = minic_type_int();
     }
     return minic_parser_add_expression(parser, &expression, expression_id);
 }
@@ -334,6 +360,16 @@ static MinicBinaryOperator binary_operator(MinicTokenKind kind)
     }
 }
 
+static bool binary_is_comparison(MinicTokenKind kind)
+{
+    return kind == MINIC_TOKEN_EQUAL_EQUAL ||
+           kind == MINIC_TOKEN_BANG_EQUAL ||
+           kind == MINIC_TOKEN_LESS ||
+           kind == MINIC_TOKEN_LESS_EQUAL ||
+           kind == MINIC_TOKEN_GREATER ||
+           kind == MINIC_TOKEN_GREATER_EQUAL;
+}
+
 static bool binary_result_type(
     MinicTokenKind kind,
     MinicType left,
@@ -344,8 +380,11 @@ static bool binary_result_type(
         return false;
     }
     if (minic_type_is_integer(left) && minic_type_is_integer(right)) {
-        *result = minic_type_int();
-        return true;
+        if (binary_is_comparison(kind)) {
+            *result = minic_type_int();
+            return true;
+        }
+        return minic_type_integer_common(left, right, result);
     }
     if (kind == MINIC_TOKEN_PLUS) {
         if (minic_type_is_pointer(left) && minic_type_is_integer(right)) {

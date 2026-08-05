@@ -15,7 +15,7 @@ static bool minic_riscv64_emit_assignment(
     value = minic_c0_program_expression(program, statement->expression);
     if (target == NULL || value == NULL ||
         target->value_category != MINIC_VALUE_LVALUE ||
-        !minic_type_equal(target->type, value->type)) {
+        !minic_type_assignment_compatible(target->type, value->type)) {
         return false;
     }
     if (!minic_riscv64_emit_expression(
@@ -52,7 +52,14 @@ static bool minic_riscv64_emit_return(
             return false;
         }
     } else {
+        const MinicExpression *value;
+
+        value = minic_c0_program_expression(program, statement->expression);
         if (minic_type_is_void(function->return_type) ||
+            value == NULL ||
+            !minic_type_assignment_compatible(
+                function->return_type,
+                value->type) ||
             !minic_riscv64_emit_expression(
                 file,
                 program,

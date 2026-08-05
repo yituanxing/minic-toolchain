@@ -54,8 +54,18 @@ report_difference() {
 
     printf '%s\n' "FAIL programs/c0/$name: $kind differs" >&2
     diff -u "$gcc_file" "$minic_file" >&2 || true
+    printf '%s\n' "--- MiniC assembly: $name.minic.s ---" >&2
+    sed -n '1,260p' "$work/$name.minic.s" >&2 || true
     write_disassembly "$work/$name.gcc.elf" "$work/$name.gcc.disasm"
     write_disassembly "$work/$name.minic.elf" "$work/$name.minic.disasm"
+    if test -f "$work/$name.gcc.disasm"; then
+        printf '%s\n' "--- GCC disassembly: $name.gcc.elf ---" >&2
+        sed -n '1,260p' "$work/$name.gcc.disasm" >&2 || true
+    fi
+    if test -f "$work/$name.minic.disasm"; then
+        printf '%s\n' "--- MiniC disassembly: $name.minic.elf ---" >&2
+        sed -n '1,260p' "$work/$name.minic.disasm" >&2 || true
+    fi
     printf '%s\n' "Artifacts retained in $work" >&2
     exit 1
 }
@@ -122,3 +132,7 @@ run_program function_four_parameters
 run_program function_eight_parameters
 run_program recursive_factorial
 run_program mutual_recursion
+run_program for_counter
+run_program for_iterations
+run_program for_loop
+run_program unsigned_semantics
