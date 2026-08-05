@@ -49,6 +49,20 @@ bool minic_parser_parse_type_name(
         if (!minic_parser_advance(parser)) {
             return false;
         }
+    } else if (parser->current.kind == MINIC_TOKEN_IDENTIFIER) {
+        MinicTypeAliasId alias_id;
+        const MinicTypeAlias *alias;
+
+        alias_id = minic_parser_find_type_alias(parser, parser->current.span);
+        alias = minic_c0_program_type_alias(parser->program, alias_id);
+        if (alias == NULL) {
+            minic_parser_error(parser, "expected type name");
+            return false;
+        }
+        parsed_type = alias->type;
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
     } else {
         minic_parser_error(parser, "expected type name");
         return false;
