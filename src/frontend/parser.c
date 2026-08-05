@@ -238,7 +238,6 @@ static bool parse_primary(
     parser_error(parser, "expected expression");
     return false;
 }
-
 static bool parse_unary(
     MinicParser *parser,
     MinicExpressionId *expression_id)
@@ -305,30 +304,18 @@ static unsigned int binary_precedence(MinicTokenKind kind)
 static MinicBinaryOperator binary_operator(MinicTokenKind kind)
 {
     switch (kind) {
-    case MINIC_TOKEN_PLUS:
-        return MINIC_BINARY_ADD;
-    case MINIC_TOKEN_MINUS:
-        return MINIC_BINARY_SUBTRACT;
-    case MINIC_TOKEN_STAR:
-        return MINIC_BINARY_MULTIPLY;
-    case MINIC_TOKEN_SLASH:
-        return MINIC_BINARY_DIVIDE;
-    case MINIC_TOKEN_PERCENT:
-        return MINIC_BINARY_REMAINDER;
-    case MINIC_TOKEN_EQUAL_EQUAL:
-        return MINIC_BINARY_EQUAL;
-    case MINIC_TOKEN_BANG_EQUAL:
-        return MINIC_BINARY_NOT_EQUAL;
-    case MINIC_TOKEN_LESS:
-        return MINIC_BINARY_LESS;
-    case MINIC_TOKEN_LESS_EQUAL:
-        return MINIC_BINARY_LESS_EQUAL;
-    case MINIC_TOKEN_GREATER:
-        return MINIC_BINARY_GREATER;
-    case MINIC_TOKEN_GREATER_EQUAL:
-        return MINIC_BINARY_GREATER_EQUAL;
-    default:
-        return MINIC_BINARY_ADD;
+    case MINIC_TOKEN_PLUS: return MINIC_BINARY_ADD;
+    case MINIC_TOKEN_MINUS: return MINIC_BINARY_SUBTRACT;
+    case MINIC_TOKEN_STAR: return MINIC_BINARY_MULTIPLY;
+    case MINIC_TOKEN_SLASH: return MINIC_BINARY_DIVIDE;
+    case MINIC_TOKEN_PERCENT: return MINIC_BINARY_REMAINDER;
+    case MINIC_TOKEN_EQUAL_EQUAL: return MINIC_BINARY_EQUAL;
+    case MINIC_TOKEN_BANG_EQUAL: return MINIC_BINARY_NOT_EQUAL;
+    case MINIC_TOKEN_LESS: return MINIC_BINARY_LESS;
+    case MINIC_TOKEN_LESS_EQUAL: return MINIC_BINARY_LESS_EQUAL;
+    case MINIC_TOKEN_GREATER: return MINIC_BINARY_GREATER;
+    case MINIC_TOKEN_GREATER_EQUAL: return MINIC_BINARY_GREATER_EQUAL;
+    default: return MINIC_BINARY_ADD;
     }
 }
 
@@ -452,13 +439,9 @@ static bool parse_assignment(MinicParser *parser)
            add_statement(parser, &statement);
 }
 
-static bool parse_statement(
-    MinicParser *parser,
-    bool allow_declaration);
+static bool parse_statement(MinicParser *parser, bool allow_declaration);
 
-static bool parse_branch(
-    MinicParser *parser,
-    MinicBlockId *block_id)
+static bool parse_branch(MinicParser *parser, MinicBlockId *block_id)
 {
     MinicBlockId parent_block;
     bool success;
@@ -481,10 +464,7 @@ static bool parse_branch(
             success = parse_statement(parser, false);
         }
         if (success) {
-            success = parser_expect(
-                parser,
-                MINIC_TOKEN_RBRACE,
-                "expected '}'");
+            success = parser_expect(parser, MINIC_TOKEN_RBRACE, "expected '}'");
         }
     } else {
         success = parse_statement(parser, false);
@@ -584,9 +564,7 @@ static bool add_default_return(MinicParser *parser)
     return add_statement(parser, &statement);
 }
 
-static bool parse_statement(
-    MinicParser *parser,
-    bool allow_declaration)
+static bool parse_statement(MinicParser *parser, bool allow_declaration)
 {
     if (parser->current.kind == MINIC_TOKEN_KW_IF) {
         return parse_if(parser);
@@ -596,9 +574,7 @@ static bool parse_statement(
     }
     if (parser->current.kind == MINIC_TOKEN_KW_INT) {
         if (!allow_declaration) {
-            parser_error(
-                parser,
-                "declarations inside branch blocks are not supported yet");
+            parser_error(parser, "declarations inside branch blocks are not supported yet");
             return false;
         }
         return parse_declaration(parser);
@@ -609,9 +585,7 @@ static bool parse_statement(
     if (parser->current.kind == MINIC_TOKEN_IDENTIFIER) {
         return parse_assignment(parser);
     }
-    parser_error(
-        parser,
-        "expected if, while, declaration, assignment, return, or '}'");
+    parser_error(parser, "expected if, while, declaration, assignment, return, or '}'");
     return false;
 }
 
@@ -637,12 +611,12 @@ static MinicFunctionId find_function(
     }
     return MINIC_FUNCTION_INVALID;
 }
-
 static bool parse_function(MinicParser *parser)
 {
     MinicSourceSpan name_span;
     MinicBlockId body_block;
     MinicFunctionId function_id;
+    const MinicFunction *existing_function;
     size_t local_begin;
     size_t local_count;
     bool is_main;
@@ -657,10 +631,7 @@ static bool parse_function(MinicParser *parser)
     }
 
     name_span = parser->current.span;
-    if (find_function(parser, name_span) != MINIC_FUNCTION_INVALID) {
-        parser_error(parser, "duplicate function definition");
-        return false;
-    }
+    function_id = find_function(parser, name_span);
     is_main = span_length(name_span) == 4U &&
               memcmp(
                   parser->source + name_span.begin.offset,
@@ -675,8 +646,41 @@ static bool parse_function(MinicParser *parser)
         !parser_expect(parser, MINIC_TOKEN_KW_VOID, "expected keyword 'void'")) {
         return false;
     }
-    if (!parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')'") ||
-        !parser_expect(parser, MINIC_TOKEN_LBRACE, "expected '{'") ||
+    if (!parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')'")) {
+        return false;
+    }
+
+    if (parser->current.kind == MINIC_TOKEN_SEMICOLON) {
+        if (function_id == MINIC_FUNCTION_INVALID &&
+            !minic_c0_program_add_function(
+                parser->program,
+                parser->source + name_span.begin.offset,
+                span_length(name_span),
+                parser->program->local_count,
+                0U,
+                MINIC_BLOCK_INVALID,
+                &function_id)) {
+            parser_error(parser, "out of memory while declaring function");
+            return false;
+        }
+        return parser_advance(parser);
+    }
+
+    if (parser->current.kind != MINIC_TOKEN_LBRACE) {
+        parser_error(parser, "expected ';' or '{' after function declarator");
+        return false;
+    }
+    if (function_id != MINIC_FUNCTION_INVALID) {
+        existing_function = minic_c0_program_function(
+            parser->program,
+            function_id);
+        if (existing_function == NULL || existing_function->is_defined) {
+            parser_error(parser, "duplicate function definition");
+            return false;
+        }
+    }
+
+    if (!parser_advance(parser) ||
         !minic_c0_program_add_block(parser->program, &body_block)) {
         if (body_block == MINIC_BLOCK_INVALID) {
             parser_error(parser, "out of memory while adding function body");
@@ -685,15 +689,24 @@ static bool parse_function(MinicParser *parser)
     }
 
     local_begin = parser->program->local_count;
-    if (!minic_c0_program_add_function(
-            parser->program,
-            parser->source + name_span.begin.offset,
-            span_length(name_span),
-            local_begin,
-            0U,
-            body_block,
-            &function_id)) {
-        parser_error(parser, "out of memory while adding function");
+    if (function_id == MINIC_FUNCTION_INVALID) {
+        if (!minic_c0_program_add_function(
+                parser->program,
+                parser->source + name_span.begin.offset,
+                span_length(name_span),
+                local_begin,
+                0U,
+                body_block,
+                &function_id)) {
+            parser_error(parser, "out of memory while adding function");
+            return false;
+        }
+    } else if (!minic_c0_program_define_function(
+                   parser->program,
+                   function_id,
+                   local_begin,
+                   body_block)) {
+        parser_error(parser, "cannot define previously declared function");
         return false;
     }
     if (is_main) {
