@@ -25,6 +25,15 @@ bool minic_parser_parse_type_name(
         if (!minic_parser_advance(parser)) {
             return false;
         }
+    } else if (parser->current.kind == MINIC_TOKEN_KW_UNSIGNED) {
+        parsed_type = minic_type_unsigned_int();
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
+        if (parser->current.kind == MINIC_TOKEN_KW_INT &&
+            !minic_parser_advance(parser)) {
+            return false;
+        }
     } else if (parser->current.kind == MINIC_TOKEN_KW_VOID) {
         parsed_type = minic_type_void();
         if (!minic_parser_advance(parser)) {
