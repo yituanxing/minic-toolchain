@@ -178,6 +178,7 @@ bool minic_c0_program_add_function(
          body_block >= program->block_count) ||
         local_begin > program->local_count ||
         local_count > program->local_count - local_begin ||
+        local_count > SIZE_MAX / 4U ||
         name_length == SIZE_MAX) {
         return false;
     }
@@ -198,6 +199,7 @@ bool minic_c0_program_add_function(
     function.name_length = name_length;
     function.local_begin = local_begin;
     function.local_count = local_count;
+    function.local_storage_size = local_count * 4U;
     function.parameter_count = 0U;
     function.body_block = body_block;
     function.is_defined = body_block != MINIC_BLOCK_INVALID;
@@ -247,6 +249,7 @@ bool minic_c0_program_define_function(
     }
     function->local_begin = local_begin;
     function->local_count = 0U;
+    function->local_storage_size = 0U;
     function->body_block = body_block;
     function->is_defined = true;
     return true;
@@ -259,7 +262,8 @@ bool minic_c0_program_finish_function(
 {
     MinicFunction *function;
 
-    if (function_id >= program->function_count) {
+    if (function_id >= program->function_count ||
+        local_count > SIZE_MAX / 4U) {
         return false;
     }
     function = &program->functions[function_id];
@@ -270,6 +274,7 @@ bool minic_c0_program_finish_function(
         return false;
     }
     function->local_count = local_count;
+    function->local_storage_size = local_count * 4U;
     return true;
 }
 
