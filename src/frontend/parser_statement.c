@@ -263,56 +263,107 @@ static bool parse_while(MinicParser *parser)
 
 static bool parse_return(MinicParser *parser)
 {
+    const MinicFunction *function;
     MinicStatement statement;
-    const MinicExpression *returned_expression;
+
+    function = minic_c0_program_function(
+        parser->program,
+        parser->current_function);
+    if (function == NULL) {
+        minic_parser_error(parser, "return statement outside a function");
+        return false;
+    }
 
     (void)memset(&statement, 0, sizeof(statement));
     statement.kind = MINIC_STATEMENT_RETURN;
     statement.span.begin = parser->current.span.begin;
     statement.target_expression = MINIC_EXPRESSION_INVALID;
-    if (!minic_parser_advance(parser) ||
-        !minic_parser_parse_expression(parser, &statement.expression, 0U)) {
+    statement.expression = MINIC_EXPRESSION_INVALID;
+    if (!minic_parser_advance(parser)) {
         return false;
     }
-    returned_expression = minic_c0_program_expression(
-        parser->program,
-        statement.expression);
-    if (returned_expression == NULL ||
-        !minic_type_is_integer(returned_expression->type)) {
-        minic_parser_error(parser, "return expression must have int type");
-        return false;
+
+    if (minic_type_is_void(function->return_type)) {
+        if (parser->current.kind != MINIC_TOKEN_SEMICOLON) {
+            minic_parser_error(parser, "void function cannot return a value");
+            return false;
+        }
+        statement.span.end = parser->current.span.end;
+    } else {
+        const MinicExpression *returned_expression;
+
+        if (parser->current.kind == MINIC_TOKEN_SEMICOLON) {
+            minic_parser_error(parser, "int function requires a return value");
+            return false;
+        }
+        if (!minic_parser_parse_expression(
+                parser,
+                &statement.expression,
+                0U)) {
+            return false;
+        }
+        returned_expression = minic_c0_program_expression(
+            parser->program,
+            statement.expression);
+        if (returned_expression == NULL ||
+            !minic_type_equal(
+                function->return_type,
+                returned_expression->type)) {
+            minic_parser_error(
+                parser,
+                "return expression does not match function return type");
+            return false;
+        }
+        statement.span.end = returned_expression->span.end;
+        parser->program->return_expression = statement.expression;
     }
-    statement.span.end = returned_expression->span.end;
-    if (!minic_parser_expect(parser, MINIC_TOKEN_SEMICOLON, "expected ';'") ||
-        !minic_parser_add_statement(parser, &statement)) {
-        return false;
-    }
-    parser->program->return_expression = statement.expression;
-    return true;
+
+    return minic_parser_expect(
+               parser,
+               MINIC_TOKEN_SEMICOLON,
+               "expected ';'") &&
+           minic_parser_add_statement(parser, &statement);
 }
 
 bool minic_parser_add_default_return(MinicParser *parser)
 {
-    MinicExpression expression;
+    const MinicFunction *function;
     MinicStatement statement;
 
-    (void)memset(&expression, 0, sizeof(expression));
-    (void)memset(&statement, 0, sizeof(statement));
-    expression.kind = MINIC_EXPRESSION_INTEGER;
-    expression.span = parser->current.span;
-    expression.type = minic_type_int();
-    expression.value_category = MINIC_VALUE_RVALUE;
-    expression.value.integer_value = 0;
-    if (!minic_parser_add_expression(
-            parser,
-            &expression,
-            &statement.expression)) {
+    function = minic_c0_program_function(
+        parser->program,
+        parser->current_function);
+    if (function == NULL) {
+        minic_parser_error(parser, "internal error: no active function");
         return false;
     }
+
+    (void)memset(&statement, 0, sizeof(statement));
     statement.kind = MINIC_STATEMENT_RETURN;
     statement.span = parser->current.span;
     statement.target_expression = MINIC_EXPRESSION_INVALID;
-    parser->program->return_expression = statement.expression;
+    statement.expression = MINIC_EXPRESSION_INVALID;
+
+    if (minic_type_is_integer(function->return_type)) {
+        MinicExpression expression;
+
+        (void)memset(&expression, 0, sizeof(expression));
+        expression.kind = MINIC_EXPRESSION_INTEGER;
+        expression.span = parser->current.span;
+        expression.type = minic_type_int();
+        expression.value_category = MINIC_VALUE_RVALUE;
+        expression.value.integer_value = 0;
+        if (!minic_parser_add_expression(
+                parser,
+                &expression,
+                &statement.expression)) {
+            return false;
+        }
+        parser->program->return_expression = statement.expression;
+    } else if (!minic_type_is_void(function->return_type)) {
+        minic_parser_error(parser, "unsupported implicit return type");
+        return false;
+    }
     return minic_parser_add_statement(parser, &statement);
 }
 
