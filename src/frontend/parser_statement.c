@@ -52,6 +52,7 @@ static bool parse_declaration(MinicParser *parser)
 
     local.name_span = parser->current.span;
     local.type = declared_type;
+    local.element_count = 1U;
     local.storage_offset = 0U;
     if (minic_parser_find_local_in_current_scope(
             parser,
