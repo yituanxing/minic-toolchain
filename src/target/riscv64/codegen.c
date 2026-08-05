@@ -410,7 +410,8 @@ static bool minic_riscv64_emit_function(
     size_t frame_size;
     bool success;
 
-    if (function == NULL || function->name_length == 0U ||
+    if (function == NULL || !function->is_defined ||
+        function->name_length == 0U ||
         function->body_block >= program->block_count ||
         !minic_riscv64_frame_size(function, &frame_size)) {
         return false;
@@ -475,13 +476,20 @@ bool minic_riscv64_write_c0_program(
     size_t label_counter;
     bool success;
 
-    if (minic_c0_program_function(program, program->entry_function) == NULL ||
-        program->function_count == 0U) {
-        minic_codegen_set_diagnostic(
-            diagnostic,
-            path,
-            "entry function is missing or invalid");
-        return false;
+    {
+        const MinicFunction *entry_function;
+
+        entry_function = minic_c0_program_function(
+            program,
+            program->entry_function);
+        if (entry_function == NULL || !entry_function->is_defined ||
+            program->function_count == 0U) {
+            minic_codegen_set_diagnostic(
+                diagnostic,
+                path,
+                "entry function is missing or invalid");
+            return false;
+        }
     }
 
     file = fopen(path, "wb");
@@ -502,10 +510,16 @@ bool minic_riscv64_write_c0_program(
     for (function_index = 0U;
          success && function_index < program->function_count;
          ++function_index) {
+        const MinicFunction *function;
+
+        function = &program->functions[function_index];
+        if (!function->is_defined) {
+            continue;
+        }
         success = minic_riscv64_emit_function(
             file,
             program,
-            &program->functions[function_index],
+            function,
             &label_counter);
     }
 
