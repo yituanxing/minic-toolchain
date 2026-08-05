@@ -48,9 +48,14 @@ static bool minic_riscv64_emit_subscript_address(
     }
     array = minic_c0_program_local(program, base->value.local_id);
     if (array == NULL || array->element_count <= 1U ||
-        !minic_type_equal(array->type, expression->type) ||
-        !minic_type_pointer_to(expression->type, &base->type) ||
-        !minic_riscv64_pointer_shift(base->type, &shift)) {
+        !minic_type_equal(array->type, expression->type)) {
+        return false;
+    }
+    if (minic_type_is_integer(expression->type)) {
+        shift = 2U;
+    } else if (minic_type_is_pointer(expression->type)) {
+        shift = 3U;
+    } else {
         return false;
     }
 
