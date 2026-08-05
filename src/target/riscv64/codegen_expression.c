@@ -1,5 +1,36 @@
 #include "target/riscv64/codegen_internal.h"
 
+static bool minic_riscv64_emit_lvalue_address(
+    FILE *file,
+    const MinicC0Program *program,
+    const MinicFunction *function,
+    MinicExpressionId expression_id)
+{
+    const MinicExpression *expression;
+
+    expression = minic_c0_program_expression(program, expression_id);
+    if (expression == NULL ||
+        expression->value_category != MINIC_VALUE_LVALUE) {
+        return false;
+    }
+    switch (expression->kind) {
+    case MINIC_EXPRESSION_LOCAL:
+        return minic_riscv64_emit_object_address(
+            file,
+            program,
+            function,
+            expression->value.local_id);
+    case MINIC_EXPRESSION_DEREFERENCE:
+        return minic_riscv64_emit_expression(
+            file,
+            program,
+            function,
+            expression->value.unary.operand);
+    default:
+        return false;
+    }
+}
+
 bool minic_riscv64_emit_expression(
     FILE *file,
     const MinicC0Program *program,
@@ -22,6 +53,27 @@ bool minic_riscv64_emit_expression(
             program,
             function,
             expression->value.local_id);
+    case MINIC_EXPRESSION_ADDRESS_OF:
+        return minic_riscv64_emit_lvalue_address(
+            file,
+            program,
+            function,
+            expression->value.unary.operand);
+    case MINIC_EXPRESSION_DEREFERENCE:
+        if (!minic_riscv64_emit_expression(
+                file,
+                program,
+                function,
+                expression->value.unary.operand)) {
+            return false;
+        }
+        if (minic_type_is_integer(expression->type)) {
+            return fprintf(file, "  lw a0, 0(a0)\n") >= 0;
+        }
+        if (minic_type_is_pointer(expression->type)) {
+            return fprintf(file, "  ld a0, 0(a0)\n") >= 0;
+        }
+        return false;
     case MINIC_EXPRESSION_UNARY:
         if (!minic_riscv64_emit_expression(file, program, function, expression->value.unary.operand)) {
             return false;
