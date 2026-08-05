@@ -204,6 +204,12 @@ expect_compile_failure \
     invalid_pointer_assignment_type \
     "assignment type does not match target type"
 expect_compile_failure \
+    invalid_pointer_add_pointer \
+    "unsupported pointer arithmetic operands"
+expect_compile_failure \
+    invalid_integer_subtract_pointer \
+    "unsupported pointer arithmetic operands"
+expect_compile_failure \
     invalid_zero_length_array \
     "array bound must be greater than zero"
 expect_compile_failure \
