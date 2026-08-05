@@ -5,6 +5,10 @@
 #include <stdio.h>
 #include <string.h>
 
+static const char *const minic_riscv64_argument_registers[8] = {
+    "a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7"
+};
+
 static bool minic_riscv64_emit_function(
     FILE *file,
     const MinicC0Program *program,
@@ -46,19 +50,12 @@ static bool minic_riscv64_emit_function(
         for (parameter_index = 0U;
              success && parameter_index < function->parameter_count;
              ++parameter_index) {
-            char register_name[4];
-
-            (void)snprintf(
-                register_name,
-                sizeof(register_name),
-                "a%zu",
-                parameter_index);
             success = minic_riscv64_emit_object_store_register(
                 file,
                 program,
                 function,
                 function->local_begin + parameter_index,
-                register_name);
+                minic_riscv64_argument_registers[parameter_index]);
         }
     }
     if (success) {
