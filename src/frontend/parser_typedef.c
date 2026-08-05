@@ -85,21 +85,18 @@ bool minic_parser_parse_typedef(MinicParser *parser)
             return false;
         }
     }
-    if (!minic_parser_expect(
-            parser,
-            MINIC_TOKEN_SEMICOLON,
-            "expected ';' after typedef") ||
-        !minic_c0_program_add_type_alias(
+    if (parser->current.kind != MINIC_TOKEN_SEMICOLON) {
+        minic_parser_error(parser, "expected ';' after typedef");
+        return false;
+    }
+    if (!minic_c0_program_add_type_alias(
             parser->program,
             parser->source + name_span.begin.offset,
             minic_parser_span_length(name_span),
             aliased_type,
             &alias_id)) {
-        if (parser->current.kind == MINIC_TOKEN_EOF ||
-            parser->current.kind == MINIC_TOKEN_SEMICOLON) {
-            minic_parser_error(parser, "out of memory while adding typedef");
-        }
+        minic_parser_error(parser, "out of memory while adding typedef");
         return false;
     }
-    return true;
+    return minic_parser_advance(parser);
 }
