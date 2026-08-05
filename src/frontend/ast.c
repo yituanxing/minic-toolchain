@@ -198,12 +198,31 @@ bool minic_c0_program_add_function(
     function.name_length = name_length;
     function.local_begin = local_begin;
     function.local_count = local_count;
+    function.parameter_count = 0U;
     function.body_block = body_block;
     function.is_defined = body_block != MINIC_BLOCK_INVALID;
 
     *function_id = program->function_count;
     program->functions[program->function_count] = function;
     program->function_count += 1U;
+    return true;
+}
+
+bool minic_c0_program_set_function_parameter_count(
+    MinicC0Program *program,
+    MinicFunctionId function_id,
+    size_t parameter_count)
+{
+    MinicFunction *function;
+
+    if (function_id >= program->function_count || parameter_count > 8U) {
+        return false;
+    }
+    function = &program->functions[function_id];
+    if (function->is_defined && function->local_count < parameter_count) {
+        return false;
+    }
+    function->parameter_count = parameter_count;
     return true;
 }
 
