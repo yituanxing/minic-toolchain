@@ -1,5 +1,25 @@
 #include "target/riscv64/codegen_internal.h"
 
+static bool minic_riscv64_pointer_shift(
+    MinicType pointer_type,
+    unsigned int *shift)
+{
+    MinicType pointee;
+
+    if (shift == NULL || !minic_type_pointee(pointer_type, &pointee)) {
+        return false;
+    }
+    if (minic_type_is_integer(pointee)) {
+        *shift = 2U;
+        return true;
+    }
+    if (minic_type_is_pointer(pointee)) {
+        *shift = 3U;
+        return true;
+    }
+    return false;
+}
+
 static bool minic_riscv64_emit_subscript_address(
     FILE *file,
     const MinicC0Program *program,
@@ -28,14 +48,9 @@ static bool minic_riscv64_emit_subscript_address(
     }
     array = minic_c0_program_local(program, base->value.local_id);
     if (array == NULL || array->element_count <= 1U ||
-        !minic_type_equal(array->type, expression->type)) {
-        return false;
-    }
-    if (minic_type_is_integer(expression->type)) {
-        shift = 2U;
-    } else if (minic_type_is_pointer(expression->type)) {
-        shift = 3U;
-    } else {
+        !minic_type_equal(array->type, expression->type) ||
+        !minic_type_pointer_to(expression->type, &base->type) ||
+        !minic_riscv64_pointer_shift(base->type, &shift)) {
         return false;
     }
 
@@ -164,27 +179,111 @@ bool minic_riscv64_emit_expression(
         case MINIC_UNARY_LOGICAL_NOT: return fprintf(file, "  seqz a0, a0\n") >= 0;
         }
         return false;
-    case MINIC_EXPRESSION_BINARY:
-        if (!minic_riscv64_emit_expression(file, program, function, expression->value.binary.left) ||
+    case MINIC_EXPRESSION_BINARY: {
+        const MinicExpression *left;
+        const MinicExpression *right;
+        unsigned int shift;
+
+        left = minic_c0_program_expression(
+            program,
+            expression->value.binary.left);
+        right = minic_c0_program_expression(
+            program,
+            expression->value.binary.right);
+        if (left == NULL || right == NULL ||
+            !minic_riscv64_emit_expression(
+                file,
+                program,
+                function,
+                expression->value.binary.left) ||
             fprintf(file, "  addi sp, sp, -16\n  sd a0, 0(sp)\n") < 0 ||
-            !minic_riscv64_emit_expression(file, program, function, expression->value.binary.right) ||
+            !minic_riscv64_emit_expression(
+                file,
+                program,
+                function,
+                expression->value.binary.right) ||
             fprintf(file, "  ld t0, 0(sp)\n  addi sp, sp, 16\n") < 0) {
             return false;
         }
         switch (expression->value.binary.operator_kind) {
-        case MINIC_BINARY_ADD: return fprintf(file, "  addw a0, t0, a0\n") >= 0;
-        case MINIC_BINARY_SUBTRACT: return fprintf(file, "  subw a0, t0, a0\n") >= 0;
-        case MINIC_BINARY_MULTIPLY: return fprintf(file, "  mulw a0, t0, a0\n") >= 0;
-        case MINIC_BINARY_DIVIDE: return fprintf(file, "  divw a0, t0, a0\n") >= 0;
-        case MINIC_BINARY_REMAINDER: return fprintf(file, "  remw a0, t0, a0\n") >= 0;
-        case MINIC_BINARY_EQUAL: return fprintf(file, "  xor a0, t0, a0\n  seqz a0, a0\n") >= 0;
-        case MINIC_BINARY_NOT_EQUAL: return fprintf(file, "  xor a0, t0, a0\n  snez a0, a0\n") >= 0;
-        case MINIC_BINARY_LESS: return fprintf(file, "  slt a0, t0, a0\n") >= 0;
-        case MINIC_BINARY_LESS_EQUAL: return fprintf(file, "  slt a0, a0, t0\n  xori a0, a0, 1\n") >= 0;
-        case MINIC_BINARY_GREATER: return fprintf(file, "  slt a0, a0, t0\n") >= 0;
-        case MINIC_BINARY_GREATER_EQUAL: return fprintf(file, "  slt a0, t0, a0\n  xori a0, a0, 1\n") >= 0;
+        case MINIC_BINARY_ADD:
+            if (minic_type_is_integer(left->type) &&
+                minic_type_is_integer(right->type)) {
+                return fprintf(file, "  addw a0, t0, a0\n") >= 0;
+            }
+            if (minic_type_is_pointer(left->type) &&
+                minic_type_is_integer(right->type) &&
+                minic_riscv64_pointer_shift(left->type, &shift)) {
+                return fprintf(
+                    file,
+                    "  slli a0, a0, %u\n"
+                    "  add a0, t0, a0\n",
+                    shift) >= 0;
+            }
+            if (minic_type_is_integer(left->type) &&
+                minic_type_is_pointer(right->type) &&
+                minic_riscv64_pointer_shift(right->type, &shift)) {
+                return fprintf(
+                    file,
+                    "  slli t0, t0, %u\n"
+                    "  add a0, a0, t0\n",
+                    shift) >= 0;
+            }
+            return false;
+        case MINIC_BINARY_SUBTRACT:
+            if (minic_type_is_integer(left->type) &&
+                minic_type_is_integer(right->type)) {
+                return fprintf(file, "  subw a0, t0, a0\n") >= 0;
+            }
+            if (minic_type_is_pointer(left->type) &&
+                minic_type_is_integer(right->type) &&
+                minic_riscv64_pointer_shift(left->type, &shift)) {
+                return fprintf(
+                    file,
+                    "  slli a0, a0, %u\n"
+                    "  sub a0, t0, a0\n",
+                    shift) >= 0;
+            }
+            return false;
+        case MINIC_BINARY_MULTIPLY:
+            return minic_type_is_integer(left->type) &&
+                   minic_type_is_integer(right->type) &&
+                   fprintf(file, "  mulw a0, t0, a0\n") >= 0;
+        case MINIC_BINARY_DIVIDE:
+            return minic_type_is_integer(left->type) &&
+                   minic_type_is_integer(right->type) &&
+                   fprintf(file, "  divw a0, t0, a0\n") >= 0;
+        case MINIC_BINARY_REMAINDER:
+            return minic_type_is_integer(left->type) &&
+                   minic_type_is_integer(right->type) &&
+                   fprintf(file, "  remw a0, t0, a0\n") >= 0;
+        case MINIC_BINARY_EQUAL:
+            return minic_type_is_integer(left->type) &&
+                   minic_type_is_integer(right->type) &&
+                   fprintf(file, "  xor a0, t0, a0\n  seqz a0, a0\n") >= 0;
+        case MINIC_BINARY_NOT_EQUAL:
+            return minic_type_is_integer(left->type) &&
+                   minic_type_is_integer(right->type) &&
+                   fprintf(file, "  xor a0, t0, a0\n  snez a0, a0\n") >= 0;
+        case MINIC_BINARY_LESS:
+            return minic_type_is_integer(left->type) &&
+                   minic_type_is_integer(right->type) &&
+                   fprintf(file, "  slt a0, t0, a0\n") >= 0;
+        case MINIC_BINARY_LESS_EQUAL:
+            return minic_type_is_integer(left->type) &&
+                   minic_type_is_integer(right->type) &&
+                   fprintf(file, "  slt a0, a0, t0\n  xori a0, a0, 1\n") >= 0;
+        case MINIC_BINARY_GREATER:
+            return minic_type_is_integer(left->type) &&
+                   minic_type_is_integer(right->type) &&
+                   fprintf(file, "  slt a0, a0, t0\n") >= 0;
+        case MINIC_BINARY_GREATER_EQUAL:
+            return minic_type_is_integer(left->type) &&
+                   minic_type_is_integer(right->type) &&
+                   fprintf(file, "  slt a0, t0, a0\n  xori a0, a0, 1\n") >= 0;
         }
         return false;
+    }
     case MINIC_EXPRESSION_CALL: {
         const MinicFunction *callee;
         size_t argument_index;
