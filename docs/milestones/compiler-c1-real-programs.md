@@ -33,9 +33,9 @@ MiniC 被测线中只有 MiniC 承担 C 编译。外部 GCC 负责目标预处�
 | Prime count / 素数计数 | nested loops, multiplication, conditions / 嵌套循环、乘法、条件 | 15 |
 | Collatz iteration / Collatz 迭代 | long data-dependent loop, if/else / 长数据相关循环、分支 | 111 |
 
-The historical acceptance run compared the exit status of both static RISC-V ELFs. The strengthened gate now additionally compares stdout and stderr and must be rerun before the milestone is merged.
+The historical acceptance run compared the exit status of both static RISC-V ELFs. The strengthened gate now additionally compares stdout and stderr and must be rerun after the frame migration before this milestone is merged.
 
-历史验收运行比较了双方静态 RISC-V ELF 的退出码。强化后的门禁还会比较 stdout 与 stderr，里程碑合并前必须重新执行。
+历史验收运行比较了双方静态 RISC-V ELF 的退出码。强化后的门禁还会比较 stdout 与 stderr；调用安全栈帧迁移后，里程碑合并前必须重新执行。
 
 ## Implemented capability base / 已实现能力基础
 
@@ -49,31 +49,36 @@ The current production implementation includes:
 - `== != < <= > >=` with normalized C truth values / 比较及规范化 C 真假值；
 - `if/else`, nearest-`if` binding, and compound branches / 条件语句、最近 `if` 绑定和复合分支；
 - program-owned expressions, locals, statements, and blocks / Program 自有表达式、局部变量、语句和 Block；
-- a single parsed `main` function shape / 单个已解析的 `main` 函数结构。
+- a single parsed `main` function shape / 单个已解析的 `main` 函数结构；
+- a call-safe single-function RV64 frame / 调用安全的单函数 RV64 栈帧。
 
-## Important current limitation / 当前重要限制
+## RV64 frame contract / RV64 栈帧契约
 
-The current RV64 frame is still a single-function frame. Local storage is addressed through caller-saved register `t1`, and the generated function does not yet preserve `ra` and `s0`. It is valid for the current call-free programs but **is not call-safe** and must not be described as such.
+The local-storage base is now callee-saved `s0`. Every generated frame reserves slots for the incoming `s0` and `ra`, saves them before the body, and restores them before releasing the frame. Local accesses no longer depend on caller-saved `t1`. Save-slot and local addresses beyond the signed 12-bit load/store offset are explicitly materialized.
 
-当前 RV64 栈帧仍是单函数栈帧。局部存储通过调用者保存寄存器 `t1` 寻址，生成函数尚未保存 `ra` 与 `s0`。它适用于当前无函数调用程序，但**并不具备调用安全性**，不得把它描述为已完成调用安全栈帧。
+局部存储基址已经迁移到被调用者保存寄存器 `s0`。每个生成栈帧为传入的 `s0` 和 `ra` 预留槽位，在函数体前保存，并在释放栈帧前恢复。局部访问不再依赖调用者保存寄存器 `t1`。保存槽和局部地址超出有符号 12 位访存偏移时，会显式构造地址。
 
-The AST also does not yet own function records. Multiple functions, calls, parameters, recursion, pointers, arrays, global objects, richer integer types, and block scopes remain unimplemented.
+The implementation and structural tests are committed. A C11 syntax build has passed; fast, sanitizer, focused RISC-V/QEMU, and real-program GCC/MiniC differential gates remain required after this migration.
 
-AST 当前也尚未拥有函数记录。多函数、调用、参数、递归、指针、数组、全局对象、更丰富的整数类型和块作用域仍未实现。
+实现和结构门禁已经提交，C11 语法构建已经通过；迁移后仍必须执行快速门禁、Sanitizer、聚焦 RISC-V/QEMU 门禁，以及真实程序 GCC/MiniC 差分门禁。
+
+## Remaining limitations / 剩余限制
+
+The AST does not yet own function records. Multiple functions, calls, parameters, recursion, pointers, arrays, global objects, richer integer types, and block scopes remain unimplemented.
+
+AST 当前尚未拥有函数记录。多函数、调用、参数、递归、指针、数组、全局对象、更丰富的整数类型和块作用域仍未实现。
 
 ## Next driver / 下一驱动目标
 
-The next sequence is deliberately ordered around ABI correctness:
+The next sequence remains deliberately ordered around evidence:
 
-下一阶段围绕 ABI 正确性按以下顺序推进：
+下一阶段继续按证据顺序推进：
 
-1. move the local base from caller-saved `t1` to callee-saved `s0`;
-2. preserve and restore `ra` and the incoming `s0` in every generated function frame;
-3. rerun fast, sanitizer, micro-runtime, and GCC/MiniC real-program differential gates;
-4. introduce program-owned function records and migrate the existing `main` into the first record;
-5. parse and emit multiple zero-argument `int f(void)` definitions;
-6. add resolved direct calls, nested calls, and recursion;
-7. then introduce integer parameters and RV64 `a0`-`a7` argument passing.
+1. rerun fast, sanitizer, micro-runtime, and GCC/MiniC real-program differential gates after the call-safe frame migration;
+2. introduce program-owned function records and migrate the existing `main` into the first record;
+3. parse and emit multiple zero-argument `int f(void)` definitions;
+4. add resolved direct calls, nested calls, and recursion;
+5. then introduce integer parameters and RV64 `a0`-`a7` argument passing.
 
 `break` and `continue` remain useful but are not the current bottleneck for real-program composition. Function boundaries and ABI correctness have higher leverage for the next workload class.
 
