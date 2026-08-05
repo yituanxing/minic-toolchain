@@ -22,21 +22,43 @@ static void minic_riscv64_layout_error(
 }
 
 static bool minic_riscv64_type_layout(
+    const MinicC0Program *program,
     MinicType type,
     size_t *size,
     size_t *alignment)
 {
-    if (size == NULL || alignment == NULL) {
+    if (program == NULL || size == NULL || alignment == NULL) {
         return false;
+    }
+    if (minic_type_is_pointer(type)) {
+        *size = 8U;
+        *alignment = 8U;
+        return true;
     }
     if (minic_type_is_integer(type)) {
         *size = 4U;
         *alignment = 4U;
         return true;
     }
-    if (minic_type_is_pointer(type)) {
-        *size = 8U;
-        *alignment = 8U;
+    if (minic_type_is_array(type)) {
+        const MinicArrayType *array_type;
+        size_t element_size;
+        size_t element_alignment;
+
+        array_type = minic_c0_program_array_type(
+            program,
+            type.array_type_id);
+        if (array_type == NULL || array_type->element_count == 0U ||
+            !minic_riscv64_type_layout(
+                program,
+                array_type->element_type,
+                &element_size,
+                &element_alignment) ||
+            element_size > SIZE_MAX / array_type->element_count) {
+            return false;
+        }
+        *size = element_size * array_type->element_count;
+        *alignment = element_alignment;
         return true;
     }
     return false;
@@ -62,6 +84,32 @@ static bool minic_riscv64_align_up(
     return true;
 }
 
+static bool minic_riscv64_layout_globals(
+    MinicC0Program *program)
+{
+    size_t object_index;
+
+    for (object_index = 0U;
+         object_index < program->global_object_count;
+         ++object_index) {
+        MinicGlobalObject *object;
+        size_t storage_size;
+        size_t alignment;
+
+        object = &program->global_objects[object_index];
+        if (!minic_riscv64_type_layout(
+                program,
+                object->type,
+                &storage_size,
+                &alignment)) {
+            return false;
+        }
+        object->storage_size = storage_size;
+        object->alignment = alignment;
+    }
+    return true;
+}
+
 bool minic_riscv64_layout_program(
     const char *path,
     MinicC0Program *program,
@@ -74,6 +122,13 @@ bool minic_riscv64_layout_program(
             diagnostic,
             path,
             "cannot layout a null program");
+        return false;
+    }
+    if (!minic_riscv64_layout_globals(program)) {
+        minic_riscv64_layout_error(
+            diagnostic,
+            path,
+            "global object size is invalid for the RV64 target");
         return false;
     }
 
@@ -111,6 +166,7 @@ bool minic_riscv64_layout_program(
 
             local = &program->locals[function->local_begin + local_index];
             if (!minic_riscv64_type_layout(
+                    program,
                     local->type,
                     &element_size,
                     &object_alignment) ||
