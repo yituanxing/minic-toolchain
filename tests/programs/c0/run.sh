@@ -114,3 +114,4 @@ run_program gcd
 run_program fibonacci
 run_program prime_count
 run_program collatz
+run_program function_calls
