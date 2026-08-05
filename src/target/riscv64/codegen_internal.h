@@ -48,6 +48,11 @@ bool minic_riscv64_frame_size(
     const MinicFunction *function,
     size_t *frame_size);
 
+bool minic_riscv64_emit_lvalue_address(
+    FILE *file,
+    const MinicC0Program *program,
+    const MinicFunction *function,
+    MinicExpressionId expression_id);
 bool minic_riscv64_emit_expression(
     FILE *file,
     const MinicC0Program *program,
