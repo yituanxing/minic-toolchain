@@ -16,12 +16,17 @@ static bool parse_declaration(MinicParser *parser)
     }
 
     local.name_span = parser->current.span;
-    if (minic_parser_find_local(parser, local.name_span) != MINIC_LOCAL_INVALID) {
+    if (minic_parser_find_local_in_current_scope(
+            parser,
+            local.name_span) != MINIC_LOCAL_INVALID) {
         minic_parser_error(parser, "duplicate local declaration");
         return false;
     }
     if (!minic_c0_program_add_local(parser->program, &local, &local_id)) {
         minic_parser_error(parser, "out of memory while adding local");
+        return false;
+    }
+    if (!minic_parser_bind_local(parser, local.name_span, local_id)) {
         return false;
     }
     if (!minic_parser_advance(parser)) {
