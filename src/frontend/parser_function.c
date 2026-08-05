@@ -131,6 +131,9 @@ static bool parse_function(MinicParser *parser)
 
     local_begin = parser->program->local_count;
     parser->local_begin = local_begin;
+    if (!minic_parser_begin_scope(parser)) {
+        return false;
+    }
     {
         size_t parameter_index;
 
@@ -138,16 +141,23 @@ static bool parse_function(MinicParser *parser)
              parameter_index < parameter_count;
              ++parameter_index) {
             parameter_local.name_span = parameter_name_spans[parameter_index];
-            if (minic_parser_find_local(parser, parameter_local.name_span) !=
-                MINIC_LOCAL_INVALID) {
+            if (minic_parser_find_local_in_current_scope(
+                    parser,
+                    parameter_local.name_span) != MINIC_LOCAL_INVALID) {
                 minic_parser_error(parser, "duplicate parameter name");
                 return false;
             }
             if (!minic_c0_program_add_local(
                     parser->program,
                     &parameter_local,
-                    &parameter_local_id)) {
-                minic_parser_error(parser, "out of memory while adding parameter");
+                    &parameter_local_id) ||
+                !minic_parser_bind_local(
+                    parser,
+                    parameter_local.name_span,
+                    parameter_local_id)) {
+                if (parameter_local_id == MINIC_LOCAL_INVALID) {
+                    minic_parser_error(parser, "out of memory while adding parameter");
+                }
                 return false;
             }
         }
@@ -205,6 +215,7 @@ static bool parse_function(MinicParser *parser)
         minic_parser_error(parser, "invalid local range while finishing function");
         return false;
     }
+    minic_parser_end_scope(parser);
     return true;
 }
 
