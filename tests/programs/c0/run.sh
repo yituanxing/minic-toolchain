@@ -117,3 +117,4 @@ run_program collatz
 run_program function_calls
 run_program function_prototype
 run_program function_parameter
+run_program function_two_parameters
