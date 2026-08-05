@@ -219,7 +219,9 @@ bool minic_c0_program_set_function_parameter_count(
         return false;
     }
     function = &program->functions[function_id];
-    if (function->is_defined && function->local_count < parameter_count) {
+    if (function->is_defined &&
+        (function->local_begin > program->local_count ||
+         parameter_count > program->local_count - function->local_begin)) {
         return false;
     }
     function->parameter_count = parameter_count;
