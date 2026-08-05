@@ -122,5 +122,7 @@ run_program function_four_parameters
 run_program function_eight_parameters
 run_program recursive_factorial
 run_program mutual_recursion
+run_program for_counter
+run_program for_iterations
 run_program for_loop
 run_program unsigned_semantics
