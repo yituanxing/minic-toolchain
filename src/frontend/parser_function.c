@@ -6,7 +6,7 @@
 static bool parse_function(MinicParser *parser)
 {
     MinicSourceSpan name_span;
-    MinicSourceSpan parameter_name_spans[2];
+    MinicSourceSpan parameter_name_spans[4];
     MinicBlockId body_block;
     MinicFunctionId function_id;
     const MinicFunction *existing_function;
@@ -31,10 +31,7 @@ static bool parse_function(MinicParser *parser)
     name_span = parser->current.span;
     function_id = minic_parser_find_function(parser, name_span);
     is_main = minic_parser_span_length(name_span) == 4U &&
-              memcmp(
-                  parser->source + name_span.begin.offset,
-                  "main",
-                  4U) == 0;
+              memcmp(parser->source + name_span.begin.offset, "main", 4U) == 0;
 
     if (!minic_parser_advance(parser) ||
         !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '('") ) {
@@ -46,13 +43,13 @@ static bool parse_function(MinicParser *parser)
         }
     } else if (parser->current.kind == MINIC_TOKEN_KW_INT) {
         for (;;) {
-            if (parameter_count >= 2U ||
+            if (parameter_count >= 4U ||
                 !minic_parser_advance(parser) ||
                 parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
                 minic_parser_error(
                     parser,
-                    parameter_count >= 2U
-                        ? "at most two int parameters are supported"
+                    parameter_count >= 4U
+                        ? "at most four int parameters are supported"
                         : "expected parameter name after 'int'");
                 return false;
             }
@@ -83,9 +80,7 @@ static bool parse_function(MinicParser *parser)
     }
 
     if (function_id != MINIC_FUNCTION_INVALID) {
-        existing_function = minic_c0_program_function(
-            parser->program,
-            function_id);
+        existing_function = minic_c0_program_function(parser->program, function_id);
         if (existing_function == NULL ||
             existing_function->parameter_count != parameter_count) {
             minic_parser_error(parser, "conflicting function declaration");
@@ -119,9 +114,7 @@ static bool parse_function(MinicParser *parser)
         return false;
     }
     if (function_id != MINIC_FUNCTION_INVALID) {
-        existing_function = minic_c0_program_function(
-            parser->program,
-            function_id);
+        existing_function = minic_c0_program_function(parser->program, function_id);
         if (existing_function == NULL || existing_function->is_defined) {
             minic_parser_error(parser, "duplicate function definition");
             return false;
@@ -145,9 +138,8 @@ static bool parse_function(MinicParser *parser)
              parameter_index < parameter_count;
              ++parameter_index) {
             parameter_local.name_span = parameter_name_spans[parameter_index];
-            if (minic_parser_find_local(
-                    parser,
-                    parameter_local.name_span) != MINIC_LOCAL_INVALID) {
+            if (minic_parser_find_local(parser, parameter_local.name_span) !=
+                MINIC_LOCAL_INVALID) {
                 minic_parser_error(parser, "duplicate parameter name");
                 return false;
             }
