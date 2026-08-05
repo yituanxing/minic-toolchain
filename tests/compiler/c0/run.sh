@@ -179,4 +179,13 @@ expect_compile_failure \
 expect_compile_failure \
     invalid_out_of_scope_local \
     "use of undeclared local"
+expect_compile_failure \
+    invalid_address_of_rvalue \
+    "address-of requires an lvalue operand"
+expect_compile_failure \
+    invalid_dereference_integer \
+    "dereference requires a pointer operand"
+expect_compile_failure \
+    invalid_pointer_initializer \
+    "initializer type does not match local type"
 expect_compile_failure invalid_return "expected expression"
