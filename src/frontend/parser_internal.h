@@ -9,6 +9,11 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+typedef struct MinicParserLocalBinding {
+    MinicSourceSpan name_span;
+    MinicLocalId local_id;
+} MinicParserLocalBinding;
+
 typedef struct MinicParser {
     const char *path;
     const char *source;
@@ -18,6 +23,14 @@ typedef struct MinicParser {
     MinicC0Program *program;
     MinicBlockId current_block;
     size_t local_begin;
+
+    MinicParserLocalBinding *local_bindings;
+    size_t local_binding_count;
+    size_t local_binding_capacity;
+
+    size_t *scope_binding_begins;
+    size_t scope_count;
+    size_t scope_capacity;
 } MinicParser;
 
 void minic_parser_error(MinicParser *parser, const char *format, ...);
@@ -38,6 +51,18 @@ bool minic_parser_add_expression(
 bool minic_parser_add_statement(
     MinicParser *parser,
     const MinicStatement *statement);
+
+bool minic_parser_begin_scope(MinicParser *parser);
+void minic_parser_end_scope(MinicParser *parser);
+bool minic_parser_bind_local(
+    MinicParser *parser,
+    MinicSourceSpan name_span,
+    MinicLocalId local_id);
+MinicLocalId minic_parser_find_local_in_current_scope(
+    const MinicParser *parser,
+    MinicSourceSpan name_span);
+void minic_parser_destroy_scopes(MinicParser *parser);
+
 MinicLocalId minic_parser_find_local(
     const MinicParser *parser,
     MinicSourceSpan name_span);
