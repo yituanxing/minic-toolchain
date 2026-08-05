@@ -297,8 +297,29 @@ static bool minic_riscv64_emit_statement(
         return fprintf(file, ".Lif_end_%zu:\n", label) >= 0;
     }
 
-    case MINIC_STATEMENT_WHILE:
-        return false;
+    case MINIC_STATEMENT_WHILE: {
+        size_t label;
+
+        label = *label_counter;
+        *label_counter += 1U;
+        return fprintf(file, ".Lwhile_condition_%zu:\n", label) >= 0 &&
+               minic_riscv64_emit_expression(
+                   file,
+                   program,
+                   statement->expression) &&
+               fprintf(file, "  beqz a0, .Lwhile_end_%zu\n", label) >= 0 &&
+               minic_riscv64_emit_block(
+                   file,
+                   program,
+                   statement->then_block,
+                   label_counter) &&
+               fprintf(
+                   file,
+                   "  j .Lwhile_condition_%zu\n"
+                   ".Lwhile_end_%zu:\n",
+                   label,
+                   label) >= 0;
+    }
     }
 
     return false;
