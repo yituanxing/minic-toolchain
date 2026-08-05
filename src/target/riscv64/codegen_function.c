@@ -37,7 +37,7 @@ static bool minic_riscv64_emit_function(
                   minic_riscv64_emit_sp_store64(file, "s0", frame_size - 16U) &&
                   fprintf(file, "  mv s0, sp\n") >= 0;
     }
-    if (success && function->parameter_count > 4U) {
+    if (success && function->parameter_count > 8U) {
         return false;
     }
     if (success) {
