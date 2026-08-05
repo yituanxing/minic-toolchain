@@ -183,6 +183,7 @@ bool minic_riscv64_emit_object_load(
 {
     const MinicLocal *local;
     size_t width;
+    const char *instruction;
 
     if (!minic_riscv64_object_access(
             program,
@@ -192,9 +193,14 @@ bool minic_riscv64_emit_object_load(
             &width)) {
         return false;
     }
+    if (width == 4U) {
+        instruction = minic_type_is_unsigned_integer(local->type) ? "lwu" : "lw";
+    } else {
+        instruction = "ld";
+    }
     return minic_riscv64_emit_s0_access(
         file,
-        width == 4U ? "lw" : "ld",
+        instruction,
         "a0",
         local->storage_offset);
 }
