@@ -78,8 +78,12 @@ MinicFunctionId minic_parser_find_function(
 MinicRecordId minic_parser_find_record(
     const MinicParser *parser,
     MinicSourceSpan name_span);
+MinicTypeAliasId minic_parser_find_type_alias(
+    const MinicParser *parser,
+    MinicSourceSpan name_span);
 
 bool minic_parser_parse_record_definition(MinicParser *parser);
+bool minic_parser_parse_typedef(MinicParser *parser);
 bool minic_parser_parse_expression(
     MinicParser *parser,
     MinicExpressionId *expression_id,
