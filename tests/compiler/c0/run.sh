@@ -193,6 +193,22 @@ compile_source typedef_multidimensional_array typedef_multidimensional_array
 expect_instructions typedef_multidimensional_array \
     "mv s0, sp" "li a0, 0" "j .Lmain_return"
 
+compile_source static_global_array static_global_array
+grep -F ".section .rodata" "$work/static_global_array.s" >/dev/null
+grep -F ".type table, @object" "$work/static_global_array.s" >/dev/null
+grep -F ".align 2" "$work/static_global_array.s" >/dev/null
+grep -F "table:" "$work/static_global_array.s" >/dev/null
+grep -F "  .word 99" "$work/static_global_array.s" >/dev/null
+grep -F "  .word 124" "$work/static_global_array.s" >/dev/null
+grep -F "  .word 1" "$work/static_global_array.s" >/dev/null
+grep -F "  .word 0" "$work/static_global_array.s" >/dev/null
+grep -F ".size table, 16" "$work/static_global_array.s" >/dev/null
+if grep -F ".globl table" "$work/static_global_array.s" >/dev/null; then
+    printf '%s\n' "FAIL compiler/c0/static_global_array: internal object exported" >&2
+    exit 1
+fi
+printf '%s\n' "PASS compiler/c0/static_global_array"
+
 expect_compile_failure \
     invalid_duplicate_block_local \
     "duplicate local declaration"
@@ -256,4 +272,13 @@ expect_compile_failure \
 expect_compile_failure \
     invalid_void_typedef \
     "typedef cannot name bare void"
+expect_compile_failure \
+    invalid_too_many_global_initializers \
+    "too many global array initializers"
+expect_compile_failure \
+    invalid_writable_static_global \
+    "static global arrays currently require const int elements"
+expect_compile_failure \
+    invalid_scalar_static_global \
+    "static global object requires a fixed array declarator"
 expect_compile_failure invalid_return "expected expression"
