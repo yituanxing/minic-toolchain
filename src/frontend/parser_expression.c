@@ -77,6 +77,12 @@ static bool parse_primary(
             expression.value.call.function_id = function_id;
             expression.value.call.argument_count = callee->parameter_count;
             if (callee->parameter_count == 1U) {
+                if (parser->current.kind == MINIC_TOKEN_RPAREN) {
+                    minic_parser_error(
+                        parser,
+                        "call argument count does not match declaration");
+                    return false;
+                }
                 if (!minic_parser_parse_expression(
                         parser,
                         &expression.value.call.arguments[0],
