@@ -334,6 +334,39 @@ static MinicBinaryOperator binary_operator(MinicTokenKind kind)
     }
 }
 
+static bool binary_result_type(
+    MinicTokenKind kind,
+    MinicType left,
+    MinicType right,
+    MinicType *result)
+{
+    if (result == NULL) {
+        return false;
+    }
+    if (minic_type_is_integer(left) && minic_type_is_integer(right)) {
+        *result = minic_type_int();
+        return true;
+    }
+    if (kind == MINIC_TOKEN_PLUS) {
+        if (minic_type_is_pointer(left) && minic_type_is_integer(right)) {
+            *result = left;
+            return true;
+        }
+        if (minic_type_is_integer(left) && minic_type_is_pointer(right)) {
+            *result = right;
+            return true;
+        }
+        return false;
+    }
+    if (kind == MINIC_TOKEN_MINUS &&
+        minic_type_is_pointer(left) &&
+        minic_type_is_integer(right)) {
+        *result = left;
+        return true;
+    }
+    return false;
+}
+
 bool minic_parser_parse_expression(
     MinicParser *parser,
     MinicExpressionId *expression_id,
@@ -363,10 +396,8 @@ bool minic_parser_parse_expression(
         }
         left_expression = minic_c0_program_expression(parser->program, left);
         right_expression = minic_c0_program_expression(parser->program, right);
-        if (left_expression == NULL || right_expression == NULL ||
-            !minic_type_is_integer(left_expression->type) ||
-            !minic_type_is_integer(right_expression->type)) {
-            minic_parser_error(parser, "binary operator requires int operands");
+        if (left_expression == NULL || right_expression == NULL) {
+            minic_parser_error(parser, "invalid binary operands");
             return false;
         }
 
@@ -374,11 +405,23 @@ bool minic_parser_parse_expression(
         expression.kind = MINIC_EXPRESSION_BINARY;
         expression.span.begin = left_expression->span.begin;
         expression.span.end = right_expression->span.end;
-        expression.type = minic_type_int();
         expression.value_category = MINIC_VALUE_RVALUE;
         expression.value.binary.operator_kind = binary_operator(token_kind);
         expression.value.binary.left = left;
         expression.value.binary.right = right;
+        if (!binary_result_type(
+                token_kind,
+                left_expression->type,
+                right_expression->type,
+                &expression.type)) {
+            if (token_kind == MINIC_TOKEN_PLUS ||
+                token_kind == MINIC_TOKEN_MINUS) {
+                minic_parser_error(parser, "unsupported pointer arithmetic operands");
+            } else {
+                minic_parser_error(parser, "binary operator requires int operands");
+            }
+            return false;
+        }
         if (!minic_parser_add_expression(parser, &expression, &left)) {
             return false;
         }
