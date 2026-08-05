@@ -22,7 +22,8 @@ typedef enum MinicExpressionKind {
     MINIC_EXPRESSION_INTEGER = 0,
     MINIC_EXPRESSION_LOCAL,
     MINIC_EXPRESSION_UNARY,
-    MINIC_EXPRESSION_BINARY
+    MINIC_EXPRESSION_BINARY,
+    MINIC_EXPRESSION_CALL
 } MinicExpressionKind;
 
 typedef enum MinicUnaryOperator {
@@ -51,6 +52,7 @@ typedef struct MinicExpression {
     union {
         int integer_value;
         MinicLocalId local_id;
+        MinicFunctionId function_id;
         struct {
             MinicUnaryOperator operator_kind;
             MinicExpressionId operand;
