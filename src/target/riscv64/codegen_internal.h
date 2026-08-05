@@ -23,6 +23,11 @@ bool minic_riscv64_emit_sp_load64(
     const char *register_name,
     size_t offset);
 
+bool minic_riscv64_emit_object_address(
+    FILE *file,
+    const MinicC0Program *program,
+    const MinicFunction *function,
+    MinicLocalId local_id);
 bool minic_riscv64_emit_object_load(
     FILE *file,
     const MinicC0Program *program,
