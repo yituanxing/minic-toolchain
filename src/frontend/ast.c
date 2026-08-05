@@ -36,6 +36,7 @@ void minic_c0_program_initialize(MinicC0Program *program)
 {
     (void)memset(program, 0, sizeof(*program));
     program->body_block = MINIC_BLOCK_INVALID;
+    program->entry_function = MINIC_FUNCTION_INVALID;
     program->return_expression = MINIC_EXPRESSION_INVALID;
 }
 
@@ -46,10 +47,14 @@ void minic_c0_program_destroy(MinicC0Program *program)
     for (index = 0U; index < program->block_count; ++index) {
         free(program->blocks[index].statements);
     }
+    for (index = 0U; index < program->function_count; ++index) {
+        free(program->functions[index].name);
+    }
     free(program->expressions);
     free(program->locals);
     free(program->statements);
     free(program->blocks);
+    free(program->functions);
     minic_c0_program_initialize(program);
 }
 
@@ -157,6 +162,49 @@ bool minic_c0_block_add_statement(
     return true;
 }
 
+bool minic_c0_program_add_function(
+    MinicC0Program *program,
+    const char *name,
+    size_t name_length,
+    size_t local_begin,
+    size_t local_count,
+    MinicBlockId body_block,
+    MinicFunctionId *function_id)
+{
+    MinicFunction function;
+
+    if (name == NULL || function_id == NULL ||
+        body_block >= program->block_count ||
+        local_begin > program->local_count ||
+        local_count > program->local_count - local_begin ||
+        name_length == SIZE_MAX) {
+        return false;
+    }
+    if (!minic_grow_array(
+            (void **)&program->functions,
+            &program->function_capacity,
+            program->function_count,
+            sizeof(*program->functions))) {
+        return false;
+    }
+
+    function.name = (char *)malloc(name_length + 1U);
+    if (function.name == NULL) {
+        return false;
+    }
+    (void)memcpy(function.name, name, name_length);
+    function.name[name_length] = '\0';
+    function.name_length = name_length;
+    function.local_begin = local_begin;
+    function.local_count = local_count;
+    function.body_block = body_block;
+
+    *function_id = program->function_count;
+    program->functions[program->function_count] = function;
+    program->function_count += 1U;
+    return true;
+}
+
 const MinicExpression *minic_c0_program_expression(
     const MinicC0Program *program,
     MinicExpressionId expression_id)
@@ -195,4 +243,14 @@ const MinicBlock *minic_c0_program_block(
         return NULL;
     }
     return &program->blocks[block_id];
+}
+
+const MinicFunction *minic_c0_program_function(
+    const MinicC0Program *program,
+    MinicFunctionId function_id)
+{
+    if (function_id >= program->function_count) {
+        return NULL;
+    }
+    return &program->functions[function_id];
 }
