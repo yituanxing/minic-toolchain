@@ -105,6 +105,36 @@ bool minic_type_equal(MinicType left, MinicType right)
            left.pointer_depth == right.pointer_depth;
 }
 
+bool minic_type_integer_common(
+    MinicType left,
+    MinicType right,
+    MinicType *result)
+{
+    if (result == NULL ||
+        !minic_type_is_integer(left) ||
+        !minic_type_is_integer(right)) {
+        return false;
+    }
+    if (minic_type_is_unsigned_integer(left) ||
+        minic_type_is_unsigned_integer(right)) {
+        *result = minic_type_unsigned_int();
+    } else {
+        *result = minic_type_int();
+    }
+    return true;
+}
+
+bool minic_type_assignment_compatible(MinicType target, MinicType source)
+{
+    if (minic_type_is_const(target)) {
+        return false;
+    }
+    if (minic_type_is_integer(target) && minic_type_is_integer(source)) {
+        return true;
+    }
+    return minic_type_equal(target, source);
+}
+
 bool minic_type_is_const(MinicType type)
 {
     return (type.base_qualifiers & MINIC_TYPE_QUALIFIER_CONST) != 0U;
