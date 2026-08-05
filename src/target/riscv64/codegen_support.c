@@ -144,6 +144,37 @@ bool minic_riscv64_emit_sp_load64(
         register_name) >= 0;
 }
 
+bool minic_riscv64_emit_object_address(
+    FILE *file,
+    const MinicC0Program *program,
+    const MinicFunction *function,
+    MinicLocalId local_id)
+{
+    const MinicLocal *local;
+    size_t width;
+
+    if (!minic_riscv64_object_access(
+            program,
+            function,
+            local_id,
+            &local,
+            &width)) {
+        return false;
+    }
+    (void)width;
+    if (local->storage_offset <= 2047U) {
+        return fprintf(
+            file,
+            "  addi a0, s0, %zu\n",
+            local->storage_offset) >= 0;
+    }
+    return fprintf(
+        file,
+        "  li t2, %zu\n"
+        "  add a0, s0, t2\n",
+        local->storage_offset) >= 0;
+}
+
 bool minic_riscv64_emit_object_load(
     FILE *file,
     const MinicC0Program *program,
