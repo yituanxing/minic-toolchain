@@ -185,6 +185,10 @@ expect_instructions array_declaration "mv s0, sp" "li a0, 0" "j .Lmain_return"
 compile_source record_definition record_definition
 expect_instructions record_definition "mv s0, sp" "li a0, 0" "j .Lmain_return"
 
+compile_source function_typed_prototype function_typed_prototype
+expect_instructions function_typed_prototype \
+    "mv s0, sp" "li a0, 0" "j .Lmain_return"
+
 expect_compile_failure \
     invalid_duplicate_block_local \
     "duplicate local declaration"
@@ -233,4 +237,10 @@ expect_compile_failure \
 expect_compile_failure \
     invalid_empty_record \
     "record definition requires at least one field"
+expect_compile_failure \
+    invalid_conflicting_const_parameter \
+    "conflicting function declaration"
+expect_compile_failure \
+    invalid_named_void_parameter \
+    "parameter type cannot be bare void"
 expect_compile_failure invalid_return "expected expression"
