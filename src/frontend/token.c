@@ -15,6 +15,8 @@ const char *minic_token_kind_name(MinicTokenKind kind)
         return "int";
     case MINIC_TOKEN_KW_VOID:
         return "void";
+    case MINIC_TOKEN_KW_STRUCT:
+        return "struct";
     case MINIC_TOKEN_KW_RETURN:
         return "return";
     case MINIC_TOKEN_KW_IF:
