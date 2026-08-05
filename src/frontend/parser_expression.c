@@ -164,7 +164,9 @@ static bool parse_unary(MinicParser *parser, MinicExpressionId *expression_id)
 
     if (parser->current.kind != MINIC_TOKEN_PLUS &&
         parser->current.kind != MINIC_TOKEN_MINUS &&
-        parser->current.kind != MINIC_TOKEN_BANG) {
+        parser->current.kind != MINIC_TOKEN_BANG &&
+        parser->current.kind != MINIC_TOKEN_AMPERSAND &&
+        parser->current.kind != MINIC_TOKEN_STAR) {
         return parse_primary(parser, expression_id);
     }
 
@@ -173,19 +175,44 @@ static bool parse_unary(MinicParser *parser, MinicExpressionId *expression_id)
         return false;
     }
     operand_expression = minic_c0_program_expression(parser->program, operand);
-    if (operand_expression == NULL ||
-        !minic_type_is_integer(operand_expression->type)) {
-        minic_parser_error(parser, "unary operator requires an int operand");
+    if (operand_expression == NULL) {
+        minic_parser_error(parser, "invalid unary operand");
         return false;
     }
 
     (void)memset(&expression, 0, sizeof(expression));
-    expression.kind = MINIC_EXPRESSION_UNARY;
     expression.span.begin = operator_token.span.begin;
     expression.span.end = operand_expression->span.end;
+    expression.value.unary.operand = operand;
+
+    if (operator_token.kind == MINIC_TOKEN_AMPERSAND) {
+        if (operand_expression->value_category != MINIC_VALUE_LVALUE ||
+            !minic_type_pointer_to(operand_expression->type, &expression.type)) {
+            minic_parser_error(parser, "address-of requires an lvalue operand");
+            return false;
+        }
+        expression.kind = MINIC_EXPRESSION_ADDRESS_OF;
+        expression.value_category = MINIC_VALUE_RVALUE;
+        return minic_parser_add_expression(parser, &expression, expression_id);
+    }
+
+    if (operator_token.kind == MINIC_TOKEN_STAR) {
+        if (!minic_type_pointee(operand_expression->type, &expression.type)) {
+            minic_parser_error(parser, "dereference requires a pointer operand");
+            return false;
+        }
+        expression.kind = MINIC_EXPRESSION_DEREFERENCE;
+        expression.value_category = MINIC_VALUE_LVALUE;
+        return minic_parser_add_expression(parser, &expression, expression_id);
+    }
+
+    if (!minic_type_is_integer(operand_expression->type)) {
+        minic_parser_error(parser, "unary operator requires an int operand");
+        return false;
+    }
+    expression.kind = MINIC_EXPRESSION_UNARY;
     expression.type = minic_type_int();
     expression.value_category = MINIC_VALUE_RVALUE;
-    expression.value.unary.operand = operand;
     if (operator_token.kind == MINIC_TOKEN_PLUS) {
         expression.value.unary.operator_kind = MINIC_UNARY_PLUS;
     } else if (operator_token.kind == MINIC_TOKEN_MINUS) {
