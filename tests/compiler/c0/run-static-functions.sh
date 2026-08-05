@@ -53,4 +53,4 @@ expect_failure \
     "void function cannot return a value"
 expect_failure \
     invalid_int_return_without_value \
-    "int function requires a return value"
+    "non-void function requires a return value"
