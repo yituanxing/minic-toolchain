@@ -135,7 +135,6 @@ int minic_compile_preprocessed_file(
 {
     MinicSourceBuffer buffer;
     MinicC0Program program;
-    MinicFunctionId entry_function;
     bool success;
 
     if (input_path == NULL || output_path == NULL) {
@@ -167,26 +166,6 @@ int minic_compile_preprocessed_file(
         buffer.size,
         &program,
         diagnostic);
-    if (success && program.function_count == 0U) {
-        success = minic_c0_program_add_function(
-            &program,
-            "main",
-            4U,
-            0U,
-            program.local_count,
-            program.body_block,
-            &entry_function);
-        if (success) {
-            program.entry_function = entry_function;
-        } else {
-            minic_set_diagnostic(
-                diagnostic,
-                input_path,
-                1U,
-                1U,
-                "out of memory while recording entry function");
-        }
-    }
     if (success) {
         success = minic_riscv64_write_c0_program(
             output_path,
