@@ -129,10 +129,14 @@ static bool parse_assignment(MinicParser *parser)
         !minic_parser_parse_expression(parser, &statement.expression, 0U)) {
         return false;
     }
+    target_expression = minic_c0_program_expression(
+        parser->program,
+        statement.target_expression);
     assigned_expression = minic_c0_program_expression(
         parser->program,
         statement.expression);
-    if (assigned_expression == NULL ||
+    if (target_expression == NULL || assigned_expression == NULL ||
+        target_expression->value_category != MINIC_VALUE_LVALUE ||
         !minic_type_equal(target_expression->type, assigned_expression->type)) {
         minic_parser_error(parser, "assignment type does not match target type");
         return false;
