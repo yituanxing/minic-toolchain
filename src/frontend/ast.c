@@ -32,6 +32,22 @@ static bool minic_grow_array(
     return true;
 }
 
+static char *minic_copy_name(const char *name, size_t name_length)
+{
+    char *copy;
+
+    if (name == NULL || name_length == SIZE_MAX) {
+        return NULL;
+    }
+    copy = (char *)malloc(name_length + 1U);
+    if (copy == NULL) {
+        return NULL;
+    }
+    (void)memcpy(copy, name, name_length);
+    copy[name_length] = '\0';
+    return copy;
+}
+
 void minic_c0_program_initialize(MinicC0Program *program)
 {
     (void)memset(program, 0, sizeof(*program));
@@ -50,11 +66,25 @@ void minic_c0_program_destroy(MinicC0Program *program)
     for (index = 0U; index < program->function_count; ++index) {
         free(program->functions[index].name);
     }
+    for (index = 0U; index < program->record_count; ++index) {
+        MinicRecord *record;
+        size_t field_index;
+
+        record = &program->records[index];
+        for (field_index = 0U;
+             field_index < record->field_count;
+             ++field_index) {
+            free(record->fields[field_index].name);
+        }
+        free(record->fields);
+        free(record->name);
+    }
     free(program->expressions);
     free(program->locals);
     free(program->statements);
     free(program->blocks);
     free(program->functions);
+    free(program->records);
     minic_c0_program_initialize(program);
 }
 
@@ -177,8 +207,7 @@ bool minic_c0_program_add_function(
         (body_block != MINIC_BLOCK_INVALID &&
          body_block >= program->block_count) ||
         local_begin > program->local_count ||
-        local_count > program->local_count - local_begin ||
-        name_length == SIZE_MAX) {
+        local_count > program->local_count - local_begin) {
         return false;
     }
     if (!minic_grow_array(
@@ -189,12 +218,10 @@ bool minic_c0_program_add_function(
         return false;
     }
 
-    function.name = (char *)malloc(name_length + 1U);
+    function.name = minic_copy_name(name, name_length);
     if (function.name == NULL) {
         return false;
     }
-    (void)memcpy(function.name, name, name_length);
-    function.name[name_length] = '\0';
     function.name_length = name_length;
     function.local_begin = local_begin;
     function.local_count = local_count;
@@ -276,6 +303,114 @@ bool minic_c0_program_finish_function(
     return true;
 }
 
+bool minic_c0_program_add_record(
+    MinicC0Program *program,
+    const char *name,
+    size_t name_length,
+    MinicRecordId *record_id)
+{
+    MinicRecord record;
+    size_t index;
+
+    if (program == NULL || name == NULL || record_id == NULL) {
+        return false;
+    }
+    for (index = 0U; index < program->record_count; ++index) {
+        const MinicRecord *existing;
+
+        existing = &program->records[index];
+        if (existing->name_length == name_length &&
+            memcmp(existing->name, name, name_length) == 0) {
+            return false;
+        }
+    }
+    if (!minic_grow_array(
+            (void **)&program->records,
+            &program->record_capacity,
+            program->record_count,
+            sizeof(*program->records))) {
+        return false;
+    }
+
+    (void)memset(&record, 0, sizeof(record));
+    record.name = minic_copy_name(name, name_length);
+    if (record.name == NULL) {
+        return false;
+    }
+    record.name_length = name_length;
+    *record_id = program->record_count;
+    program->records[program->record_count] = record;
+    program->record_count += 1U;
+    return true;
+}
+
+bool minic_c0_record_add_field(
+    MinicC0Program *program,
+    MinicRecordId record_id,
+    const char *name,
+    size_t name_length,
+    MinicType type,
+    size_t element_count)
+{
+    MinicRecord *record;
+    MinicRecordField field;
+    size_t index;
+
+    if (program == NULL || record_id >= program->record_count ||
+        name == NULL || element_count == 0U) {
+        return false;
+    }
+    record = &program->records[record_id];
+    if (record->is_complete) {
+        return false;
+    }
+    for (index = 0U; index < record->field_count; ++index) {
+        const MinicRecordField *existing;
+
+        existing = &record->fields[index];
+        if (existing->name_length == name_length &&
+            memcmp(existing->name, name, name_length) == 0) {
+            return false;
+        }
+    }
+    if (!minic_grow_array(
+            (void **)&record->fields,
+            &record->field_capacity,
+            record->field_count,
+            sizeof(*record->fields))) {
+        return false;
+    }
+
+    (void)memset(&field, 0, sizeof(field));
+    field.name = minic_copy_name(name, name_length);
+    if (field.name == NULL) {
+        return false;
+    }
+    field.name_length = name_length;
+    field.type = type;
+    field.element_count = element_count;
+    record->fields[record->field_count] = field;
+    record->field_count += 1U;
+    return true;
+}
+
+bool minic_c0_program_finish_record(
+    MinicC0Program *program,
+    MinicRecordId record_id)
+{
+    MinicRecord *record;
+
+    if (program == NULL || record_id >= program->record_count) {
+        return false;
+    }
+    record = &program->records[record_id];
+    if (record->is_complete || record->field_count == 0U) {
+        return false;
+    }
+    record->is_complete = true;
+    return true;
+}
+
 const MinicExpression *minic_c0_program_expression(
     const MinicC0Program *program,
     MinicExpressionId expression_id)
@@ -324,4 +459,24 @@ const MinicFunction *minic_c0_program_function(
         return NULL;
     }
     return &program->functions[function_id];
+}
+
+const MinicRecord *minic_c0_program_record(
+    const MinicC0Program *program,
+    MinicRecordId record_id)
+{
+    if (program == NULL || record_id >= program->record_count) {
+        return NULL;
+    }
+    return &program->records[record_id];
+}
+
+const MinicRecordField *minic_c0_record_field(
+    const MinicRecord *record,
+    size_t field_index)
+{
+    if (record == NULL || field_index >= record->field_count) {
+        return NULL;
+    }
+    return &record->fields[field_index];
 }
