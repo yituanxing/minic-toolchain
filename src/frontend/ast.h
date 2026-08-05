@@ -124,6 +124,25 @@ typedef struct MinicFunction {
     bool is_defined;
 } MinicFunction;
 
+typedef struct MinicRecordField {
+    char *name;
+    size_t name_length;
+    MinicType type;
+    size_t element_count;
+    size_t storage_offset;
+} MinicRecordField;
+
+typedef struct MinicRecord {
+    char *name;
+    size_t name_length;
+    MinicRecordField *fields;
+    size_t field_count;
+    size_t field_capacity;
+    size_t storage_size;
+    size_t alignment;
+    bool is_complete;
+} MinicRecord;
+
 typedef struct MinicC0Program {
     MinicExpression *expressions;
     size_t expression_count;
@@ -146,6 +165,10 @@ typedef struct MinicC0Program {
     size_t function_count;
     size_t function_capacity;
     MinicFunctionId entry_function;
+
+    MinicRecord *records;
+    size_t record_count;
+    size_t record_capacity;
 
     MinicExpressionId return_expression;
 } MinicC0Program;
@@ -193,6 +216,21 @@ bool minic_c0_program_finish_function(
     MinicC0Program *program,
     MinicFunctionId function_id,
     size_t local_count);
+bool minic_c0_program_add_record(
+    MinicC0Program *program,
+    const char *name,
+    size_t name_length,
+    MinicRecordId *record_id);
+bool minic_c0_record_add_field(
+    MinicC0Program *program,
+    MinicRecordId record_id,
+    const char *name,
+    size_t name_length,
+    MinicType type,
+    size_t element_count);
+bool minic_c0_program_finish_record(
+    MinicC0Program *program,
+    MinicRecordId record_id);
 
 const MinicExpression *minic_c0_program_expression(
     const MinicC0Program *program,
@@ -209,5 +247,11 @@ const MinicBlock *minic_c0_program_block(
 const MinicFunction *minic_c0_program_function(
     const MinicC0Program *program,
     MinicFunctionId function_id);
+const MinicRecord *minic_c0_program_record(
+    const MinicC0Program *program,
+    MinicRecordId record_id);
+const MinicRecordField *minic_c0_record_field(
+    const MinicRecord *record,
+    size_t field_index);
 
 #endif
