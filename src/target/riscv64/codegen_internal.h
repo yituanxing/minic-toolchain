@@ -39,15 +39,6 @@ bool minic_riscv64_emit_object_store_register(
     const MinicFunction *function,
     MinicLocalId local_id,
     const char *register_name);
-
-bool minic_riscv64_emit_local_load(
-    FILE *file,
-    const MinicFunction *function,
-    MinicLocalId local_id);
-bool minic_riscv64_emit_local_store(
-    FILE *file,
-    const MinicFunction *function,
-    MinicLocalId local_id);
 bool minic_riscv64_frame_size(
     const MinicFunction *function,
     size_t *frame_size);
