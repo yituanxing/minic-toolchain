@@ -97,7 +97,6 @@ typedef struct MinicStatement {
     MinicSourceSpan span;
     MinicExpressionId target_expression;
     MinicExpressionId expression;
-    MinicLocalId local_id;
     MinicBlockId then_block;
     MinicBlockId else_block;
 } MinicStatement;
