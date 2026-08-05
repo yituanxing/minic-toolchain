@@ -82,6 +82,7 @@ typedef struct MinicExpression {
 typedef struct MinicLocal {
     MinicSourceSpan name_span;
     MinicType type;
+    size_t element_count;
     size_t storage_offset;
 } MinicLocal;
 
