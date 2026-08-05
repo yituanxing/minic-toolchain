@@ -1,5 +1,46 @@
 #include "target/riscv64/codegen_internal.h"
 
+static bool minic_riscv64_emit_assignment(
+    FILE *file,
+    const MinicC0Program *program,
+    const MinicFunction *function,
+    const MinicStatement *statement)
+{
+    const MinicExpression *target;
+    const MinicExpression *value;
+
+    target = minic_c0_program_expression(
+        program,
+        statement->target_expression);
+    value = minic_c0_program_expression(program, statement->expression);
+    if (target == NULL || value == NULL ||
+        target->value_category != MINIC_VALUE_LVALUE ||
+        !minic_type_equal(target->type, value->type)) {
+        return false;
+    }
+    if (!minic_riscv64_emit_expression(
+            file,
+            program,
+            function,
+            statement->expression) ||
+        fprintf(file, "  addi sp, sp, -16\n  sd a0, 0(sp)\n") < 0 ||
+        !minic_riscv64_emit_lvalue_address(
+            file,
+            program,
+            function,
+            statement->target_expression) ||
+        fprintf(file, "  ld t0, 0(sp)\n  addi sp, sp, 16\n") < 0) {
+        return false;
+    }
+    if (minic_type_is_integer(target->type)) {
+        return fprintf(file, "  sw t0, 0(a0)\n") >= 0;
+    }
+    if (minic_type_is_pointer(target->type)) {
+        return fprintf(file, "  sd t0, 0(a0)\n") >= 0;
+    }
+    return false;
+}
+
 static bool minic_riscv64_emit_statement(
     FILE *file,
     const MinicC0Program *program,
@@ -13,16 +54,11 @@ static bool minic_riscv64_emit_statement(
 
     switch (statement->kind) {
     case MINIC_STATEMENT_ASSIGN:
-        return minic_riscv64_emit_expression(
-                   file,
-                   program,
-                   function,
-                   statement->expression) &&
-               minic_riscv64_emit_object_store(
-                   file,
-                   program,
-                   function,
-                   statement->local_id);
+        return minic_riscv64_emit_assignment(
+            file,
+            program,
+            function,
+            statement);
 
     case MINIC_STATEMENT_RETURN:
         return minic_riscv64_emit_expression(
