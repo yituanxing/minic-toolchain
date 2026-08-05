@@ -16,7 +16,7 @@ static bool minic_parser_grow_array(
 
     new_capacity = *capacity == 0U ? 8U : *capacity * 2U;
     if (new_capacity < *capacity ||
-        element_size != 0U && new_capacity > SIZE_MAX / element_size) {
+        (element_size != 0U && new_capacity > SIZE_MAX / element_size)) {
         return false;
     }
     new_storage = realloc(*storage, new_capacity * element_size);
@@ -213,14 +213,12 @@ MinicLocalId minic_parser_find_local(
 {
     size_t index;
 
-    for (index = parser->local_begin;
-         index < parser->program->local_count;
-         ++index) {
-        if (minic_parser_span_equals(
-                parser,
-                name_span,
-                parser->program->locals[index].name_span)) {
-            return index;
+    for (index = parser->local_binding_count; index > 0U; --index) {
+        const MinicParserLocalBinding *binding;
+
+        binding = &parser->local_bindings[index - 1U];
+        if (minic_parser_span_equals(parser, name_span, binding->name_span)) {
+            return binding->local_id;
         }
     }
     return MINIC_LOCAL_INVALID;
