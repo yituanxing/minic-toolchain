@@ -76,7 +76,7 @@ static bool parse_parameter_list(
     }
 }
 
-static bool parse_function(MinicParser *parser)
+static bool parse_function(MinicParser *parser, bool is_internal)
 {
     MinicSourceSpan name_span;
     MinicSourceSpan parameter_name_spans[8];
@@ -96,6 +96,13 @@ static bool parse_function(MinicParser *parser)
     parameter_count = 0U;
     (void)memset(parameter_name_spans, 0, sizeof(parameter_name_spans));
     (void)memset(parameter_types, 0, sizeof(parameter_types));
+    if (is_internal &&
+        !minic_parser_expect(
+            parser,
+            MINIC_TOKEN_KW_STATIC,
+            "expected keyword 'static'")) {
+        return false;
+    }
     if (!minic_parser_parse_type_name(parser, &return_type)) {
         return false;
     }
@@ -110,6 +117,10 @@ static bool parse_function(MinicParser *parser)
               memcmp(parser->source + name_span.begin.offset, "main", 4U) == 0;
     if (is_main && !minic_type_is_integer(return_type)) {
         minic_parser_error(parser, "main must return int");
+        return false;
+    }
+    if (is_main && is_internal) {
+        minic_parser_error(parser, "main cannot have internal linkage");
         return false;
     }
 
@@ -134,7 +145,8 @@ static bool parse_function(MinicParser *parser)
                 existing_function,
                 return_type,
                 parameter_types,
-                parameter_count)) {
+                parameter_count) ||
+            existing_function->is_internal != is_internal) {
             minic_parser_error(parser, "conflicting function declaration");
             return false;
         }
@@ -155,7 +167,11 @@ static bool parse_function(MinicParser *parser)
                     function_id,
                     return_type,
                     parameter_types,
-                    parameter_count)) {
+                    parameter_count) ||
+                !minic_c0_program_set_function_internal(
+                    parser->program,
+                    function_id,
+                    is_internal)) {
                 minic_parser_error(parser, "out of memory while declaring function");
                 return false;
             }
@@ -163,8 +179,10 @@ static bool parse_function(MinicParser *parser)
         return minic_parser_advance(parser);
     }
 
-    if (!minic_type_is_integer(return_type)) {
-        minic_parser_error(parser, "non-int function definitions are not supported yet");
+    if (!minic_type_is_integer(return_type) &&
+        !minic_type_is_void(return_type) &&
+        !minic_type_is_pointer(return_type)) {
+        minic_parser_error(parser, "unsupported function return type");
         return false;
     }
     if (parser->current.kind != MINIC_TOKEN_LBRACE) {
@@ -238,7 +256,11 @@ static bool parse_function(MinicParser *parser)
                 function_id,
                 return_type,
                 parameter_types,
-                parameter_count)) {
+                parameter_count) ||
+            !minic_c0_program_set_function_internal(
+                parser->program,
+                function_id,
+                is_internal)) {
             minic_parser_error(parser, "out of memory while adding function");
             return false;
         }
@@ -284,6 +306,33 @@ static bool parse_function(MinicParser *parser)
     return true;
 }
 
+static bool static_declaration_is_function(
+    MinicParser *parser,
+    bool *is_function)
+{
+    MinicParser probe;
+    MinicType declared_type;
+
+    if (parser == NULL || is_function == NULL) {
+        return false;
+    }
+    probe = *parser;
+    if (!minic_parser_advance(&probe) ||
+        !minic_parser_parse_type_name(&probe, &declared_type)) {
+        return false;
+    }
+    (void)declared_type;
+    if (probe.current.kind != MINIC_TOKEN_IDENTIFIER) {
+        minic_parser_error(parser, "expected static declaration name");
+        return false;
+    }
+    if (!minic_parser_advance(&probe)) {
+        return false;
+    }
+    *is_function = probe.current.kind == MINIC_TOKEN_LPAREN;
+    return true;
+}
+
 bool minic_parse_c0_program(
     const char *path,
     const char *source,
@@ -308,11 +357,19 @@ bool minic_parse_c0_program(
         if (parser.current.kind == MINIC_TOKEN_KW_TYPEDEF) {
             success = minic_parser_parse_typedef(&parser);
         } else if (parser.current.kind == MINIC_TOKEN_KW_STATIC) {
-            success = minic_parser_parse_static_global(&parser);
+            bool is_function;
+
+            if (!static_declaration_is_function(&parser, &is_function)) {
+                success = false;
+            } else if (is_function) {
+                success = parse_function(&parser, true);
+            } else {
+                success = minic_parser_parse_static_global(&parser);
+            }
         } else if (parser.current.kind == MINIC_TOKEN_KW_STRUCT) {
             success = minic_parser_parse_record_definition(&parser);
         } else {
-            success = parse_function(&parser);
+            success = parse_function(&parser, false);
         }
     }
     if (success && program->entry_function == MINIC_FUNCTION_INVALID) {
