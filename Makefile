@@ -45,9 +45,15 @@ MINIC_SOURCES := \
 	src/compiler/compiler.c \
 	src/frontend/ast.c \
 	src/frontend/lexer.c \
-	src/frontend/parser.c \
+	src/frontend/parser_core.c \
+	src/frontend/parser_expression.c \
+	src/frontend/parser_statement.c \
+	src/frontend/parser_function.c \
 	src/frontend/token.c \
-	src/target/riscv64/codegen.c \
+	src/target/riscv64/codegen_support.c \
+	src/target/riscv64/codegen_expression.c \
+	src/target/riscv64/codegen_statement.c \
+	src/target/riscv64/codegen_function.c \
 	tools/minic/main.c
 MINIC_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINIC_SOURCES))
 MINIC_BINARY  := $(BUILD_DIR)/bin/minic
