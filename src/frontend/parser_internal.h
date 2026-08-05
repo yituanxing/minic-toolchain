@@ -76,6 +76,7 @@ MinicRecordId minic_parser_find_record(
     const MinicParser *parser,
     MinicSourceSpan name_span);
 
+bool minic_parser_parse_record_definition(MinicParser *parser);
 bool minic_parser_parse_expression(
     MinicParser *parser,
     MinicExpressionId *expression_id,
