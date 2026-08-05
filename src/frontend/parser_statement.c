@@ -77,7 +77,6 @@ static bool parse_declaration(MinicParser *parser)
         (void)memset(&statement, 0, sizeof(statement));
         statement.kind = MINIC_STATEMENT_ASSIGN;
         statement.span.begin = local.name_span.begin;
-        statement.local_id = local_id;
         if (!add_local_lvalue_expression(
                 parser,
                 local_id,
@@ -107,21 +106,22 @@ static bool parse_assignment(MinicParser *parser)
 {
     MinicStatement statement;
     MinicSourceSpan name_span;
+    MinicLocalId target_local_id;
     const MinicExpression *target_expression;
     const MinicExpression *assigned_expression;
 
     (void)memset(&statement, 0, sizeof(statement));
     name_span = parser->current.span;
-    statement.kind = MINIC_STATEMENT_ASSIGN;
-    statement.span.begin = name_span.begin;
-    statement.local_id = minic_parser_find_local(parser, name_span);
-    if (statement.local_id == MINIC_LOCAL_INVALID) {
+    target_local_id = minic_parser_find_local(parser, name_span);
+    if (target_local_id == MINIC_LOCAL_INVALID) {
         minic_parser_error(parser, "assignment to undeclared local");
         return false;
     }
+    statement.kind = MINIC_STATEMENT_ASSIGN;
+    statement.span.begin = name_span.begin;
     if (!add_local_lvalue_expression(
             parser,
-            statement.local_id,
+            target_local_id,
             name_span,
             &statement.target_expression) ||
         !minic_parser_advance(parser) ||
@@ -208,7 +208,6 @@ static bool parse_if(MinicParser *parser)
     statement.kind = MINIC_STATEMENT_IF;
     statement.span.begin = parser->current.span.begin;
     statement.target_expression = MINIC_EXPRESSION_INVALID;
-    statement.local_id = MINIC_LOCAL_INVALID;
     statement.else_block = MINIC_BLOCK_INVALID;
 
     if (!minic_parser_advance(parser) ||
@@ -236,7 +235,6 @@ static bool parse_while(MinicParser *parser)
     statement.kind = MINIC_STATEMENT_WHILE;
     statement.span.begin = parser->current.span.begin;
     statement.target_expression = MINIC_EXPRESSION_INVALID;
-    statement.local_id = MINIC_LOCAL_INVALID;
     statement.else_block = MINIC_BLOCK_INVALID;
 
     if (!minic_parser_advance(parser) ||
@@ -259,7 +257,6 @@ static bool parse_return(MinicParser *parser)
     statement.kind = MINIC_STATEMENT_RETURN;
     statement.span.begin = parser->current.span.begin;
     statement.target_expression = MINIC_EXPRESSION_INVALID;
-    statement.local_id = MINIC_LOCAL_INVALID;
     if (!minic_parser_advance(parser) ||
         !minic_parser_parse_expression(parser, &statement.expression, 0U)) {
         return false;
@@ -302,7 +299,6 @@ bool minic_parser_add_default_return(MinicParser *parser)
     statement.kind = MINIC_STATEMENT_RETURN;
     statement.span = parser->current.span;
     statement.target_expression = MINIC_EXPRESSION_INVALID;
-    statement.local_id = MINIC_LOCAL_INVALID;
     parser->program->return_expression = statement.expression;
     return minic_parser_add_statement(parser, &statement);
 }
