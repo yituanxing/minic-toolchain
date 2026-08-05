@@ -39,6 +39,23 @@ expect_instructions() {
     printf '%s\n' "PASS compiler/c0/$name"
 }
 
+expect_compile_failure() {
+    name=$1
+    expected_message=$2
+
+    "$host_cc" -E -P -x c \
+        "$root/tests/compiler/c0/$name.c" \
+        -o "$work/$name.i"
+    if "$minic" -S "$work/$name.i" -o "$work/$name.s" \
+        >"$work/$name.stdout" 2>"$work/$name.stderr"; then
+        printf '%s\n' \
+            "FAIL compiler/c0/$name: compilation unexpectedly succeeded" >&2
+        exit 1
+    fi
+    grep -F "$expected_message" "$work/$name.stderr" >/dev/null
+    printf '%s\n' "PASS compiler/c0/$name"
+}
+
 compile_source empty_main empty_main
 expect_instructions empty_main "li a0, 0" "j .Lmain_return"
 
@@ -156,26 +173,10 @@ expect_instructions if_multi_statement \
     "beqz a0, .Lif_else_0" "addw a0, t0, a0" \
     "mulw a0, t0, a0"
 
-"$host_cc" -E -P -x c \
-    "$root/tests/compiler/c0/invalid_nested_declaration.c" \
-    -o "$work/invalid_nested_declaration.i"
-if "$minic" -S "$work/invalid_nested_declaration.i" \
-    -o "$work/invalid_nested_declaration.s" \
-    >"$work/invalid_nested_declaration.stdout" \
-    2>"$work/invalid_nested_declaration.stderr"; then
-    printf '%s\n' \
-        "FAIL compiler/c0/invalid_nested_declaration: compilation unexpectedly succeeded" >&2
-    exit 1
-fi
-grep -F "declarations inside branch blocks are not supported yet" \
-    "$work/invalid_nested_declaration.stderr" >/dev/null
-printf '%s\n' "PASS compiler/c0/invalid_nested_declaration"
-
-"$host_cc" -E -P -x c "$root/tests/compiler/c0/invalid_return.c" -o "$work/invalid_return.i"
-if "$minic" -S "$work/invalid_return.i" -o "$work/invalid_return.s" \
-    >"$work/invalid_return.stdout" 2>"$work/invalid_return.stderr"; then
-    printf '%s\n' "FAIL compiler/c0/invalid_return: compilation unexpectedly succeeded" >&2
-    exit 1
-fi
-grep -F "expected expression" "$work/invalid_return.stderr" >/dev/null
-printf '%s\n' "PASS compiler/c0/invalid_return"
+expect_compile_failure \
+    invalid_duplicate_block_local \
+    "duplicate local declaration"
+expect_compile_failure \
+    invalid_out_of_scope_local \
+    "use of undeclared local"
+expect_compile_failure invalid_return "expected expression"
