@@ -2,6 +2,7 @@
 #define MINIC_FRONTEND_AST_H
 
 #include "frontend/token.h"
+#include "frontend/type.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -49,6 +50,7 @@ typedef enum MinicBinaryOperator {
 typedef struct MinicExpression {
     MinicExpressionKind kind;
     MinicSourceSpan span;
+    MinicType type;
     union {
         int integer_value;
         MinicLocalId local_id;
@@ -71,6 +73,8 @@ typedef struct MinicExpression {
 
 typedef struct MinicLocal {
     MinicSourceSpan name_span;
+    MinicType type;
+    size_t storage_offset;
 } MinicLocal;
 
 typedef enum MinicStatementKind {
@@ -100,6 +104,7 @@ typedef struct MinicFunction {
     size_t name_length;
     size_t local_begin;
     size_t local_count;
+    size_t local_storage_size;
     size_t parameter_count;
     MinicBlockId body_block;
     bool is_defined;
