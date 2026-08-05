@@ -34,6 +34,87 @@ static bool parse_integer(
            minic_parser_advance(parser);
 }
 
+static bool parse_local_reference(
+    MinicParser *parser,
+    MinicSourceSpan name_span,
+    MinicLocalId local_id,
+    MinicExpressionId *expression_id)
+{
+    const MinicLocal *local;
+    MinicExpression base_expression;
+    MinicExpressionId base_id;
+
+    local = minic_c0_program_local(parser->program, local_id);
+    if (local == NULL) {
+        minic_parser_error(parser, "invalid local reference");
+        return false;
+    }
+
+    (void)memset(&base_expression, 0, sizeof(base_expression));
+    base_expression.kind = MINIC_EXPRESSION_LOCAL;
+    base_expression.span = name_span;
+    base_expression.type = local->type;
+    base_expression.value_category = MINIC_VALUE_LVALUE;
+    base_expression.value.local_id = local_id;
+    if (!minic_parser_add_expression(parser, &base_expression, &base_id)) {
+        return false;
+    }
+
+    if (local->element_count == 1U) {
+        if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
+            minic_parser_error(parser, "subscript base must be an array object");
+            return false;
+        }
+        *expression_id = base_id;
+        return true;
+    }
+
+    if (parser->current.kind != MINIC_TOKEN_LBRACKET) {
+        minic_parser_error(parser, "array object requires a subscript");
+        return false;
+    }
+    {
+        MinicExpression subscript;
+        MinicExpressionId index_id;
+        const MinicExpression *index_expression;
+        MinicSourcePosition subscript_end;
+
+        if (!minic_parser_advance(parser) ||
+            !minic_parser_parse_expression(parser, &index_id, 0U)) {
+            return false;
+        }
+        index_expression = minic_c0_program_expression(
+            parser->program,
+            index_id);
+        if (index_expression == NULL ||
+            !minic_type_is_integer(index_expression->type)) {
+            minic_parser_error(parser, "array index must have int type");
+            return false;
+        }
+        if (parser->current.kind != MINIC_TOKEN_RBRACKET) {
+            minic_parser_error(parser, "expected ']'");
+            return false;
+        }
+        subscript_end = parser->current.span.end;
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
+
+        (void)memset(&subscript, 0, sizeof(subscript));
+        subscript.kind = MINIC_EXPRESSION_SUBSCRIPT;
+        subscript.span.begin = name_span.begin;
+        subscript.span.end = subscript_end;
+        subscript.type = local->type;
+        subscript.value_category = MINIC_VALUE_LVALUE;
+        subscript.value.subscript.base = base_id;
+        subscript.value.subscript.index = index_id;
+        return minic_parser_add_expression(
+            parser,
+            &subscript,
+            expression_id);
+    }
+}
+
 static bool parse_primary(
     MinicParser *parser,
     MinicExpressionId *expression_id)
@@ -129,26 +210,11 @@ static bool parse_primary(
             minic_parser_error(parser, "use of undeclared local");
             return false;
         }
-        {
-            const MinicLocal *local;
-
-            local = minic_c0_program_local(parser->program, local_id);
-            if (local == NULL) {
-                minic_parser_error(parser, "invalid local reference");
-                return false;
-            }
-            if (local->element_count != 1U) {
-                minic_parser_error(parser, "array object requires a subscript");
-                return false;
-            }
-            (void)memset(&expression, 0, sizeof(expression));
-            expression.kind = MINIC_EXPRESSION_LOCAL;
-            expression.span = name_span;
-            expression.type = local->type;
-            expression.value_category = MINIC_VALUE_LVALUE;
-            expression.value.local_id = local_id;
-        }
-        return minic_parser_add_expression(parser, &expression, expression_id);
+        return parse_local_reference(
+            parser,
+            name_span,
+            local_id,
+            expression_id);
     }
     if (parser->current.kind == MINIC_TOKEN_LPAREN) {
         return minic_parser_advance(parser) &&
