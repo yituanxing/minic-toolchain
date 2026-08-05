@@ -39,6 +39,9 @@ bool minic_parser_expect(
     MinicParser *parser,
     MinicTokenKind kind,
     const char *message);
+bool minic_parser_parse_fixed_array_bound(
+    MinicParser *parser,
+    size_t *element_count);
 size_t minic_parser_span_length(MinicSourceSpan span);
 bool minic_parser_span_equals(
     const MinicParser *parser,
