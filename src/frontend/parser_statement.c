@@ -6,17 +6,29 @@ static bool parse_declaration(MinicParser *parser)
 {
     MinicLocal local;
     MinicLocalId local_id;
+    MinicType declared_type;
 
-    if (!minic_parser_expect(parser, MINIC_TOKEN_KW_INT, "expected keyword 'int'") ||
-        parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
-        if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
-            minic_parser_error(parser, "expected local name");
+    if (!minic_parser_expect(
+            parser,
+            MINIC_TOKEN_KW_INT,
+            "expected keyword 'int'")) {
+        return false;
+    }
+    declared_type = minic_type_int();
+    while (parser->current.kind == MINIC_TOKEN_STAR) {
+        if (!minic_type_pointer_to(declared_type, &declared_type) ||
+            !minic_parser_advance(parser)) {
+            minic_parser_error(parser, "pointer declarator depth is unsupported");
+            return false;
         }
+    }
+    if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
+        minic_parser_error(parser, "expected local name");
         return false;
     }
 
     local.name_span = parser->current.span;
-    local.type = minic_type_int();
+    local.type = declared_type;
     local.storage_offset = 0U;
     if (minic_parser_find_local_in_current_scope(
             parser,
@@ -37,6 +49,7 @@ static bool parse_declaration(MinicParser *parser)
 
     if (parser->current.kind == MINIC_TOKEN_EQUAL) {
         MinicStatement statement;
+        const MinicExpression *initializer;
 
         (void)memset(&statement, 0, sizeof(statement));
         statement.kind = MINIC_STATEMENT_ASSIGN;
@@ -46,10 +59,15 @@ static bool parse_declaration(MinicParser *parser)
             !minic_parser_parse_expression(parser, &statement.expression, 0U)) {
             return false;
         }
-        statement.span.end =
-            minic_c0_program_expression(
-                parser->program,
-                statement.expression)->span.end;
+        initializer = minic_c0_program_expression(
+            parser->program,
+            statement.expression);
+        if (initializer == NULL ||
+            !minic_type_equal(local.type, initializer->type)) {
+            minic_parser_error(parser, "initializer type does not match local type");
+            return false;
+        }
+        statement.span.end = initializer->span.end;
         if (!minic_parser_add_statement(parser, &statement)) {
             return false;
         }
@@ -220,6 +238,7 @@ bool minic_parser_add_default_return(MinicParser *parser)
     expression.kind = MINIC_EXPRESSION_INTEGER;
     expression.span = parser->current.span;
     expression.type = minic_type_int();
+    expression.value_category = MINIC_VALUE_RVALUE;
     expression.value.integer_value = 0;
     if (!minic_parser_add_expression(
             parser,
