@@ -44,12 +44,15 @@ MINIC_INCLUDES := -Iinclude -Isrc
 MINIC_SOURCES := \
 	src/compiler/compiler.c \
 	src/frontend/ast.c \
+	src/frontend/ast_global.c \
 	src/frontend/lexer.c \
+	src/frontend/parser_constant.c \
 	src/frontend/parser_core.c \
 	src/frontend/parser_expression.c \
-	src/frontend/parser_statement.c \
 	src/frontend/parser_function.c \
+	src/frontend/parser_global.c \
 	src/frontend/parser_record.c \
+	src/frontend/parser_statement.c \
 	src/frontend/parser_type.c \
 	src/frontend/parser_typedef.c \
 	src/frontend/token.c \
