@@ -79,12 +79,17 @@ void minic_c0_program_destroy(MinicC0Program *program)
         free(record->fields);
         free(record->name);
     }
+    for (index = 0U; index < program->type_alias_count; ++index) {
+        free(program->type_aliases[index].name);
+    }
     free(program->expressions);
     free(program->locals);
     free(program->statements);
     free(program->blocks);
     free(program->functions);
     free(program->records);
+    free(program->array_types);
+    free(program->type_aliases);
     minic_c0_program_initialize(program);
 }
 
@@ -464,6 +469,80 @@ bool minic_c0_program_finish_record(
     return true;
 }
 
+bool minic_c0_program_add_array_type(
+    MinicC0Program *program,
+    MinicType element_type,
+    size_t element_count,
+    MinicType *array_type)
+{
+    MinicArrayType descriptor;
+    MinicArrayTypeId array_type_id;
+
+    if (program == NULL || array_type == NULL || element_count == 0U ||
+        minic_type_is_void(element_type)) {
+        return false;
+    }
+    if (!minic_grow_array(
+            (void **)&program->array_types,
+            &program->array_type_capacity,
+            program->array_type_count,
+            sizeof(*program->array_types))) {
+        return false;
+    }
+
+    descriptor.element_type = element_type;
+    descriptor.element_count = element_count;
+    array_type_id = program->array_type_count;
+    program->array_types[program->array_type_count] = descriptor;
+    program->array_type_count += 1U;
+    *array_type = minic_type_array(array_type_id);
+    return true;
+}
+
+bool minic_c0_program_add_type_alias(
+    MinicC0Program *program,
+    const char *name,
+    size_t name_length,
+    MinicType type,
+    MinicTypeAliasId *alias_id)
+{
+    MinicTypeAlias alias;
+    size_t index;
+
+    if (program == NULL || name == NULL || alias_id == NULL ||
+        minic_type_is_void(type)) {
+        return false;
+    }
+    for (index = 0U; index < program->type_alias_count; ++index) {
+        const MinicTypeAlias *existing;
+
+        existing = &program->type_aliases[index];
+        if (existing->name_length == name_length &&
+            memcmp(existing->name, name, name_length) == 0) {
+            return false;
+        }
+    }
+    if (!minic_grow_array(
+            (void **)&program->type_aliases,
+            &program->type_alias_capacity,
+            program->type_alias_count,
+            sizeof(*program->type_aliases))) {
+        return false;
+    }
+
+    (void)memset(&alias, 0, sizeof(alias));
+    alias.name = minic_copy_name(name, name_length);
+    if (alias.name == NULL) {
+        return false;
+    }
+    alias.name_length = name_length;
+    alias.type = type;
+    *alias_id = program->type_alias_count;
+    program->type_aliases[program->type_alias_count] = alias;
+    program->type_alias_count += 1U;
+    return true;
+}
+
 const MinicExpression *minic_c0_program_expression(
     const MinicC0Program *program,
     MinicExpressionId expression_id)
@@ -532,4 +611,24 @@ const MinicRecordField *minic_c0_record_field(
         return NULL;
     }
     return &record->fields[field_index];
+}
+
+const MinicArrayType *minic_c0_program_array_type(
+    const MinicC0Program *program,
+    MinicArrayTypeId array_type_id)
+{
+    if (program == NULL || array_type_id >= program->array_type_count) {
+        return NULL;
+    }
+    return &program->array_types[array_type_id];
+}
+
+const MinicTypeAlias *minic_c0_program_type_alias(
+    const MinicC0Program *program,
+    MinicTypeAliasId alias_id)
+{
+    if (program == NULL || alias_id >= program->type_alias_count) {
+        return NULL;
+    }
+    return &program->type_aliases[alias_id];
 }
