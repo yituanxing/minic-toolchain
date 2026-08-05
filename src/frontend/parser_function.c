@@ -250,6 +250,7 @@ static bool parse_function(MinicParser *parser)
         minic_parser_error(parser, "cannot define previously declared function");
         return false;
     }
+    parser->current_function = function_id;
     if (is_main) {
         parser->program->entry_function = function_id;
         parser->program->body_block = body_block;
@@ -279,6 +280,7 @@ static bool parse_function(MinicParser *parser)
         return false;
     }
     minic_parser_end_scope(parser);
+    parser->current_function = MINIC_FUNCTION_INVALID;
     return true;
 }
 
@@ -298,6 +300,7 @@ bool minic_parse_c0_program(
     parser.diagnostic = diagnostic;
     parser.program = program;
     parser.current_block = MINIC_BLOCK_INVALID;
+    parser.current_function = MINIC_FUNCTION_INVALID;
     minic_lexer_initialize(&parser.lexer, path, source, length);
 
     success = minic_parser_advance(&parser);
