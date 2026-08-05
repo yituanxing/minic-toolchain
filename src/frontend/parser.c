@@ -131,6 +131,10 @@ static MinicLocalId find_local(
     return MINIC_LOCAL_INVALID;
 }
 
+static MinicFunctionId find_function(
+    const MinicParser *parser,
+    MinicSourceSpan name_span);
+
 static bool parse_expression(
     MinicParser *parser,
     MinicExpressionId *expression_id,
@@ -170,23 +174,61 @@ static bool parse_primary(
     MinicExpressionId *expression_id)
 {
     MinicExpression expression;
+    MinicSourceSpan name_span;
     MinicLocalId local_id;
+    MinicFunctionId function_id;
 
     if (parser->current.kind == MINIC_TOKEN_INTEGER_CONSTANT) {
         return parse_integer(parser, expression_id);
     }
     if (parser->current.kind == MINIC_TOKEN_IDENTIFIER) {
-        local_id = find_local(parser, parser->current.span);
+        name_span = parser->current.span;
+        local_id = find_local(parser, name_span);
+        function_id = find_function(parser, name_span);
+        if (!parser_advance(parser)) {
+            return false;
+        }
+
+        if (parser->current.kind == MINIC_TOKEN_LPAREN) {
+            MinicSourcePosition call_end;
+
+            if (local_id != MINIC_LOCAL_INVALID) {
+                parser_error(parser, "called object is a local variable");
+                return false;
+            }
+            if (function_id == MINIC_FUNCTION_INVALID) {
+                parser_error(parser, "call to function not yet declared");
+                return false;
+            }
+            if (!parser_advance(parser)) {
+                return false;
+            }
+            if (parser->current.kind != MINIC_TOKEN_RPAREN) {
+                parser_error(parser, "zero-argument calls require ')'");
+                return false;
+            }
+            call_end = parser->current.span.end;
+            if (!parser_advance(parser)) {
+                return false;
+            }
+
+            (void)memset(&expression, 0, sizeof(expression));
+            expression.kind = MINIC_EXPRESSION_CALL;
+            expression.span.begin = name_span.begin;
+            expression.span.end = call_end;
+            expression.value.function_id = function_id;
+            return add_expression(parser, &expression, expression_id);
+        }
+
         if (local_id == MINIC_LOCAL_INVALID) {
             parser_error(parser, "use of undeclared local");
             return false;
         }
         (void)memset(&expression, 0, sizeof(expression));
         expression.kind = MINIC_EXPRESSION_LOCAL;
-        expression.span = parser->current.span;
+        expression.span = name_span;
         expression.value.local_id = local_id;
-        return add_expression(parser, &expression, expression_id) &&
-               parser_advance(parser);
+        return add_expression(parser, &expression, expression_id);
     }
     if (parser->current.kind == MINIC_TOKEN_LPAREN) {
         return parser_advance(parser) &&
@@ -573,7 +615,7 @@ static bool parse_statement(
     return false;
 }
 
-static bool function_name_exists(
+static MinicFunctionId find_function(
     const MinicParser *parser,
     MinicSourceSpan name_span)
 {
@@ -590,10 +632,10 @@ static bool function_name_exists(
                 function->name,
                 parser->source + name_span.begin.offset,
                 name_length) == 0) {
-            return true;
+            return index;
         }
     }
-    return false;
+    return MINIC_FUNCTION_INVALID;
 }
 
 static bool parse_function(MinicParser *parser)
@@ -615,7 +657,7 @@ static bool parse_function(MinicParser *parser)
     }
 
     name_span = parser->current.span;
-    if (function_name_exists(parser, name_span)) {
+    if (find_function(parser, name_span) != MINIC_FUNCTION_INVALID) {
         parser_error(parser, "duplicate function definition");
         return false;
     }
@@ -643,6 +685,22 @@ static bool parse_function(MinicParser *parser)
     }
 
     local_begin = parser->program->local_count;
+    if (!minic_c0_program_add_function(
+            parser->program,
+            parser->source + name_span.begin.offset,
+            span_length(name_span),
+            local_begin,
+            0U,
+            body_block,
+            &function_id)) {
+        parser_error(parser, "out of memory while adding function");
+        return false;
+    }
+    if (is_main) {
+        parser->program->entry_function = function_id;
+        parser->program->body_block = body_block;
+    }
+
     parser->local_begin = local_begin;
     parser->current_block = body_block;
     while (parser->current.kind != MINIC_TOKEN_RBRACE) {
@@ -660,20 +718,12 @@ static bool parse_function(MinicParser *parser)
     }
 
     local_count = parser->program->local_count - local_begin;
-    if (!minic_c0_program_add_function(
+    if (!minic_c0_program_finish_function(
             parser->program,
-            parser->source + name_span.begin.offset,
-            span_length(name_span),
-            local_begin,
-            local_count,
-            body_block,
-            &function_id)) {
-        parser_error(parser, "out of memory while adding function");
+            function_id,
+            local_count)) {
+        parser_error(parser, "invalid local range while finishing function");
         return false;
-    }
-    if (is_main) {
-        parser->program->entry_function = function_id;
-        parser->program->body_block = body_block;
     }
     return true;
 }
