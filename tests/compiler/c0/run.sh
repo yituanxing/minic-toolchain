@@ -212,4 +212,7 @@ expect_compile_failure \
 expect_compile_failure \
     invalid_bare_array_use \
     "array object requires a subscript"
+expect_compile_failure \
+    invalid_array_index_type \
+    "array index must have int type"
 expect_compile_failure invalid_return "expected expression"
