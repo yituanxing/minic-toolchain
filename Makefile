@@ -51,6 +51,7 @@ MINIC_SOURCES := \
 	src/frontend/parser_function.c \
 	src/frontend/parser_record.c \
 	src/frontend/parser_type.c \
+	src/frontend/parser_typedef.c \
 	src/frontend/token.c \
 	src/frontend/type.c \
 	src/target/riscv64/layout.c \
