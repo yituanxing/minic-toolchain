@@ -16,6 +16,7 @@ int main(void)
     MinicType integer_type;
     MinicType unsigned_integer_type;
     MinicType unsigned_pointer_type;
+    MinicType common_type;
     MinicType const_integer_type;
     MinicType const_pointer_type;
     MinicType pointer_type;
@@ -66,6 +67,31 @@ int main(void)
         minic_type_equal(integer_type, unsigned_integer_type)) {
         return fail("unsigned int identity");
     }
+    if (!minic_type_integer_common(
+            integer_type,
+            integer_type,
+            &common_type) ||
+        !minic_type_equal(common_type, integer_type) ||
+        !minic_type_integer_common(
+            integer_type,
+            unsigned_integer_type,
+            &common_type) ||
+        !minic_type_equal(common_type, unsigned_integer_type) ||
+        !minic_type_integer_common(
+            unsigned_integer_type,
+            integer_type,
+            &common_type) ||
+        !minic_type_equal(common_type, unsigned_integer_type) ||
+        minic_type_integer_common(integer_type, void_type, &common_type) ||
+        minic_type_integer_common(integer_type, unsigned_integer_type, NULL)) {
+        return fail("common integer type");
+    }
+    if (!minic_type_assignment_compatible(integer_type, unsigned_integer_type) ||
+        !minic_type_assignment_compatible(unsigned_integer_type, integer_type) ||
+        !minic_type_assignment_compatible(integer_type, integer_type) ||
+        minic_type_assignment_compatible(integer_type, void_type)) {
+        return fail("integer assignment conversions");
+    }
     if (!minic_type_pointer_to(
             unsigned_integer_type,
             &unsigned_pointer_type) ||
@@ -81,6 +107,7 @@ int main(void)
         !minic_type_is_integer(const_integer_type) ||
         !minic_type_is_signed_integer(const_integer_type) ||
         minic_type_equal(integer_type, const_integer_type) ||
+        minic_type_assignment_compatible(const_integer_type, integer_type) ||
         !minic_type_pointer_to(const_integer_type, &const_pointer_type) ||
         !minic_type_is_const(const_pointer_type) ||
         !minic_type_pointee(const_pointer_type, &recovered_type) ||
@@ -95,7 +122,8 @@ int main(void)
         minic_type_is_record(pointer_type) ||
         minic_type_equal(integer_type, pointer_type) ||
         minic_type_equal(pointer_type, const_pointer_type) ||
-        minic_type_equal(pointer_type, unsigned_pointer_type)) {
+        minic_type_equal(pointer_type, unsigned_pointer_type) ||
+        minic_type_assignment_compatible(pointer_type, unsigned_pointer_type)) {
         return fail("int pointer construction");
     }
     if (!minic_type_pointer_to(pointer_type, &pointer_to_pointer_type) ||
