@@ -50,6 +50,7 @@ MINIC_SOURCES := \
 	src/frontend/parser_statement.c \
 	src/frontend/parser_function.c \
 	src/frontend/token.c \
+	src/frontend/type.c \
 	src/target/riscv64/codegen_support.c \
 	src/target/riscv64/codegen_expression.c \
 	src/target/riscv64/codegen_statement.c \
@@ -71,9 +72,15 @@ LEXER_TEST_SOURCES := \
 LEXER_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(LEXER_TEST_SOURCES))
 LEXER_TEST_BINARY  := $(BUILD_DIR)/tests/frontend/lexer-test
 
+TYPE_TEST_SOURCES := \
+	src/frontend/type.c \
+	tests/frontend/type_test.c
+TYPE_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(TYPE_TEST_SOURCES))
+TYPE_TEST_BINARY  := $(BUILD_DIR)/tests/frontend/type-test
+
 .PHONY: all help prepare check check-fast check-token-model check-lexer \
-	check-c0-runtime check-programs-c0 check-runtime sanitize bootstrap \
-	bootstrap-compare format format-check clean distclean print-config
+	check-type check-c0-runtime check-programs-c0 check-runtime sanitize \
+	bootstrap bootstrap-compare format format-check clean distclean print-config
 
 all: $(MINIC_BINARY)
 
@@ -84,6 +91,7 @@ help:
 		"  make check-fast         Run the fast frontend and C0 gates" \
 		"  make check-token-model  Run the token data-model unit gate" \
 		"  make check-lexer        Run the C0 lexer unit gate" \
+		"  make check-type         Run the frontend type-value unit gate" \
 		"  make check              Run the normal host-side test gate" \
 		"  make check-c0-runtime   Run focused RISC-V/QEMU microprogram gates" \
 		"  make check-programs-c0  Differentially compare real programs: GCC vs MiniC" \
@@ -112,13 +120,20 @@ $(LEXER_TEST_BINARY): $(LEXER_TEST_OBJECTS)
 	@mkdir -p "$(dir $@)"
 	$(CC) $(LEXER_TEST_OBJECTS) $(MINIC_LDFLAGS) -o "$@"
 
+$(TYPE_TEST_BINARY): $(TYPE_TEST_OBJECTS)
+	@mkdir -p "$(dir $@)"
+	$(CC) $(TYPE_TEST_OBJECTS) $(MINIC_LDFLAGS) -o "$@"
+
 check-token-model: $(TOKEN_MODEL_TEST_BINARY)
 	"$(abspath $(TOKEN_MODEL_TEST_BINARY))"
 
 check-lexer: $(LEXER_TEST_BINARY)
 	"$(abspath $(LEXER_TEST_BINARY))"
 
-check-fast: check-token-model check-lexer $(MINIC_BINARY)
+check-type: $(TYPE_TEST_BINARY)
+	"$(abspath $(TYPE_TEST_BINARY))"
+
+check-fast: check-token-model check-lexer check-type $(MINIC_BINARY)
 	MINIC="$(abspath $(MINIC_BINARY))" \
 	HOST_CC="$(CC)" \
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
@@ -185,3 +200,4 @@ distclean:
 -include $(MINIC_OBJECTS:.o=.d)
 -include $(TOKEN_MODEL_TEST_OBJECTS:.o=.d)
 -include $(LEXER_TEST_OBJECTS:.o=.d)
+-include $(TYPE_TEST_OBJECTS:.o=.d)
