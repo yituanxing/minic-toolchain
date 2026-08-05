@@ -88,6 +88,13 @@ RECORD_TEST_SOURCES := \
 RECORD_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(RECORD_TEST_SOURCES))
 RECORD_TEST_BINARY  := $(BUILD_DIR)/tests/frontend/record-test
 
+TYPE_ALIAS_TEST_SOURCES := \
+	src/frontend/ast.c \
+	src/frontend/type.c \
+	tests/frontend/type_alias_test.c
+TYPE_ALIAS_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(TYPE_ALIAS_TEST_SOURCES))
+TYPE_ALIAS_TEST_BINARY  := $(BUILD_DIR)/tests/frontend/type-alias-test
+
 LAYOUT_TEST_SOURCES := \
 	src/frontend/ast.c \
 	src/frontend/type.c \
@@ -97,9 +104,9 @@ LAYOUT_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(LAYOUT_TEST_SOURCES
 LAYOUT_TEST_BINARY  := $(BUILD_DIR)/tests/target/riscv64/layout-test
 
 .PHONY: all help prepare check check-fast check-token-model check-lexer \
-	check-type check-record check-layout check-c0-runtime check-programs-c0 \
-	check-runtime sanitize bootstrap bootstrap-compare format format-check clean \
-	distclean print-config
+	check-type check-record check-type-alias check-layout check-c0-runtime \
+	check-programs-c0 check-runtime sanitize bootstrap bootstrap-compare format \
+	format-check clean distclean print-config
 
 all: $(MINIC_BINARY)
 
@@ -112,6 +119,7 @@ help:
 		"  make check-lexer        Run the C0 lexer unit gate" \
 		"  make check-type         Run the frontend type-value unit gate" \
 		"  make check-record       Run the record ownership unit gate" \
+		"  make check-type-alias   Run recursive array and typedef ownership gates" \
 		"  make check-layout       Run the RV64 object-layout unit gate" \
 		"  make check              Run the normal host-side test gate" \
 		"  make check-c0-runtime   Run focused RISC-V/QEMU microprogram gates" \
@@ -149,6 +157,10 @@ $(RECORD_TEST_BINARY): $(RECORD_TEST_OBJECTS)
 	@mkdir -p "$(dir $@)"
 	$(CC) $(RECORD_TEST_OBJECTS) $(MINIC_LDFLAGS) -o "$@"
 
+$(TYPE_ALIAS_TEST_BINARY): $(TYPE_ALIAS_TEST_OBJECTS)
+	@mkdir -p "$(dir $@)"
+	$(CC) $(TYPE_ALIAS_TEST_OBJECTS) $(MINIC_LDFLAGS) -o "$@"
+
 $(LAYOUT_TEST_BINARY): $(LAYOUT_TEST_OBJECTS)
 	@mkdir -p "$(dir $@)"
 	$(CC) $(LAYOUT_TEST_OBJECTS) $(MINIC_LDFLAGS) -o "$@"
@@ -165,10 +177,13 @@ check-type: $(TYPE_TEST_BINARY)
 check-record: $(RECORD_TEST_BINARY)
 	"$(abspath $(RECORD_TEST_BINARY))"
 
+check-type-alias: $(TYPE_ALIAS_TEST_BINARY)
+	"$(abspath $(TYPE_ALIAS_TEST_BINARY))"
+
 check-layout: $(LAYOUT_TEST_BINARY)
 	"$(abspath $(LAYOUT_TEST_BINARY))"
 
-check-fast: check-token-model check-lexer check-type check-record check-layout $(MINIC_BINARY)
+check-fast: check-token-model check-lexer check-type check-record check-type-alias check-layout $(MINIC_BINARY)
 	MINIC="$(abspath $(MINIC_BINARY))" \
 	HOST_CC="$(CC)" \
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
@@ -237,4 +252,5 @@ distclean:
 -include $(LEXER_TEST_OBJECTS:.o=.d)
 -include $(TYPE_TEST_OBJECTS:.o=.d)
 -include $(RECORD_TEST_OBJECTS:.o=.d)
+-include $(TYPE_ALIAS_TEST_OBJECTS:.o=.d)
 -include $(LAYOUT_TEST_OBJECTS:.o=.d)
