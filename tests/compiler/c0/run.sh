@@ -182,6 +182,9 @@ expect_instructions if_multi_statement \
 compile_source array_declaration array_declaration
 expect_instructions array_declaration "mv s0, sp" "li a0, 0" "j .Lmain_return"
 
+compile_source record_definition record_definition
+expect_instructions record_definition "mv s0, sp" "li a0, 0" "j .Lmain_return"
+
 expect_compile_failure \
     invalid_duplicate_block_local \
     "duplicate local declaration"
@@ -221,4 +224,13 @@ expect_compile_failure \
 expect_compile_failure \
     invalid_array_index_type \
     "array index must have int type"
+expect_compile_failure \
+    invalid_duplicate_record_field \
+    "duplicate record field"
+expect_compile_failure \
+    invalid_duplicate_record_definition \
+    "duplicate record definition"
+expect_compile_failure \
+    invalid_empty_record \
+    "record definition requires at least one field"
 expect_compile_failure invalid_return "expected expression"
