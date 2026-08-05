@@ -85,25 +85,30 @@ static int test_c0_sequence(void)
 
 static int test_operator_sequence(void)
 {
-    static const char source[] = "+ - * / % =";
-    static const MinicTokenKind expected[] = {
-        MINIC_TOKEN_PLUS,
-        MINIC_TOKEN_MINUS,
-        MINIC_TOKEN_STAR,
-        MINIC_TOKEN_SLASH,
-        MINIC_TOKEN_PERCENT,
-        MINIC_TOKEN_EQUAL,
-        MINIC_TOKEN_EOF
+    static const char source[] = "+ - * & / % =";
+    static const struct {
+        MinicTokenKind kind;
+        size_t column;
+    } expected[] = {
+        {MINIC_TOKEN_PLUS, 1U},
+        {MINIC_TOKEN_MINUS, 3U},
+        {MINIC_TOKEN_STAR, 5U},
+        {MINIC_TOKEN_AMPERSAND, 7U},
+        {MINIC_TOKEN_SLASH, 9U},
+        {MINIC_TOKEN_PERCENT, 11U},
+        {MINIC_TOKEN_EQUAL, 13U},
+        {MINIC_TOKEN_EOF, 14U}
     };
     MinicLexer lexer;
     size_t index;
 
     minic_lexer_initialize(&lexer, "operators.c", source, sizeof(source) - 1U);
     for (index = 0U; index < sizeof(expected) / sizeof(expected[0]); ++index) {
-        size_t column;
-
-        column = index < 6U ? index * 2U + 1U : 12U;
-        if (expect_token(&lexer, expected[index], 1U, column) != 0) {
+        if (expect_token(
+                &lexer,
+                expected[index].kind,
+                1U,
+                expected[index].column) != 0) {
             return 1;
         }
     }
