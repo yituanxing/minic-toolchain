@@ -87,6 +87,7 @@ MinicTypeAliasId minic_parser_find_type_alias(
 
 bool minic_parser_parse_record_definition(MinicParser *parser);
 bool minic_parser_parse_typedef(MinicParser *parser);
+bool minic_parser_parse_static_global(MinicParser *parser);
 bool minic_parser_parse_expression(
     MinicParser *parser,
     MinicExpressionId *expression_id,
