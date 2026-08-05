@@ -389,51 +389,23 @@ static bool minic_riscv64_emit_block(
     return true;
 }
 
-bool minic_riscv64_write_c0_program(
-    const char *path,
+static bool minic_riscv64_emit_function(
+    FILE *file,
     const MinicC0Program *program,
-    MinicDiagnostic *diagnostic)
+    const MinicFunction *function,
+    size_t *label_counter)
 {
-    FILE *file;
-    const MinicFunction *function;
     size_t frame_size;
-    size_t label_counter;
     bool success;
 
-    function = minic_c0_program_function(program, program->entry_function);
     if (function == NULL || function->name_length == 0U ||
-        function->body_block >= program->block_count) {
-        minic_codegen_set_diagnostic(
-            diagnostic,
-            path,
-            "entry function is missing or invalid");
-        return false;
-    }
-
-    if (!minic_riscv64_frame_size(function, &frame_size)) {
-        minic_codegen_set_diagnostic(
-            diagnostic,
-            path,
-            "local frame size exceeds target limits");
-        return false;
-    }
-
-    file = fopen(path, "wb");
-    if (file == NULL) {
-        char message[256];
-
-        (void)snprintf(
-            message,
-            sizeof(message),
-            "cannot open output: %s",
-            strerror(errno));
-        minic_codegen_set_diagnostic(diagnostic, path, message);
+        function->body_block >= program->block_count ||
+        !minic_riscv64_frame_size(function, &frame_size)) {
         return false;
     }
 
     success = fprintf(
         file,
-        ".text\n"
         ".globl %s\n"
         ".type %s, @function\n"
         "%s:\n",
@@ -448,14 +420,13 @@ bool minic_riscv64_write_c0_program(
                   minic_riscv64_emit_sp_store64(file, "s0", frame_size - 16U) &&
                   fprintf(file, "  mv s0, sp\n") >= 0;
     }
-    label_counter = 0U;
     if (success) {
         success = minic_riscv64_emit_block(
             file,
             program,
             function,
             function->body_block,
-            &label_counter);
+            label_counter);
     }
     if (success) {
         success = fprintf(
@@ -478,6 +449,52 @@ bool minic_riscv64_write_c0_program(
             ".size %s, .-%s\n",
             function->name,
             function->name) >= 0;
+    }
+    return success;
+}
+
+bool minic_riscv64_write_c0_program(
+    const char *path,
+    const MinicC0Program *program,
+    MinicDiagnostic *diagnostic)
+{
+    FILE *file;
+    size_t function_index;
+    size_t label_counter;
+    bool success;
+
+    if (minic_c0_program_function(program, program->entry_function) == NULL ||
+        program->function_count == 0U) {
+        minic_codegen_set_diagnostic(
+            diagnostic,
+            path,
+            "entry function is missing or invalid");
+        return false;
+    }
+
+    file = fopen(path, "wb");
+    if (file == NULL) {
+        char message[256];
+
+        (void)snprintf(
+            message,
+            sizeof(message),
+            "cannot open output: %s",
+            strerror(errno));
+        minic_codegen_set_diagnostic(diagnostic, path, message);
+        return false;
+    }
+
+    success = fprintf(file, ".text\n") >= 0;
+    label_counter = 0U;
+    for (function_index = 0U;
+         success && function_index < program->function_count;
+         ++function_index) {
+        success = minic_riscv64_emit_function(
+            file,
+            program,
+            &program->functions[function_index],
+            &label_counter);
     }
 
     if (!success) {
