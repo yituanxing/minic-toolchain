@@ -1,6 +1,6 @@
 #include "target/riscv64/codegen_internal.h"
 
-static bool minic_riscv64_emit_lvalue_address(
+bool minic_riscv64_emit_lvalue_address(
     FILE *file,
     const MinicC0Program *program,
     const MinicFunction *function,
