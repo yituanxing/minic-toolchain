@@ -18,8 +18,9 @@ static bool minic_riscv64_emit_statement(
                    program,
                    function,
                    statement->expression) &&
-               minic_riscv64_emit_local_store(
+               minic_riscv64_emit_object_store(
                    file,
+                   program,
                    function,
                    statement->local_id);
 
