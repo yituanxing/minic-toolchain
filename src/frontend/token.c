@@ -33,6 +33,8 @@ const char *minic_token_kind_name(MinicTokenKind kind)
         return "else";
     case MINIC_TOKEN_KW_WHILE:
         return "while";
+    case MINIC_TOKEN_KW_FOR:
+        return "for";
     case MINIC_TOKEN_LPAREN:
         return "(";
     case MINIC_TOKEN_RPAREN:
@@ -47,6 +49,8 @@ const char *minic_token_kind_name(MinicTokenKind kind)
         return ",";
     case MINIC_TOKEN_PLUS:
         return "+";
+    case MINIC_TOKEN_PLUS_PLUS:
+        return "++";
     case MINIC_TOKEN_MINUS:
         return "-";
     case MINIC_TOKEN_STAR:
