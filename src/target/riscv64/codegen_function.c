@@ -17,7 +17,6 @@ static bool minic_riscv64_emit_function(
     if (function == NULL || !function->is_defined ||
         function->name_length == 0U ||
         function->body_block >= program->block_count ||
-        function->parameter_count > 2U ||
         !minic_riscv64_frame_size(function, &frame_size)) {
         return false;
     }
@@ -38,11 +37,21 @@ static bool minic_riscv64_emit_function(
                   minic_riscv64_emit_sp_store64(file, "s0", frame_size - 16U) &&
                   fprintf(file, "  mv s0, sp\n") >= 0;
     }
-    if (success && function->parameter_count >= 1U) {
-        success = fprintf(file, "  sw a0, 0(s0)\n") >= 0;
+    if (success && function->parameter_count > 4U) {
+        return false;
     }
-    if (success && function->parameter_count >= 2U) {
-        success = fprintf(file, "  sw a1, 4(s0)\n") >= 0;
+    if (success) {
+        size_t parameter_index;
+
+        for (parameter_index = 0U;
+             success && parameter_index < function->parameter_count;
+             ++parameter_index) {
+            success = fprintf(
+                file,
+                "  sw a%zu, %zu(s0)\n",
+                parameter_index,
+                parameter_index * 4U) >= 0;
+        }
     }
     if (success) {
         success = minic_riscv64_emit_block(
