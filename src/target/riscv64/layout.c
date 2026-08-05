@@ -104,6 +104,7 @@ bool minic_riscv64_layout_program(
              local_index < function->local_count;
              ++local_index) {
             MinicLocal *local;
+            size_t element_size;
             size_t object_size;
             size_t object_alignment;
             size_t object_offset;
@@ -111,9 +112,18 @@ bool minic_riscv64_layout_program(
             local = &program->locals[function->local_begin + local_index];
             if (!minic_riscv64_type_layout(
                     local->type,
-                    &object_size,
+                    &element_size,
                     &object_alignment) ||
-                !minic_riscv64_align_up(
+                local->element_count == 0U ||
+                element_size > SIZE_MAX / local->element_count) {
+                minic_riscv64_layout_error(
+                    diagnostic,
+                    path,
+                    "local object size is invalid for the RV64 target");
+                return false;
+            }
+            object_size = element_size * local->element_count;
+            if (!minic_riscv64_align_up(
                     storage_size,
                     object_alignment,
                     &object_offset) ||
