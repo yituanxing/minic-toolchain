@@ -39,6 +39,9 @@ bool minic_parser_expect(
     MinicParser *parser,
     MinicTokenKind kind,
     const char *message);
+bool minic_parser_parse_integer_value(
+    MinicParser *parser,
+    int *value);
 bool minic_parser_parse_type_name(
     MinicParser *parser,
     MinicType *type);
