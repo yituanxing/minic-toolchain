@@ -45,7 +45,7 @@ if "$minic" -S "$work/aes-ecb.i" -o "$work/aes-ecb.s" \
     exit 1
 fi
 
-if ! grep -F ":8:1:" "$work/minic.stderr" >/dev/null ||
+if ! grep -F ":9:1:" "$work/minic.stderr" >/dev/null ||
    ! grep -F "expected type name" "$work/minic.stderr" >/dev/null; then
     printf '%s\n' \
         "FAIL external/tiny-aes-c: unexpected compiler frontier" >&2
@@ -55,4 +55,4 @@ fi
 
 frontier=$(sed -n '1p' "$work/minic.stderr")
 printf '%s\n' \
-    "PASS external/tiny-aes-c frontier=typedef-state_t diagnostic=$frontier"
+    "PASS external/tiny-aes-c frontier=static-global-sbox diagnostic=$frontier"
