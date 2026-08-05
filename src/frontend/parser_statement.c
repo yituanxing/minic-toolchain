@@ -408,11 +408,12 @@ static bool parse_for(MinicParser *parser)
     (void)memset(&statement, 0, sizeof(statement));
     statement.kind = MINIC_STATEMENT_WHILE;
     statement.target_expression = MINIC_EXPRESSION_INVALID;
+    statement.then_block = MINIC_BLOCK_INVALID;
     statement.else_block = MINIC_BLOCK_INVALID;
     for_begin = parser->current.span.begin;
 
     if (!minic_parser_advance(parser) ||
-        !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '('") ) {
+        !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '('")) {
         return false;
     }
     if (parser->current.kind != MINIC_TOKEN_IDENTIFIER &&
@@ -426,15 +427,17 @@ static bool parse_for(MinicParser *parser)
         !expression_is_integer_condition(parser, statement.expression) ||
         !minic_parser_expect(parser, MINIC_TOKEN_SEMICOLON, "expected ';'") ||
         !build_prefix_increment(parser, &update_statement) ||
-        !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')'") ||
-        !parse_branch(parser, &statement.then_block) ||
-        !minic_c0_block_add_statement(
+        !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')'")) {
+        return false;
+    }
+    if (!parse_branch(parser, &statement.then_block)) {
+        return false;
+    }
+    if (!minic_c0_block_add_statement(
             parser->program,
             statement.then_block,
             update_statement)) {
-        if (statement.then_block != MINIC_BLOCK_INVALID) {
-            minic_parser_error(parser, "cannot append for-loop update");
-        }
+        minic_parser_error(parser, "cannot append for-loop update");
         return false;
     }
     statement.span.begin = for_begin;
