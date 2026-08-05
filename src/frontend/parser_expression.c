@@ -65,7 +65,7 @@ static bool parse_primary(
                 return false;
             }
             callee = minic_c0_program_function(parser->program, function_id);
-            if (callee == NULL || callee->parameter_count > 2U ||
+            if (callee == NULL || callee->parameter_count > 4U ||
                 !minic_parser_advance(parser)) {
                 minic_parser_error(parser, "unsupported function call signature");
                 return false;
@@ -118,10 +118,7 @@ static bool parse_primary(
                 return false;
             }
             expression.span.end = call_end;
-            return minic_parser_add_expression(
-                parser,
-                &expression,
-                expression_id);
+            return minic_parser_add_expression(parser, &expression, expression_id);
         }
 
         if (local_id == MINIC_LOCAL_INVALID) {
@@ -143,9 +140,7 @@ static bool parse_primary(
     return false;
 }
 
-static bool parse_unary(
-    MinicParser *parser,
-    MinicExpressionId *expression_id)
+static bool parse_unary(MinicParser *parser, MinicExpressionId *expression_id)
 {
     MinicToken operator_token;
     MinicExpression expression;
@@ -209,30 +204,18 @@ static unsigned int binary_precedence(MinicTokenKind kind)
 static MinicBinaryOperator binary_operator(MinicTokenKind kind)
 {
     switch (kind) {
-    case MINIC_TOKEN_PLUS:
-        return MINIC_BINARY_ADD;
-    case MINIC_TOKEN_MINUS:
-        return MINIC_BINARY_SUBTRACT;
-    case MINIC_TOKEN_STAR:
-        return MINIC_BINARY_MULTIPLY;
-    case MINIC_TOKEN_SLASH:
-        return MINIC_BINARY_DIVIDE;
-    case MINIC_TOKEN_PERCENT:
-        return MINIC_BINARY_REMAINDER;
-    case MINIC_TOKEN_EQUAL_EQUAL:
-        return MINIC_BINARY_EQUAL;
-    case MINIC_TOKEN_BANG_EQUAL:
-        return MINIC_BINARY_NOT_EQUAL;
-    case MINIC_TOKEN_LESS:
-        return MINIC_BINARY_LESS;
-    case MINIC_TOKEN_LESS_EQUAL:
-        return MINIC_BINARY_LESS_EQUAL;
-    case MINIC_TOKEN_GREATER:
-        return MINIC_BINARY_GREATER;
-    case MINIC_TOKEN_GREATER_EQUAL:
-        return MINIC_BINARY_GREATER_EQUAL;
-    default:
-        return MINIC_BINARY_ADD;
+    case MINIC_TOKEN_PLUS: return MINIC_BINARY_ADD;
+    case MINIC_TOKEN_MINUS: return MINIC_BINARY_SUBTRACT;
+    case MINIC_TOKEN_STAR: return MINIC_BINARY_MULTIPLY;
+    case MINIC_TOKEN_SLASH: return MINIC_BINARY_DIVIDE;
+    case MINIC_TOKEN_PERCENT: return MINIC_BINARY_REMAINDER;
+    case MINIC_TOKEN_EQUAL_EQUAL: return MINIC_BINARY_EQUAL;
+    case MINIC_TOKEN_BANG_EQUAL: return MINIC_BINARY_NOT_EQUAL;
+    case MINIC_TOKEN_LESS: return MINIC_BINARY_LESS;
+    case MINIC_TOKEN_LESS_EQUAL: return MINIC_BINARY_LESS_EQUAL;
+    case MINIC_TOKEN_GREATER: return MINIC_BINARY_GREATER;
+    case MINIC_TOKEN_GREATER_EQUAL: return MINIC_BINARY_GREATER_EQUAL;
+    default: return MINIC_BINARY_ADD;
     }
 }
 
@@ -260,10 +243,7 @@ bool minic_parser_parse_expression(
             break;
         }
         if (!minic_parser_advance(parser) ||
-            !minic_parser_parse_expression(
-                parser,
-                &right,
-                precedence + 1U)) {
+            !minic_parser_parse_expression(parser, &right, precedence + 1U)) {
             return false;
         }
         left_expression = minic_c0_program_expression(parser->program, left);
