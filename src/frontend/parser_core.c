@@ -284,3 +284,26 @@ MinicFunctionId minic_parser_find_function(
     }
     return MINIC_FUNCTION_INVALID;
 }
+
+MinicRecordId minic_parser_find_record(
+    const MinicParser *parser,
+    MinicSourceSpan name_span)
+{
+    size_t name_length;
+    size_t index;
+
+    name_length = minic_parser_span_length(name_span);
+    for (index = 0U; index < parser->program->record_count; ++index) {
+        const MinicRecord *record;
+
+        record = minic_c0_program_record(parser->program, index);
+        if (record != NULL && record->name_length == name_length &&
+            memcmp(
+                record->name,
+                parser->source + name_span.begin.offset,
+                name_length) == 0) {
+            return index;
+        }
+    }
+    return MINIC_RECORD_INVALID;
+}
