@@ -72,6 +72,9 @@ MinicLocalId minic_parser_find_local(
 MinicFunctionId minic_parser_find_function(
     const MinicParser *parser,
     MinicSourceSpan name_span);
+MinicRecordId minic_parser_find_record(
+    const MinicParser *parser,
+    MinicSourceSpan name_span);
 
 bool minic_parser_parse_expression(
     MinicParser *parser,
