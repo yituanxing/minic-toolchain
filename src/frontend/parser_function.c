@@ -302,7 +302,9 @@ bool minic_parse_c0_program(
 
     success = minic_parser_advance(&parser);
     while (success && parser.current.kind != MINIC_TOKEN_EOF) {
-        if (parser.current.kind == MINIC_TOKEN_KW_STRUCT) {
+        if (parser.current.kind == MINIC_TOKEN_KW_TYPEDEF) {
+            success = minic_parser_parse_typedef(&parser);
+        } else if (parser.current.kind == MINIC_TOKEN_KW_STRUCT) {
             success = minic_parser_parse_record_definition(&parser);
         } else {
             success = parse_function(&parser);
