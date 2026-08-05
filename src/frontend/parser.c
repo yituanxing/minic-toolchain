@@ -16,6 +16,7 @@ typedef struct MinicParser {
     MinicDiagnostic *diagnostic;
     MinicC0Program *program;
     MinicBlockId current_block;
+    size_t local_begin;
 } MinicParser;
 
 static void parser_error(MinicParser *parser, const char *format, ...)
@@ -76,20 +77,6 @@ static bool span_equals(
                left_length) == 0;
 }
 
-static bool current_text_equals(
-    const MinicParser *parser,
-    const char *expected)
-{
-    size_t length;
-
-    length = span_length(parser->current.span);
-    return length == strlen(expected) &&
-           memcmp(
-               parser->source + parser->current.span.begin.offset,
-               expected,
-               length) == 0;
-}
-
 static bool add_expression(
     MinicParser *parser,
     const MinicExpression *expression,
@@ -131,7 +118,9 @@ static MinicLocalId find_local(
 {
     size_t index;
 
-    for (index = 0U; index < parser->program->local_count; ++index) {
+    for (index = parser->local_begin;
+         index < parser->program->local_count;
+         ++index) {
         if (span_equals(
                 parser,
                 name_span,
@@ -584,6 +573,111 @@ static bool parse_statement(
     return false;
 }
 
+static bool function_name_exists(
+    const MinicParser *parser,
+    MinicSourceSpan name_span)
+{
+    size_t name_length;
+    size_t index;
+
+    name_length = span_length(name_span);
+    for (index = 0U; index < parser->program->function_count; ++index) {
+        const MinicFunction *function;
+
+        function = minic_c0_program_function(parser->program, index);
+        if (function != NULL && function->name_length == name_length &&
+            memcmp(
+                function->name,
+                parser->source + name_span.begin.offset,
+                name_length) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool parse_function(MinicParser *parser)
+{
+    MinicSourceSpan name_span;
+    MinicBlockId body_block;
+    MinicFunctionId function_id;
+    size_t local_begin;
+    size_t local_count;
+    bool is_main;
+
+    body_block = MINIC_BLOCK_INVALID;
+    if (!parser_expect(parser, MINIC_TOKEN_KW_INT, "expected keyword 'int'")) {
+        return false;
+    }
+    if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
+        parser_error(parser, "expected function name");
+        return false;
+    }
+
+    name_span = parser->current.span;
+    if (function_name_exists(parser, name_span)) {
+        parser_error(parser, "duplicate function definition");
+        return false;
+    }
+    is_main = span_length(name_span) == 4U &&
+              memcmp(
+                  parser->source + name_span.begin.offset,
+                  "main",
+                  4U) == 0;
+
+    if (!parser_advance(parser) ||
+        !parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '('") ) {
+        return false;
+    }
+    if (parser->current.kind != MINIC_TOKEN_RPAREN &&
+        !parser_expect(parser, MINIC_TOKEN_KW_VOID, "expected keyword 'void'")) {
+        return false;
+    }
+    if (!parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')'") ||
+        !parser_expect(parser, MINIC_TOKEN_LBRACE, "expected '{'") ||
+        !minic_c0_program_add_block(parser->program, &body_block)) {
+        if (body_block == MINIC_BLOCK_INVALID) {
+            parser_error(parser, "out of memory while adding function body");
+        }
+        return false;
+    }
+
+    local_begin = parser->program->local_count;
+    parser->local_begin = local_begin;
+    parser->current_block = body_block;
+    while (parser->current.kind != MINIC_TOKEN_RBRACE) {
+        if (parser->current.kind == MINIC_TOKEN_EOF) {
+            parser_error(parser, "expected '}' before end of file");
+            return false;
+        }
+        if (!parse_statement(parser, true)) {
+            return false;
+        }
+    }
+    if (!add_default_return(parser) ||
+        !parser_expect(parser, MINIC_TOKEN_RBRACE, "expected '}'")) {
+        return false;
+    }
+
+    local_count = parser->program->local_count - local_begin;
+    if (!minic_c0_program_add_function(
+            parser->program,
+            parser->source + name_span.begin.offset,
+            span_length(name_span),
+            local_begin,
+            local_count,
+            body_block,
+            &function_id)) {
+        parser_error(parser, "out of memory while adding function");
+        return false;
+    }
+    if (is_main) {
+        parser->program->entry_function = function_id;
+        parser->program->body_block = body_block;
+    }
+    return true;
+}
+
 bool minic_parse_c0_program(
     const char *path,
     const char *source,
@@ -598,46 +692,19 @@ bool minic_parse_c0_program(
     parser.diagnostic = diagnostic;
     parser.program = program;
     parser.current_block = MINIC_BLOCK_INVALID;
+    parser.local_begin = 0U;
     minic_lexer_initialize(&parser.lexer, path, source, length);
-    if (!parser_advance(&parser) ||
-        !parser_expect(&parser, MINIC_TOKEN_KW_INT, "expected keyword 'int'") ||
-        parser.current.kind != MINIC_TOKEN_IDENTIFIER ||
-        !current_text_equals(&parser, "main")) {
-        if (parser.current.kind != MINIC_TOKEN_IDENTIFIER ||
-            !current_text_equals(&parser, "main")) {
-            parser_error(&parser, "expected identifier 'main'");
-        }
+    if (!parser_advance(&parser)) {
         return false;
     }
-    if (!parser_advance(&parser) ||
-        !parser_expect(&parser, MINIC_TOKEN_LPAREN, "expected '('") ) {
-        return false;
-    }
-    if (parser.current.kind != MINIC_TOKEN_RPAREN &&
-        !parser_expect(&parser, MINIC_TOKEN_KW_VOID, "expected keyword 'void'")) {
-        return false;
-    }
-    if (!parser_expect(&parser, MINIC_TOKEN_RPAREN, "expected ')'") ||
-        !parser_expect(&parser, MINIC_TOKEN_LBRACE, "expected '{'") ||
-        !minic_c0_program_add_block(program, &program->body_block)) {
-        if (program->body_block == MINIC_BLOCK_INVALID) {
-            parser_error(&parser, "out of memory while adding function body");
-        }
-        return false;
-    }
-    parser.current_block = program->body_block;
 
-    while (parser.current.kind != MINIC_TOKEN_RBRACE) {
-        if (!parse_statement(&parser, true)) {
+    while (parser.current.kind != MINIC_TOKEN_EOF) {
+        if (!parse_function(&parser)) {
             return false;
         }
     }
-    if (!add_default_return(&parser) ||
-        !parser_expect(&parser, MINIC_TOKEN_RBRACE, "expected '}'")) {
-        return false;
-    }
-    if (parser.current.kind != MINIC_TOKEN_EOF) {
-        parser_error(&parser, "unexpected input after main function");
+    if (program->entry_function == MINIC_FUNCTION_INVALID) {
+        parser_error(&parser, "translation unit requires an int main function");
         return false;
     }
     return true;
