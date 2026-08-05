@@ -174,7 +174,8 @@ bool minic_c0_program_add_function(
     MinicFunction function;
 
     if (name == NULL || function_id == NULL ||
-        body_block >= program->block_count ||
+        (body_block != MINIC_BLOCK_INVALID &&
+         body_block >= program->block_count) ||
         local_begin > program->local_count ||
         local_count > program->local_count - local_begin ||
         name_length == SIZE_MAX) {
@@ -198,10 +199,35 @@ bool minic_c0_program_add_function(
     function.local_begin = local_begin;
     function.local_count = local_count;
     function.body_block = body_block;
+    function.is_defined = body_block != MINIC_BLOCK_INVALID;
 
     *function_id = program->function_count;
     program->functions[program->function_count] = function;
     program->function_count += 1U;
+    return true;
+}
+
+bool minic_c0_program_define_function(
+    MinicC0Program *program,
+    MinicFunctionId function_id,
+    size_t local_begin,
+    MinicBlockId body_block)
+{
+    MinicFunction *function;
+
+    if (function_id >= program->function_count ||
+        body_block >= program->block_count ||
+        local_begin > program->local_count) {
+        return false;
+    }
+    function = &program->functions[function_id];
+    if (function->is_defined) {
+        return false;
+    }
+    function->local_begin = local_begin;
+    function->local_count = 0U;
+    function->body_block = body_block;
+    function->is_defined = true;
     return true;
 }
 
@@ -216,7 +242,9 @@ bool minic_c0_program_finish_function(
         return false;
     }
     function = &program->functions[function_id];
-    if (function->local_begin > program->local_count ||
+    if (!function->is_defined ||
+        function->body_block >= program->block_count ||
+        function->local_begin > program->local_count ||
         local_count > program->local_count - function->local_begin) {
         return false;
     }
