@@ -1,6 +1,6 @@
 # tiny-AES-c external frontier
 
-This directory tracks the first upstream project used to drive MiniC from real, independently maintained C source.
+This directory tracks the first independently maintained upstream project used to drive MiniC.
 
 ## Upstream identity
 
@@ -21,7 +21,15 @@ Pinned Git blob identities:
 
 1. The downloaded upstream files are not edited for MiniC.
 2. The RISC-V GCC preprocessor remains outside the compiler-under-test boundary.
-3. Small target-environment shim headers may model standard integer names while MiniC lacks native standard headers.
-4. The frontier probe must verify every upstream Git blob before preprocessing.
-5. The current expected diagnostic is advanced only when the previous language boundary has a production implementation and permanent regression coverage.
-6. Completion means the pinned upstream AES-128 ECB core and a NIST-derived harness pass the GCC/MiniC differential Oracle without MiniC-specific source patches.
+3. Small target-environment shim headers may define standard integer names while native system headers remain outside the active subset.
+4. The probe verifies every upstream Git blob before preprocessing.
+5. The expected frontier advances only after the previous capability has a production implementation and permanent focused coverage.
+6. Completion requires the pinned AES-128 ECB core and a test-vector harness to pass the GCC/MiniC differential oracle without MiniC-specific source patches.
+
+## Current frontier
+
+MiniC now passes the upstream declarations, `struct AES_ctx`, typed and `const` prototypes, multidimensional typedef arrays, static read-only lookup tables, static internal functions, and `void` definitions.
+
+The exact pinned failure is the first `unsigned` local declaration inside `KeyExpansion`, currently surfaced as an undeclared local at the verified preprocessed location.
+
+This probe is intentionally a moving frontier, not an execution acceptance test. Once the upstream core compiles, it must be replaced by assembly/linking and a real AES-128 ECB differential execution harness.
