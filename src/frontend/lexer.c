@@ -204,6 +204,9 @@ bool minic_lexer_next(
     case ';':
         token->kind = MINIC_TOKEN_SEMICOLON;
         break;
+    case ',':
+        token->kind = MINIC_TOKEN_COMMA;
+        break;
     case '+':
         token->kind = MINIC_TOKEN_PLUS;
         break;
