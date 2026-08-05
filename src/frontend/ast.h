@@ -97,6 +97,7 @@ typedef struct MinicFunction {
     size_t local_begin;
     size_t local_count;
     MinicBlockId body_block;
+    bool is_defined;
 } MinicFunction;
 
 typedef struct MinicC0Program {
@@ -155,6 +156,11 @@ bool minic_c0_program_add_function(
     size_t local_count,
     MinicBlockId body_block,
     MinicFunctionId *function_id);
+bool minic_c0_program_define_function(
+    MinicC0Program *program,
+    MinicFunctionId function_id,
+    size_t local_begin,
+    MinicBlockId body_block);
 bool minic_c0_program_finish_function(
     MinicC0Program *program,
     MinicFunctionId function_id,
