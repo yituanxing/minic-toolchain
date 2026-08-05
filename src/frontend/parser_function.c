@@ -150,14 +150,14 @@ static bool parse_function(MinicParser *parser)
             if (!minic_c0_program_add_local(
                     parser->program,
                     &parameter_local,
-                    &parameter_local_id) ||
-                !minic_parser_bind_local(
+                    &parameter_local_id)) {
+                minic_parser_error(parser, "out of memory while adding parameter");
+                return false;
+            }
+            if (!minic_parser_bind_local(
                     parser,
                     parameter_local.name_span,
                     parameter_local_id)) {
-                if (parameter_local_id == MINIC_LOCAL_INVALID) {
-                    minic_parser_error(parser, "out of memory while adding parameter");
-                }
                 return false;
             }
         }
