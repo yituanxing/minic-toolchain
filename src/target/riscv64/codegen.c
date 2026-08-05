@@ -234,6 +234,18 @@ static bool minic_riscv64_emit_expression(
             return fprintf(file, "  slt a0, t0, a0\n  xori a0, a0, 1\n") >= 0;
         }
         return false;
+
+    case MINIC_EXPRESSION_CALL: {
+        const MinicFunction *callee;
+
+        callee = minic_c0_program_function(
+            program,
+            expression->value.function_id);
+        if (callee == NULL || callee->name_length == 0U) {
+            return false;
+        }
+        return fprintf(file, "  call %s\n", callee->name) >= 0;
+    }
     }
 
     return false;
