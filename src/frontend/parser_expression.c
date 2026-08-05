@@ -15,6 +15,7 @@ static bool parse_integer(
     expression.kind = MINIC_EXPRESSION_INTEGER;
     expression.span = parser->current.span;
     expression.type = minic_type_int();
+    expression.value_category = MINIC_VALUE_RVALUE;
     value = 0UL;
     for (offset = expression.span.begin.offset;
          offset < expression.span.end.offset;
@@ -76,6 +77,7 @@ static bool parse_primary(
             expression.kind = MINIC_EXPRESSION_CALL;
             expression.span.begin = name_span.begin;
             expression.type = minic_type_int();
+            expression.value_category = MINIC_VALUE_RVALUE;
             expression.value.call.function_id = function_id;
             expression.value.call.argument_count = callee->parameter_count;
             {
@@ -139,6 +141,7 @@ static bool parse_primary(
             expression.kind = MINIC_EXPRESSION_LOCAL;
             expression.span = name_span;
             expression.type = local->type;
+            expression.value_category = MINIC_VALUE_LVALUE;
             expression.value.local_id = local_id;
         }
         return minic_parser_add_expression(parser, &expression, expression_id);
@@ -181,6 +184,7 @@ static bool parse_unary(MinicParser *parser, MinicExpressionId *expression_id)
     expression.span.begin = operator_token.span.begin;
     expression.span.end = operand_expression->span.end;
     expression.type = minic_type_int();
+    expression.value_category = MINIC_VALUE_RVALUE;
     expression.value.unary.operand = operand;
     if (operator_token.kind == MINIC_TOKEN_PLUS) {
         expression.value.unary.operator_kind = MINIC_UNARY_PLUS;
@@ -274,6 +278,7 @@ bool minic_parser_parse_expression(
         expression.span.begin = left_expression->span.begin;
         expression.span.end = right_expression->span.end;
         expression.type = minic_type_int();
+        expression.value_category = MINIC_VALUE_RVALUE;
         expression.value.binary.operator_kind = binary_operator(token_kind);
         expression.value.binary.left = left;
         expression.value.binary.right = right;
