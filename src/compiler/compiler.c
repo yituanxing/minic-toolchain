@@ -167,7 +167,7 @@ int minic_compile_preprocessed_file(
         buffer.size,
         &program,
         diagnostic);
-    if (success) {
+    if (success && program.function_count == 0U) {
         success = minic_c0_program_add_function(
             &program,
             "main",
