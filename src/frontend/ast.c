@@ -205,6 +205,25 @@ bool minic_c0_program_add_function(
     return true;
 }
 
+bool minic_c0_program_finish_function(
+    MinicC0Program *program,
+    MinicFunctionId function_id,
+    size_t local_count)
+{
+    MinicFunction *function;
+
+    if (function_id >= program->function_count) {
+        return false;
+    }
+    function = &program->functions[function_id];
+    if (function->local_begin > program->local_count ||
+        local_count > program->local_count - function->local_begin) {
+        return false;
+    }
+    function->local_count = local_count;
+    return true;
+}
+
 const MinicExpression *minic_c0_program_expression(
     const MinicC0Program *program,
     MinicExpressionId expression_id)
