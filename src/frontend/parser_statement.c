@@ -1,11 +1,13 @@
 #include "frontend/parser_internal.h"
 
+#include <stdint.h>
 #include <string.h>
 
 static bool parse_declaration(MinicParser *parser)
 {
     MinicLocal local;
     MinicLocalId local_id;
+    size_t relative_local_index;
 
     if (!minic_parser_expect(parser, MINIC_TOKEN_KW_INT, "expected keyword 'int'") ||
         parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
@@ -15,7 +17,14 @@ static bool parse_declaration(MinicParser *parser)
         return false;
     }
 
+    relative_local_index = parser->program->local_count - parser->local_begin;
+    if (relative_local_index > SIZE_MAX / 4U) {
+        minic_parser_error(parser, "local storage offset exceeds target range");
+        return false;
+    }
     local.name_span = parser->current.span;
+    local.type = minic_type_int();
+    local.storage_offset = relative_local_index * 4U;
     if (minic_parser_find_local_in_current_scope(
             parser,
             local.name_span) != MINIC_LOCAL_INVALID) {
@@ -217,6 +226,7 @@ bool minic_parser_add_default_return(MinicParser *parser)
     (void)memset(&statement, 0, sizeof(statement));
     expression.kind = MINIC_EXPRESSION_INTEGER;
     expression.span = parser->current.span;
+    expression.type = minic_type_int();
     expression.value.integer_value = 0;
     if (!minic_parser_add_expression(
             parser,
