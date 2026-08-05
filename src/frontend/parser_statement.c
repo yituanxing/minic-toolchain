@@ -1,5 +1,6 @@
 #include "frontend/parser_internal.h"
 
+#include <stdint.h>
 #include <string.h>
 
 static bool add_local_lvalue_expression(
@@ -23,6 +24,44 @@ static bool add_local_lvalue_expression(
     expression.value_category = MINIC_VALUE_LVALUE;
     expression.value.local_id = local_id;
     return minic_parser_add_expression(parser, &expression, expression_id);
+}
+
+static bool parse_array_bound(
+    MinicParser *parser,
+    size_t *element_count)
+{
+    MinicSourceSpan span;
+    size_t offset;
+    size_t value;
+
+    if (element_count == NULL ||
+        parser->current.kind != MINIC_TOKEN_INTEGER_CONSTANT) {
+        minic_parser_error(parser, "expected integer array bound");
+        return false;
+    }
+
+    span = parser->current.span;
+    value = 0U;
+    for (offset = span.begin.offset; offset < span.end.offset; ++offset) {
+        size_t digit;
+
+        digit = (size_t)(unsigned int)(parser->source[offset] - '0');
+        if (value > (SIZE_MAX - digit) / 10U) {
+            minic_parser_error(parser, "array bound exceeds target object range");
+            return false;
+        }
+        value = value * 10U + digit;
+    }
+    if (value == 0U) {
+        minic_parser_error(parser, "array bound must be greater than zero");
+        return false;
+    }
+    if (!minic_parser_advance(parser) ||
+        !minic_parser_expect(parser, MINIC_TOKEN_RBRACKET, "expected ']'") ) {
+        return false;
+    }
+    *element_count = value;
+    return true;
 }
 
 static bool parse_declaration(MinicParser *parser)
@@ -60,6 +99,15 @@ static bool parse_declaration(MinicParser *parser)
         minic_parser_error(parser, "duplicate local declaration");
         return false;
     }
+    if (!minic_parser_advance(parser)) {
+        return false;
+    }
+    if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
+        if (!minic_parser_advance(parser) ||
+            !parse_array_bound(parser, &local.element_count)) {
+            return false;
+        }
+    }
     if (!minic_c0_program_add_local(parser->program, &local, &local_id)) {
         minic_parser_error(parser, "out of memory while adding local");
         return false;
@@ -67,14 +115,15 @@ static bool parse_declaration(MinicParser *parser)
     if (!minic_parser_bind_local(parser, local.name_span, local_id)) {
         return false;
     }
-    if (!minic_parser_advance(parser)) {
-        return false;
-    }
 
     if (parser->current.kind == MINIC_TOKEN_EQUAL) {
         MinicStatement statement;
         const MinicExpression *initializer;
 
+        if (local.element_count != 1U) {
+            minic_parser_error(parser, "array initializers are not supported yet");
+            return false;
+        }
         (void)memset(&statement, 0, sizeof(statement));
         statement.kind = MINIC_STATEMENT_ASSIGN;
         statement.span.begin = local.name_span.begin;
