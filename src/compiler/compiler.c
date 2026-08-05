@@ -3,6 +3,7 @@
 #include "frontend/ast.h"
 #include "frontend/parser.h"
 #include "target/riscv64/codegen.h"
+#include "target/riscv64/layout.h"
 
 #include <errno.h>
 #include <stdbool.h>
@@ -166,6 +167,12 @@ int minic_compile_preprocessed_file(
         buffer.size,
         &program,
         diagnostic);
+    if (success) {
+        success = minic_riscv64_layout_program(
+            input_path,
+            &program,
+            diagnostic);
+    }
     if (success) {
         success = minic_riscv64_write_c0_program(
             output_path,
