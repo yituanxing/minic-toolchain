@@ -44,6 +44,7 @@ MINIC_INCLUDES := -Iinclude -Isrc
 MINIC_SOURCES := \
 	src/compiler/compiler.c \
 	src/frontend/ast.c \
+	src/frontend/ast_function.c \
 	src/frontend/ast_global.c \
 	src/frontend/lexer.c \
 	src/frontend/parser_constant.c \
@@ -108,9 +109,9 @@ LAYOUT_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(LAYOUT_TEST_SOURCES
 LAYOUT_TEST_BINARY  := $(BUILD_DIR)/tests/target/riscv64/layout-test
 
 .PHONY: all help prepare check check-fast check-token-model check-lexer \
-	check-type check-record check-type-alias check-layout check-c0-runtime \
-	check-programs-c0 check-runtime sanitize bootstrap bootstrap-compare format \
-	format-check clean distclean print-config
+	check-type check-record check-type-alias check-layout check-static-functions \
+	check-c0-runtime check-programs-c0 check-runtime sanitize bootstrap \
+	bootstrap-compare format format-check clean distclean print-config
 
 all: $(MINIC_BINARY)
 
@@ -125,6 +126,7 @@ help:
 		"  make check-record       Run the record ownership unit gate" \
 		"  make check-type-alias   Run recursive array and typedef ownership gates" \
 		"  make check-layout       Run the RV64 object-layout unit gate" \
+		"  make check-static-functions Run internal-linkage and typed-return gates" \
 		"  make check              Run the normal host-side test gate" \
 		"  make check-c0-runtime   Run focused RISC-V/QEMU microprogram gates" \
 		"  make check-programs-c0  Differentially compare real programs: GCC vs MiniC" \
@@ -187,7 +189,13 @@ check-type-alias: $(TYPE_ALIAS_TEST_BINARY)
 check-layout: $(LAYOUT_TEST_BINARY)
 	"$(abspath $(LAYOUT_TEST_BINARY))"
 
-check-fast: check-token-model check-lexer check-type check-record check-type-alias check-layout $(MINIC_BINARY)
+check-static-functions: $(MINIC_BINARY)
+	MINIC="$(abspath $(MINIC_BINARY))" \
+	HOST_CC="$(CC)" \
+	BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/compiler/c0/run-static-functions.sh
+
+check-fast: check-token-model check-lexer check-type check-record check-type-alias check-layout check-static-functions $(MINIC_BINARY)
 	MINIC="$(abspath $(MINIC_BINARY))" \
 	HOST_CC="$(CC)" \
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
