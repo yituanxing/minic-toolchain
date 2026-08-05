@@ -216,26 +216,25 @@ bool minic_parse_c0_program(
     MinicDiagnostic *diagnostic)
 {
     MinicParser parser;
+    bool success;
 
+    (void)memset(&parser, 0, sizeof(parser));
     parser.path = path;
     parser.source = source;
     parser.diagnostic = diagnostic;
     parser.program = program;
     parser.current_block = MINIC_BLOCK_INVALID;
-    parser.local_begin = 0U;
     minic_lexer_initialize(&parser.lexer, path, source, length);
-    if (!minic_parser_advance(&parser)) {
-        return false;
+
+    success = minic_parser_advance(&parser);
+    while (success && parser.current.kind != MINIC_TOKEN_EOF) {
+        success = parse_function(&parser);
+    }
+    if (success && program->entry_function == MINIC_FUNCTION_INVALID) {
+        minic_parser_error(&parser, "translation unit requires an int main function");
+        success = false;
     }
 
-    while (parser.current.kind != MINIC_TOKEN_EOF) {
-        if (!parse_function(&parser)) {
-            return false;
-        }
-    }
-    if (program->entry_function == MINIC_FUNCTION_INVALID) {
-        minic_parser_error(&parser, "translation unit requires an int main function");
-        return false;
-    }
-    return true;
+    minic_parser_destroy_scopes(&parser);
+    return success;
 }
