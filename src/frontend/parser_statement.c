@@ -25,25 +25,19 @@ static bool add_local_lvalue_expression(
     return minic_parser_add_expression(parser, &expression, expression_id);
 }
 
-static bool parse_declaration(MinicParser *parser)
+static bool parse_local_declarator(
+    MinicParser *parser,
+    MinicType base_type)
 {
     MinicLocal local;
     MinicLocalId local_id;
     MinicType declared_type;
 
-    if (!minic_parser_expect(
+    if (!minic_parser_parse_pointer_declarator(
             parser,
-            MINIC_TOKEN_KW_INT,
-            "expected keyword 'int'")) {
+            base_type,
+            &declared_type)) {
         return false;
-    }
-    declared_type = minic_type_int();
-    while (parser->current.kind == MINIC_TOKEN_STAR) {
-        if (!minic_type_pointer_to(declared_type, &declared_type) ||
-            !minic_parser_advance(parser)) {
-            minic_parser_error(parser, "pointer declarator depth is unsupported");
-            return false;
-        }
     }
     if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
         minic_parser_error(parser, "expected local name");
@@ -109,6 +103,32 @@ static bool parse_declaration(MinicParser *parser)
         }
         statement.span.end = initializer->span.end;
         if (!minic_parser_add_statement(parser, &statement)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool parse_declaration(MinicParser *parser)
+{
+    MinicType base_type;
+
+    if (!minic_parser_parse_type_specifiers(parser, &base_type)) {
+        return false;
+    }
+    if (minic_type_is_void(base_type)) {
+        minic_parser_error(parser, "local object cannot have void type");
+        return false;
+    }
+
+    for (;;) {
+        if (!parse_local_declarator(parser, base_type)) {
+            return false;
+        }
+        if (parser->current.kind != MINIC_TOKEN_COMMA) {
+            break;
+        }
+        if (!minic_parser_advance(parser)) {
             return false;
         }
     }
@@ -350,7 +370,7 @@ bool minic_parser_add_default_return(MinicParser *parser)
         (void)memset(&expression, 0, sizeof(expression));
         expression.kind = MINIC_EXPRESSION_INTEGER;
         expression.span = parser->current.span;
-        expression.type = minic_type_int();
+        expression.type = function->return_type;
         expression.value_category = MINIC_VALUE_RVALUE;
         expression.value.integer_value = 0;
         if (!minic_parser_add_expression(
@@ -378,7 +398,8 @@ bool minic_parser_parse_statement(MinicParser *parser, bool allow_declaration)
     if (parser->current.kind == MINIC_TOKEN_KW_WHILE) {
         return parse_while(parser);
     }
-    if (parser->current.kind == MINIC_TOKEN_KW_INT) {
+    if (parser->current.kind == MINIC_TOKEN_KW_INT ||
+        parser->current.kind == MINIC_TOKEN_KW_UNSIGNED) {
         if (!allow_declaration) {
             minic_parser_error(
                 parser,
