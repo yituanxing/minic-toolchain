@@ -95,20 +95,24 @@ static bool parse_branch(MinicParser *parser, MinicBlockId *block_id)
     parser->current_block = *block_id;
 
     if (parser->current.kind == MINIC_TOKEN_LBRACE) {
-        success = minic_parser_advance(parser);
-        while (success && parser->current.kind != MINIC_TOKEN_RBRACE) {
-            if (parser->current.kind == MINIC_TOKEN_EOF) {
-                minic_parser_error(parser, "expected '}' before end of file");
-                success = false;
-                break;
-            }
-            success = minic_parser_parse_statement(parser, false);
-        }
+        success = minic_parser_begin_scope(parser);
         if (success) {
-            success = minic_parser_expect(
-                parser,
-                MINIC_TOKEN_RBRACE,
-                "expected '}'");
+            success = minic_parser_advance(parser);
+            while (success && parser->current.kind != MINIC_TOKEN_RBRACE) {
+                if (parser->current.kind == MINIC_TOKEN_EOF) {
+                    minic_parser_error(parser, "expected '}' before end of file");
+                    success = false;
+                    break;
+                }
+                success = minic_parser_parse_statement(parser, true);
+            }
+            if (success) {
+                success = minic_parser_expect(
+                    parser,
+                    MINIC_TOKEN_RBRACE,
+                    "expected '}'");
+            }
+            minic_parser_end_scope(parser);
         }
     } else {
         success = minic_parser_parse_statement(parser, false);
@@ -225,7 +229,7 @@ bool minic_parser_parse_statement(MinicParser *parser, bool allow_declaration)
         if (!allow_declaration) {
             minic_parser_error(
                 parser,
-                "declarations inside branch blocks are not supported yet");
+                "a declaration requires a compound statement scope");
             return false;
         }
         return parse_declaration(parser);
