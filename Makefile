@@ -49,6 +49,7 @@ MINIC_SOURCES := \
 	src/frontend/parser_expression.c \
 	src/frontend/parser_statement.c \
 	src/frontend/parser_function.c \
+	src/frontend/parser_record.c \
 	src/frontend/token.c \
 	src/frontend/type.c \
 	src/target/riscv64/layout.c \
