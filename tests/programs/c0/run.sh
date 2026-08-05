@@ -64,14 +64,7 @@ run_program() {
     name=$1
     source="$root/tests/programs/c0/$name.c"
 
-    # GCC reference lane: GCC owns preprocessing, C compilation, assembly,
-    # linking, CRT and libc selection.
-    # GCC 参考线：全部阶段均由目标 GCC 工具链完成。
     "$riscv_cc" -std=c11 -O0 -static "$source" -o "$work/$name.gcc.elf"
-
-    # MiniC lane: GCC only preprocesses and later assembles/links. MiniC is
-    # solely responsible for compiling the complete preprocessed C unit.
-    # MiniC 线：GCC 仅负责预处理、汇编和链接，完整 C 编译由 MiniC 负责。
     "$riscv_cc" -std=c11 -E -P -x c "$source" -o "$work/$name.i"
     "$minic" -S "$work/$name.i" -o "$work/$name.minic.s"
     "$riscv_cc" -static "$work/$name.minic.s" -o "$work/$name.minic.elf"
@@ -118,3 +111,4 @@ run_program function_calls
 run_program function_prototype
 run_program function_parameter
 run_program function_two_parameters
+run_program function_four_parameters
