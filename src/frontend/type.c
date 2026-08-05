@@ -1,6 +1,7 @@
 #include "frontend/type.h"
 
 #include <limits.h>
+#include <stddef.h>
 
 MinicType minic_type_int(void)
 {
