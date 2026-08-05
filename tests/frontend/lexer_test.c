@@ -85,7 +85,7 @@ static int test_c0_sequence(void)
 
 static int test_operator_sequence(void)
 {
-    static const char source[] = "+ - * & / % =";
+    static const char source[] = "+ - * & / % = [ ]";
     static const struct {
         MinicTokenKind kind;
         size_t column;
@@ -97,7 +97,9 @@ static int test_operator_sequence(void)
         {MINIC_TOKEN_SLASH, 9U},
         {MINIC_TOKEN_PERCENT, 11U},
         {MINIC_TOKEN_EQUAL, 13U},
-        {MINIC_TOKEN_EOF, 14U}
+        {MINIC_TOKEN_LBRACKET, 15U},
+        {MINIC_TOKEN_RBRACKET, 17U},
+        {MINIC_TOKEN_EOF, 18U}
     };
     MinicLexer lexer;
     size_t index;
