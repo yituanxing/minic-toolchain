@@ -1,5 +1,64 @@
 #include "target/riscv64/codegen_internal.h"
 
+static bool minic_riscv64_emit_subscript_address(
+    FILE *file,
+    const MinicC0Program *program,
+    const MinicFunction *function,
+    const MinicExpression *expression)
+{
+    const MinicExpression *base;
+    const MinicExpression *index;
+    const MinicLocal *array;
+    unsigned int shift;
+
+    if (expression == NULL || expression->kind != MINIC_EXPRESSION_SUBSCRIPT) {
+        return false;
+    }
+    base = minic_c0_program_expression(
+        program,
+        expression->value.subscript.base);
+    index = minic_c0_program_expression(
+        program,
+        expression->value.subscript.index);
+    if (base == NULL || index == NULL ||
+        base->kind != MINIC_EXPRESSION_LOCAL ||
+        base->value_category != MINIC_VALUE_LVALUE ||
+        !minic_type_is_integer(index->type)) {
+        return false;
+    }
+    array = minic_c0_program_local(program, base->value.local_id);
+    if (array == NULL || array->element_count <= 1U ||
+        !minic_type_equal(array->type, expression->type)) {
+        return false;
+    }
+    if (minic_type_is_integer(expression->type)) {
+        shift = 2U;
+    } else if (minic_type_is_pointer(expression->type)) {
+        shift = 3U;
+    } else {
+        return false;
+    }
+
+    return minic_riscv64_emit_lvalue_address(
+               file,
+               program,
+               function,
+               expression->value.subscript.base) &&
+           fprintf(file, "  addi sp, sp, -16\n  sd a0, 0(sp)\n") >= 0 &&
+           minic_riscv64_emit_expression(
+               file,
+               program,
+               function,
+               expression->value.subscript.index) &&
+           fprintf(
+               file,
+               "  slli a0, a0, %u\n"
+               "  ld t0, 0(sp)\n"
+               "  addi sp, sp, 16\n"
+               "  add a0, t0, a0\n",
+               shift) >= 0;
+}
+
 bool minic_riscv64_emit_lvalue_address(
     FILE *file,
     const MinicC0Program *program,
@@ -26,6 +85,12 @@ bool minic_riscv64_emit_lvalue_address(
             program,
             function,
             expression->value.unary.operand);
+    case MINIC_EXPRESSION_SUBSCRIPT:
+        return minic_riscv64_emit_subscript_address(
+            file,
+            program,
+            function,
+            expression);
     default:
         return false;
     }
@@ -75,6 +140,19 @@ bool minic_riscv64_emit_expression(
         }
         return false;
     case MINIC_EXPRESSION_SUBSCRIPT:
+        if (!minic_riscv64_emit_subscript_address(
+                file,
+                program,
+                function,
+                expression)) {
+            return false;
+        }
+        if (minic_type_is_integer(expression->type)) {
+            return fprintf(file, "  lw a0, 0(a0)\n") >= 0;
+        }
+        if (minic_type_is_pointer(expression->type)) {
+            return fprintf(file, "  ld a0, 0(a0)\n") >= 0;
+        }
         return false;
     case MINIC_EXPRESSION_UNARY:
         if (!minic_riscv64_emit_expression(file, program, function, expression->value.unary.operand)) {
