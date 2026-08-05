@@ -10,6 +10,7 @@ CC            ?= cc
 AR            ?= ar
 RISCV_CC      ?= riscv64-buildroot-linux-musl-gcc
 QEMU_RISCV64  ?= qemu-riscv64
+RISCV_OBJDUMP ?=
 REQUIRE_RISCV_RUNTIME ?= 0
 
 CPPFLAGS      ?=
@@ -64,8 +65,9 @@ LEXER_TEST_SOURCES := \
 LEXER_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(LEXER_TEST_SOURCES))
 LEXER_TEST_BINARY  := $(BUILD_DIR)/tests/frontend/lexer-test
 
-.PHONY: all help prepare check check-fast check-token-model check-lexer check-c0-runtime \
-	sanitize bootstrap bootstrap-compare format format-check clean distclean print-config
+.PHONY: all help prepare check check-fast check-token-model check-lexer \
+	check-c0-runtime check-programs-c0 check-runtime sanitize bootstrap \
+	bootstrap-compare format format-check clean distclean print-config
 
 all: $(MINIC_BINARY)
 
@@ -76,9 +78,11 @@ help:
 		"  make check-fast         Run the fast frontend and C0 gates" \
 		"  make check-token-model  Run the token data-model unit gate" \
 		"  make check-lexer        Run the C0 lexer unit gate" \
-		"  make check              Run the normal test gate" \
-		"  make check-c0-runtime   Use external RISC-V GCC and QEMU when available" \
-		"  make sanitize           Run checks with ASan and UBSan" \
+		"  make check              Run the normal host-side test gate" \
+		"  make check-c0-runtime   Run focused RISC-V/QEMU microprogram gates" \
+		"  make check-programs-c0  Differentially compare real programs: GCC vs MiniC" \
+		"  make check-runtime      Run all available target runtime gates" \
+		"  make sanitize           Run host checks with ASan and UBSan" \
 		"  make print-config       Print the active toolchain configuration" \
 		"  make clean              Remove the active build directory" \
 		"  make distclean          Remove all generated build directories"
@@ -124,6 +128,17 @@ check-c0-runtime: $(MINIC_BINARY)
 	REQUIRE_RISCV_RUNTIME="$(REQUIRE_RISCV_RUNTIME)" \
 	sh tests/compiler/c0/run-runtime.sh
 
+check-programs-c0: $(MINIC_BINARY)
+	MINIC="$(abspath $(MINIC_BINARY))" \
+	BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	RISCV_CC="$(RISCV_CC)" \
+	RISCV_OBJDUMP="$(RISCV_OBJDUMP)" \
+	QEMU_RISCV64="$(QEMU_RISCV64)" \
+	REQUIRE_RISCV_RUNTIME="$(REQUIRE_RISCV_RUNTIME)" \
+	sh tests/programs/c0/run.sh
+
+check-runtime: check-c0-runtime check-programs-c0
+
 sanitize:
 	@$(MAKE) MODE=sanitize check
 
@@ -147,6 +162,7 @@ print-config:
 		"CC=$(CC)" \
 		"AR=$(AR)" \
 		"RISCV_CC=$(RISCV_CC)" \
+		"RISCV_OBJDUMP=$(RISCV_OBJDUMP)" \
 		"QEMU_RISCV64=$(QEMU_RISCV64)" \
 		"REQUIRE_RISCV_RUNTIME=$(REQUIRE_RISCV_RUNTIME)" \
 		"CPPFLAGS=$(CPPFLAGS)" \
