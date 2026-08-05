@@ -6,7 +6,7 @@
 static bool parse_function(MinicParser *parser)
 {
     MinicSourceSpan name_span;
-    MinicSourceSpan parameter_name_spans[4];
+    MinicSourceSpan parameter_name_spans[8];
     MinicBlockId body_block;
     MinicFunctionId function_id;
     const MinicFunction *existing_function;
@@ -43,13 +43,13 @@ static bool parse_function(MinicParser *parser)
         }
     } else if (parser->current.kind == MINIC_TOKEN_KW_INT) {
         for (;;) {
-            if (parameter_count >= 4U ||
+            if (parameter_count >= 8U ||
                 !minic_parser_advance(parser) ||
                 parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
                 minic_parser_error(
                     parser,
-                    parameter_count >= 4U
-                        ? "at most four int parameters are supported"
+                    parameter_count >= 8U
+                        ? "at most eight int parameters are supported"
                         : "expected parameter name after 'int'");
                 return false;
             }
