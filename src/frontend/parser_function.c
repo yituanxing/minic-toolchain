@@ -28,6 +28,54 @@ static bool function_signature_matches(
     return true;
 }
 
+static bool parse_parameter_list(
+    MinicParser *parser,
+    MinicSourceSpan *parameter_name_spans,
+    MinicType *parameter_types,
+    size_t *parameter_count)
+{
+    if (parser->current.kind == MINIC_TOKEN_RPAREN) {
+        return true;
+    }
+
+    for (;;) {
+        MinicType parameter_type;
+
+        if (*parameter_count >= 8U) {
+            minic_parser_error(parser, "at most eight parameters are supported");
+            return false;
+        }
+        if (!minic_parser_parse_type_name(parser, &parameter_type)) {
+            return false;
+        }
+        if (minic_type_is_void(parameter_type)) {
+            if (*parameter_count == 0U &&
+                parser->current.kind == MINIC_TOKEN_RPAREN) {
+                return true;
+            }
+            minic_parser_error(parser, "parameter type cannot be bare void");
+            return false;
+        }
+        if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
+            minic_parser_error(parser, "expected parameter name");
+            return false;
+        }
+
+        parameter_name_spans[*parameter_count] = parser->current.span;
+        parameter_types[*parameter_count] = parameter_type;
+        *parameter_count += 1U;
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
+        if (parser->current.kind != MINIC_TOKEN_COMMA) {
+            return true;
+        }
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
+    }
+}
+
 static bool parse_function(MinicParser *parser)
 {
     MinicSourceSpan name_span;
@@ -48,15 +96,7 @@ static bool parse_function(MinicParser *parser)
     parameter_count = 0U;
     (void)memset(parameter_name_spans, 0, sizeof(parameter_name_spans));
     (void)memset(parameter_types, 0, sizeof(parameter_types));
-    if (parser->current.kind == MINIC_TOKEN_KW_INT) {
-        return_type = minic_type_int();
-    } else if (parser->current.kind == MINIC_TOKEN_KW_VOID) {
-        return_type = minic_type_void();
-    } else {
-        minic_parser_error(parser, "expected function return type");
-        return false;
-    }
-    if (!minic_parser_advance(parser)) {
+    if (!minic_parser_parse_type_name(parser, &return_type)) {
         return false;
     }
     if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
@@ -74,45 +114,13 @@ static bool parse_function(MinicParser *parser)
     }
 
     if (!minic_parser_advance(parser) ||
-        !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '('") ) {
-        return false;
-    }
-    if (parser->current.kind == MINIC_TOKEN_KW_VOID) {
-        if (!minic_parser_advance(parser)) {
-            return false;
-        }
-    } else if (parser->current.kind == MINIC_TOKEN_KW_INT) {
-        for (;;) {
-            if (parameter_count >= 8U ||
-                !minic_parser_advance(parser) ||
-                parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
-                minic_parser_error(
-                    parser,
-                    parameter_count >= 8U
-                        ? "at most eight int parameters are supported"
-                        : "expected parameter name after 'int'");
-                return false;
-            }
-            parameter_name_spans[parameter_count] = parser->current.span;
-            parameter_types[parameter_count] = minic_type_int();
-            parameter_count += 1U;
-            if (!minic_parser_advance(parser)) {
-                return false;
-            }
-            if (parser->current.kind != MINIC_TOKEN_COMMA) {
-                break;
-            }
-            if (!minic_parser_advance(parser) ||
-                parser->current.kind != MINIC_TOKEN_KW_INT) {
-                minic_parser_error(parser, "expected 'int' after ','");
-                return false;
-            }
-        }
-    } else if (parser->current.kind != MINIC_TOKEN_RPAREN) {
-        minic_parser_error(parser, "expected 'void', 'int', or ')'");
-        return false;
-    }
-    if (!minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')'")) {
+        !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '('") ||
+        !parse_parameter_list(
+            parser,
+            parameter_name_spans,
+            parameter_types,
+            &parameter_count) ||
+        !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')'")) {
         return false;
     }
     if (is_main && parameter_count != 0U) {
@@ -155,8 +163,8 @@ static bool parse_function(MinicParser *parser)
         return minic_parser_advance(parser);
     }
 
-    if (minic_type_is_void(return_type)) {
-        minic_parser_error(parser, "void function definitions are not supported yet");
+    if (!minic_type_is_integer(return_type)) {
+        minic_parser_error(parser, "non-int function definitions are not supported yet");
         return false;
     }
     if (parser->current.kind != MINIC_TOKEN_LBRACE) {
