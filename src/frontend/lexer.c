@@ -216,6 +216,9 @@ bool minic_lexer_next(
     case '*':
         token->kind = MINIC_TOKEN_STAR;
         break;
+    case '&':
+        token->kind = MINIC_TOKEN_AMPERSAND;
+        break;
     case '/':
         token->kind = MINIC_TOKEN_SLASH;
         break;
