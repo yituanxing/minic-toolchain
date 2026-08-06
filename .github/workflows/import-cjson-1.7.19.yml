@@ -1,0 +1,31 @@
+name: Import pinned cJSON 1.7.19
+
+on:
+  push:
+    branches:
+      - tests/cjson-baseline
+    paths:
+      - '.github/scripts/import-cjson-1.7.19.sh'
+      - '.github/workflows/import-cjson-1.7.19.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: import-cjson-1.7.19
+  cancel-in-progress: false
+
+jobs:
+  import:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout cJSON baseline branch
+        uses: actions/checkout@v4
+        with:
+          ref: tests/cjson-baseline
+          fetch-depth: 0
+
+      - name: Import and verify pinned upstream files
+        run: bash .github/scripts/import-cjson-1.7.19.sh
