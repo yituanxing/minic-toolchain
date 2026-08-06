@@ -29,17 +29,19 @@ Pinned Git blob identities:
 
 ## Current frontier
 
-MiniC now passes the upstream declarations, `struct AES_ctx`, typed and `const` prototypes, multidimensional typedef arrays, static read-only lookup tables, static internal functions, `void` definitions, explicit unsigned integer identity, comma-separated unsigned declarations, the first `KeyExpansion` loop, pointer-parameter subscripting, const-qualified local initialization, expression lookup of the static global `sbox` table, bitwise XOR, typedef-backed record fields, RV64 record layout, pointer member access in `AES_init_ctx`, the standalone `KeyExpansion(ctx->RoundKey, key);` expression statement, and the repeatable postfix chain `(*state)[i][j]` in `AddRoundKey`.
+MiniC now passes the upstream declarations, `struct AES_ctx`, typed and `const` prototypes, multidimensional typedef arrays, static read-only lookup tables, static internal functions, `void` definitions, explicit unsigned integer identity, comma-separated unsigned declarations, the first `KeyExpansion` loop, pointer-parameter subscripting, const-qualified local initialization, expression lookup of the static global `sbox` table, bitwise XOR, typedef-backed record fields, RV64 record layout, pointer member access in `AES_init_ctx`, the standalone `KeyExpansion(ctx->RoundKey, key);` expression statement, the repeatable postfix chain `(*state)[i][j]`, and compound XOR assignment in `AddRoundKey`.
 
-The exact pinned failure is the compound XOR assignment:
+Compound XOR assignment is represented as a dedicated read-modify-write statement. RV64 code generation evaluates the target lvalue address exactly once, saves it, loads the old value, applies the common integer conversion, evaluates the right operand, performs XOR, converts back to the target type, and stores through the saved address. A focused side-effect fixture requires exactly one call while computing a complex target.
+
+The exact pinned failure has advanced to the left-shift operator in `xtime`:
 
 ```c
-(*state)[i][j] ^= RoundKey[(round * Nb * 4) + (i * Nb) + j];
+return ((x<<1) ^ (((x>>7) & 1) * 0x1b));
 ```
 
-Both subscripts now parse and lower correctly. The lexer currently emits separate `^` and `=` tokens. Binary parsing consumes `^`, then reaches `=` while expecting the right operand and reports `expected expression` at preprocessed line 100, column 23. The next short integration must add a distinct `^=` token and lower it as a single read-modify-write statement while preserving one evaluation of the target lvalue.
+The lexer currently emits two `<` tokens. Binary parsing consumes the first as a comparison and reaches the second while expecting its right operand, reporting `expected expression` at preprocessed line 137, column 14. The next integration must add shift tokens and precedence, integer-only type rules, and RV64 word-shift lowering. The same expression also exposes right shift and bitwise AND immediately afterward, so those operations should be implemented and validated as one bounded integer-bit-operations slice.
 
-Repeatable postfix support is protected by focused scalar-rejection and assembly gates plus thirty GCC/MiniC differential programs. The new `postfix_subscript` program dereferences a pointer to a two-dimensional typedef array, repeatedly applies postfix subscripts, reads and writes elements, and verifies a non-power-of-two 12-byte row stride; both lanes exit with status 15 and produce empty output streams. RV64 codegen now consumes the same target-owned type-size query as object layout, using shifts for power-of-two strides and multiplication for arbitrary aggregate sizes.
+Compound XOR support is protected by longest-match token tests, integer and const diagnostics, an assembly gate, a single-evaluation side-effect gate, and thirty-one GCC/MiniC differential programs. The `compound_xor_assignment` program covers signed and unsigned targets and verifies that a function call used to obtain the target address executes once; GCC and MiniC must both exit with status 205 and produce empty output streams.
 
 ## Remaining acceptance debt
 
