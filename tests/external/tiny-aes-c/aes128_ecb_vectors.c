@@ -39,6 +39,41 @@ static const uint8_t vector_plaintext[16] = {
     0x73, 0x93, 0x17, 0x2a
 };
 
+static const uint8_t vector_add_round_key_0[16] = {
+    0x40, 0xbf, 0xab, 0xf4,
+    0x06, 0xee, 0x4d, 0x30,
+    0x42, 0xca, 0x6b, 0x99,
+    0x7a, 0x5c, 0x58, 0x16
+};
+
+static const uint8_t vector_sub_bytes_1[16] = {
+    0x09, 0x08, 0x62, 0xbf,
+    0x6f, 0x28, 0xe3, 0x04,
+    0x2c, 0x74, 0x7f, 0xee,
+    0xda, 0x4a, 0x6a, 0x47
+};
+
+static const uint8_t vector_shift_rows_1[16] = {
+    0x09, 0x28, 0x7f, 0x47,
+    0x6f, 0x74, 0x6a, 0xbf,
+    0x2c, 0x4a, 0x62, 0x04,
+    0xda, 0x08, 0xe3, 0xee
+};
+
+static const uint8_t vector_mix_columns_1[16] = {
+    0x52, 0x9f, 0x16, 0xc2,
+    0x97, 0x86, 0x15, 0xca,
+    0xe0, 0x1a, 0xae, 0x54,
+    0xba, 0x1a, 0x26, 0x59
+};
+
+static const uint8_t vector_add_round_key_1[16] = {
+    0xf2, 0x65, 0xe8, 0xd5,
+    0x1f, 0xd2, 0x39, 0x7b,
+    0xc3, 0xb9, 0x97, 0x6d,
+    0x90, 0x76, 0x50, 0x5c
+};
+
 static const uint8_t vector_ciphertext[16] = {
     0x3a, 0xd7, 0x7b, 0xb4,
     0x0d, 0x7a, 0x36, 0x60,
@@ -61,18 +96,40 @@ static int first_mismatch(
     return 0;
 }
 
+static void copy_plaintext(uint8_t *block)
+{
+    int index;
+
+    for (index = 0; index < 16; ++index) {
+        block[index] = vector_plaintext[index];
+    }
+}
+
+static int check_stage(
+    uint8_t *block,
+    const uint8_t *expected,
+    int base)
+{
+    int failure;
+
+    failure = first_mismatch(block, expected, 16);
+    if (failure != 0) {
+        return base + failure;
+    }
+    return 0;
+}
+
 int main(void)
 {
     struct AES_ctx context;
     struct AES_ctx *context_pointer;
+    state_t *state_pointer;
     uint8_t block[16];
     int failure;
-    int index;
 
     context_pointer = &context;
-    for (index = 0; index < 16; ++index) {
-        block[index] = vector_plaintext[index];
-    }
+    state_pointer = (state_t*)&block[0];
+    copy_plaintext(&block[0]);
 
     AES_init_ctx(context_pointer, &vector_key[0]);
     failure = first_mismatch(
@@ -80,19 +137,50 @@ int main(void)
         &vector_round_key[0],
         176);
     if (failure != 0) {
+        return 1;
+    }
+
+    AddRoundKey(0, state_pointer, &context_pointer->RoundKey[0]);
+    failure = check_stage(&block[0], &vector_add_round_key_0[0], 16);
+    if (failure != 0) {
         return failure;
     }
 
-    AES_ECB_encrypt(context_pointer, &block[0]);
-    failure = first_mismatch(&block[0], &vector_ciphertext[0], 16);
+    SubBytes(state_pointer);
+    failure = check_stage(&block[0], &vector_sub_bytes_1[0], 32);
     if (failure != 0) {
-        return 176 + failure;
+        return failure;
+    }
+
+    ShiftRows(state_pointer);
+    failure = check_stage(&block[0], &vector_shift_rows_1[0], 48);
+    if (failure != 0) {
+        return failure;
+    }
+
+    MixColumns(state_pointer);
+    failure = check_stage(&block[0], &vector_mix_columns_1[0], 64);
+    if (failure != 0) {
+        return failure;
+    }
+
+    AddRoundKey(1, state_pointer, &context_pointer->RoundKey[0]);
+    failure = check_stage(&block[0], &vector_add_round_key_1[0], 80);
+    if (failure != 0) {
+        return failure;
+    }
+
+    copy_plaintext(&block[0]);
+    AES_ECB_encrypt(context_pointer, &block[0]);
+    failure = check_stage(&block[0], &vector_ciphertext[0], 96);
+    if (failure != 0) {
+        return failure;
     }
 
     AES_ECB_decrypt(context_pointer, &block[0]);
-    failure = first_mismatch(&block[0], &vector_plaintext[0], 16);
+    failure = check_stage(&block[0], &vector_plaintext[0], 112);
     if (failure != 0) {
-        return 192 + failure;
+        return failure;
     }
 
     return 0;
