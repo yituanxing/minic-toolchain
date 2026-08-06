@@ -41,7 +41,7 @@ expect_failure \
     "for initializer requires an assignment"
 expect_failure \
     invalid_for_update \
-    "for update requires prefix increment"
+    "for update requires prefix increment or decrement"
 expect_failure \
     invalid_for_increment_target \
     "prefix increment requires a modifiable integer local"
