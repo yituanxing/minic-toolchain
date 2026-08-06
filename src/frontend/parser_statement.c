@@ -292,6 +292,16 @@ static bool parse_branch(MinicParser *parser, MinicBlockId *block_id)
     return success;
 }
 
+static bool parse_loop_branch(MinicParser *parser, MinicBlockId *block_id)
+{
+    bool success;
+
+    parser->loop_depth += 1U;
+    success = parse_branch(parser, block_id);
+    parser->loop_depth -= 1U;
+    return success;
+}
+
 static bool expression_is_integer_condition(
     MinicParser *parser,
     MinicExpressionId expression_id)
@@ -349,7 +359,7 @@ static bool parse_while(MinicParser *parser)
         !minic_parser_parse_expression(parser, &statement.expression, 0U) ||
         !expression_is_integer_condition(parser, statement.expression) ||
         !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')'") ||
-        !parse_branch(parser, &statement.then_block)) {
+        !parse_loop_branch(parser, &statement.then_block)) {
         return false;
     }
     statement.span.end = parser->current.span.begin;
@@ -457,6 +467,7 @@ static bool parse_for(MinicParser *parser)
     (void)memset(&statement, 0, sizeof(statement));
     statement.kind = MINIC_STATEMENT_WHILE;
     statement.target_expression = MINIC_EXPRESSION_INVALID;
+    statement.expression = MINIC_EXPRESSION_INVALID;
     statement.then_block = MINIC_BLOCK_INVALID;
     statement.else_block = MINIC_BLOCK_INVALID;
     for_begin = parser->current.span.begin;
@@ -471,15 +482,27 @@ static bool parse_for(MinicParser *parser)
         minic_parser_error(parser, "for initializer requires an assignment");
         return false;
     }
-    if (!parse_expression_or_assignment_statement(parser, false) ||
-        !minic_parser_parse_expression(parser, &statement.expression, 0U) ||
-        !expression_is_integer_condition(parser, statement.expression) ||
-        !minic_parser_expect(parser, MINIC_TOKEN_SEMICOLON, "expected ';'") ||
-        !build_prefix_increment(parser, &update_statement) ||
-        !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')'")) {
+    if (!parse_expression_or_assignment_statement(parser, false)) {
         return false;
     }
-    if (!parse_branch(parser, &statement.then_block)) {
+    if (parser->current.kind == MINIC_TOKEN_SEMICOLON) {
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
+    } else if (!minic_parser_parse_expression(
+                   parser,
+                   &statement.expression,
+                   0U) ||
+               !expression_is_integer_condition(parser, statement.expression) ||
+               !minic_parser_expect(
+                   parser,
+                   MINIC_TOKEN_SEMICOLON,
+                   "expected ';'")) {
+        return false;
+    }
+    if (!build_prefix_increment(parser, &update_statement) ||
+        !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')'") ||
+        !parse_loop_branch(parser, &statement.then_block)) {
         return false;
     }
     if (!minic_c0_block_add_statement(
@@ -492,6 +515,34 @@ static bool parse_for(MinicParser *parser)
     statement.span.begin = for_begin;
     statement.span.end = parser->current.span.begin;
     return minic_parser_add_statement(parser, &statement);
+}
+
+static bool parse_break(MinicParser *parser)
+{
+    MinicStatement statement;
+
+    if (parser->loop_depth == 0U) {
+        minic_parser_error(parser, "break statement requires an enclosing loop");
+        return false;
+    }
+
+    (void)memset(&statement, 0, sizeof(statement));
+    statement.kind = MINIC_STATEMENT_BREAK;
+    statement.span.begin = parser->current.span.begin;
+    statement.target_expression = MINIC_EXPRESSION_INVALID;
+    statement.expression = MINIC_EXPRESSION_INVALID;
+    statement.then_block = MINIC_BLOCK_INVALID;
+    statement.else_block = MINIC_BLOCK_INVALID;
+
+    if (!minic_parser_advance(parser)) {
+        return false;
+    }
+    statement.span.end = parser->current.span.end;
+    return minic_parser_expect(
+               parser,
+               MINIC_TOKEN_SEMICOLON,
+               "expected ';' after break") &&
+           minic_parser_add_statement(parser, &statement);
 }
 
 static bool parse_return(MinicParser *parser)
@@ -645,6 +696,9 @@ bool minic_parser_parse_statement(MinicParser *parser, bool allow_declaration)
     if (parser->current.kind == MINIC_TOKEN_KW_FOR) {
         return parse_for(parser);
     }
+    if (parser->current.kind == MINIC_TOKEN_KW_BREAK) {
+        return parse_break(parser);
+    }
     if (token_starts_local_declaration(parser)) {
         if (!allow_declaration) {
             minic_parser_error(
@@ -662,6 +716,6 @@ bool minic_parser_parse_statement(MinicParser *parser, bool allow_declaration)
     }
     minic_parser_error(
         parser,
-        "expected compound, if, while, for, declaration, expression, return, or '}'");
+        "expected compound, if, while, for, break, declaration, expression, return, or '}'");
     return false;
 }
