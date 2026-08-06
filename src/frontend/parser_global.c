@@ -3,7 +3,7 @@
 #include <stdint.h>
 #include <string.h>
 
-static bool global_name_exists(
+MinicGlobalObjectId minic_parser_find_global_object(
     const MinicParser *parser,
     MinicSourceSpan name_span)
 {
@@ -20,10 +20,10 @@ static bool global_name_exists(
                 object->name,
                 parser->source + name_span.begin.offset,
                 name_length) == 0) {
-            return true;
+            return index;
         }
     }
-    return false;
+    return MINIC_GLOBAL_OBJECT_INVALID;
 }
 
 bool minic_parser_parse_static_global(MinicParser *parser)
@@ -59,7 +59,8 @@ bool minic_parser_parse_static_global(MinicParser *parser)
     }
 
     name_span = parser->current.span;
-    if (global_name_exists(parser, name_span)) {
+    if (minic_parser_find_global_object(parser, name_span) !=
+        MINIC_GLOBAL_OBJECT_INVALID) {
         minic_parser_error(parser, "duplicate global object");
         return false;
     }
