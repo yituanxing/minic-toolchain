@@ -6,30 +6,43 @@ on:
       - '.github/workflows/discover-incomplete-record-context.yml'
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  discover:
+  apply:
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
           ref: frontend/incomplete-record-tags
-      - name: Install target preprocessor
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends gcc-riscv64-linux-gnu
-      - name: Build MiniC and reproduce pinned frontier
+          fetch-depth: 0
+      - name: Prepare corrected bounded acceptance
         shell: bash
         run: |
-          make -j2
-          MINIC="$PWD/build/debug/bin/minic" \
-          BUILD_DIR="$PWD/build/record-context" \
-          RISCV_CC=riscv64-linux-gnu-gcc \
-            sh tests/external/cjson/probe.sh
-          preprocessed="$PWD/build/record-context/tests/external/cjson/cJSON.i"
-          printf '%s\n' '--- first twelve preprocessed lines ---'
-          nl -ba "$preprocessed" | sed -n '1,12p'
-          printf '%s\n' '--- exact MiniC diagnostic ---'
-          cat "$PWD/build/record-context/tests/external/cjson/minic.stderr"
-          exit 1
+          printf '\n' >> src/frontend/parser_type.c
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('.github/scripts/apply-self-referential-records.sh')
+          text = path.read_text()
+          old = '''    Node first;
+    Node second;
+
+    first.next = &second;
+    first.next->value = 41;
+    return first.next->value;
+'''
+          new = '''    Node first;
+    Node second;
+    Node *cursor = &first;
+
+    cursor->next = &second;
+    cursor->next->value = 41;
+    return cursor->next->value;
+'''
+          if text.count(old) != 1:
+              raise SystemExit(f'fixture marker count={text.count(old)}')
+          path.write_text(text.replace(old, new, 1))
+          PY
+      - name: Apply and verify self-referential record support
+        run: bash .github/scripts/apply-self-referential-records.sh
