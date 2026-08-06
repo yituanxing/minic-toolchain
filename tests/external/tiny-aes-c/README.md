@@ -9,7 +9,7 @@ This directory tracks the first independently maintained upstream project used t
 - Repository / 仓库：`kokke/tiny-AES-c`
 - Commit / 提交：`23856752fbd139da0b8ca6e471a13d5bcc99a08d`
 - License / 许可证：Unlicense (`unlicense.txt`)
-- Accepted configuration / 当前验收配置：AES-128 ECB (`ECB=1`, `CBC=0`, `CTR=0`)
+- Accepted configuration / 已验收配置：AES-128 ECB (`ECB=1`, `CBC=0`, `CTR=0`)
 
 Pinned Git blob identities / 固定 Git Blob：
 
@@ -34,66 +34,76 @@ The implementation is intentionally tiny and concentrated. `aes.c` is the princi
 5. Production support must have permanent focused positive and negative coverage / 生产能力必须具有永久聚焦正负门禁。
 6. Completion requires a GCC/MiniC differential AES-128 ECB test-vector execution without MiniC-specific upstream patches / 完成要求在无 MiniC 专用上游补丁的前提下通过 GCC/MiniC AES-128 ECB 标准向量执行差分。
 
-## Current accepted state / 当前已验收状态
+## Completed compiler path / 已完成编译路径
 
-MiniC now compiles the complete pinned AES-128 ECB core with a real target byte type:
+MiniC uses a real target byte type:
 
-MiniC 现在使用真实目标字节类型完整编译固定 AES-128 ECB 核心：
+MiniC 使用真实目标字节类型：
 
 ```c
 typedef unsigned char uint8_t;
 ```
 
-The accepted compiler path is:
+The accepted path is:
 
-已验收编译路径为：
+已验收路径为：
 
 ```text
-pinned upstream aes.c + unchanged aes.h
+pinned upstream aes.c + unchanged aes.h + independent vector harness
 -> external RISC-V GCC preprocessing
 -> MiniC compilation to RV64 assembly
--> external RISC-V assembly
--> non-empty target object
+-> external RISC-V assembly and static linking
+-> QEMU RISC-V execution
+-> comparison with a full GCC reference executable
 ```
 
-The implementation includes native `unsigned char` identity, CHAR/INT ranks, integer promotion to `int`, one-byte scalar/array/record/global/local layout, `lbu`/`sb`, 8-bit conversion and truncation, `.byte` lookup-table emission, and one-byte pointer/subscript scaling.
+The implementation includes native `unsigned char`, CHAR/INT ranks, integer promotion, one-byte scalar/array/record/global/local layout, `lbu`/`sb`, 8-bit conversion and truncation, `.byte` lookup-table emission, one-byte pointer/subscript scaling, safe first-level const-pointer qualification conversion, and canonical decimal/hexadecimal expression constants.
 
-实现已经包含原生 `unsigned char` 身份、CHAR/INT 等级、提升到 `int` 的整数提升、一字节标量/数组/记录/全局/局部布局、`lbu`/`sb`、8 位转换和截断、`.byte` 查找表发射，以及一字节指针/下标缩放。
+实现包含原生 `unsigned char`、CHAR/INT 等级、整数提升、一字节标量/数组/记录/全局/局部布局、`lbu`/`sb`、8 位转换和截断、`.byte` 查找表发射、一字节指针/下标缩放、安全一级 const 指针资格转换，以及统一的十进制/十六进制表达式常量解析。
 
-Clean-checkout run #532 passed:
+## Execution acceptance / 执行验收
 
-干净检出第 532 次运行通过：
+The independent libc-free harness uses the standard AES-128 key, plaintext, and ciphertext also used by the pinned upstream tests. It verifies:
+
+独立无 libc harness 使用固定上游测试采用的标准 AES-128 密钥、明文和密文，并验证：
+
+- all 176 expanded round-key bytes / 全部 176 字节展开轮密钥；
+- initial AddRoundKey and first-round SubBytes, ShiftRows, MixColumns, and AddRoundKey states / 初始 AddRoundKey 与第一轮各阶段状态；
+- the final standard AES-128 ECB ciphertext / 最终标准 AES-128 ECB 密文；
+- decryption back to the original plaintext / 解密恢复原始明文。
+
+GitHub Actions clean-checkout run #556 passed:
+
+GitHub Actions 干净检出第 556 次运行通过：
 
 - Debug, Release `-Werror`, and ASan/UBSan host gates / 三套宿主门禁；
-- focused Token, Lexer, Type, Layout, byte-access, and plain-char boundary gates / Token、Lexer、Type、Layout、字节访问和 plain-char 边界门禁；
+- focused pointer-qualification and hexadecimal-expression positive/negative gates / 指针资格转换和十六进制表达式聚焦正负门禁；
 - focused RV64/QEMU runtime gates / 聚焦 RV64/QEMU 门禁；
-- thirty-six GCC/MiniC differential executable programs / 36 个 GCC/MiniC 可执行差分程序；
-- `unsigned_char_layout` exits 127 in both lanes with empty output / `unsigned_char_layout` 两条流水线均退出 127 且无输出；
-- MiniC-generated tiny-AES assembly produces an 18,504-byte RV64 object / MiniC tiny-AES 汇编生成 18,504 字节 RV64 目标文件；
-- `AES_ECB_encrypt` and `AES_ECB_decrypt` symbols are present when target `nm` is available / 可用目标 `nm` 时确认两个 ECB 入口符号存在。
+- thirty-seven GCC/MiniC differential executable programs / 37 个 GCC/MiniC 可执行差分程序；
+- `hexadecimal_expression`: exit 77 in both lanes / `hexadecimal_expression` 两条流水线均退出 77；
+- GCC and MiniC AES vector executables: exit 0, empty stdout, empty stderr / GCC 与 MiniC AES 向量程序均退出 0，标准输出和错误均为空；
+- MiniC-generated object size: 26,016 bytes / MiniC 目标文件大小为 26,016 字节；
+- `AES_ECB_encrypt` and `AES_ECB_decrypt` symbols present / ECB 加解密入口符号存在。
 
-## Deliberate boundary / 明确边界
+## Defects exposed and generalized / 暴露并通用化修复的问题
 
-Plain `char` and signed-char semantics remain outside this capability slice. The parser accepts `unsigned char` and typedefs such as `uint8_t`; a permanent negative fixture keeps bare `char` unsupported until it receives its own complete type and target-policy decision.
+Execution exposed two compiler-wide issues rather than tiny-AES-specific source problems:
 
-plain `char` 与 signed-char 语义仍在本能力切片之外。Parser 接受 `unsigned char` 及 `uint8_t` 等 typedef；永久负例会继续拒绝 bare `char`，直到它拥有独立且完整的类型与目标策略。
+执行阶段暴露的是两项编译器通用问题，而非 tiny-AES 专用源码问题：
 
-## Remaining acceptance milestone / 剩余验收里程碑
+1. valid first-level `T * -> const T *` argument conversion was rejected; the type system now accepts qualification addition while rejecting const removal and unsafe `T ** -> const T **` conversion / 原先错误拒绝一级 `T * -> const T *` 实参转换；类型系统现允许增加限定，同时拒绝移除 const 和不安全的嵌套转换；
+2. expression hexadecimal constants used a duplicate decimal-only parser, so `0x4d` became 7292 and indexed beyond the S-box; expressions now reuse the canonical decimal/hexadecimal parser, with focused and differential coverage / 表达式十六进制常量曾走重复的十进制专用解析器，使 `0x4d` 变成 7292 并越界访问 S-box；现已统一复用正确解析器并加入永久门禁。
 
-Compilation and assembly of the complete core are accepted. The software itself is not frozen yet because the current harness only supplies the required `int main` and does not execute AES operations.
+No upstream source patch was used.
 
-完整核心的编译和汇编已经验收；但软件本身尚未冻结，因为当前 harness 只提供编译器要求的 `int main`，并未实际执行 AES 运算。
+未使用任何上游源码补丁。
 
-The final project milestone is:
+## Frozen status / 冻结状态
 
-最终项目里程碑为：
+The declared completion criteria for the pinned AES-128 ECB workload are satisfied. This project is now frozen as a permanent regression gate rather than an active syntax frontier.
 
-1. define independent AES-128 ECB key/plaintext/ciphertext vectors / 定义独立 AES-128 ECB 密钥、明文和密文向量；
-2. link the MiniC-generated core into a runnable RISC-V executable / 将 MiniC 生成的核心链接成可运行 RISC-V 程序；
-3. execute encryption and decryption under QEMU / 在 QEMU 下执行加密和解密；
-4. compare exit status, stdout, and stderr with a full GCC reference lane / 与完整 GCC 参考流水线比较退出码、标准输出和标准错误；
-5. update the permanent probe and documentation, then freeze tiny-AES / 更新永久探针和文档后冻结 tiny-AES。
+固定 AES-128 ECB 负载已满足预先声明的全部完成标准。该项目现冻结为永久回归门禁，不再是活动语法前沿。
 
-No further C syntax frontier is currently known inside the pinned AES-128 ECB core. Any failure in the execution milestone must be treated as a semantic, ABI, layout, code-generation, or harness issue and diagnosed from evidence rather than patched around in upstream source.
+Plain `char`, signed-char policy, CBC, and CTR are not required for this accepted configuration. They may be selected later only as separate language or workload milestones.
 
-固定 AES-128 ECB 核心内部目前没有已知剩余 C 语法前沿。执行里程碑中的任何失败，都必须按语义、ABI、布局、代码生成或 harness 问题基于证据排查，不得通过修改上游源码绕过。
+plain `char`、signed-char 策略、CBC 和 CTR 不属于当前已验收配置的要求；未来若需要，应作为独立语言或负载里程碑选择。
