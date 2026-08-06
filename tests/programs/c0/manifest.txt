@@ -11,6 +11,7 @@ pointer_arithmetic
 pointer_aggregate_arithmetic
 pointer_read
 pointer_write
+pointer_chain
 pointer_chain_write
 function_calls
 function_prototype
