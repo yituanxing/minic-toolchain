@@ -140,7 +140,7 @@ int main(void)
         minic_type_assignment_compatible(integer_type, void_type) ||
         !minic_type_cast_compatible(unsigned_char_type, integer_type) ||
         !minic_type_cast_compatible(integer_type, unsigned_char_type) ||
-        minic_type_cast_compatible(pointer_type, integer_type)) {
+        minic_type_cast_compatible(void_pointer_type, integer_type)) {
         return fail("integer assignment and cast conversions");
     }
     if (!minic_type_pointer_to(
