@@ -29,17 +29,17 @@ Pinned Git blob identities:
 
 ## Current frontier
 
-MiniC now passes the upstream declarations, `struct AES_ctx`, typed and `const` prototypes, multidimensional typedef arrays, static read-only lookup tables, static internal functions, `void` definitions, explicit unsigned integer identity, comma-separated unsigned declarations, the first `KeyExpansion` loop, pointer-parameter subscripting, and const-qualified local initialization.
+MiniC now passes the upstream declarations, `struct AES_ctx`, typed and `const` prototypes, multidimensional typedef arrays, static read-only lookup tables, static internal functions, `void` definitions, explicit unsigned integer identity, comma-separated unsigned declarations, the first `KeyExpansion` loop, pointer-parameter subscripting, const-qualified local initialization, and expression lookup of the static global `sbox` table.
 
-The exact pinned failure is the first expression reference to the static global lookup table in the expanded S-box macro:
+The exact pinned failure is the first unsupported bitwise XOR operator in `KeyExpansion`:
 
 ```c
-sbox[tempa[0]]
+RoundKey[...] = RoundKey[...] ^ tempa[0];
 ```
 
-The global object is already parsed and emitted in `.rodata`; the missing capability is resolving a global object name in an expression and using it as a subscript base without confusing it with a local identifier.
+The lexer currently rejects `^` before expression parsing. The next short integration must add a distinct token, C precedence below equality and above no currently supported logical operators, integer common-type semantics, and RV64 `xor` lowering with focused signed/unsigned differential coverage.
 
-Const-local support is protected by focused initialization, assignment-rejection, and increment-rejection gates plus twenty-five GCC/MiniC differential programs. The new `const_local` program initializes and reads a const-qualified local across a function call; both lanes exit with status 32.
+Global-object expression support is protected by focused lookup, local-shadowing, read-only-assignment, and bare-array gates plus twenty-six GCC/MiniC differential programs. The new `global_array_read` program reads a static table in one function while a same-named local shadows it in another; both lanes exit with status 15.
 
 ## Remaining acceptance debt
 
