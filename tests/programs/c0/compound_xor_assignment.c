@@ -6,15 +6,16 @@ static int pick(int *calls)
 
 int main(void)
 {
-    int values[2];
+    int value;
+    int *pointer;
     int calls;
     unsigned mask;
 
-    values[0] = 85;
-    values[1] = 0;
+    value = 85;
+    pointer = &value;
     calls = 0;
     mask = 240;
-    values[pick(&calls)] ^= 15;
+    pointer[pick(&calls)] ^= 15;
     mask ^= 255;
-    return values[0] + calls * 100 + mask;
+    return value + calls * 100 + mask;
 }
