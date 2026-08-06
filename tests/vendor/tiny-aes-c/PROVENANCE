@@ -1,0 +1,21 @@
+# tiny-AES-c provenance / tiny-AES-c 来源记录
+
+- Upstream repository / 上游仓库: `kokke/tiny-AES-c`
+- Upstream commit / 上游提交: `23856752fbd139da0b8ca6e471a13d5bcc99a08d`
+- Imported on / 导入日期: `2026-08-06`
+- License / 许可证: Unlicense (`upstream/unlicense.txt`)
+- Accepted workload / 已验收负载: AES-128 ECB (`ECB=1`, `CBC=0`, `CTR=0`)
+
+| Vendored file / Vendor 文件 | Upstream Git blob SHA-1 / 上游 Git Blob |
+|---|---|
+| `upstream/aes.c` | `4481f7b24ec964019d38669842913fd571d28ba3` |
+| `upstream/aes.h` | `b29b6683549632676ec11c06eb86efd02964db57` |
+| `upstream/unlicense.txt` | `68a49daad8ff7e35068f2b7a97d643aab440eaec` |
+
+The three files under `upstream/` are byte-for-byte copies of the named upstream Git blobs. They are not formatted, patched, or otherwise modified for MiniC. The permanent external-project gate verifies these identities before preprocessing and execution.
+
+`upstream/` 下三份文件是对应上游 Git Blob 的逐字节副本，不为 MiniC 格式化、打补丁或进行其他修改。永久外部项目门禁会在预处理和执行前重新校验这些身份。
+
+To update this dependency, select a new upstream commit, review its license and workload impact, replace all three files in one bounded pull request, update this table, and rerun the complete GCC/MiniC differential gate.
+
+更新该依赖时，应选择新的上游提交，审查许可证与负载影响，在一条范围受限的 PR 中同时替换三份文件并更新本表，然后重新运行完整 GCC/MiniC 差分门禁。

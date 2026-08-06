@@ -8,8 +8,10 @@ This directory tracks the first independently maintained upstream project used t
 
 - Repository / 仓库：`kokke/tiny-AES-c`
 - Commit / 提交：`23856752fbd139da0b8ca6e471a13d5bcc99a08d`
-- License / 许可证：Unlicense (`unlicense.txt`)
+- License / 许可证：Unlicense (`tests/vendor/tiny-aes-c/upstream/unlicense.txt`)
 - Accepted configuration / 已验收配置：AES-128 ECB (`ECB=1`, `CBC=0`, `CTR=0`)
+- Vendored source / 入库源码：`tests/vendor/tiny-aes-c/upstream/`
+- Provenance record / 来源记录：`tests/vendor/tiny-aes-c/PROVENANCE`
 
 Pinned Git blob identities / 固定 Git Blob：
 
@@ -19,6 +21,10 @@ Pinned Git blob identities / 固定 Git Blob：
 | `aes.h` | `b29b6683549632676ec11c06eb86efd02964db57` |
 | `unlicense.txt` | `68a49daad8ff7e35068f2b7a97d643aab440eaec` |
 
+The vendored files have exactly these Git Blob identities. The regression gate does not download source at runtime.
+
+入库文件保持上述精确 Git Blob 身份；回归门禁运行时不再下载源码。
+
 ## Project shape / 项目形态
 
 The implementation is intentionally tiny and concentrated. `aes.c` is the principal cryptographic implementation file, `aes.h` is its public interface, and the remaining C material in the upstream repository is primarily tests or examples. Progress through `aes.c` therefore represents progress through essentially the complete AES core rather than merely the first of many independent implementation files.
@@ -27,12 +33,13 @@ The implementation is intentionally tiny and concentrated. `aes.c` is the princi
 
 ## Rules / 规则
 
-1. Downloaded upstream files are not edited for MiniC / 不为 MiniC 修改下载的上游文件。
+1. Vendored upstream files are not edited for MiniC / 不为 MiniC 修改入库的上游文件。
 2. The RISC-V GCC preprocessor remains outside the compiler-under-test boundary / RISC-V GCC 预处理器仍在被测编译器边界之外。
 3. Target-environment shim headers may define standard integer names, but accepted semantics must match the real target width / 目标环境 shim 可以定义标准整数名称，但验收语义必须符合真实目标宽度。
-4. The probe verifies every upstream Git blob before preprocessing / 探针在预处理前校验每个上游 Git Blob。
+4. The probe verifies every vendored Git Blob before preprocessing / 探针在预处理前校验每个入库 Git Blob。
 5. Production support must have permanent focused positive and negative coverage / 生产能力必须具有永久聚焦正负门禁。
 6. Completion requires a GCC/MiniC differential AES-128 ECB test-vector execution without MiniC-specific upstream patches / 完成要求在无 MiniC 专用上游补丁的前提下通过 GCC/MiniC AES-128 ECB 标准向量执行差分。
+7. Updating the vendored dependency requires one bounded review that updates source, license, provenance, blob identities, and the complete regression evidence together / 更新 Vendor 依赖必须在一条范围受限的审查中同时更新源码、许可证、来源、Blob 身份和完整回归证据。
 
 ## Completed compiler path / 已完成编译路径
 
@@ -49,7 +56,8 @@ The accepted path is:
 已验收路径为：
 
 ```text
-pinned upstream aes.c + unchanged aes.h + independent vector harness
+pinned vendored aes.c + unchanged aes.h + independent vector harness
+-> vendored Git Blob identity verification
 -> external RISC-V GCC preprocessing
 -> MiniC compilation to RV64 assembly
 -> external RISC-V assembly and static linking
@@ -100,9 +108,9 @@ No upstream source patch was used.
 
 ## Frozen status / 冻结状态
 
-The declared completion criteria for the pinned AES-128 ECB workload are satisfied. This project is now frozen as a permanent regression gate rather than an active syntax frontier.
+The declared completion criteria for the pinned AES-128 ECB workload are satisfied. This project is now frozen as a permanent offline regression gate rather than an active syntax frontier.
 
-固定 AES-128 ECB 负载已满足预先声明的全部完成标准。该项目现冻结为永久回归门禁，不再是活动语法前沿。
+固定 AES-128 ECB 负载已满足预先声明的全部完成标准。该项目现冻结为永久离线回归门禁，不再是活动语法前沿。
 
 Plain `char`, signed-char policy, CBC, and CTR are not required for this accepted configuration. They may be selected later only as separate language or workload milestones.
 

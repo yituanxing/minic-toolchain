@@ -41,13 +41,13 @@ C 版本现在已经具备：
 
 ## 第一个外部真实项目——已完成
 
-第一个固定上游驱动项目是 `kokke/tiny-AES-c`，验收配置为 AES-128 ECB。CI 会按固定 Git Blob 校验上游源码，不允许为 MiniC 修改上游文件。
+第一个固定上游驱动项目是 `kokke/tiny-AES-c`，验收配置为 AES-128 ECB。上游原始 `aes.c`、`aes.h` 和 Unlicense 文件存放在 `tests/vendor/tiny-aes-c/upstream/`；`tests/vendor/tiny-aes-c/PROVENANCE` 记录固定上游提交和 Git Blob 身份。三份文件不为 MiniC 修改，永久门禁会在不联网下载源码的情况下重新校验其身份。
 
 这个项目虽然叫 tiny-AES-c，但算法实现有意高度集中：主要实现文件就是 `aes.c`，`aes.h` 是公开接口，其他 C 内容主要是测试和示例。MiniC 已经在真实 `typedef unsigned char uint8_t` 下完整编译固定版本的 `aes.c`，生成 RV64 汇编，并链接成静态 RISC-V 可执行文件。
 
 永久独立 harness 会验证全部 176 字节 AES-128 展开轮密钥、第一轮中间状态、标准 AES-128 ECB 密文，以及解密后恢复原始明文。GitHub Actions 干净检出第 556 次运行在 QEMU 下同时执行完整 GCC 参考程序和 MiniC 程序；两条流水线均退出 0，标准输出和标准错误均为空。MiniC 生成的目标文件为 26,016 字节，37 个通用差分程序也全部通过。
 
-这已经满足首个外部项目预先声明的完成标准。AES-128 ECB 配置现已冻结为永久回归门禁。CBC/CTR 不属于本里程碑要求，是否扩展应作为未来独立负载选择，而不是继续拖长当前项目。
+这已经满足首个外部项目预先声明的完成标准。AES-128 ECB 配置现已冻结为永久离线回归门禁。CBC/CTR 不属于本里程碑要求，是否扩展应作为未来独立负载选择，而不是继续拖长当前项目。
 
 ## 构建与验证
 
@@ -66,7 +66,7 @@ make check-runtime \
   REQUIRE_RISCV_RUNTIME=1
 ```
 
-GitHub Actions 会在 Ubuntu 24.04 干净虚拟机中运行完整门禁，包括固定 tiny-AES AES-128 ECB 双轨执行门禁。
+GitHub Actions 会在 Ubuntu 24.04 干净虚拟机中运行完整门禁，包括离线固定 tiny-AES AES-128 ECB 双轨执行门禁。
 
 ## 项目规则
 

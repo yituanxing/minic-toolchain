@@ -41,13 +41,13 @@ Thirty-eight executable C programs are permanently compared between a full GCC r
 
 ## First external project — completed
 
-The first pinned upstream driver is `kokke/tiny-AES-c`, AES-128 ECB configuration. Upstream source files are downloaded at fixed Git blob identities and are not patched for MiniC.
+The first pinned upstream driver is `kokke/tiny-AES-c`, AES-128 ECB configuration. The exact upstream `aes.c`, `aes.h`, and Unlicense files are stored under `tests/vendor/tiny-aes-c/upstream/`; `tests/vendor/tiny-aes-c/PROVENANCE` records the upstream commit and Git Blob identities. The files are not patched for MiniC, and the permanent gate verifies their identities without downloading source at runtime.
 
 Despite the repository name, the cryptographic implementation is intentionally concentrated in one principal C source file, `aes.c`; `aes.h` is its public interface and the other C material is test/example code. MiniC compiles the complete pinned `aes.c` core with a real `typedef unsigned char uint8_t`, emits RV64 assembly, and links it into a static RISC-V executable.
 
 The permanent independent harness verifies all 176 AES-128 expanded round-key bytes, first-round intermediate states, the standard AES-128 ECB ciphertext, and decryption back to the original plaintext. GitHub Actions clean-checkout run #556 executed both a full GCC reference executable and the MiniC executable under QEMU; both exited 0 with empty stdout and stderr. The MiniC-generated object was 26,016 bytes. All 37 general differential programs also passed.
 
-This satisfies the declared completion criteria for the first external project. The AES-128 ECB configuration is now frozen as a permanent regression gate. CBC/CTR expansion is not required for this milestone and would be a separate future workload choice.
+This satisfies the declared completion criteria for the first external project. The AES-128 ECB configuration is frozen as a permanent offline regression gate. CBC/CTR expansion is not required for this milestone and would be a separate future workload choice.
 
 ## Build and validation
 
@@ -66,7 +66,7 @@ make check-runtime \
   REQUIRE_RISCV_RUNTIME=1
 ```
 
-GitHub Actions runs the complete clean-checkout gate on Ubuntu 24.04, including the pinned tiny-AES AES-128 ECB differential execution gate.
+GitHub Actions runs the complete clean-checkout gate on Ubuntu 24.04, including the offline pinned tiny-AES AES-128 ECB differential execution gate.
 
 ## Project rules
 
