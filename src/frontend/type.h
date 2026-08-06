@@ -45,7 +45,6 @@ typedef struct MinicType {
 } MinicType;
 
 MinicType minic_type_void(void);
-MinicType minic_type_char(void);
 MinicType minic_type_unsigned_char(void);
 MinicType minic_type_int(void);
 MinicType minic_type_unsigned_int(void);
