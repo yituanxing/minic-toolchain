@@ -34,49 +34,6 @@ static bool parse_integer(
            minic_parser_advance(parser);
 }
 
-static bool parse_subscript_expression(
-    MinicParser *parser,
-    MinicExpressionId base_id,
-    MinicType element_type,
-    MinicSourceSpan base_span,
-    MinicExpressionId *expression_id)
-{
-    MinicExpression subscript;
-    MinicExpressionId index_id;
-    const MinicExpression *index_expression;
-    MinicSourcePosition subscript_end;
-
-    if (parser->current.kind != MINIC_TOKEN_LBRACKET ||
-        !minic_parser_advance(parser) ||
-        !minic_parser_parse_expression(parser, &index_id, 0U)) {
-        return false;
-    }
-    index_expression = minic_c0_program_expression(parser->program, index_id);
-    if (index_expression == NULL ||
-        !minic_type_is_integer(index_expression->type)) {
-        minic_parser_error(parser, "array index must have integer type");
-        return false;
-    }
-    if (parser->current.kind != MINIC_TOKEN_RBRACKET) {
-        minic_parser_error(parser, "expected ']'");
-        return false;
-    }
-    subscript_end = parser->current.span.end;
-    if (!minic_parser_advance(parser)) {
-        return false;
-    }
-
-    (void)memset(&subscript, 0, sizeof(subscript));
-    subscript.kind = MINIC_EXPRESSION_SUBSCRIPT;
-    subscript.span.begin = base_span.begin;
-    subscript.span.end = subscript_end;
-    subscript.type = element_type;
-    subscript.value_category = MINIC_VALUE_LVALUE;
-    subscript.value.subscript.base = base_id;
-    subscript.value.subscript.index = index_id;
-    return minic_parser_add_expression(parser, &subscript, expression_id);
-}
-
 static bool parse_local_reference(
     MinicParser *parser,
     MinicSourceSpan name_span,
@@ -102,73 +59,11 @@ static bool parse_local_reference(
     if (!minic_parser_add_expression(parser, &base_expression, &base_id)) {
         return false;
     }
-
-    if (parser->current.kind == MINIC_TOKEN_ARROW) {
-        MinicExpressionId member_id;
-        const MinicExpression *member_expression;
-
-        if (local->element_count > 1U) {
-            minic_parser_error(parser, "pointer member access requires a scalar pointer");
-            return false;
-        }
-        if (!minic_parser_parse_pointer_member(
-                parser,
-                base_id,
-                &member_id)) {
-            return false;
-        }
-        member_expression = minic_c0_program_expression(
-            parser->program,
-            member_id);
-        if (member_expression == NULL) {
-            minic_parser_error(parser, "invalid pointer member expression");
-            return false;
-        }
-        if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
-            MinicType element_type;
-
-            if (!minic_type_pointee(
-                    member_expression->type,
-                    &element_type)) {
-                minic_parser_error(
-                    parser,
-                    "subscript base must be an array or pointer");
-                return false;
-            }
-            return parse_subscript_expression(
-                parser,
-                member_id,
-                element_type,
-                member_expression->span,
-                expression_id);
-        }
-        *expression_id = member_id;
-        return true;
-    }
-
-    if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
-        MinicType element_type;
-
-        if (local->element_count > 1U) {
-            element_type = local->type;
-        } else if (!minic_type_pointee(local->type, &element_type)) {
-            minic_parser_error(parser, "subscript base must be an array or pointer");
-            return false;
-        }
-        return parse_subscript_expression(
-            parser,
-            base_id,
-            element_type,
-            name_span,
-            expression_id);
-    }
-
-    if (local->element_count > 1U) {
-        minic_parser_error(parser, "array object requires a subscript");
-        return false;
-    }
-    *expression_id = base_id;
-    return true;
+    return minic_parser_parse_postfix(
+        parser,
+        base_id,
+        local->element_count > 1U,
+        expression_id);
 }
 
 static bool parse_global_reference(
@@ -178,20 +73,12 @@ static bool parse_global_reference(
     MinicExpressionId *expression_id)
 {
     const MinicGlobalObject *object;
-    const MinicArrayType *array_type;
     MinicExpression base_expression;
     MinicExpressionId base_id;
 
     object = minic_c0_program_global_object(parser->program, global_object_id);
     if (object == NULL || !minic_type_is_array(object->type)) {
         minic_parser_error(parser, "invalid global object reference");
-        return false;
-    }
-    array_type = minic_c0_program_array_type(
-        parser->program,
-        object->type.array_type_id);
-    if (array_type == NULL) {
-        minic_parser_error(parser, "invalid global array type");
         return false;
     }
 
@@ -204,16 +91,14 @@ static bool parse_global_reference(
     if (!minic_parser_add_expression(parser, &base_expression, &base_id)) {
         return false;
     }
-
     if (parser->current.kind != MINIC_TOKEN_LBRACKET) {
         minic_parser_error(parser, "global array object requires a subscript");
         return false;
     }
-    return parse_subscript_expression(
+    return minic_parser_parse_postfix(
         parser,
         base_id,
-        array_type->element_type,
-        name_span,
+        true,
         expression_id);
 }
 
@@ -222,13 +107,19 @@ static bool parse_primary(
     MinicExpressionId *expression_id)
 {
     MinicExpression expression;
+    MinicExpressionId primary_id;
     MinicSourceSpan name_span;
     MinicLocalId local_id;
     MinicFunctionId function_id;
     MinicGlobalObjectId global_object_id;
 
     if (parser->current.kind == MINIC_TOKEN_INTEGER_CONSTANT) {
-        return parse_integer(parser, expression_id);
+        return parse_integer(parser, &primary_id) &&
+               minic_parser_parse_postfix(
+                   parser,
+                   primary_id,
+                   false,
+                   expression_id);
     }
     if (parser->current.kind == MINIC_TOKEN_IDENTIFIER) {
         name_span = parser->current.span;
@@ -325,7 +216,17 @@ static bool parse_primary(
                 return false;
             }
             expression.span.end = call_end;
-            return minic_parser_add_expression(parser, &expression, expression_id);
+            if (!minic_parser_add_expression(
+                    parser,
+                    &expression,
+                    &primary_id)) {
+                return false;
+            }
+            return minic_parser_parse_postfix(
+                parser,
+                primary_id,
+                false,
+                expression_id);
         }
 
         if (local_id != MINIC_LOCAL_INVALID) {
@@ -346,9 +247,16 @@ static bool parse_primary(
         return false;
     }
     if (parser->current.kind == MINIC_TOKEN_LPAREN) {
-        return minic_parser_advance(parser) &&
-               minic_parser_parse_expression(parser, expression_id, 0U) &&
-               minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')'");
+        if (!minic_parser_advance(parser) ||
+            !minic_parser_parse_expression(parser, &primary_id, 0U) ||
+            !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')'")) {
+            return false;
+        }
+        return minic_parser_parse_postfix(
+            parser,
+            primary_id,
+            false,
+            expression_id);
     }
     minic_parser_error(parser, "expected expression");
     return false;
