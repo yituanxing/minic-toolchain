@@ -35,6 +35,8 @@ const char *minic_token_kind_name(MinicTokenKind kind)
         return "while";
     case MINIC_TOKEN_KW_FOR:
         return "for";
+    case MINIC_TOKEN_KW_BREAK:
+        return "break";
     case MINIC_TOKEN_LPAREN:
         return "(";
     case MINIC_TOKEN_RPAREN:

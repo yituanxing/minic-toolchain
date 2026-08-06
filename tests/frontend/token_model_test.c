@@ -41,6 +41,7 @@ int main(void)
         expect_name(MINIC_TOKEN_KW_STRUCT, "struct") != 0 ||
         expect_name(MINIC_TOKEN_KW_CONST, "const") != 0 ||
         expect_name(MINIC_TOKEN_KW_RETURN, "return") != 0 ||
+        expect_name(MINIC_TOKEN_KW_BREAK, "break") != 0 ||
         expect_name(MINIC_TOKEN_ARROW, "->") != 0 ||
         expect_name(MINIC_TOKEN_AMPERSAND, "&") != 0 ||
         expect_name(MINIC_TOKEN_CARET, "^") != 0 ||

@@ -29,19 +29,21 @@ Pinned Git blob identities:
 
 ## Current frontier
 
-MiniC now passes the upstream declarations, `struct AES_ctx`, typed and `const` prototypes, multidimensional typedef arrays, static read-only lookup tables, static internal functions, `void` definitions, explicit unsigned integer identity, comma-separated unsigned declarations, the first `KeyExpansion` loop, pointer-parameter subscripting, const-qualified local initialization, expression lookup of the static global `sbox` table, bitwise XOR, typedef-backed record fields, RV64 record layout, pointer member access in `AES_init_ctx`, the standalone `KeyExpansion(ctx->RoundKey, key);` expression statement, the repeatable postfix chain `(*state)[i][j]`, compound XOR assignment in `AddRoundKey`, and the complete integer bit expression in `xtime`.
+MiniC now passes the upstream declarations, `struct AES_ctx`, typed and `const` prototypes, multidimensional typedef arrays, static read-only lookup tables, static internal functions, `void` definitions, explicit unsigned integer identity, comma-separated unsigned declarations, the first `KeyExpansion` loop, pointer-parameter subscripting, const-qualified local initialization, expression lookup of the static global `sbox` table, bitwise XOR, typedef-backed record fields, RV64 record layout, pointer member access in `AES_init_ctx`, the standalone `KeyExpansion(ctx->RoundKey, key);` expression statement, the repeatable postfix chain `(*state)[i][j]`, compound XOR assignment in `AddRoundKey`, the complete integer bit expression in `xtime`, and the empty-condition `for` loop with `break` in `Cipher`.
 
-The integer bit-operation slice adds longest-match `<<` and `>>` tokens, shift precedence between additive and relational expressions, bitwise-AND precedence above XOR, integer-only operand checks, and RV64 `sllw`, signed `sraw`, unsigned `srlw`, and `and` lowering. Direct token and lexer tests distinguish `<`, `<<`, `<=`, `>`, `>>`, and `>=`. Focused positive and pointer-rejection fixtures protect the type and assembly behavior.
+The unbounded-loop control-flow slice adds a dedicated `break` token and statement identity, explicit parser loop-depth tracking, empty `for` conditions normalized to unconditional loops, and RV64 lowering to the innermost loop-end label. Ordinary `while` statements still require an integer condition. Loop context is preserved through nested `if` blocks, while nested loops replace the active break target with their own end label.
 
-The exact pinned failure has advanced to the empty condition in the first unbounded `for` loop in `Cipher`:
+Focused coverage verifies that two nested unbounded loops receive distinct exit labels, no condition guard is emitted for an omitted `for` condition, a `break` skips the normalized loop-tail update, and `break` is rejected outside a loop or without a terminating semicolon. A separate negative fixture prevents empty conditions from leaking into ordinary `while` statements.
+
+The exact pinned failure has advanced to the prefix decrement update in `InvCipher`:
 
 ```c
-for (round = 1; ; ++round)
+for (round = (10 - 1); ; --round)
 ```
 
-MiniC currently requires an expression between the two semicolons in its bounded `for` subset. It therefore reports `expected expression` at preprocessed line 212, column 19. Empty `for` conditions and the `break` statement used in the loop body belong to the next bounded control-flow integration; they are intentionally not included in the integer bit-operation branch.
+MiniC currently accepts only prefix increment as the normalized `for` update. It therefore reports `for update requires prefix increment` at preprocessed line 228, column 28. Prefix decrement tokenization, validation, normalization, and lowering belong to the next independent capability slice and are intentionally not included in the unbounded-loop branch.
 
-The permanent GCC/MiniC execution matrix now contains thirty-two programs. The `integer_bit_operations` program covers left shift, signed arithmetic right shift, unsigned logical right shift, and bitwise AND; both lanes exit with status 58 and produce empty output streams. Compound XOR remains protected by its single-evaluation side-effect and diagnostic gates.
+The permanent GCC/MiniC execution matrix now contains thirty-three programs. The `unbounded_for_break` program covers nested empty-condition loops, innermost-loop targeting, breaks through nested branches, and skipped loop-tail updates; both lanes exit with status 31 and produce empty output streams. The earlier integer bit-operation program continues to exit 58 in both lanes.
 
 ## Remaining acceptance debt
 

@@ -1,5 +1,14 @@
 #include "target/riscv64/codegen_internal.h"
 
+static bool minic_riscv64_emit_block_with_break_target(
+    FILE *file,
+    const MinicC0Program *program,
+    const MinicFunction *function,
+    MinicBlockId block_id,
+    size_t *label_counter,
+    bool has_break_target,
+    size_t break_target_label);
+
 static bool minic_riscv64_emit_normalize_word(
     FILE *file,
     MinicType type,
@@ -154,7 +163,9 @@ static bool minic_riscv64_emit_statement(
     const MinicC0Program *program,
     const MinicFunction *function,
     const MinicStatement *statement,
-    size_t *label_counter)
+    size_t *label_counter,
+    bool has_break_target,
+    size_t break_target_label)
 {
     if (statement == NULL) {
         return false;
@@ -190,6 +201,13 @@ static bool minic_riscv64_emit_statement(
             function,
             statement);
 
+    case MINIC_STATEMENT_BREAK:
+        return has_break_target &&
+               fprintf(
+                   file,
+                   "  j .Lwhile_end_%zu\n",
+                   break_target_label) >= 0;
+
     case MINIC_STATEMENT_IF: {
         size_t label;
 
@@ -201,12 +219,14 @@ static bool minic_riscv64_emit_statement(
                 function,
                 statement->expression) ||
             fprintf(file, "  beqz a0, .Lif_else_%zu\n", label) < 0 ||
-            !minic_riscv64_emit_block(
+            !minic_riscv64_emit_block_with_break_target(
                 file,
                 program,
                 function,
                 statement->then_block,
-                label_counter) ||
+                label_counter,
+                has_break_target,
+                break_target_label) ||
             fprintf(
                 file,
                 "  j .Lif_end_%zu\n"
@@ -216,12 +236,14 @@ static bool minic_riscv64_emit_statement(
             return false;
         }
         if (statement->else_block != MINIC_BLOCK_INVALID &&
-            !minic_riscv64_emit_block(
+            !minic_riscv64_emit_block_with_break_target(
                 file,
                 program,
                 function,
                 statement->else_block,
-                label_counter)) {
+                label_counter,
+                has_break_target,
+                break_target_label)) {
             return false;
         }
         return fprintf(file, ".Lif_end_%zu:\n", label) >= 0;
@@ -232,19 +254,26 @@ static bool minic_riscv64_emit_statement(
 
         label = *label_counter;
         *label_counter += 1U;
-        return fprintf(file, ".Lwhile_condition_%zu:\n", label) >= 0 &&
-               minic_riscv64_emit_expression(
-                   file,
-                   program,
-                   function,
-                   statement->expression) &&
-               fprintf(file, "  beqz a0, .Lwhile_end_%zu\n", label) >= 0 &&
-               minic_riscv64_emit_block(
+        if (fprintf(file, ".Lwhile_condition_%zu:\n", label) < 0) {
+            return false;
+        }
+        if (statement->expression != MINIC_EXPRESSION_INVALID &&
+            (!minic_riscv64_emit_expression(
+                 file,
+                 program,
+                 function,
+                 statement->expression) ||
+             fprintf(file, "  beqz a0, .Lwhile_end_%zu\n", label) < 0)) {
+            return false;
+        }
+        return minic_riscv64_emit_block_with_break_target(
                    file,
                    program,
                    function,
                    statement->then_block,
-                   label_counter) &&
+                   label_counter,
+                   true,
+                   label) &&
                fprintf(
                    file,
                    "  j .Lwhile_condition_%zu\n"
@@ -257,12 +286,14 @@ static bool minic_riscv64_emit_statement(
     return false;
 }
 
-bool minic_riscv64_emit_block(
+static bool minic_riscv64_emit_block_with_break_target(
     FILE *file,
     const MinicC0Program *program,
     const MinicFunction *function,
     MinicBlockId block_id,
-    size_t *label_counter)
+    size_t *label_counter,
+    bool has_break_target,
+    size_t break_target_label)
 {
     const MinicBlock *block;
     size_t index;
@@ -282,9 +313,28 @@ bool minic_riscv64_emit_block(
                 program,
                 function,
                 statement,
-                label_counter)) {
+                label_counter,
+                has_break_target,
+                break_target_label)) {
             return false;
         }
     }
     return true;
+}
+
+bool minic_riscv64_emit_block(
+    FILE *file,
+    const MinicC0Program *program,
+    const MinicFunction *function,
+    MinicBlockId block_id,
+    size_t *label_counter)
+{
+    return minic_riscv64_emit_block_with_break_target(
+        file,
+        program,
+        function,
+        block_id,
+        label_counter,
+        false,
+        0U);
 }

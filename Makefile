@@ -112,9 +112,9 @@ LAYOUT_TEST_BINARY  := $(BUILD_DIR)/tests/target/riscv64/layout-test
 
 .PHONY: all help prepare check check-fast check-token-model check-lexer \
 	check-type check-record check-type-alias check-layout check-static-functions \
-	check-unsigned-declarations check-for-loops check-pointer-subscripts \
-	check-const-locals check-global-objects check-bitwise-xor \
-	check-integer-bit-operations check-pointer-members \
+	check-unsigned-declarations check-for-loops check-unbounded-for-break \
+	check-pointer-subscripts check-const-locals check-global-objects \
+	check-bitwise-xor check-integer-bit-operations check-pointer-members \
 	check-expression-statements check-postfix-subscripts \
 	check-compound-xor-assignment check-c0-runtime check-programs-c0 \
 	check-runtime sanitize bootstrap bootstrap-compare format format-check \
@@ -136,6 +136,7 @@ help:
 		"  make check-static-functions Run internal-linkage and typed-return gates" \
 		"  make check-unsigned-declarations Run unsigned declaration-list gates" \
 		"  make check-for-loops    Run for-loop lowering and boundary gates" \
+		"  make check-unbounded-for-break Run empty-condition for and break gates" \
 		"  make check-pointer-subscripts Run pointer subscript read/write gates" \
 		"  make check-const-locals Run const local initialization and mutability gates" \
 		"  make check-global-objects Run global array lookup and shadowing gates" \
@@ -225,6 +226,12 @@ check-for-loops: $(MINIC_BINARY)
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
 	sh tests/compiler/c0/run-for-loops.sh
 
+check-unbounded-for-break: $(MINIC_BINARY)
+	MINIC="$(abspath $(MINIC_BINARY))" \
+	HOST_CC="$(CC)" \
+	BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/compiler/c0/run-unbounded-for-break.sh
+
 check-pointer-subscripts: $(MINIC_BINARY)
 	MINIC="$(abspath $(MINIC_BINARY))" \
 	HOST_CC="$(CC)" \
@@ -279,7 +286,7 @@ check-compound-xor-assignment: $(MINIC_BINARY)
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
 	sh tests/compiler/c0/run-compound-xor-assignment.sh
 
-check-fast: check-token-model check-lexer check-type check-record check-type-alias check-layout check-static-functions check-unsigned-declarations check-for-loops check-pointer-subscripts check-const-locals check-global-objects check-bitwise-xor check-integer-bit-operations check-pointer-members check-expression-statements check-postfix-subscripts check-compound-xor-assignment $(MINIC_BINARY)
+check-fast: check-token-model check-lexer check-type check-record check-type-alias check-layout check-static-functions check-unsigned-declarations check-for-loops check-unbounded-for-break check-pointer-subscripts check-const-locals check-global-objects check-bitwise-xor check-integer-bit-operations check-pointer-members check-expression-statements check-postfix-subscripts check-compound-xor-assignment $(MINIC_BINARY)
 	MINIC="$(abspath $(MINIC_BINARY))" \
 	HOST_CC="$(CC)" \
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
