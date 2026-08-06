@@ -51,6 +51,7 @@ bool minic_type_integer_common(
     MinicType right,
     MinicType *result);
 bool minic_type_assignment_compatible(MinicType target, MinicType source);
+bool minic_type_cast_compatible(MinicType target, MinicType source);
 bool minic_type_is_const(MinicType type);
 bool minic_type_is_void(MinicType type);
 bool minic_type_is_integer(MinicType type);
