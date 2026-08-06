@@ -77,10 +77,14 @@ const char *minic_token_kind_name(MinicTokenKind kind)
         return "!=";
     case MINIC_TOKEN_LESS:
         return "<";
+    case MINIC_TOKEN_LESS_LESS:
+        return "<<";
     case MINIC_TOKEN_LESS_EQUAL:
         return "<=";
     case MINIC_TOKEN_GREATER:
         return ">";
+    case MINIC_TOKEN_GREATER_GREATER:
+        return ">>";
     case MINIC_TOKEN_GREATER_EQUAL:
         return ">=";
     case MINIC_TOKEN_LBRACKET:

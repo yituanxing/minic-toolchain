@@ -29,19 +29,19 @@ Pinned Git blob identities:
 
 ## Current frontier
 
-MiniC now passes the upstream declarations, `struct AES_ctx`, typed and `const` prototypes, multidimensional typedef arrays, static read-only lookup tables, static internal functions, `void` definitions, explicit unsigned integer identity, comma-separated unsigned declarations, the first `KeyExpansion` loop, pointer-parameter subscripting, const-qualified local initialization, expression lookup of the static global `sbox` table, bitwise XOR, typedef-backed record fields, RV64 record layout, pointer member access in `AES_init_ctx`, the standalone `KeyExpansion(ctx->RoundKey, key);` expression statement, the repeatable postfix chain `(*state)[i][j]`, and compound XOR assignment in `AddRoundKey`.
+MiniC now passes the upstream declarations, `struct AES_ctx`, typed and `const` prototypes, multidimensional typedef arrays, static read-only lookup tables, static internal functions, `void` definitions, explicit unsigned integer identity, comma-separated unsigned declarations, the first `KeyExpansion` loop, pointer-parameter subscripting, const-qualified local initialization, expression lookup of the static global `sbox` table, bitwise XOR, typedef-backed record fields, RV64 record layout, pointer member access in `AES_init_ctx`, the standalone `KeyExpansion(ctx->RoundKey, key);` expression statement, the repeatable postfix chain `(*state)[i][j]`, compound XOR assignment in `AddRoundKey`, and the complete integer bit expression in `xtime`.
 
-Compound XOR assignment is represented as a dedicated read-modify-write statement. RV64 code generation evaluates the target lvalue address exactly once, saves it, loads the old value, applies the common integer conversion, evaluates the right operand, performs XOR, converts back to the target type, and stores through the saved address. A focused side-effect fixture requires exactly one function call while computing a complex subscript target.
+The integer bit-operation slice adds longest-match `<<` and `>>` tokens, shift precedence between additive and relational expressions, bitwise-AND precedence above XOR, integer-only operand checks, and RV64 `sllw`, signed `sraw`, unsigned `srlw`, and `and` lowering. Direct token and lexer tests distinguish `<`, `<<`, `<=`, `>`, `>>`, and `>=`. Focused positive and pointer-rejection fixtures protect the type and assembly behavior.
 
-The exact pinned failure has advanced to the left-shift operator in `xtime`:
+The exact pinned failure has advanced to the empty condition in the first unbounded `for` loop in `Cipher`:
 
 ```c
-return ((x<<1) ^ (((x>>7) & 1) * 0x1b));
+for (round = 1; ; ++round)
 ```
 
-The lexer currently emits two `<` tokens. Binary parsing consumes the first as a comparison and reaches the second while expecting its right operand, reporting `expected expression` at preprocessed line 137, column 14. The next integration must add shift tokens and precedence, integer-only type rules, and RV64 word-shift lowering. The same expression also exposes right shift and bitwise AND immediately afterward, so those operations should be implemented and validated as one bounded integer-bit-operations slice.
+MiniC currently requires an expression between the two semicolons in its bounded `for` subset. It therefore reports `expected expression` at preprocessed line 212, column 19. Empty `for` conditions and the `break` statement used in the loop body belong to the next bounded control-flow integration; they are intentionally not included in the integer bit-operation branch.
 
-Compound XOR support is protected by longest-match token tests, integer and const diagnostics, an assembly gate, a single-evaluation side-effect gate, and thirty-one GCC/MiniC differential programs. The `compound_xor_assignment` program covers signed and unsigned targets and verifies that a function call used to compute the target subscript executes once; GCC and MiniC both exit with status 205 and produce empty output streams.
+The permanent GCC/MiniC execution matrix now contains thirty-two programs. The `integer_bit_operations` program covers left shift, signed arithmetic right shift, unsigned logical right shift, and bitwise AND; both lanes exit with status 58 and produce empty output streams. Compound XOR remains protected by its single-evaluation side-effect and diagnostic gates.
 
 ## Remaining acceptance debt
 

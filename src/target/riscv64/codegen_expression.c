@@ -537,6 +537,31 @@ bool minic_riscv64_emit_expression(
                        file,
                        expression->type,
                        "a0");
+        case MINIC_BINARY_SHIFT_LEFT:
+            return has_integer_common_type &&
+                   fprintf(file, "  sllw a0, t0, a0\n") >= 0 &&
+                   minic_riscv64_emit_normalize_integer(
+                       file,
+                       expression->type,
+                       "a0");
+        case MINIC_BINARY_SHIFT_RIGHT:
+            return has_integer_common_type &&
+                   fprintf(
+                       file,
+                       minic_type_is_unsigned_integer(left->type)
+                           ? "  srlw a0, t0, a0\n"
+                           : "  sraw a0, t0, a0\n") >= 0 &&
+                   minic_riscv64_emit_normalize_integer(
+                       file,
+                       expression->type,
+                       "a0");
+        case MINIC_BINARY_BITWISE_AND:
+            return has_integer_common_type &&
+                   fprintf(file, "  and a0, t0, a0\n") >= 0 &&
+                   minic_riscv64_emit_normalize_integer(
+                       file,
+                       expression->type,
+                       "a0");
         case MINIC_BINARY_BITWISE_XOR:
             return has_integer_common_type &&
                    fprintf(file, "  xor a0, t0, a0\n") >= 0 &&

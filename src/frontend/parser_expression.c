@@ -348,17 +348,22 @@ static unsigned int binary_precedence(MinicTokenKind kind)
     case MINIC_TOKEN_STAR:
     case MINIC_TOKEN_SLASH:
     case MINIC_TOKEN_PERCENT:
-        return 50U;
+        return 70U;
     case MINIC_TOKEN_PLUS:
     case MINIC_TOKEN_MINUS:
-        return 40U;
+        return 60U;
+    case MINIC_TOKEN_LESS_LESS:
+    case MINIC_TOKEN_GREATER_GREATER:
+        return 50U;
     case MINIC_TOKEN_LESS:
     case MINIC_TOKEN_LESS_EQUAL:
     case MINIC_TOKEN_GREATER:
     case MINIC_TOKEN_GREATER_EQUAL:
-        return 30U;
+        return 40U;
     case MINIC_TOKEN_EQUAL_EQUAL:
     case MINIC_TOKEN_BANG_EQUAL:
+        return 30U;
+    case MINIC_TOKEN_AMPERSAND:
         return 20U;
     case MINIC_TOKEN_CARET:
         return 10U;
@@ -375,6 +380,9 @@ static MinicBinaryOperator binary_operator(MinicTokenKind kind)
     case MINIC_TOKEN_STAR: return MINIC_BINARY_MULTIPLY;
     case MINIC_TOKEN_SLASH: return MINIC_BINARY_DIVIDE;
     case MINIC_TOKEN_PERCENT: return MINIC_BINARY_REMAINDER;
+    case MINIC_TOKEN_LESS_LESS: return MINIC_BINARY_SHIFT_LEFT;
+    case MINIC_TOKEN_GREATER_GREATER: return MINIC_BINARY_SHIFT_RIGHT;
+    case MINIC_TOKEN_AMPERSAND: return MINIC_BINARY_BITWISE_AND;
     case MINIC_TOKEN_CARET: return MINIC_BINARY_BITWISE_XOR;
     case MINIC_TOKEN_EQUAL_EQUAL: return MINIC_BINARY_EQUAL;
     case MINIC_TOKEN_BANG_EQUAL: return MINIC_BINARY_NOT_EQUAL;
@@ -396,6 +404,12 @@ static bool binary_is_comparison(MinicTokenKind kind)
            kind == MINIC_TOKEN_GREATER_EQUAL;
 }
 
+static bool binary_is_shift(MinicTokenKind kind)
+{
+    return kind == MINIC_TOKEN_LESS_LESS ||
+           kind == MINIC_TOKEN_GREATER_GREATER;
+}
+
 static bool binary_result_type(
     MinicTokenKind kind,
     MinicType left,
@@ -409,6 +423,9 @@ static bool binary_result_type(
         if (binary_is_comparison(kind)) {
             *result = minic_type_int();
             return true;
+        }
+        if (binary_is_shift(kind)) {
+            return minic_type_integer_common(left, left, result);
         }
         return minic_type_integer_common(left, right, result);
     }

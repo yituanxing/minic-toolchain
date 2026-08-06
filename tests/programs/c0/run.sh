@@ -144,3 +144,4 @@ run_program pointer_member
 run_program expression_statement
 run_program postfix_subscript
 run_program compound_xor_assignment
+run_program integer_bit_operations
