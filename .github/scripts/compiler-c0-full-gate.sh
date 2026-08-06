@@ -6,6 +6,7 @@ cd "$root"
 
 log_dir="$root/build/ci-logs"
 apt_cache=${APT_CACHE_DIR:-"$HOME/.cache/minic-apt/archives"}
+package_manifest="$root/tools/ci/ubuntu-24.04-packages.txt"
 cache_hit=${RV64_CACHE_HIT:-false}
 cpu_count=$(nproc)
 
@@ -43,7 +44,7 @@ wait_phase() {
         if wait "${pids[$index]}"; then
             elapsed=$(( $(date +%s) - starts[$index] ))
             printf 'PASS ci/%s elapsed=%ss\n' "$name" "$elapsed"
-            if ! grep -E '^(PASS|SKIP) ' "$log"; then
+            if ! grep -E '^(PASS|SKIP|PROFILE|TOOL|PACKAGE) ' "$log"; then
                 tail -n 20 "$log"
             fi
         else
@@ -62,33 +63,47 @@ wait_phase() {
 }
 
 install_rv64_tools() {
-    local packages=()
+    local cached_packages=()
+    local requested_packages=()
+    local package
+
+    while IFS= read -r package || [[ -n "$package" ]]; do
+        case "$package" in
+        ''|'#'*)
+            continue
+            ;;
+        esac
+        requested_packages+=("$package")
+    done <"$package_manifest"
+
+    if (( ${#requested_packages[@]} == 0 )); then
+        printf '%s\n' 'RISC-V package manifest is empty' >&2
+        return 1
+    fi
 
     mkdir -p "$apt_cache/partial"
     if [[ "$cache_hit" == true ]]; then
         while IFS= read -r -d '' package; do
-            packages+=("$package")
+            cached_packages+=("$package")
         done < <(find "$apt_cache" -maxdepth 1 -type f -name '*.deb' -print0 | sort -z)
     fi
 
-    if (( ${#packages[@]} > 0 )); then
-        printf 'Restoring %d cached RISC-V packages\n' "${#packages[@]}"
-        sudo apt-get install -y --no-install-recommends "${packages[@]}"
+    if (( ${#cached_packages[@]} > 0 )); then
+        printf 'Restoring %d cached RISC-V packages\n' "${#cached_packages[@]}"
+        sudo apt-get install -y --no-install-recommends "${cached_packages[@]}"
     else
-        printf 'Building the RISC-V package cache\n'
+        printf 'Building the RISC-V package cache from %d requested packages\n' \
+            "${#requested_packages[@]}"
         sudo apt-get update
         sudo apt-get \
             -o Dir::Cache::archives="$apt_cache" \
             -o APT::Keep-Downloaded-Packages=true \
             install -y --no-install-recommends \
-                gcc-riscv64-linux-gnu \
-                libc6-dev-riscv64-cross \
-                qemu-user
+            "${requested_packages[@]}"
     fi
 
     sudo chown -R "$USER:$USER" "$(dirname "$apt_cache")"
-    riscv64-linux-gnu-gcc --version | sed -n '1p'
-    qemu-riscv64 --version | sed -n '1p'
+    sh tools/ci/verify-validation-tools.sh
 }
 
 source_inventory() {
