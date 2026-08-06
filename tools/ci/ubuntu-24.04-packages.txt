@@ -1,0 +1,5 @@
+# One Ubuntu 24.04 package name per line.
+# 每行一个 Ubuntu 24.04 软件包名称。
+gcc-riscv64-linux-gnu
+libc6-dev-riscv64-cross
+qemu-user
