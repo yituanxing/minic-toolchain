@@ -1,0 +1,49 @@
+name: Apply self-referential records v2
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/apply-self-referential-records-v2.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: frontend/incomplete-record-tags
+          fetch-depth: 0
+      - name: Prepare bounded acceptance
+        shell: bash
+        run: |
+          printf '\n' >> src/frontend/parser_type.c
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('.github/scripts/apply-self-referential-records.sh')
+          text = path.read_text()
+          old = '''    Node first;
+    Node second;
+
+    first.next = &second;
+    first.next->value = 41;
+    return first.next->value;
+'''
+          new = '''    Node first;
+    Node second;
+    Node *cursor = &first;
+
+    cursor->next = &second;
+    cursor->next->value = 41;
+    return cursor->next->value;
+'''
+          if text.count(old) != 1:
+              raise SystemExit(f'fixture marker count={text.count(old)}')
+          path.write_text(text.replace(old, new, 1))
+          PY
+          git rm .github/workflows/apply-self-referential-records-v2.yml
+      - name: Apply and verify self-referential record support
+        run: bash .github/scripts/apply-self-referential-records.sh
