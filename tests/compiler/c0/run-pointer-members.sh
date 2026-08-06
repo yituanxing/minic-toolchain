@@ -17,6 +17,15 @@ grep -F "  addi a0, a0, 20" "$work/pointer_member.s" >/dev/null
 grep -F "  call sum_four" "$work/pointer_member.s" >/dev/null
 printf '%s\n' "PASS compiler/c0/pointer_member"
 
+"$host_cc" -E -P -x c \
+    "$root/tests/programs/c0/self_referential_record.c" \
+    -o "$work/self_referential_record.i"
+"$minic" -S \
+    "$work/self_referential_record.i" \
+    -o "$work/self_referential_record.s"
+grep -F ".globl main" "$work/self_referential_record.s" >/dev/null
+printf '%s\n' "PASS compiler/c0/self_referential_record"
+
 expect_failure() {
     name=$1
     diagnostic=$2
@@ -43,3 +52,9 @@ expect_failure \
 expect_failure \
     invalid_const_pointer_member_assignment \
     "assignment target must be a modifiable lvalue"
+expect_failure \
+    invalid_self_record_by_value \
+    "record field cannot use incomplete type by value"
+expect_failure \
+    invalid_unknown_record_pointer \
+    "use of undeclared record tag"
