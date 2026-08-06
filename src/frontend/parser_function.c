@@ -3,37 +3,29 @@
 
 #include <string.h>
 
-static bool function_signature_matches(
-    const MinicFunction *function,
-    MinicType return_type,
-    const MinicType *parameter_types,
-    size_t parameter_count)
-{
+static bool function_signature_matches(const MinicFunction *function,
+                                       MinicType return_type,
+                                       const MinicType *parameter_types,
+                                       size_t parameter_count) {
     size_t parameter_index;
 
-    if (function == NULL ||
-        !minic_type_equal(function->return_type, return_type) ||
+    if (function == NULL || !minic_type_equal(function->return_type, return_type) ||
         function->parameter_count != parameter_count) {
         return false;
     }
-    for (parameter_index = 0U;
-         parameter_index < parameter_count;
-         ++parameter_index) {
-        if (!minic_type_equal(
-                function->parameter_types[parameter_index],
-                parameter_types[parameter_index])) {
+    for (parameter_index = 0U; parameter_index < parameter_count; ++parameter_index) {
+        if (!minic_type_equal(function->parameter_types[parameter_index],
+                              parameter_types[parameter_index])) {
             return false;
         }
     }
     return true;
 }
 
-static bool parse_parameter_list(
-    MinicParser *parser,
-    MinicSourceSpan *parameter_name_spans,
-    MinicType *parameter_types,
-    size_t *parameter_count)
-{
+static bool parse_parameter_list(MinicParser *parser,
+                                 MinicSourceSpan *parameter_name_spans,
+                                 MinicType *parameter_types,
+                                 size_t *parameter_count) {
     if (parser->current.kind == MINIC_TOKEN_RPAREN) {
         return true;
     }
@@ -49,8 +41,7 @@ static bool parse_parameter_list(
             return false;
         }
         if (minic_type_is_void(parameter_type)) {
-            if (*parameter_count == 0U &&
-                parser->current.kind == MINIC_TOKEN_RPAREN) {
+            if (*parameter_count == 0U && parser->current.kind == MINIC_TOKEN_RPAREN) {
                 return true;
             }
             minic_parser_error(parser, "parameter type cannot be bare void");
@@ -76,8 +67,7 @@ static bool parse_parameter_list(
     }
 }
 
-static bool parse_function(MinicParser *parser, bool is_internal)
-{
+static bool parse_function(MinicParser *parser, bool is_internal) {
     MinicSourceSpan name_span;
     MinicSourceSpan parameter_name_spans[8];
     MinicType parameter_types[8];
@@ -97,10 +87,7 @@ static bool parse_function(MinicParser *parser, bool is_internal)
     (void)memset(parameter_name_spans, 0, sizeof(parameter_name_spans));
     (void)memset(parameter_types, 0, sizeof(parameter_types));
     if (is_internal &&
-        !minic_parser_expect(
-            parser,
-            MINIC_TOKEN_KW_STATIC,
-            "expected keyword 'static'")) {
+        !minic_parser_expect(parser, MINIC_TOKEN_KW_STATIC, "expected keyword 'static'")) {
         return false;
     }
     if (!minic_parser_parse_type_name(parser, &return_type)) {
@@ -126,11 +113,7 @@ static bool parse_function(MinicParser *parser, bool is_internal)
 
     if (!minic_parser_advance(parser) ||
         !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '('") ||
-        !parse_parameter_list(
-            parser,
-            parameter_name_spans,
-            parameter_types,
-            &parameter_count) ||
+        !parse_parameter_list(parser, parameter_name_spans, parameter_types, &parameter_count) ||
         !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')'")) {
         return false;
     }
@@ -142,10 +125,7 @@ static bool parse_function(MinicParser *parser, bool is_internal)
     if (function_id != MINIC_FUNCTION_INVALID) {
         existing_function = minic_c0_program_function(parser->program, function_id);
         if (!function_signature_matches(
-                existing_function,
-                return_type,
-                parameter_types,
-                parameter_count) ||
+                existing_function, return_type, parameter_types, parameter_count) ||
             existing_function->is_internal != is_internal) {
             minic_parser_error(parser, "conflicting function declaration");
             return false;
@@ -154,24 +134,17 @@ static bool parse_function(MinicParser *parser, bool is_internal)
 
     if (parser->current.kind == MINIC_TOKEN_SEMICOLON) {
         if (function_id == MINIC_FUNCTION_INVALID) {
-            if (!minic_c0_program_add_function(
-                    parser->program,
-                    parser->source + name_span.begin.offset,
-                    minic_parser_span_length(name_span),
-                    parser->program->local_count,
-                    0U,
-                    MINIC_BLOCK_INVALID,
-                    &function_id) ||
+            if (!minic_c0_program_add_function(parser->program,
+                                               parser->source + name_span.begin.offset,
+                                               minic_parser_span_length(name_span),
+                                               parser->program->local_count,
+                                               0U,
+                                               MINIC_BLOCK_INVALID,
+                                               &function_id) ||
                 !minic_c0_program_set_function_signature(
-                    parser->program,
-                    function_id,
-                    return_type,
-                    parameter_types,
-                    parameter_count) ||
+                    parser->program, function_id, return_type, parameter_types, parameter_count) ||
                 !minic_c0_program_set_function_internal(
-                    parser->program,
-                    function_id,
-                    is_internal)) {
+                    parser->program, function_id, is_internal)) {
                 minic_parser_error(parser, "out of memory while declaring function");
                 return false;
             }
@@ -179,8 +152,7 @@ static bool parse_function(MinicParser *parser, bool is_internal)
         return minic_parser_advance(parser);
     }
 
-    if (!minic_type_is_integer(return_type) &&
-        !minic_type_is_void(return_type) &&
+    if (!minic_type_is_integer(return_type) && !minic_type_is_void(return_type) &&
         !minic_type_is_pointer(return_type)) {
         minic_parser_error(parser, "unsupported function return type");
         return false;
@@ -213,62 +185,43 @@ static bool parse_function(MinicParser *parser, bool is_internal)
     {
         size_t parameter_index;
 
-        for (parameter_index = 0U;
-             parameter_index < parameter_count;
-             ++parameter_index) {
+        for (parameter_index = 0U; parameter_index < parameter_count; ++parameter_index) {
             parameter_local.name_span = parameter_name_spans[parameter_index];
             parameter_local.type = parameter_types[parameter_index];
             parameter_local.element_count = 1U;
             parameter_local.storage_offset = 0U;
-            if (minic_parser_find_local_in_current_scope(
-                    parser,
-                    parameter_local.name_span) != MINIC_LOCAL_INVALID) {
+            if (minic_parser_find_local_in_current_scope(parser, parameter_local.name_span) !=
+                MINIC_LOCAL_INVALID) {
                 minic_parser_error(parser, "duplicate parameter name");
                 return false;
             }
             if (!minic_c0_program_add_local(
-                    parser->program,
-                    &parameter_local,
-                    &parameter_local_id)) {
+                    parser->program, &parameter_local, &parameter_local_id)) {
                 minic_parser_error(parser, "out of memory while adding parameter");
                 return false;
             }
-            if (!minic_parser_bind_local(
-                    parser,
-                    parameter_local.name_span,
-                    parameter_local_id)) {
+            if (!minic_parser_bind_local(parser, parameter_local.name_span, parameter_local_id)) {
                 return false;
             }
         }
     }
 
     if (function_id == MINIC_FUNCTION_INVALID) {
-        if (!minic_c0_program_add_function(
-                parser->program,
-                parser->source + name_span.begin.offset,
-                minic_parser_span_length(name_span),
-                local_begin,
-                parameter_count,
-                body_block,
-                &function_id) ||
+        if (!minic_c0_program_add_function(parser->program,
+                                           parser->source + name_span.begin.offset,
+                                           minic_parser_span_length(name_span),
+                                           local_begin,
+                                           parameter_count,
+                                           body_block,
+                                           &function_id) ||
             !minic_c0_program_set_function_signature(
-                parser->program,
-                function_id,
-                return_type,
-                parameter_types,
-                parameter_count) ||
-            !minic_c0_program_set_function_internal(
-                parser->program,
-                function_id,
-                is_internal)) {
+                parser->program, function_id, return_type, parameter_types, parameter_count) ||
+            !minic_c0_program_set_function_internal(parser->program, function_id, is_internal)) {
             minic_parser_error(parser, "out of memory while adding function");
             return false;
         }
     } else if (!minic_c0_program_define_function(
-                   parser->program,
-                   function_id,
-                   local_begin,
-                   body_block)) {
+                   parser->program, function_id, local_begin, body_block)) {
         minic_parser_error(parser, "cannot define previously declared function");
         return false;
     }
@@ -294,10 +247,7 @@ static bool parse_function(MinicParser *parser, bool is_internal)
     }
 
     local_count = parser->program->local_count - local_begin;
-    if (!minic_c0_program_finish_function(
-            parser->program,
-            function_id,
-            local_count)) {
+    if (!minic_c0_program_finish_function(parser->program, function_id, local_count)) {
         minic_parser_error(parser, "invalid local range while finishing function");
         return false;
     }
@@ -306,10 +256,7 @@ static bool parse_function(MinicParser *parser, bool is_internal)
     return true;
 }
 
-static bool static_declaration_is_function(
-    MinicParser *parser,
-    bool *is_function)
-{
+static bool static_declaration_is_function(MinicParser *parser, bool *is_function) {
     MinicParser probe;
     MinicType declared_type;
 
@@ -317,8 +264,7 @@ static bool static_declaration_is_function(
         return false;
     }
     probe = *parser;
-    if (!minic_parser_advance(&probe) ||
-        !minic_parser_parse_type_name(&probe, &declared_type)) {
+    if (!minic_parser_advance(&probe) || !minic_parser_parse_type_name(&probe, &declared_type)) {
         return false;
     }
     (void)declared_type;
@@ -333,13 +279,11 @@ static bool static_declaration_is_function(
     return true;
 }
 
-bool minic_parse_c0_program(
-    const char *path,
-    const char *source,
-    size_t length,
-    MinicC0Program *program,
-    MinicDiagnostic *diagnostic)
-{
+bool minic_parse_c0_program(const char *path,
+                            const char *source,
+                            size_t length,
+                            MinicC0Program *program,
+                            MinicDiagnostic *diagnostic) {
     MinicParser parser;
     bool success;
 

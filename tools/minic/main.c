@@ -3,16 +3,11 @@
 #include <stdio.h>
 #include <string.h>
 
-static void minic_print_usage(FILE *stream, const char *program)
-{
-    (void)fprintf(
-        stream,
-        "usage: %s -S <preprocessed-input.i> -o <output.s>\n",
-        program);
+static void minic_print_usage(FILE *stream, const char *program) {
+    (void)fprintf(stream, "usage: %s -S <preprocessed-input.i> -o <output.s>\n", program);
 }
 
-int main(int argc, char **argv)
-{
+int main(int argc, char **argv) {
     const char *input_path;
     const char *output_path;
     MinicDiagnostic diagnostic;
@@ -35,8 +30,7 @@ int main(int argc, char **argv)
                 return 2;
             }
             output_path = argv[++index];
-        } else if (strcmp(argv[index], "--help") == 0 ||
-                   strcmp(argv[index], "-h") == 0) {
+        } else if (strcmp(argv[index], "--help") == 0 || strcmp(argv[index], "-h") == 0) {
             minic_print_usage(stdout, argv[0]);
             return 0;
         } else {
@@ -51,18 +45,14 @@ int main(int argc, char **argv)
         return 2;
     }
 
-    result = minic_compile_preprocessed_file(
-        input_path,
-        output_path,
-        &diagnostic);
+    result = minic_compile_preprocessed_file(input_path, output_path, &diagnostic);
     if (result != 0) {
-        (void)fprintf(
-            stderr,
-            "%s:%zu:%zu: error: %s\n",
-            diagnostic.path != NULL ? diagnostic.path : input_path,
-            diagnostic.line,
-            diagnostic.column,
-            diagnostic.message[0] != '\0' ? diagnostic.message : "compilation failed");
+        (void)fprintf(stderr,
+                      "%s:%zu:%zu: error: %s\n",
+                      diagnostic.path != NULL ? diagnostic.path : input_path,
+                      diagnostic.line,
+                      diagnostic.column,
+                      diagnostic.message[0] != '\0' ? diagnostic.message : "compilation failed");
     }
 
     return result;

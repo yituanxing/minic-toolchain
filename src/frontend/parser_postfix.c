@@ -2,11 +2,9 @@
 
 #include <string.h>
 
-static bool postfix_element_type(
-    const MinicParser *parser,
-    MinicExpressionId base_id,
-    MinicType *element_type)
-{
+static bool postfix_element_type(const MinicParser *parser,
+                                 MinicExpressionId base_id,
+                                 MinicType *element_type) {
     const MinicExpression *base;
 
     if (element_type == NULL) {
@@ -28,9 +26,7 @@ static bool postfix_element_type(
     if (minic_type_is_array(base->type)) {
         const MinicArrayType *array_type;
 
-        array_type = minic_c0_program_array_type(
-            parser->program,
-            base->type.array_type_id);
+        array_type = minic_c0_program_array_type(parser->program, base->type.array_type_id);
         if (array_type == NULL) {
             return false;
         }
@@ -40,11 +36,9 @@ static bool postfix_element_type(
     return minic_type_pointee(base->type, element_type);
 }
 
-static bool parse_one_subscript(
-    MinicParser *parser,
-    MinicExpressionId base_id,
-    MinicExpressionId *expression_id)
-{
+static bool parse_one_subscript(MinicParser *parser,
+                                MinicExpressionId base_id,
+                                MinicExpressionId *expression_id) {
     const MinicExpression *base;
     MinicSourceSpan base_span;
     MinicType element_type;
@@ -54,19 +48,16 @@ static bool parse_one_subscript(
     MinicExpression subscript;
 
     base = minic_c0_program_expression(parser->program, base_id);
-    if (base == NULL ||
-        !postfix_element_type(parser, base_id, &element_type)) {
+    if (base == NULL || !postfix_element_type(parser, base_id, &element_type)) {
         minic_parser_error(parser, "subscript base must be an array or pointer");
         return false;
     }
     base_span = base->span;
-    if (!minic_parser_advance(parser) ||
-        !minic_parser_parse_expression(parser, &index_id, 0U)) {
+    if (!minic_parser_advance(parser) || !minic_parser_parse_expression(parser, &index_id, 0U)) {
         return false;
     }
     index_expression = minic_c0_program_expression(parser->program, index_id);
-    if (index_expression == NULL ||
-        !minic_type_is_integer(index_expression->type)) {
+    if (index_expression == NULL || !minic_type_is_integer(index_expression->type)) {
         minic_parser_error(parser, "array index must have integer type");
         return false;
     }
@@ -90,12 +81,10 @@ static bool parse_one_subscript(
     return minic_parser_add_expression(parser, &subscript, expression_id);
 }
 
-bool minic_parser_parse_postfix(
-    MinicParser *parser,
-    MinicExpressionId base_id,
-    bool require_subscript,
-    MinicExpressionId *expression_id)
-{
+bool minic_parser_parse_postfix(MinicParser *parser,
+                                MinicExpressionId base_id,
+                                bool require_subscript,
+                                MinicExpressionId *expression_id) {
     MinicExpressionId current;
     bool consumed_subscript;
 
@@ -103,10 +92,7 @@ bool minic_parser_parse_postfix(
     consumed_subscript = false;
     for (;;) {
         if (parser->current.kind == MINIC_TOKEN_ARROW) {
-            if (!minic_parser_parse_pointer_member(
-                    parser,
-                    current,
-                    &current)) {
+            if (!minic_parser_parse_pointer_member(parser, current, &current)) {
                 return false;
             }
             continue;

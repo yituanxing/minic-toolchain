@@ -2,11 +2,8 @@
 
 #include <string.h>
 
-static bool record_has_field(
-    const MinicParser *parser,
-    const MinicRecord *record,
-    MinicSourceSpan name_span)
-{
+static bool
+record_has_field(const MinicParser *parser, const MinicRecord *record, MinicSourceSpan name_span) {
     size_t name_length;
     size_t index;
 
@@ -16,20 +13,14 @@ static bool record_has_field(
 
         field = minic_c0_record_field(record, index);
         if (field != NULL && field->name_length == name_length &&
-            memcmp(
-                field->name,
-                parser->source + name_span.begin.offset,
-                name_length) == 0) {
+            memcmp(field->name, parser->source + name_span.begin.offset, name_length) == 0) {
             return true;
         }
     }
     return false;
 }
 
-static bool parse_record_field(
-    MinicParser *parser,
-    MinicRecordId record_id)
-{
+static bool parse_record_field(MinicParser *parser, MinicRecordId record_id) {
     MinicSourceSpan name_span;
     MinicType base_type;
     MinicType field_type;
@@ -37,10 +28,7 @@ static bool parse_record_field(
     const MinicRecord *record;
 
     if (!minic_parser_parse_type_specifiers(parser, &base_type) ||
-        !minic_parser_parse_pointer_declarator(
-            parser,
-            base_type,
-            &field_type)) {
+        !minic_parser_parse_pointer_declarator(parser, base_type, &field_type)) {
         return false;
     }
     if (minic_type_is_void(field_type)) {
@@ -77,34 +65,26 @@ static bool parse_record_field(
             return false;
         }
     }
-    if (!minic_parser_expect(
-            parser,
-            MINIC_TOKEN_SEMICOLON,
-            "expected ';' after record field")) {
+    if (!minic_parser_expect(parser, MINIC_TOKEN_SEMICOLON, "expected ';' after record field")) {
         return false;
     }
-    if (!minic_c0_record_add_field(
-            parser->program,
-            record_id,
-            parser->source + name_span.begin.offset,
-            minic_parser_span_length(name_span),
-            field_type,
-            element_count)) {
+    if (!minic_c0_record_add_field(parser->program,
+                                   record_id,
+                                   parser->source + name_span.begin.offset,
+                                   minic_parser_span_length(name_span),
+                                   field_type,
+                                   element_count)) {
         minic_parser_error(parser, "out of memory while adding record field");
         return false;
     }
     return true;
 }
 
-bool minic_parser_parse_record_definition(MinicParser *parser)
-{
+bool minic_parser_parse_record_definition(MinicParser *parser) {
     MinicSourceSpan name_span;
     MinicRecordId record_id;
 
-    if (!minic_parser_expect(
-            parser,
-            MINIC_TOKEN_KW_STRUCT,
-            "expected keyword 'struct'")) {
+    if (!minic_parser_expect(parser, MINIC_TOKEN_KW_STRUCT, "expected keyword 'struct'")) {
         return false;
     }
     if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
@@ -117,19 +97,15 @@ bool minic_parser_parse_record_definition(MinicParser *parser)
         minic_parser_error(parser, "duplicate record definition");
         return false;
     }
-    if (!minic_c0_program_add_record(
-            parser->program,
-            parser->source + name_span.begin.offset,
-            minic_parser_span_length(name_span),
-            &record_id)) {
+    if (!minic_c0_program_add_record(parser->program,
+                                     parser->source + name_span.begin.offset,
+                                     minic_parser_span_length(name_span),
+                                     &record_id)) {
         minic_parser_error(parser, "out of memory while adding record");
         return false;
     }
     if (!minic_parser_advance(parser) ||
-        !minic_parser_expect(
-            parser,
-            MINIC_TOKEN_LBRACE,
-            "expected '{' after record tag")) {
+        !minic_parser_expect(parser, MINIC_TOKEN_LBRACE, "expected '{' after record tag")) {
         return false;
     }
 
@@ -142,14 +118,9 @@ bool minic_parser_parse_record_definition(MinicParser *parser)
             return false;
         }
     }
-    if (!minic_parser_expect(
-            parser,
-            MINIC_TOKEN_RBRACE,
-            "expected '}' after record fields") ||
+    if (!minic_parser_expect(parser, MINIC_TOKEN_RBRACE, "expected '}' after record fields") ||
         !minic_parser_expect(
-            parser,
-            MINIC_TOKEN_SEMICOLON,
-            "expected ';' after record definition")) {
+            parser, MINIC_TOKEN_SEMICOLON, "expected ';' after record definition")) {
         return false;
     }
     if (!minic_c0_program_finish_record(parser->program, record_id)) {

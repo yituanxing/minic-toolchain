@@ -6,11 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-static bool minic_parser_grow_array(
-    void **storage,
-    size_t *capacity,
-    size_t element_size)
-{
+static bool minic_parser_grow_array(void **storage, size_t *capacity, size_t element_size) {
     size_t new_capacity;
     void *new_storage;
 
@@ -28,8 +24,7 @@ static bool minic_parser_grow_array(
     return true;
 }
 
-void minic_parser_error(MinicParser *parser, const char *format, ...)
-{
+void minic_parser_error(MinicParser *parser, const char *format, ...) {
     va_list arguments;
 
     if (parser->diagnostic == NULL) {
@@ -40,23 +35,15 @@ void minic_parser_error(MinicParser *parser, const char *format, ...)
     parser->diagnostic->column = parser->current.span.begin.column;
     va_start(arguments, format);
     (void)vsnprintf(
-        parser->diagnostic->message,
-        sizeof(parser->diagnostic->message),
-        format,
-        arguments);
+        parser->diagnostic->message, sizeof(parser->diagnostic->message), format, arguments);
     va_end(arguments);
 }
 
-bool minic_parser_advance(MinicParser *parser)
-{
+bool minic_parser_advance(MinicParser *parser) {
     return minic_lexer_next(&parser->lexer, &parser->current, parser->diagnostic);
 }
 
-bool minic_parser_expect(
-    MinicParser *parser,
-    MinicTokenKind kind,
-    const char *message)
-{
+bool minic_parser_expect(MinicParser *parser, MinicTokenKind kind, const char *message) {
     if (parser->current.kind != kind) {
         minic_parser_error(parser, "%s", message);
         return false;
@@ -64,16 +51,12 @@ bool minic_parser_expect(
     return minic_parser_advance(parser);
 }
 
-bool minic_parser_parse_fixed_array_bound(
-    MinicParser *parser,
-    size_t *element_count)
-{
+bool minic_parser_parse_fixed_array_bound(MinicParser *parser, size_t *element_count) {
     MinicSourceSpan span;
     size_t offset;
     size_t value;
 
-    if (element_count == NULL ||
-        parser->current.kind != MINIC_TOKEN_INTEGER_CONSTANT) {
+    if (element_count == NULL || parser->current.kind != MINIC_TOKEN_INTEGER_CONSTANT) {
         minic_parser_error(parser, "expected integer array bound");
         return false;
     }
@@ -95,101 +78,75 @@ bool minic_parser_parse_fixed_array_bound(
         return false;
     }
     if (!minic_parser_advance(parser) ||
-        !minic_parser_expect(parser, MINIC_TOKEN_RBRACKET, "expected ']'") ) {
+        !minic_parser_expect(parser, MINIC_TOKEN_RBRACKET, "expected ']'")) {
         return false;
     }
     *element_count = value;
     return true;
 }
 
-size_t minic_parser_span_length(MinicSourceSpan span)
-{
+size_t minic_parser_span_length(MinicSourceSpan span) {
     return span.end.offset - span.begin.offset;
 }
 
-bool minic_parser_span_equals(
-    const MinicParser *parser,
-    MinicSourceSpan left,
-    MinicSourceSpan right)
-{
+bool minic_parser_span_equals(const MinicParser *parser,
+                              MinicSourceSpan left,
+                              MinicSourceSpan right) {
     size_t left_length;
     size_t right_length;
 
     left_length = minic_parser_span_length(left);
     right_length = minic_parser_span_length(right);
-    return left_length == right_length &&
-           memcmp(
-               parser->source + left.begin.offset,
-               parser->source + right.begin.offset,
-               left_length) == 0;
+    return left_length == right_length && memcmp(parser->source + left.begin.offset,
+                                                 parser->source + right.begin.offset,
+                                                 left_length) == 0;
 }
 
-bool minic_parser_add_expression(
-    MinicParser *parser,
-    const MinicExpression *expression,
-    MinicExpressionId *expression_id)
-{
-    if (minic_c0_program_add_expression(
-            parser->program,
-            expression,
-            expression_id)) {
+bool minic_parser_add_expression(MinicParser *parser,
+                                 const MinicExpression *expression,
+                                 MinicExpressionId *expression_id) {
+    if (minic_c0_program_add_expression(parser->program, expression, expression_id)) {
         return true;
     }
     minic_parser_error(parser, "out of memory while building expression tree");
     return false;
 }
 
-bool minic_parser_add_statement(
-    MinicParser *parser,
-    const MinicStatement *statement)
-{
+bool minic_parser_add_statement(MinicParser *parser, const MinicStatement *statement) {
     MinicStatementId statement_id;
 
-    if (minic_c0_program_add_statement(
-            parser->program,
-            statement,
-            &statement_id) &&
-        minic_c0_block_add_statement(
-            parser->program,
-            parser->current_block,
-            statement_id)) {
+    if (minic_c0_program_add_statement(parser->program, statement, &statement_id) &&
+        minic_c0_block_add_statement(parser->program, parser->current_block, statement_id)) {
         return true;
     }
     minic_parser_error(parser, "out of memory while building statement list");
     return false;
 }
 
-bool minic_parser_begin_scope(MinicParser *parser)
-{
+bool minic_parser_begin_scope(MinicParser *parser) {
     if (parser->scope_count == parser->scope_capacity &&
-        !minic_parser_grow_array(
-            (void **)&parser->scope_binding_begins,
-            &parser->scope_capacity,
-            sizeof(*parser->scope_binding_begins))) {
+        !minic_parser_grow_array((void **)&parser->scope_binding_begins,
+                                 &parser->scope_capacity,
+                                 sizeof(*parser->scope_binding_begins))) {
         minic_parser_error(parser, "out of memory while entering scope");
         return false;
     }
-    parser->scope_binding_begins[parser->scope_count] =
-        parser->local_binding_count;
+    parser->scope_binding_begins[parser->scope_count] = parser->local_binding_count;
     parser->scope_count += 1U;
     return true;
 }
 
-void minic_parser_end_scope(MinicParser *parser)
-{
+void minic_parser_end_scope(MinicParser *parser) {
     if (parser->scope_count == 0U) {
         return;
     }
     parser->scope_count -= 1U;
-    parser->local_binding_count =
-        parser->scope_binding_begins[parser->scope_count];
+    parser->local_binding_count = parser->scope_binding_begins[parser->scope_count];
 }
 
-bool minic_parser_bind_local(
-    MinicParser *parser,
-    MinicSourceSpan name_span,
-    MinicLocalId local_id)
-{
+bool minic_parser_bind_local(MinicParser *parser,
+                             MinicSourceSpan name_span,
+                             MinicLocalId local_id) {
     MinicParserLocalBinding *binding;
 
     if (parser->scope_count == 0U) {
@@ -197,10 +154,9 @@ bool minic_parser_bind_local(
         return false;
     }
     if (parser->local_binding_count == parser->local_binding_capacity &&
-        !minic_parser_grow_array(
-            (void **)&parser->local_bindings,
-            &parser->local_binding_capacity,
-            sizeof(*parser->local_bindings))) {
+        !minic_parser_grow_array((void **)&parser->local_bindings,
+                                 &parser->local_binding_capacity,
+                                 sizeof(*parser->local_bindings))) {
         minic_parser_error(parser, "out of memory while binding local name");
         return false;
     }
@@ -211,10 +167,8 @@ bool minic_parser_bind_local(
     return true;
 }
 
-MinicLocalId minic_parser_find_local_in_current_scope(
-    const MinicParser *parser,
-    MinicSourceSpan name_span)
-{
+MinicLocalId minic_parser_find_local_in_current_scope(const MinicParser *parser,
+                                                      MinicSourceSpan name_span) {
     size_t scope_begin;
     size_t index;
 
@@ -233,8 +187,7 @@ MinicLocalId minic_parser_find_local_in_current_scope(
     return MINIC_LOCAL_INVALID;
 }
 
-void minic_parser_destroy_scopes(MinicParser *parser)
-{
+void minic_parser_destroy_scopes(MinicParser *parser) {
     free(parser->local_bindings);
     free(parser->scope_binding_begins);
     parser->local_bindings = NULL;
@@ -245,10 +198,7 @@ void minic_parser_destroy_scopes(MinicParser *parser)
     parser->scope_capacity = 0U;
 }
 
-MinicLocalId minic_parser_find_local(
-    const MinicParser *parser,
-    MinicSourceSpan name_span)
-{
+MinicLocalId minic_parser_find_local(const MinicParser *parser, MinicSourceSpan name_span) {
     size_t index;
 
     for (index = parser->local_binding_count; index > 0U; --index) {
@@ -262,10 +212,7 @@ MinicLocalId minic_parser_find_local(
     return MINIC_LOCAL_INVALID;
 }
 
-MinicFunctionId minic_parser_find_function(
-    const MinicParser *parser,
-    MinicSourceSpan name_span)
-{
+MinicFunctionId minic_parser_find_function(const MinicParser *parser, MinicSourceSpan name_span) {
     size_t name_length;
     size_t index;
 
@@ -275,20 +222,14 @@ MinicFunctionId minic_parser_find_function(
 
         function = minic_c0_program_function(parser->program, index);
         if (function != NULL && function->name_length == name_length &&
-            memcmp(
-                function->name,
-                parser->source + name_span.begin.offset,
-                name_length) == 0) {
+            memcmp(function->name, parser->source + name_span.begin.offset, name_length) == 0) {
             return index;
         }
     }
     return MINIC_FUNCTION_INVALID;
 }
 
-MinicRecordId minic_parser_find_record(
-    const MinicParser *parser,
-    MinicSourceSpan name_span)
-{
+MinicRecordId minic_parser_find_record(const MinicParser *parser, MinicSourceSpan name_span) {
     size_t name_length;
     size_t index;
 
@@ -298,10 +239,7 @@ MinicRecordId minic_parser_find_record(
 
         record = minic_c0_program_record(parser->program, index);
         if (record != NULL && record->name_length == name_length &&
-            memcmp(
-                record->name,
-                parser->source + name_span.begin.offset,
-                name_length) == 0) {
+            memcmp(record->name, parser->source + name_span.begin.offset, name_length) == 0) {
             return index;
         }
     }

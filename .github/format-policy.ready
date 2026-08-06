@@ -1,3 +1,0 @@
-formatter=clang-format-18
-scope=include,src,tools/minic
-mode=normalize-and-check

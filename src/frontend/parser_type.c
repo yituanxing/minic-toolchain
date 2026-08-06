@@ -1,9 +1,6 @@
 #include "frontend/parser_internal.h"
 
-bool minic_parser_parse_type_specifiers(
-    MinicParser *parser,
-    MinicType *type)
-{
+bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type) {
     MinicType parsed_type;
     bool is_const;
 
@@ -36,8 +33,7 @@ bool minic_parser_parse_type_specifiers(
             }
         } else {
             parsed_type = minic_type_unsigned_int();
-            if (parser->current.kind == MINIC_TOKEN_KW_INT &&
-                !minic_parser_advance(parser)) {
+            if (parser->current.kind == MINIC_TOKEN_KW_INT && !minic_parser_advance(parser)) {
                 return false;
             }
         }
@@ -50,8 +46,7 @@ bool minic_parser_parse_type_specifiers(
         MinicRecordId record_id;
         const MinicRecord *record;
 
-        if (!minic_parser_advance(parser) ||
-            parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
+        if (!minic_parser_advance(parser) || parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
             minic_parser_error(parser, "expected record tag after 'struct'");
             return false;
         }
@@ -92,11 +87,9 @@ bool minic_parser_parse_type_specifiers(
     return true;
 }
 
-bool minic_parser_parse_pointer_declarator(
-    MinicParser *parser,
-    MinicType base_type,
-    MinicType *type)
-{
+bool minic_parser_parse_pointer_declarator(MinicParser *parser,
+                                           MinicType base_type,
+                                           MinicType *type) {
     MinicType parsed_type;
 
     if (type == NULL) {
@@ -105,8 +98,7 @@ bool minic_parser_parse_pointer_declarator(
     }
     parsed_type = base_type;
     while (parser->current.kind == MINIC_TOKEN_STAR) {
-        if (!minic_type_pointer_to(parsed_type, &parsed_type) ||
-            !minic_parser_advance(parser)) {
+        if (!minic_type_pointer_to(parsed_type, &parsed_type) || !minic_parser_advance(parser)) {
             minic_parser_error(parser, "pointer declarator depth is unsupported");
             return false;
         }
@@ -115,10 +107,7 @@ bool minic_parser_parse_pointer_declarator(
     return true;
 }
 
-bool minic_parser_parse_type_name(
-    MinicParser *parser,
-    MinicType *type)
-{
+bool minic_parser_parse_type_name(MinicParser *parser, MinicType *type) {
     MinicType base_type;
 
     return minic_parser_parse_type_specifiers(parser, &base_type) &&

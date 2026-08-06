@@ -15,18 +15,15 @@ typedef size_t MinicFunctionId;
 typedef size_t MinicTypeAliasId;
 typedef size_t MinicGlobalObjectId;
 
-#define MINIC_EXPRESSION_INVALID ((MinicExpressionId)-1)
-#define MINIC_LOCAL_INVALID ((MinicLocalId)-1)
-#define MINIC_STATEMENT_INVALID ((MinicStatementId)-1)
-#define MINIC_BLOCK_INVALID ((MinicBlockId)-1)
-#define MINIC_FUNCTION_INVALID ((MinicFunctionId)-1)
-#define MINIC_TYPE_ALIAS_INVALID ((MinicTypeAliasId)-1)
-#define MINIC_GLOBAL_OBJECT_INVALID ((MinicGlobalObjectId)-1)
+#define MINIC_EXPRESSION_INVALID ((MinicExpressionId) - 1)
+#define MINIC_LOCAL_INVALID ((MinicLocalId) - 1)
+#define MINIC_STATEMENT_INVALID ((MinicStatementId) - 1)
+#define MINIC_BLOCK_INVALID ((MinicBlockId) - 1)
+#define MINIC_FUNCTION_INVALID ((MinicFunctionId) - 1)
+#define MINIC_TYPE_ALIAS_INVALID ((MinicTypeAliasId) - 1)
+#define MINIC_GLOBAL_OBJECT_INVALID ((MinicGlobalObjectId) - 1)
 
-typedef enum MinicValueCategory {
-    MINIC_VALUE_RVALUE = 0,
-    MINIC_VALUE_LVALUE
-} MinicValueCategory;
+typedef enum MinicValueCategory { MINIC_VALUE_RVALUE = 0, MINIC_VALUE_LVALUE } MinicValueCategory;
 
 typedef enum MinicExpressionKind {
     MINIC_EXPRESSION_INTEGER = 0,
@@ -236,124 +233,90 @@ typedef struct MinicC0Program {
 void minic_c0_program_initialize(MinicC0Program *program);
 void minic_c0_program_destroy(MinicC0Program *program);
 
-bool minic_c0_program_add_expression(
-    MinicC0Program *program,
-    const MinicExpression *expression,
-    MinicExpressionId *expression_id);
-bool minic_c0_program_add_local(
-    MinicC0Program *program,
-    const MinicLocal *local,
-    MinicLocalId *local_id);
-bool minic_c0_program_add_statement(
-    MinicC0Program *program,
-    const MinicStatement *statement,
-    MinicStatementId *statement_id);
-bool minic_c0_program_add_block(
-    MinicC0Program *program,
-    MinicBlockId *block_id);
-bool minic_c0_block_add_statement(
-    MinicC0Program *program,
-    MinicBlockId block_id,
-    MinicStatementId statement_id);
-bool minic_c0_program_add_function(
-    MinicC0Program *program,
-    const char *name,
-    size_t name_length,
-    size_t local_begin,
-    size_t local_count,
-    MinicBlockId body_block,
-    MinicFunctionId *function_id);
-bool minic_c0_program_set_function_signature(
-    MinicC0Program *program,
-    MinicFunctionId function_id,
-    MinicType return_type,
-    const MinicType *parameter_types,
-    size_t parameter_count);
-bool minic_c0_program_set_function_parameter_count(
-    MinicC0Program *program,
-    MinicFunctionId function_id,
-    size_t parameter_count);
-bool minic_c0_program_set_function_internal(
-    MinicC0Program *program,
-    MinicFunctionId function_id,
-    bool is_internal);
-bool minic_c0_program_define_function(
-    MinicC0Program *program,
-    MinicFunctionId function_id,
-    size_t local_begin,
-    MinicBlockId body_block);
-bool minic_c0_program_finish_function(
-    MinicC0Program *program,
-    MinicFunctionId function_id,
-    size_t local_count);
-bool minic_c0_program_add_record(
-    MinicC0Program *program,
-    const char *name,
-    size_t name_length,
-    MinicRecordId *record_id);
-bool minic_c0_record_add_field(
-    MinicC0Program *program,
-    MinicRecordId record_id,
-    const char *name,
-    size_t name_length,
-    MinicType type,
-    size_t element_count);
-bool minic_c0_program_finish_record(
-    MinicC0Program *program,
-    MinicRecordId record_id);
-bool minic_c0_program_add_array_type(
-    MinicC0Program *program,
-    MinicType element_type,
-    size_t element_count,
-    MinicType *array_type);
-bool minic_c0_program_add_type_alias(
-    MinicC0Program *program,
-    const char *name,
-    size_t name_length,
-    MinicType type,
-    MinicTypeAliasId *alias_id);
-bool minic_c0_program_add_global_object(
-    MinicC0Program *program,
-    const char *name,
-    size_t name_length,
-    MinicType type,
-    bool is_internal,
-    bool is_read_only,
-    MinicGlobalObjectId *global_object_id);
-bool minic_c0_global_object_add_initializer(
-    MinicC0Program *program,
-    MinicGlobalObjectId global_object_id,
-    int value);
+bool minic_c0_program_add_expression(MinicC0Program *program,
+                                     const MinicExpression *expression,
+                                     MinicExpressionId *expression_id);
+bool minic_c0_program_add_local(MinicC0Program *program,
+                                const MinicLocal *local,
+                                MinicLocalId *local_id);
+bool minic_c0_program_add_statement(MinicC0Program *program,
+                                    const MinicStatement *statement,
+                                    MinicStatementId *statement_id);
+bool minic_c0_program_add_block(MinicC0Program *program, MinicBlockId *block_id);
+bool minic_c0_block_add_statement(MinicC0Program *program,
+                                  MinicBlockId block_id,
+                                  MinicStatementId statement_id);
+bool minic_c0_program_add_function(MinicC0Program *program,
+                                   const char *name,
+                                   size_t name_length,
+                                   size_t local_begin,
+                                   size_t local_count,
+                                   MinicBlockId body_block,
+                                   MinicFunctionId *function_id);
+bool minic_c0_program_set_function_signature(MinicC0Program *program,
+                                             MinicFunctionId function_id,
+                                             MinicType return_type,
+                                             const MinicType *parameter_types,
+                                             size_t parameter_count);
+bool minic_c0_program_set_function_parameter_count(MinicC0Program *program,
+                                                   MinicFunctionId function_id,
+                                                   size_t parameter_count);
+bool minic_c0_program_set_function_internal(MinicC0Program *program,
+                                            MinicFunctionId function_id,
+                                            bool is_internal);
+bool minic_c0_program_define_function(MinicC0Program *program,
+                                      MinicFunctionId function_id,
+                                      size_t local_begin,
+                                      MinicBlockId body_block);
+bool minic_c0_program_finish_function(MinicC0Program *program,
+                                      MinicFunctionId function_id,
+                                      size_t local_count);
+bool minic_c0_program_add_record(MinicC0Program *program,
+                                 const char *name,
+                                 size_t name_length,
+                                 MinicRecordId *record_id);
+bool minic_c0_record_add_field(MinicC0Program *program,
+                               MinicRecordId record_id,
+                               const char *name,
+                               size_t name_length,
+                               MinicType type,
+                               size_t element_count);
+bool minic_c0_program_finish_record(MinicC0Program *program, MinicRecordId record_id);
+bool minic_c0_program_add_array_type(MinicC0Program *program,
+                                     MinicType element_type,
+                                     size_t element_count,
+                                     MinicType *array_type);
+bool minic_c0_program_add_type_alias(MinicC0Program *program,
+                                     const char *name,
+                                     size_t name_length,
+                                     MinicType type,
+                                     MinicTypeAliasId *alias_id);
+bool minic_c0_program_add_global_object(MinicC0Program *program,
+                                        const char *name,
+                                        size_t name_length,
+                                        MinicType type,
+                                        bool is_internal,
+                                        bool is_read_only,
+                                        MinicGlobalObjectId *global_object_id);
+bool minic_c0_global_object_add_initializer(MinicC0Program *program,
+                                            MinicGlobalObjectId global_object_id,
+                                            int value);
 
-const MinicExpression *minic_c0_program_expression(
-    const MinicC0Program *program,
-    MinicExpressionId expression_id);
-const MinicLocal *minic_c0_program_local(
-    const MinicC0Program *program,
-    MinicLocalId local_id);
-const MinicStatement *minic_c0_program_statement(
-    const MinicC0Program *program,
-    MinicStatementId statement_id);
-const MinicBlock *minic_c0_program_block(
-    const MinicC0Program *program,
-    MinicBlockId block_id);
-const MinicFunction *minic_c0_program_function(
-    const MinicC0Program *program,
-    MinicFunctionId function_id);
-const MinicRecord *minic_c0_program_record(
-    const MinicC0Program *program,
-    MinicRecordId record_id);
-const MinicRecordField *minic_c0_record_field(
-    const MinicRecord *record,
-    size_t field_index);
-const MinicArrayType *minic_c0_program_array_type(
-    const MinicC0Program *program,
-    MinicArrayTypeId array_type_id);
-const MinicTypeAlias *minic_c0_program_type_alias(
-    const MinicC0Program *program,
-    MinicTypeAliasId alias_id);
-const MinicGlobalObject *minic_c0_program_global_object(
-    const MinicC0Program *program,
-    MinicGlobalObjectId global_object_id);
+const MinicExpression *minic_c0_program_expression(const MinicC0Program *program,
+                                                   MinicExpressionId expression_id);
+const MinicLocal *minic_c0_program_local(const MinicC0Program *program, MinicLocalId local_id);
+const MinicStatement *minic_c0_program_statement(const MinicC0Program *program,
+                                                 MinicStatementId statement_id);
+const MinicBlock *minic_c0_program_block(const MinicC0Program *program, MinicBlockId block_id);
+const MinicFunction *minic_c0_program_function(const MinicC0Program *program,
+                                               MinicFunctionId function_id);
+const MinicRecord *minic_c0_program_record(const MinicC0Program *program, MinicRecordId record_id);
+const MinicRecordField *minic_c0_record_field(const MinicRecord *record, size_t field_index);
+const MinicArrayType *minic_c0_program_array_type(const MinicC0Program *program,
+                                                  MinicArrayTypeId array_type_id);
+const MinicTypeAlias *minic_c0_program_type_alias(const MinicC0Program *program,
+                                                  MinicTypeAliasId alias_id);
+const MinicGlobalObject *minic_c0_program_global_object(const MinicC0Program *program,
+                                                        MinicGlobalObjectId global_object_id);
 
 #endif

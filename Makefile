@@ -374,10 +374,12 @@ bootstrap-compare: bootstrap
 	@printf '%s\n' "bootstrap-compare: no bootstrap stages exist yet"
 
 format:
-	@printf '%s\n' "format: formatter policy is not automated yet"
+	CLANG_FORMAT="$${CLANG_FORMAT:-clang-format-18}" \
+		bash tools/maintenance/run-format.sh write
 
 format-check:
-	@printf '%s\n' "format-check: formatter policy is not automated yet"
+	CLANG_FORMAT="$${CLANG_FORMAT:-clang-format-18}" \
+		bash tools/maintenance/run-format.sh check
 
 print-config:
 	@printf '%s\n' \

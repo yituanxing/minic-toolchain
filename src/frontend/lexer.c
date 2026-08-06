@@ -3,8 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 
-static MinicSourcePosition minic_lexer_position(const MinicLexer *lexer)
-{
+static MinicSourcePosition minic_lexer_position(const MinicLexer *lexer) {
     MinicSourcePosition position;
 
     position.offset = lexer->cursor;
@@ -13,24 +12,21 @@ static MinicSourcePosition minic_lexer_position(const MinicLexer *lexer)
     return position;
 }
 
-static char minic_lexer_peek(const MinicLexer *lexer)
-{
+static char minic_lexer_peek(const MinicLexer *lexer) {
     if (lexer->cursor >= lexer->length) {
         return '\0';
     }
     return lexer->source[lexer->cursor];
 }
 
-static char minic_lexer_peek_next(const MinicLexer *lexer)
-{
+static char minic_lexer_peek_next(const MinicLexer *lexer) {
     if (lexer->cursor + 1U >= lexer->length) {
         return '\0';
     }
     return lexer->source[lexer->cursor + 1U];
 }
 
-static void minic_lexer_advance(MinicLexer *lexer)
-{
+static void minic_lexer_advance(MinicLexer *lexer) {
     char character;
 
     if (lexer->cursor >= lexer->length) {
@@ -47,45 +43,33 @@ static void minic_lexer_advance(MinicLexer *lexer)
     }
 }
 
-static bool minic_is_space(char character)
-{
-    return character == ' ' || character == '\t' || character == '\n' ||
-           character == '\r' || character == '\f' || character == '\v';
+static bool minic_is_space(char character) {
+    return character == ' ' || character == '\t' || character == '\n' || character == '\r' ||
+           character == '\f' || character == '\v';
 }
 
-static bool minic_is_ascii_letter(char character)
-{
-    return (character >= 'a' && character <= 'z') ||
-           (character >= 'A' && character <= 'Z');
+static bool minic_is_ascii_letter(char character) {
+    return (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z');
 }
 
-static bool minic_is_identifier_start(char character)
-{
+static bool minic_is_identifier_start(char character) {
     return minic_is_ascii_letter(character) || character == '_';
 }
 
-static bool minic_is_identifier_continue(char character)
-{
-    return minic_is_identifier_start(character) ||
-           (character >= '0' && character <= '9');
+static bool minic_is_identifier_continue(char character) {
+    return minic_is_identifier_start(character) || (character >= '0' && character <= '9');
 }
 
-static bool minic_is_decimal_digit(char character)
-{
+static bool minic_is_decimal_digit(char character) {
     return character >= '0' && character <= '9';
 }
 
-static bool minic_is_hexadecimal_digit(char character)
-{
-    return minic_is_decimal_digit(character) ||
-           (character >= 'a' && character <= 'f') ||
+static bool minic_is_hexadecimal_digit(char character) {
+    return minic_is_decimal_digit(character) || (character >= 'a' && character <= 'f') ||
            (character >= 'A' && character <= 'F');
 }
 
-static MinicTokenKind minic_classify_identifier(
-    const char *text,
-    size_t length)
-{
+static MinicTokenKind minic_classify_identifier(const char *text, size_t length) {
     if (length == 4U && memcmp(text, "char", 4U) == 0) {
         return MINIC_TOKEN_KW_CHAR;
     }
@@ -131,12 +115,10 @@ static MinicTokenKind minic_classify_identifier(
     return MINIC_TOKEN_IDENTIFIER;
 }
 
-static void minic_lexer_set_diagnostic(
-    const MinicLexer *lexer,
-    MinicDiagnostic *diagnostic,
-    MinicSourcePosition position,
-    char character)
-{
+static void minic_lexer_set_diagnostic(const MinicLexer *lexer,
+                                       MinicDiagnostic *diagnostic,
+                                       MinicSourcePosition position,
+                                       char character) {
     if (diagnostic == NULL) {
         return;
     }
@@ -145,45 +127,35 @@ static void minic_lexer_set_diagnostic(
     diagnostic->line = position.line;
     diagnostic->column = position.column;
     if (character >= ' ' && character <= '~') {
-        (void)snprintf(
-            diagnostic->message,
-            sizeof(diagnostic->message),
-            "unexpected character '%c'",
-            character);
+        (void)snprintf(diagnostic->message,
+                       sizeof(diagnostic->message),
+                       "unexpected character '%c'",
+                       character);
     } else {
-        (void)snprintf(
-            diagnostic->message,
-            sizeof(diagnostic->message),
-            "unexpected byte 0x%02x",
-            (unsigned int)(unsigned char)character);
+        (void)snprintf(diagnostic->message,
+                       sizeof(diagnostic->message),
+                       "unexpected byte 0x%02x",
+                       (unsigned int)(unsigned char)character);
     }
 }
 
-static void minic_lexer_set_message(
-    const MinicLexer *lexer,
-    MinicDiagnostic *diagnostic,
-    MinicSourcePosition position,
-    const char *message)
-{
+static void minic_lexer_set_message(const MinicLexer *lexer,
+                                    MinicDiagnostic *diagnostic,
+                                    MinicSourcePosition position,
+                                    const char *message) {
     if (diagnostic == NULL) {
         return;
     }
     diagnostic->path = lexer->path;
     diagnostic->line = position.line;
     diagnostic->column = position.column;
-    (void)snprintf(
-        diagnostic->message,
-        sizeof(diagnostic->message),
-        "%s",
-        message);
+    (void)snprintf(diagnostic->message, sizeof(diagnostic->message), "%s", message);
 }
 
-void minic_lexer_initialize(
-    MinicLexer *lexer,
-    const char *path,
-    const char *source,
-    size_t length)
-{
+void minic_lexer_initialize(MinicLexer *lexer,
+                            const char *path,
+                            const char *source,
+                            size_t length) {
     lexer->path = path;
     lexer->source = source;
     lexer->length = length;
@@ -192,11 +164,7 @@ void minic_lexer_initialize(
     lexer->column = 1U;
 }
 
-bool minic_lexer_next(
-    MinicLexer *lexer,
-    MinicToken *token,
-    MinicDiagnostic *diagnostic)
-{
+bool minic_lexer_next(MinicLexer *lexer, MinicToken *token, MinicDiagnostic *diagnostic) {
     MinicSourcePosition begin;
     char character;
 
@@ -222,26 +190,20 @@ bool minic_lexer_next(
         do {
             minic_lexer_advance(lexer);
         } while (minic_is_identifier_continue(minic_lexer_peek(lexer)));
-        token->kind = minic_classify_identifier(
-            lexer->source + start,
-            lexer->cursor - start);
+        token->kind = minic_classify_identifier(lexer->source + start, lexer->cursor - start);
         token->span.end = minic_lexer_position(lexer);
         return true;
     }
 
     if (minic_is_decimal_digit(character)) {
         if (character == '0' &&
-            (minic_lexer_peek_next(lexer) == 'x' ||
-             minic_lexer_peek_next(lexer) == 'X')) {
+            (minic_lexer_peek_next(lexer) == 'x' || minic_lexer_peek_next(lexer) == 'X')) {
             minic_lexer_advance(lexer);
             minic_lexer_advance(lexer);
             if (!minic_is_hexadecimal_digit(minic_lexer_peek(lexer))) {
                 token->span.end = minic_lexer_position(lexer);
                 minic_lexer_set_message(
-                    lexer,
-                    diagnostic,
-                    begin,
-                    "expected hexadecimal digit after 0x");
+                    lexer, diagnostic, begin, "expected hexadecimal digit after 0x");
                 return false;
             }
             do {

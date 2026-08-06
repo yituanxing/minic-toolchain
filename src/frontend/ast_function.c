@@ -1,10 +1,8 @@
 #include "frontend/ast.h"
 
-bool minic_c0_program_set_function_internal(
-    MinicC0Program *program,
-    MinicFunctionId function_id,
-    bool is_internal)
-{
+bool minic_c0_program_set_function_internal(MinicC0Program *program,
+                                            MinicFunctionId function_id,
+                                            bool is_internal) {
     if (program == NULL || function_id >= program->function_count) {
         return false;
     }

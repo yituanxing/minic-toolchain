@@ -20,14 +20,12 @@ typedef struct MinicSourceBuffer {
     size_t size;
 } MinicSourceBuffer;
 
-static void minic_set_diagnostic(
-    MinicDiagnostic *diagnostic,
-    const char *path,
-    size_t line,
-    size_t column,
-    const char *format,
-    ...)
-{
+static void minic_set_diagnostic(MinicDiagnostic *diagnostic,
+                                 const char *path,
+                                 size_t line,
+                                 size_t column,
+                                 const char *format,
+                                 ...) {
     va_list arguments;
 
     if (diagnostic == NULL) {
@@ -37,19 +35,12 @@ static void minic_set_diagnostic(
     diagnostic->line = line;
     diagnostic->column = column;
     va_start(arguments, format);
-    (void)vsnprintf(
-        diagnostic->message,
-        sizeof(diagnostic->message),
-        format,
-        arguments);
+    (void)vsnprintf(diagnostic->message, sizeof(diagnostic->message), format, arguments);
     va_end(arguments);
 }
 
-static bool minic_read_file(
-    const char *path,
-    MinicSourceBuffer *buffer,
-    MinicDiagnostic *diagnostic)
-{
+static bool
+minic_read_file(const char *path, MinicSourceBuffer *buffer, MinicDiagnostic *diagnostic) {
     FILE *file;
     long end_position;
     size_t size;
@@ -57,35 +48,17 @@ static bool minic_read_file(
 
     file = fopen(path, "rb");
     if (file == NULL) {
-        minic_set_diagnostic(
-            diagnostic,
-            path,
-            1U,
-            1U,
-            "cannot open input: %s",
-            strerror(errno));
+        minic_set_diagnostic(diagnostic, path, 1U, 1U, "cannot open input: %s", strerror(errno));
         return false;
     }
-    if (fseek(file, 0L, SEEK_END) != 0 ||
-        (end_position = ftell(file)) < 0L ||
+    if (fseek(file, 0L, SEEK_END) != 0 || (end_position = ftell(file)) < 0L ||
         fseek(file, 0L, SEEK_SET) != 0) {
-        minic_set_diagnostic(
-            diagnostic,
-            path,
-            1U,
-            1U,
-            "cannot seek input: %s",
-            strerror(errno));
+        minic_set_diagnostic(diagnostic, path, 1U, 1U, "cannot seek input: %s", strerror(errno));
         (void)fclose(file);
         return false;
     }
     if ((unsigned long)end_position > (unsigned long)(SIZE_MAX - 1U)) {
-        minic_set_diagnostic(
-            diagnostic,
-            path,
-            1U,
-            1U,
-            "input is too large");
+        minic_set_diagnostic(diagnostic, path, 1U, 1U, "input is too large");
         (void)fclose(file);
         return false;
     }
@@ -93,35 +66,19 @@ static bool minic_read_file(
     size = (size_t)end_position;
     data = (char *)malloc(size + 1U);
     if (data == NULL) {
-        minic_set_diagnostic(
-            diagnostic,
-            path,
-            1U,
-            1U,
-            "out of memory while reading input");
+        minic_set_diagnostic(diagnostic, path, 1U, 1U, "out of memory while reading input");
         (void)fclose(file);
         return false;
     }
     if (size != 0U && fread(data, 1U, size, file) != size) {
-        minic_set_diagnostic(
-            diagnostic,
-            path,
-            1U,
-            1U,
-            "cannot read input");
+        minic_set_diagnostic(diagnostic, path, 1U, 1U, "cannot read input");
         free(data);
         (void)fclose(file);
         return false;
     }
     data[size] = '\0';
     if (fclose(file) != 0) {
-        minic_set_diagnostic(
-            diagnostic,
-            path,
-            1U,
-            1U,
-            "cannot close input: %s",
-            strerror(errno));
+        minic_set_diagnostic(diagnostic, path, 1U, 1U, "cannot close input: %s", strerror(errno));
         free(data);
         return false;
     }
@@ -131,22 +88,15 @@ static bool minic_read_file(
     return true;
 }
 
-int minic_compile_preprocessed_file(
-    const char *input_path,
-    const char *output_path,
-    MinicDiagnostic *diagnostic)
-{
+int minic_compile_preprocessed_file(const char *input_path,
+                                    const char *output_path,
+                                    MinicDiagnostic *diagnostic) {
     MinicSourceBuffer buffer;
     MinicC0Program program;
     bool success;
 
     if (input_path == NULL || output_path == NULL) {
-        minic_set_diagnostic(
-            diagnostic,
-            input_path,
-            1U,
-            1U,
-            "input and output paths are required");
+        minic_set_diagnostic(diagnostic, input_path, 1U, 1U, "input and output paths are required");
         return 1;
     }
     if (diagnostic != NULL) {
@@ -163,52 +113,26 @@ int minic_compile_preprocessed_file(
     }
 
     minic_c0_program_initialize(&program);
-    success = minic_parse_c0_program(
-        input_path,
-        buffer.data,
-        buffer.size,
-        &program,
-        diagnostic);
-    if (success &&
-        !minic_c0_program_verify(&program, MINIC_C0_AST_PARSED)) {
+    success = minic_parse_c0_program(input_path, buffer.data, buffer.size, &program, diagnostic);
+    if (success && !minic_c0_program_verify(&program, MINIC_C0_AST_PARSED)) {
         minic_set_diagnostic(
-            diagnostic,
-            input_path,
-            1U,
-            1U,
-            "parsed AST violates compiler contracts");
+            diagnostic, input_path, 1U, 1U, "parsed AST violates compiler contracts");
         success = false;
     }
     if (success && !minic_c0_program_normalize_casts(&program)) {
-        minic_set_diagnostic(
-            diagnostic,
-            input_path,
-            1U,
-            1U,
-            "cannot normalize cast expressions");
+        minic_set_diagnostic(diagnostic, input_path, 1U, 1U, "cannot normalize cast expressions");
         success = false;
     }
-    if (success &&
-        !minic_c0_program_verify(&program, MINIC_C0_AST_NORMALIZED)) {
+    if (success && !minic_c0_program_verify(&program, MINIC_C0_AST_NORMALIZED)) {
         minic_set_diagnostic(
-            diagnostic,
-            input_path,
-            1U,
-            1U,
-            "normalized AST violates backend contracts");
+            diagnostic, input_path, 1U, 1U, "normalized AST violates backend contracts");
         success = false;
     }
     if (success) {
-        success = minic_riscv64_layout_program(
-            input_path,
-            &program,
-            diagnostic);
+        success = minic_riscv64_layout_program(input_path, &program, diagnostic);
     }
     if (success) {
-        success = minic_riscv64_write_c0_program(
-            output_path,
-            &program,
-            diagnostic);
+        success = minic_riscv64_write_c0_program(output_path, &program, diagnostic);
     }
 
     minic_c0_program_destroy(&program);

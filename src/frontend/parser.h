@@ -7,11 +7,10 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-bool minic_parse_c0_program(
-    const char *path,
-    const char *source,
-    size_t length,
-    MinicC0Program *program,
-    MinicDiagnostic *diagnostic);
+bool minic_parse_c0_program(const char *path,
+                            const char *source,
+                            size_t length,
+                            MinicC0Program *program,
+                            MinicDiagnostic *diagnostic);
 
 #endif

@@ -2,8 +2,7 @@
 
 #include <limits.h>
 
-static int hexadecimal_digit_value(char character)
-{
+static int hexadecimal_digit_value(char character) {
     if (character >= '0' && character <= '9') {
         return character - '0';
     }
@@ -16,17 +15,13 @@ static int hexadecimal_digit_value(char character)
     return -1;
 }
 
-bool minic_parser_parse_integer_value(
-    MinicParser *parser,
-    int *value)
-{
+bool minic_parser_parse_integer_value(MinicParser *parser, int *value) {
     MinicSourceSpan span;
     size_t offset;
     unsigned long parsed;
     unsigned long base;
 
-    if (value == NULL ||
-        parser->current.kind != MINIC_TOKEN_INTEGER_CONSTANT) {
+    if (value == NULL || parser->current.kind != MINIC_TOKEN_INTEGER_CONSTANT) {
         minic_parser_error(parser, "expected integer constant");
         return false;
     }
@@ -34,10 +29,8 @@ bool minic_parser_parse_integer_value(
     span = parser->current.span;
     offset = span.begin.offset;
     base = 10UL;
-    if (span.end.offset - span.begin.offset >= 2U &&
-        parser->source[offset] == '0' &&
-        (parser->source[offset + 1U] == 'x' ||
-         parser->source[offset + 1U] == 'X')) {
+    if (span.end.offset - span.begin.offset >= 2U && parser->source[offset] == '0' &&
+        (parser->source[offset + 1U] == 'x' || parser->source[offset + 1U] == 'X')) {
         base = 16UL;
         offset += 2U;
     }
