@@ -29,17 +29,17 @@ Pinned Git blob identities:
 
 ## Current frontier
 
-MiniC now passes the upstream declarations, `struct AES_ctx`, typed and `const` prototypes, multidimensional typedef arrays, static read-only lookup tables, static internal functions, `void` definitions, explicit unsigned integer identity, comma-separated unsigned declarations, the first `KeyExpansion` loop, pointer-parameter subscripting, const-qualified local initialization, and expression lookup of the static global `sbox` table.
+MiniC now passes the upstream declarations, `struct AES_ctx`, typed and `const` prototypes, multidimensional typedef arrays, static read-only lookup tables, static internal functions, `void` definitions, explicit unsigned integer identity, comma-separated unsigned declarations, the first `KeyExpansion` loop, pointer-parameter subscripting, const-qualified local initialization, expression lookup of the static global `sbox` table, and the bitwise XOR expressions in `KeyExpansion`.
 
-The exact pinned failure is the first unsupported bitwise XOR operator in `KeyExpansion`:
+The exact pinned failure is the first pointer member access in `AES_init_ctx`:
 
 ```c
-RoundKey[...] = RoundKey[...] ^ tempa[0];
+KeyExpansion(ctx->RoundKey, key);
 ```
 
-The lexer currently rejects `^` before expression parsing. The next short integration must add a distinct token, C precedence below equality and above no currently supported logical operators, integer common-type semantics, and RV64 `xor` lowering with focused signed/unsigned differential coverage.
+The lexer and expression parser do not yet recognize `->`. The next short integration must connect the existing named-record descriptions to record object layout, derive the field offset and field type from a pointer-to-record base, produce an lvalue for the selected member, and emit RV64 base-plus-offset addressing. Array members such as `RoundKey` must then participate in the existing array-to-call-argument path without introducing a second record model.
 
-Global-object expression support is protected by focused lookup, local-shadowing, read-only-assignment, and bare-array gates plus twenty-six GCC/MiniC differential programs. The new `global_array_read` program reads a static table in one function while a same-named local shadows it in another; both lanes exit with status 15.
+Bitwise XOR support is protected by token and lexer tests, focused precedence/type/lowering gates, pointer-operand rejection, and twenty-seven GCC/MiniC differential programs. The new `bitwise_xor` program covers equality-versus-XOR precedence, negative signed operands, and high-bit unsigned behavior; both lanes exit with status 127.
 
 ## Remaining acceptance debt
 
