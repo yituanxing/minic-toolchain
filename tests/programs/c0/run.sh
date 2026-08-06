@@ -7,6 +7,59 @@ riscv_cc=${RISCV_CC:-riscv64-buildroot-linux-musl-gcc}
 qemu=${QEMU_RISCV64:-qemu-riscv64}
 riscv_objdump=${RISCV_OBJDUMP:-}
 work=${BUILD_DIR:-"$root/build/debug"}/tests/programs-c0
+manifest="$root/tests/programs/c0/manifest.txt"
+programs=
+
+inventory_error() {
+    printf '%s\n' "FAIL programs/c0 inventory: $1" >&2
+    exit 1
+}
+
+load_manifest() {
+    if test ! -f "$manifest"; then
+        inventory_error "missing manifest $manifest"
+    fi
+
+    while IFS= read -r name || test -n "$name"; do
+        case "$name" in
+        ''|'#'*)
+            continue
+            ;;
+        *[!a-z0-9_]*)
+            inventory_error "invalid program name '$name'"
+            ;;
+        esac
+
+        case " $programs " in
+        *" $name "*)
+            inventory_error "duplicate program '$name'"
+            ;;
+        esac
+        if test ! -f "$root/tests/programs/c0/$name.c"; then
+            inventory_error "manifest entry '$name' has no source file"
+        fi
+        programs="$programs $name"
+    done <"$manifest"
+
+    if test -z "$programs"; then
+        inventory_error "manifest contains no programs"
+    fi
+
+    for source in "$root"/tests/programs/c0/*.c; do
+        test -e "$source" || continue
+        source_name=${source##*/}
+        source_name=${source_name%.c}
+        case " $programs " in
+        *" $source_name "*)
+            ;;
+        *)
+            inventory_error "source '$source_name.c' is not listed in manifest"
+            ;;
+        esac
+    done
+}
+
+load_manifest
 
 if ! command -v "$riscv_cc" >/dev/null 2>&1 ||
    ! command -v "$qemu" >/dev/null 2>&1; then
@@ -113,41 +166,6 @@ run_program() {
         "PASS programs/c0/$name exit=$status stdout=$stdout_bytes stderr=$stderr_bytes"
 }
 
-run_program gcd
-run_program fibonacci
-run_program prime_count
-run_program collatz
-run_program block_scope
-run_program standalone_block
-run_program array_subscript
-run_program pointer_arithmetic
-run_program pointer_aggregate_arithmetic
-run_program pointer_read
-run_program pointer_write
-run_program pointer_chain_write
-run_program function_calls
-run_program function_prototype
-run_program function_parameter
-run_program function_two_parameters
-run_program function_four_parameters
-run_program function_eight_parameters
-run_program recursive_factorial
-run_program mutual_recursion
-run_program for_counter
-run_program for_iterations
-run_program for_loop
-run_program unsigned_semantics
-run_program pointer_subscript
-run_program const_local
-run_program global_array_read
-run_program bitwise_xor
-run_program pointer_member
-run_program expression_statement
-run_program postfix_subscript
-run_program compound_xor_assignment
-run_program integer_bit_operations
-run_program unbounded_for_break
-run_program prefix_decrement_update
-run_program cast_expressions
-run_program unsigned_char_layout
-run_program hexadecimal_expression
+for name in $programs; do
+    run_program "$name"
+done
