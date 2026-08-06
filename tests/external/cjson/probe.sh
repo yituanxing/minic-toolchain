@@ -91,6 +91,14 @@ if test "$first_line" != "$expected_line"; then
     exit 1
 fi
 
+eighth_line=$(sed -n '8p' "$preprocessed")
+expected_eighth_line='    char *valuestring;'
+if test "$eighth_line" != "$expected_eighth_line"; then
+    printf '%s\n' \
+        "FAIL external/cjson: preprocessed eighth line changed: $eighth_line" >&2
+    exit 1
+fi
+
 set +e
 "$minic" -S "$preprocessed" -o "$work/cJSON.s" \
     >"$work/minic.stdout" 2>"$diagnostic"
@@ -105,7 +113,7 @@ fi
 
 first_error=$(sed -n '/error:/p' "$diagnostic" | sed -n '1p')
 case "$first_error" in
-    *':2:16: error: use of undeclared record tag')
+    *':8:10: error: expected type name')
         ;;
     *)
         printf '%s\n' \
@@ -116,4 +124,4 @@ case "$first_error" in
 esac
 
 printf '%s\n' \
-    'PASS external/cjson frontier=self-referential-incomplete-record diagnostic=undeclared-record-tag source=cJSON-1.7.19 offline=1'
+    'PASS external/cjson frontier=plain-char-type-specifier diagnostic=expected-type-name source=cJSON-1.7.19 offline=1'
