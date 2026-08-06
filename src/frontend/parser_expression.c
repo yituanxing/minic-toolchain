@@ -409,6 +409,8 @@ static unsigned int binary_precedence(MinicTokenKind kind)
     case MINIC_TOKEN_EQUAL_EQUAL:
     case MINIC_TOKEN_BANG_EQUAL:
         return 20U;
+    case MINIC_TOKEN_CARET:
+        return 10U;
     default:
         return 0U;
     }
@@ -422,6 +424,7 @@ static MinicBinaryOperator binary_operator(MinicTokenKind kind)
     case MINIC_TOKEN_STAR: return MINIC_BINARY_MULTIPLY;
     case MINIC_TOKEN_SLASH: return MINIC_BINARY_DIVIDE;
     case MINIC_TOKEN_PERCENT: return MINIC_BINARY_REMAINDER;
+    case MINIC_TOKEN_CARET: return MINIC_BINARY_BITWISE_XOR;
     case MINIC_TOKEN_EQUAL_EQUAL: return MINIC_BINARY_EQUAL;
     case MINIC_TOKEN_BANG_EQUAL: return MINIC_BINARY_NOT_EQUAL;
     case MINIC_TOKEN_LESS: return MINIC_BINARY_LESS;
