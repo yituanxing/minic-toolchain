@@ -91,5 +91,6 @@ if command -v "$riscv_nm" >/dev/null 2>&1; then
     grep -F " AES_ECB_decrypt" "$work/aes-ecb.nm" >/dev/null
 fi
 
+object_bytes=$(wc -c <"$work/aes-ecb.o" | tr -d ' ')
 printf '%s\n' \
-    "PASS external/tiny-aes-c frontier=shimmed-core-assembly object=$(wc -c <\"$work/aes-ecb.o\" | tr -d ' ')"
+    "PASS external/tiny-aes-c frontier=shimmed-core-assembly object=$object_bytes"
