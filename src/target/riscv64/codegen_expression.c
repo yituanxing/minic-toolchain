@@ -318,6 +318,8 @@ bool minic_riscv64_emit_expression(
             expression->value.local_id);
     case MINIC_EXPRESSION_GLOBAL_OBJECT:
         return false;
+    case MINIC_EXPRESSION_CAST:
+        return false;
     case MINIC_EXPRESSION_ADDRESS_OF:
         return minic_riscv64_emit_lvalue_address(
             file,
