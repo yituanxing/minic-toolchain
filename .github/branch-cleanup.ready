@@ -1,0 +1,4 @@
+preserve=main,archive/*,backup/*
+merged_targets=27
+superseded_targets=1
+self_delete=true
