@@ -1,0 +1,35 @@
+name: Discover incomplete record context
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/discover-incomplete-record-context.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  discover:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: frontend/incomplete-record-tags
+      - name: Install target preprocessor
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-riscv64-linux-gnu
+      - name: Build MiniC and reproduce pinned frontier
+        shell: bash
+        run: |
+          make -j2
+          MINIC="$PWD/build/debug/bin/minic" \
+          BUILD_DIR="$PWD/build/record-context" \
+          RISCV_CC=riscv64-linux-gnu-gcc \
+            sh tests/external/cjson/probe.sh
+          preprocessed="$PWD/build/record-context/tests/external/cjson/cJSON.i"
+          printf '%s\n' '--- first twelve preprocessed lines ---'
+          nl -ba "$preprocessed" | sed -n '1,12p'
+          printf '%s\n' '--- exact MiniC diagnostic ---'
+          cat "$PWD/build/record-context/tests/external/cjson/minic.stderr"
+          exit 1
