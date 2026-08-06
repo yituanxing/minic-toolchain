@@ -6,6 +6,22 @@ static bool minic_parser_is_integer_type_specifier(MinicTokenKind kind) {
            kind == MINIC_TOKEN_KW_UNSIGNED;
 }
 
+bool minic_parser_require_complete_object_type(MinicParser *parser,
+                                               MinicType type,
+                                               const char *message) {
+    const MinicRecord *record;
+
+    if (!minic_type_is_record(type)) {
+        return true;
+    }
+    record = minic_c0_program_record(parser->program, type.record_id);
+    if (record != NULL && record->is_complete) {
+        return true;
+    }
+    minic_parser_error(parser, "%s", message);
+    return false;
+}
+
 bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type) {
     MinicType parsed_type;
     bool is_const;
@@ -113,7 +129,7 @@ bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type) {
         }
         record_id = minic_parser_find_record(parser, parser->current.span);
         record = minic_c0_program_record(parser->program, record_id);
-        if (record == NULL || !record->is_complete) {
+        if (record == NULL) {
             minic_parser_error(parser, "use of undeclared record tag");
             return false;
         }
@@ -171,6 +187,10 @@ bool minic_parser_parse_pointer_declarator(MinicParser *parser,
 bool minic_parser_parse_type_name(MinicParser *parser, MinicType *type) {
     MinicType base_type;
 
-    return minic_parser_parse_type_specifiers(parser, &base_type) &&
-           minic_parser_parse_pointer_declarator(parser, base_type, type);
+    if (!minic_parser_parse_type_specifiers(parser, &base_type) ||
+        !minic_parser_parse_pointer_declarator(parser, base_type, type)) {
+        return false;
+    }
+    return minic_parser_require_complete_object_type(
+        parser, *type, "incomplete record type requires pointer declarator");
 }
