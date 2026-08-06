@@ -124,7 +124,7 @@ LAYOUT_TEST_BINARY  := $(BUILD_DIR)/tests/target/riscv64/layout-test
 
 .PHONY: all help prepare check check-fast check-token-model check-lexer \
 	check-type check-record check-type-alias check-ast-contract check-layout \
-	check-static-functions \
+	check-source-inventory check-static-functions \
 	check-unsigned-declarations check-for-loops check-unbounded-for-break \
 	check-prefix-decrement-update check-cast-expressions \
 	check-unsigned-char-layout check-pointer-subscripts check-pointer-arithmetic \
@@ -133,7 +133,7 @@ LAYOUT_TEST_BINARY  := $(BUILD_DIR)/tests/target/riscv64/layout-test
 	check-expression-statements check-postfix-subscripts \
 	check-compound-xor-assignment check-c0-runtime check-programs-c0 \
 	check-runtime sanitize bootstrap bootstrap-compare format format-check \
-	clean distclean print-config
+	clean distclean print-config print-minic-sources
 
 all: $(MINIC_BINARY)
 
@@ -142,6 +142,7 @@ help:
 		"MiniC Toolchain build targets:" \
 		"  make                    Build the active MiniC compiler" \
 		"  make check-fast         Run the fast frontend and C0 gates" \
+		"  make check-source-inventory Verify production C source coverage" \
 		"  make check-token-model  Run the token data-model unit gate" \
 		"  make check-lexer        Run the C0 lexer unit gate" \
 		"  make check-type         Run the frontend type-value unit gate" \
@@ -234,6 +235,9 @@ check-ast-contract: $(AST_CONTRACT_TEST_BINARY)
 
 check-layout: $(LAYOUT_TEST_BINARY)
 	"$(abspath $(LAYOUT_TEST_BINARY))"
+
+check-source-inventory:
+	sh tools/check-source-inventory.sh
 
 check-static-functions: $(MINIC_BINARY)
 	MINIC="$(abspath $(MINIC_BINARY))" \
@@ -337,7 +341,7 @@ check-compound-xor-assignment: $(MINIC_BINARY)
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
 	sh tests/compiler/c0/run-compound-xor-assignment.sh
 
-check-fast: check-token-model check-lexer check-type check-record check-type-alias check-ast-contract check-layout check-static-functions check-unsigned-declarations check-for-loops check-unbounded-for-break check-prefix-decrement-update check-cast-expressions check-unsigned-char-layout check-pointer-subscripts check-pointer-arithmetic check-const-locals check-global-objects check-bitwise-xor check-integer-bit-operations check-pointer-members check-expression-statements check-postfix-subscripts check-compound-xor-assignment $(MINIC_BINARY)
+check-fast: check-source-inventory check-token-model check-lexer check-type check-record check-type-alias check-ast-contract check-layout check-static-functions check-unsigned-declarations check-for-loops check-unbounded-for-break check-prefix-decrement-update check-cast-expressions check-unsigned-char-layout check-pointer-subscripts check-pointer-arithmetic check-const-locals check-global-objects check-bitwise-xor check-integer-bit-operations check-pointer-members check-expression-statements check-postfix-subscripts check-compound-xor-assignment $(MINIC_BINARY)
 	MINIC="$(abspath $(MINIC_BINARY))" \
 	HOST_CC="$(CC)" \
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
@@ -378,6 +382,9 @@ format:
 
 format-check:
 	@printf '%s\n' "format-check: formatter policy is not automated yet"
+
+print-minic-sources:
+	@printf '%s\n' $(MINIC_SOURCES)
 
 print-config:
 	@printf '%s\n' \
