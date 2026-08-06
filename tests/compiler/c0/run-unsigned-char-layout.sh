@@ -29,6 +29,15 @@ fi
 printf '%s\n' "PASS compiler/c0/unsigned_char_layout"
 
 "$host_cc" -E -P -x c \
+    "$root/tests/compiler/c0/hexadecimal_expression.c" \
+    -o "$work/hexadecimal_expression.i"
+"$minic" -S \
+    "$work/hexadecimal_expression.i" \
+    -o "$work/hexadecimal_expression.s"
+grep -F "  li a0, 77" "$work/hexadecimal_expression.s" >/dev/null
+printf '%s\n' "PASS compiler/c0/hexadecimal_expression"
+
+"$host_cc" -E -P -x c \
     "$root/tests/compiler/c0/invalid_plain_char.c" \
     -o "$work/invalid_plain_char.i"
 if "$minic" -S \
