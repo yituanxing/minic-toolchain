@@ -35,6 +35,7 @@ typedef enum MinicExpressionKind {
     MINIC_EXPRESSION_ADDRESS_OF,
     MINIC_EXPRESSION_DEREFERENCE,
     MINIC_EXPRESSION_SUBSCRIPT,
+    MINIC_EXPRESSION_MEMBER,
     MINIC_EXPRESSION_UNARY,
     MINIC_EXPRESSION_BINARY,
     MINIC_EXPRESSION_CALL
@@ -83,6 +84,11 @@ typedef struct MinicExpression {
             MinicExpressionId base;
             MinicExpressionId index;
         } subscript;
+        struct {
+            MinicExpressionId base;
+            MinicRecordId record_id;
+            size_t field_index;
+        } member;
         struct {
             MinicBinaryOperator operator_kind;
             MinicExpressionId left;
