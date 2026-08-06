@@ -56,7 +56,7 @@ static bool minic_riscv64_emit_subscript_address(
 {
     const MinicExpression *base;
     const MinicExpression *index;
-    const MinicLocal *array;
+    bool base_is_array_object;
     unsigned int shift;
 
     if (expression == NULL || expression->kind != MINIC_EXPRESSION_SUBSCRIPT) {
@@ -69,16 +69,45 @@ static bool minic_riscv64_emit_subscript_address(
         program,
         expression->value.subscript.index);
     if (base == NULL || index == NULL ||
-        base->kind != MINIC_EXPRESSION_LOCAL ||
-        base->value_category != MINIC_VALUE_LVALUE ||
         !minic_type_is_integer(index->type)) {
         return false;
     }
-    array = minic_c0_program_local(program, base->value.local_id);
-    if (array == NULL || array->element_count <= 1U ||
-        !minic_type_equal(array->type, expression->type)) {
-        return false;
+
+    base_is_array_object = false;
+    if (base->kind == MINIC_EXPRESSION_LOCAL &&
+        base->value_category == MINIC_VALUE_LVALUE) {
+        const MinicLocal *local;
+
+        local = minic_c0_program_local(program, base->value.local_id);
+        base_is_array_object = local != NULL && local->element_count > 1U;
+        if (base_is_array_object &&
+            !minic_type_equal(local->type, expression->type)) {
+            return false;
+        }
     }
+
+    if (base_is_array_object) {
+        if (!minic_riscv64_emit_lvalue_address(
+                file,
+                program,
+                function,
+                expression->value.subscript.base)) {
+            return false;
+        }
+    } else {
+        MinicType pointee;
+
+        if (!minic_type_pointee(base->type, &pointee) ||
+            !minic_type_equal(pointee, expression->type) ||
+            !minic_riscv64_emit_expression(
+                file,
+                program,
+                function,
+                expression->value.subscript.base)) {
+            return false;
+        }
+    }
+
     if (minic_type_is_integer(expression->type)) {
         shift = 2U;
     } else if (minic_type_is_pointer(expression->type)) {
@@ -87,12 +116,7 @@ static bool minic_riscv64_emit_subscript_address(
         return false;
     }
 
-    return minic_riscv64_emit_lvalue_address(
-               file,
-               program,
-               function,
-               expression->value.subscript.base) &&
-           fprintf(file, "  addi sp, sp, -16\n  sd a0, 0(sp)\n") >= 0 &&
+    return fprintf(file, "  addi sp, sp, -16\n  sd a0, 0(sp)\n") >= 0 &&
            minic_riscv64_emit_expression(
                file,
                program,
