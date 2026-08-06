@@ -29,17 +29,17 @@ Pinned Git blob identities:
 
 ## Current frontier
 
-MiniC now passes the upstream declarations, `struct AES_ctx`, typed and `const` prototypes, multidimensional typedef arrays, static read-only lookup tables, static internal functions, `void` definitions, explicit unsigned integer identity, comma-separated unsigned declarations, the first `KeyExpansion` loop, pointer-parameter subscripting, const-qualified local initialization, expression lookup of the static global `sbox` table, bitwise XOR, typedef-backed record fields, RV64 record layout, pointer member access in `AES_init_ctx`, and the standalone `KeyExpansion(ctx->RoundKey, key);` expression statement.
+MiniC now passes the upstream declarations, `struct AES_ctx`, typed and `const` prototypes, multidimensional typedef arrays, static read-only lookup tables, static internal functions, `void` definitions, explicit unsigned integer identity, comma-separated unsigned declarations, the first `KeyExpansion` loop, pointer-parameter subscripting, const-qualified local initialization, expression lookup of the static global `sbox` table, bitwise XOR, typedef-backed record fields, RV64 record layout, pointer member access in `AES_init_ctx`, the standalone `KeyExpansion(ctx->RoundKey, key);` expression statement, and the repeatable postfix chain `(*state)[i][j]` in `AddRoundKey`.
 
-The exact pinned failure is the first postfix subscript after a parenthesized dereference in `AddRoundKey`:
+The exact pinned failure is the compound XOR assignment:
 
 ```c
 (*state)[i][j] ^= RoundKey[(round * Nb * 4) + (i * Nb) + j];
 ```
 
-MiniC parses `(*state)` as a valid parenthesized dereference expression, but postfix parsing is still embedded in selected local/global/member paths. It therefore stops before the first `[i]`. The next integration must centralize repeatable postfix subscripting so any suitable expression result can become a subscript base; only after that boundary will the compound `^=` operator become the active frontier.
+Both subscripts now parse and lower correctly. The lexer currently emits separate `^` and `=` tokens. Binary parsing consumes `^`, then reaches `=` while expecting the right operand and reports `expected expression` at preprocessed line 100, column 23. The next short integration must add a distinct `^=` token and lower it as a single read-modify-write statement while preserving one evaluation of the target lvalue.
 
-Expression-statement support is protected by focused call/assignment/semicolon gates and twenty-nine GCC/MiniC differential programs. The new `expression_statement` program covers a void call, a value-returning call whose result is discarded, pointer side effects, and a side-effect-free arithmetic expression; both lanes exit with status 10 and produce empty output streams. The parser also copies target type identity before parsing an assignment right-hand side, preventing pointers into growable Program-owned expression storage from surviving an AST reallocation boundary.
+Repeatable postfix support is protected by focused scalar-rejection and assembly gates plus thirty GCC/MiniC differential programs. The new `postfix_subscript` program dereferences a pointer to a two-dimensional typedef array, repeatedly applies postfix subscripts, reads and writes elements, and verifies a non-power-of-two 12-byte row stride; both lanes exit with status 15 and produce empty output streams. RV64 codegen now consumes the same target-owned type-size query as object layout, using shifts for power-of-two strides and multiplication for arbitrary aggregate sizes.
 
 ## Remaining acceptance debt
 

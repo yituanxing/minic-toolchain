@@ -1,4 +1,5 @@
 #include "target/riscv64/codegen_internal.h"
+#include "target/riscv64/layout.h"
 
 static bool minic_riscv64_pointer_shift(
     MinicType pointer_type,
@@ -48,6 +49,33 @@ static bool minic_riscv64_emit_normalize_integer(
     return true;
 }
 
+static bool minic_riscv64_emit_scale_a0(FILE *file, size_t element_size)
+{
+    size_t value;
+    unsigned int shift;
+
+    if (element_size == 0U) {
+        return false;
+    }
+    if (element_size == 1U) {
+        return true;
+    }
+    if ((element_size & (element_size - 1U)) == 0U) {
+        value = element_size;
+        shift = 0U;
+        while (value > 1U) {
+            value >>= 1U;
+            shift += 1U;
+        }
+        return fprintf(file, "  slli a0, a0, %u\n", shift) >= 0;
+    }
+    return fprintf(
+        file,
+        "  li t1, %zu\n"
+        "  mul a0, a0, t1\n",
+        element_size) >= 0;
+}
+
 static bool minic_riscv64_emit_subscript_address(
     FILE *file,
     const MinicC0Program *program,
@@ -57,7 +85,8 @@ static bool minic_riscv64_emit_subscript_address(
     const MinicExpression *base;
     const MinicExpression *index;
     bool base_is_array_object;
-    unsigned int shift;
+    size_t element_size;
+    size_t element_alignment;
 
     if (expression == NULL || expression->kind != MINIC_EXPRESSION_SUBSCRIPT) {
         return false;
@@ -103,6 +132,18 @@ static bool minic_riscv64_emit_subscript_address(
             !minic_type_equal(array_type->element_type, expression->type)) {
             return false;
         }
+    } else if (base->value_category == MINIC_VALUE_LVALUE &&
+               minic_type_is_array(base->type)) {
+        const MinicArrayType *array_type;
+
+        array_type = minic_c0_program_array_type(
+            program,
+            base->type.array_type_id);
+        base_is_array_object = array_type != NULL;
+        if (!base_is_array_object ||
+            !minic_type_equal(array_type->element_type, expression->type)) {
+            return false;
+        }
     }
 
     if (base_is_array_object) {
@@ -127,11 +168,11 @@ static bool minic_riscv64_emit_subscript_address(
         }
     }
 
-    if (minic_type_is_integer(expression->type)) {
-        shift = 2U;
-    } else if (minic_type_is_pointer(expression->type)) {
-        shift = 3U;
-    } else {
+    if (!minic_riscv64_type_layout(
+            program,
+            expression->type,
+            &element_size,
+            &element_alignment)) {
         return false;
     }
 
@@ -141,13 +182,12 @@ static bool minic_riscv64_emit_subscript_address(
                program,
                function,
                expression->value.subscript.index) &&
+           minic_riscv64_emit_scale_a0(file, element_size) &&
            fprintf(
                file,
-               "  slli a0, a0, %u\n"
                "  ld t0, 0(sp)\n"
                "  addi sp, sp, 16\n"
-               "  add a0, t0, a0\n",
-               shift) >= 0;
+               "  add a0, t0, a0\n") >= 0;
 }
 
 static bool minic_riscv64_emit_member_address(
