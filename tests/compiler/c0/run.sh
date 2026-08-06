@@ -247,7 +247,7 @@ expect_compile_failure \
     "array object requires a subscript"
 expect_compile_failure \
     invalid_array_index_type \
-    "array index must have int type"
+    "array index must have integer type"
 expect_compile_failure \
     invalid_duplicate_record_field \
     "duplicate record field"
