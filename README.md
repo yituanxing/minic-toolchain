@@ -30,19 +30,21 @@ The C implementation now includes:
 - a modular parser split by expressions, statements, functions, types, records, typedefs, globals, and constants;
 - typed expressions with lvalue/rvalue distinctions, explicit signed/unsigned integer identity, and equal-rank integer conversions;
 - lexical block scopes and stable Program-owned local objects;
-- integer expressions, comparisons, conditions, `if`, `while`, normalized bounded `for` loops, assignments, prefix increment, pointers, fixed arrays, pointer arithmetic, and comma-separated local declarations;
+- integer expressions, comparisons, conditions, `if`, `while`, normalized bounded `for` loops, assignments, prefix increment, pointers, fixed arrays, array and pointer subscripting, pointer arithmetic, and comma-separated local declarations;
 - function prototypes, legal forward calls, direct and nested calls, recursion, mutual recursion, and zero through eight integer register arguments;
 - `void`, `const`, named records, recursive array typedefs, static read-only global arrays, and internal functions;
-- RV64 object layout, call-safe stack frames, signed/unsigned loads and arithmetic, assembly emission, and internal symbol visibility;
+- RV64 object layout, call-safe stack frames, signed/unsigned loads and arithmetic, shared scaled address calculation for array/pointer subscripts, assembly emission, and internal symbol visibility;
 - debug, release `-Werror`, ASan/UBSan, RV64/QEMU, and GCC/MiniC differential gates.
 
-Twenty-three executable C programs are permanently compared between a full GCC reference lane and the MiniC lane by exit status, standard output, and standard error. The matrix includes isolated loop-counter/body tests and high-bit unsigned comparison, division, and remainder coverage.
+Twenty-four executable C programs are permanently compared between a full GCC reference lane and the MiniC lane by exit status, standard output, and standard error. The matrix includes isolated loop-counter/body tests, high-bit unsigned comparison/division/remainder coverage, and pointer-parameter/local-pointer subscript reads and writes.
 
 ## First external project
 
 The first pinned upstream driver is `kokke/tiny-AES-c`, AES-128 ECB configuration. Upstream source files are downloaded at fixed Git blob identities and are not patched for MiniC.
 
-The compiler has progressed through the upstream declarations, typedef arrays, static lookup tables, internal functions, `void` definitions, unsigned declaration lists, and the first `KeyExpansion` loop. The current verified frontier is the first assignment that subscripts the `RoundKey` and `Key` pointer parameters.
+The compiler has progressed through the upstream declarations, typedef arrays, static lookup tables, internal functions, `void` definitions, unsigned declaration lists, the first `KeyExpansion` loop, and pointer-parameter subscripting. The current verified frontier is the `const uint8_t u8tmp = tempa[0]` source declaration; under the active target shim this preprocesses to a const-qualified `int` local declaration.
+
+The target shim is temporary evidence scaffolding, not an implementation of `uint8_t`. True byte-sized type identity, object layout, loads/stores, scaling, and conversions remain separate capabilities that must be implemented before AES execution can be considered correct.
 
 The external project is not complete yet. Completion requires the pinned AES-128 ECB core and a test-vector harness to pass the GCC/MiniC differential oracle without MiniC-specific source changes.
 

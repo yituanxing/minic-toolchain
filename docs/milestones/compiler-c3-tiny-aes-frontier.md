@@ -1,14 +1,20 @@
 # C3 First External Project Frontier / C3 首个外部项目前沿
 
+> Historical snapshot / 历史快照
+>
+> This document freezes the C3 baseline at the point where the original 400-plus-commit integration branch was closed. It is not the live tiny-AES status. The maintained current frontier is [`tests/external/tiny-aes-c/README.md`](../../tests/external/tiny-aes-c/README.md), and the executable source of truth is its exact CI probe.
+>
+> 本文冻结最初 400 多提交集成分支结束时的 C3 基线，不再作为 tiny-AES 动态状态页。当前维护中的前沿位于 [`tests/external/tiny-aes-c/README.md`](../../tests/external/tiny-aes-c/README.md)，可执行的最终事实来源是其中的精确 CI 探针。
+
 ## Scope / 范围
 
-This milestone freezes the first large compiler-only integration branch before continuing the pinned `tiny-AES-c` workload on a new, shorter branch.
+This milestone froze the first large compiler-only integration branch before continuing the pinned `tiny-AES-c` workload through short, bounded pull requests.
 
-本里程碑在新的短分支继续固定的 `tiny-AES-c` 负载前，冻结首条大型“仅编译器”集成分支。
+本里程碑冻结第一条大型“仅编译器”集成分支，后续固定的 `tiny-AES-c` 负载改用范围受限的短 PR 推进。
 
-The toolchain boundary remains:
+The toolchain boundary was and remains:
 
-工具链边界保持为：
+工具链边界当时及现在均为：
 
 ```text
 external target preprocessing
@@ -17,15 +23,15 @@ external target preprocessing
 -> QEMU execution
 ```
 
-No native preprocessor, assembler, linker, libc, or self-hosting takeover is included.
+No native preprocessor, assembler, linker, libc, or self-hosting takeover was included.
 
 本里程碑不包含原生预处理器、汇编器、链接器、libc 或自举接管。
 
-## Accepted implementation / 已验收实现
+## Accepted C3 implementation / 已验收的 C3 实现
 
-The branch contains production support for:
+The frozen baseline contained production support for:
 
-该分支包含以下生产能力：
+冻结基线包含以下生产能力：
 
 - dedicated Lexer, Token, and source spans / 独立 Lexer、Token 和源码区间；
 - modular Parser files with lexical block scopes / 带词法块作用域的模块化 Parser；
@@ -35,15 +41,15 @@ The branch contains production support for:
 - named records, recursive array typedefs, static read-only global arrays, internal functions, and typed `void` returns / 命名记录、递归数组 typedef、静态只读全局数组、内部函数和类型化 `void` 返回；
 - RV64 layout, call-safe frames, typed loads/stores, global data emission, and internal linkage emission / RV64 布局、调用安全栈帧、类型化加载/存储、全局数据发射和内部链接发射。
 
-## Permanent validation / 永久验证
+Later short PRs deliberately extend this baseline; those later capabilities are documented in the live project status rather than retroactively changing this accepted list.
 
-The clean-checkout CI runs one coarse-grained Ubuntu 24.04 job so the RISC-V toolchain cache is restored only once. Within that machine it runs host configurations and target suites concurrently where safe.
+后续短 PR 会继续扩展该基线；这些新能力记录在动态项目状态中，不回写为当时已经具备的 C3 能力。
 
-干净检出 CI 使用一个粗粒度 Ubuntu 24.04 Job，使 RISC-V 工具链缓存只恢复一次；在同一虚拟机中，对安全的宿主配置和目标测试并行执行。
+## Frozen validation / 冻结时验证
 
-Required lanes:
+The C3 clean-checkout CI required:
 
-必须通过的流水线：
+C3 干净检出 CI 当时要求：
 
 - Debug host gate / Debug 宿主门禁；
 - Release `-Werror` host gate / Release `-Werror` 宿主门禁；
@@ -52,9 +58,9 @@ Required lanes:
 - nineteen GCC/MiniC differential executable programs / 19 个 GCC/MiniC 双轨可执行程序；
 - pinned upstream tiny-AES frontier / 固定上游 tiny-AES 前沿。
 
-The differential program lane compares exit status, standard output, and standard error and retains paired artifacts on mismatch.
+The current matrix has grown beyond this frozen count. See the root README and live external-project status for current validation numbers.
 
-差分程序流水线比较退出码、标准输出和标准错误；出现差异时保留双方产物。
+当前矩阵已经超过该冻结数量；最新验证数量请查看根 README 和动态外部项目状态。
 
 ## Pinned upstream driver / 固定上游驱动
 
@@ -69,9 +75,9 @@ The upstream `aes.c`, `aes.h`, and license blobs are verified before each probe.
 
 每次探针运行前都会校验上游 `aes.c`、`aes.h` 和许可证 Blob；不允许加入 MiniC 专用上游补丁。
 
-Capabilities already driven by this project include:
+At the C3 freeze, this project had already driven:
 
-该项目已经推动实现：
+在 C3 冻结点，该项目已经推动实现：
 
 - named `struct AES_ctx` declarations / 命名 `struct AES_ctx` 声明；
 - typed and `const` function prototypes / 类型化及 `const` 函数原型；
@@ -80,15 +86,15 @@ Capabilities already driven by this project include:
 - static read-only lookup tables and initializer lists / 静态只读查找表和初始化列表；
 - static internal functions and linkage conflicts / static 内部函数和链接属性冲突检查。
 
-## Current exact frontier / 当前精确前沿
+## Historical frontier / 历史前沿
 
-The compiler now reaches the body of `KeyExpansion`. The next fixed failure is the first `unsigned` local declaration in that function, currently reported at the pinned preprocessed location as an undeclared local.
+At this milestone, the compiler had reached the body of `KeyExpansion` and stopped at its first unsupported `unsigned` local declaration. That frontier has since been passed.
 
-编译器现在已经进入 `KeyExpansion` 函数体。下一处固定失败是该函数中的第一条 `unsigned` 局部声明；在固定预处理结果中，它目前被报告为未声明局部名字。
+在本里程碑时，编译器已经进入 `KeyExpansion` 函数体，并停在第一条不支持的 `unsigned` 局部声明。该前沿后来已经越过。
 
-This is a frontier, not project completion.
+Do not update this section for every later capability. The live frontier and exact diagnostic belong in the external-project directory and CI probe.
 
-这只是当前前沿，不代表项目完成。
+不要为后续每项能力持续修改本节；动态前沿和精确诊断应维护在外部项目目录及 CI 探针中。
 
 ## Completion criteria / 完成标准
 
@@ -101,21 +107,11 @@ This is a frontier, not project completion.
 3. an independently defined test-vector harness executes under QEMU / 独立定义的测试向量驱动在 QEMU 中运行；
 4. GCC and MiniC lanes produce equal observable results / GCC 与 MiniC 两条流水线产生相同可观察结果；
 5. focused positive and negative tests permanently cover every generalized capability introduced by the workload / 真实项目推动的每项通用能力都有永久正负测试；
-6. README, capability documentation, validation instructions, and active deviations are reviewed again / 再次审查 README、能力文档、验证说明和活跃偏离。
+6. temporary type shims are removed or proven semantically equivalent for the accepted workload / 临时类型 shim 被移除，或已证明对验收负载语义等价；
+7. README, capability documentation, validation instructions, and active deviations are reviewed again / 再次审查 README、能力文档、验证说明和活跃偏离。
 
-## Next branch / 下一分支
+## Branch policy established here / 本里程碑确立的分支策略
 
-After this integration milestone is green and merged, development continues on a new branch beginning with the real frontier rather than retaining a 400-plus-commit Draft PR.
+The detailed 400-plus-commit history was preserved separately, while the accepted baseline was squash-merged. Subsequent real-software capabilities use short branches with one exact upstream boundary, permanent coverage, documentation synchronization, and squash merge.
 
-该集成里程碑全绿并合并后，将从真实前沿创建新分支继续，不再让 400 多提交的 Draft PR 持续增长。
-
-The next expected sequence is evidence-driven:
-
-下一阶段仍由证据决定，当前预期顺序为：
-
-1. unsigned integer declaration syntax / unsigned 整数声明语法；
-2. comma-separated local declarations / 逗号分隔局部声明；
-3. narrow integer width and signedness semantics / 窄整数宽度与符号性语义；
-4. byte-sized local/global layout and RV64 load/store/data directives / 字节宽度局部和全局布局，以及 RV64 加载、存储和数据指令；
-5. member access and remaining control-flow or operator requirements exposed by upstream / 上游继续暴露的成员访问、控制流或运算符需求；
-6. final AES-128 ECB differential execution / 最终 AES-128 ECB 双轨执行。
+完整的 400 多提交历史另行保留，已验收基线通过 squash 合并。后续真实软件能力使用短分支：每条分支处理一个精确上游边界，补永久门禁、同步文档后再 squash 合并。
