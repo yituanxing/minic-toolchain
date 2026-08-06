@@ -3,18 +3,24 @@
 #include <stdio.h>
 #include <string.h>
 
-static int expect_name(MinicTokenKind kind, const char *expected) {
+static int expect_name(MinicTokenKind kind, const char *expected)
+{
     const char *actual;
 
     actual = minic_token_kind_name(kind);
     if (strcmp(actual, expected) != 0) {
-        (void)fprintf(stderr, "token name mismatch: expected='%s' actual='%s'\n", expected, actual);
+        (void)fprintf(
+            stderr,
+            "token name mismatch: expected='%s' actual='%s'\n",
+            expected,
+            actual);
         return 1;
     }
     return 0;
 }
 
-int main(void) {
+int main(void)
+{
     MinicSourceSpan span;
 
     span.begin.offset = 4U;
@@ -40,7 +46,8 @@ int main(void) {
         expect_name(MINIC_TOKEN_KW_RETURN, "return") != 0 ||
         expect_name(MINIC_TOKEN_KW_BREAK, "break") != 0 ||
         expect_name(MINIC_TOKEN_MINUS_MINUS, "--") != 0 ||
-        expect_name(MINIC_TOKEN_ARROW, "->") != 0 || expect_name(MINIC_TOKEN_AMPERSAND, "&") != 0 ||
+        expect_name(MINIC_TOKEN_ARROW, "->") != 0 ||
+        expect_name(MINIC_TOKEN_AMPERSAND, "&") != 0 ||
         expect_name(MINIC_TOKEN_CARET, "^") != 0 ||
         expect_name(MINIC_TOKEN_CARET_EQUAL, "^=") != 0 ||
         expect_name(MINIC_TOKEN_LESS_LESS, "<<") != 0 ||
