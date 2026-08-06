@@ -366,31 +366,50 @@ static bool parse_while(MinicParser *parser)
     return minic_parser_add_statement(parser, &statement);
 }
 
-static bool build_prefix_increment(
+static bool build_prefix_update(
     MinicParser *parser,
     MinicStatementId *statement_id)
 {
-    MinicSourceSpan increment_span;
+    MinicSourceSpan update_span;
     MinicSourceSpan name_span;
+    MinicTokenKind update_kind;
+    MinicBinaryOperator operator_kind;
+    const char *name_error;
+    const char *target_error;
     MinicLocalId local_id;
     const MinicLocal *local;
     MinicExpressionId target_id;
     MinicExpressionId value_id;
     MinicExpressionId one_id;
-    MinicExpressionId sum_id;
+    MinicExpressionId updated_value_id;
     MinicExpression one;
-    MinicExpression sum;
+    MinicExpression updated_value;
     MinicStatement statement;
 
     if (statement_id == NULL ||
-        parser->current.kind != MINIC_TOKEN_PLUS_PLUS) {
-        minic_parser_error(parser, "for update requires prefix increment");
+        (parser->current.kind != MINIC_TOKEN_PLUS_PLUS &&
+         parser->current.kind != MINIC_TOKEN_MINUS_MINUS)) {
+        minic_parser_error(
+            parser,
+            "for update requires prefix increment or decrement");
         return false;
     }
-    increment_span = parser->current.span;
+
+    update_kind = parser->current.kind;
+    operator_kind = update_kind == MINIC_TOKEN_PLUS_PLUS
+        ? MINIC_BINARY_ADD
+        : MINIC_BINARY_SUBTRACT;
+    name_error = update_kind == MINIC_TOKEN_PLUS_PLUS
+        ? "prefix increment requires a local name"
+        : "prefix decrement requires a local name";
+    target_error = update_kind == MINIC_TOKEN_PLUS_PLUS
+        ? "prefix increment requires a modifiable integer local"
+        : "prefix decrement requires a modifiable integer local";
+    update_span = parser->current.span;
+
     if (!minic_parser_advance(parser) ||
         parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
-        minic_parser_error(parser, "prefix increment requires a local name");
+        minic_parser_error(parser, "%s", name_error);
         return false;
     }
 
@@ -401,7 +420,7 @@ static bool build_prefix_increment(
         !minic_type_is_integer(local->type) ||
         (minic_type_is_const(local->type) &&
          !minic_type_is_pointer(local->type))) {
-        minic_parser_error(parser, "prefix increment requires a modifiable integer local");
+        minic_parser_error(parser, "%s", target_error);
         return false;
     }
     if (!add_local_lvalue_expression(
@@ -419,7 +438,7 @@ static bool build_prefix_increment(
 
     (void)memset(&one, 0, sizeof(one));
     one.kind = MINIC_EXPRESSION_INTEGER;
-    one.span = increment_span;
+    one.span = update_span;
     one.type = minic_type_int();
     one.value_category = MINIC_VALUE_RVALUE;
     one.value.integer_value = 1;
@@ -427,25 +446,31 @@ static bool build_prefix_increment(
         return false;
     }
 
-    (void)memset(&sum, 0, sizeof(sum));
-    sum.kind = MINIC_EXPRESSION_BINARY;
-    sum.span.begin = increment_span.begin;
-    sum.span.end = name_span.end;
-    sum.value_category = MINIC_VALUE_RVALUE;
-    sum.value.binary.operator_kind = MINIC_BINARY_ADD;
-    sum.value.binary.left = value_id;
-    sum.value.binary.right = one_id;
-    if (!minic_type_integer_common(local->type, one.type, &sum.type) ||
-        !minic_parser_add_expression(parser, &sum, &sum_id)) {
+    (void)memset(&updated_value, 0, sizeof(updated_value));
+    updated_value.kind = MINIC_EXPRESSION_BINARY;
+    updated_value.span.begin = update_span.begin;
+    updated_value.span.end = name_span.end;
+    updated_value.value_category = MINIC_VALUE_RVALUE;
+    updated_value.value.binary.operator_kind = operator_kind;
+    updated_value.value.binary.left = value_id;
+    updated_value.value.binary.right = one_id;
+    if (!minic_type_integer_common(
+            local->type,
+            one.type,
+            &updated_value.type) ||
+        !minic_parser_add_expression(
+            parser,
+            &updated_value,
+            &updated_value_id)) {
         return false;
     }
 
     (void)memset(&statement, 0, sizeof(statement));
     statement.kind = MINIC_STATEMENT_ASSIGN;
-    statement.span.begin = increment_span.begin;
+    statement.span.begin = update_span.begin;
     statement.span.end = name_span.end;
     statement.target_expression = target_id;
-    statement.expression = sum_id;
+    statement.expression = updated_value_id;
     statement.then_block = MINIC_BLOCK_INVALID;
     statement.else_block = MINIC_BLOCK_INVALID;
     if (!minic_c0_program_add_statement(
@@ -500,7 +525,7 @@ static bool parse_for(MinicParser *parser)
                    "expected ';'")) {
         return false;
     }
-    if (!build_prefix_increment(parser, &update_statement) ||
+    if (!build_prefix_update(parser, &update_statement) ||
         !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')'") ||
         !parse_loop_branch(parser, &statement.then_block)) {
         return false;
