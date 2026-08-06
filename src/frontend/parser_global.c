@@ -50,7 +50,7 @@ bool minic_parser_parse_static_global(MinicParser *parser)
         !minic_type_is_const(element_type)) {
         minic_parser_error(
             parser,
-            "static global arrays currently require const int elements");
+            "static global arrays currently require const integer elements");
         return false;
     }
     if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
