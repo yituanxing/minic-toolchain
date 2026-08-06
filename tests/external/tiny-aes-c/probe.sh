@@ -56,4 +56,4 @@ fi
 
 frontier=$(sed -n '1p' "$work/minic.stderr")
 printf '%s\n' \
-    "PASS external/tiny-aes-c frontier=KeyExpansion-const-typedef-local diagnostic=$frontier"
+    "PASS external/tiny-aes-c frontier=KeyExpansion-const-local diagnostic=$frontier"
