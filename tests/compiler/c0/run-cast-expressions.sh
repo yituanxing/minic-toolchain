@@ -4,7 +4,8 @@ set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 minic=${MINIC:-"$root/build/debug/bin/minic"}
 host_cc=${HOST_CC:-${CC:-cc}}
-work=${BUILD_DIR:-"$root/build/debug"}/tests/compiler-c0-cast-expressions
+build_dir=${BUILD_DIR:-"$root/build/debug"}
+work="$build_dir/tests/compiler-c0-cast-expressions"
 
 mkdir -p "$work"
 
@@ -52,3 +53,8 @@ expect_failure \
 expect_failure \
     invalid_cast_assignment_target \
     "assignment target must be a modifiable lvalue"
+
+MINIC="$minic" \
+HOST_CC="$host_cc" \
+BUILD_DIR="$build_dir" \
+sh "$root/tests/compiler/c0/run-pointer-qualifications.sh"

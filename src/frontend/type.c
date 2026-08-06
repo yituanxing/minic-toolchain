@@ -19,6 +19,29 @@ static MinicType minic_type_integer(
     return type;
 }
 
+static bool minic_type_same_unqualified_identity(
+    MinicType left,
+    MinicType right)
+{
+    return left.base_kind == right.base_kind &&
+           left.record_id == right.record_id &&
+           left.array_type_id == right.array_type_id &&
+           left.integer_sign == right.integer_sign &&
+           left.integer_rank == right.integer_rank &&
+           left.pointer_depth == right.pointer_depth;
+}
+
+static bool minic_type_pointer_qualification_compatible(
+    MinicType target,
+    MinicType source)
+{
+    if (target.pointer_depth != 1U || source.pointer_depth != 1U ||
+        !minic_type_same_unqualified_identity(target, source)) {
+        return false;
+    }
+    return (source.base_qualifiers & ~target.base_qualifiers) == 0U;
+}
+
 MinicType minic_type_void(void)
 {
     MinicType type;
@@ -114,13 +137,8 @@ bool minic_type_pointee(MinicType pointer, MinicType *result)
 
 bool minic_type_equal(MinicType left, MinicType right)
 {
-    return left.base_kind == right.base_kind &&
-           left.record_id == right.record_id &&
-           left.array_type_id == right.array_type_id &&
-           left.integer_sign == right.integer_sign &&
-           left.integer_rank == right.integer_rank &&
-           left.base_qualifiers == right.base_qualifiers &&
-           left.pointer_depth == right.pointer_depth;
+    return minic_type_same_unqualified_identity(left, right) &&
+           left.base_qualifiers == right.base_qualifiers;
 }
 
 bool minic_type_integer_promotion(MinicType type, MinicType *result)
@@ -168,7 +186,8 @@ bool minic_type_assignment_compatible(MinicType target, MinicType source)
     if (minic_type_is_integer(target) && minic_type_is_integer(source)) {
         return true;
     }
-    return minic_type_equal(target, source);
+    return minic_type_equal(target, source) ||
+           minic_type_pointer_qualification_compatible(target, source);
 }
 
 bool minic_type_cast_compatible(MinicType target, MinicType source)

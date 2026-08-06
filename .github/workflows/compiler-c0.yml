@@ -41,3 +41,14 @@ jobs:
         env:
           RV64_CACHE_HIT: ${{ steps.rv64-cache.outputs.cache-hit }}
         run: bash .github/scripts/compiler-c0-full-gate.sh
+
+      - name: Upload compiler failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compiler-c0-failure-diagnostics
+          path: |
+            build/ci-external/tests/external/tiny-aes-c/diagnostic.txt
+            build/ci-external/tests/external/tiny-aes-c/*.status
+          if-no-files-found: ignore
+          retention-days: 7

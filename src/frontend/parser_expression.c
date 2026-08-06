@@ -12,30 +12,18 @@ static bool parse_integer(
     MinicExpressionId *expression_id)
 {
     MinicExpression expression;
-    size_t offset;
-    unsigned long value;
+    int value;
 
     (void)memset(&expression, 0, sizeof(expression));
     expression.kind = MINIC_EXPRESSION_INTEGER;
     expression.span = parser->current.span;
     expression.type = minic_type_int();
     expression.value_category = MINIC_VALUE_RVALUE;
-    value = 0UL;
-    for (offset = expression.span.begin.offset;
-         offset < expression.span.end.offset;
-         ++offset) {
-        unsigned long digit;
-
-        digit = (unsigned long)(unsigned int)(parser->source[offset] - '0');
-        if (value > ((unsigned long)INT_MAX - digit) / 10UL) {
-            minic_parser_error(parser, "integer constant exceeds C0 int range");
-            return false;
-        }
-        value = value * 10UL + digit;
+    if (!minic_parser_parse_integer_value(parser, &value)) {
+        return false;
     }
-    expression.value.integer_value = (int)value;
-    return minic_parser_add_expression(parser, &expression, expression_id) &&
-           minic_parser_advance(parser);
+    expression.value.integer_value = value;
+    return minic_parser_add_expression(parser, &expression, expression_id);
 }
 
 static bool parse_local_reference(
