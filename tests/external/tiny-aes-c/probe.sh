@@ -45,7 +45,7 @@ if "$minic" -S "$work/aes-ecb.i" -o "$work/aes-ecb.s" \
     exit 1
 fi
 
-if ! grep -F ":100:23:" "$work/minic.stderr" >/dev/null ||
+if ! grep -F ":137:14:" "$work/minic.stderr" >/dev/null ||
    ! grep -F "expected expression" "$work/minic.stderr" >/dev/null; then
     printf '%s\n' \
         "FAIL external/tiny-aes-c: unexpected compiler frontier" >&2
@@ -55,4 +55,4 @@ fi
 
 frontier=$(sed -n '1p' "$work/minic.stderr")
 printf '%s\n' \
-    "PASS external/tiny-aes-c frontier=AddRoundKey-compound-xor-assignment diagnostic=$frontier"
+    "PASS external/tiny-aes-c frontier=xtime-left-shift diagnostic=$frontier"
