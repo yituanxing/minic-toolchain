@@ -10,6 +10,7 @@ permissions:
 
 jobs:
   apply:
+    # This workflow is the authoritative bounded implementation gate for PR #32.
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
