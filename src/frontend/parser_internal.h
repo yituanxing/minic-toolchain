@@ -71,8 +71,7 @@ MinicGlobalObjectId minic_parser_find_global_object(const MinicParser *parser,
 MinicRecordId minic_parser_find_record(const MinicParser *parser, MinicSourceSpan name_span);
 MinicTypeAliasId minic_parser_find_type_alias(const MinicParser *parser, MinicSourceSpan name_span);
 
-bool minic_parser_parse_record_definition_specifier(MinicParser *parser,
-                                                     MinicType *record_type);
+bool minic_parser_parse_record_definition_specifier(MinicParser *parser, MinicType *record_type);
 bool minic_parser_parse_record_definition(MinicParser *parser);
 bool minic_parser_parse_typedef(MinicParser *parser);
 bool minic_parser_parse_static_global(MinicParser *parser);
