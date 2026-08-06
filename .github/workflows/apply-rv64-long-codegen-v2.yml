@@ -1,0 +1,36 @@
+name: Apply RV64 long codegen v2
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/apply-rv64-long-codegen-v2.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: frontend/rv64-long-integers
+          fetch-depth: 0
+      - name: Add long cast recognition
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('src/frontend/parser_expression.c')
+          text = path.read_text()
+          old = "    case MINIC_TOKEN_KW_CONST:\n    case MINIC_TOKEN_KW_INT:\n    case MINIC_TOKEN_KW_UNSIGNED:"
+          new = "    case MINIC_TOKEN_KW_CONST:\n    case MINIC_TOKEN_KW_INT:\n    case MINIC_TOKEN_KW_LONG:\n    case MINIC_TOKEN_KW_SIGNED:\n    case MINIC_TOKEN_KW_UNSIGNED:"
+          if text.count(old) != 1:
+              raise SystemExit(f'cast marker count={text.count(old)}')
+          path.write_text(text.replace(old, new, 1))
+          PY
+          git rm \
+            .github/workflows/apply-rv64-long-codegen-v2.yml \
+            .github/workflows/diagnose-rv64-long-program.yml
+      - name: Verify and commit full-width backend
+        run: bash .github/scripts/apply-rv64-long-codegen.sh
