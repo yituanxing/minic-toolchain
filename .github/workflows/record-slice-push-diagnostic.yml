@@ -1,0 +1,73 @@
+name: Record slice push diagnostic
+
+on:
+  push:
+    branches:
+      - frontend/incomplete-record-tags
+    paths:
+      - '.github/record-slice.ready'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: frontend/incomplete-record-tags
+          fetch-depth: 0
+      - name: Run bounded record slice with persistent diagnostics
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          printf '\n' >> src/frontend/parser_type.c
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('.github/scripts/apply-self-referential-records.sh')
+          text = path.read_text()
+          old = '''    Node first;
+    Node second;
+
+    first.next = &second;
+    first.next->value = 41;
+    return first.next->value;
+'''
+          new = '''    Node first;
+    Node second;
+    Node *cursor = &first;
+
+    cursor->next = &second;
+    cursor->next->value = 41;
+    return cursor->next->value;
+'''
+          if text.count(old) != 1:
+              raise SystemExit(f'fixture marker count={text.count(old)}')
+          path.write_text(text.replace(old, new, 1))
+          PY
+          git rm \
+            .github/record-slice.ready \
+            .github/workflows/record-slice-push-diagnostic.yml \
+            .github/workflows/record-slice-push.yml \
+            .github/workflows/apply-self-referential-records-v2.yml
+
+          set +e
+          bash .github/scripts/apply-self-referential-records.sh \
+            > /tmp/record-slice.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/record-slice.log
+          if test "$status" -eq 0; then
+            exit 0
+          fi
+
+          cp /tmp/record-slice.log .github/record-slice-failure.log
+          printf 'status=%s\n' "$status" >> .github/record-slice-failure.log
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/record-slice-failure.log
+          git commit -m "ci: capture self-record slice failure"
+          git push origin HEAD:frontend/incomplete-record-tags
+          exit "$status"
