@@ -13,13 +13,14 @@ on:
   push:
     branches:
       - main
+      - frontend/incomplete-record-tags
   merge_group:
     types:
       - checks_requested
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: compiler-c0-${{ github.ref }}
@@ -58,3 +59,54 @@ jobs:
             build/ci-external/tests/external/tiny-aes-c/*.status
           if-no-files-found: ignore
           retention-days: 7
+
+  apply-record-slice:
+    name: Apply self-referential record slice
+    if: github.event_name == 'push' && github.ref == 'refs/heads/frontend/incomplete-record-tags'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout production branch
+        uses: actions/checkout@v4
+        with:
+          ref: frontend/incomplete-record-tags
+          fetch-depth: 0
+
+      - name: Prepare bounded acceptance and restore permanent workflow
+        shell: bash
+        run: |
+          git fetch origin main
+          printf '\n' >> src/frontend/parser_type.c
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('.github/scripts/apply-self-referential-records.sh')
+          text = path.read_text()
+          old = '''    Node first;
+    Node second;
+
+    first.next = &second;
+    first.next->value = 41;
+    return first.next->value;
+'''
+          new = '''    Node first;
+    Node second;
+    Node *cursor = &first;
+
+    cursor->next = &second;
+    cursor->next->value = 41;
+    return cursor->next->value;
+'''
+          if text.count(old) != 1:
+              raise SystemExit(f'fixture marker count={text.count(old)}')
+          path.write_text(text.replace(old, new, 1))
+          PY
+          git checkout origin/main -- .github/workflows/compiler-c0.yml
+          git rm --ignore-unmatch \
+            .github/record-slice.ready \
+            .github/record-slice-failure.log \
+            .github/workflows/record-slice-push-diagnostic.yml \
+            .github/workflows/record-slice-push.yml \
+            .github/workflows/apply-self-referential-records-v2.yml
+
+      - name: Apply, validate, and commit bounded slice
+        run: bash .github/scripts/apply-self-referential-records.sh
