@@ -143,3 +143,4 @@ run_program bitwise_xor
 run_program pointer_member
 run_program expression_statement
 run_program postfix_subscript
+run_program compound_xor_assignment
