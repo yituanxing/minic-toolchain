@@ -129,9 +129,14 @@ bool minic_type_integer_promotion(MinicType type, MinicType *result) {
         *result = minic_type_int();
         return true;
     }
-    if (type.integer_rank == MINIC_INTEGER_RANK_INT ||
-        type.integer_rank == MINIC_INTEGER_RANK_LONG) {
-        *result = type;
+    if (type.integer_rank == MINIC_INTEGER_RANK_INT) {
+        *result =
+            minic_type_is_unsigned_integer(type) ? minic_type_unsigned_int() : minic_type_int();
+        return true;
+    }
+    if (type.integer_rank == MINIC_INTEGER_RANK_LONG) {
+        *result =
+            minic_type_is_unsigned_integer(type) ? minic_type_unsigned_long() : minic_type_long();
         return true;
     }
     return false;
