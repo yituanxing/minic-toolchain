@@ -320,6 +320,12 @@ bool minic_riscv64_emit_expression(
         return false;
     case MINIC_EXPRESSION_CAST:
         return false;
+    case MINIC_EXPRESSION_BITCAST:
+        return minic_riscv64_emit_expression(
+            file,
+            program,
+            function,
+            expression->value.unary.operand);
     case MINIC_EXPRESSION_ADDRESS_OF:
         return minic_riscv64_emit_lvalue_address(
             file,

@@ -1,6 +1,7 @@
 #include "minic/compiler.h"
 
 #include "frontend/ast.h"
+#include "frontend/ast_verifier.h"
 #include "frontend/cast_normalization.h"
 #include "frontend/parser.h"
 #include "target/riscv64/codegen.h"
@@ -168,6 +169,16 @@ int minic_compile_preprocessed_file(
         buffer.size,
         &program,
         diagnostic);
+    if (success &&
+        !minic_c0_program_verify(&program, MINIC_C0_AST_PARSED)) {
+        minic_set_diagnostic(
+            diagnostic,
+            input_path,
+            1U,
+            1U,
+            "parsed AST violates compiler contracts");
+        success = false;
+    }
     if (success && !minic_c0_program_normalize_casts(&program)) {
         minic_set_diagnostic(
             diagnostic,
@@ -175,6 +186,16 @@ int minic_compile_preprocessed_file(
             1U,
             1U,
             "cannot normalize cast expressions");
+        success = false;
+    }
+    if (success &&
+        !minic_c0_program_verify(&program, MINIC_C0_AST_NORMALIZED)) {
+        minic_set_diagnostic(
+            diagnostic,
+            input_path,
+            1U,
+            1U,
+            "normalized AST violates backend contracts");
         success = false;
     }
     if (success) {
