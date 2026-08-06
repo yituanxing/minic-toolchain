@@ -115,8 +115,9 @@ LAYOUT_TEST_BINARY  := $(BUILD_DIR)/tests/target/riscv64/layout-test
 	check-unsigned-declarations check-for-loops check-pointer-subscripts \
 	check-const-locals check-global-objects check-bitwise-xor \
 	check-pointer-members check-expression-statements check-postfix-subscripts \
-	check-c0-runtime check-programs-c0 check-runtime sanitize bootstrap \
-	bootstrap-compare format format-check clean distclean print-config
+	check-compound-xor-assignment check-c0-runtime check-programs-c0 \
+	check-runtime sanitize bootstrap bootstrap-compare format format-check \
+	clean distclean print-config
 
 all: $(MINIC_BINARY)
 
@@ -141,6 +142,7 @@ help:
 		"  make check-pointer-members Run pointer record member and field gates" \
 		"  make check-expression-statements Run expression/assignment statement gates" \
 		"  make check-postfix-subscripts Run repeatable multidimensional subscript gates" \
+		"  make check-compound-xor-assignment Run ^= single-evaluation and type gates" \
 		"  make check              Run the normal host-side test gate" \
 		"  make check-c0-runtime   Run focused RISC-V/QEMU microprogram gates" \
 		"  make check-programs-c0  Differentially compare real programs: GCC vs MiniC" \
@@ -263,7 +265,13 @@ check-postfix-subscripts: $(MINIC_BINARY)
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
 	sh tests/compiler/c0/run-postfix-subscripts.sh
 
-check-fast: check-token-model check-lexer check-type check-record check-type-alias check-layout check-static-functions check-unsigned-declarations check-for-loops check-pointer-subscripts check-const-locals check-global-objects check-bitwise-xor check-pointer-members check-expression-statements check-postfix-subscripts $(MINIC_BINARY)
+check-compound-xor-assignment: $(MINIC_BINARY)
+	MINIC="$(abspath $(MINIC_BINARY))" \
+	HOST_CC="$(CC)" \
+	BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/compiler/c0/run-compound-xor-assignment.sh
+
+check-fast: check-token-model check-lexer check-type check-record check-type-alias check-layout check-static-functions check-unsigned-declarations check-for-loops check-pointer-subscripts check-const-locals check-global-objects check-bitwise-xor check-pointer-members check-expression-statements check-postfix-subscripts check-compound-xor-assignment $(MINIC_BINARY)
 	MINIC="$(abspath $(MINIC_BINARY))" \
 	HOST_CC="$(CC)" \
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
