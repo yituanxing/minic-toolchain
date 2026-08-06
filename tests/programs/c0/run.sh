@@ -136,3 +136,4 @@ run_program for_counter
 run_program for_iterations
 run_program for_loop
 run_program unsigned_semantics
+run_program pointer_subscript
