@@ -132,6 +132,14 @@ bool minic_type_assignment_compatible(MinicType target, MinicType source)
     return minic_type_equal(target, source);
 }
 
+bool minic_type_cast_compatible(MinicType target, MinicType source)
+{
+    if (minic_type_is_integer(target) && minic_type_is_integer(source)) {
+        return true;
+    }
+    return minic_type_is_pointer(target) && minic_type_is_pointer(source);
+}
+
 bool minic_type_is_const(MinicType type)
 {
     return (type.base_qualifiers & MINIC_TYPE_QUALIFIER_CONST) != 0U;
