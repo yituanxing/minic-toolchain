@@ -64,30 +64,32 @@ static int first_mismatch(
 int main(void)
 {
     struct AES_ctx context;
+    struct AES_ctx *context_pointer;
     uint8_t block[16];
     int failure;
     int index;
 
+    context_pointer = &context;
     for (index = 0; index < 16; ++index) {
         block[index] = vector_plaintext[index];
     }
 
-    AES_init_ctx(&context, &vector_key[0]);
+    AES_init_ctx(context_pointer, &vector_key[0]);
     failure = first_mismatch(
-        &context.RoundKey[0],
+        &context_pointer->RoundKey[0],
         &vector_round_key[0],
         176);
     if (failure != 0) {
         return failure;
     }
 
-    AES_ECB_encrypt(&context, &block[0]);
+    AES_ECB_encrypt(context_pointer, &block[0]);
     failure = first_mismatch(&block[0], &vector_ciphertext[0], 16);
     if (failure != 0) {
         return 176 + failure;
     }
 
-    AES_ECB_decrypt(&context, &block[0]);
+    AES_ECB_decrypt(context_pointer, &block[0]);
     failure = first_mismatch(&block[0], &vector_plaintext[0], 16);
     if (failure != 0) {
         return 192 + failure;
