@@ -1,19 +1,19 @@
-static int *pick(int *value, int *calls)
+static int pick(int *calls)
 {
     *calls = *calls + 1;
-    return value;
+    return 0;
 }
 
 int main(void)
 {
-    int value;
+    int values[1];
     int calls;
     unsigned mask;
 
-    value = 85;
+    values[0] = 85;
     calls = 0;
     mask = 240;
-    *pick(&value, &calls) ^= 15;
+    values[pick(&calls)] ^= 15;
     mask ^= 255;
-    return value + calls * 100 + mask;
+    return values[0] + calls * 100 + mask;
 }
