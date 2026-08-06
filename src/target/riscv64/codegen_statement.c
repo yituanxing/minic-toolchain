@@ -90,6 +90,14 @@ static bool minic_riscv64_emit_statement(
             function,
             statement);
 
+    case MINIC_STATEMENT_EXPRESSION:
+        return statement->expression != MINIC_EXPRESSION_INVALID &&
+               minic_riscv64_emit_expression(
+                   file,
+                   program,
+                   function,
+                   statement->expression);
+
     case MINIC_STATEMENT_RETURN:
         return minic_riscv64_emit_return(
             file,
