@@ -1,0 +1,36 @@
+name: Delete merged RV64 long branch
+
+on:
+  push:
+    branches:
+      - frontend/rv64-long-integers
+    paths:
+      - '.github/workflows/delete-merged-rv64-long-branch.yml'
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  delete:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Verify merged PR and delete exact branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          EXPECTED_BRANCH: frontend/rv64-long-integers
+          EXPECTED_PR: '31'
+          EXPECTED_MERGE: 7179d5fb5cb0ecaa17cd35bfdba24a259649d9ba
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$GITHUB_REF_NAME" = "$EXPECTED_BRANCH"
+          merged=$(gh api "repos/$REPOSITORY/pulls/$EXPECTED_PR" --jq '.merged')
+          merge_sha=$(gh api "repos/$REPOSITORY/pulls/$EXPECTED_PR" --jq '.merge_commit_sha')
+          head_ref=$(gh api "repos/$REPOSITORY/pulls/$EXPECTED_PR" --jq '.head.ref')
+          test "$merged" = true
+          test "$merge_sha" = "$EXPECTED_MERGE"
+          test "$head_ref" = "$EXPECTED_BRANCH"
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${REPOSITORY}.git" \
+            --delete "$EXPECTED_BRANCH"
