@@ -14,24 +14,10 @@ static bool minic_riscv64_emit_normalize_word(
     MinicType type,
     const char *register_name)
 {
-    if (!minic_type_is_integer(type)) {
-        return false;
-    }
-    if (minic_type_is_unsigned_integer(type)) {
-        return fprintf(
-            file,
-            "  slli %s, %s, 32\n"
-            "  srli %s, %s, 32\n",
-            register_name,
-            register_name,
-            register_name,
-            register_name) >= 0;
-    }
-    return fprintf(
+    return minic_riscv64_emit_integer_conversion(
         file,
-        "  addiw %s, %s, 0\n",
-        register_name,
-        register_name) >= 0;
+        type,
+        register_name);
 }
 
 static bool minic_riscv64_emit_assignment(
@@ -52,27 +38,23 @@ static bool minic_riscv64_emit_assignment(
         !minic_type_assignment_compatible(target->type, value->type)) {
         return false;
     }
-    if (!minic_riscv64_emit_expression(
-            file,
-            program,
-            function,
-            statement->expression) ||
-        fprintf(file, "  addi sp, sp, -16\n  sd a0, 0(sp)\n") < 0 ||
-        !minic_riscv64_emit_lvalue_address(
-            file,
-            program,
-            function,
-            statement->target_expression) ||
-        fprintf(file, "  ld t0, 0(sp)\n  addi sp, sp, 16\n") < 0) {
-        return false;
-    }
-    if (minic_type_is_integer(target->type)) {
-        return fprintf(file, "  sw t0, 0(a0)\n") >= 0;
-    }
-    if (minic_type_is_pointer(target->type)) {
-        return fprintf(file, "  sd t0, 0(a0)\n") >= 0;
-    }
-    return false;
+    return minic_riscv64_emit_expression(
+               file,
+               program,
+               function,
+               statement->expression) &&
+           fprintf(file, "  addi sp, sp, -16\n  sd a0, 0(sp)\n") >= 0 &&
+           minic_riscv64_emit_lvalue_address(
+               file,
+               program,
+               function,
+               statement->target_expression) &&
+           fprintf(file, "  ld t0, 0(sp)\n  addi sp, sp, 16\n") >= 0 &&
+           minic_riscv64_emit_scalar_store(
+               file,
+               target->type,
+               "t0",
+               "a0");
 }
 
 static bool minic_riscv64_emit_xor_assignment(
@@ -100,11 +82,11 @@ static bool minic_riscv64_emit_xor_assignment(
             function,
             statement->target_expression) ||
         fprintf(file, "  addi sp, sp, -16\n  sd a0, 0(sp)\n") < 0 ||
-        fprintf(
+        !minic_riscv64_emit_scalar_load(
             file,
-            minic_type_is_unsigned_integer(target->type)
-                ? "  lwu t0, 0(a0)\n"
-                : "  lw t0, 0(a0)\n") < 0 ||
+            target->type,
+            "t0",
+            "a0") ||
         !minic_riscv64_emit_normalize_word(file, common_type, "t0") ||
         fprintf(file, "  sd t0, 8(sp)\n") < 0 ||
         !minic_riscv64_emit_expression(
@@ -121,8 +103,12 @@ static bool minic_riscv64_emit_xor_assignment(
         fprintf(
             file,
             "  ld t0, 0(sp)\n"
-            "  addi sp, sp, 16\n"
-            "  sw a0, 0(t0)\n") < 0) {
+            "  addi sp, sp, 16\n") < 0 ||
+        !minic_riscv64_emit_scalar_store(
+            file,
+            target->type,
+            "a0",
+            "t0")) {
         return false;
     }
     return true;
@@ -152,6 +138,13 @@ static bool minic_riscv64_emit_return(
                 program,
                 function,
                 statement->expression)) {
+            return false;
+        }
+        if (minic_type_is_integer(function->return_type) &&
+            !minic_riscv64_emit_integer_conversion(
+                file,
+                function->return_type,
+                "a0")) {
             return false;
         }
     }
