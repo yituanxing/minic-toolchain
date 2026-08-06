@@ -41,7 +41,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/minic-apt/archives
-          key: rv64-apt-${{ runner.os }}-${{ runner.arch }}-noble-v1
+          key: rv64-apt-${{ runner.os }}-${{ runner.arch }}-noble-${{ hashFiles('tools/ci/ubuntu-24.04-packages.txt') }}
 
       - name: Run the complete compiler gate
         env:
