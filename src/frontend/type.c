@@ -33,13 +33,6 @@ MinicType minic_type_void(void)
     return type;
 }
 
-MinicType minic_type_char(void)
-{
-    return minic_type_integer(
-        MINIC_INTEGER_SIGN_SIGNED,
-        MINIC_INTEGER_RANK_CHAR);
-}
-
 MinicType minic_type_unsigned_char(void)
 {
     return minic_type_integer(
