@@ -63,6 +63,32 @@ External GCC may preprocess, assemble, link, and provide CRT/libc. MiniC must co
 
 外部 GCC 可以预处理、汇编、链接并提供 CRT/libc。MiniC 必须编译已验收输入中的每个 C 函数，不得把不支持的函数静默交给 GCC。
 
+## Current exact frontier / 当前精确前沿
+
+The clean-checkout discovery probe preprocesses the unchanged core with a minimal Hosted header surface. `size_t` is defined through the target compiler's `__SIZE_TYPE__`, so the RV64 preprocessed form is width-correct rather than reduced to `unsigned int` for convenience.
+
+干净检出发现探针使用最小 Hosted 头环境预处理未修改核心。`size_t` 通过目标编译器的 `__SIZE_TYPE__` 定义，因此 RV64 预处理结果保持正确宽度，不为方便而缩减成 `unsigned int`。
+
+The first preprocessed line and first MiniC diagnostic are:
+
+首条预处理源码和 MiniC 首条诊断为：
+
+```c
+typedef long unsigned int size_t;
+```
+
+```text
+cJSON.i:1:9: error: expected type name
+```
+
+The current blocker is therefore native `long` integer type support and the RV64 `unsigned long` identity required by `size_t`. This is classified as a category-A cross-project hotspot: Lua, TinyCC, SQLite, hosted libc interfaces, musl, and Linux all depend on target-correct `size_t` and long-width integer semantics.
+
+因此，当前缺口是原生 `long` 整数类型，以及 `size_t` 所需的 RV64 `unsigned long` 身份。该缺口属于 A 类多项目热点：Lua、TinyCC、SQLite、Hosted libc 接口、musl 和 Linux 都依赖目标正确的 `size_t` 与 long 宽度整数语义。
+
+`tests/external/cjson/probe.sh` permanently verifies the three vendored identities, recreates this target-accurate preprocessing environment without network access, and requires the exact frontier. When MiniC crosses it, the gate fails intentionally so the next branch must advance and document the new frontier instead of silently leaving stale status.
+
+`tests/external/cjson/probe.sh` 永久校验三份 Vendor 身份，在无网络条件下重建目标正确的预处理环境，并要求精确前沿。当 MiniC 越过该位置时，门禁会主动失败，要求下一分支推进并记录新前沿，而不是静默保留过期状态。
+
 ## Validation ladder / 验证阶梯
 
 The project will advance through visible, independently reviewable results:
