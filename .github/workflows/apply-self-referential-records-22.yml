@@ -1,0 +1,23 @@
+name: Apply self-referential records 22
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/apply-self-referential-records-22.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: frontend/incomplete-record-tags
+          fetch-depth: 0
+      - name: Verify formatter availability
+        run: command -v clang-format-18
+      - name: Apply and verify self-referential record support
+        run: bash .github/scripts/apply-self-referential-records.sh
