@@ -33,15 +33,17 @@ This is the active GitHub Actions clean-checkout profile.
 
 ```text
 Runner image:  ubuntu-24.04
+Host compiler: cc supplied by the runner image
+Formatter:     clang-format-18 supplied by the runner image
 Target driver: riscv64-linux-gnu-gcc
 Assembler/linker/objdump prefix: riscv64-linux-gnu-
 Executor:      qemu-riscv64
 Target libc:   Ubuntu RISC-V GNU libc cross environment
 ```
 
-Requested package names are reviewed in:
+Requested target package names are reviewed in:
 
-软件包名称清单位于：
+目标侧软件包名称清单位于：
 
 ```text
 tools/ci/ubuntu-24.04-packages.txt
@@ -57,9 +59,9 @@ libc6-dev-riscv64-cross
 qemu-user
 ```
 
-APT repositories and Ubuntu runner images are mutable. Therefore this profile is **version-reported**, not falsely described as byte-pinned. `tools/ci/verify-validation-tools.sh` verifies the required commands and prints the resolved GCC, Binutils, QEMU, and installed package versions in every complete run.
+APT repositories and Ubuntu runner images are mutable. Therefore this profile is **version-reported**, not falsely described as byte-pinned. `tools/ci/verify-validation-tools.sh` verifies the required commands and prints the resolved host compiler, formatter, GCC, Binutils, QEMU, and installed target package versions in every complete run.
 
-APT 仓库和 Ubuntu Runner 镜像会变化，因此该配置属于**运行时记录版本**，不能伪称逐字节固定。`tools/ci/verify-validation-tools.sh` 会在每次完整运行中校验必要命令，并输出实际 GCC、Binutils、QEMU 和已安装软件包版本。
+APT 仓库和 Ubuntu Runner 镜像会变化，因此该配置属于**运行时记录版本**，不能伪称逐字节固定。`tools/ci/verify-validation-tools.sh` 会在每次完整运行中校验必要命令，并输出实际宿主编译器、格式化器、GCC、Binutils、QEMU 和已安装目标软件包版本。
 
 For example, the clean-checkout environment observed on 2026-08-06 before this profile split reported:
 
@@ -92,8 +94,8 @@ On a compatible Ubuntu 24.04 environment:
 
 ```sh
 sudo apt-get update
-sudo xargs -a tools/ci/ubuntu-24.04-packages.txt \
-  apt-get install -y --no-install-recommends
+grep -Ev '^[[:space:]]*(#|$)' tools/ci/ubuntu-24.04-packages.txt | \
+  xargs sudo apt-get install -y --no-install-recommends
 sh tools/ci/verify-validation-tools.sh
 
 make check-runtime \
@@ -102,9 +104,9 @@ make check-runtime \
   REQUIRE_RISCV_RUNTIME=1
 ```
 
-Comment lines in the package manifest must be filtered when reproducing manually on systems where `xargs` does not ignore them. The GitHub gate parses the manifest itself and ignores blank/comment lines.
+The GitHub gate parses the same manifest itself and ignores blank/comment lines.
 
-在 `xargs` 不会忽略注释行的系统中手动复现时，应先过滤软件包清单的注释。GitHub 门禁由脚本自行解析清单，并忽略空行和注释行。
+GitHub 门禁由脚本解析同一清单，并忽略空行和注释行。
 
 ## 3. Profile B: pinned archival local profile / 配置 B：固定归档本地环境
 
@@ -175,15 +177,15 @@ Using the target compiler for preprocessing preserves target predefined macros a
 
 ## 5. Host implementation compiler / 宿主实现编译器
 
-`CC` builds MiniC itself on the host. It is not the target oracle and does not assemble or link formal RISC-V products. The exact host compiler version belongs to the execution profile and should be recorded in CI or local validation logs rather than inferred from old documentation.
+`CC` builds MiniC itself on the host. It is not the target oracle and does not assemble or link formal RISC-V products. The exact host compiler version belongs to the execution profile and is reported in the CI or local validation log rather than inferred from old documentation.
 
-`CC` 用于在宿主机上构建 MiniC 本身。它不是目标 Oracle，也不参与正式 RISC-V 产物的汇编和链接。宿主编译器精确版本属于具体执行配置，应记录在 CI 或本地验证日志中，而不是从旧文档推断。
+`CC` 用于在宿主机上构建 MiniC 本身。它不是目标 Oracle，也不参与正式 RISC-V 产物的汇编和链接。宿主编译器精确版本属于具体执行配置，由 CI 或本地验证日志输出，而不是从旧文档推断。
 
 ## 6. Change policy / 变更策略
 
 - Changing package names requires updating `tools/ci/ubuntu-24.04-packages.txt` in review / 修改软件包名称必须在审查中更新清单；
 - the cache key follows the manifest hash automatically / 缓存 Key 自动跟随清单哈希；
-- every CI run records resolved versions / 每次 CI 记录实际解析版本；
+- every CI run records resolved host, formatter, target, and package versions / 每次 CI 记录实际宿主、格式化器、目标工具和软件包版本；
 - replacing archival artifacts requires new size/checksum/version evidence / 替换归档工具必须记录新的大小、校验值和版本证据；
 - large tool binaries remain external to ordinary Git / 大型工具二进制继续位于普通 Git 之外；
 - any future OCI image or release asset must use a pinned digest/checksum and remain a separate infrastructure decision / 未来若使用 OCI 镜像或 Release Asset，必须固定摘要/校验值，并作为独立基础设施决策处理。
