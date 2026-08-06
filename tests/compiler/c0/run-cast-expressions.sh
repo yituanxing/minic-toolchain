@@ -38,7 +38,7 @@ expect_failure() {
 compile_success cast_expressions
 grep -F "  slli a0, a0, 32" "$work/cast_expressions.s" >/dev/null
 grep -F "  srli a0, a0, 32" "$work/cast_expressions.s" >/dev/null
-grep -F "  addiw a0, a0, 0" "$work/cast_expressions.s" >/dev/null
+grep -F "  addw a0, t0, a0" "$work/cast_expressions.s" >/dev/null
 printf '%s\n' "PASS compiler/c0/cast_integer_lowering"
 
 compile_success cast_typedef_shadow

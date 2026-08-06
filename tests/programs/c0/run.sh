@@ -147,3 +147,4 @@ run_program compound_xor_assignment
 run_program integer_bit_operations
 run_program unbounded_for_break
 run_program prefix_decrement_update
+run_program cast_expressions

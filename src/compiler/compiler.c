@@ -1,6 +1,7 @@
 #include "minic/compiler.h"
 
 #include "frontend/ast.h"
+#include "frontend/cast_normalization.h"
 #include "frontend/parser.h"
 #include "target/riscv64/codegen.h"
 #include "target/riscv64/layout.h"
@@ -167,6 +168,15 @@ int minic_compile_preprocessed_file(
         buffer.size,
         &program,
         diagnostic);
+    if (success && !minic_c0_program_normalize_casts(&program)) {
+        minic_set_diagnostic(
+            diagnostic,
+            input_path,
+            1U,
+            1U,
+            "cannot normalize cast expressions");
+        success = false;
+    }
     if (success) {
         success = minic_riscv64_layout_program(
             input_path,
