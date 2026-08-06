@@ -23,6 +23,12 @@ typedef enum MinicIntegerSign {
     MINIC_INTEGER_SIGN_UNSIGNED
 } MinicIntegerSign;
 
+typedef enum MinicIntegerRank {
+    MINIC_INTEGER_RANK_NONE = 0,
+    MINIC_INTEGER_RANK_CHAR,
+    MINIC_INTEGER_RANK_INT
+} MinicIntegerRank;
+
 typedef enum MinicTypeQualifier {
     MINIC_TYPE_QUALIFIER_NONE = 0,
     MINIC_TYPE_QUALIFIER_CONST = 1U << 0
@@ -33,11 +39,14 @@ typedef struct MinicType {
     MinicRecordId record_id;
     MinicArrayTypeId array_type_id;
     MinicIntegerSign integer_sign;
+    MinicIntegerRank integer_rank;
     unsigned int base_qualifiers;
     unsigned int pointer_depth;
 } MinicType;
 
 MinicType minic_type_void(void);
+MinicType minic_type_char(void);
+MinicType minic_type_unsigned_char(void);
 MinicType minic_type_int(void);
 MinicType minic_type_unsigned_int(void);
 MinicType minic_type_record(MinicRecordId record_id);
@@ -46,6 +55,7 @@ bool minic_type_add_const(MinicType type, MinicType *result);
 bool minic_type_pointer_to(MinicType pointee, MinicType *result);
 bool minic_type_pointee(MinicType pointer, MinicType *result);
 bool minic_type_equal(MinicType left, MinicType right);
+bool minic_type_integer_promotion(MinicType type, MinicType *result);
 bool minic_type_integer_common(
     MinicType left,
     MinicType right,
@@ -55,6 +65,7 @@ bool minic_type_cast_compatible(MinicType target, MinicType source);
 bool minic_type_is_const(MinicType type);
 bool minic_type_is_void(MinicType type);
 bool minic_type_is_integer(MinicType type);
+bool minic_type_is_char_integer(MinicType type);
 bool minic_type_is_signed_integer(MinicType type);
 bool minic_type_is_unsigned_integer(MinicType type);
 bool minic_type_is_record(MinicType type);
