@@ -329,7 +329,10 @@ bool minic_lexer_next(
         }
         break;
     case '<':
-        if (minic_lexer_peek_next(lexer) == '=') {
+        if (minic_lexer_peek_next(lexer) == '<') {
+            token->kind = MINIC_TOKEN_LESS_LESS;
+            minic_lexer_advance(lexer);
+        } else if (minic_lexer_peek_next(lexer) == '=') {
             token->kind = MINIC_TOKEN_LESS_EQUAL;
             minic_lexer_advance(lexer);
         } else {
@@ -337,7 +340,10 @@ bool minic_lexer_next(
         }
         break;
     case '>':
-        if (minic_lexer_peek_next(lexer) == '=') {
+        if (minic_lexer_peek_next(lexer) == '>') {
+            token->kind = MINIC_TOKEN_GREATER_GREATER;
+            minic_lexer_advance(lexer);
+        } else if (minic_lexer_peek_next(lexer) == '=') {
             token->kind = MINIC_TOKEN_GREATER_EQUAL;
             minic_lexer_advance(lexer);
         } else {
