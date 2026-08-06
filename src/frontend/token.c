@@ -61,6 +61,8 @@ const char *minic_token_kind_name(MinicTokenKind kind)
         return "&";
     case MINIC_TOKEN_CARET:
         return "^";
+    case MINIC_TOKEN_CARET_EQUAL:
+        return "^=";
     case MINIC_TOKEN_SLASH:
         return "/";
     case MINIC_TOKEN_PERCENT:
