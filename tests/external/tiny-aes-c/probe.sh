@@ -44,6 +44,14 @@ print_failure_context() {
     nl -ba "$work/aes128-ecb.i" | sed -n "${start},${end}p" >&2
 }
 
+print_function_assembly() {
+    symbol=$1
+
+    printf '%s\n' "--- MiniC assembly: $symbol ---" >&2
+    sed -n "/^${symbol}:/,/^\.size ${symbol},/p" \
+        "$work/aes128-ecb.minic.s" >&2 || true
+}
+
 run_elf() {
     elf=$1
     stdout_file=$2
@@ -61,11 +69,21 @@ report_difference() {
     kind=$1
     gcc_file=$2
     minic_file=$3
+    gcc_status=$(cat "$work/aes128-ecb.gcc.status")
+    minic_status=$(cat "$work/aes128-ecb.minic.status")
 
-    printf '%s\n' "FAIL external/tiny-aes-c: $kind differs" >&2
+    printf '%s\n' \
+        "FAIL external/tiny-aes-c: $kind differs gcc=$gcc_status minic=$minic_status" >&2
     diff -u "$gcc_file" "$minic_file" >&2 || true
-    printf '%s\n' "--- MiniC assembly ---" >&2
-    sed -n '1,320p' "$work/aes128-ecb.minic.s" >&2 || true
+    print_function_assembly KeyExpansion
+    print_function_assembly AddRoundKey
+    print_function_assembly SubBytes
+    print_function_assembly ShiftRows
+    print_function_assembly MixColumns
+    print_function_assembly Cipher
+    print_function_assembly AES_ECB_encrypt
+    print_function_assembly block_mismatch_index
+    print_function_assembly main
     printf '%s\n' "Artifacts retained in $work" >&2
     exit 1
 }
