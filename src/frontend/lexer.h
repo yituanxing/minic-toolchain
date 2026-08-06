@@ -20,15 +20,8 @@ typedef struct MinicLexer {
  * The lexer borrows source and path storage for its complete lifetime.
  * Lexer 在整个生命周期内借用 source 与 path 的存储，不取得所有权。
  */
-void minic_lexer_initialize(
-    MinicLexer *lexer,
-    const char *path,
-    const char *source,
-    size_t length);
+void minic_lexer_initialize(MinicLexer *lexer, const char *path, const char *source, size_t length);
 
-bool minic_lexer_next(
-    MinicLexer *lexer,
-    MinicToken *token,
-    MinicDiagnostic *diagnostic);
+bool minic_lexer_next(MinicLexer *lexer, MinicToken *token, MinicDiagnostic *diagnostic);
 
 #endif

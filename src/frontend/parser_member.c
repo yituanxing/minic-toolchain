@@ -2,12 +2,10 @@
 
 #include <string.h>
 
-static bool find_record_field(
-    const MinicParser *parser,
-    const MinicRecord *record,
-    MinicSourceSpan name_span,
-    size_t *field_index)
-{
+static bool find_record_field(const MinicParser *parser,
+                              const MinicRecord *record,
+                              MinicSourceSpan name_span,
+                              size_t *field_index) {
     size_t name_length;
     size_t index;
 
@@ -20,10 +18,7 @@ static bool find_record_field(
 
         field = minic_c0_record_field(record, index);
         if (field != NULL && field->name_length == name_length &&
-            memcmp(
-                field->name,
-                parser->source + name_span.begin.offset,
-                name_length) == 0) {
+            memcmp(field->name, parser->source + name_span.begin.offset, name_length) == 0) {
             *field_index = index;
             return true;
         }
@@ -31,11 +26,9 @@ static bool find_record_field(
     return false;
 }
 
-bool minic_parser_parse_pointer_member(
-    MinicParser *parser,
-    MinicExpressionId base_id,
-    MinicExpressionId *expression_id)
-{
+bool minic_parser_parse_pointer_member(MinicParser *parser,
+                                       MinicExpressionId base_id,
+                                       MinicExpressionId *expression_id) {
     const MinicExpression *base;
     const MinicRecord *record;
     const MinicRecordField *field;
@@ -56,10 +49,7 @@ bool minic_parser_parse_pointer_member(
         minic_parser_error(parser, "pointer member access requires a complete record");
         return false;
     }
-    if (!minic_parser_expect(
-            parser,
-            MINIC_TOKEN_ARROW,
-            "expected '->'")) {
+    if (!minic_parser_expect(parser, MINIC_TOKEN_ARROW, "expected '->'")) {
         return false;
     }
     if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
@@ -78,8 +68,7 @@ bool minic_parser_parse_pointer_member(
         return false;
     }
     member_type = field->type;
-    if (minic_type_is_const(record_type) &&
-        !minic_type_add_const(member_type, &member_type)) {
+    if (minic_type_is_const(record_type) && !minic_type_add_const(member_type, &member_type)) {
         minic_parser_error(parser, "cannot propagate const to record member");
         return false;
     }

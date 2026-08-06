@@ -95,6 +95,10 @@ source_inventory() {
     sh tools/maintenance/check-production-source-inventory.sh
 }
 
+format_check() {
+    CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+}
+
 host_debug() {
     make -j1 BUILD_DIR=build/ci-debug check
 }
@@ -145,8 +149,9 @@ external_tiny_aes() {
 }
 
 printf 'Runner CPUs=%s\n' "$cpu_count"
-printf '%s\n' 'Phase 1: source inventory, tool preparation, and three host configurations'
+printf '%s\n' 'Phase 1: source inventory, format policy, tool preparation, and three host configurations'
 start_gate source-inventory source_inventory
+start_gate format-check format_check
 start_gate rv64-tools install_rv64_tools
 start_gate host-debug host_debug
 start_gate host-release-werror host_release

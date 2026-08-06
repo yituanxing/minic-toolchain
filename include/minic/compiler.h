@@ -21,10 +21,9 @@ typedef struct MinicDiagnostic {
  * C0 accepts only an int main function with an optional integer return.
  * C0 目前只接受 int main 函数，以及可选的整数 return 语句。
  */
-int minic_compile_preprocessed_file(
-    const char *input_path,
-    const char *output_path,
-    MinicDiagnostic *diagnostic);
+int minic_compile_preprocessed_file(const char *input_path,
+                                    const char *output_path,
+                                    MinicDiagnostic *diagnostic);
 
 #ifdef __cplusplus
 }

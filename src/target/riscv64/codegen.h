@@ -6,9 +6,8 @@
 
 #include <stdbool.h>
 
-bool minic_riscv64_write_c0_program(
-    const char *path,
-    const MinicC0Program *program,
-    MinicDiagnostic *diagnostic);
+bool minic_riscv64_write_c0_program(const char *path,
+                                    const MinicC0Program *program,
+                                    MinicDiagnostic *diagnostic);
 
 #endif

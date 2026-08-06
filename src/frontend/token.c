@@ -1,7 +1,6 @@
 #include "frontend/token.h"
 
-const char *minic_token_kind_name(MinicTokenKind kind)
-{
+const char *minic_token_kind_name(MinicTokenKind kind) {
     switch (kind) {
     case MINIC_TOKEN_INVALID:
         return "invalid";

@@ -40,3 +40,34 @@ sh tools/maintenance/check-production-source-inventory.sh
 The complete GitHub Actions clean-checkout gate runs the same command before accepting compiler builds.
 
 GitHub Actions 完整干净检出门禁会在接受编译器构建前运行同一检查。
+
+## First-party C formatting / 第一方 C 格式化
+
+`run-format.sh` applies the repository `.clang-format` configuration with `clang-format-18`. The fixed major version prevents unrelated formatter upgrades from rewriting the tree differently.
+
+`run-format.sh` 使用 `clang-format-18` 应用仓库内 `.clang-format` 配置。固定主版本可以避免格式化器升级无关地重写代码树。
+
+The active scope is every `.c` and `.h` file below:
+
+当前范围是以下目录中的全部 `.c` 与 `.h` 文件：
+
+- `include/`;
+- `src/`;
+- `tools/minic/`.
+
+Vendored upstream files, generated outputs, and C files used as compiler input fixtures are deliberately excluded. They have separate provenance or test-shape requirements and must not be rewritten by the project formatter.
+
+Vendor 上游文件、生成输出和作为编译器输入夹具的 C 文件被明确排除。它们具有独立来源或测试形态要求，不得由项目格式化器重写。
+
+Run locally with:
+
+本地执行：
+
+```sh
+make format-check
+make format
+```
+
+`make format-check` is non-mutating. `make format` rewrites the declared first-party surface. The complete clean-checkout gate runs `format-check` in parallel with source inventory and host builds.
+
+`make format-check` 不修改文件，`make format` 会重写声明的第一方范围。完整干净检出门禁会将 `format-check` 与源码清单和宿主构建并行运行。

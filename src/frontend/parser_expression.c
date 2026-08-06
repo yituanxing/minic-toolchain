@@ -3,14 +3,9 @@
 #include <limits.h>
 #include <string.h>
 
-static bool parse_unary(
-    MinicParser *parser,
-    MinicExpressionId *expression_id);
+static bool parse_unary(MinicParser *parser, MinicExpressionId *expression_id);
 
-static bool parse_integer(
-    MinicParser *parser,
-    MinicExpressionId *expression_id)
-{
+static bool parse_integer(MinicParser *parser, MinicExpressionId *expression_id) {
     MinicExpression expression;
     int value;
 
@@ -26,12 +21,10 @@ static bool parse_integer(
     return minic_parser_add_expression(parser, &expression, expression_id);
 }
 
-static bool parse_local_reference(
-    MinicParser *parser,
-    MinicSourceSpan name_span,
-    MinicLocalId local_id,
-    MinicExpressionId *expression_id)
-{
+static bool parse_local_reference(MinicParser *parser,
+                                  MinicSourceSpan name_span,
+                                  MinicLocalId local_id,
+                                  MinicExpressionId *expression_id) {
     const MinicLocal *local;
     MinicExpression base_expression;
     MinicExpressionId base_id;
@@ -51,19 +44,13 @@ static bool parse_local_reference(
     if (!minic_parser_add_expression(parser, &base_expression, &base_id)) {
         return false;
     }
-    return minic_parser_parse_postfix(
-        parser,
-        base_id,
-        local->element_count > 1U,
-        expression_id);
+    return minic_parser_parse_postfix(parser, base_id, local->element_count > 1U, expression_id);
 }
 
-static bool parse_global_reference(
-    MinicParser *parser,
-    MinicSourceSpan name_span,
-    MinicGlobalObjectId global_object_id,
-    MinicExpressionId *expression_id)
-{
+static bool parse_global_reference(MinicParser *parser,
+                                   MinicSourceSpan name_span,
+                                   MinicGlobalObjectId global_object_id,
+                                   MinicExpressionId *expression_id) {
     const MinicGlobalObject *object;
     MinicExpression base_expression;
     MinicExpressionId base_id;
@@ -87,17 +74,10 @@ static bool parse_global_reference(
         minic_parser_error(parser, "global array object requires a subscript");
         return false;
     }
-    return minic_parser_parse_postfix(
-        parser,
-        base_id,
-        true,
-        expression_id);
+    return minic_parser_parse_postfix(parser, base_id, true, expression_id);
 }
 
-static bool token_starts_cast_type(
-    const MinicParser *parser,
-    MinicToken token)
-{
+static bool token_starts_cast_type(const MinicParser *parser, MinicToken token) {
     switch (token.kind) {
     case MINIC_TOKEN_KW_CONST:
     case MINIC_TOKEN_KW_INT:
@@ -106,17 +86,14 @@ static bool token_starts_cast_type(
     case MINIC_TOKEN_KW_STRUCT:
         return true;
     case MINIC_TOKEN_IDENTIFIER:
-        return minic_parser_find_local(parser, token.span) ==
-                   MINIC_LOCAL_INVALID &&
-               minic_parser_find_type_alias(parser, token.span) !=
-                   MINIC_TYPE_ALIAS_INVALID;
+        return minic_parser_find_local(parser, token.span) == MINIC_LOCAL_INVALID &&
+               minic_parser_find_type_alias(parser, token.span) != MINIC_TYPE_ALIAS_INVALID;
     default:
         return false;
     }
 }
 
-static bool parenthesis_starts_cast(const MinicParser *parser)
-{
+static bool parenthesis_starts_cast(const MinicParser *parser) {
     MinicDiagnostic diagnostic;
     MinicLexer lookahead;
     MinicToken token;
@@ -133,10 +110,7 @@ static bool parenthesis_starts_cast(const MinicParser *parser)
     return token_starts_cast_type(parser, token);
 }
 
-static bool parse_cast(
-    MinicParser *parser,
-    MinicExpressionId *expression_id)
-{
+static bool parse_cast(MinicParser *parser, MinicExpressionId *expression_id) {
     MinicSourcePosition begin;
     MinicExpression expression;
     MinicExpressionId operand_id;
@@ -144,19 +118,14 @@ static bool parse_cast(
     MinicType target_type;
 
     begin = parser->current.span.begin;
-    if (!minic_parser_advance(parser) ||
-        !minic_parser_parse_type_name(parser, &target_type) ||
-        !minic_parser_expect(
-            parser,
-            MINIC_TOKEN_RPAREN,
-            "expected ')' after cast type") ||
+    if (!minic_parser_advance(parser) || !minic_parser_parse_type_name(parser, &target_type) ||
+        !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')' after cast type") ||
         !parse_unary(parser, &operand_id)) {
         return false;
     }
 
     operand = minic_c0_program_expression(parser->program, operand_id);
-    if (operand == NULL ||
-        !minic_type_cast_compatible(target_type, operand->type)) {
+    if (operand == NULL || !minic_type_cast_compatible(target_type, operand->type)) {
         minic_parser_error(parser, "unsupported cast between these types");
         return false;
     }
@@ -171,10 +140,7 @@ static bool parse_cast(
     return minic_parser_add_expression(parser, &expression, expression_id);
 }
 
-static bool parse_primary(
-    MinicParser *parser,
-    MinicExpressionId *expression_id)
-{
+static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id) {
     MinicExpression expression;
     MinicExpressionId primary_id;
     MinicSourceSpan name_span;
@@ -184,11 +150,7 @@ static bool parse_primary(
 
     if (parser->current.kind == MINIC_TOKEN_INTEGER_CONSTANT) {
         return parse_integer(parser, &primary_id) &&
-               minic_parser_parse_postfix(
-                   parser,
-                   primary_id,
-                   false,
-                   expression_id);
+               minic_parser_parse_postfix(parser, primary_id, false, expression_id);
     }
     if (parser->current.kind == MINIC_TOKEN_IDENTIFIER) {
         name_span = parser->current.span;
@@ -216,8 +178,7 @@ static bool parse_primary(
                 return false;
             }
             callee = minic_c0_program_function(parser->program, function_id);
-            if (callee == NULL || callee->parameter_count > 8U ||
-                !minic_parser_advance(parser)) {
+            if (callee == NULL || callee->parameter_count > 8U || !minic_parser_advance(parser)) {
                 minic_parser_error(parser, "unsupported function call signature");
                 return false;
             }
@@ -232,40 +193,31 @@ static bool parse_primary(
             {
                 size_t argument_index;
 
-                for (argument_index = 0U;
-                     argument_index < callee->parameter_count;
+                for (argument_index = 0U; argument_index < callee->parameter_count;
                      ++argument_index) {
                     const MinicExpression *argument;
 
                     if (parser->current.kind == MINIC_TOKEN_RPAREN) {
-                        minic_parser_error(
-                            parser,
-                            "call argument count does not match declaration");
+                        minic_parser_error(parser,
+                                           "call argument count does not match declaration");
                         return false;
                     }
                     if (!minic_parser_parse_expression(
-                            parser,
-                            &expression.value.call.arguments[argument_index],
-                            0U)) {
+                            parser, &expression.value.call.arguments[argument_index], 0U)) {
                         return false;
                     }
                     argument = minic_c0_program_expression(
-                        parser->program,
-                        expression.value.call.arguments[argument_index]);
+                        parser->program, expression.value.call.arguments[argument_index]);
                     if (argument == NULL ||
-                        !minic_type_assignment_compatible(
-                            callee->parameter_types[argument_index],
-                            argument->type)) {
-                        minic_parser_error(
-                            parser,
-                            "call argument type does not match declaration");
+                        !minic_type_assignment_compatible(callee->parameter_types[argument_index],
+                                                          argument->type)) {
+                        minic_parser_error(parser, "call argument type does not match declaration");
                         return false;
                     }
                     if (argument_index + 1U < callee->parameter_count) {
                         if (parser->current.kind != MINIC_TOKEN_COMMA) {
-                            minic_parser_error(
-                                parser,
-                                "call argument count does not match declaration");
+                            minic_parser_error(parser,
+                                               "call argument count does not match declaration");
                             return false;
                         }
                         if (!minic_parser_advance(parser)) {
@@ -275,9 +227,7 @@ static bool parse_primary(
                 }
             }
             if (parser->current.kind != MINIC_TOKEN_RPAREN) {
-                minic_parser_error(
-                    parser,
-                    "call argument count does not match declaration");
+                minic_parser_error(parser, "call argument count does not match declaration");
                 return false;
             }
             call_end = parser->current.span.end;
@@ -285,32 +235,17 @@ static bool parse_primary(
                 return false;
             }
             expression.span.end = call_end;
-            if (!minic_parser_add_expression(
-                    parser,
-                    &expression,
-                    &primary_id)) {
+            if (!minic_parser_add_expression(parser, &expression, &primary_id)) {
                 return false;
             }
-            return minic_parser_parse_postfix(
-                parser,
-                primary_id,
-                false,
-                expression_id);
+            return minic_parser_parse_postfix(parser, primary_id, false, expression_id);
         }
 
         if (local_id != MINIC_LOCAL_INVALID) {
-            return parse_local_reference(
-                parser,
-                name_span,
-                local_id,
-                expression_id);
+            return parse_local_reference(parser, name_span, local_id, expression_id);
         }
         if (global_object_id != MINIC_GLOBAL_OBJECT_INVALID) {
-            return parse_global_reference(
-                parser,
-                name_span,
-                global_object_id,
-                expression_id);
+            return parse_global_reference(parser, name_span, global_object_id, expression_id);
         }
         minic_parser_error(parser, "use of undeclared local");
         return false;
@@ -321,18 +256,13 @@ static bool parse_primary(
             !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')'")) {
             return false;
         }
-        return minic_parser_parse_postfix(
-            parser,
-            primary_id,
-            false,
-            expression_id);
+        return minic_parser_parse_postfix(parser, primary_id, false, expression_id);
     }
     minic_parser_error(parser, "expected expression");
     return false;
 }
 
-static bool parse_unary(MinicParser *parser, MinicExpressionId *expression_id)
-{
+static bool parse_unary(MinicParser *parser, MinicExpressionId *expression_id) {
     MinicToken operator_token;
     MinicExpression expression;
     MinicExpressionId operand;
@@ -341,10 +271,8 @@ static bool parse_unary(MinicParser *parser, MinicExpressionId *expression_id)
     if (parenthesis_starts_cast(parser)) {
         return parse_cast(parser, expression_id);
     }
-    if (parser->current.kind != MINIC_TOKEN_PLUS &&
-        parser->current.kind != MINIC_TOKEN_MINUS &&
-        parser->current.kind != MINIC_TOKEN_BANG &&
-        parser->current.kind != MINIC_TOKEN_AMPERSAND &&
+    if (parser->current.kind != MINIC_TOKEN_PLUS && parser->current.kind != MINIC_TOKEN_MINUS &&
+        parser->current.kind != MINIC_TOKEN_BANG && parser->current.kind != MINIC_TOKEN_AMPERSAND &&
         parser->current.kind != MINIC_TOKEN_STAR) {
         return parse_primary(parser, expression_id);
     }
@@ -394,17 +322,13 @@ static bool parse_unary(MinicParser *parser, MinicExpressionId *expression_id)
     if (operator_token.kind == MINIC_TOKEN_PLUS) {
         expression.value.unary.operator_kind = MINIC_UNARY_PLUS;
         if (!minic_type_integer_common(
-                operand_expression->type,
-                operand_expression->type,
-                &expression.type)) {
+                operand_expression->type, operand_expression->type, &expression.type)) {
             return false;
         }
     } else if (operator_token.kind == MINIC_TOKEN_MINUS) {
         expression.value.unary.operator_kind = MINIC_UNARY_NEGATE;
         if (!minic_type_integer_common(
-                operand_expression->type,
-                operand_expression->type,
-                &expression.type)) {
+                operand_expression->type, operand_expression->type, &expression.type)) {
             return false;
         }
     } else {
@@ -414,8 +338,7 @@ static bool parse_unary(MinicParser *parser, MinicExpressionId *expression_id)
     return minic_parser_add_expression(parser, &expression, expression_id);
 }
 
-static unsigned int binary_precedence(MinicTokenKind kind)
-{
+static unsigned int binary_precedence(MinicTokenKind kind) {
     switch (kind) {
     case MINIC_TOKEN_STAR:
     case MINIC_TOKEN_SLASH:
@@ -444,48 +367,54 @@ static unsigned int binary_precedence(MinicTokenKind kind)
     }
 }
 
-static MinicBinaryOperator binary_operator(MinicTokenKind kind)
-{
+static MinicBinaryOperator binary_operator(MinicTokenKind kind) {
     switch (kind) {
-    case MINIC_TOKEN_PLUS: return MINIC_BINARY_ADD;
-    case MINIC_TOKEN_MINUS: return MINIC_BINARY_SUBTRACT;
-    case MINIC_TOKEN_STAR: return MINIC_BINARY_MULTIPLY;
-    case MINIC_TOKEN_SLASH: return MINIC_BINARY_DIVIDE;
-    case MINIC_TOKEN_PERCENT: return MINIC_BINARY_REMAINDER;
-    case MINIC_TOKEN_LESS_LESS: return MINIC_BINARY_SHIFT_LEFT;
-    case MINIC_TOKEN_GREATER_GREATER: return MINIC_BINARY_SHIFT_RIGHT;
-    case MINIC_TOKEN_AMPERSAND: return MINIC_BINARY_BITWISE_AND;
-    case MINIC_TOKEN_CARET: return MINIC_BINARY_BITWISE_XOR;
-    case MINIC_TOKEN_EQUAL_EQUAL: return MINIC_BINARY_EQUAL;
-    case MINIC_TOKEN_BANG_EQUAL: return MINIC_BINARY_NOT_EQUAL;
-    case MINIC_TOKEN_LESS: return MINIC_BINARY_LESS;
-    case MINIC_TOKEN_LESS_EQUAL: return MINIC_BINARY_LESS_EQUAL;
-    case MINIC_TOKEN_GREATER: return MINIC_BINARY_GREATER;
-    case MINIC_TOKEN_GREATER_EQUAL: return MINIC_BINARY_GREATER_EQUAL;
-    default: return MINIC_BINARY_ADD;
+    case MINIC_TOKEN_PLUS:
+        return MINIC_BINARY_ADD;
+    case MINIC_TOKEN_MINUS:
+        return MINIC_BINARY_SUBTRACT;
+    case MINIC_TOKEN_STAR:
+        return MINIC_BINARY_MULTIPLY;
+    case MINIC_TOKEN_SLASH:
+        return MINIC_BINARY_DIVIDE;
+    case MINIC_TOKEN_PERCENT:
+        return MINIC_BINARY_REMAINDER;
+    case MINIC_TOKEN_LESS_LESS:
+        return MINIC_BINARY_SHIFT_LEFT;
+    case MINIC_TOKEN_GREATER_GREATER:
+        return MINIC_BINARY_SHIFT_RIGHT;
+    case MINIC_TOKEN_AMPERSAND:
+        return MINIC_BINARY_BITWISE_AND;
+    case MINIC_TOKEN_CARET:
+        return MINIC_BINARY_BITWISE_XOR;
+    case MINIC_TOKEN_EQUAL_EQUAL:
+        return MINIC_BINARY_EQUAL;
+    case MINIC_TOKEN_BANG_EQUAL:
+        return MINIC_BINARY_NOT_EQUAL;
+    case MINIC_TOKEN_LESS:
+        return MINIC_BINARY_LESS;
+    case MINIC_TOKEN_LESS_EQUAL:
+        return MINIC_BINARY_LESS_EQUAL;
+    case MINIC_TOKEN_GREATER:
+        return MINIC_BINARY_GREATER;
+    case MINIC_TOKEN_GREATER_EQUAL:
+        return MINIC_BINARY_GREATER_EQUAL;
+    default:
+        return MINIC_BINARY_ADD;
     }
 }
 
-static bool binary_is_comparison(MinicTokenKind kind)
-{
-    return kind == MINIC_TOKEN_EQUAL_EQUAL ||
-           kind == MINIC_TOKEN_BANG_EQUAL ||
-           kind == MINIC_TOKEN_LESS ||
-           kind == MINIC_TOKEN_LESS_EQUAL ||
-           kind == MINIC_TOKEN_GREATER ||
-           kind == MINIC_TOKEN_GREATER_EQUAL;
+static bool binary_is_comparison(MinicTokenKind kind) {
+    return kind == MINIC_TOKEN_EQUAL_EQUAL || kind == MINIC_TOKEN_BANG_EQUAL ||
+           kind == MINIC_TOKEN_LESS || kind == MINIC_TOKEN_LESS_EQUAL ||
+           kind == MINIC_TOKEN_GREATER || kind == MINIC_TOKEN_GREATER_EQUAL;
 }
 
-static bool binary_is_shift(MinicTokenKind kind)
-{
-    return kind == MINIC_TOKEN_LESS_LESS ||
-           kind == MINIC_TOKEN_GREATER_GREATER;
+static bool binary_is_shift(MinicTokenKind kind) {
+    return kind == MINIC_TOKEN_LESS_LESS || kind == MINIC_TOKEN_GREATER_GREATER;
 }
 
-static bool type_is_complete_object(
-    const MinicC0Program *program,
-    MinicType type)
-{
+static bool type_is_complete_object(const MinicC0Program *program, MinicType type) {
     if (program == NULL || minic_type_is_void(type)) {
         return false;
     }
@@ -501,21 +430,17 @@ static bool type_is_complete_object(
     if (minic_type_is_array(type)) {
         const MinicArrayType *array_type;
 
-        array_type = minic_c0_program_array_type(
-            program,
-            type.array_type_id);
+        array_type = minic_c0_program_array_type(program, type.array_type_id);
         return array_type != NULL && array_type->element_count != 0U &&
                type_is_complete_object(program, array_type->element_type);
     }
     return false;
 }
 
-static bool pointer_arithmetic_shape(
-    MinicTokenKind kind,
-    MinicType left,
-    MinicType right,
-    MinicType *pointer_type)
-{
+static bool pointer_arithmetic_shape(MinicTokenKind kind,
+                                     MinicType left,
+                                     MinicType right,
+                                     MinicType *pointer_type) {
     if (pointer_type == NULL) {
         return false;
     }
@@ -530,22 +455,18 @@ static bool pointer_arithmetic_shape(
         }
         return false;
     }
-    if (kind == MINIC_TOKEN_MINUS &&
-        minic_type_is_pointer(left) &&
-        minic_type_is_integer(right)) {
+    if (kind == MINIC_TOKEN_MINUS && minic_type_is_pointer(left) && minic_type_is_integer(right)) {
         *pointer_type = left;
         return true;
     }
     return false;
 }
 
-static bool binary_result_type(
-    const MinicC0Program *program,
-    MinicTokenKind kind,
-    MinicType left,
-    MinicType right,
-    MinicType *result)
-{
+static bool binary_result_type(const MinicC0Program *program,
+                               MinicTokenKind kind,
+                               MinicType left,
+                               MinicType right,
+                               MinicType *result) {
     MinicType pointer_type;
     MinicType pointee_type;
 
@@ -562,11 +483,7 @@ static bool binary_result_type(
         }
         return minic_type_integer_common(left, right, result);
     }
-    if (!pointer_arithmetic_shape(
-            kind,
-            left,
-            right,
-            &pointer_type) ||
+    if (!pointer_arithmetic_shape(kind, left, right, &pointer_type) ||
         !minic_type_pointee(pointer_type, &pointee_type) ||
         !type_is_complete_object(program, pointee_type)) {
         return false;
@@ -575,11 +492,9 @@ static bool binary_result_type(
     return true;
 }
 
-bool minic_parser_parse_expression(
-    MinicParser *parser,
-    MinicExpressionId *expression_id,
-    unsigned int minimum_precedence)
-{
+bool minic_parser_parse_expression(MinicParser *parser,
+                                   MinicExpressionId *expression_id,
+                                   unsigned int minimum_precedence) {
     MinicExpressionId left;
 
     if (!parse_unary(parser, &left)) {
@@ -617,34 +532,23 @@ bool minic_parser_parse_expression(
         expression.value.binary.operator_kind = binary_operator(token_kind);
         expression.value.binary.left = left;
         expression.value.binary.right = right;
-        if (!binary_result_type(
-                parser->program,
-                token_kind,
-                left_expression->type,
-                right_expression->type,
-                &expression.type)) {
+        if (!binary_result_type(parser->program,
+                                token_kind,
+                                left_expression->type,
+                                right_expression->type,
+                                &expression.type)) {
             MinicType pointer_type;
             MinicType pointee_type;
 
             if (pointer_arithmetic_shape(
-                    token_kind,
-                    left_expression->type,
-                    right_expression->type,
-                    &pointer_type) &&
+                    token_kind, left_expression->type, right_expression->type, &pointer_type) &&
                 minic_type_pointee(pointer_type, &pointee_type) &&
                 !type_is_complete_object(parser->program, pointee_type)) {
-                minic_parser_error(
-                    parser,
-                    "pointer arithmetic requires a complete object type");
-            } else if (token_kind == MINIC_TOKEN_PLUS ||
-                       token_kind == MINIC_TOKEN_MINUS) {
-                minic_parser_error(
-                    parser,
-                    "unsupported pointer arithmetic operands");
+                minic_parser_error(parser, "pointer arithmetic requires a complete object type");
+            } else if (token_kind == MINIC_TOKEN_PLUS || token_kind == MINIC_TOKEN_MINUS) {
+                minic_parser_error(parser, "unsupported pointer arithmetic operands");
             } else {
-                minic_parser_error(
-                    parser,
-                    "binary operator requires int operands");
+                minic_parser_error(parser, "binary operator requires int operands");
             }
             return false;
         }

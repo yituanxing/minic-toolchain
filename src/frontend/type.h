@@ -7,8 +7,8 @@
 typedef size_t MinicRecordId;
 typedef size_t MinicArrayTypeId;
 
-#define MINIC_RECORD_INVALID ((MinicRecordId)-1)
-#define MINIC_ARRAY_TYPE_INVALID ((MinicArrayTypeId)-1)
+#define MINIC_RECORD_INVALID ((MinicRecordId) - 1)
+#define MINIC_ARRAY_TYPE_INVALID ((MinicArrayTypeId) - 1)
 
 typedef enum MinicTypeBaseKind {
     MINIC_TYPE_BASE_VOID = 0,
@@ -55,10 +55,7 @@ bool minic_type_pointer_to(MinicType pointee, MinicType *result);
 bool minic_type_pointee(MinicType pointer, MinicType *result);
 bool minic_type_equal(MinicType left, MinicType right);
 bool minic_type_integer_promotion(MinicType type, MinicType *result);
-bool minic_type_integer_common(
-    MinicType left,
-    MinicType right,
-    MinicType *result);
+bool minic_type_integer_common(MinicType left, MinicType right, MinicType *result);
 bool minic_type_assignment_compatible(MinicType target, MinicType source);
 bool minic_type_cast_compatible(MinicType target, MinicType source);
 bool minic_type_is_const(MinicType type);

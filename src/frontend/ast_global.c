@@ -4,12 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-static bool grow_array(
-    void **data,
-    size_t *capacity,
-    size_t count,
-    size_t element_size)
-{
+static bool grow_array(void **data, size_t *capacity, size_t count, size_t element_size) {
     void *resized;
     size_t new_capacity;
 
@@ -17,8 +12,7 @@ static bool grow_array(
         return true;
     }
     new_capacity = *capacity == 0U ? 16U : *capacity * 2U;
-    if (new_capacity < *capacity ||
-        new_capacity > SIZE_MAX / element_size) {
+    if (new_capacity < *capacity || new_capacity > SIZE_MAX / element_size) {
         return false;
     }
     resized = realloc(*data, new_capacity * element_size);
@@ -30,8 +24,7 @@ static bool grow_array(
     return true;
 }
 
-static char *copy_name(const char *name, size_t name_length)
-{
+static char *copy_name(const char *name, size_t name_length) {
     char *copy;
 
     if (name == NULL || name_length == SIZE_MAX) {
@@ -46,19 +39,14 @@ static char *copy_name(const char *name, size_t name_length)
     return copy;
 }
 
-static bool name_conflicts(
-    const MinicC0Program *program,
-    const char *name,
-    size_t name_length)
-{
+static bool name_conflicts(const MinicC0Program *program, const char *name, size_t name_length) {
     size_t index;
 
     for (index = 0U; index < program->global_object_count; ++index) {
         const MinicGlobalObject *object;
 
         object = &program->global_objects[index];
-        if (object->name_length == name_length &&
-            memcmp(object->name, name, name_length) == 0) {
+        if (object->name_length == name_length && memcmp(object->name, name, name_length) == 0) {
             return true;
         }
     }
@@ -74,27 +62,23 @@ static bool name_conflicts(
     return false;
 }
 
-bool minic_c0_program_add_global_object(
-    MinicC0Program *program,
-    const char *name,
-    size_t name_length,
-    MinicType type,
-    bool is_internal,
-    bool is_read_only,
-    MinicGlobalObjectId *global_object_id)
-{
+bool minic_c0_program_add_global_object(MinicC0Program *program,
+                                        const char *name,
+                                        size_t name_length,
+                                        MinicType type,
+                                        bool is_internal,
+                                        bool is_read_only,
+                                        MinicGlobalObjectId *global_object_id) {
     MinicGlobalObject object;
 
-    if (program == NULL || name == NULL || global_object_id == NULL ||
-        minic_type_is_void(type) ||
+    if (program == NULL || name == NULL || global_object_id == NULL || minic_type_is_void(type) ||
         name_conflicts(program, name, name_length)) {
         return false;
     }
-    if (!grow_array(
-            (void **)&program->global_objects,
-            &program->global_object_capacity,
-            program->global_object_count,
-            sizeof(*program->global_objects))) {
+    if (!grow_array((void **)&program->global_objects,
+                    &program->global_object_capacity,
+                    program->global_object_count,
+                    sizeof(*program->global_objects))) {
         return false;
     }
 
@@ -113,22 +97,19 @@ bool minic_c0_program_add_global_object(
     return true;
 }
 
-bool minic_c0_global_object_add_initializer(
-    MinicC0Program *program,
-    MinicGlobalObjectId global_object_id,
-    int value)
-{
+bool minic_c0_global_object_add_initializer(MinicC0Program *program,
+                                            MinicGlobalObjectId global_object_id,
+                                            int value) {
     MinicGlobalObject *object;
 
     if (program == NULL || global_object_id >= program->global_object_count) {
         return false;
     }
     object = &program->global_objects[global_object_id];
-    if (!grow_array(
-            (void **)&object->initializer_values,
-            &object->initializer_capacity,
-            object->initializer_count,
-            sizeof(*object->initializer_values))) {
+    if (!grow_array((void **)&object->initializer_values,
+                    &object->initializer_capacity,
+                    object->initializer_count,
+                    sizeof(*object->initializer_values))) {
         return false;
     }
     object->initializer_values[object->initializer_count] = value;
@@ -136,10 +117,8 @@ bool minic_c0_global_object_add_initializer(
     return true;
 }
 
-const MinicGlobalObject *minic_c0_program_global_object(
-    const MinicC0Program *program,
-    MinicGlobalObjectId global_object_id)
-{
+const MinicGlobalObject *minic_c0_program_global_object(const MinicC0Program *program,
+                                                        MinicGlobalObjectId global_object_id) {
     if (program == NULL || global_object_id >= program->global_object_count) {
         return NULL;
     }
