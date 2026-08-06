@@ -21,7 +21,7 @@ static void minic_riscv64_layout_error(
         message);
 }
 
-static bool minic_riscv64_type_layout(
+bool minic_riscv64_type_layout(
     const MinicC0Program *program,
     MinicType type,
     size_t *size,
