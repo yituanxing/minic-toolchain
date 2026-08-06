@@ -39,3 +39,4 @@ prefix_decrement_update
 cast_expressions
 unsigned_char_layout
 hexadecimal_expression
+long_integer_semantics

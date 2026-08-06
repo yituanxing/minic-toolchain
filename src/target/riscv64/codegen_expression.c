@@ -16,6 +16,17 @@ minic_riscv64_emit_normalize_integer(FILE *file, MinicType type, const char *reg
     return minic_riscv64_emit_integer_conversion(file, type, register_name);
 }
 
+static bool minic_riscv64_emit_integer_result_conversion(FILE *file,
+                                                         MinicType operation_type,
+                                                         MinicType result_type,
+                                                         const char *register_name) {
+    if (!minic_riscv64_emit_integer_conversion(file, operation_type, register_name)) {
+        return false;
+    }
+    return minic_type_equal(operation_type, result_type) ||
+           minic_riscv64_emit_integer_conversion(file, result_type, register_name);
+}
+
 static bool minic_riscv64_emit_scale_register(FILE *file,
                                               const char *register_name,
                                               const char *scratch_register,
@@ -256,7 +267,9 @@ bool minic_riscv64_emit_expression(FILE *file,
         case MINIC_UNARY_PLUS:
             return minic_riscv64_emit_normalize_integer(file, expression->type, "a0");
         case MINIC_UNARY_NEGATE:
-            return fprintf(file, "  negw a0, a0\n") >= 0 &&
+            return fprintf(file,
+                           minic_type_is_long_integer(expression->type) ? "  neg a0, a0\n"
+                                                                        : "  negw a0, a0\n") >= 0 &&
                    minic_riscv64_emit_normalize_integer(file, expression->type, "a0");
         case MINIC_UNARY_LOGICAL_NOT:
             return fprintf(file, "  seqz a0, a0\n") >= 0;
@@ -290,8 +303,12 @@ bool minic_riscv64_emit_expression(FILE *file,
         switch (expression->value.binary.operator_kind) {
         case MINIC_BINARY_ADD:
             if (has_integer_common_type) {
-                return fprintf(file, "  addw a0, t0, a0\n") >= 0 &&
-                       minic_riscv64_emit_normalize_integer(file, expression->type, "a0");
+                return fprintf(file,
+                               minic_type_is_long_integer(common_integer_type)
+                                   ? "  add a0, t0, a0\n"
+                                   : "  addw a0, t0, a0\n") >= 0 &&
+                       minic_riscv64_emit_integer_result_conversion(
+                           file, common_integer_type, expression->type, "a0");
             }
             if (minic_type_is_pointer(left->type) && minic_type_is_integer(right->type) &&
                 minic_riscv64_pointer_element_size(program, left->type, &element_size)) {
@@ -306,8 +323,12 @@ bool minic_riscv64_emit_expression(FILE *file,
             return false;
         case MINIC_BINARY_SUBTRACT:
             if (has_integer_common_type) {
-                return fprintf(file, "  subw a0, t0, a0\n") >= 0 &&
-                       minic_riscv64_emit_normalize_integer(file, expression->type, "a0");
+                return fprintf(file,
+                               minic_type_is_long_integer(common_integer_type)
+                                   ? "  sub a0, t0, a0\n"
+                                   : "  subw a0, t0, a0\n") >= 0 &&
+                       minic_riscv64_emit_integer_result_conversion(
+                           file, common_integer_type, expression->type, "a0");
             }
             if (minic_type_is_pointer(left->type) && minic_type_is_integer(right->type) &&
                 minic_riscv64_pointer_element_size(program, left->type, &element_size)) {
@@ -316,38 +337,63 @@ bool minic_riscv64_emit_expression(FILE *file,
             }
             return false;
         case MINIC_BINARY_MULTIPLY:
-            return has_integer_common_type && fprintf(file, "  mulw a0, t0, a0\n") >= 0 &&
-                   minic_riscv64_emit_normalize_integer(file, expression->type, "a0");
+            return has_integer_common_type &&
+                   fprintf(file,
+                           minic_type_is_long_integer(common_integer_type)
+                               ? "  mul a0, t0, a0\n"
+                               : "  mulw a0, t0, a0\n") >= 0 &&
+                   minic_riscv64_emit_integer_result_conversion(
+                       file, common_integer_type, expression->type, "a0");
         case MINIC_BINARY_DIVIDE:
             return has_integer_common_type &&
                    fprintf(file,
-                           minic_type_is_unsigned_integer(common_integer_type)
-                               ? "  divuw a0, t0, a0\n"
-                               : "  divw a0, t0, a0\n") >= 0 &&
-                   minic_riscv64_emit_normalize_integer(file, expression->type, "a0");
+                           minic_type_is_long_integer(common_integer_type)
+                               ? (minic_type_is_unsigned_integer(common_integer_type)
+                                      ? "  divu a0, t0, a0\n"
+                                      : "  div a0, t0, a0\n")
+                               : (minic_type_is_unsigned_integer(common_integer_type)
+                                      ? "  divuw a0, t0, a0\n"
+                                      : "  divw a0, t0, a0\n")) >= 0 &&
+                   minic_riscv64_emit_integer_result_conversion(
+                       file, common_integer_type, expression->type, "a0");
         case MINIC_BINARY_REMAINDER:
             return has_integer_common_type &&
                    fprintf(file,
-                           minic_type_is_unsigned_integer(common_integer_type)
-                               ? "  remuw a0, t0, a0\n"
-                               : "  remw a0, t0, a0\n") >= 0 &&
-                   minic_riscv64_emit_normalize_integer(file, expression->type, "a0");
+                           minic_type_is_long_integer(common_integer_type)
+                               ? (minic_type_is_unsigned_integer(common_integer_type)
+                                      ? "  remu a0, t0, a0\n"
+                                      : "  rem a0, t0, a0\n")
+                               : (minic_type_is_unsigned_integer(common_integer_type)
+                                      ? "  remuw a0, t0, a0\n"
+                                      : "  remw a0, t0, a0\n")) >= 0 &&
+                   minic_riscv64_emit_integer_result_conversion(
+                       file, common_integer_type, expression->type, "a0");
         case MINIC_BINARY_SHIFT_LEFT:
-            return has_integer_common_type && fprintf(file, "  sllw a0, t0, a0\n") >= 0 &&
+            return has_integer_common_type &&
+                   fprintf(file,
+                           minic_type_is_long_integer(expression->type)
+                               ? "  sll a0, t0, a0\n"
+                               : "  sllw a0, t0, a0\n") >= 0 &&
                    minic_riscv64_emit_normalize_integer(file, expression->type, "a0");
         case MINIC_BINARY_SHIFT_RIGHT:
             return has_integer_common_type &&
                    fprintf(file,
-                           minic_type_is_unsigned_integer(expression->type)
-                               ? "  srlw a0, t0, a0\n"
-                               : "  sraw a0, t0, a0\n") >= 0 &&
+                           minic_type_is_long_integer(expression->type)
+                               ? (minic_type_is_unsigned_integer(expression->type)
+                                      ? "  srl a0, t0, a0\n"
+                                      : "  sra a0, t0, a0\n")
+                               : (minic_type_is_unsigned_integer(expression->type)
+                                      ? "  srlw a0, t0, a0\n"
+                                      : "  sraw a0, t0, a0\n")) >= 0 &&
                    minic_riscv64_emit_normalize_integer(file, expression->type, "a0");
         case MINIC_BINARY_BITWISE_AND:
             return has_integer_common_type && fprintf(file, "  and a0, t0, a0\n") >= 0 &&
-                   minic_riscv64_emit_normalize_integer(file, expression->type, "a0");
+                   minic_riscv64_emit_integer_result_conversion(
+                       file, common_integer_type, expression->type, "a0");
         case MINIC_BINARY_BITWISE_XOR:
             return has_integer_common_type && fprintf(file, "  xor a0, t0, a0\n") >= 0 &&
-                   minic_riscv64_emit_normalize_integer(file, expression->type, "a0");
+                   minic_riscv64_emit_integer_result_conversion(
+                       file, common_integer_type, expression->type, "a0");
         case MINIC_BINARY_EQUAL:
             return has_integer_common_type &&
                    fprintf(file, "  xor a0, t0, a0\n  seqz a0, a0\n") >= 0;
