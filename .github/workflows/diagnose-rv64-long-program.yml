@@ -6,38 +6,35 @@ on:
       - '.github/workflows/diagnose-rv64-long-program.yml'
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  diagnose:
+  accept:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
           ref: frontend/rv64-long-integers
-      - name: Apply pending backend patch in workspace
+          fetch-depth: 0
+      - name: Extend cast type recognition
         shell: bash
         run: |
-          awk '
-            /^python3 - <<'\''PY'\''/ { capture=1; next }
-            capture && /^PY$/ { exit }
-            capture { print }
-          ' .github/scripts/apply-rv64-long-codegen.sh > /tmp/apply-rv64-long-codegen.py
-          python3 /tmp/apply-rv64-long-codegen.py
-          make -j2
-      - name: Print exact source and diagnostic
-        shell: bash
-        run: |
-          cc -E -P -x c tests/programs/c0/long_integer_semantics.c -o /tmp/long.i
-          printf '%s\n' '--- numbered preprocessed source ---'
-          nl -ba /tmp/long.i
-          printf '%s\n' '--- MiniC diagnostic ---'
-          set +e
-          build/debug/bin/minic -S /tmp/long.i -o /tmp/long.s \
-            >/tmp/long.stdout 2>/tmp/long.stderr
-          status=$?
-          set -e
-          printf 'status=%s\n' "$status"
-          cat /tmp/long.stderr
-          test "$status" -ne 0
-          exit 1
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('src/frontend/parser_expression.c')
+          text = path.read_text()
+          old = '''    case MINIC_TOKEN_KW_CONST:
+    case MINIC_TOKEN_KW_INT:
+    case MINIC_TOKEN_KW_UNSIGNED:'''
+          new = '''    case MINIC_TOKEN_KW_CONST:
+    case MINIC_TOKEN_KW_INT:
+    case MINIC_TOKEN_KW_LONG:
+    case MINIC_TOKEN_KW_SIGNED:
+    case MINIC_TOKEN_KW_UNSIGNED:'''
+          if text.count(old) != 1:
+              raise SystemExit(f'cast type start marker count={text.count(old)}')
+          path.write_text(text.replace(old, new, 1))
+          PY
+          git rm .github/workflows/diagnose-rv64-long-program.yml
+      - name: Apply and verify RV64 long codegen
+        run: bash .github/scripts/apply-rv64-long-codegen.sh
