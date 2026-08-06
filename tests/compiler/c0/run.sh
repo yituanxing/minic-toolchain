@@ -277,7 +277,7 @@ expect_compile_failure \
     "too many global array initializers"
 expect_compile_failure \
     invalid_writable_static_global \
-    "static global arrays currently require const int elements"
+    "static global arrays currently require const integer elements"
 expect_compile_failure \
     invalid_scalar_static_global \
     "static global object requires a fixed array declarator"
