@@ -17,5 +17,7 @@ jobs:
         with:
           ref: frontend/incomplete-record-tags
           fetch-depth: 0
+      - name: Normalize parser source boundary
+        run: printf '\n' >> src/frontend/parser_type.c
       - name: Apply and verify self-referential record support
         run: bash .github/scripts/apply-self-referential-records.sh
