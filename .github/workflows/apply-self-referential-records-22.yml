@@ -17,7 +17,10 @@ jobs:
         with:
           ref: frontend/incomplete-record-tags
           fetch-depth: 0
-      - name: Verify formatter availability
-        run: command -v clang-format-18
+      - name: Install pinned formatter
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang-format-18
+          clang-format-18 --version
       - name: Apply and verify self-referential record support
         run: bash .github/scripts/apply-self-referential-records.sh
