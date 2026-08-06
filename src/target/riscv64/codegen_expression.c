@@ -408,6 +408,13 @@ bool minic_riscv64_emit_expression(
                        file,
                        expression->type,
                        "a0");
+        case MINIC_BINARY_BITWISE_XOR:
+            return has_integer_common_type &&
+                   fprintf(file, "  xor a0, t0, a0\n") >= 0 &&
+                   minic_riscv64_emit_normalize_integer(
+                       file,
+                       expression->type,
+                       "a0");
         case MINIC_BINARY_EQUAL:
             return has_integer_common_type &&
                    fprintf(file, "  xor a0, t0, a0\n  seqz a0, a0\n") >= 0;
