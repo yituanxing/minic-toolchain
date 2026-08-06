@@ -1,0 +1,149 @@
+name: Delete audited merged branches
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/branch-cleanup.ready'
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: delete-audited-merged-branches
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CLEANUP_BRANCH: maintenance/delete-merged-branches
+    steps:
+      - name: Checkout cleanup branch
+        uses: actions/checkout@v4
+        with:
+          ref: maintenance/delete-merged-branches
+          fetch-depth: 0
+
+      - name: Verify and delete audited branches
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          merged_targets=(
+            build/format-policy
+            compiler/c0-external-toolchain
+            compiler/fix-compound-xor-single-evaluation-fixture
+            compiler/general-pointer-scaling
+            compiler/repair-cast-codegen-baseline
+            compiler/tiny-aes-bitwise-xor
+            compiler/tiny-aes-cast-expressions
+            compiler/tiny-aes-compound-xor-assignment
+            compiler/tiny-aes-const-locals
+            compiler/tiny-aes-ecb-test-vectors
+            compiler/tiny-aes-expression-statements
+            compiler/tiny-aes-for-loops
+            compiler/tiny-aes-global-object-expressions
+            compiler/tiny-aes-integer-bit-operations
+            compiler/tiny-aes-pointer-member-access
+            compiler/tiny-aes-pointer-subscripts
+            compiler/tiny-aes-postfix-subscripts
+            compiler/tiny-aes-prefix-decrement-update
+            compiler/tiny-aes-unbounded-for-break
+            compiler/tiny-aes-unsigned-char-layout
+            compiler/tiny-aes-unsigned-integers
+            docs/validation-toolchain-profiles
+            frontend/ast-contract-verifier
+            maintenance/main-integration-safety
+            maintenance/production-source-inventory
+            maintenance/test-program-manifest
+            tests/vendor-tiny-aes
+          )
+          superseded_target=maintenance/test-inventory
+
+          delete_remote_branch() {
+            local branch=$1
+
+            if ! git ls-remote --exit-code --heads origin "refs/heads/$branch" >/dev/null; then
+              printf 'SKIP already absent branch=%s\n' "$branch"
+              return
+            fi
+
+            printf 'DELETE branch=%s\n' "$branch"
+            git push origin --delete "$branch"
+          }
+
+          for branch in "${merged_targets[@]}"; do
+            open_count=$(gh pr list \
+              --repo "$GITHUB_REPOSITORY" \
+              --head "$branch" \
+              --state open \
+              --json number \
+              --jq 'length')
+            merged_count=$(gh pr list \
+              --repo "$GITHUB_REPOSITORY" \
+              --head "$branch" \
+              --state merged \
+              --json number \
+              --jq 'length')
+
+            if (( open_count != 0 )); then
+              printf 'REFUSE branch=%s reason=open-prs count=%s\n' \
+                "$branch" "$open_count" >&2
+              exit 1
+            fi
+            if (( merged_count == 0 )); then
+              printf 'REFUSE branch=%s reason=no-merged-pr\n' "$branch" >&2
+              exit 1
+            fi
+          done
+
+          superseded_state=$(gh pr view 25 \
+            --repo "$GITHUB_REPOSITORY" \
+            --json state,headRefName \
+            --jq '.state + ":" + .headRefName')
+          if [[ "$superseded_state" != "CLOSED:$superseded_target" ]]; then
+            printf 'REFUSE branch=%s reason=unexpected-pr25-state actual=%s\n' \
+              "$superseded_target" "$superseded_state" >&2
+            exit 1
+          fi
+          superseded_open_count=$(gh pr list \
+            --repo "$GITHUB_REPOSITORY" \
+            --head "$superseded_target" \
+            --state open \
+            --json number \
+            --jq 'length')
+          if (( superseded_open_count != 0 )); then
+            printf 'REFUSE branch=%s reason=open-prs count=%s\n' \
+              "$superseded_target" "$superseded_open_count" >&2
+            exit 1
+          fi
+
+          for branch in "${merged_targets[@]}"; do
+            delete_remote_branch "$branch"
+          done
+          delete_remote_branch "$superseded_target"
+
+          remaining=$(git ls-remote --heads origin | awk '{sub("refs/heads/", "", $2); print $2}' | sort)
+          printf '%s\n' 'Remaining branches before self-delete:'
+          printf '%s\n' "$remaining"
+
+          while IFS= read -r branch; do
+            case "$branch" in
+              main|archive/*|backup/*|"$CLEANUP_BRANCH")
+                ;;
+              *)
+                printf 'REFUSE self-delete reason=unexpected-remaining-branch branch=%s\n' \
+                  "$branch" >&2
+                exit 1
+                ;;
+            esac
+          done <<<"$remaining"
+
+          delete_remote_branch "$CLEANUP_BRANCH"
+          printf '%s\n' \
+            'PASS branch-cleanup preserved=main,archive/*,backup/* deleted=29'
