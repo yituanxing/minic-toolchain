@@ -144,47 +144,74 @@ static bool parse_declaration(MinicParser *parser)
     return minic_parser_expect(parser, MINIC_TOKEN_SEMICOLON, "expected ';'");
 }
 
-static bool parse_assignment(MinicParser *parser)
+static bool parse_expression_or_assignment_statement(
+    MinicParser *parser,
+    bool allow_expression_statement)
 {
     MinicStatement statement;
-    const MinicExpression *target_expression;
-    const MinicExpression *assigned_expression;
+    const MinicExpression *first_expression;
 
     (void)memset(&statement, 0, sizeof(statement));
-    statement.kind = MINIC_STATEMENT_ASSIGN;
     statement.span.begin = parser->current.span.begin;
+    statement.target_expression = MINIC_EXPRESSION_INVALID;
+    statement.expression = MINIC_EXPRESSION_INVALID;
+    statement.then_block = MINIC_BLOCK_INVALID;
+    statement.else_block = MINIC_BLOCK_INVALID;
+
     if (!minic_parser_parse_expression(
             parser,
-            &statement.target_expression,
+            &statement.expression,
             0U)) {
         return false;
     }
-    target_expression = minic_c0_program_expression(
+    first_expression = minic_c0_program_expression(
         parser->program,
-        statement.target_expression);
-    if (!expression_is_modifiable_lvalue(target_expression)) {
+        statement.expression);
+    if (first_expression == NULL) {
+        minic_parser_error(parser, "invalid statement expression");
+        return false;
+    }
+
+    if (parser->current.kind != MINIC_TOKEN_EQUAL) {
+        if (!allow_expression_statement) {
+            minic_parser_error(parser, "for initializer requires an assignment");
+            return false;
+        }
+        statement.kind = MINIC_STATEMENT_EXPRESSION;
+        statement.span.end = first_expression->span.end;
+        return minic_parser_expect(
+                   parser,
+                   MINIC_TOKEN_SEMICOLON,
+                   "expected ';' after expression") &&
+               minic_parser_add_statement(parser, &statement);
+    }
+
+    statement.kind = MINIC_STATEMENT_ASSIGN;
+    statement.target_expression = statement.expression;
+    statement.expression = MINIC_EXPRESSION_INVALID;
+    if (!expression_is_modifiable_lvalue(first_expression)) {
         minic_parser_error(parser, "assignment target must be a modifiable lvalue");
         return false;
     }
-    if (!minic_parser_expect(parser, MINIC_TOKEN_EQUAL, "expected '='") ||
+    if (!minic_parser_advance(parser) ||
         !minic_parser_parse_expression(parser, &statement.expression, 0U)) {
         return false;
     }
-    target_expression = minic_c0_program_expression(
-        parser->program,
-        statement.target_expression);
-    assigned_expression = minic_c0_program_expression(
-        parser->program,
-        statement.expression);
-    if (!expression_is_modifiable_lvalue(target_expression) ||
-        assigned_expression == NULL ||
-        !minic_type_assignment_compatible(
-            target_expression->type,
-            assigned_expression->type)) {
-        minic_parser_error(parser, "assignment type does not match target type");
-        return false;
+    {
+        const MinicExpression *assigned_expression;
+
+        assigned_expression = minic_c0_program_expression(
+            parser->program,
+            statement.expression);
+        if (assigned_expression == NULL ||
+            !minic_type_assignment_compatible(
+                first_expression->type,
+                assigned_expression->type)) {
+            minic_parser_error(parser, "assignment type does not match target type");
+            return false;
+        }
+        statement.span.end = assigned_expression->span.end;
     }
-    statement.span.end = assigned_expression->span.end;
     return minic_parser_expect(parser, MINIC_TOKEN_SEMICOLON, "expected ';'") &&
            minic_parser_add_statement(parser, &statement);
 }
@@ -422,7 +449,7 @@ static bool parse_for(MinicParser *parser)
         minic_parser_error(parser, "for initializer requires an assignment");
         return false;
     }
-    if (!parse_assignment(parser) ||
+    if (!parse_expression_or_assignment_statement(parser, false) ||
         !minic_parser_parse_expression(parser, &statement.expression, 0U) ||
         !expression_is_integer_condition(parser, statement.expression) ||
         !minic_parser_expect(parser, MINIC_TOKEN_SEMICOLON, "expected ';'") ||
@@ -570,6 +597,18 @@ static bool token_starts_local_declaration(const MinicParser *parser)
     }
 }
 
+static bool token_starts_expression(MinicTokenKind kind)
+{
+    return kind == MINIC_TOKEN_IDENTIFIER ||
+           kind == MINIC_TOKEN_INTEGER_CONSTANT ||
+           kind == MINIC_TOKEN_LPAREN ||
+           kind == MINIC_TOKEN_PLUS ||
+           kind == MINIC_TOKEN_MINUS ||
+           kind == MINIC_TOKEN_BANG ||
+           kind == MINIC_TOKEN_AMPERSAND ||
+           kind == MINIC_TOKEN_STAR;
+}
+
 bool minic_parser_parse_statement(MinicParser *parser, bool allow_declaration)
 {
     if (parser->current.kind == MINIC_TOKEN_LBRACE) {
@@ -596,13 +635,11 @@ bool minic_parser_parse_statement(MinicParser *parser, bool allow_declaration)
     if (parser->current.kind == MINIC_TOKEN_KW_RETURN) {
         return parse_return(parser);
     }
-    if (parser->current.kind == MINIC_TOKEN_IDENTIFIER ||
-        parser->current.kind == MINIC_TOKEN_STAR ||
-        parser->current.kind == MINIC_TOKEN_LPAREN) {
-        return parse_assignment(parser);
+    if (token_starts_expression(parser->current.kind)) {
+        return parse_expression_or_assignment_statement(parser, true);
     }
     minic_parser_error(
         parser,
-        "expected compound, if, while, for, declaration, assignment, return, or '}'");
+        "expected compound, if, while, for, declaration, expression, return, or '}'");
     return false;
 }
