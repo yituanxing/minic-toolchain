@@ -148,3 +148,4 @@ run_program integer_bit_operations
 run_program unbounded_for_break
 run_program prefix_decrement_update
 run_program cast_expressions
+run_program unsigned_char_layout
