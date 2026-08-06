@@ -288,7 +288,10 @@ bool minic_lexer_next(
         }
         break;
     case '-':
-        if (minic_lexer_peek_next(lexer) == '>') {
+        if (minic_lexer_peek_next(lexer) == '-') {
+            token->kind = MINIC_TOKEN_MINUS_MINUS;
+            minic_lexer_advance(lexer);
+        } else if (minic_lexer_peek_next(lexer) == '>') {
             token->kind = MINIC_TOKEN_ARROW;
             minic_lexer_advance(lexer);
         } else {
