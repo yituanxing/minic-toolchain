@@ -7,10 +7,12 @@ riscv_cc=${RISCV_CC:-riscv64-linux-gnu-gcc}
 qemu=${QEMU_RISCV64:-qemu-riscv64}
 work=${BUILD_DIR:-"$root/build/debug"}/tests/external/tiny-aes-c
 harness="$root/tests/external/tiny-aes-c/aes128_ecb_vectors.c"
+diagnostic_file="$work/diagnostic.txt"
 upstream_commit=23856752fbd139da0b8ca6e471a13d5bcc99a08d
 base_url="https://raw.githubusercontent.com/kokke/tiny-AES-c/$upstream_commit"
 
 mkdir -p "$work/upstream"
+rm -f "$diagnostic_file"
 
 fetch_and_verify() {
     name=$1
@@ -52,6 +54,65 @@ print_function_assembly() {
         "$work/aes128-ecb.minic.s" >&2 || true
 }
 
+decode_minic_status() {
+    status=$1
+
+    case "$status" in
+    0)
+        printf '%s\n' "all AES-128 ECB vector checks passed"
+        ;;
+    17|18|19|20|21|22|23|24|25|26|27|28|29|30|31|32)
+        printf '%s\n' "initial AddRoundKey mismatch byte=$((status - 16))"
+        ;;
+    33|34|35|36|37|38|39|40|41|42|43|44|45|46|47|48)
+        printf '%s\n' "SubBytes mismatch byte=$((status - 32))"
+        ;;
+    49|50|51|52|53|54|55|56|57|58|59|60|61|62|63|64)
+        printf '%s\n' "ShiftRows mismatch byte=$((status - 48))"
+        ;;
+    65|66|67|68|69|70|71|72|73|74|75|76|77|78|79|80)
+        printf '%s\n' "MixColumns mismatch byte=$((status - 64))"
+        ;;
+    81|82|83|84|85|86|87|88|89|90|91|92|93|94|95|96)
+        printf '%s\n' "round-one AddRoundKey mismatch byte=$((status - 80))"
+        ;;
+    97|98|99|100|101|102|103|104|105|106|107|108|109|110|111|112)
+        printf '%s\n' "final encryption mismatch byte=$((status - 96))"
+        ;;
+    113|114|115|116|117|118|119|120|121|122|123|124|125|126|127|128)
+        printf '%s\n' "final decryption mismatch byte=$((status - 112))"
+        ;;
+    129)
+        printf '%s\n' "constant S-box lookup mismatch index=0x4d"
+        ;;
+    130)
+        printf '%s\n' "dynamic S-box lookup mismatch state-byte=6"
+        ;;
+    *)
+        printf '%s\n' "unclassified harness status=$status"
+        ;;
+    esac
+}
+
+write_runtime_diagnostic() {
+    kind=$1
+    gcc_status=$2
+    minic_status=$3
+    decoded=$(decode_minic_status "$minic_status")
+
+    {
+        printf 'kind=%s\n' "$kind"
+        printf 'gcc_status=%s\n' "$gcc_status"
+        printf 'minic_status=%s\n' "$minic_status"
+        printf 'decoded=%s\n' "$decoded"
+        printf 'branch_scope=AES-128-ECB-test-vector-execution\n'
+        printf 'upstream_commit=%s\n' "$upstream_commit"
+    } >"$diagnostic_file"
+
+    printf '::error title=tiny-AES differential failure::gcc=%s minic=%s %s\n' \
+        "$gcc_status" "$minic_status" "$decoded" >&2
+}
+
 run_elf() {
     elf=$1
     stdout_file=$2
@@ -72,6 +133,7 @@ report_difference() {
     gcc_status=$(cat "$work/aes128-ecb.gcc.status")
     minic_status=$(cat "$work/aes128-ecb.minic.status")
 
+    write_runtime_diagnostic "$kind" "$gcc_status" "$minic_status"
     printf '%s\n' \
         "FAIL external/tiny-aes-c: $kind differs gcc=$gcc_status minic=$minic_status" >&2
     diff -u "$gcc_file" "$minic_file" >&2 || true
@@ -82,7 +144,8 @@ report_difference() {
     print_function_assembly MixColumns
     print_function_assembly Cipher
     print_function_assembly AES_ECB_encrypt
-    print_function_assembly block_mismatch_index
+    print_function_assembly first_mismatch
+    print_function_assembly check_stage
     print_function_assembly main
     printf '%s\n' "Artifacts retained in $work" >&2
     exit 1
@@ -191,6 +254,10 @@ fi
 
 status=$(cat "$work/aes128-ecb.minic.status")
 if test "$status" -ne 0; then
+    write_runtime_diagnostic \
+        "nonzero matching status" \
+        "$(cat "$work/aes128-ecb.gcc.status")" \
+        "$status"
     printf '%s\n' \
         "FAIL external/tiny-aes-c: AES vector harness exited $status" >&2
     exit 1
