@@ -55,6 +55,8 @@ const char *minic_token_kind_name(MinicTokenKind kind)
         return "++";
     case MINIC_TOKEN_MINUS:
         return "-";
+    case MINIC_TOKEN_MINUS_MINUS:
+        return "--";
     case MINIC_TOKEN_ARROW:
         return "->";
     case MINIC_TOKEN_STAR:
