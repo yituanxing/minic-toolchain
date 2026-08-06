@@ -25,6 +25,23 @@ fetch_and_verify() {
     fi
 }
 
+print_frontier_context() {
+    diagnostic=$1
+    line=$(printf '%s\n' "$diagnostic" | \
+        sed -n 's/.*:\([0-9][0-9]*\):[0-9][0-9]*: error:.*/\1/p')
+    if test -z "$line"; then
+        return
+    fi
+
+    start=$((line - 2))
+    if test "$start" -lt 1; then
+        start=1
+    fi
+    end=$((line + 2))
+    printf '%s\n' "--- preprocessed frontier context ---" >&2
+    nl -ba "$work/aes-ecb.i" | sed -n "${start},${end}p" >&2
+}
+
 fetch_and_verify aes.c 4481f7b24ec964019d38669842913fd571d28ba3
 fetch_and_verify aes.h b29b6683549632676ec11c06eb86efd02964db57
 fetch_and_verify unlicense.txt 68a49daad8ff7e35068f2b7a97d643aab440eaec
@@ -50,6 +67,7 @@ if ! grep -F ":137:14:" "$work/minic.stderr" >/dev/null ||
     printf '%s\n' \
         "FAIL external/tiny-aes-c: unexpected compiler frontier" >&2
     cat "$work/minic.stderr" >&2
+    print_frontier_context "$(sed -n '1p' "$work/minic.stderr")"
     exit 1
 fi
 
