@@ -3,7 +3,29 @@
 #include <stdint.h>
 #include <stdio.h>
 
-static bool minic_riscv64_object_access(
+static bool minic_riscv64_local_object(
+    const MinicC0Program *program,
+    const MinicFunction *function,
+    MinicLocalId local_id,
+    const MinicLocal **local)
+{
+    const MinicLocal *object;
+
+    if (program == NULL || function == NULL || local == NULL ||
+        local_id < function->local_begin ||
+        local_id - function->local_begin >= function->local_count) {
+        return false;
+    }
+    object = minic_c0_program_local(program, local_id);
+    if (object == NULL || function->local_storage_size == 0U ||
+        object->storage_offset >= function->local_storage_size) {
+        return false;
+    }
+    *local = object;
+    return true;
+}
+
+static bool minic_riscv64_scalar_object_access(
     const MinicC0Program *program,
     const MinicFunction *function,
     MinicLocalId local_id,
@@ -13,13 +35,12 @@ static bool minic_riscv64_object_access(
     const MinicLocal *object;
     size_t object_width;
 
-    if (program == NULL || function == NULL || local == NULL || width == NULL ||
-        local_id < function->local_begin ||
-        local_id - function->local_begin >= function->local_count) {
-        return false;
-    }
-    object = minic_c0_program_local(program, local_id);
-    if (object == NULL) {
+    if (width == NULL ||
+        !minic_riscv64_local_object(
+            program,
+            function,
+            local_id,
+            &object)) {
         return false;
     }
     if (minic_type_is_integer(object->type)) {
@@ -29,8 +50,8 @@ static bool minic_riscv64_object_access(
     } else {
         return false;
     }
-    if (object->storage_offset > function->local_storage_size ||
-        object_width > function->local_storage_size - object->storage_offset) {
+    if (object_width >
+        function->local_storage_size - object->storage_offset) {
         return false;
     }
     *local = object;
@@ -151,17 +172,14 @@ bool minic_riscv64_emit_object_address(
     MinicLocalId local_id)
 {
     const MinicLocal *local;
-    size_t width;
 
-    if (!minic_riscv64_object_access(
+    if (!minic_riscv64_local_object(
             program,
             function,
             local_id,
-            &local,
-            &width)) {
+            &local)) {
         return false;
     }
-    (void)width;
     if (local->storage_offset <= 2047U) {
         return fprintf(
             file,
@@ -185,7 +203,7 @@ bool minic_riscv64_emit_object_load(
     size_t width;
     const char *instruction;
 
-    if (!minic_riscv64_object_access(
+    if (!minic_riscv64_scalar_object_access(
             program,
             function,
             local_id,
@@ -216,7 +234,7 @@ bool minic_riscv64_emit_object_store_register(
     size_t width;
 
     if (register_name == NULL ||
-        !minic_riscv64_object_access(
+        !minic_riscv64_scalar_object_access(
             program,
             function,
             local_id,
