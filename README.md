@@ -30,19 +30,19 @@ The C implementation now includes:
 - a modular parser split by expressions, statements, functions, types, records, typedefs, globals, and constants;
 - typed expressions with lvalue/rvalue distinctions, explicit signed/unsigned integer identity, and equal-rank integer conversions;
 - lexical block scopes and stable Program-owned local objects;
-- integer expressions, comparisons, conditions, `if`, `while`, normalized bounded `for` loops, assignments, prefix increment, pointers, fixed arrays, array and pointer subscripting, pointer arithmetic, comma-separated local declarations, and const-qualified local initialization;
+- integer arithmetic, comparisons, bitwise XOR, conditions, `if`, `while`, normalized bounded `for` loops, assignments, prefix increment, pointers, fixed arrays, array and pointer subscripting, pointer arithmetic, comma-separated local declarations, and const-qualified local initialization;
 - function prototypes, legal forward calls, direct and nested calls, recursion, mutual recursion, and zero through eight integer register arguments;
 - `void`, `const`, named records, recursive array typedefs, static read-only global arrays, global array expression lookup with local-name shadowing, and internal functions;
-- RV64 object layout, call-safe stack frames, signed/unsigned loads and arithmetic, shared scaled address calculation for local arrays, pointer values, and global symbols, assembly emission, and internal symbol visibility;
+- RV64 object layout, call-safe stack frames, signed/unsigned loads and arithmetic, `xor` lowering, shared scaled address calculation for local arrays, pointer values, and global symbols, assembly emission, and internal symbol visibility;
 - debug, release `-Werror`, ASan/UBSan, RV64/QEMU, and GCC/MiniC differential gates.
 
-Twenty-six executable C programs are permanently compared between a full GCC reference lane and the MiniC lane by exit status, standard output, and standard error. The matrix includes isolated loop-counter/body tests, high-bit unsigned comparison/division/remainder coverage, pointer-parameter/local-pointer subscript reads and writes, const-local initialization/readback, and static global-array lookup with local-name shadowing.
+Twenty-seven executable C programs are permanently compared between a full GCC reference lane and the MiniC lane by exit status, standard output, and standard error. The matrix includes isolated loop-counter/body tests, high-bit unsigned comparison/division/remainder coverage, pointer-parameter/local-pointer subscript reads and writes, const-local initialization/readback, static global-array lookup with local-name shadowing, and signed/unsigned bitwise-XOR precedence and execution.
 
 ## First external project
 
 The first pinned upstream driver is `kokke/tiny-AES-c`, AES-128 ECB configuration. Upstream source files are downloaded at fixed Git blob identities and are not patched for MiniC.
 
-The compiler has progressed through the upstream declarations, typedef arrays, static lookup tables, internal functions, `void` definitions, unsigned declaration lists, the first `KeyExpansion` loop, pointer-parameter subscripting, const-qualified local initialization, and expression references to the static global `sbox` table. The current verified frontier is the first unsupported bitwise XOR operator in `KeyExpansion`.
+The compiler has progressed through the upstream declarations, typedef arrays, static lookup tables, internal functions, `void` definitions, unsigned declaration lists, the first `KeyExpansion` loop, pointer-parameter subscripting, const-qualified local initialization, expression references to the static global `sbox` table, and bitwise XOR. The current verified frontier is the first pointer-to-record member expression, `ctx->RoundKey`, in `AES_init_ctx`.
 
 The target shim is temporary evidence scaffolding, not an implementation of `uint8_t`. True byte-sized type identity, object layout, loads/stores, scaling, and conversions remain separate capabilities that must be implemented before AES execution can be considered correct.
 
