@@ -45,8 +45,8 @@ if "$minic" -S "$work/aes-ecb.i" -o "$work/aes-ecb.s" \
     exit 1
 fi
 
-if ! grep -F ":80:27:" "$work/minic.stderr" >/dev/null ||
-   ! grep -F "unexpected character '^'" "$work/minic.stderr" >/dev/null; then
+if ! grep -F ":91:20:" "$work/minic.stderr" >/dev/null ||
+   ! grep -F "expected expression" "$work/minic.stderr" >/dev/null; then
     printf '%s\n' \
         "FAIL external/tiny-aes-c: unexpected compiler frontier" >&2
     cat "$work/minic.stderr" >&2
@@ -55,4 +55,4 @@ fi
 
 frontier=$(sed -n '1p' "$work/minic.stderr")
 printf '%s\n' \
-    "PASS external/tiny-aes-c frontier=KeyExpansion-bitwise-xor diagnostic=$frontier"
+    "PASS external/tiny-aes-c frontier=AES-init-ctx-pointer-member diagnostic=$frontier"

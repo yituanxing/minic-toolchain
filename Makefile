@@ -111,9 +111,9 @@ LAYOUT_TEST_BINARY  := $(BUILD_DIR)/tests/target/riscv64/layout-test
 .PHONY: all help prepare check check-fast check-token-model check-lexer \
 	check-type check-record check-type-alias check-layout check-static-functions \
 	check-unsigned-declarations check-for-loops check-pointer-subscripts \
-	check-const-locals check-global-objects check-c0-runtime check-programs-c0 \
-	check-runtime sanitize bootstrap bootstrap-compare format format-check clean \
-	distclean print-config
+	check-const-locals check-global-objects check-bitwise-xor check-c0-runtime \
+	check-programs-c0 check-runtime sanitize bootstrap bootstrap-compare format \
+	format-check clean distclean print-config
 
 all: $(MINIC_BINARY)
 
@@ -134,6 +134,7 @@ help:
 		"  make check-pointer-subscripts Run pointer subscript read/write gates" \
 		"  make check-const-locals Run const local initialization and mutability gates" \
 		"  make check-global-objects Run global array lookup and shadowing gates" \
+		"  make check-bitwise-xor  Run XOR precedence, type, and lowering gates" \
 		"  make check              Run the normal host-side test gate" \
 		"  make check-c0-runtime   Run focused RISC-V/QEMU microprogram gates" \
 		"  make check-programs-c0  Differentially compare real programs: GCC vs MiniC" \
@@ -232,7 +233,13 @@ check-global-objects: $(MINIC_BINARY)
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
 	sh tests/compiler/c0/run-global-objects.sh
 
-check-fast: check-token-model check-lexer check-type check-record check-type-alias check-layout check-static-functions check-unsigned-declarations check-for-loops check-pointer-subscripts check-const-locals check-global-objects $(MINIC_BINARY)
+check-bitwise-xor: $(MINIC_BINARY)
+	MINIC="$(abspath $(MINIC_BINARY))" \
+	HOST_CC="$(CC)" \
+	BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/compiler/c0/run-bitwise-xor.sh
+
+check-fast: check-token-model check-lexer check-type check-record check-type-alias check-layout check-static-functions check-unsigned-declarations check-for-loops check-pointer-subscripts check-const-locals check-global-objects check-bitwise-xor $(MINIC_BINARY)
 	MINIC="$(abspath $(MINIC_BINARY))" \
 	HOST_CC="$(CC)" \
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
