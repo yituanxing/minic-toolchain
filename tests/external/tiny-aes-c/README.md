@@ -29,21 +29,21 @@ Pinned Git blob identities:
 
 ## Current frontier
 
-MiniC now passes the upstream declarations, `struct AES_ctx`, typed and `const` prototypes, multidimensional typedef arrays, static read-only lookup tables, static internal functions, `void` definitions, explicit unsigned integer identity, comma-separated unsigned declarations, the first `KeyExpansion` loop, pointer-parameter subscripting, const-qualified local initialization, expression lookup of the static global `sbox` table, bitwise XOR, typedef-backed record fields, RV64 record layout, pointer member access in `AES_init_ctx`, the standalone `KeyExpansion(ctx->RoundKey, key);` expression statement, the repeatable postfix chain `(*state)[i][j]`, compound XOR assignment in `AddRoundKey`, the complete integer bit expression in `xtime`, and the empty-condition `for` loop with `break` in `Cipher`.
+MiniC now passes the upstream declarations, `struct AES_ctx`, typed and `const` prototypes, multidimensional typedef arrays, static read-only lookup tables, static internal functions, `void` definitions, explicit unsigned integer identity, comma-separated unsigned declarations, the first `KeyExpansion` loop, pointer-parameter subscripting, const-qualified local initialization, expression lookup of the static global `sbox` table, bitwise XOR, typedef-backed record fields, RV64 record layout, pointer member access in `AES_init_ctx`, the standalone `KeyExpansion(ctx->RoundKey, key);` expression statement, the repeatable postfix chain `(*state)[i][j]`, compound XOR assignment in `AddRoundKey`, the complete integer bit expression in `xtime`, the empty-condition `for` loop with `break` in `Cipher`, and the prefix decrement update in `InvCipher`.
 
-The unbounded-loop control-flow slice adds a dedicated `break` token and statement identity, explicit parser loop-depth tracking, empty `for` conditions normalized to unconditional loops, and RV64 lowering to the innermost loop-end label. Ordinary `while` statements still require an integer condition. Loop context is preserved through nested `if` blocks, while nested loops replace the active break target with their own end label.
+The prefix-decrement slice adds a distinct longest-match `--` token beside `-` and `->`, then generalizes the existing normalized `for` update from `++local` to either `++local` or `--local`. It deliberately does not add general prefix-decrement expression semantics. The target must remain a modifiable integer local, and decrement is represented with the existing subtraction expression and ordinary assignment lowering.
 
-Focused coverage verifies that two nested unbounded loops receive distinct exit labels, no condition guard is emitted for an omitted `for` condition, a `break` skips the normalized loop-tail update, and `break` is rejected outside a loop or without a terminating semicolon. A separate negative fixture prevents empty conditions from leaking into ordinary `while` statements.
+Direct Token and Lexer coverage distinguishes all three minus-prefixed spellings. Focused coverage verifies `subw` lowering, preserves existing increment diagnostics, rejects pointer decrement targets, and proves that a `break` exits before the normalized decrement tail executes.
 
-The exact pinned failure has advanced to the prefix decrement update in `InvCipher`:
+The exact pinned failure has advanced to the state-pointer cast in `AES_ECB_encrypt`:
 
 ```c
-for (round = (10 - 1); ; --round)
+Cipher((state_t*)buf, ctx->RoundKey);
 ```
 
-MiniC currently accepts only prefix increment as the normalized `for` update. It therefore reports `for update requires prefix increment` at preprocessed line 228, column 28. Prefix decrement tokenization, validation, normalization, and lowering belong to the next independent capability slice and are intentionally not included in the unbounded-loop branch.
+MiniC does not yet parse C cast expressions. It therefore treats the typedef name inside the parenthesized sequence as an expression identifier and reports `use of undeclared local` at preprocessed line 241, column 18. Cast parsing, type validation, pointer conversion semantics, and unchanged-value RV64 lowering belong to the next independent capability slice and are intentionally excluded from the prefix-decrement branch.
 
-The permanent GCC/MiniC execution matrix now contains thirty-three programs. The `unbounded_for_break` program covers nested empty-condition loops, innermost-loop targeting, breaks through nested branches, and skipped loop-tail updates; both lanes exit with status 31 and produce empty output streams. The earlier integer bit-operation program continues to exit 58 in both lanes.
+The permanent GCC/MiniC execution matrix now contains thirty-four programs. The `prefix_decrement_update` program covers a descending empty-condition loop and verifies that `break` skips the decrement tail; both lanes exit with status 16 and produce empty output streams. The `unbounded_for_break` program continues to exit 31 in both lanes.
 
 ## Remaining acceptance debt
 
