@@ -299,7 +299,12 @@ bool minic_lexer_next(
         token->kind = MINIC_TOKEN_AMPERSAND;
         break;
     case '^':
-        token->kind = MINIC_TOKEN_CARET;
+        if (minic_lexer_peek_next(lexer) == '=') {
+            token->kind = MINIC_TOKEN_CARET_EQUAL;
+            minic_lexer_advance(lexer);
+        } else {
+            token->kind = MINIC_TOKEN_CARET;
+        }
         break;
     case '/':
         token->kind = MINIC_TOKEN_SLASH;
