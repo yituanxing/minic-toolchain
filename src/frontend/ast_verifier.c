@@ -22,7 +22,8 @@ static bool type_is_valid(const MinicC0Program *program, MinicType type) {
                (type.integer_sign == MINIC_INTEGER_SIGN_SIGNED ||
                 type.integer_sign == MINIC_INTEGER_SIGN_UNSIGNED) &&
                (type.integer_rank == MINIC_INTEGER_RANK_CHAR ||
-                type.integer_rank == MINIC_INTEGER_RANK_INT);
+                type.integer_rank == MINIC_INTEGER_RANK_INT ||
+                type.integer_rank == MINIC_INTEGER_RANK_LONG);
     case MINIC_TYPE_BASE_RECORD:
         return type.record_id < program->record_count &&
                type.array_type_id == MINIC_ARRAY_TYPE_INVALID &&

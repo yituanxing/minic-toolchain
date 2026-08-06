@@ -6,14 +6,12 @@
 #include <stdio.h>
 #include <string.h>
 
-static int fail(const char *message)
-{
+static int fail(const char *message) {
     (void)fprintf(stderr, "FAIL target/riscv64/layout: %s\n", message);
     return 1;
 }
 
-int main(void)
-{
+int main(void) {
     MinicC0Program program;
     MinicBlockId block_id;
     MinicFunctionId function_id;
@@ -28,47 +26,32 @@ int main(void)
     const MinicRecord *record;
     size_t byte_size;
     size_t byte_alignment;
+    size_t long_size;
+    size_t long_alignment;
 
     minic_c0_program_initialize(&program);
     (void)memset(&diagnostic, 0, sizeof(diagnostic));
     byte_type = minic_type_unsigned_char();
 
-    if (!minic_riscv64_type_layout(
-            &program,
-            byte_type,
-            &byte_size,
-            &byte_alignment) ||
+    if (!minic_riscv64_type_layout(&program, byte_type, &byte_size, &byte_alignment) ||
         byte_size != 1U || byte_alignment != 1U) {
         minic_c0_program_destroy(&program);
         return fail("unsigned-char scalar layout");
     }
 
-    if (!minic_c0_program_add_record(
-            &program,
-            "Packet",
-            6U,
-            &record_id) ||
-        !minic_c0_record_add_field(
-            &program,
-            record_id,
-            "prefix",
-            6U,
-            byte_type,
-            1U) ||
-        !minic_c0_record_add_field(
-            &program,
-            record_id,
-            "data",
-            4U,
-            minic_type_int(),
-            4U) ||
-        !minic_c0_record_add_field(
-            &program,
-            record_id,
-            "value",
-            5U,
-            byte_type,
-            1U) ||
+    if (!minic_riscv64_type_layout(&program, minic_type_long(), &long_size, &long_alignment) ||
+        long_size != 8U || long_alignment != 8U ||
+        !minic_riscv64_type_layout(
+            &program, minic_type_unsigned_long(), &long_size, &long_alignment) ||
+        long_size != 8U || long_alignment != 8U) {
+        minic_c0_program_destroy(&program);
+        return fail("RV64 long scalar layout");
+    }
+
+    if (!minic_c0_program_add_record(&program, "Packet", 6U, &record_id) ||
+        !minic_c0_record_add_field(&program, record_id, "prefix", 6U, byte_type, 1U) ||
+        !minic_c0_record_add_field(&program, record_id, "data", 4U, minic_type_int(), 4U) ||
+        !minic_c0_record_add_field(&program, record_id, "value", 5U, byte_type, 1U) ||
         !minic_c0_program_finish_record(&program, record_id)) {
         minic_c0_program_destroy(&program);
         return fail("construct record");
@@ -138,27 +121,15 @@ int main(void)
         return fail("add record local");
     }
 
-    if (!minic_c0_program_add_function(
-            &program,
-            "sample",
-            6U,
-            0U,
-            8U,
-            block_id,
-            &function_id) ||
-        !minic_riscv64_layout_program(
-            "layout-test",
-            &program,
-            &diagnostic)) {
+    if (!minic_c0_program_add_function(&program, "sample", 6U, 0U, 8U, block_id, &function_id) ||
+        !minic_riscv64_layout_program("layout-test", &program, &diagnostic)) {
         minic_c0_program_destroy(&program);
         return fail("layout program");
     }
 
     record = minic_c0_program_record(&program, record_id);
-    if (record == NULL || record->storage_size != 24U ||
-        record->alignment != 4U ||
-        record->fields[0].storage_offset != 0U ||
-        record->fields[1].storage_offset != 4U ||
+    if (record == NULL || record->storage_size != 24U || record->alignment != 4U ||
+        record->fields[0].storage_offset != 0U || record->fields[1].storage_offset != 4U ||
         record->fields[2].storage_offset != 20U) {
         minic_c0_program_destroy(&program);
         return fail("record field layout");
@@ -166,27 +137,18 @@ int main(void)
 
     function = minic_c0_program_function(&program, function_id);
     if (function == NULL || function->local_storage_size != 76U ||
-        program.locals[0].storage_offset != 0U ||
-        program.locals[1].storage_offset != 1U ||
-        program.locals[2].storage_offset != 4U ||
-        program.locals[3].storage_offset != 8U ||
-        program.locals[4].storage_offset != 24U ||
-        program.locals[5].storage_offset != 32U ||
-        program.locals[6].storage_offset != 48U ||
-        program.locals[7].storage_offset != 52U) {
+        program.locals[0].storage_offset != 0U || program.locals[1].storage_offset != 1U ||
+        program.locals[2].storage_offset != 4U || program.locals[3].storage_offset != 8U ||
+        program.locals[4].storage_offset != 24U || program.locals[5].storage_offset != 32U ||
+        program.locals[6].storage_offset != 48U || program.locals[7].storage_offset != 52U) {
         minic_c0_program_destroy(&program);
         return fail("mixed byte, scalar, array, pointer, and record offsets");
     }
 
     program.locals[1].element_count = 0U;
     diagnostic.message[0] = '\0';
-    if (minic_riscv64_layout_program(
-            "layout-zero",
-            &program,
-            &diagnostic) ||
-        strcmp(
-            diagnostic.message,
-            "local object size is invalid for the RV64 target") != 0) {
+    if (minic_riscv64_layout_program("layout-zero", &program, &diagnostic) ||
+        strcmp(diagnostic.message, "local object size is invalid for the RV64 target") != 0) {
         minic_c0_program_destroy(&program);
         return fail("zero-element byte object accepted");
     }
@@ -194,13 +156,8 @@ int main(void)
     program.locals[1].element_count = 3U;
     program.locals[3].element_count = SIZE_MAX;
     diagnostic.message[0] = '\0';
-    if (minic_riscv64_layout_program(
-            "layout-overflow",
-            &program,
-            &diagnostic) ||
-        strcmp(
-            diagnostic.message,
-            "local object size is invalid for the RV64 target") != 0) {
+    if (minic_riscv64_layout_program("layout-overflow", &program, &diagnostic) ||
+        strcmp(diagnostic.message, "local object size is invalid for the RV64 target") != 0) {
         minic_c0_program_destroy(&program);
         return fail("array size overflow accepted");
     }

@@ -1,5 +1,11 @@
 #include "frontend/parser_internal.h"
 
+static bool minic_parser_is_integer_type_specifier(MinicTokenKind kind) {
+    return kind == MINIC_TOKEN_KW_CHAR || kind == MINIC_TOKEN_KW_INT ||
+           kind == MINIC_TOKEN_KW_LONG || kind == MINIC_TOKEN_KW_SIGNED ||
+           kind == MINIC_TOKEN_KW_UNSIGNED;
+}
+
 bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type) {
     MinicType parsed_type;
     bool is_const;
@@ -17,25 +23,80 @@ bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type) {
         }
     }
 
-    if (parser->current.kind == MINIC_TOKEN_KW_INT) {
-        parsed_type = minic_type_int();
-        if (!minic_parser_advance(parser)) {
-            return false;
-        }
-    } else if (parser->current.kind == MINIC_TOKEN_KW_UNSIGNED) {
-        if (!minic_parser_advance(parser)) {
-            return false;
-        }
-        if (parser->current.kind == MINIC_TOKEN_KW_CHAR) {
-            parsed_type = minic_type_unsigned_char();
+    if (minic_parser_is_integer_type_specifier(parser->current.kind)) {
+        bool saw_char = false;
+        bool saw_int = false;
+        bool saw_long = false;
+        bool saw_signed = false;
+        bool saw_unsigned = false;
+
+        while (minic_parser_is_integer_type_specifier(parser->current.kind)) {
+            switch (parser->current.kind) {
+            case MINIC_TOKEN_KW_CHAR:
+                if (saw_char) {
+                    minic_parser_error(parser, "duplicate char type specifier");
+                    return false;
+                }
+                saw_char = true;
+                break;
+            case MINIC_TOKEN_KW_INT:
+                if (saw_int) {
+                    minic_parser_error(parser, "duplicate int type specifier");
+                    return false;
+                }
+                saw_int = true;
+                break;
+            case MINIC_TOKEN_KW_LONG:
+                if (saw_long) {
+                    minic_parser_error(parser, "long long is not supported");
+                    return false;
+                }
+                saw_long = true;
+                break;
+            case MINIC_TOKEN_KW_SIGNED:
+                if (saw_signed) {
+                    minic_parser_error(parser, "duplicate signed type specifier");
+                    return false;
+                }
+                saw_signed = true;
+                break;
+            case MINIC_TOKEN_KW_UNSIGNED:
+                if (saw_unsigned) {
+                    minic_parser_error(parser, "duplicate unsigned type specifier");
+                    return false;
+                }
+                saw_unsigned = true;
+                break;
+            default:
+                return false;
+            }
             if (!minic_parser_advance(parser)) {
                 return false;
             }
-        } else {
-            parsed_type = minic_type_unsigned_int();
-            if (parser->current.kind == MINIC_TOKEN_KW_INT && !minic_parser_advance(parser)) {
+        }
+
+        if (saw_signed && saw_unsigned) {
+            minic_parser_error(parser, "conflicting signed and unsigned type specifiers");
+            return false;
+        }
+        if (saw_char) {
+            if (saw_long || saw_int) {
+                minic_parser_error(parser, "char cannot be combined with int or long");
                 return false;
             }
+            if (saw_signed) {
+                minic_parser_error(parser, "signed char is not supported");
+                return false;
+            }
+            if (!saw_unsigned) {
+                minic_parser_error(parser, "expected type name");
+                return false;
+            }
+            parsed_type = minic_type_unsigned_char();
+        } else if (saw_long) {
+            parsed_type = saw_unsigned ? minic_type_unsigned_long() : minic_type_long();
+        } else {
+            parsed_type = saw_unsigned ? minic_type_unsigned_int() : minic_type_int();
         }
     } else if (parser->current.kind == MINIC_TOKEN_KW_VOID) {
         parsed_type = minic_type_void();
