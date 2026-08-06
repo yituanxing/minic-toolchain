@@ -150,6 +150,56 @@ static bool minic_riscv64_emit_subscript_address(
                shift) >= 0;
 }
 
+static bool minic_riscv64_emit_member_address(
+    FILE *file,
+    const MinicC0Program *program,
+    const MinicFunction *function,
+    const MinicExpression *expression)
+{
+    const MinicExpression *base;
+    const MinicRecord *record;
+    const MinicRecordField *field;
+    MinicType record_type;
+
+    if (expression == NULL || expression->kind != MINIC_EXPRESSION_MEMBER) {
+        return false;
+    }
+    base = minic_c0_program_expression(
+        program,
+        expression->value.member.base);
+    record = minic_c0_program_record(
+        program,
+        expression->value.member.record_id);
+    field = minic_c0_record_field(
+        record,
+        expression->value.member.field_index);
+    if (base == NULL || record == NULL || field == NULL ||
+        !minic_type_pointee(base->type, &record_type) ||
+        !minic_type_is_record(record_type) ||
+        record_type.record_id != expression->value.member.record_id ||
+        !minic_riscv64_emit_expression(
+            file,
+            program,
+            function,
+            expression->value.member.base)) {
+        return false;
+    }
+    if (field->storage_offset == 0U) {
+        return true;
+    }
+    if (field->storage_offset <= 2047U) {
+        return fprintf(
+            file,
+            "  addi a0, a0, %zu\n",
+            field->storage_offset) >= 0;
+    }
+    return fprintf(
+        file,
+        "  li t0, %zu\n"
+        "  add a0, a0, t0\n",
+        field->storage_offset) >= 0;
+}
+
 bool minic_riscv64_emit_lvalue_address(
     FILE *file,
     const MinicC0Program *program,
@@ -187,6 +237,12 @@ bool minic_riscv64_emit_lvalue_address(
             expression->value.unary.operand);
     case MINIC_EXPRESSION_SUBSCRIPT:
         return minic_riscv64_emit_subscript_address(
+            file,
+            program,
+            function,
+            expression);
+    case MINIC_EXPRESSION_MEMBER:
+        return minic_riscv64_emit_member_address(
             file,
             program,
             function,
@@ -266,6 +322,39 @@ bool minic_riscv64_emit_expression(
             return fprintf(file, "  ld a0, 0(a0)\n") >= 0;
         }
         return false;
+    case MINIC_EXPRESSION_MEMBER: {
+        const MinicRecord *record;
+        const MinicRecordField *field;
+
+        record = minic_c0_program_record(
+            program,
+            expression->value.member.record_id);
+        field = minic_c0_record_field(
+            record,
+            expression->value.member.field_index);
+        if (field == NULL ||
+            !minic_riscv64_emit_member_address(
+                file,
+                program,
+                function,
+                expression)) {
+            return false;
+        }
+        if (field->element_count > 1U) {
+            return minic_type_is_pointer(expression->type);
+        }
+        if (minic_type_is_integer(expression->type)) {
+            return fprintf(
+                file,
+                minic_type_is_unsigned_integer(expression->type)
+                    ? "  lwu a0, 0(a0)\n"
+                    : "  lw a0, 0(a0)\n") >= 0;
+        }
+        if (minic_type_is_pointer(expression->type)) {
+            return fprintf(file, "  ld a0, 0(a0)\n") >= 0;
+        }
+        return false;
+    }
     case MINIC_EXPRESSION_UNARY:
         if (!minic_riscv64_emit_expression(
                 file,
