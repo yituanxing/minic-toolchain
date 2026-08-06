@@ -146,6 +146,13 @@ int main(void)
         return failure;
     }
 
+    if (sbox[0x4d] != 0xe3) {
+        return 129;
+    }
+    if (sbox[block[6]] != 0xe3) {
+        return 130;
+    }
+
     SubBytes(state_pointer);
     failure = check_stage(&block[0], &vector_sub_bytes_1[0], 32);
     if (failure != 0) {
