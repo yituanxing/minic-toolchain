@@ -34,6 +34,49 @@ static bool parse_integer(
            minic_parser_advance(parser);
 }
 
+static bool parse_subscript_expression(
+    MinicParser *parser,
+    MinicExpressionId base_id,
+    MinicType element_type,
+    MinicSourceSpan base_span,
+    MinicExpressionId *expression_id)
+{
+    MinicExpression subscript;
+    MinicExpressionId index_id;
+    const MinicExpression *index_expression;
+    MinicSourcePosition subscript_end;
+
+    if (parser->current.kind != MINIC_TOKEN_LBRACKET ||
+        !minic_parser_advance(parser) ||
+        !minic_parser_parse_expression(parser, &index_id, 0U)) {
+        return false;
+    }
+    index_expression = minic_c0_program_expression(parser->program, index_id);
+    if (index_expression == NULL ||
+        !minic_type_is_integer(index_expression->type)) {
+        minic_parser_error(parser, "array index must have integer type");
+        return false;
+    }
+    if (parser->current.kind != MINIC_TOKEN_RBRACKET) {
+        minic_parser_error(parser, "expected ']'");
+        return false;
+    }
+    subscript_end = parser->current.span.end;
+    if (!minic_parser_advance(parser)) {
+        return false;
+    }
+
+    (void)memset(&subscript, 0, sizeof(subscript));
+    subscript.kind = MINIC_EXPRESSION_SUBSCRIPT;
+    subscript.span.begin = base_span.begin;
+    subscript.span.end = subscript_end;
+    subscript.type = element_type;
+    subscript.value_category = MINIC_VALUE_LVALUE;
+    subscript.value.subscript.base = base_id;
+    subscript.value.subscript.index = index_id;
+    return minic_parser_add_expression(parser, &subscript, expression_id);
+}
+
 static bool parse_local_reference(
     MinicParser *parser,
     MinicSourceSpan name_span,
@@ -60,59 +103,29 @@ static bool parse_local_reference(
         return false;
     }
 
-    if (local->element_count == 1U) {
-        if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
-            minic_parser_error(parser, "subscript base must be an array object");
+    if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
+        MinicType element_type;
+
+        if (local->element_count > 1U) {
+            element_type = local->type;
+        } else if (!minic_type_pointee(local->type, &element_type)) {
+            minic_parser_error(parser, "subscript base must be an array or pointer");
             return false;
         }
-        *expression_id = base_id;
-        return true;
+        return parse_subscript_expression(
+            parser,
+            base_id,
+            element_type,
+            name_span,
+            expression_id);
     }
 
-    if (parser->current.kind != MINIC_TOKEN_LBRACKET) {
+    if (local->element_count > 1U) {
         minic_parser_error(parser, "array object requires a subscript");
         return false;
     }
-    {
-        MinicExpression subscript;
-        MinicExpressionId index_id;
-        const MinicExpression *index_expression;
-        MinicSourcePosition subscript_end;
-
-        if (!minic_parser_advance(parser) ||
-            !minic_parser_parse_expression(parser, &index_id, 0U)) {
-            return false;
-        }
-        index_expression = minic_c0_program_expression(
-            parser->program,
-            index_id);
-        if (index_expression == NULL ||
-            !minic_type_is_integer(index_expression->type)) {
-            minic_parser_error(parser, "array index must have int type");
-            return false;
-        }
-        if (parser->current.kind != MINIC_TOKEN_RBRACKET) {
-            minic_parser_error(parser, "expected ']'");
-            return false;
-        }
-        subscript_end = parser->current.span.end;
-        if (!minic_parser_advance(parser)) {
-            return false;
-        }
-
-        (void)memset(&subscript, 0, sizeof(subscript));
-        subscript.kind = MINIC_EXPRESSION_SUBSCRIPT;
-        subscript.span.begin = name_span.begin;
-        subscript.span.end = subscript_end;
-        subscript.type = local->type;
-        subscript.value_category = MINIC_VALUE_LVALUE;
-        subscript.value.subscript.base = base_id;
-        subscript.value.subscript.index = index_id;
-        return minic_parser_add_expression(
-            parser,
-            &subscript,
-            expression_id);
-    }
+    *expression_id = base_id;
+    return true;
 }
 
 static bool parse_primary(
