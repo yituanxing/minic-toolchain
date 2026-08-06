@@ -150,6 +150,7 @@ static bool parse_expression_or_assignment_statement(
 {
     MinicStatement statement;
     const MinicExpression *first_expression;
+    MinicType first_type;
 
     (void)memset(&statement, 0, sizeof(statement));
     statement.span.begin = parser->current.span.begin;
@@ -171,6 +172,7 @@ static bool parse_expression_or_assignment_statement(
         minic_parser_error(parser, "invalid statement expression");
         return false;
     }
+    first_type = first_expression->type;
 
     if (parser->current.kind != MINIC_TOKEN_EQUAL) {
         if (!allow_expression_statement) {
@@ -205,7 +207,7 @@ static bool parse_expression_or_assignment_statement(
             statement.expression);
         if (assigned_expression == NULL ||
             !minic_type_assignment_compatible(
-                first_expression->type,
+                first_type,
                 assigned_expression->type)) {
             minic_parser_error(parser, "assignment type does not match target type");
             return false;
