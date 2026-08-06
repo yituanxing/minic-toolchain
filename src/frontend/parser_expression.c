@@ -3,6 +3,10 @@
 #include <limits.h>
 #include <string.h>
 
+static bool parse_unary(
+    MinicParser *parser,
+    MinicExpressionId *expression_id);
+
 static bool parse_integer(
     MinicParser *parser,
     MinicExpressionId *expression_id)
@@ -100,6 +104,83 @@ static bool parse_global_reference(
         base_id,
         true,
         expression_id);
+}
+
+static bool token_starts_cast_type(
+    const MinicParser *parser,
+    MinicToken token)
+{
+    switch (token.kind) {
+    case MINIC_TOKEN_KW_CONST:
+    case MINIC_TOKEN_KW_INT:
+    case MINIC_TOKEN_KW_UNSIGNED:
+    case MINIC_TOKEN_KW_VOID:
+    case MINIC_TOKEN_KW_STRUCT:
+        return true;
+    case MINIC_TOKEN_IDENTIFIER:
+        return minic_parser_find_local(parser, token.span) ==
+                   MINIC_LOCAL_INVALID &&
+               minic_parser_find_type_alias(parser, token.span) !=
+                   MINIC_TYPE_ALIAS_INVALID;
+    default:
+        return false;
+    }
+}
+
+static bool parenthesis_starts_cast(const MinicParser *parser)
+{
+    MinicDiagnostic diagnostic;
+    MinicLexer lookahead;
+    MinicToken token;
+
+    if (parser->current.kind != MINIC_TOKEN_LPAREN) {
+        return false;
+    }
+
+    lookahead = parser->lexer;
+    (void)memset(&diagnostic, 0, sizeof(diagnostic));
+    if (!minic_lexer_next(&lookahead, &token, &diagnostic)) {
+        return false;
+    }
+    return token_starts_cast_type(parser, token);
+}
+
+static bool parse_cast(
+    MinicParser *parser,
+    MinicExpressionId *expression_id)
+{
+    MinicSourcePosition begin;
+    MinicExpression expression;
+    MinicExpressionId operand_id;
+    const MinicExpression *operand;
+    MinicType target_type;
+
+    begin = parser->current.span.begin;
+    if (!minic_parser_advance(parser) ||
+        !minic_parser_parse_type_name(parser, &target_type) ||
+        !minic_parser_expect(
+            parser,
+            MINIC_TOKEN_RPAREN,
+            "expected ')' after cast type") ||
+        !parse_unary(parser, &operand_id)) {
+        return false;
+    }
+
+    operand = minic_c0_program_expression(parser->program, operand_id);
+    if (operand == NULL ||
+        !minic_type_cast_compatible(target_type, operand->type)) {
+        minic_parser_error(parser, "unsupported cast between these types");
+        return false;
+    }
+
+    (void)memset(&expression, 0, sizeof(expression));
+    expression.kind = MINIC_EXPRESSION_CAST;
+    expression.span.begin = begin;
+    expression.span.end = operand->span.end;
+    expression.type = target_type;
+    expression.value_category = MINIC_VALUE_RVALUE;
+    expression.value.unary.operand = operand_id;
+    return minic_parser_add_expression(parser, &expression, expression_id);
 }
 
 static bool parse_primary(
@@ -269,6 +350,9 @@ static bool parse_unary(MinicParser *parser, MinicExpressionId *expression_id)
     MinicExpressionId operand;
     const MinicExpression *operand_expression;
 
+    if (parenthesis_starts_cast(parser)) {
+        return parse_cast(parser, expression_id);
+    }
     if (parser->current.kind != MINIC_TOKEN_PLUS &&
         parser->current.kind != MINIC_TOKEN_MINUS &&
         parser->current.kind != MINIC_TOKEN_BANG &&
