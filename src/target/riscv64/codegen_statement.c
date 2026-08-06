@@ -1,5 +1,30 @@
 #include "target/riscv64/codegen_internal.h"
 
+static bool minic_riscv64_emit_normalize_word(
+    FILE *file,
+    MinicType type,
+    const char *register_name)
+{
+    if (!minic_type_is_integer(type)) {
+        return false;
+    }
+    if (minic_type_is_unsigned_integer(type)) {
+        return fprintf(
+            file,
+            "  slli %s, %s, 32\n"
+            "  srli %s, %s, 32\n",
+            register_name,
+            register_name,
+            register_name,
+            register_name) >= 0;
+    }
+    return fprintf(
+        file,
+        "  addiw %s, %s, 0\n",
+        register_name,
+        register_name) >= 0;
+}
+
 static bool minic_riscv64_emit_assignment(
     FILE *file,
     const MinicC0Program *program,
@@ -39,6 +64,59 @@ static bool minic_riscv64_emit_assignment(
         return fprintf(file, "  sd t0, 0(a0)\n") >= 0;
     }
     return false;
+}
+
+static bool minic_riscv64_emit_xor_assignment(
+    FILE *file,
+    const MinicC0Program *program,
+    const MinicFunction *function,
+    const MinicStatement *statement)
+{
+    const MinicExpression *target;
+    const MinicExpression *value;
+    MinicType common_type;
+
+    target = minic_c0_program_expression(
+        program,
+        statement->target_expression);
+    value = minic_c0_program_expression(program, statement->expression);
+    if (target == NULL || value == NULL ||
+        target->value_category != MINIC_VALUE_LVALUE ||
+        !minic_type_is_integer(target->type) ||
+        !minic_type_is_integer(value->type) ||
+        !minic_type_integer_common(target->type, value->type, &common_type) ||
+        !minic_riscv64_emit_lvalue_address(
+            file,
+            program,
+            function,
+            statement->target_expression) ||
+        fprintf(file, "  addi sp, sp, -16\n  sd a0, 0(sp)\n") < 0 ||
+        fprintf(
+            file,
+            minic_type_is_unsigned_integer(target->type)
+                ? "  lwu t0, 0(a0)\n"
+                : "  lw t0, 0(a0)\n") < 0 ||
+        !minic_riscv64_emit_normalize_word(file, common_type, "t0") ||
+        fprintf(file, "  sd t0, 8(sp)\n") < 0 ||
+        !minic_riscv64_emit_expression(
+            file,
+            program,
+            function,
+            statement->expression) ||
+        !minic_riscv64_emit_normalize_word(file, common_type, "a0") ||
+        fprintf(
+            file,
+            "  ld t0, 8(sp)\n"
+            "  xor a0, t0, a0\n") < 0 ||
+        !minic_riscv64_emit_normalize_word(file, target->type, "a0") ||
+        fprintf(
+            file,
+            "  ld t0, 0(sp)\n"
+            "  addi sp, sp, 16\n"
+            "  sw a0, 0(t0)\n") < 0) {
+        return false;
+    }
+    return true;
 }
 
 static bool minic_riscv64_emit_return(
@@ -85,6 +163,13 @@ static bool minic_riscv64_emit_statement(
     switch (statement->kind) {
     case MINIC_STATEMENT_ASSIGN:
         return minic_riscv64_emit_assignment(
+            file,
+            program,
+            function,
+            statement);
+
+    case MINIC_STATEMENT_XOR_ASSIGN:
+        return minic_riscv64_emit_xor_assignment(
             file,
             program,
             function,

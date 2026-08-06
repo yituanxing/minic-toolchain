@@ -151,6 +151,7 @@ static bool parse_expression_or_assignment_statement(
     MinicStatement statement;
     const MinicExpression *first_expression;
     MinicType first_type;
+    MinicTokenKind assignment_token;
 
     (void)memset(&statement, 0, sizeof(statement));
     statement.span.begin = parser->current.span.begin;
@@ -173,8 +174,10 @@ static bool parse_expression_or_assignment_statement(
         return false;
     }
     first_type = first_expression->type;
+    assignment_token = parser->current.kind;
 
-    if (parser->current.kind != MINIC_TOKEN_EQUAL) {
+    if (assignment_token != MINIC_TOKEN_EQUAL &&
+        assignment_token != MINIC_TOKEN_CARET_EQUAL) {
         if (!allow_expression_statement) {
             minic_parser_error(parser, "for initializer requires an assignment");
             return false;
@@ -188,7 +191,9 @@ static bool parse_expression_or_assignment_statement(
                minic_parser_add_statement(parser, &statement);
     }
 
-    statement.kind = MINIC_STATEMENT_ASSIGN;
+    statement.kind = assignment_token == MINIC_TOKEN_CARET_EQUAL
+        ? MINIC_STATEMENT_XOR_ASSIGN
+        : MINIC_STATEMENT_ASSIGN;
     statement.target_expression = statement.expression;
     statement.expression = MINIC_EXPRESSION_INVALID;
     if (!expression_is_modifiable_lvalue(first_expression)) {
@@ -205,10 +210,25 @@ static bool parse_expression_or_assignment_statement(
         assigned_expression = minic_c0_program_expression(
             parser->program,
             statement.expression);
-        if (assigned_expression == NULL ||
-            !minic_type_assignment_compatible(
-                first_type,
-                assigned_expression->type)) {
+        if (statement.kind == MINIC_STATEMENT_XOR_ASSIGN) {
+            MinicType common_type;
+
+            if (assigned_expression == NULL ||
+                !minic_type_is_integer(first_type) ||
+                !minic_type_is_integer(assigned_expression->type) ||
+                !minic_type_integer_common(
+                    first_type,
+                    assigned_expression->type,
+                    &common_type)) {
+                minic_parser_error(
+                    parser,
+                    "compound XOR assignment requires integer operands");
+                return false;
+            }
+        } else if (assigned_expression == NULL ||
+                   !minic_type_assignment_compatible(
+                       first_type,
+                       assigned_expression->type)) {
             minic_parser_error(parser, "assignment type does not match target type");
             return false;
         }
