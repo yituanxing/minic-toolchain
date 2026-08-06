@@ -44,7 +44,7 @@ wait_phase() {
         if wait "${pids[$index]}"; then
             elapsed=$(( $(date +%s) - starts[$index] ))
             printf 'PASS ci/%s elapsed=%ss\n' "$name" "$elapsed"
-            if ! grep -E '^(PASS|SKIP) ' "$log"; then
+            if ! grep -E '^(PASS|SKIP|PROFILE|TOOL|PACKAGE) ' "$log"; then
                 tail -n 20 "$log"
             fi
         else
