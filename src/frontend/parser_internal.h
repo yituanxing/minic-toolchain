@@ -44,6 +44,9 @@ bool minic_parser_parse_pointer_declarator(MinicParser *parser,
                                            MinicType base_type,
                                            MinicType *type);
 bool minic_parser_parse_type_name(MinicParser *parser, MinicType *type);
+bool minic_parser_require_complete_object_type(MinicParser *parser,
+                                               MinicType type,
+                                               const char *message);
 bool minic_parser_parse_fixed_array_bound(MinicParser *parser, size_t *element_count);
 size_t minic_parser_span_length(MinicSourceSpan span);
 bool minic_parser_span_equals(const MinicParser *parser,
@@ -68,6 +71,8 @@ MinicGlobalObjectId minic_parser_find_global_object(const MinicParser *parser,
 MinicRecordId minic_parser_find_record(const MinicParser *parser, MinicSourceSpan name_span);
 MinicTypeAliasId minic_parser_find_type_alias(const MinicParser *parser, MinicSourceSpan name_span);
 
+bool minic_parser_parse_record_definition_specifier(MinicParser *parser,
+                                                     MinicType *record_type);
 bool minic_parser_parse_record_definition(MinicParser *parser);
 bool minic_parser_parse_typedef(MinicParser *parser);
 bool minic_parser_parse_static_global(MinicParser *parser);
