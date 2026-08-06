@@ -39,13 +39,19 @@ The active C rewrite accepts preprocessed C and emits RISC-V assembly:
 
 ```text
 input.i
-  → MiniC lexer
-  → parser
-  → semantic analysis
-  → IR
-  → RISC-V code generation
+  → MiniC Lexer and Token stream
+  → Parser-owned typed AST
+  → Parsed AST contract verification
+  → transactional topological Cast normalization
+  → Normalized AST contract verification
+  → RV64 object layout
+  → RV64 assembly generation
   → output.s
 ```
+
+Parser `CAST` nodes are source-semantic constructs and are permitted only in the Parsed form. Normalization rebuilds expression IDs so every child remains earlier than its parent; pointer casts become normalized-only `BITCAST` nodes, while bounded integer casts reuse the typed add-zero form. The backend receives neither Parser `CAST` nodes nor structurally invalid ASTs.
+
+Parser 的 `CAST` 节点属于源码语义，只允许出现在 Parsed 形态。规范化会重建表达式 ID，保证所有子节点继续早于父节点；指针 Cast 转换为仅限 Normalized 形态的 `BITCAST`，受限整数 Cast 继续复用带目标类型的加零形式。后端既不会收到 Parser `CAST`，也不会收到结构不合法的 AST。
 
 The surrounding pipeline remains external:
 

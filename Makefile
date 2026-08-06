@@ -44,6 +44,8 @@ MINIC_INCLUDES := -Iinclude -Isrc
 MINIC_SOURCES := \
 	src/compiler/compiler.c \
 	src/frontend/ast.c \
+	src/frontend/ast_verifier.c \
+	src/frontend/cast_normalization.c \
 	src/frontend/ast_function.c \
 	src/frontend/ast_global.c \
 	src/frontend/lexer.c \
@@ -102,6 +104,16 @@ TYPE_ALIAS_TEST_SOURCES := \
 TYPE_ALIAS_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(TYPE_ALIAS_TEST_SOURCES))
 TYPE_ALIAS_TEST_BINARY  := $(BUILD_DIR)/tests/frontend/type-alias-test
 
+AST_CONTRACT_TEST_SOURCES := \
+	src/frontend/ast.c \
+	src/frontend/ast_global.c \
+	src/frontend/ast_verifier.c \
+	src/frontend/cast_normalization.c \
+	src/frontend/type.c \
+	tests/frontend/ast_contract_test.c
+AST_CONTRACT_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(AST_CONTRACT_TEST_SOURCES))
+AST_CONTRACT_TEST_BINARY  := $(BUILD_DIR)/tests/frontend/ast-contract-test
+
 LAYOUT_TEST_SOURCES := \
 	src/frontend/ast.c \
 	src/frontend/type.c \
@@ -111,7 +123,8 @@ LAYOUT_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(LAYOUT_TEST_SOURCES
 LAYOUT_TEST_BINARY  := $(BUILD_DIR)/tests/target/riscv64/layout-test
 
 .PHONY: all help prepare check check-fast check-token-model check-lexer \
-	check-type check-record check-type-alias check-layout check-static-functions \
+	check-type check-record check-type-alias check-ast-contract check-layout \
+	check-static-functions \
 	check-unsigned-declarations check-for-loops check-unbounded-for-break \
 	check-prefix-decrement-update check-cast-expressions \
 	check-unsigned-char-layout check-pointer-subscripts check-pointer-arithmetic \
@@ -134,6 +147,7 @@ help:
 		"  make check-type         Run the frontend type-value unit gate" \
 		"  make check-record       Run the record ownership unit gate" \
 		"  make check-type-alias   Run recursive array and typedef ownership gates" \
+		"  make check-ast-contract Run parsed/normalized AST contract gates" \
 		"  make check-layout       Run the RV64 object-layout unit gate" \
 		"  make check-static-functions Run internal-linkage and typed-return gates" \
 		"  make check-unsigned-declarations Run unsigned declaration-list gates" \
@@ -192,6 +206,10 @@ $(TYPE_ALIAS_TEST_BINARY): $(TYPE_ALIAS_TEST_OBJECTS)
 	@mkdir -p "$(dir $@)"
 	$(CC) $(TYPE_ALIAS_TEST_OBJECTS) $(MINIC_LDFLAGS) -o "$@"
 
+$(AST_CONTRACT_TEST_BINARY): $(AST_CONTRACT_TEST_OBJECTS)
+	@mkdir -p "$(dir $@)"
+	$(CC) $(AST_CONTRACT_TEST_OBJECTS) $(MINIC_LDFLAGS) -o "$@"
+
 $(LAYOUT_TEST_BINARY): $(LAYOUT_TEST_OBJECTS)
 	@mkdir -p "$(dir $@)"
 	$(CC) $(LAYOUT_TEST_OBJECTS) $(MINIC_LDFLAGS) -o "$@"
@@ -210,6 +228,9 @@ check-record: $(RECORD_TEST_BINARY)
 
 check-type-alias: $(TYPE_ALIAS_TEST_BINARY)
 	"$(abspath $(TYPE_ALIAS_TEST_BINARY))"
+
+check-ast-contract: $(AST_CONTRACT_TEST_BINARY)
+	"$(abspath $(AST_CONTRACT_TEST_BINARY))"
 
 check-layout: $(LAYOUT_TEST_BINARY)
 	"$(abspath $(LAYOUT_TEST_BINARY))"
@@ -316,7 +337,7 @@ check-compound-xor-assignment: $(MINIC_BINARY)
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
 	sh tests/compiler/c0/run-compound-xor-assignment.sh
 
-check-fast: check-token-model check-lexer check-type check-record check-type-alias check-layout check-static-functions check-unsigned-declarations check-for-loops check-unbounded-for-break check-prefix-decrement-update check-cast-expressions check-unsigned-char-layout check-pointer-subscripts check-pointer-arithmetic check-const-locals check-global-objects check-bitwise-xor check-integer-bit-operations check-pointer-members check-expression-statements check-postfix-subscripts check-compound-xor-assignment $(MINIC_BINARY)
+check-fast: check-token-model check-lexer check-type check-record check-type-alias check-ast-contract check-layout check-static-functions check-unsigned-declarations check-for-loops check-unbounded-for-break check-prefix-decrement-update check-cast-expressions check-unsigned-char-layout check-pointer-subscripts check-pointer-arithmetic check-const-locals check-global-objects check-bitwise-xor check-integer-bit-operations check-pointer-members check-expression-statements check-postfix-subscripts check-compound-xor-assignment $(MINIC_BINARY)
 	MINIC="$(abspath $(MINIC_BINARY))" \
 	HOST_CC="$(CC)" \
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
@@ -386,4 +407,5 @@ distclean:
 -include $(TYPE_TEST_OBJECTS:.o=.d)
 -include $(RECORD_TEST_OBJECTS:.o=.d)
 -include $(TYPE_ALIAS_TEST_OBJECTS:.o=.d)
+-include $(AST_CONTRACT_TEST_OBJECTS:.o=.d)
 -include $(LAYOUT_TEST_OBJECTS:.o=.d)
