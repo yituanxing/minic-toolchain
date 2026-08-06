@@ -21,7 +21,7 @@ static const uint8_t vector_ciphertext[16] = {
     0x24, 0x66, 0xef, 0x97
 };
 
-static int block_matches(
+static int block_mismatch_index(
     uint8_t *actual,
     const uint8_t *expected)
 {
@@ -29,16 +29,17 @@ static int block_matches(
 
     for (index = 0; index < 16; ++index) {
         if (actual[index] != expected[index]) {
-            return 0;
+            return index + 1;
         }
     }
-    return 1;
+    return 0;
 }
 
 int main(void)
 {
     struct AES_ctx context;
     uint8_t block[16];
+    int failure;
     int index;
 
     for (index = 0; index < 16; ++index) {
@@ -47,13 +48,15 @@ int main(void)
 
     AES_init_ctx(&context, &vector_key[0]);
     AES_ECB_encrypt(&context, &block[0]);
-    if (!block_matches(&block[0], &vector_ciphertext[0])) {
-        return 1;
+    failure = block_mismatch_index(&block[0], &vector_ciphertext[0]);
+    if (failure != 0) {
+        return failure;
     }
 
     AES_ECB_decrypt(&context, &block[0]);
-    if (!block_matches(&block[0], &vector_plaintext[0])) {
-        return 2;
+    failure = block_mismatch_index(&block[0], &vector_plaintext[0]);
+    if (failure != 0) {
+        return 32 + failure;
     }
 
     return 0;
