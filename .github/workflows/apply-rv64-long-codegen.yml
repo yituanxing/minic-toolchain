@@ -1,0 +1,20 @@
+name: Apply RV64 long codegen
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/apply-rv64-long-codegen.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: frontend/rv64-long-integers
+          fetch-depth: 0
+      - name: Apply and verify RV64 long codegen
+        run: bash .github/scripts/apply-rv64-long-codegen.sh
