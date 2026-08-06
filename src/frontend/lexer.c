@@ -122,6 +122,9 @@ static MinicTokenKind minic_classify_identifier(
     if (length == 3U && memcmp(text, "for", 3U) == 0) {
         return MINIC_TOKEN_KW_FOR;
     }
+    if (length == 5U && memcmp(text, "break", 5U) == 0) {
+        return MINIC_TOKEN_KW_BREAK;
+    }
     return MINIC_TOKEN_IDENTIFIER;
 }
 
