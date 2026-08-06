@@ -163,6 +163,13 @@ external_tiny_aes() {
         sh tests/external/tiny-aes-c/probe.sh
 }
 
+external_cjson_frontier() {
+    MINIC="$root/build/ci-release/bin/minic" \
+    BUILD_DIR="$root/build/ci-external" \
+    RISCV_CC=riscv64-linux-gnu-gcc \
+        sh tests/external/cjson/probe.sh
+}
+
 printf 'Runner CPUs=%s\n' "$cpu_count"
 printf '%s\n' 'Phase 1: source inventory, format policy, tool preparation, and three host configurations'
 start_gate source-inventory source_inventory
@@ -175,8 +182,9 @@ if ! wait_phase; then
     exit 1
 fi
 
-printf '%s\n' 'Phase 2: two RV64 suites plus the first external frontier'
+printf '%s\n' 'Phase 2: two RV64 suites, frozen tiny-AES, and the active cJSON frontier'
 start_gate rv64-focused rv64_focused
 start_gate rv64-programs rv64_programs
 start_gate external-tiny-aes external_tiny_aes
+start_gate external-cjson-frontier external_cjson_frontier
 wait_phase

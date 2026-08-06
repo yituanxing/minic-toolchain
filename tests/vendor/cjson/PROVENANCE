@@ -1,0 +1,56 @@
+Project / 项目: cJSON
+Repository / 仓库: https://github.com/DaveGamble/cJSON
+Release / 版本: 1.7.19
+Tag / 标签: v1.7.19
+Commit / 提交: c859b25da02955fef659d658b8f324b5cde87be3
+Imported / 导入日期: 2026-08-06
+License / 许可证: MIT
+
+Vendored files / 入库文件:
+
+| Upstream path | Repository path | Git blob SHA-1 |
+|---|---|---|
+| cJSON.c | tests/vendor/cjson/upstream/cJSON.c | 6e4fb0dd369cd905923da515be87ab06db6c1ee0 |
+| cJSON.h | tests/vendor/cjson/upstream/cJSON.h | cab5feb427725f8e5c82287f7fe59481b609b9b5 |
+| LICENSE | tests/vendor/cjson/upstream/LICENSE | 78deb0406d713ab9730e3c2447be1abdbd70b9a2 |
+
+Import boundary / 导入边界:
+
+- The three files above are copied byte-for-byte from the pinned upstream commit.
+- 上述三份文件从固定上游提交逐字节复制。
+- Vendored upstream files are never formatted or patched for MiniC.
+- Vendor 上游文件不执行 MiniC 专用格式化或补丁。
+- The first accepted project target is the core cJSON implementation, not cJSON_Utils, examples, packaging files, or every optional platform configuration.
+- 首个项目目标是 cJSON 核心实现，不包含 cJSON_Utils、示例、打包文件或全部可选平台配置。
+- Project-owned tests may be imported separately when their exact accepted subset and dependencies are reviewed.
+- 项目自带测试将在精确验收子集及其依赖完成审查后独立导入。
+
+Identity verification / 身份校验:
+
+```sh
+git hash-object tests/vendor/cjson/upstream/cJSON.c
+git hash-object tests/vendor/cjson/upstream/cJSON.h
+git hash-object tests/vendor/cjson/upstream/LICENSE
+```
+
+The outputs must match the table above before preprocessing or testing.
+
+预处理或测试前，输出必须与上表一致。
+
+Update procedure / 更新流程:
+
+1. Select an official stable release and record its full commit SHA.
+2. Review release notes, source shape, license, and accepted configuration.
+3. Replace source and license byte-for-byte without MiniC-specific edits.
+4. Recompute and review every Git Blob identity.
+5. Update this record and the external-project status together.
+6. Run the complete clean-checkout gate and the accepted cJSON behavior tests.
+7. Merge the update as one bounded dependency-review outcome.
+
+1. 选择官方稳定版并记录完整提交 SHA；
+2. 审查发布说明、源码形态、许可证和验收配置；
+3. 逐字节替换源码与许可证，不加入 MiniC 专用修改；
+4. 重新计算并审查全部 Git Blob 身份；
+5. 同步更新本记录和外部项目状态；
+6. 执行完整干净检出门禁及已验收 cJSON 行为测试；
+7. 将更新作为一项范围受限的依赖审查结果合入。
