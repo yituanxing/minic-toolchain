@@ -565,7 +565,8 @@ bool minic_parser_parse_statement(MinicParser *parser, bool allow_declaration)
     if (parser->current.kind == MINIC_TOKEN_KW_FOR) {
         return parse_for(parser);
     }
-    if (parser->current.kind == MINIC_TOKEN_KW_INT ||
+    if (parser->current.kind == MINIC_TOKEN_KW_CONST ||
+        parser->current.kind == MINIC_TOKEN_KW_INT ||
         parser->current.kind == MINIC_TOKEN_KW_UNSIGNED) {
         if (!allow_declaration) {
             minic_parser_error(

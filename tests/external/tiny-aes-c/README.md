@@ -29,17 +29,17 @@ Pinned Git blob identities:
 
 ## Current frontier
 
-MiniC now passes the upstream declarations, `struct AES_ctx`, typed and `const` prototypes, multidimensional typedef arrays, static read-only lookup tables, static internal functions, `void` definitions, explicit unsigned integer identity, comma-separated unsigned declarations, the first `KeyExpansion` loop, and reads/writes through subscripted pointer parameters.
+MiniC now passes the upstream declarations, `struct AES_ctx`, typed and `const` prototypes, multidimensional typedef arrays, static read-only lookup tables, static internal functions, `void` definitions, explicit unsigned integer identity, comma-separated unsigned declarations, the first `KeyExpansion` loop, pointer-parameter subscripting, and const-qualified local initialization.
 
-The exact pinned failure is the local declaration written upstream as:
+The exact pinned failure is the first expression reference to the static global lookup table in the expanded S-box macro:
 
 ```c
-const uint8_t u8tmp = tempa[0];
+sbox[tempa[0]]
 ```
 
-The active test shim currently preprocesses `uint8_t` to `int`, so the compiler boundary exposed here is const-qualified local declarations. This does not prove byte-width type identity or layout.
+The global object is already parsed and emitted in `.rodata`; the missing capability is resolving a global object name in an expression and using it as a subscript base without confusing it with a local identifier.
 
-Pointer subscripting is protected by focused positive and negative host gates plus twenty-four GCC/MiniC differential programs. The new program covers pointer-parameter reads, local-pointer reads and writes, dynamic indexing, and arithmetic on subscript results; both lanes exit with status 22.
+Const-local support is protected by focused initialization, assignment-rejection, and increment-rejection gates plus twenty-five GCC/MiniC differential programs. The new `const_local` program initializes and reads a const-qualified local across a function call; both lanes exit with status 32.
 
 ## Remaining acceptance debt
 
