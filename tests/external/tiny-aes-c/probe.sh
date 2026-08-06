@@ -45,8 +45,9 @@ if "$minic" -S "$work/aes-ecb.i" -o "$work/aes-ecb.s" \
     exit 1
 fi
 
-if ! grep -F ":51:13:" "$work/minic.stderr" >/dev/null ||
-   ! grep -F "subscript base must be an array object" "$work/minic.stderr" >/dev/null; then
+if ! grep -F ":68:9:" "$work/minic.stderr" >/dev/null ||
+   ! grep -F "expected compound, if, while, for, declaration, assignment, return, or '}'" \
+        "$work/minic.stderr" >/dev/null; then
     printf '%s\n' \
         "FAIL external/tiny-aes-c: unexpected compiler frontier" >&2
     cat "$work/minic.stderr" >&2
@@ -55,4 +56,4 @@ fi
 
 frontier=$(sed -n '1p' "$work/minic.stderr")
 printf '%s\n' \
-    "PASS external/tiny-aes-c frontier=KeyExpansion-pointer-subscript diagnostic=$frontier"
+    "PASS external/tiny-aes-c frontier=KeyExpansion-const-typedef-local diagnostic=$frontier"
