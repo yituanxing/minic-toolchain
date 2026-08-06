@@ -36,8 +36,13 @@ bool minic_riscv64_type_layout(
         return true;
     }
     if (minic_type_is_integer(type)) {
-        *size = 4U;
-        *alignment = 4U;
+        if (minic_type_is_char_integer(type)) {
+            *size = 1U;
+            *alignment = 1U;
+        } else {
+            *size = 4U;
+            *alignment = 4U;
+        }
         return true;
     }
     if (minic_type_is_record(type)) {
@@ -158,8 +163,7 @@ static bool minic_riscv64_layout_records(MinicC0Program *program)
     return true;
 }
 
-static bool minic_riscv64_layout_globals(
-    MinicC0Program *program)
+static bool minic_riscv64_layout_globals(MinicC0Program *program)
 {
     size_t object_index;
 
