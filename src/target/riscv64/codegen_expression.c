@@ -11,7 +11,7 @@ static bool minic_riscv64_pointer_shift(
         return false;
     }
     if (minic_type_is_integer(pointee)) {
-        *shift = 2U;
+        *shift = minic_type_is_char_integer(pointee) ? 0U : 2U;
         return true;
     }
     if (minic_type_is_pointer(pointee)) {
@@ -21,32 +21,15 @@ static bool minic_riscv64_pointer_shift(
     return false;
 }
 
-static bool minic_riscv64_emit_zero_extend_word(
-    FILE *file,
-    const char *register_name)
-{
-    return fprintf(
-        file,
-        "  slli %s, %s, 32\n"
-        "  srli %s, %s, 32\n",
-        register_name,
-        register_name,
-        register_name,
-        register_name) >= 0;
-}
-
 static bool minic_riscv64_emit_normalize_integer(
     FILE *file,
     MinicType type,
     const char *register_name)
 {
-    if (!minic_type_is_integer(type)) {
-        return false;
-    }
-    if (minic_type_is_unsigned_integer(type)) {
-        return minic_riscv64_emit_zero_extend_word(file, register_name);
-    }
-    return true;
+    return minic_riscv64_emit_integer_conversion(
+        file,
+        type,
+        register_name);
 }
 
 static bool minic_riscv64_emit_scale_a0(FILE *file, size_t element_size)
@@ -308,8 +291,10 @@ bool minic_riscv64_emit_expression(
     switch (expression->kind) {
     case MINIC_EXPRESSION_INTEGER:
         return fprintf(file, "  li a0, %d\n", expression->value.integer_value) >= 0 &&
-               (!minic_type_is_unsigned_integer(expression->type) ||
-                minic_riscv64_emit_zero_extend_word(file, "a0"));
+               minic_riscv64_emit_integer_conversion(
+                   file,
+                   expression->type,
+                   "a0");
     case MINIC_EXPRESSION_LOCAL:
         return minic_riscv64_emit_object_load(
             file,
@@ -327,43 +312,27 @@ bool minic_riscv64_emit_expression(
             function,
             expression->value.unary.operand);
     case MINIC_EXPRESSION_DEREFERENCE:
-        if (!minic_riscv64_emit_expression(
-                file,
-                program,
-                function,
-                expression->value.unary.operand)) {
-            return false;
-        }
-        if (minic_type_is_integer(expression->type)) {
-            return fprintf(
-                file,
-                minic_type_is_unsigned_integer(expression->type)
-                    ? "  lwu a0, 0(a0)\n"
-                    : "  lw a0, 0(a0)\n") >= 0;
-        }
-        if (minic_type_is_pointer(expression->type)) {
-            return fprintf(file, "  ld a0, 0(a0)\n") >= 0;
-        }
-        return false;
+        return minic_riscv64_emit_expression(
+                   file,
+                   program,
+                   function,
+                   expression->value.unary.operand) &&
+               minic_riscv64_emit_scalar_load(
+                   file,
+                   expression->type,
+                   "a0",
+                   "a0");
     case MINIC_EXPRESSION_SUBSCRIPT:
-        if (!minic_riscv64_emit_subscript_address(
-                file,
-                program,
-                function,
-                expression)) {
-            return false;
-        }
-        if (minic_type_is_integer(expression->type)) {
-            return fprintf(
-                file,
-                minic_type_is_unsigned_integer(expression->type)
-                    ? "  lwu a0, 0(a0)\n"
-                    : "  lw a0, 0(a0)\n") >= 0;
-        }
-        if (minic_type_is_pointer(expression->type)) {
-            return fprintf(file, "  ld a0, 0(a0)\n") >= 0;
-        }
-        return false;
+        return minic_riscv64_emit_subscript_address(
+                   file,
+                   program,
+                   function,
+                   expression) &&
+               minic_riscv64_emit_scalar_load(
+                   file,
+                   expression->type,
+                   "a0",
+                   "a0");
     case MINIC_EXPRESSION_MEMBER: {
         const MinicRecord *record;
         const MinicRecordField *field;
@@ -385,17 +354,11 @@ bool minic_riscv64_emit_expression(
         if (field->element_count > 1U) {
             return minic_type_is_pointer(expression->type);
         }
-        if (minic_type_is_integer(expression->type)) {
-            return fprintf(
-                file,
-                minic_type_is_unsigned_integer(expression->type)
-                    ? "  lwu a0, 0(a0)\n"
-                    : "  lw a0, 0(a0)\n") >= 0;
-        }
-        if (minic_type_is_pointer(expression->type)) {
-            return fprintf(file, "  ld a0, 0(a0)\n") >= 0;
-        }
-        return false;
+        return minic_riscv64_emit_scalar_load(
+            file,
+            expression->type,
+            "a0",
+            "a0");
     }
     case MINIC_EXPRESSION_UNARY:
         if (!minic_riscv64_emit_expression(
@@ -476,6 +439,9 @@ bool minic_riscv64_emit_expression(
             if (minic_type_is_pointer(left->type) &&
                 minic_type_is_integer(right->type) &&
                 minic_riscv64_pointer_shift(left->type, &shift)) {
+                if (shift == 0U) {
+                    return fprintf(file, "  add a0, t0, a0\n") >= 0;
+                }
                 return fprintf(
                     file,
                     "  slli a0, a0, %u\n"
@@ -485,6 +451,9 @@ bool minic_riscv64_emit_expression(
             if (minic_type_is_integer(left->type) &&
                 minic_type_is_pointer(right->type) &&
                 minic_riscv64_pointer_shift(right->type, &shift)) {
+                if (shift == 0U) {
+                    return fprintf(file, "  add a0, a0, t0\n") >= 0;
+                }
                 return fprintf(
                     file,
                     "  slli t0, t0, %u\n"
@@ -503,6 +472,9 @@ bool minic_riscv64_emit_expression(
             if (minic_type_is_pointer(left->type) &&
                 minic_type_is_integer(right->type) &&
                 minic_riscv64_pointer_shift(left->type, &shift)) {
+                if (shift == 0U) {
+                    return fprintf(file, "  sub a0, t0, a0\n") >= 0;
+                }
                 return fprintf(
                     file,
                     "  slli a0, a0, %u\n"
@@ -550,7 +522,7 @@ bool minic_riscv64_emit_expression(
             return has_integer_common_type &&
                    fprintf(
                        file,
-                       minic_type_is_unsigned_integer(left->type)
+                       minic_type_is_unsigned_integer(expression->type)
                            ? "  srlw a0, t0, a0\n"
                            : "  sraw a0, t0, a0\n") >= 0 &&
                    minic_riscv64_emit_normalize_integer(
@@ -629,6 +601,12 @@ bool minic_riscv64_emit_expression(
                     program,
                     function,
                     expression->value.call.arguments[argument_index]) ||
+                (minic_type_is_integer(
+                     callee->parameter_types[argument_index]) &&
+                 !minic_riscv64_emit_integer_conversion(
+                     file,
+                     callee->parameter_types[argument_index],
+                     "a0")) ||
                 fprintf(file, "  addi sp, sp, -16\n  sd a0, 0(sp)\n") < 0) {
                 return false;
             }
@@ -651,8 +629,14 @@ bool minic_riscv64_emit_expression(
         if (fprintf(file, "  call %s\n", callee->name) < 0) {
             return false;
         }
-        return !minic_type_is_unsigned_integer(expression->type) ||
-               minic_riscv64_emit_zero_extend_word(file, "a0");
+        if (minic_type_is_integer(expression->type)) {
+            return minic_riscv64_emit_integer_conversion(
+                file,
+                expression->type,
+                "a0");
+        }
+        return minic_type_is_pointer(expression->type) ||
+               minic_type_is_void(expression->type);
     }
     }
     return false;

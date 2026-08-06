@@ -28,25 +28,23 @@ The C implementation now includes:
 
 - token and source-span models plus a dedicated lexer;
 - a modular parser split by expressions, postfix operations, statements, functions, types, records, typedefs, globals, members, and constants;
-- typed expressions with lvalue/rvalue distinctions, explicit signed/unsigned integer identity, and equal-rank integer conversions;
+- typed expressions with lvalue/rvalue distinctions, explicit signed/unsigned identity, CHAR/INT integer ranks, native `unsigned char`, and C integer promotions from `unsigned char` to `int`;
 - lexical block scopes and stable Program-owned local objects;
 - integer arithmetic, comparisons, left/right shifts, bitwise AND/XOR, conditions, `if`, `while`, normalized conditioned and empty-condition `for` loops, innermost-loop `break`, ordinary and compound-XOR assignments, general expression statements with discarded values, bounded prefix increment/decrement updates, pointers, fixed and recursive arrays, repeatable postfix subscripting on suitable expression results, pointer arithmetic, comma-separated local declarations, and const-qualified local initialization;
 - function prototypes, legal forward calls, direct and nested calls, recursion, mutual recursion, and zero through eight integer register arguments;
 - `void`, `const`, named records, typedef-backed record fields, local record objects, pointer-to-record member lookup, scalar member lvalues, array-member decay, recursive array typedefs, static read-only global arrays, global array expression lookup with local-name shadowing, and internal functions;
-- RV64 scalar/array/record object layout, shared type-size/alignment queries, field offsets and aggregate alignment, call-safe stack frames, signed/unsigned loads and arithmetic, `sllw`/`sraw`/`srlw` shift lowering, `and`/`xor` lowering, single-evaluation read-modify-write lowering for `^=`, conditioned and unconditional loop lowering, normalized add/subtract loop updates, innermost loop-exit targets for `break`, member base-plus-offset addressing, expression-statement evaluation with result discard, power-of-two and arbitrary aggregate subscript scaling, assembly emission, and internal symbol visibility;
+- RV64 byte/int/pointer scalar layout, shared type-size/alignment queries, one-byte array and record-field layout, `lbu`/`sb` byte accesses, 8-bit truncation, `.byte` global-table emission, one-byte pointer/subscript scaling, call-safe stack frames, signed/unsigned loads and arithmetic, `sllw`/`sraw`/`srlw` shift lowering, `and`/`xor` lowering, single-evaluation read-modify-write lowering for `^=`, conditioned and unconditional loop lowering, normalized add/subtract loop updates, innermost loop-exit targets for `break`, member base-plus-offset addressing, expression-statement evaluation with result discard, power-of-two and arbitrary aggregate subscript scaling, assembly emission, and internal symbol visibility;
 - debug, release `-Werror`, ASan/UBSan, RV64/QEMU, and GCC/MiniC differential gates.
 
-Thirty-four executable C programs are permanently compared between a full GCC reference lane and the MiniC lane by exit status, standard output, and standard error. The matrix includes isolated loop-counter/body tests, nested empty-condition loops with innermost `break` and skipped tail updates, a descending loop whose `break` skips the decrement tail, high-bit unsigned comparison/division/remainder coverage, pointer-parameter/local-pointer subscript reads and writes, const-local initialization/readback, static global-array lookup with local-name shadowing, signed/unsigned bitwise-XOR semantics, signed and unsigned shift behavior, bitwise AND, pointer record members with non-zero field offsets, general expression statements, multidimensional pointer-to-array subscripting with a non-power-of-two 12-byte row stride, and compound-XOR assignment with a side-effecting complex target that must be evaluated once.
+Thirty-six executable C programs are permanently compared between a full GCC reference lane and the MiniC lane by exit status, standard output, and standard error. The matrix includes isolated loop-counter/body tests, nested empty-condition loops with innermost `break` and skipped tail updates, a descending loop whose `break` skips the decrement tail, high-bit unsigned comparison/division/remainder coverage, native unsigned-char truncation/promotion/layout/access tests, pointer-parameter/local-pointer subscript reads and writes, const-local initialization/readback, static global-array lookup with local-name shadowing, signed/unsigned bitwise-XOR semantics, signed and unsigned shift behavior, bitwise AND, pointer record members with non-zero field offsets, general expression statements, multidimensional pointer-to-array subscripting with a non-power-of-two 12-byte row stride, and compound-XOR assignment with a side-effecting complex target that must be evaluated once.
 
 ## First external project
 
 The first pinned upstream driver is `kokke/tiny-AES-c`, AES-128 ECB configuration. Upstream source files are downloaded at fixed Git blob identities and are not patched for MiniC.
 
-The compiler has progressed through the upstream declarations, typedef arrays, static lookup tables, internal functions, `void` definitions, unsigned declaration lists, the first `KeyExpansion` loop, pointer-parameter subscripting, const-qualified local initialization, expression references to the static global `sbox` table, bitwise XOR, typedef-backed record fields, record layout, the first `ctx->RoundKey` pointer member access, the standalone `KeyExpansion(ctx->RoundKey, key);` expression statement, repeatable postfix subscripting in `(*state)[i][j]`, compound XOR assignment in `AddRoundKey`, the complete left-shift/right-shift/bitwise-AND expression in `xtime`, the empty-condition loop with `break` in `Cipher`, and the prefix decrement update in `InvCipher`. The current verified frontier is the state-pointer cast `(state_t*)buf` in `AES_ECB_encrypt` at preprocessed line 241, column 18.
+Despite the repository name, the cryptographic implementation is intentionally concentrated in one principal C source file, `aes.c`; `aes.h` is its public interface and the other C material is test/example code. MiniC now compiles the complete pinned `aes.c` core with a real `typedef unsigned char uint8_t`, emits RV64 assembly, and produces a non-empty target object containing `AES_ECB_encrypt` and `AES_ECB_decrypt`. The clean-checkout native-byte gate also passes all focused host tests and the 36-program differential matrix.
 
-The target shim is temporary evidence scaffolding, not an implementation of `uint8_t`. True byte-sized type identity, object layout, loads/stores, scaling, and conversions remain separate capabilities that must be implemented before AES execution can be considered correct.
-
-The external project is not complete yet. Completion requires the pinned AES-128 ECB core and a test-vector harness to pass the GCC/MiniC differential oracle without MiniC-specific source changes.
+This is complete compilation and assembly acceptance for the core, not final software execution acceptance. The remaining tiny-AES milestone is an independently defined AES-128 ECB test-vector harness that links the MiniC-generated core, executes encryption and decryption under QEMU, and matches the GCC lane without MiniC-specific upstream source changes.
 
 ## Build and validation
 
@@ -65,7 +63,7 @@ make check-runtime \
   REQUIRE_RISCV_RUNTIME=1
 ```
 
-GitHub Actions runs the complete clean-checkout gate on Ubuntu 24.04, including the pinned tiny-AES frontier.
+GitHub Actions runs the complete clean-checkout gate on Ubuntu 24.04, including the pinned tiny-AES core assembly gate.
 
 ## Project rules
 

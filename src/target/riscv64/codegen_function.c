@@ -32,21 +32,66 @@ static bool minic_riscv64_alignment_power(
     return true;
 }
 
+static bool minic_riscv64_global_scalar_type(
+    const MinicC0Program *program,
+    MinicType object_type,
+    MinicType *scalar_type,
+    size_t *scalar_width)
+{
+    MinicType type;
+
+    if (program == NULL || scalar_type == NULL || scalar_width == NULL) {
+        return false;
+    }
+    type = object_type;
+    while (minic_type_is_array(type)) {
+        const MinicArrayType *array_type;
+
+        array_type = minic_c0_program_array_type(
+            program,
+            type.array_type_id);
+        if (array_type == NULL) {
+            return false;
+        }
+        type = array_type->element_type;
+    }
+    if (!minic_type_is_integer(type)) {
+        return false;
+    }
+    *scalar_type = type;
+    *scalar_width = minic_type_is_char_integer(type) ? 1U : 4U;
+    return true;
+}
+
 static bool minic_riscv64_emit_global_object(
     FILE *file,
+    const MinicC0Program *program,
     const MinicGlobalObject *object)
 {
+    MinicType scalar_type;
+    const char *directive;
     unsigned int alignment_power;
+    size_t scalar_width;
     size_t initializer_index;
 
-    if (file == NULL || object == NULL || object->name_length == 0U ||
-        object->storage_size == 0U || object->alignment == 0U ||
-        object->initializer_count > object->storage_size / 4U ||
+    if (file == NULL || program == NULL || object == NULL ||
+        object->name_length == 0U || object->storage_size == 0U ||
+        object->alignment == 0U ||
+        !minic_riscv64_global_scalar_type(
+            program,
+            object->type,
+            &scalar_type,
+            &scalar_width) ||
+        scalar_width == 0U ||
+        object->initializer_count > object->storage_size / scalar_width ||
         !minic_riscv64_alignment_power(
             object->alignment,
             &alignment_power)) {
         return false;
     }
+    directive = minic_type_is_char_integer(scalar_type)
+        ? ".byte"
+        : ".word";
 
     if (fprintf(
             file,
@@ -71,10 +116,23 @@ static bool minic_riscv64_emit_global_object(
     for (initializer_index = 0U;
          initializer_index < object->initializer_count;
          ++initializer_index) {
-        if (fprintf(
-                file,
-                "  .word %d\n",
-                object->initializer_values[initializer_index]) < 0) {
+        if (minic_type_is_char_integer(scalar_type)) {
+            unsigned int value;
+
+            value = (unsigned int)object->initializer_values[initializer_index] &
+                    0xffU;
+            if (fprintf(
+                    file,
+                    "  %s %u\n",
+                    directive,
+                    value) < 0) {
+                return false;
+            }
+        } else if (fprintf(
+                       file,
+                       "  %s %d\n",
+                       directive,
+                       object->initializer_values[initializer_index]) < 0) {
             return false;
         }
     }
@@ -217,6 +275,7 @@ bool minic_riscv64_write_c0_program(
          ++global_index) {
         success = minic_riscv64_emit_global_object(
             file,
+            program,
             &program->global_objects[global_index]);
     }
     if (success) {

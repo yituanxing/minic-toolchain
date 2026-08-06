@@ -26,13 +26,20 @@ bool minic_parser_parse_type_specifiers(
             return false;
         }
     } else if (parser->current.kind == MINIC_TOKEN_KW_UNSIGNED) {
-        parsed_type = minic_type_unsigned_int();
         if (!minic_parser_advance(parser)) {
             return false;
         }
-        if (parser->current.kind == MINIC_TOKEN_KW_INT &&
-            !minic_parser_advance(parser)) {
-            return false;
+        if (parser->current.kind == MINIC_TOKEN_KW_CHAR) {
+            parsed_type = minic_type_unsigned_char();
+            if (!minic_parser_advance(parser)) {
+                return false;
+            }
+        } else {
+            parsed_type = minic_type_unsigned_int();
+            if (parser->current.kind == MINIC_TOKEN_KW_INT &&
+                !minic_parser_advance(parser)) {
+                return false;
+            }
         }
     } else if (parser->current.kind == MINIC_TOKEN_KW_VOID) {
         parsed_type = minic_type_void();

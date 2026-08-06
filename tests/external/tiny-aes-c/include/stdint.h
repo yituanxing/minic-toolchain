@@ -1,6 +1,6 @@
 #ifndef MINIC_TINY_AES_STDINT_H
 #define MINIC_TINY_AES_STDINT_H
 
-#define uint8_t int
+typedef unsigned char uint8_t;
 
 #endif
