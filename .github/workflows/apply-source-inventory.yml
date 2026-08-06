@@ -1,0 +1,103 @@
+name: Apply production source inventory
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/source-inventory.ready'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-source-inventory-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: maintenance/test-inventory
+          fetch-depth: 0
+
+      - name: Apply exact Makefile integration
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 .github/scripts/apply-source-inventory.py
+          rm -f \
+            .github/scripts/apply-source-inventory.py \
+            .github/workflows/apply-source-inventory.yml \
+            .github/source-inventory.ready
+          git diff --check
+
+      - name: Exercise inventory positive and negative paths
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sh -n tools/check-source-inventory.sh
+          sh tools/check-source-inventory.sh
+
+          printf '%s\n' 'int minic_inventory_probe(void) { return 0; }' \
+            > src/unlisted_inventory_probe.c
+          if sh tools/check-source-inventory.sh; then
+            printf '%s\n' 'unlisted production source was not rejected' >&2
+            exit 1
+          fi
+          rm -f src/unlisted_inventory_probe.c
+
+          cp Makefile /tmp/Makefile.source-inventory
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('Makefile')
+          content = path.read_text(encoding='utf-8')
+          needle = '\tsrc/compiler/compiler.c \\\n'
+          if content.count(needle) != 1:
+              raise SystemExit('expected one compiler source entry')
+          path.write_text(content.replace(needle, needle + needle, 1), encoding='utf-8')
+          PY
+          if sh tools/check-source-inventory.sh; then
+            printf '%s\n' 'duplicate MINIC_SOURCES entry was not rejected' >&2
+            exit 1
+          fi
+          mv /tmp/Makefile.source-inventory Makefile
+
+          sh tools/check-source-inventory.sh
+          git diff --check
+
+      - name: Run complete host gate
+        run: make -j2 check-fast
+
+      - name: Commit production source inventory
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -F - <<'EOF'
+          build: enforce the production source inventory
+
+          Compare the Makefile's explicit MINIC_SOURCES list with every production C file under src and tools. Reject duplicates, missing listed paths, unexpected source locations, and unlisted production files.
+
+          Expose the source list through a machine-readable Make target and run the inventory from check-fast so registration drift fails without requiring target tools.
+
+          中文说明：
+          将 Makefile 显式 MINIC_SOURCES 与 src、tools 下全部生产 C 文件比较，拒绝重复项、缺失路径、异常位置和未列入构建的生产文件。
+
+          通过机器可读 Make 目标公开源码列表，并将库存检查接入 check-fast，因此不需要目标工具也能拦截登记漂移。
+
+          Validation / 验证：
+          - current production source inventory: PASS
+          - unlisted production C file rejection: PASS
+          - duplicate MINIC_SOURCES entry rejection: PASS
+          - make -j2 check-fast: PASS
+          - complete clean-checkout compiler CI: NOT RUN; clean PR head will execute it
+          EOF
+          git push origin HEAD:maintenance/test-inventory
