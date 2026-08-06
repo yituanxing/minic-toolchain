@@ -1,24 +1,21 @@
 #include "target/riscv64/codegen_internal.h"
 #include "target/riscv64/layout.h"
 
-static bool minic_riscv64_pointer_shift(
+static bool minic_riscv64_pointer_element_size(
+    const MinicC0Program *program,
     MinicType pointer_type,
-    unsigned int *shift)
+    size_t *element_size)
 {
     MinicType pointee;
+    size_t element_alignment;
 
-    if (shift == NULL || !minic_type_pointee(pointer_type, &pointee)) {
-        return false;
-    }
-    if (minic_type_is_integer(pointee)) {
-        *shift = minic_type_is_char_integer(pointee) ? 0U : 2U;
-        return true;
-    }
-    if (minic_type_is_pointer(pointee)) {
-        *shift = 3U;
-        return true;
-    }
-    return false;
+    return element_size != NULL &&
+           minic_type_pointee(pointer_type, &pointee) &&
+           minic_riscv64_type_layout(
+               program,
+               pointee,
+               element_size,
+               &element_alignment);
 }
 
 static bool minic_riscv64_emit_normalize_integer(
@@ -32,12 +29,17 @@ static bool minic_riscv64_emit_normalize_integer(
         register_name);
 }
 
-static bool minic_riscv64_emit_scale_a0(FILE *file, size_t element_size)
+static bool minic_riscv64_emit_scale_register(
+    FILE *file,
+    const char *register_name,
+    const char *scratch_register,
+    size_t element_size)
 {
     size_t value;
     unsigned int shift;
 
-    if (element_size == 0U) {
+    if (file == NULL || register_name == NULL || scratch_register == NULL ||
+        element_size == 0U) {
         return false;
     }
     if (element_size == 1U) {
@@ -50,13 +52,22 @@ static bool minic_riscv64_emit_scale_a0(FILE *file, size_t element_size)
             value >>= 1U;
             shift += 1U;
         }
-        return fprintf(file, "  slli a0, a0, %u\n", shift) >= 0;
+        return fprintf(
+            file,
+            "  slli %s, %s, %u\n",
+            register_name,
+            register_name,
+            shift) >= 0;
     }
     return fprintf(
         file,
-        "  li t1, %zu\n"
-        "  mul a0, a0, t1\n",
-        element_size) >= 0;
+        "  li %s, %zu\n"
+        "  mul %s, %s, %s\n",
+        scratch_register,
+        element_size,
+        register_name,
+        register_name,
+        scratch_register) >= 0;
 }
 
 static bool minic_riscv64_emit_subscript_address(
@@ -165,7 +176,11 @@ static bool minic_riscv64_emit_subscript_address(
                program,
                function,
                expression->value.subscript.index) &&
-           minic_riscv64_emit_scale_a0(file, element_size) &&
+           minic_riscv64_emit_scale_register(
+               file,
+               "a0",
+               "t1",
+               element_size) &&
            fprintf(
                file,
                "  ld t0, 0(sp)\n"
@@ -389,7 +404,7 @@ bool minic_riscv64_emit_expression(
         const MinicExpression *right;
         MinicType common_integer_type;
         bool has_integer_common_type;
-        unsigned int shift;
+        size_t element_size;
 
         left = minic_c0_program_expression(
             program,
@@ -438,27 +453,29 @@ bool minic_riscv64_emit_expression(
             }
             if (minic_type_is_pointer(left->type) &&
                 minic_type_is_integer(right->type) &&
-                minic_riscv64_pointer_shift(left->type, &shift)) {
-                if (shift == 0U) {
-                    return fprintf(file, "  add a0, t0, a0\n") >= 0;
-                }
-                return fprintf(
-                    file,
-                    "  slli a0, a0, %u\n"
-                    "  add a0, t0, a0\n",
-                    shift) >= 0;
+                minic_riscv64_pointer_element_size(
+                    program,
+                    left->type,
+                    &element_size)) {
+                return minic_riscv64_emit_scale_register(
+                           file,
+                           "a0",
+                           "t1",
+                           element_size) &&
+                       fprintf(file, "  add a0, t0, a0\n") >= 0;
             }
             if (minic_type_is_integer(left->type) &&
                 minic_type_is_pointer(right->type) &&
-                minic_riscv64_pointer_shift(right->type, &shift)) {
-                if (shift == 0U) {
-                    return fprintf(file, "  add a0, a0, t0\n") >= 0;
-                }
-                return fprintf(
-                    file,
-                    "  slli t0, t0, %u\n"
-                    "  add a0, a0, t0\n",
-                    shift) >= 0;
+                minic_riscv64_pointer_element_size(
+                    program,
+                    right->type,
+                    &element_size)) {
+                return minic_riscv64_emit_scale_register(
+                           file,
+                           "t0",
+                           "t1",
+                           element_size) &&
+                       fprintf(file, "  add a0, a0, t0\n") >= 0;
             }
             return false;
         case MINIC_BINARY_SUBTRACT:
@@ -471,15 +488,16 @@ bool minic_riscv64_emit_expression(
             }
             if (minic_type_is_pointer(left->type) &&
                 minic_type_is_integer(right->type) &&
-                minic_riscv64_pointer_shift(left->type, &shift)) {
-                if (shift == 0U) {
-                    return fprintf(file, "  sub a0, t0, a0\n") >= 0;
-                }
-                return fprintf(
-                    file,
-                    "  slli a0, a0, %u\n"
-                    "  sub a0, t0, a0\n",
-                    shift) >= 0;
+                minic_riscv64_pointer_element_size(
+                    program,
+                    left->type,
+                    &element_size)) {
+                return minic_riscv64_emit_scale_register(
+                           file,
+                           "a0",
+                           "t1",
+                           element_size) &&
+                       fprintf(file, "  sub a0, t0, a0\n") >= 0;
             }
             return false;
         case MINIC_BINARY_MULTIPLY:

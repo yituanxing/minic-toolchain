@@ -482,12 +482,73 @@ static bool binary_is_shift(MinicTokenKind kind)
            kind == MINIC_TOKEN_GREATER_GREATER;
 }
 
+static bool type_is_complete_object(
+    const MinicC0Program *program,
+    MinicType type)
+{
+    if (program == NULL || minic_type_is_void(type)) {
+        return false;
+    }
+    if (minic_type_is_integer(type) || minic_type_is_pointer(type)) {
+        return true;
+    }
+    if (minic_type_is_record(type)) {
+        const MinicRecord *record;
+
+        record = minic_c0_program_record(program, type.record_id);
+        return record != NULL && record->is_complete;
+    }
+    if (minic_type_is_array(type)) {
+        const MinicArrayType *array_type;
+
+        array_type = minic_c0_program_array_type(
+            program,
+            type.array_type_id);
+        return array_type != NULL && array_type->element_count != 0U &&
+               type_is_complete_object(program, array_type->element_type);
+    }
+    return false;
+}
+
+static bool pointer_arithmetic_shape(
+    MinicTokenKind kind,
+    MinicType left,
+    MinicType right,
+    MinicType *pointer_type)
+{
+    if (pointer_type == NULL) {
+        return false;
+    }
+    if (kind == MINIC_TOKEN_PLUS) {
+        if (minic_type_is_pointer(left) && minic_type_is_integer(right)) {
+            *pointer_type = left;
+            return true;
+        }
+        if (minic_type_is_integer(left) && minic_type_is_pointer(right)) {
+            *pointer_type = right;
+            return true;
+        }
+        return false;
+    }
+    if (kind == MINIC_TOKEN_MINUS &&
+        minic_type_is_pointer(left) &&
+        minic_type_is_integer(right)) {
+        *pointer_type = left;
+        return true;
+    }
+    return false;
+}
+
 static bool binary_result_type(
+    const MinicC0Program *program,
     MinicTokenKind kind,
     MinicType left,
     MinicType right,
     MinicType *result)
 {
+    MinicType pointer_type;
+    MinicType pointee_type;
+
     if (result == NULL) {
         return false;
     }
@@ -501,24 +562,17 @@ static bool binary_result_type(
         }
         return minic_type_integer_common(left, right, result);
     }
-    if (kind == MINIC_TOKEN_PLUS) {
-        if (minic_type_is_pointer(left) && minic_type_is_integer(right)) {
-            *result = left;
-            return true;
-        }
-        if (minic_type_is_integer(left) && minic_type_is_pointer(right)) {
-            *result = right;
-            return true;
-        }
+    if (!pointer_arithmetic_shape(
+            kind,
+            left,
+            right,
+            &pointer_type) ||
+        !minic_type_pointee(pointer_type, &pointee_type) ||
+        !type_is_complete_object(program, pointee_type)) {
         return false;
     }
-    if (kind == MINIC_TOKEN_MINUS &&
-        minic_type_is_pointer(left) &&
-        minic_type_is_integer(right)) {
-        *result = left;
-        return true;
-    }
-    return false;
+    *result = pointer_type;
+    return true;
 }
 
 bool minic_parser_parse_expression(
@@ -564,15 +618,33 @@ bool minic_parser_parse_expression(
         expression.value.binary.left = left;
         expression.value.binary.right = right;
         if (!binary_result_type(
+                parser->program,
                 token_kind,
                 left_expression->type,
                 right_expression->type,
                 &expression.type)) {
-            if (token_kind == MINIC_TOKEN_PLUS ||
-                token_kind == MINIC_TOKEN_MINUS) {
-                minic_parser_error(parser, "unsupported pointer arithmetic operands");
+            MinicType pointer_type;
+            MinicType pointee_type;
+
+            if (pointer_arithmetic_shape(
+                    token_kind,
+                    left_expression->type,
+                    right_expression->type,
+                    &pointer_type) &&
+                minic_type_pointee(pointer_type, &pointee_type) &&
+                !type_is_complete_object(parser->program, pointee_type)) {
+                minic_parser_error(
+                    parser,
+                    "pointer arithmetic requires a complete object type");
+            } else if (token_kind == MINIC_TOKEN_PLUS ||
+                       token_kind == MINIC_TOKEN_MINUS) {
+                minic_parser_error(
+                    parser,
+                    "unsupported pointer arithmetic operands");
             } else {
-                minic_parser_error(parser, "binary operator requires int operands");
+                minic_parser_error(
+                    parser,
+                    "binary operator requires int operands");
             }
             return false;
         }
