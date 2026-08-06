@@ -3,6 +3,47 @@
 #include <stdint.h>
 #include <stdio.h>
 
+static bool minic_riscv64_scalar_width(MinicType type, size_t *width)
+{
+    if (width == NULL) {
+        return false;
+    }
+    if (minic_type_is_pointer(type)) {
+        *width = 8U;
+        return true;
+    }
+    if (!minic_type_is_integer(type)) {
+        return false;
+    }
+    *width = minic_type_is_char_integer(type) ? 1U : 4U;
+    return true;
+}
+
+static const char *minic_riscv64_load_instruction(MinicType type)
+{
+    if (minic_type_is_pointer(type)) {
+        return "ld";
+    }
+    if (!minic_type_is_integer(type)) {
+        return NULL;
+    }
+    if (minic_type_is_char_integer(type)) {
+        return minic_type_is_unsigned_integer(type) ? "lbu" : "lb";
+    }
+    return minic_type_is_unsigned_integer(type) ? "lwu" : "lw";
+}
+
+static const char *minic_riscv64_store_instruction(MinicType type)
+{
+    if (minic_type_is_pointer(type)) {
+        return "sd";
+    }
+    if (!minic_type_is_integer(type)) {
+        return NULL;
+    }
+    return minic_type_is_char_integer(type) ? "sb" : "sw";
+}
+
 static bool minic_riscv64_local_object(
     const MinicC0Program *program,
     const MinicFunction *function,
@@ -35,23 +76,14 @@ static bool minic_riscv64_scalar_object_access(
     const MinicLocal *object;
     size_t object_width;
 
-    if (width == NULL ||
-        !minic_riscv64_local_object(
+    if (!minic_riscv64_local_object(
             program,
             function,
             local_id,
-            &object)) {
-        return false;
-    }
-    if (minic_type_is_integer(object->type)) {
-        object_width = 4U;
-    } else if (minic_type_is_pointer(object->type)) {
-        object_width = 8U;
-    } else {
-        return false;
-    }
-    if (object_width >
-        function->local_storage_size - object->storage_offset) {
+            &object) ||
+        !minic_riscv64_scalar_width(object->type, &object_width) ||
+        object_width >
+            function->local_storage_size - object->storage_offset) {
         return false;
     }
     *local = object;
@@ -65,6 +97,9 @@ static bool minic_riscv64_emit_s0_access(
     const char *register_name,
     size_t offset)
 {
+    if (instruction == NULL || register_name == NULL) {
+        return false;
+    }
     if (offset <= 2047U) {
         return fprintf(
             file,
@@ -165,6 +200,86 @@ bool minic_riscv64_emit_sp_load64(
         register_name) >= 0;
 }
 
+bool minic_riscv64_emit_integer_conversion(
+    FILE *file,
+    MinicType type,
+    const char *register_name)
+{
+    if (register_name == NULL || !minic_type_is_integer(type)) {
+        return false;
+    }
+    if (minic_type_is_char_integer(type)) {
+        if (minic_type_is_unsigned_integer(type)) {
+            return fprintf(
+                file,
+                "  andi %s, %s, 255\n",
+                register_name,
+                register_name) >= 0;
+        }
+        return fprintf(
+            file,
+            "  slli %s, %s, 56\n"
+            "  srai %s, %s, 56\n",
+            register_name,
+            register_name,
+            register_name,
+            register_name) >= 0;
+    }
+    if (minic_type_is_unsigned_integer(type)) {
+        return fprintf(
+            file,
+            "  slli %s, %s, 32\n"
+            "  srli %s, %s, 32\n",
+            register_name,
+            register_name,
+            register_name,
+            register_name) >= 0;
+    }
+    return fprintf(
+        file,
+        "  addiw %s, %s, 0\n",
+        register_name,
+        register_name) >= 0;
+}
+
+bool minic_riscv64_emit_scalar_load(
+    FILE *file,
+    MinicType type,
+    const char *destination_register,
+    const char *address_register)
+{
+    const char *instruction;
+
+    instruction = minic_riscv64_load_instruction(type);
+    return instruction != NULL && destination_register != NULL &&
+           address_register != NULL &&
+           fprintf(
+               file,
+               "  %s %s, 0(%s)\n",
+               instruction,
+               destination_register,
+               address_register) >= 0;
+}
+
+bool minic_riscv64_emit_scalar_store(
+    FILE *file,
+    MinicType type,
+    const char *source_register,
+    const char *address_register)
+{
+    const char *instruction;
+
+    instruction = minic_riscv64_store_instruction(type);
+    return instruction != NULL && source_register != NULL &&
+           address_register != NULL &&
+           fprintf(
+               file,
+               "  %s %s, 0(%s)\n",
+               instruction,
+               source_register,
+               address_register) >= 0;
+}
+
 bool minic_riscv64_emit_object_address(
     FILE *file,
     const MinicC0Program *program,
@@ -211,11 +326,8 @@ bool minic_riscv64_emit_object_load(
             &width)) {
         return false;
     }
-    if (width == 4U) {
-        instruction = minic_type_is_unsigned_integer(local->type) ? "lwu" : "lw";
-    } else {
-        instruction = "ld";
-    }
+    (void)width;
+    instruction = minic_riscv64_load_instruction(local->type);
     return minic_riscv64_emit_s0_access(
         file,
         instruction,
@@ -232,6 +344,7 @@ bool minic_riscv64_emit_object_store_register(
 {
     const MinicLocal *local;
     size_t width;
+    const char *instruction;
 
     if (register_name == NULL ||
         !minic_riscv64_scalar_object_access(
@@ -242,9 +355,11 @@ bool minic_riscv64_emit_object_store_register(
             &width)) {
         return false;
     }
+    (void)width;
+    instruction = minic_riscv64_store_instruction(local->type);
     return minic_riscv64_emit_s0_access(
         file,
-        width == 4U ? "sw" : "sd",
+        instruction,
         register_name,
         local->storage_offset);
 }
