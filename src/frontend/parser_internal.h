@@ -24,6 +24,7 @@ typedef struct MinicParser {
     MinicBlockId current_block;
     MinicFunctionId current_function;
     size_t local_begin;
+    size_t loop_depth;
 
     MinicParserLocalBinding *local_bindings;
     size_t local_binding_count;
