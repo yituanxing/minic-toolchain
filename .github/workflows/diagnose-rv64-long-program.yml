@@ -1,0 +1,43 @@
+name: Diagnose RV64 long program
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/diagnose-rv64-long-program.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: frontend/rv64-long-integers
+      - name: Apply pending backend patch in workspace
+        shell: bash
+        run: |
+          awk '
+            /^python3 - <<'\''PY'\''/ { capture=1; next }
+            capture && /^PY$/ { exit }
+            capture { print }
+          ' .github/scripts/apply-rv64-long-codegen.sh > /tmp/apply-rv64-long-codegen.py
+          python3 /tmp/apply-rv64-long-codegen.py
+          make -j2
+      - name: Print exact source and diagnostic
+        shell: bash
+        run: |
+          cc -E -P -x c tests/programs/c0/long_integer_semantics.c -o /tmp/long.i
+          printf '%s\n' '--- numbered preprocessed source ---'
+          nl -ba /tmp/long.i
+          printf '%s\n' '--- MiniC diagnostic ---'
+          set +e
+          build/debug/bin/minic -S /tmp/long.i -o /tmp/long.s \
+            >/tmp/long.stdout 2>/tmp/long.stderr
+          status=$?
+          set -e
+          printf 'status=%s\n' "$status"
+          cat /tmp/long.stderr
+          test "$status" -ne 0
+          exit 1
