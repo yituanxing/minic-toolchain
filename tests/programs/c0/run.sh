@@ -138,3 +138,4 @@ run_program for_loop
 run_program unsigned_semantics
 run_program pointer_subscript
 run_program const_local
+run_program global_array_read

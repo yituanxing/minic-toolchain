@@ -84,6 +84,25 @@ static bool minic_riscv64_emit_subscript_address(
             !minic_type_equal(local->type, expression->type)) {
             return false;
         }
+    } else if (base->kind == MINIC_EXPRESSION_GLOBAL_OBJECT &&
+               base->value_category == MINIC_VALUE_LVALUE) {
+        const MinicGlobalObject *object;
+        const MinicArrayType *array_type;
+
+        object = minic_c0_program_global_object(
+            program,
+            base->value.global_object_id);
+        if (object == NULL || !minic_type_is_array(object->type)) {
+            return false;
+        }
+        array_type = minic_c0_program_array_type(
+            program,
+            object->type.array_type_id);
+        base_is_array_object = array_type != NULL;
+        if (!base_is_array_object ||
+            !minic_type_equal(array_type->element_type, expression->type)) {
+            return false;
+        }
     }
 
     if (base_is_array_object) {
@@ -151,6 +170,15 @@ bool minic_riscv64_emit_lvalue_address(
             program,
             function,
             expression->value.local_id);
+    case MINIC_EXPRESSION_GLOBAL_OBJECT: {
+        const MinicGlobalObject *object;
+
+        object = minic_c0_program_global_object(
+            program,
+            expression->value.global_object_id);
+        return object != NULL && object->name_length != 0U &&
+               fprintf(file, "  la a0, %s\n", object->name) >= 0;
+    }
     case MINIC_EXPRESSION_DEREFERENCE:
         return minic_riscv64_emit_expression(
             file,
@@ -192,6 +220,8 @@ bool minic_riscv64_emit_expression(
             program,
             function,
             expression->value.local_id);
+    case MINIC_EXPRESSION_GLOBAL_OBJECT:
+        return false;
     case MINIC_EXPRESSION_ADDRESS_OF:
         return minic_riscv64_emit_lvalue_address(
             file,

@@ -31,6 +31,7 @@ typedef enum MinicValueCategory {
 typedef enum MinicExpressionKind {
     MINIC_EXPRESSION_INTEGER = 0,
     MINIC_EXPRESSION_LOCAL,
+    MINIC_EXPRESSION_GLOBAL_OBJECT,
     MINIC_EXPRESSION_ADDRESS_OF,
     MINIC_EXPRESSION_DEREFERENCE,
     MINIC_EXPRESSION_SUBSCRIPT,
@@ -67,6 +68,7 @@ typedef struct MinicExpression {
     union {
         int integer_value;
         MinicLocalId local_id;
+        MinicGlobalObjectId global_object_id;
         struct {
             MinicFunctionId function_id;
             size_t argument_count;

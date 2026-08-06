@@ -128,6 +128,52 @@ static bool parse_local_reference(
     return true;
 }
 
+static bool parse_global_reference(
+    MinicParser *parser,
+    MinicSourceSpan name_span,
+    MinicGlobalObjectId global_object_id,
+    MinicExpressionId *expression_id)
+{
+    const MinicGlobalObject *object;
+    const MinicArrayType *array_type;
+    MinicExpression base_expression;
+    MinicExpressionId base_id;
+
+    object = minic_c0_program_global_object(parser->program, global_object_id);
+    if (object == NULL || !minic_type_is_array(object->type)) {
+        minic_parser_error(parser, "invalid global object reference");
+        return false;
+    }
+    array_type = minic_c0_program_array_type(
+        parser->program,
+        object->type.array_type_id);
+    if (array_type == NULL) {
+        minic_parser_error(parser, "invalid global array type");
+        return false;
+    }
+
+    (void)memset(&base_expression, 0, sizeof(base_expression));
+    base_expression.kind = MINIC_EXPRESSION_GLOBAL_OBJECT;
+    base_expression.span = name_span;
+    base_expression.type = object->type;
+    base_expression.value_category = MINIC_VALUE_LVALUE;
+    base_expression.value.global_object_id = global_object_id;
+    if (!minic_parser_add_expression(parser, &base_expression, &base_id)) {
+        return false;
+    }
+
+    if (parser->current.kind != MINIC_TOKEN_LBRACKET) {
+        minic_parser_error(parser, "global array object requires a subscript");
+        return false;
+    }
+    return parse_subscript_expression(
+        parser,
+        base_id,
+        array_type->element_type,
+        name_span,
+        expression_id);
+}
+
 static bool parse_primary(
     MinicParser *parser,
     MinicExpressionId *expression_id)
@@ -136,6 +182,7 @@ static bool parse_primary(
     MinicSourceSpan name_span;
     MinicLocalId local_id;
     MinicFunctionId function_id;
+    MinicGlobalObjectId global_object_id;
 
     if (parser->current.kind == MINIC_TOKEN_INTEGER_CONSTANT) {
         return parse_integer(parser, expression_id);
@@ -144,6 +191,7 @@ static bool parse_primary(
         name_span = parser->current.span;
         local_id = minic_parser_find_local(parser, name_span);
         function_id = minic_parser_find_function(parser, name_span);
+        global_object_id = minic_parser_find_global_object(parser, name_span);
         if (!minic_parser_advance(parser)) {
             return false;
         }
@@ -154,6 +202,10 @@ static bool parse_primary(
 
             if (local_id != MINIC_LOCAL_INVALID) {
                 minic_parser_error(parser, "called object is a local variable");
+                return false;
+            }
+            if (global_object_id != MINIC_GLOBAL_OBJECT_INVALID) {
+                minic_parser_error(parser, "called object is a global object");
                 return false;
             }
             if (function_id == MINIC_FUNCTION_INVALID) {
@@ -233,15 +285,22 @@ static bool parse_primary(
             return minic_parser_add_expression(parser, &expression, expression_id);
         }
 
-        if (local_id == MINIC_LOCAL_INVALID) {
-            minic_parser_error(parser, "use of undeclared local");
-            return false;
+        if (local_id != MINIC_LOCAL_INVALID) {
+            return parse_local_reference(
+                parser,
+                name_span,
+                local_id,
+                expression_id);
         }
-        return parse_local_reference(
-            parser,
-            name_span,
-            local_id,
-            expression_id);
+        if (global_object_id != MINIC_GLOBAL_OBJECT_INVALID) {
+            return parse_global_reference(
+                parser,
+                name_span,
+                global_object_id,
+                expression_id);
+        }
+        minic_parser_error(parser, "use of undeclared local");
+        return false;
     }
     if (parser->current.kind == MINIC_TOKEN_LPAREN) {
         return minic_parser_advance(parser) &&
