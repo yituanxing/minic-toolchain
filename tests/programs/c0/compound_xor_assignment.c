@@ -6,11 +6,12 @@ static int pick(int *calls)
 
 int main(void)
 {
-    int values[1];
+    int values[2];
     int calls;
     unsigned mask;
 
     values[0] = 85;
+    values[1] = 0;
     calls = 0;
     mask = 240;
     values[pick(&calls)] ^= 15;
