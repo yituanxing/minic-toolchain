@@ -13,6 +13,10 @@ require_command() {
     fi
 }
 
+version_line() {
+    "$@" --version | sed -n '1p'
+}
+
 require_command cc
 require_command clang-format-18
 require_command riscv64-linux-gnu-gcc
@@ -21,15 +25,13 @@ require_command riscv64-linux-gnu-objdump
 require_command qemu-riscv64
 require_command dpkg-query
 
-printf '%s\n' 'Validation profile: ubuntu-24.04-apt / 验证配置：ubuntu-24.04-apt'
-printf '%s\n' 'Host tools / 宿主工具：'
-cc --version | sed -n '1p'
-clang-format-18 --version | sed -n '1p'
-printf '%s\n' 'Target tools / 目标工具：'
-riscv64-linux-gnu-gcc --version | sed -n '1p'
-riscv64-linux-gnu-ld --version | sed -n '1p'
-riscv64-linux-gnu-objdump --version | sed -n '1p'
-qemu-riscv64 --version | sed -n '1p'
+printf '%s\n' 'PROFILE validation=ubuntu-24.04-apt'
+printf 'TOOL host-cc=%s\n' "$(version_line cc)"
+printf 'TOOL clang-format=%s\n' "$(version_line clang-format-18)"
+printf 'TOOL target-gcc=%s\n' "$(version_line riscv64-linux-gnu-gcc)"
+printf 'TOOL target-ld=%s\n' "$(version_line riscv64-linux-gnu-ld)"
+printf 'TOOL target-objdump=%s\n' "$(version_line riscv64-linux-gnu-objdump)"
+printf 'TOOL qemu-riscv64=%s\n' "$(version_line qemu-riscv64)"
 
 while IFS= read -r package || test -n "$package"; do
     case "$package" in
@@ -43,7 +45,7 @@ while IFS= read -r package || test -n "$package"; do
             "FAIL validation-tools: package is not installed: $package" >&2
         exit 1
     }
-    printf 'package %s=%s\n' "$package" "$version"
+    printf 'PACKAGE %s=%s\n' "$package" "$version"
 done <"$packages"
 
 printf '%s\n' 'PASS validation-tools profile=ubuntu-24.04-apt'
