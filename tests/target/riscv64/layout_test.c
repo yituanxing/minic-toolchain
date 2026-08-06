@@ -28,6 +28,8 @@ int main(void)
     const MinicRecord *record;
     size_t byte_size;
     size_t byte_alignment;
+    size_t long_size;
+    size_t long_alignment;
 
     minic_c0_program_initialize(&program);
     (void)memset(&diagnostic, 0, sizeof(diagnostic));
@@ -41,6 +43,22 @@ int main(void)
         byte_size != 1U || byte_alignment != 1U) {
         minic_c0_program_destroy(&program);
         return fail("unsigned-char scalar layout");
+    }
+
+    if (!minic_riscv64_type_layout(
+            &program,
+            minic_type_long(),
+            &long_size,
+            &long_alignment) ||
+        long_size != 8U || long_alignment != 8U ||
+        !minic_riscv64_type_layout(
+            &program,
+            minic_type_unsigned_long(),
+            &long_size,
+            &long_alignment) ||
+        long_size != 8U || long_alignment != 8U) {
+        minic_c0_program_destroy(&program);
+        return fail("RV64 long scalar layout");
     }
 
     if (!minic_c0_program_add_record(

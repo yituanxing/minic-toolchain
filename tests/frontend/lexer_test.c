@@ -253,6 +253,36 @@ static int test_unsigned_keyword_boundaries(void)
     return 0;
 }
 
+static int test_signed_keyword_boundaries(void)
+{
+    static const char source[] = "signed signed_value signedness";
+    MinicLexer lexer;
+
+    minic_lexer_initialize(&lexer, "signed.c", source, sizeof(source) - 1U);
+    if (expect_token(&lexer, MINIC_TOKEN_KW_SIGNED, 1U, 1U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_IDENTIFIER, 1U, 8U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_IDENTIFIER, 1U, 21U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_EOF, 1U, 31U) != 0) {
+        return 1;
+    }
+    return 0;
+}
+
+static int test_long_keyword_boundaries(void)
+{
+    static const char source[] = "long longer long_value";
+    MinicLexer lexer;
+
+    minic_lexer_initialize(&lexer, "long.c", source, sizeof(source) - 1U);
+    if (expect_token(&lexer, MINIC_TOKEN_KW_LONG, 1U, 1U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_IDENTIFIER, 1U, 6U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_IDENTIFIER, 1U, 13U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_EOF, 1U, 23U) != 0) {
+        return 1;
+    }
+    return 0;
+}
+
 static int test_char_keyword_boundaries(void)
 {
     static const char source[] = "char char_value character";
@@ -321,6 +351,8 @@ int main(void)
         test_struct_keyword_boundaries() != 0 ||
         test_const_keyword_boundaries() != 0 ||
         test_unsigned_keyword_boundaries() != 0 ||
+        test_signed_keyword_boundaries() != 0 ||
+        test_long_keyword_boundaries() != 0 ||
         test_char_keyword_boundaries() != 0 ||
         test_keyword_boundaries() != 0 ||
         test_invalid_character() != 0) {

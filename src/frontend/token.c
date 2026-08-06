@@ -14,6 +14,10 @@ const char *minic_token_kind_name(MinicTokenKind kind) {
         return "char";
     case MINIC_TOKEN_KW_INT:
         return "int";
+    case MINIC_TOKEN_KW_LONG:
+        return "long";
+    case MINIC_TOKEN_KW_SIGNED:
+        return "signed";
     case MINIC_TOKEN_KW_UNSIGNED:
         return "unsigned";
     case MINIC_TOKEN_KW_VOID:

@@ -51,7 +51,9 @@ static bool minic_riscv64_global_scalar_type(const MinicC0Program *program,
         return false;
     }
     *scalar_type = type;
-    *scalar_width = minic_type_is_char_integer(type) ? 1U : 4U;
+    *scalar_width = minic_type_is_char_integer(type)   ? 1U
+                    : minic_type_is_long_integer(type) ? 8U
+                                                       : 4U;
     return true;
 }
 
@@ -71,7 +73,9 @@ static bool minic_riscv64_emit_global_object(FILE *file,
         !minic_riscv64_alignment_power(object->alignment, &alignment_power)) {
         return false;
     }
-    directive = minic_type_is_char_integer(scalar_type) ? ".byte" : ".word";
+    directive = minic_type_is_char_integer(scalar_type)   ? ".byte"
+                : minic_type_is_long_integer(scalar_type) ? ".dword"
+                                                          : ".word";
 
     if (fprintf(file, "%s\n", object->is_read_only ? ".section .rodata" : ".data") < 0) {
         return false;

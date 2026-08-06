@@ -26,7 +26,8 @@ typedef enum MinicIntegerSign {
 typedef enum MinicIntegerRank {
     MINIC_INTEGER_RANK_NONE = 0,
     MINIC_INTEGER_RANK_CHAR,
-    MINIC_INTEGER_RANK_INT
+    MINIC_INTEGER_RANK_INT,
+    MINIC_INTEGER_RANK_LONG
 } MinicIntegerRank;
 
 typedef enum MinicTypeQualifier {
@@ -48,6 +49,8 @@ MinicType minic_type_void(void);
 MinicType minic_type_unsigned_char(void);
 MinicType minic_type_int(void);
 MinicType minic_type_unsigned_int(void);
+MinicType minic_type_long(void);
+MinicType minic_type_unsigned_long(void);
 MinicType minic_type_record(MinicRecordId record_id);
 MinicType minic_type_array(MinicArrayTypeId array_type_id);
 bool minic_type_add_const(MinicType type, MinicType *result);
@@ -62,6 +65,7 @@ bool minic_type_is_const(MinicType type);
 bool minic_type_is_void(MinicType type);
 bool minic_type_is_integer(MinicType type);
 bool minic_type_is_char_integer(MinicType type);
+bool minic_type_is_long_integer(MinicType type);
 bool minic_type_is_signed_integer(MinicType type);
 bool minic_type_is_unsigned_integer(MinicType type);
 bool minic_type_is_record(MinicType type);

@@ -560,6 +560,8 @@ static bool token_starts_local_declaration(const MinicParser *parser) {
     switch (parser->current.kind) {
     case MINIC_TOKEN_KW_CONST:
     case MINIC_TOKEN_KW_INT:
+    case MINIC_TOKEN_KW_LONG:
+    case MINIC_TOKEN_KW_SIGNED:
     case MINIC_TOKEN_KW_UNSIGNED:
     case MINIC_TOKEN_KW_VOID:
     case MINIC_TOKEN_KW_STRUCT:

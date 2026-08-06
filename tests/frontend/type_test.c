@@ -17,6 +17,9 @@ int main(void)
     MinicType unsigned_char_pointer_type;
     MinicType integer_type;
     MinicType unsigned_integer_type;
+    MinicType signed_long_type;
+    MinicType unsigned_long_type;
+    MinicType const_long_type;
     MinicType unsigned_pointer_type;
     MinicType promoted_type;
     MinicType common_type;
@@ -74,6 +77,28 @@ int main(void)
         return fail("unsigned int identity");
     }
 
+    signed_long_type = minic_type_long();
+    unsigned_long_type = minic_type_unsigned_long();
+    if (!minic_type_is_integer(signed_long_type) ||
+        !minic_type_is_long_integer(signed_long_type) ||
+        !minic_type_is_signed_integer(signed_long_type) ||
+        minic_type_is_unsigned_integer(signed_long_type) ||
+        !minic_type_is_integer(unsigned_long_type) ||
+        !minic_type_is_long_integer(unsigned_long_type) ||
+        minic_type_is_signed_integer(unsigned_long_type) ||
+        !minic_type_is_unsigned_integer(unsigned_long_type) ||
+        minic_type_equal(signed_long_type, integer_type) ||
+        minic_type_equal(unsigned_long_type, unsigned_integer_type) ||
+        minic_type_equal(signed_long_type, unsigned_long_type)) {
+        return fail("long integer identity");
+    }
+
+    if (!minic_type_add_const(signed_long_type, &const_long_type) ||
+        !minic_type_is_const(const_long_type) ||
+        !minic_type_is_long_integer(const_long_type)) {
+        return fail("const long identity");
+    }
+
     unsigned_char_type = minic_type_unsigned_char();
     if (!minic_type_is_integer(unsigned_char_type) ||
         !minic_type_is_char_integer(unsigned_char_type) ||
@@ -93,6 +118,13 @@ int main(void)
         !minic_type_equal(promoted_type, integer_type) ||
         !minic_type_integer_promotion(unsigned_integer_type, &promoted_type) ||
         !minic_type_equal(promoted_type, unsigned_integer_type) ||
+        !minic_type_integer_promotion(signed_long_type, &promoted_type) ||
+        !minic_type_equal(promoted_type, signed_long_type) ||
+        !minic_type_integer_promotion(const_long_type, &promoted_type) ||
+        !minic_type_equal(promoted_type, signed_long_type) ||
+        minic_type_is_const(promoted_type) ||
+        !minic_type_integer_promotion(unsigned_long_type, &promoted_type) ||
+        !minic_type_equal(promoted_type, unsigned_long_type) ||
         minic_type_integer_promotion(void_type, &promoted_type) ||
         minic_type_integer_promotion(unsigned_char_type, NULL)) {
         return fail("integer promotion");
@@ -128,6 +160,26 @@ int main(void)
             integer_type,
             &common_type) ||
         !minic_type_equal(common_type, unsigned_integer_type) ||
+        !minic_type_integer_common(
+            integer_type,
+            signed_long_type,
+            &common_type) ||
+        !minic_type_equal(common_type, signed_long_type) ||
+        !minic_type_integer_common(
+            unsigned_integer_type,
+            signed_long_type,
+            &common_type) ||
+        !minic_type_equal(common_type, signed_long_type) ||
+        !minic_type_integer_common(
+            integer_type,
+            unsigned_long_type,
+            &common_type) ||
+        !minic_type_equal(common_type, unsigned_long_type) ||
+        !minic_type_integer_common(
+            signed_long_type,
+            unsigned_long_type,
+            &common_type) ||
+        !minic_type_equal(common_type, unsigned_long_type) ||
         minic_type_integer_common(integer_type, void_type, &common_type) ||
         minic_type_integer_common(integer_type, unsigned_integer_type, NULL)) {
         return fail("common integer type");
