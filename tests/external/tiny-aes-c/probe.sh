@@ -7,20 +7,23 @@ riscv_cc=${RISCV_CC:-riscv64-linux-gnu-gcc}
 qemu=${QEMU_RISCV64:-qemu-riscv64}
 work=${BUILD_DIR:-"$root/build/debug"}/tests/external/tiny-aes-c
 harness="$root/tests/external/tiny-aes-c/aes128_ecb_vectors.c"
+vendor="$root/tests/vendor/tiny-aes-c/upstream"
 diagnostic_file="$work/diagnostic.txt"
 upstream_commit=23856752fbd139da0b8ca6e471a13d5bcc99a08d
-base_url="https://raw.githubusercontent.com/kokke/tiny-AES-c/$upstream_commit"
 
-mkdir -p "$work/upstream"
+mkdir -p "$work"
 rm -f "$diagnostic_file"
 
-fetch_and_verify() {
+verify_vendor_file() {
     name=$1
     expected_blob=$2
-    path="$work/upstream/$name"
+    path="$vendor/$name"
 
-    curl --fail --location --silent --show-error \
-        "$base_url/$name" -o "$path"
+    if test ! -f "$path"; then
+        printf '%s\n' \
+            "FAIL external/tiny-aes-c: missing vendored file $path" >&2
+        exit 1
+    fi
     actual_blob=$(git hash-object "$path")
     if test "$actual_blob" != "$expected_blob"; then
         printf '%s\n' \
@@ -159,14 +162,18 @@ if ! command -v "$qemu" >/dev/null 2>&1; then
     printf '%s\n' "FAIL external/tiny-aes-c: missing QEMU executor $qemu" >&2
     exit 1
 fi
+if ! command -v git >/dev/null 2>&1; then
+    printf '%s\n' "FAIL external/tiny-aes-c: missing git for vendor identity checks" >&2
+    exit 1
+fi
 
-fetch_and_verify aes.c 4481f7b24ec964019d38669842913fd571d28ba3
-fetch_and_verify aes.h b29b6683549632676ec11c06eb86efd02964db57
-fetch_and_verify unlicense.txt 68a49daad8ff7e35068f2b7a97d643aab440eaec
+verify_vendor_file aes.c 4481f7b24ec964019d38669842913fd571d28ba3
+verify_vendor_file aes.h b29b6683549632676ec11c06eb86efd02964db57
+verify_vendor_file unlicense.txt 68a49daad8ff7e35068f2b7a97d643aab440eaec
 
 "$riscv_cc" \
     -std=c11 -O0 -static \
-    -I"$work/upstream" \
+    -I"$vendor" \
     -DECB=1 -DCBC=0 -DCTR=0 \
     -DMULTIPLY_AS_A_FUNCTION=1 \
     "$harness" \
@@ -175,7 +182,7 @@ fetch_and_verify unlicense.txt 68a49daad8ff7e35068f2b7a97d643aab440eaec
 "$riscv_cc" \
     -E -P -nostdinc -x c \
     -I"$root/tests/external/tiny-aes-c/include" \
-    -I"$work/upstream" \
+    -I"$vendor" \
     -DECB=1 -DCBC=0 -DCTR=0 \
     -DMULTIPLY_AS_A_FUNCTION=1 \
     "$harness" \
