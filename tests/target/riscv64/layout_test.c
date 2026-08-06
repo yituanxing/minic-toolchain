@@ -20,14 +20,28 @@ int main(void)
     MinicLocalId local_id;
     MinicRecordId record_id;
     MinicLocal local;
+    MinicType byte_type;
     MinicType pointer_type;
     MinicType record_type;
     MinicDiagnostic diagnostic;
     const MinicFunction *function;
     const MinicRecord *record;
+    size_t byte_size;
+    size_t byte_alignment;
 
     minic_c0_program_initialize(&program);
     (void)memset(&diagnostic, 0, sizeof(diagnostic));
+    byte_type = minic_type_unsigned_char();
+
+    if (!minic_riscv64_type_layout(
+            &program,
+            byte_type,
+            &byte_size,
+            &byte_alignment) ||
+        byte_size != 1U || byte_alignment != 1U) {
+        minic_c0_program_destroy(&program);
+        return fail("unsigned-char scalar layout");
+    }
 
     if (!minic_c0_program_add_record(
             &program,
@@ -39,7 +53,7 @@ int main(void)
             record_id,
             "prefix",
             6U,
-            minic_type_int(),
+            byte_type,
             1U) ||
         !minic_c0_record_add_field(
             &program,
@@ -53,7 +67,7 @@ int main(void)
             record_id,
             "value",
             5U,
-            minic_type_int(),
+            byte_type,
             1U) ||
         !minic_c0_program_finish_record(&program, record_id)) {
         minic_c0_program_destroy(&program);
@@ -67,6 +81,19 @@ int main(void)
     }
 
     (void)memset(&local, 0, sizeof(local));
+    local.type = byte_type;
+    local.element_count = 1U;
+    if (!minic_c0_program_add_local(&program, &local, &local_id)) {
+        minic_c0_program_destroy(&program);
+        return fail("add byte scalar");
+    }
+
+    local.element_count = 3U;
+    if (!minic_c0_program_add_local(&program, &local, &local_id)) {
+        minic_c0_program_destroy(&program);
+        return fail("add byte array");
+    }
+
     local.type = minic_type_int();
     local.element_count = 1U;
     if (!minic_c0_program_add_local(&program, &local, &local_id)) {
@@ -116,7 +143,7 @@ int main(void)
             "sample",
             6U,
             0U,
-            6U,
+            8U,
             block_id,
             &function_id) ||
         !minic_riscv64_layout_program(
@@ -138,15 +165,17 @@ int main(void)
     }
 
     function = minic_c0_program_function(&program, function_id);
-    if (function == NULL || function->local_storage_size != 68U ||
+    if (function == NULL || function->local_storage_size != 76U ||
         program.locals[0].storage_offset != 0U ||
-        program.locals[1].storage_offset != 4U ||
-        program.locals[2].storage_offset != 16U ||
-        program.locals[3].storage_offset != 24U ||
-        program.locals[4].storage_offset != 40U ||
-        program.locals[5].storage_offset != 44U) {
+        program.locals[1].storage_offset != 1U ||
+        program.locals[2].storage_offset != 4U ||
+        program.locals[3].storage_offset != 8U ||
+        program.locals[4].storage_offset != 24U ||
+        program.locals[5].storage_offset != 32U ||
+        program.locals[6].storage_offset != 48U ||
+        program.locals[7].storage_offset != 52U) {
         minic_c0_program_destroy(&program);
-        return fail("mixed scalar, array, and record offsets");
+        return fail("mixed byte, scalar, array, pointer, and record offsets");
     }
 
     program.locals[1].element_count = 0U;
@@ -159,10 +188,11 @@ int main(void)
             diagnostic.message,
             "local object size is invalid for the RV64 target") != 0) {
         minic_c0_program_destroy(&program);
-        return fail("zero-element object accepted");
+        return fail("zero-element byte object accepted");
     }
 
-    program.locals[1].element_count = SIZE_MAX;
+    program.locals[1].element_count = 3U;
+    program.locals[3].element_count = SIZE_MAX;
     diagnostic.message[0] = '\0';
     if (minic_riscv64_layout_program(
             "layout-overflow",
