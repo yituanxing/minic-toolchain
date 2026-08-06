@@ -29,17 +29,17 @@ Pinned Git blob identities:
 
 ## Current frontier
 
-MiniC now passes the upstream declarations, `struct AES_ctx`, typed and `const` prototypes, multidimensional typedef arrays, static read-only lookup tables, static internal functions, `void` definitions, explicit unsigned integer identity, comma-separated unsigned declarations, the first `KeyExpansion` loop, pointer-parameter subscripting, const-qualified local initialization, expression lookup of the static global `sbox` table, and the bitwise XOR expressions in `KeyExpansion`.
+MiniC now passes the upstream declarations, `struct AES_ctx`, typed and `const` prototypes, multidimensional typedef arrays, static read-only lookup tables, static internal functions, `void` definitions, explicit unsigned integer identity, comma-separated unsigned declarations, the first `KeyExpansion` loop, pointer-parameter subscripting, const-qualified local initialization, expression lookup of the static global `sbox` table, the bitwise XOR expressions in `KeyExpansion`, typedef-backed record fields, RV64 record layout, and the first pointer member access in `AES_init_ctx`.
 
-The exact pinned failure is the first pointer member access in `AES_init_ctx`:
+The exact pinned failure is the standalone call:
 
 ```c
 KeyExpansion(ctx->RoundKey, key);
 ```
 
-The lexer and expression parser do not yet recognize `->`. The next short integration must connect the existing named-record descriptions to record object layout, derive the field offset and field type from a pointer-to-record base, produce an lvalue for the selected member, and emit RV64 base-plus-offset addressing. Array members such as `RoundKey` must then participate in the existing array-to-call-argument path without introducing a second record model.
+`ctx->RoundKey` now resolves as an array member, decays to an element pointer, and passes function argument type checking. The remaining capability is an expression statement: the statement parser currently treats every identifier-led non-declaration statement as an assignment, so the successfully parsed call is rejected when no `=` follows.
 
-Bitwise XOR support is protected by token and lexer tests, focused precedence/type/lowering gates, pointer-operand rejection, and twenty-seven GCC/MiniC differential programs. The new `bitwise_xor` program covers equality-versus-XOR precedence, negative signed operands, and high-bit unsigned behavior; both lanes exit with status 127.
+Pointer-member support is protected by token and lexer tests, direct RV64 record-layout assertions, focused scalar/array/const/invalid-member gates, and twenty-eight GCC/MiniC differential programs. The new `pointer_member` program covers typedef-backed fields, non-zero offsets, scalar writes, array-member decay, member subscripting, and passing a record address across function boundaries; both lanes exit with status 37 and produce empty output streams.
 
 ## Remaining acceptance debt
 

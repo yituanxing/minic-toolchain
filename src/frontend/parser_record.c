@@ -31,23 +31,25 @@ static bool parse_record_field(
     MinicRecordId record_id)
 {
     MinicSourceSpan name_span;
+    MinicType base_type;
     MinicType field_type;
     size_t element_count;
     const MinicRecord *record;
 
-    if (!minic_parser_expect(
+    if (!minic_parser_parse_type_specifiers(parser, &base_type) ||
+        !minic_parser_parse_pointer_declarator(
             parser,
-            MINIC_TOKEN_KW_INT,
-            "record field type must start with 'int'")) {
+            base_type,
+            &field_type)) {
         return false;
     }
-    field_type = minic_type_int();
-    while (parser->current.kind == MINIC_TOKEN_STAR) {
-        if (!minic_type_pointer_to(field_type, &field_type) ||
-            !minic_parser_advance(parser)) {
-            minic_parser_error(parser, "record field pointer depth is unsupported");
-            return false;
-        }
+    if (minic_type_is_void(field_type)) {
+        minic_parser_error(parser, "record field cannot have void type");
+        return false;
+    }
+    if (minic_type_is_array(field_type)) {
+        minic_parser_error(parser, "record field typedef array is unsupported");
+        return false;
     }
     if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
         minic_parser_error(parser, "expected record field name");
@@ -75,7 +77,10 @@ static bool parse_record_field(
             return false;
         }
     }
-    if (!minic_parser_expect(parser, MINIC_TOKEN_SEMICOLON, "expected ';' after record field")) {
+    if (!minic_parser_expect(
+            parser,
+            MINIC_TOKEN_SEMICOLON,
+            "expected ';' after record field")) {
         return false;
     }
     if (!minic_c0_record_add_field(
@@ -133,16 +138,18 @@ bool minic_parser_parse_record_definition(MinicParser *parser)
             minic_parser_error(parser, "expected '}' before end of record");
             return false;
         }
-        if (parser->current.kind != MINIC_TOKEN_KW_INT) {
-            minic_parser_error(parser, "record field type must start with 'int'");
-            return false;
-        }
         if (!parse_record_field(parser, record_id)) {
             return false;
         }
     }
-    if (!minic_parser_expect(parser, MINIC_TOKEN_RBRACE, "expected '}' after record fields") ||
-        !minic_parser_expect(parser, MINIC_TOKEN_SEMICOLON, "expected ';' after record definition")) {
+    if (!minic_parser_expect(
+            parser,
+            MINIC_TOKEN_RBRACE,
+            "expected '}' after record fields") ||
+        !minic_parser_expect(
+            parser,
+            MINIC_TOKEN_SEMICOLON,
+            "expected ';' after record definition")) {
         return false;
     }
     if (!minic_c0_program_finish_record(parser->program, record_id)) {

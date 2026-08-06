@@ -45,8 +45,9 @@ if "$minic" -S "$work/aes-ecb.i" -o "$work/aes-ecb.s" \
     exit 1
 fi
 
-if ! grep -F ":91:20:" "$work/minic.stderr" >/dev/null ||
-   ! grep -F "expected expression" "$work/minic.stderr" >/dev/null; then
+if ! grep -F ":91:35:" "$work/minic.stderr" >/dev/null ||
+   ! grep -F "assignment target must be a modifiable lvalue" \
+       "$work/minic.stderr" >/dev/null; then
     printf '%s\n' \
         "FAIL external/tiny-aes-c: unexpected compiler frontier" >&2
     cat "$work/minic.stderr" >&2
@@ -55,4 +56,4 @@ fi
 
 frontier=$(sed -n '1p' "$work/minic.stderr")
 printf '%s\n' \
-    "PASS external/tiny-aes-c frontier=AES-init-ctx-pointer-member diagnostic=$frontier"
+    "PASS external/tiny-aes-c frontier=AES-init-ctx-call-expression-statement diagnostic=$frontier"

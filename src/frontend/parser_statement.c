@@ -551,6 +551,25 @@ bool minic_parser_add_default_return(MinicParser *parser)
     return minic_parser_add_statement(parser, &statement);
 }
 
+static bool token_starts_local_declaration(const MinicParser *parser)
+{
+    switch (parser->current.kind) {
+    case MINIC_TOKEN_KW_CONST:
+    case MINIC_TOKEN_KW_INT:
+    case MINIC_TOKEN_KW_UNSIGNED:
+    case MINIC_TOKEN_KW_VOID:
+    case MINIC_TOKEN_KW_STRUCT:
+        return true;
+    case MINIC_TOKEN_IDENTIFIER:
+        return minic_parser_find_local(parser, parser->current.span) ==
+                   MINIC_LOCAL_INVALID &&
+               minic_parser_find_type_alias(parser, parser->current.span) !=
+                   MINIC_TYPE_ALIAS_INVALID;
+    default:
+        return false;
+    }
+}
+
 bool minic_parser_parse_statement(MinicParser *parser, bool allow_declaration)
 {
     if (parser->current.kind == MINIC_TOKEN_LBRACE) {
@@ -565,9 +584,7 @@ bool minic_parser_parse_statement(MinicParser *parser, bool allow_declaration)
     if (parser->current.kind == MINIC_TOKEN_KW_FOR) {
         return parse_for(parser);
     }
-    if (parser->current.kind == MINIC_TOKEN_KW_CONST ||
-        parser->current.kind == MINIC_TOKEN_KW_INT ||
-        parser->current.kind == MINIC_TOKEN_KW_UNSIGNED) {
+    if (token_starts_local_declaration(parser)) {
         if (!allow_declaration) {
             minic_parser_error(
                 parser,

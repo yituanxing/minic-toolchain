@@ -103,6 +103,49 @@ static bool parse_local_reference(
         return false;
     }
 
+    if (parser->current.kind == MINIC_TOKEN_ARROW) {
+        MinicExpressionId member_id;
+        const MinicExpression *member_expression;
+
+        if (local->element_count > 1U) {
+            minic_parser_error(parser, "pointer member access requires a scalar pointer");
+            return false;
+        }
+        if (!minic_parser_parse_pointer_member(
+                parser,
+                base_id,
+                &member_id)) {
+            return false;
+        }
+        member_expression = minic_c0_program_expression(
+            parser->program,
+            member_id);
+        if (member_expression == NULL) {
+            minic_parser_error(parser, "invalid pointer member expression");
+            return false;
+        }
+        if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
+            MinicType element_type;
+
+            if (!minic_type_pointee(
+                    member_expression->type,
+                    &element_type)) {
+                minic_parser_error(
+                    parser,
+                    "subscript base must be an array or pointer");
+                return false;
+            }
+            return parse_subscript_expression(
+                parser,
+                member_id,
+                element_type,
+                member_expression->span,
+                expression_id);
+        }
+        *expression_id = member_id;
+        return true;
+    }
+
     if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
         MinicType element_type;
 

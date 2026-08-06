@@ -52,6 +52,7 @@ MINIC_SOURCES := \
 	src/frontend/parser_expression.c \
 	src/frontend/parser_function.c \
 	src/frontend/parser_global.c \
+	src/frontend/parser_member.c \
 	src/frontend/parser_record.c \
 	src/frontend/parser_statement.c \
 	src/frontend/parser_type.c \
@@ -111,9 +112,10 @@ LAYOUT_TEST_BINARY  := $(BUILD_DIR)/tests/target/riscv64/layout-test
 .PHONY: all help prepare check check-fast check-token-model check-lexer \
 	check-type check-record check-type-alias check-layout check-static-functions \
 	check-unsigned-declarations check-for-loops check-pointer-subscripts \
-	check-const-locals check-global-objects check-bitwise-xor check-c0-runtime \
-	check-programs-c0 check-runtime sanitize bootstrap bootstrap-compare format \
-	format-check clean distclean print-config
+	check-const-locals check-global-objects check-bitwise-xor \
+	check-pointer-members check-c0-runtime check-programs-c0 check-runtime \
+	sanitize bootstrap bootstrap-compare format format-check clean distclean \
+	print-config
 
 all: $(MINIC_BINARY)
 
@@ -135,6 +137,7 @@ help:
 		"  make check-const-locals Run const local initialization and mutability gates" \
 		"  make check-global-objects Run global array lookup and shadowing gates" \
 		"  make check-bitwise-xor  Run XOR precedence, type, and lowering gates" \
+		"  make check-pointer-members Run pointer record member and field gates" \
 		"  make check              Run the normal host-side test gate" \
 		"  make check-c0-runtime   Run focused RISC-V/QEMU microprogram gates" \
 		"  make check-programs-c0  Differentially compare real programs: GCC vs MiniC" \
@@ -239,7 +242,13 @@ check-bitwise-xor: $(MINIC_BINARY)
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
 	sh tests/compiler/c0/run-bitwise-xor.sh
 
-check-fast: check-token-model check-lexer check-type check-record check-type-alias check-layout check-static-functions check-unsigned-declarations check-for-loops check-pointer-subscripts check-const-locals check-global-objects check-bitwise-xor $(MINIC_BINARY)
+check-pointer-members: $(MINIC_BINARY)
+	MINIC="$(abspath $(MINIC_BINARY))" \
+	HOST_CC="$(CC)" \
+	BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/compiler/c0/run-pointer-members.sh
+
+check-fast: check-token-model check-lexer check-type check-record check-type-alias check-layout check-static-functions check-unsigned-declarations check-for-loops check-pointer-subscripts check-const-locals check-global-objects check-bitwise-xor check-pointer-members $(MINIC_BINARY)
 	MINIC="$(abspath $(MINIC_BINARY))" \
 	HOST_CC="$(CC)" \
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
