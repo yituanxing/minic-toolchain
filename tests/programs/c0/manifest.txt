@@ -40,3 +40,4 @@ cast_expressions
 unsigned_char_layout
 hexadecimal_expression
 long_integer_semantics
+self_referential_record
