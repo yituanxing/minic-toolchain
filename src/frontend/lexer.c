@@ -285,7 +285,12 @@ bool minic_lexer_next(
         }
         break;
     case '-':
-        token->kind = MINIC_TOKEN_MINUS;
+        if (minic_lexer_peek_next(lexer) == '>') {
+            token->kind = MINIC_TOKEN_ARROW;
+            minic_lexer_advance(lexer);
+        } else {
+            token->kind = MINIC_TOKEN_MINUS;
+        }
         break;
     case '*':
         token->kind = MINIC_TOKEN_STAR;
