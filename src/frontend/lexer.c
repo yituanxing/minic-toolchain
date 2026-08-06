@@ -86,6 +86,9 @@ static MinicTokenKind minic_classify_identifier(
     const char *text,
     size_t length)
 {
+    if (length == 4U && memcmp(text, "char", 4U) == 0) {
+        return MINIC_TOKEN_KW_CHAR;
+    }
     if (length == 3U && memcmp(text, "int", 3U) == 0) {
         return MINIC_TOKEN_KW_INT;
     }
