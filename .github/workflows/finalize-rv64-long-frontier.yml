@@ -1,0 +1,31 @@
+name: Finalize RV64 long frontier
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/finalize-rv64-long-frontier.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: frontend/rv64-long-integers
+          fetch-depth: 0
+      - name: Restore RISC-V package archives
+        id: rv64-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/minic-apt/archives
+          key: rv64-apt-${{ runner.os }}-${{ runner.arch }}-noble-${{ hashFiles('tools/ci/ubuntu-24.04-packages.txt') }}
+      - name: Advance cJSON and run complete gate
+        env:
+          RV64_CACHE_HIT: ${{ steps.rv64-cache.outputs.cache-hit }}
+        run: bash .github/scripts/finalize-rv64-long-frontier.sh
