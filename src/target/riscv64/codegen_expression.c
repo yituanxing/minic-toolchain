@@ -42,6 +42,25 @@ static bool minic_riscv64_emit_integer_result_conversion(FILE *file,
            minic_riscv64_emit_integer_conversion(file, result_type, register_name);
 }
 
+static bool minic_riscv64_expression_is_integer_zero(const MinicExpression *expression) {
+    return expression != NULL && expression->kind == MINIC_EXPRESSION_INTEGER &&
+           minic_type_is_integer(expression->type) && expression->value.integer_value == 0;
+}
+
+static bool minic_riscv64_pointer_equality_compatible(const MinicExpression *left,
+                                                       const MinicExpression *right) {
+    if (left == NULL || right == NULL) {
+        return false;
+    }
+    if (minic_type_pointer_equality_compatible(left->type, right->type)) {
+        return true;
+    }
+    return (minic_type_is_pointer(left->type) &&
+            minic_riscv64_expression_is_integer_zero(right)) ||
+           (minic_riscv64_expression_is_integer_zero(left) &&
+            minic_type_is_pointer(right->type));
+}
+
 static bool minic_riscv64_emit_double_binary(FILE *file, MinicBinaryOperator operator_kind) {
     const char *instruction;
 
@@ -326,6 +345,7 @@ bool minic_riscv64_emit_expression(FILE *file,
         const MinicExpression *right;
         MinicType common_integer_type;
         bool has_integer_common_type;
+        bool has_pointer_equality;
         size_t element_size;
 
         left = minic_c0_program_expression(program, expression->value.binary.left);
@@ -333,6 +353,7 @@ bool minic_riscv64_emit_expression(FILE *file,
         has_integer_common_type =
             left != NULL && right != NULL &&
             minic_type_integer_common(left->type, right->type, &common_integer_type);
+        has_pointer_equality = minic_riscv64_pointer_equality_compatible(left, right);
         if (left == NULL || right == NULL ||
             !minic_riscv64_emit_expression(
                 file, program, function, expression->value.binary.left) ||
@@ -445,10 +466,10 @@ bool minic_riscv64_emit_expression(FILE *file,
                    minic_riscv64_emit_integer_result_conversion(
                        file, common_integer_type, expression->type, "a0");
         case MINIC_BINARY_EQUAL:
-            return has_integer_common_type &&
+            return (has_integer_common_type || has_pointer_equality) &&
                    fprintf(file, "  xor a0, t0, a0\n  seqz a0, a0\n") >= 0;
         case MINIC_BINARY_NOT_EQUAL:
-            return has_integer_common_type &&
+            return (has_integer_common_type || has_pointer_equality) &&
                    fprintf(file, "  xor a0, t0, a0\n  snez a0, a0\n") >= 0;
         case MINIC_BINARY_LESS:
             return has_integer_common_type &&
