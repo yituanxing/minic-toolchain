@@ -23,25 +23,25 @@ External GCC may preprocess, assemble, link, and provide CRT/libc. MiniC must co
 
 ## Accepted compiler capabilities / 已越过能力
 
-The unchanged core now crosses the previously frozen foundations including LONG semantics, self-referential records, plain `char`, float/double object types, function-pointer record fields, per-pointer `const`, anonymous struct typedefs, zero-initialized static record objects, direct record-member access, pointer-return completion, null-pointer constants, RV64D double return, decimal double literals, same-type double `+ - * /`, function-scope static fixed arrays, direct variadic function declaration identity, and contextual array-to-pointer decay.
+The unchanged core now crosses the previously frozen foundations including LONG semantics, self-referential records, plain `char`, float/double object types, function-pointer record fields, per-pointer `const`, anonymous struct typedefs, zero-initialized static record objects, direct record-member access, pointer-return completion, null-pointer constants, RV64D double return, decimal double literals, same-type double `+ - * /`, function-scope static fixed arrays, direct variadic function declaration identity, contextual array-to-pointer decay, and narrow string literal expressions.
 
-未修改 cJSON 核心现已越过 LONG 语义、自引用 record、plain `char`、float/double 对象类型、函数指针字段、逐级 `const`、匿名 struct typedef、静态 record 全零初始化、`.` 成员访问、指针返回 completion、空指针常量、RV64D double 返回、十进制 double 字面量、同类型 double 四则运算、函数作用域 static 定长数组、direct variadic function declaration identity 以及上下文化 array-to-pointer decay 等前沿。
+未修改 cJSON 核心现已越过 LONG 语义、自引用 record、plain `char`、float/double 对象类型、函数指针字段、逐级 `const`、匿名 struct typedef、静态 record 全零初始化、`.` 成员访问、指针返回 completion、空指针常量、RV64D double 返回、十进制 double 字面量、同类型 double 四则运算、函数作用域 static 定长数组、direct variadic function declaration identity、上下文化 array-to-pointer decay 以及窄字符串字面量等前沿。
 
-This branch adds ordinary narrow **string literal expressions**. The lexer recognizes a quoted literal as one token, including escaped quotes/backslashes, and diagnoses raw newlines or unterminated literals. The parser decodes a bounded set of simple C escapes and materializes every literal as an internal read-only `char[N]` global object with an explicit terminal NUL.
+This branch adds **variadic direct-call actual arguments and RV64 caller lowering** for integer/pointer extra arguments. Fixed parameters keep the existing declaration type checks. Variadic calls may record up to eight total actual arguments in the existing call AST. Extra arguments accept integer/pointer value paths only; floating extras remain explicitly unsupported.
 
-本分支新增普通窄 **string literal expression**。Lexer 会把带引号字符串识别为一个完整 token，包括 escaped quote/backslash，并对 raw newline 和未闭合字符串给出诊断。Parser 解码一组受控的简单 C escape，并把每个 literal 物化为内部只读 `char[N]` global object，同时显式追加结尾 NUL。
+本分支新增 **variadic direct-call actual arguments 与 RV64 caller lowering**，当前额外参数范围限定为 integer/pointer。固定参数继续执行既有声明类型检查；variadic call 使用现有 call AST 记录最多 8 个真实实际参数。额外参数只接受 integer/pointer value path，floating extra 继续明确不支持。
 
-The hidden object uses a `.Lminic_string_<n>` internal symbol, so it cannot collide with a legal C identifier. Existing global-array layout and RV64 emission place the bytes in `.rodata` using `.byte`; existing postfix subscript and array-to-pointer decay provide expression behavior. No string-specific RV64 expression kind is required.
+The RV64 backend now lowers the actual argument count rather than the fixed declaration count. Fixed integer parameters retain their declared conversion. Variadic integer extras use the current default-promotion/RV64 integer-register subset: non-`long` integer values are normalized through a 32-bit `addiw`, while `long` and pointers retain XLEN values. All actual arguments are then restored into `a0..a7` according to their real position before the direct call.
 
-隐藏对象使用 `.Lminic_string_<n>` 内部符号，不会与合法 C identifier 冲突。现有 global-array layout 与 RV64 emitter 会把字节以 `.byte` 放入 `.rodata`；现有 postfix subscript 与 array-to-pointer decay 负责表达式行为，因此无需新增 string-specific RV64 expression kind。
+RV64 backend 现在按真实实际参数数 lowering，而不是固定声明参数数。固定整数参数保留声明类型转换；variadic integer extra 使用当前 default-promotion/RV64 integer-register 子集：非 `long` 整数通过 32-bit `addiw` 归一化，`long` 与 pointer 保持 XLEN 值，随后所有实际参数按真实位置恢复到 `a0..a7` 再执行 direct call。
 
-The accepted simple escape set in this bounded slice is `\\`, `\"`, `\'`, `\?`, `\a`, `\b`, `\f`, `\n`, `\r`, `\t`, `\v`, and `\0`. Octal/hex escapes and adjacent literal concatenation remain separate capabilities.
+A permanent mixed ABI gate compiles the caller with MiniC and the variadic callee with GCC. GCC consumes the MiniC-provided extras through `va_list` as `int`, promoted `char`→`int`, `long`, and `int *`. Run #864 returned exit 0, proving the actual RV64 caller ABI behavior rather than merely accepting the syntax or matching assembly text.
 
-当前受控范围接受 `\\`、`\"`、`\'`、`\?`、`\a`、`\b`、`\f`、`\n`、`\r`、`\t`、`\v`、`\0`。八进制/十六进制 escape 与相邻字符串拼接仍保持独立能力。
+永久 mixed ABI gate 由 MiniC 编译 caller、GCC 编译 variadic callee；GCC 通过 `va_list` 真实读取 MiniC 提供的 `int`、`char` 默认提升后的 `int`、`long` 和 `int *`。Run #864 返回 exit 0，因此验证的是实际 RV64 caller ABI，而不是仅仅 Parser 放行或 grep 汇编。
 
-The permanent `string_literals` GCC/MiniC RV64 differential program validates ordinary bytes, `\n`, `\"`, `\\`, automatic terminal NUL, an empty literal, multiple hidden objects, array decay, and indexed byte loads. The permanent differential inventory is now 48 programs. Lexer unit gates additionally lock escaped-quote token boundaries, unterminated-string diagnostics, and raw-newline diagnostics.
+Negative gates preserve the capability boundary: floating variadic extras are rejected, more than eight total arguments are rejected, the full fixed prefix remains mandatory, and non-variadic calls still reject extra arguments.
 
-永久 `string_literals` GCC/MiniC RV64 差分程序验证普通字节、`\n`、`\"`、`\\`、自动结尾 NUL、空字符串、多个 hidden object、array decay 与 indexed byte load；永久差分程序总数现为 48。Lexer unit gate 还锁定 escaped quote 的 token 边界、未闭合字符串和 raw newline 诊断。
+负例门禁同时锁住边界：floating variadic extra 拒绝、总参数超过 8 个拒绝、fixed prefix 必须完整提供，普通 non-variadic call 仍拒绝多余参数。
 
 ## Current exact frontier / 当前精确前沿
 
@@ -51,30 +51,31 @@ The project-owned `stdio.h` contains the minimal hosted declaration:
 int sprintf(char *buffer, const char *format, ...);
 ```
 
-The pinned cJSON source remains unchanged. Preprocessed lines 125-126 are:
+The pinned cJSON source remains unchanged. MiniC now crosses the complete call:
 
 ```c
-    static char version[15];
-    sprintf(version, "%i.%i.%i", 1, 7, 19);
+sprintf(version, "%i.%i.%i", 1, 7, 19);
 ```
 
-Discovery Run #857 proves both the `version` array decay and the format string literal now parse successfully. The exact next first diagnostic is:
+The next stable preprocessed line is:
+
+```c
+    if ((string1 == ((void *)0)) || (string2 == ((void *)0)))
+```
+
+Discovery Run #864 produced the exact first diagnostic:
 
 ```text
-cJSON.i:126:32: error: call argument count does not match declaration
+cJSON.i:131:32: error: binary operator requires int operands
 ```
 
-Column 32 is the comma following the second fixed `sprintf` argument. The direct variadic declaration is already known, but the call AST/parser still records and accepts only the fixed parameter count. Therefore **variadic direct-call actual arguments and RV64 caller lowering** are now the next independently reviewable capability.
+The diagnostic occurs at the end of the first `string1 == ((void *)0)` comparison. MiniC's current binary comparison typing is integer-only, so the first new missing capability is **pointer equality / null-pointer comparison**. The following `||` has not yet become the first diagnostic and remains a separate later capability.
 
-Discovery Run #857 已证明 `version` 的 array decay 与格式字符串 literal 都已成功解析。当前精确 first diagnostic 是 line 126 column 32 的 `call argument count does not match declaration`，位置是第二个固定 `sprintf` 参数之后的逗号。也就是说 direct variadic declaration 已存在，但 call AST/Parser 仍只接收 fixed parameter count；下一条独立能力正式变成 **variadic direct-call actual arguments 与 RV64 caller lowering**。
-
-This branch does not implement that call ABI slice. It also does not claim character literals, `sizeof(string_literal)`, adjacent literal concatenation, or octal/hex string escapes.
-
-本分支不实现上述 variadic call ABI，也不宣称 character literal、`sizeof(string_literal)`、相邻字符串拼接或八/十六进制 string escape。
+Run #864 的 first diagnostic 位于第一个 `string1 == ((void *)0)` 比较结束处。当前 MiniC binary comparison type 仍只接受 integer，因此下一条独立能力明确为 **pointer equality / null-pointer comparison**；后面的 `||` 尚未成为 first diagnostic，继续保持后续独立能力。
 
 ## Validation / 验证
 
-Discovery Run #857 passed:
+Discovery Run #864 passed:
 
 - source inventory and clang-format 18;
 - Debug host checks;
@@ -82,13 +83,14 @@ Discovery Run #857 passed:
 - ASan/UBSan;
 - static-local focused gate;
 - variadic-declaration focused gate;
+- mixed MiniC→GCC variadic caller ABI gate (`exit=0`);
 - RV64/QEMU focused gate;
-- all 48 GCC/MiniC differential programs, including `string_literals` with exit 0;
+- all 48 GCC/MiniC differential programs;
 - frozen tiny-AES AES-128 ECB acceptance.
 
-Its only failure was the intentionally stale cJSON string-literal frontier, which exposed the variadic-call diagnostic above. The probe is now advanced to that exact diagnostic. A final clean-head run must also include the added lexer boundary regressions before this branch can merge.
+Its only failure was the intentionally stale cJSON variadic-call frontier. The probe is now advanced to line 131 column 32 and also pins the preprocessed pointer/null comparison line. A final clean-head run is required before this branch can merge.
 
-Run #857 通过 source inventory、clang-format 18、Debug、Release `-Werror`、ASan/UBSan、static-local focused、variadic declaration focused、RV64/QEMU、全部 48 个 GCC/MiniC 差分程序（其中 `string_literals exit=0`）以及冻结 tiny-AES；唯一失败是故意过期的 cJSON string-literal 前沿，由此发现上述 variadic-call 边界。probe 已同步，合并前还必须让包含新增 Lexer 边界回归的最新 Head 通过 final clean run。
+Run #864 通过 source inventory、clang-format 18、Debug、Release `-Werror`、ASan/UBSan、static-local focused、variadic declaration focused、MiniC→GCC mixed variadic ABI（exit=0）、RV64/QEMU、全部 48 个 GCC/MiniC 差分程序以及冻结 tiny-AES；唯一失败是故意过期的 cJSON variadic-call 前沿。probe 已推进到 line 131 column 32，并锁定对应 pointer/null comparison 的预处理文本；合并前还需最新 Head final clean run。
 
 ## Completion result / 完成标志
 
