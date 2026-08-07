@@ -15,15 +15,84 @@ static int hexadecimal_digit_value(char character) {
     return -1;
 }
 
+static bool parse_character_value(MinicParser *parser, int *value) {
+    MinicSourceSpan span;
+    size_t length;
+    size_t offset;
+    char character;
+
+    span = parser->current.span;
+    length = span.end.offset - span.begin.offset;
+    if (length != 3U && length != 4U) {
+        minic_parser_error(parser, "invalid character constant");
+        return false;
+    }
+    offset = span.begin.offset + 1U;
+    character = parser->source[offset];
+    if (character != '\\') {
+        *value = (int)(unsigned char)character;
+        return minic_parser_advance(parser);
+    }
+
+    character = parser->source[offset + 1U];
+    switch (character) {
+    case '0':
+        *value = 0;
+        break;
+    case 'a':
+        *value = '\a';
+        break;
+    case 'b':
+        *value = '\b';
+        break;
+    case 'f':
+        *value = '\f';
+        break;
+    case 'n':
+        *value = '\n';
+        break;
+    case 'r':
+        *value = '\r';
+        break;
+    case 't':
+        *value = '\t';
+        break;
+    case 'v':
+        *value = '\v';
+        break;
+    case '\\':
+        *value = '\\';
+        break;
+    case '\'':
+        *value = '\'';
+        break;
+    case '"':
+        *value = '"';
+        break;
+    case '?':
+        *value = '?';
+        break;
+    default:
+        minic_parser_error(parser, "unsupported character escape");
+        return false;
+    }
+    return minic_parser_advance(parser);
+}
+
 bool minic_parser_parse_integer_value(MinicParser *parser, int *value) {
     MinicSourceSpan span;
     size_t offset;
     unsigned long parsed;
     unsigned long base;
 
-    if (value == NULL || parser->current.kind != MINIC_TOKEN_INTEGER_CONSTANT) {
-        minic_parser_error(parser, "expected integer constant");
+    if (value == NULL ||
+        (parser->current.kind != MINIC_TOKEN_INTEGER_CONSTANT &&
+         parser->current.kind != MINIC_TOKEN_CHARACTER_CONSTANT)) {
+        minic_parser_error(parser, "expected integer or character constant");
         return false;
+    }
+    if (parser->current.kind == MINIC_TOKEN_CHARACTER_CONSTANT) {
+        return parse_character_value(parser, value);
     }
 
     span = parser->current.span;
