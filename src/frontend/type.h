@@ -13,6 +13,7 @@ typedef size_t MinicArrayTypeId;
 typedef enum MinicTypeBaseKind {
     MINIC_TYPE_BASE_VOID = 0,
     MINIC_TYPE_BASE_INT,
+    MINIC_TYPE_BASE_DOUBLE,
     MINIC_TYPE_BASE_RECORD,
     MINIC_TYPE_BASE_ARRAY
 } MinicTypeBaseKind;
@@ -53,6 +54,7 @@ MinicType minic_type_int(void);
 MinicType minic_type_unsigned_int(void);
 MinicType minic_type_long(void);
 MinicType minic_type_unsigned_long(void);
+MinicType minic_type_double(void);
 MinicType minic_type_record(MinicRecordId record_id);
 MinicType minic_type_array(MinicArrayTypeId array_type_id);
 bool minic_type_add_const(MinicType type, MinicType *result);
@@ -71,6 +73,7 @@ bool minic_type_is_plain_char(MinicType type);
 bool minic_type_is_long_integer(MinicType type);
 bool minic_type_is_signed_integer(MinicType type);
 bool minic_type_is_unsigned_integer(MinicType type);
+bool minic_type_is_double(MinicType type);
 bool minic_type_is_record(MinicType type);
 bool minic_type_is_array(MinicType type);
 bool minic_type_is_pointer(MinicType type);

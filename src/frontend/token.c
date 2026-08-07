@@ -12,6 +12,8 @@ const char *minic_token_kind_name(MinicTokenKind kind) {
         return "integer constant";
     case MINIC_TOKEN_KW_CHAR:
         return "char";
+    case MINIC_TOKEN_KW_DOUBLE:
+        return "double";
     case MINIC_TOKEN_KW_INT:
         return "int";
     case MINIC_TOKEN_KW_LONG:

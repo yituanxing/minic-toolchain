@@ -39,6 +39,11 @@ bool minic_riscv64_type_layout(const MinicC0Program *program,
         }
         return true;
     }
+    if (minic_type_is_double(type)) {
+        *size = 8U;
+        *alignment = 8U;
+        return true;
+    }
     if (minic_type_is_record(type)) {
         const MinicRecord *record;
 

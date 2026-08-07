@@ -17,6 +17,20 @@ static MinicType minic_type_integer(MinicIntegerSign sign, MinicIntegerRank rank
     return type;
 }
 
+static MinicType minic_type_scalar(MinicTypeBaseKind base_kind) {
+    MinicType type;
+
+    type.base_kind = base_kind;
+    type.record_id = MINIC_RECORD_INVALID;
+    type.array_type_id = MINIC_ARRAY_TYPE_INVALID;
+    type.integer_sign = MINIC_INTEGER_SIGN_NONE;
+    type.integer_rank = MINIC_INTEGER_RANK_NONE;
+    type.is_plain_char = false;
+    type.base_qualifiers = MINIC_TYPE_QUALIFIER_NONE;
+    type.pointer_depth = 0U;
+    return type;
+}
+
 static bool minic_type_same_unqualified_identity(MinicType left, MinicType right) {
     return left.base_kind == right.base_kind && left.record_id == right.record_id &&
            left.array_type_id == right.array_type_id && left.integer_sign == right.integer_sign &&
@@ -43,17 +57,7 @@ static bool minic_type_plain_char_identity_is_valid(MinicType type) {
 }
 
 MinicType minic_type_void(void) {
-    MinicType type;
-
-    type.base_kind = MINIC_TYPE_BASE_VOID;
-    type.record_id = MINIC_RECORD_INVALID;
-    type.array_type_id = MINIC_ARRAY_TYPE_INVALID;
-    type.integer_sign = MINIC_INTEGER_SIGN_NONE;
-    type.integer_rank = MINIC_INTEGER_RANK_NONE;
-    type.is_plain_char = false;
-    type.base_qualifiers = MINIC_TYPE_QUALIFIER_NONE;
-    type.pointer_depth = 0U;
-    return type;
+    return minic_type_scalar(MINIC_TYPE_BASE_VOID);
 }
 
 MinicType minic_type_char(void) {
@@ -84,31 +88,23 @@ MinicType minic_type_unsigned_long(void) {
     return minic_type_integer(MINIC_INTEGER_SIGN_UNSIGNED, MINIC_INTEGER_RANK_LONG);
 }
 
+MinicType minic_type_double(void) {
+    return minic_type_scalar(MINIC_TYPE_BASE_DOUBLE);
+}
+
 MinicType minic_type_record(MinicRecordId record_id) {
     MinicType type;
 
-    type.base_kind = MINIC_TYPE_BASE_RECORD;
+    type = minic_type_scalar(MINIC_TYPE_BASE_RECORD);
     type.record_id = record_id;
-    type.array_type_id = MINIC_ARRAY_TYPE_INVALID;
-    type.integer_sign = MINIC_INTEGER_SIGN_NONE;
-    type.integer_rank = MINIC_INTEGER_RANK_NONE;
-    type.is_plain_char = false;
-    type.base_qualifiers = MINIC_TYPE_QUALIFIER_NONE;
-    type.pointer_depth = 0U;
     return type;
 }
 
 MinicType minic_type_array(MinicArrayTypeId array_type_id) {
     MinicType type;
 
-    type.base_kind = MINIC_TYPE_BASE_ARRAY;
-    type.record_id = MINIC_RECORD_INVALID;
+    type = minic_type_scalar(MINIC_TYPE_BASE_ARRAY);
     type.array_type_id = array_type_id;
-    type.integer_sign = MINIC_INTEGER_SIGN_NONE;
-    type.integer_rank = MINIC_INTEGER_RANK_NONE;
-    type.is_plain_char = false;
-    type.base_qualifiers = MINIC_TYPE_QUALIFIER_NONE;
-    type.pointer_depth = 0U;
     return type;
 }
 
@@ -209,7 +205,8 @@ bool minic_type_integer_common(MinicType left, MinicType right, MinicType *resul
 }
 
 bool minic_type_assignment_compatible(MinicType target, MinicType source) {
-    if (minic_type_is_integer(target) && minic_type_is_integer(source)) {
+    if ((minic_type_is_integer(target) && minic_type_is_integer(source)) ||
+        (minic_type_is_double(target) && minic_type_is_double(source))) {
         return true;
     }
     return minic_type_equal(target, source) ||
@@ -264,6 +261,14 @@ bool minic_type_is_signed_integer(MinicType type) {
 
 bool minic_type_is_unsigned_integer(MinicType type) {
     return minic_type_is_integer(type) && type.integer_sign == MINIC_INTEGER_SIGN_UNSIGNED;
+}
+
+bool minic_type_is_double(MinicType type) {
+    return type.base_kind == MINIC_TYPE_BASE_DOUBLE && type.record_id == MINIC_RECORD_INVALID &&
+           type.array_type_id == MINIC_ARRAY_TYPE_INVALID &&
+           type.integer_sign == MINIC_INTEGER_SIGN_NONE &&
+           type.integer_rank == MINIC_INTEGER_RANK_NONE && !type.is_plain_char &&
+           type.pointer_depth == 0U;
 }
 
 bool minic_type_is_record(MinicType type) {
