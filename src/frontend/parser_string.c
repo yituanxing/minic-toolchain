@@ -82,9 +82,10 @@ static bool decoded_string_length(MinicParser *parser, MinicSourceSpan span, siz
 }
 
 static bool
-add_string_initializers(MinicParser *parser,
-                        MinicSourceSpan span,
-                        MinicGlobalObjectId object_id) {
+add_string_initializers(
+    MinicParser *parser,
+    MinicSourceSpan span,
+    MinicGlobalObjectId object_id) {
     size_t cursor;
     size_t end;
 
