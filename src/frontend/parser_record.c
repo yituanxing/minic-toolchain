@@ -155,7 +155,6 @@ static bool parse_record_field(MinicParser *parser, MinicRecordId record_id) {
 }
 
 bool minic_parser_parse_record_definition_specifier(MinicParser *parser, MinicType *record_type) {
-    MinicSourceSpan name_span;
     MinicRecordId record_id;
 
     if (record_type == NULL) {
@@ -165,28 +164,38 @@ bool minic_parser_parse_record_definition_specifier(MinicParser *parser, MinicTy
     if (!minic_parser_expect(parser, MINIC_TOKEN_KW_STRUCT, "expected keyword 'struct'")) {
         return false;
     }
-    if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
-        minic_parser_error(parser, "expected record tag after 'struct'");
+
+    if (parser->current.kind == MINIC_TOKEN_IDENTIFIER) {
+        MinicSourceSpan name_span;
+
+        name_span = parser->current.span;
+        if (minic_parser_find_record(parser, name_span) != MINIC_RECORD_INVALID) {
+            minic_parser_error(parser, "duplicate record definition");
+            return false;
+        }
+        if (!minic_c0_program_add_record(parser->program,
+                                         parser->source + name_span.begin.offset,
+                                         minic_parser_span_length(name_span),
+                                         &record_id)) {
+            minic_parser_error(parser, "out of memory while adding record");
+            return false;
+        }
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
+    } else if (parser->current.kind == MINIC_TOKEN_LBRACE) {
+        if (!minic_c0_program_add_anonymous_record(parser->program, &record_id)) {
+            minic_parser_error(parser, "out of memory while adding anonymous record");
+            return false;
+        }
+    } else {
+        minic_parser_error(parser, "expected record tag or '{' after 'struct'");
         return false;
     }
 
-    name_span = parser->current.span;
-    if (minic_parser_find_record(parser, name_span) != MINIC_RECORD_INVALID) {
-        minic_parser_error(parser, "duplicate record definition");
+    if (!minic_parser_expect(parser, MINIC_TOKEN_LBRACE, "expected '{' after record specifier")) {
         return false;
     }
-    if (!minic_c0_program_add_record(parser->program,
-                                     parser->source + name_span.begin.offset,
-                                     minic_parser_span_length(name_span),
-                                     &record_id)) {
-        minic_parser_error(parser, "out of memory while adding record");
-        return false;
-    }
-    if (!minic_parser_advance(parser) ||
-        !minic_parser_expect(parser, MINIC_TOKEN_LBRACE, "expected '{' after record tag")) {
-        return false;
-    }
-
     while (parser->current.kind != MINIC_TOKEN_RBRACE) {
         if (parser->current.kind == MINIC_TOKEN_EOF) {
             minic_parser_error(parser, "expected '}' before end of file");
