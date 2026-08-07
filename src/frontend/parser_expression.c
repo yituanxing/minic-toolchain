@@ -105,26 +105,20 @@ static bool parse_global_reference(MinicParser *parser,
     const MinicGlobalObject *object;
     MinicExpression base_expression;
     MinicExpressionId base_id;
-    bool require_subscript;
+    bool array_object;
 
     object = minic_c0_program_global_object(parser->program, global_object_id);
     if (object == NULL) {
         minic_parser_error(parser, "invalid global object reference");
         return false;
     }
-    require_subscript = false;
-    if (minic_type_is_array(object->type)) {
-        if (parser->current.kind != MINIC_TOKEN_LBRACKET) {
-            minic_parser_error(parser, "global array object requires a subscript");
-            return false;
-        }
-        require_subscript = true;
-    } else if (minic_type_is_record(object->type)) {
+    array_object = minic_type_is_array(object->type);
+    if (!array_object && minic_type_is_record(object->type)) {
         if (parser->current.kind != MINIC_TOKEN_DOT) {
             minic_parser_error(parser, "global record object requires member access");
             return false;
         }
-    } else {
+    } else if (!array_object) {
         minic_parser_error(parser, "invalid global object reference");
         return false;
     }
@@ -138,7 +132,7 @@ static bool parse_global_reference(MinicParser *parser,
     if (!minic_parser_add_expression(parser, &base_expression, &base_id)) {
         return false;
     }
-    return minic_parser_parse_postfix(parser, base_id, require_subscript, expression_id);
+    return minic_parser_parse_postfix(parser, base_id, array_object, expression_id);
 }
 
 static bool token_starts_cast_type(const MinicParser *parser, MinicToken token) {
