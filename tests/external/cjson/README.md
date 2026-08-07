@@ -50,39 +50,33 @@ External GCC may preprocess, assemble, link, and provide CRT/libc. MiniC must co
 
 The clean-checkout probe derives target-correct RV64 `size_t` from `__SIZE_TYPE__` and verifies the pinned source identities offline.
 
-MiniC now crosses the previously recorded foundations in the unchanged core, including native LONG semantics, self-referential tagged records, distinct plain `char`, `double` and `float` object types, function-pointer record fields, per-pointer-level `const`, anonymous struct typedefs, and now **zero-initialized internal static record objects**.
+MiniC now crosses the previously recorded foundations in the unchanged core, including native LONG semantics, self-referential tagged records, distinct plain `char`, `double` and `float` object types, function-pointer record fields, per-pointer-level `const`, anonymous struct typedefs, zero-initialized internal static record objects, and now **ordinary direct `.` member access on record lvalues**.
 
-MiniC 现已越过原生 LONG、自引用标签结构体、独立 plain `char`、`double`/`float` 对象类型、函数指针字段、逐级指针 `const`、匿名 struct typedef，以及当前新增的**内部静态 record 全零初始化对象**。
+MiniC 现已越过原生 LONG、自引用标签结构体、独立 plain `char`、`double`/`float` 对象类型、函数指针字段、逐级指针 `const`、匿名 struct typedef、内部静态 record 全零初始化对象，以及当前新增的 **record 左值普通 `.` 成员访问**。
 
-The accepted static-record slice is intentionally bounded to aggregate initializers whose semantic value is all zero. Integer fields accept only `0`; pointer fields accept null pointer constants such as preprocessed `((void *)0)`; nested complete record fields are checked recursively. The AST records whole-object zero initialization separately from the existing flat integer-array initializer list, target layout determines the exact storage size, and RV64 emission uses `.zero <size>` in the appropriate data section. Arbitrary nonzero aggregate constants remain outside this branch.
+Direct member access reuses the existing pointer-member AST and RV64 lowering contract. The parser validates a record lvalue, forms its address, and feeds that pointer into the same MEMBER representation used by `->`. Static record globals may enter expression parsing when immediately followed by `.`, while unsupported bare global-record value use remains rejected.
 
-当前静态 record 能力刻意限制为语义全零的聚合初始化：整数字段只接受 `0`，指针字段接受预处理后的 `((void *)0)` 等空指针常量，完整嵌套 record 递归校验。AST 将 whole-object zero initialization 与现有整数数组初始化列表分离，目标布局给出精确对象尺寸，RV64 以 `.zero <size>` 发射；任意非零聚合常量仍不在本分支范围内。
+直接成员访问复用既有 pointer-member AST 与 RV64 lowering 契约：Parser 校验 record 左值并取得地址，再将该指针送入与 `->` 相同的 MEMBER 表示。静态 record 全局对象在后接 `.` 时可以进入表达式解析，而尚未支持的裸全局 record 值使用继续被拒绝。
 
-The unchanged cJSON source therefore crosses:
-
-```c
-static error global_error = { NULL, 0 };
-```
-
-and reaches the first direct record-object member expression:
+The unchanged cJSON source now crosses:
 
 ```c
 return (const char*) (global_error.json + global_error.position);
 ```
 
-The exact first MiniC diagnostic is:
+The next exact diagnostic occurs at the closing brace of that pointer-returning function:
 
 ```text
-cJSON.i:104:39: error: unexpected character '.'
+cJSON.i:105:1: error: unsupported implicit return type
 ```
 
-The active blocker is **ordinary `.` member access on a record object**. MiniC already has pointer-member `->`; direct-object member syntax and semantics are a separate, independently reviewable parser/AST capability and are not folded into the static-global initializer branch.
+This diagnostic comes from MiniC's function-completion path: it currently synthesizes a default trailing return for every function and supports that synthetic completion only for integer and `void` return types. `cJSON_GetErrorPtr` returns `const char *`, so the next independently reviewable capability is **pointer-return function completion / fallthrough handling**, not additional record-member syntax.
 
-因此当前真实缺口已经转为 **record 对象上的普通 `.` 成员访问**。MiniC 已支持指针成员 `->`；直接对象成员的词法、Parser 与 AST 语义属于独立能力，不并入静态全局初始化分支。
+该诊断来自 MiniC 的函数收尾路径：当前每个函数都会补一个默认尾部 return，而该 synthetic completion 目前只支持整数和 `void` 返回类型。`cJSON_GetErrorPtr` 返回 `const char *`，因此下一条独立能力是 **指针返回函数的 completion / fallthrough 处理**，而不是继续扩展 record 成员语法。
 
-`tests/external/cjson/probe.sh` permanently verifies stable early declarations, the float prototype at preprocessed line 61, the anonymous `typedef struct {` at line 97, the static `global_error` declaration at line 101, and the direct-member expression at line 104, and requires the exact line-104 diagnostic. Crossing that boundary intentionally fails the gate until the next bounded branch records the following real source frontier.
+`tests/external/cjson/probe.sh` permanently verifies stable early declarations, the float prototype at preprocessed line 61, the anonymous `typedef struct {` at line 97, the static `global_error` declaration at line 101, the crossed direct-member expression at line 104, and the closing brace at line 105. It requires the exact line-105 function-completion diagnostic. Crossing that boundary intentionally fails the gate until the next bounded branch records the following real source frontier.
 
-`tests/external/cjson/probe.sh` 永久锚定稳定早期声明、预处理第 61 行的 `float` 原型、第 97 行匿名 `typedef struct {`、第 101 行静态 `global_error` 声明以及第 104 行直接成员表达式，并要求精确的 line-104 诊断。后续越过该边界时，门禁会主动失败，直到下一条范围受限分支记录新的真实源码前沿。
+`tests/external/cjson/probe.sh` 永久锚定稳定早期声明、预处理第 61 行的 `float` 原型、第 97 行匿名 `typedef struct {`、第 101 行静态 `global_error` 声明、已越过的第 104 行直接成员表达式，以及第 105 行函数闭合位置，并要求精确的 line-105 函数收尾诊断。后续越过该边界时，门禁会主动失败，直到下一条范围受限分支记录新的真实源码前沿。
 
 ## Validation ladder / 验证阶梯
 
