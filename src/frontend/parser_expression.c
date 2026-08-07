@@ -257,6 +257,13 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
         }
         return finish_value_expression(parser, primary_id, decay_array, expression_id);
     }
+    if (parser->current.kind == MINIC_TOKEN_STRING_LITERAL) {
+        if (!minic_parser_parse_string_literal(parser, &primary_id) ||
+            !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
+            return false;
+        }
+        return finish_value_expression(parser, primary_id, decay_array, expression_id);
+    }
     if (parser->current.kind == MINIC_TOKEN_IDENTIFIER) {
         name_span = parser->current.span;
         local_id = minic_parser_find_local(parser, name_span);
