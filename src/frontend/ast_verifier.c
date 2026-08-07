@@ -23,11 +23,13 @@ static bool type_is_valid(const MinicC0Program *program, MinicType type) {
     case MINIC_TYPE_BASE_VOID:
         return type.record_id == MINIC_RECORD_INVALID &&
                type.array_type_id == MINIC_ARRAY_TYPE_INVALID &&
+               type.function_type_id == MINIC_FUNCTION_TYPE_INVALID &&
                type.integer_sign == MINIC_INTEGER_SIGN_NONE &&
                type.integer_rank == MINIC_INTEGER_RANK_NONE;
     case MINIC_TYPE_BASE_INT:
         return type.record_id == MINIC_RECORD_INVALID &&
                type.array_type_id == MINIC_ARRAY_TYPE_INVALID &&
+               type.function_type_id == MINIC_FUNCTION_TYPE_INVALID &&
                (type.integer_sign == MINIC_INTEGER_SIGN_SIGNED ||
                 type.integer_sign == MINIC_INTEGER_SIGN_UNSIGNED) &&
                (type.integer_rank == MINIC_INTEGER_RANK_CHAR ||
@@ -36,16 +38,26 @@ static bool type_is_valid(const MinicC0Program *program, MinicType type) {
     case MINIC_TYPE_BASE_DOUBLE:
         return type.record_id == MINIC_RECORD_INVALID &&
                type.array_type_id == MINIC_ARRAY_TYPE_INVALID &&
+               type.function_type_id == MINIC_FUNCTION_TYPE_INVALID &&
                type.integer_sign == MINIC_INTEGER_SIGN_NONE &&
                type.integer_rank == MINIC_INTEGER_RANK_NONE && !type.is_plain_char;
+    case MINIC_TYPE_BASE_FUNCTION:
+        return type.record_id == MINIC_RECORD_INVALID &&
+               type.array_type_id == MINIC_ARRAY_TYPE_INVALID &&
+               type.function_type_id < program->function_type_count &&
+               type.integer_sign == MINIC_INTEGER_SIGN_NONE &&
+               type.integer_rank == MINIC_INTEGER_RANK_NONE && !type.is_plain_char &&
+               type.base_qualifiers == MINIC_TYPE_QUALIFIER_NONE;
     case MINIC_TYPE_BASE_RECORD:
         return type.record_id < program->record_count &&
                type.array_type_id == MINIC_ARRAY_TYPE_INVALID &&
+               type.function_type_id == MINIC_FUNCTION_TYPE_INVALID &&
                type.integer_sign == MINIC_INTEGER_SIGN_NONE &&
                type.integer_rank == MINIC_INTEGER_RANK_NONE;
     case MINIC_TYPE_BASE_ARRAY:
         return type.record_id == MINIC_RECORD_INVALID &&
                type.array_type_id < program->array_type_count &&
+               type.function_type_id == MINIC_FUNCTION_TYPE_INVALID &&
                type.integer_sign == MINIC_INTEGER_SIGN_NONE &&
                type.integer_rank == MINIC_INTEGER_RANK_NONE;
     }
@@ -55,7 +67,7 @@ static bool type_is_valid(const MinicC0Program *program, MinicType type) {
 static bool type_is_complete_object_bounded(const MinicC0Program *program,
                                             MinicType type,
                                             size_t remaining_depth) {
-    if (remaining_depth == 0U || minic_type_is_void(type)) {
+    if (remaining_depth == 0U || minic_type_is_void(type) || minic_type_is_function(type)) {
         return false;
     }
     if (minic_type_is_integer(type) || minic_type_is_double(type) || minic_type_is_pointer(type)) {
@@ -79,8 +91,13 @@ static bool type_is_complete_object_bounded(const MinicC0Program *program,
 }
 
 static bool type_is_complete_object(const MinicC0Program *program, MinicType type) {
-    return type_is_complete_object_bounded(
-        program, type, program->array_type_count + program->record_count + 1U);
+    size_t remaining_depth;
+
+    remaining_depth = program->array_type_count;
+    remaining_depth += program->record_count;
+    remaining_depth += program->function_type_count;
+    remaining_depth += 1U;
+    return type_is_complete_object_bounded(program, type, remaining_depth);
 }
 
 static const MinicExpression *expression_before(const MinicC0Program *program,
@@ -401,6 +418,9 @@ static bool verify_program_storage(const MinicC0Program *program) {
            storage_is_valid(program->records, program->record_count, program->record_capacity) &&
            storage_is_valid(
                program->array_types, program->array_type_count, program->array_type_capacity) &&
+           storage_is_valid(program->function_types,
+                            program->function_type_count,
+                            program->function_type_capacity) &&
            storage_is_valid(
                program->type_aliases, program->type_alias_count, program->type_alias_capacity) &&
            storage_is_valid(program->global_objects,
@@ -420,8 +440,29 @@ bool minic_c0_program_verify(const MinicC0Program *program, MinicC0AstForm form)
         const MinicArrayType *array_type;
 
         array_type = &program->array_types[index];
-        if (array_type->element_count == 0U || !type_is_valid(program, array_type->element_type)) {
+        if (array_type->element_count == 0U || !type_is_valid(program, array_type->element_type) ||
+            minic_type_is_function(array_type->element_type)) {
             return false;
+        }
+    }
+    for (index = 0U; index < program->function_type_count; ++index) {
+        const MinicFunctionType *function_type;
+        size_t parameter_index;
+
+        function_type = &program->function_types[index];
+        if (function_type->parameter_count > 8U ||
+            !type_is_valid(program, function_type->return_type) ||
+            minic_type_is_array(function_type->return_type) ||
+            minic_type_is_function(function_type->return_type)) {
+            return false;
+        }
+        for (parameter_index = 0U; parameter_index < function_type->parameter_count;
+             ++parameter_index) {
+            if (!type_is_valid(program, function_type->parameter_types[parameter_index]) ||
+                minic_type_is_void(function_type->parameter_types[parameter_index]) ||
+                minic_type_is_function(function_type->parameter_types[parameter_index])) {
+                return false;
+            }
         }
     }
     for (index = 0U; index < program->record_count; ++index) {
@@ -438,14 +479,15 @@ bool minic_c0_program_verify(const MinicC0Program *program, MinicC0AstForm form)
 
             field = &record->fields[field_index];
             if (field->name == NULL || field->element_count == 0U ||
-                !type_is_valid(program, field->type)) {
+                !type_is_valid(program, field->type) || minic_type_is_function(field->type)) {
                 return false;
             }
         }
     }
     for (index = 0U; index < program->local_count; ++index) {
         if (program->locals[index].element_count == 0U ||
-            !type_is_valid(program, program->locals[index].type)) {
+            !type_is_valid(program, program->locals[index].type) ||
+            minic_type_is_function(program->locals[index].type)) {
             return false;
         }
     }
@@ -456,6 +498,8 @@ bool minic_c0_program_verify(const MinicC0Program *program, MinicC0AstForm form)
         function = &program->functions[index];
         if (function->name == NULL || function->parameter_count > 8U ||
             !type_is_valid(program, function->return_type) ||
+            minic_type_is_function(function->return_type) ||
+            minic_type_is_array(function->return_type) ||
             function->local_begin > program->local_count ||
             function->local_count > program->local_count - function->local_begin ||
             (function->is_defined && function->body_block >= program->block_count) ||
@@ -464,14 +508,16 @@ bool minic_c0_program_verify(const MinicC0Program *program, MinicC0AstForm form)
         }
         for (parameter_index = 0U; parameter_index < function->parameter_count; ++parameter_index) {
             if (!type_is_valid(program, function->parameter_types[parameter_index]) ||
-                minic_type_is_void(function->parameter_types[parameter_index])) {
+                minic_type_is_void(function->parameter_types[parameter_index]) ||
+                minic_type_is_function(function->parameter_types[parameter_index])) {
                 return false;
             }
         }
     }
     for (index = 0U; index < program->type_alias_count; ++index) {
         if (program->type_aliases[index].name == NULL ||
-            !type_is_valid(program, program->type_aliases[index].type)) {
+            !type_is_valid(program, program->type_aliases[index].type) ||
+            minic_type_is_function(program->type_aliases[index].type)) {
             return false;
         }
     }
@@ -480,6 +526,7 @@ bool minic_c0_program_verify(const MinicC0Program *program, MinicC0AstForm form)
 
         object = &program->global_objects[index];
         if (object->name == NULL || !type_is_valid(program, object->type) ||
+            minic_type_is_function(object->type) ||
             !storage_is_valid(object->initializer_values,
                               object->initializer_count,
                               object->initializer_capacity)) {

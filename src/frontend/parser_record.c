@@ -20,6 +20,65 @@ record_has_field(const MinicParser *parser, const MinicRecord *record, MinicSour
     return false;
 }
 
+static bool parse_function_pointer_field_declarator(MinicParser *parser,
+                                                    MinicType return_type,
+                                                    MinicSourceSpan *name_span,
+                                                    MinicType *field_type) {
+    MinicType parameter_types[8];
+    MinicType function_type;
+    size_t parameter_count;
+    size_t pointer_depth;
+
+    parameter_count = 0U;
+    pointer_depth = 0U;
+    (void)memset(parameter_types, 0, sizeof(parameter_types));
+
+    if (!minic_parser_expect(
+            parser, MINIC_TOKEN_LPAREN, "expected '(' before function pointer declarator")) {
+        return false;
+    }
+    while (parser->current.kind == MINIC_TOKEN_STAR) {
+        pointer_depth += 1U;
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
+    }
+    if (pointer_depth == 0U) {
+        minic_parser_error(parser, "function pointer declarator requires '*'");
+        return false;
+    }
+    if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
+        minic_parser_error(parser, "expected function pointer field name");
+        return false;
+    }
+    *name_span = parser->current.span;
+    if (!minic_parser_advance(parser) ||
+        !minic_parser_expect(
+            parser, MINIC_TOKEN_RPAREN, "expected ')' after function pointer field name") ||
+        !minic_parser_expect(
+            parser, MINIC_TOKEN_LPAREN, "expected '(' before function pointer parameters") ||
+        !minic_parser_parse_parameter_list(
+            parser, NULL, parameter_types, &parameter_count, false) ||
+        !minic_parser_expect(
+            parser, MINIC_TOKEN_RPAREN, "expected ')' after function pointer parameters")) {
+        return false;
+    }
+    if (!minic_c0_program_add_function_type(
+            parser->program, return_type, parameter_types, parameter_count, &function_type)) {
+        minic_parser_error(parser, "cannot build function pointer field type");
+        return false;
+    }
+    while (pointer_depth > 0U) {
+        if (!minic_type_pointer_to(function_type, &function_type)) {
+            minic_parser_error(parser, "function pointer declarator depth is unsupported");
+            return false;
+        }
+        pointer_depth -= 1U;
+    }
+    *field_type = function_type;
+    return true;
+}
+
 static bool parse_record_field(MinicParser *parser, MinicRecordId record_id) {
     MinicSourceSpan name_span;
     MinicType base_type;
@@ -31,6 +90,21 @@ static bool parse_record_field(MinicParser *parser, MinicRecordId record_id) {
         !minic_parser_parse_pointer_declarator(parser, base_type, &field_type)) {
         return false;
     }
+    if (parser->current.kind == MINIC_TOKEN_LPAREN) {
+        if (!parse_function_pointer_field_declarator(parser, field_type, &name_span, &field_type)) {
+            return false;
+        }
+    } else {
+        if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
+            minic_parser_error(parser, "expected record field name");
+            return false;
+        }
+        name_span = parser->current.span;
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
+    }
+
     if (minic_type_is_void(field_type)) {
         minic_parser_error(parser, "record field cannot have void type");
         return false;
@@ -43,12 +117,7 @@ static bool parse_record_field(MinicParser *parser, MinicRecordId record_id) {
             parser, field_type, "record field cannot use incomplete type by value")) {
         return false;
     }
-    if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
-        minic_parser_error(parser, "expected record field name");
-        return false;
-    }
 
-    name_span = parser->current.span;
     record = minic_c0_program_record(parser->program, record_id);
     if (record == NULL) {
         minic_parser_error(parser, "invalid record while adding field");
@@ -58,12 +127,13 @@ static bool parse_record_field(MinicParser *parser, MinicRecordId record_id) {
         minic_parser_error(parser, "duplicate record field");
         return false;
     }
-    if (!minic_parser_advance(parser)) {
-        return false;
-    }
 
     element_count = 1U;
     if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
+        if (minic_type_is_pointer(field_type) && field_type.base_kind == MINIC_TYPE_BASE_FUNCTION) {
+            minic_parser_error(parser, "function pointer field arrays are unsupported");
+            return false;
+        }
         if (!minic_parser_advance(parser) ||
             !minic_parser_parse_fixed_array_bound(parser, &element_count)) {
             return false;
@@ -119,7 +189,7 @@ bool minic_parser_parse_record_definition_specifier(MinicParser *parser, MinicTy
 
     while (parser->current.kind != MINIC_TOKEN_RBRACE) {
         if (parser->current.kind == MINIC_TOKEN_EOF) {
-            minic_parser_error(parser, "expected '}' before end of record");
+            minic_parser_error(parser, "expected '}' before end of file");
             return false;
         }
         if (!parse_record_field(parser, record_id)) {

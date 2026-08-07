@@ -47,6 +47,11 @@ bool minic_parser_parse_type_name(MinicParser *parser, MinicType *type);
 bool minic_parser_require_complete_object_type(MinicParser *parser,
                                                MinicType type,
                                                const char *message);
+bool minic_parser_parse_parameter_list(MinicParser *parser,
+                                       MinicSourceSpan *parameter_name_spans,
+                                       MinicType *parameter_types,
+                                       size_t *parameter_count,
+                                       bool require_names);
 bool minic_parser_parse_fixed_array_bound(MinicParser *parser, size_t *element_count);
 size_t minic_parser_span_length(MinicSourceSpan span);
 bool minic_parser_span_equals(const MinicParser *parser,
