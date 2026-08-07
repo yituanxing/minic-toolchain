@@ -8,6 +8,7 @@ block_scope
 standalone_block
 array_subscript
 array_decay
+string_literals
 pointer_arithmetic
 pointer_aggregate_arithmetic
 pointer_read

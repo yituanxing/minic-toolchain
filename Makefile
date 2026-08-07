@@ -58,6 +58,7 @@ MINIC_SOURCES := \
 	src/frontend/parser_postfix.c \
 	src/frontend/parser_record.c \
 	src/frontend/parser_statement.c \
+	src/frontend/parser_string.c \
 	src/frontend/parser_type.c \
 	src/frontend/parser_typedef.c \
 	src/frontend/token.c \

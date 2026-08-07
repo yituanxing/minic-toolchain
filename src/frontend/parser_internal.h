@@ -101,6 +101,7 @@ bool minic_parser_apply_array_decay(MinicParser *parser,
 bool minic_parser_parse_postfix(MinicParser *parser,
                                 MinicExpressionId base_id,
                                 MinicExpressionId *expression_id);
+bool minic_parser_parse_string_literal(MinicParser *parser, MinicExpressionId *expression_id);
 bool minic_parser_parse_expression(MinicParser *parser,
                                    MinicExpressionId *expression_id,
                                    unsigned int minimum_precedence);

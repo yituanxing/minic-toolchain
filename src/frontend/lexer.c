@@ -185,6 +185,51 @@ static bool minic_lexer_scan_decimal_exponent(MinicLexer *lexer,
     return true;
 }
 
+static bool minic_lexer_scan_string_literal(MinicLexer *lexer,
+                                            MinicToken *token,
+                                            MinicDiagnostic *diagnostic,
+                                            MinicSourcePosition begin) {
+    minic_lexer_advance(lexer);
+    for (;;) {
+        char character;
+
+        character = minic_lexer_peek(lexer);
+        if (character == '"') {
+            minic_lexer_advance(lexer);
+            token->kind = MINIC_TOKEN_STRING_LITERAL;
+            token->span.end = minic_lexer_position(lexer);
+            return true;
+        }
+        if (character == '\0') {
+            token->span.end = minic_lexer_position(lexer);
+            minic_lexer_set_message(lexer, diagnostic, begin, "unterminated string literal");
+            return false;
+        }
+        if (character == '\n' || character == '\r') {
+            token->span.end = minic_lexer_position(lexer);
+            minic_lexer_set_message(
+                lexer, diagnostic, minic_lexer_position(lexer), "newline in string literal");
+            return false;
+        }
+        if (character == '\\') {
+            minic_lexer_advance(lexer);
+            character = minic_lexer_peek(lexer);
+            if (character == '\0') {
+                token->span.end = minic_lexer_position(lexer);
+                minic_lexer_set_message(lexer, diagnostic, begin, "unterminated string literal");
+                return false;
+            }
+            if (character == '\n' || character == '\r') {
+                token->span.end = minic_lexer_position(lexer);
+                minic_lexer_set_message(
+                    lexer, diagnostic, minic_lexer_position(lexer), "newline in string literal");
+                return false;
+            }
+        }
+        minic_lexer_advance(lexer);
+    }
+}
+
 void minic_lexer_initialize(MinicLexer *lexer,
                             const char *path,
                             const char *source,
@@ -226,6 +271,10 @@ bool minic_lexer_next(MinicLexer *lexer, MinicToken *token, MinicDiagnostic *dia
         token->kind = minic_classify_identifier(lexer->source + start, lexer->cursor - start);
         token->span.end = minic_lexer_position(lexer);
         return true;
+    }
+
+    if (character == '"') {
+        return minic_lexer_scan_string_literal(lexer, token, diagnostic, begin);
     }
 
     if (character == '.' && minic_lexer_peek_next(lexer) == '.' &&
