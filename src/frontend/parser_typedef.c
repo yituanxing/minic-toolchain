@@ -35,6 +35,10 @@ static bool typedef_starts_record_definition(MinicParser *parser, bool *is_defin
     if (!minic_parser_advance(&probe)) {
         return false;
     }
+    if (probe.current.kind == MINIC_TOKEN_LBRACE) {
+        *is_definition = true;
+        return true;
+    }
     if (probe.current.kind != MINIC_TOKEN_IDENTIFIER) {
         return true;
     }
