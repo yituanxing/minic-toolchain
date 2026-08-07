@@ -146,6 +146,7 @@ typedef struct MinicFunction {
     MinicBlockId body_block;
     bool is_defined;
     bool is_internal;
+    bool is_variadic;
 } MinicFunction;
 
 typedef struct MinicRecordField {
@@ -176,6 +177,7 @@ typedef struct MinicFunctionType {
     MinicType return_type;
     MinicType parameter_types[8];
     size_t parameter_count;
+    bool is_variadic;
 } MinicFunctionType;
 
 typedef struct MinicTypeAlias {
@@ -271,7 +273,8 @@ bool minic_c0_program_set_function_signature(MinicC0Program *program,
                                              MinicFunctionId function_id,
                                              MinicType return_type,
                                              const MinicType *parameter_types,
-                                             size_t parameter_count);
+                                             size_t parameter_count,
+                                             bool is_variadic);
 bool minic_c0_program_set_function_parameter_count(MinicC0Program *program,
                                                    MinicFunctionId function_id,
                                                    size_t parameter_count);
@@ -305,6 +308,7 @@ bool minic_c0_program_add_function_type(MinicC0Program *program,
                                         MinicType return_type,
                                         const MinicType *parameter_types,
                                         size_t parameter_count,
+                                        bool is_variadic,
                                         MinicType *function_type);
 bool minic_c0_program_add_type_alias(MinicC0Program *program,
                                      const char *name,
