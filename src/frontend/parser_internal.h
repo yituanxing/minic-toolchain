@@ -95,9 +95,11 @@ bool minic_parser_parse_pointer_member(MinicParser *parser,
 bool minic_parser_parse_direct_member(MinicParser *parser,
                                       MinicExpressionId base_id,
                                       MinicExpressionId *expression_id);
+bool minic_parser_apply_array_decay(MinicParser *parser,
+                                    MinicExpressionId input_id,
+                                    MinicExpressionId *expression_id);
 bool minic_parser_parse_postfix(MinicParser *parser,
                                 MinicExpressionId base_id,
-                                bool require_subscript,
                                 MinicExpressionId *expression_id);
 bool minic_parser_parse_expression(MinicParser *parser,
                                    MinicExpressionId *expression_id,
