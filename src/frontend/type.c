@@ -36,9 +36,9 @@ static MinicType minic_type_scalar(MinicTypeBaseKind base_kind) {
 static bool minic_type_same_unqualified_identity(MinicType left, MinicType right) {
     return left.base_kind == right.base_kind && left.record_id == right.record_id &&
            left.array_type_id == right.array_type_id &&
-           left.function_type_id == right.function_type_id && left.integer_sign == right.integer_sign &&
-           left.integer_rank == right.integer_rank && left.is_plain_char == right.is_plain_char &&
-           left.pointer_depth == right.pointer_depth;
+           left.function_type_id == right.function_type_id &&
+           left.integer_sign == right.integer_sign && left.integer_rank == right.integer_rank &&
+           left.is_plain_char == right.is_plain_char && left.pointer_depth == right.pointer_depth;
 }
 
 static bool minic_type_pointer_qualification_compatible(MinicType target, MinicType source) {
