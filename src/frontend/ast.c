@@ -252,7 +252,8 @@ bool minic_c0_program_set_function_signature(MinicC0Program *program,
     function->parameter_count = parameter_count;
     for (parameter_index = 0U; parameter_index < 8U; ++parameter_index) {
         if (parameter_index < parameter_count) {
-            function->parameter_types[parameter_index] = normalized_parameter_types[parameter_index];
+            function->parameter_types[parameter_index] =
+                normalized_parameter_types[parameter_index];
         } else {
             function->parameter_types[parameter_index] = minic_type_void();
         }
