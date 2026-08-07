@@ -21,6 +21,160 @@ MinicGlobalObjectId minic_parser_find_global_object(const MinicParser *parser,
     return MINIC_GLOBAL_OBJECT_INVALID;
 }
 
+static bool token_starts_type_name(MinicTokenKind kind) {
+    return kind == MINIC_TOKEN_KW_CONST || kind == MINIC_TOKEN_KW_CHAR ||
+           kind == MINIC_TOKEN_KW_FLOAT || kind == MINIC_TOKEN_KW_DOUBLE ||
+           kind == MINIC_TOKEN_KW_INT || kind == MINIC_TOKEN_KW_LONG ||
+           kind == MINIC_TOKEN_KW_SIGNED || kind == MINIC_TOKEN_KW_UNSIGNED ||
+           kind == MINIC_TOKEN_KW_VOID || kind == MINIC_TOKEN_KW_STRUCT ||
+           kind == MINIC_TOKEN_IDENTIFIER;
+}
+
+static bool parse_zero_pointer_constant(MinicParser *parser) {
+    if (parser->current.kind == MINIC_TOKEN_INTEGER_CONSTANT) {
+        int value;
+
+        if (!minic_parser_parse_integer_value(parser, &value)) {
+            return false;
+        }
+        if (value != 0) {
+            minic_parser_error(parser, "static pointer initializer must be null");
+            return false;
+        }
+        return true;
+    }
+
+    if (parser->current.kind == MINIC_TOKEN_LPAREN) {
+        MinicType cast_type;
+
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
+        if (token_starts_type_name(parser->current.kind)) {
+            if (!minic_parser_parse_type_name(parser, &cast_type) ||
+                !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')' after null cast") ||
+                !minic_type_is_pointer(cast_type)) {
+                if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                    minic_parser_error(parser, "static null cast requires a pointer type");
+                }
+                return false;
+            }
+            return parse_zero_pointer_constant(parser);
+        }
+        if (!parse_zero_pointer_constant(parser) ||
+            !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')' after null constant")) {
+            return false;
+        }
+        return true;
+    }
+
+    minic_parser_error(parser, "static pointer initializer must be null");
+    return false;
+}
+
+static bool parse_zero_initializer(MinicParser *parser, MinicType type) {
+    if (minic_type_is_integer(type)) {
+        int value;
+
+        if (!minic_parser_parse_integer_value(parser, &value)) {
+            return false;
+        }
+        if (value != 0) {
+            minic_parser_error(parser, "static zero initializer requires integer zero");
+            return false;
+        }
+        return true;
+    }
+    if (minic_type_is_pointer(type)) {
+        return parse_zero_pointer_constant(parser);
+    }
+    if (minic_type_is_record(type)) {
+        const MinicRecord *record;
+        size_t field_index;
+
+        record = minic_c0_program_record(parser->program, type.record_id);
+        if (record == NULL || !record->is_complete) {
+            minic_parser_error(parser, "static record initializer requires a complete record type");
+            return false;
+        }
+        if (!minic_parser_expect(parser, MINIC_TOKEN_LBRACE, "expected '{' in record initializer")) {
+            return false;
+        }
+
+        field_index = 0U;
+        while (parser->current.kind != MINIC_TOKEN_RBRACE) {
+            const MinicRecordField *field;
+
+            if (field_index >= record->field_count) {
+                minic_parser_error(parser, "too many static record initializers");
+                return false;
+            }
+            field = minic_c0_record_field(record, field_index);
+            if (field == NULL || field->element_count != 1U ||
+                (!minic_type_is_integer(field->type) && !minic_type_is_pointer(field->type) &&
+                 !minic_type_is_record(field->type))) {
+                minic_parser_error(parser, "static zero record initializer requires scalar fields");
+                return false;
+            }
+            if (!parse_zero_initializer(parser, field->type)) {
+                return false;
+            }
+            field_index += 1U;
+            if (parser->current.kind == MINIC_TOKEN_COMMA) {
+                if (!minic_parser_advance(parser)) {
+                    return false;
+                }
+                if (parser->current.kind == MINIC_TOKEN_RBRACE) {
+                    break;
+                }
+            } else if (parser->current.kind != MINIC_TOKEN_RBRACE) {
+                minic_parser_error(parser, "expected ',' or '}' in record initializer");
+                return false;
+            }
+        }
+        return minic_parser_expect(parser, MINIC_TOKEN_RBRACE, "expected '}' after record initializer");
+    }
+
+    minic_parser_error(parser, "unsupported static zero initializer type");
+    return false;
+}
+
+static bool parse_static_zero_record_global(MinicParser *parser,
+                                            MinicType record_type,
+                                            MinicSourceSpan name_span) {
+    MinicGlobalObjectId object_id;
+    const MinicRecord *record;
+
+    record = minic_c0_program_record(parser->program, record_type.record_id);
+    if (record == NULL || !record->is_complete) {
+        minic_parser_error(parser, "static record global requires a complete record type");
+        return false;
+    }
+    if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
+        minic_parser_error(parser, "static record array globals are not supported");
+        return false;
+    }
+    if (!minic_c0_program_add_global_object(parser->program,
+                                            parser->source + name_span.begin.offset,
+                                            minic_parser_span_length(name_span),
+                                            record_type,
+                                            true,
+                                            minic_type_is_const(record_type),
+                                            &object_id)) {
+        minic_parser_error(parser, "cannot add static record global");
+        return false;
+    }
+    if (!minic_parser_expect(parser, MINIC_TOKEN_EQUAL, "expected '='") ||
+        !parse_zero_initializer(parser, record_type) ||
+        !minic_c0_global_object_set_zero_initialized(parser->program, object_id)) {
+        if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+            minic_parser_error(parser, "cannot record zero-initialized global object");
+        }
+        return false;
+    }
+    return minic_parser_expect(parser, MINIC_TOKEN_SEMICOLON, "expected ';' after global object");
+}
+
 bool minic_parser_parse_static_global(MinicParser *parser) {
     MinicSourceSpan name_span;
     MinicType element_type;
@@ -37,8 +191,10 @@ bool minic_parser_parse_static_global(MinicParser *parser) {
         !minic_parser_parse_type_name(parser, &element_type)) {
         return false;
     }
-    if (!minic_type_is_integer(element_type) || !minic_type_is_const(element_type)) {
-        minic_parser_error(parser, "static global arrays currently require const integer elements");
+    if ((!minic_type_is_integer(element_type) || !minic_type_is_const(element_type)) &&
+        !minic_type_is_record(element_type)) {
+        minic_parser_error(
+            parser, "static globals require const integer arrays or zero-initialized records");
         return false;
     }
     if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
@@ -53,6 +209,10 @@ bool minic_parser_parse_static_global(MinicParser *parser) {
     }
     if (!minic_parser_advance(parser)) {
         return false;
+    }
+
+    if (minic_type_is_record(element_type)) {
+        return parse_static_zero_record_global(parser, element_type, name_span);
     }
 
     while (parser->current.kind == MINIC_TOKEN_LBRACKET) {
