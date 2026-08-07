@@ -59,11 +59,11 @@ static bool parse_function_pointer_parameters(MinicParser *parser,
     }
 }
 
-static bool
-parse_function_pointer_field_declarator(MinicParser *parser,
-                                        MinicType return_type,
-                                        MinicSourceSpan *name_span,
-                                        MinicType *field_type) {
+static bool parse_function_pointer_field_declarator(
+    MinicParser *parser,
+    MinicType return_type,
+    MinicSourceSpan *name_span,
+    MinicType *field_type) {
     MinicType parameter_types[8];
     MinicType function_type;
     size_t parameter_count;
