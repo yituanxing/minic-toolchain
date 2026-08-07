@@ -151,8 +151,7 @@ static bool minic_parser_bind_scoped_object(MinicParser *parser,
     MinicParserLocalBinding *binding;
 
     if (parser->scope_count == 0U ||
-        ((local_id == MINIC_LOCAL_INVALID) ==
-         (global_object_id == MINIC_GLOBAL_OBJECT_INVALID))) {
+        ((local_id == MINIC_LOCAL_INVALID) == (global_object_id == MINIC_GLOBAL_OBJECT_INVALID))) {
         minic_parser_error(parser, "internal error: invalid scoped object binding");
         return false;
     }
