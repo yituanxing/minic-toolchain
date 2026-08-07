@@ -51,3 +51,4 @@ plain_char_semantics
 pointer_equality
 scalar_conditions
 for_clause_updates
+character_literals
