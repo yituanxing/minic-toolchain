@@ -38,6 +38,7 @@ int main(void)
     if (expect_name(MINIC_TOKEN_EOF, "end of file") != 0 ||
         expect_name(MINIC_TOKEN_IDENTIFIER, "identifier") != 0 ||
         expect_name(MINIC_TOKEN_INTEGER_CONSTANT, "integer constant") != 0 ||
+        expect_name(MINIC_TOKEN_CHARACTER_CONSTANT, "character constant") != 0 ||
         expect_name(MINIC_TOKEN_FLOATING_CONSTANT, "floating constant") != 0 ||
         expect_name(MINIC_TOKEN_STRING_LITERAL, "string literal") != 0 ||
         expect_name(MINIC_TOKEN_KW_CHAR, "char") != 0 ||
