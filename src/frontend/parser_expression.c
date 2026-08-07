@@ -336,7 +336,8 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
     MinicFunctionId function_id;
     MinicGlobalObjectId global_object_id;
 
-    if (parser->current.kind == MINIC_TOKEN_INTEGER_CONSTANT) {
+    if (parser->current.kind == MINIC_TOKEN_INTEGER_CONSTANT ||
+        parser->current.kind == MINIC_TOKEN_CHARACTER_CONSTANT) {
         if (!parse_integer(parser, &primary_id) ||
             !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
             return false;
