@@ -325,7 +325,7 @@ bool minic_c0_program_add_record(MinicC0Program *program,
     MinicRecord record;
     size_t index;
 
-    if (program == NULL || name == NULL || record_id == NULL) {
+    if (program == NULL || name == NULL || name_length == 0U || record_id == NULL) {
         return false;
     }
     for (index = 0U; index < program->record_count; ++index) {
@@ -350,6 +350,26 @@ bool minic_c0_program_add_record(MinicC0Program *program,
         return false;
     }
     record.name_length = name_length;
+    *record_id = program->record_count;
+    program->records[program->record_count] = record;
+    program->record_count += 1U;
+    return true;
+}
+
+bool minic_c0_program_add_anonymous_record(MinicC0Program *program, MinicRecordId *record_id) {
+    MinicRecord record;
+
+    if (program == NULL || record_id == NULL) {
+        return false;
+    }
+    if (!minic_grow_array((void **)&program->records,
+                          &program->record_capacity,
+                          program->record_count,
+                          sizeof(*program->records))) {
+        return false;
+    }
+
+    (void)memset(&record, 0, sizeof(record));
     *record_id = program->record_count;
     program->records[program->record_count] = record;
     program->record_count += 1U;
