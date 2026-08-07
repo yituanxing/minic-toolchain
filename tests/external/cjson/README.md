@@ -68,7 +68,7 @@ The unchanged cJSON source therefore crosses `return NULL;` in `cJSON_GetStringV
 CJSON_PUBLIC(double) cJSON_GetNumberValue(const cJSON * const item)
 ```
 
-The exact next MiniC diagnostic is:
+The preprocessed signature is pinned at line 114, followed by the opening `{` at line 115. MiniC reports the unsupported return type after consuming the declarator and reaching that function body. The exact next diagnostic is:
 
 ```text
 cJSON.i:115:1: error: unsupported function return type
@@ -78,9 +78,9 @@ The active blocker is now **a real `double` function return type**. MiniC alread
 
 因此当前活动缺口已经变为 **真正的 `double` 函数返回类型**。MiniC 已将 `double` 建模为独立、完整、RV64 上 8 字节的对象类型，但函数定义与执行尚未实现浮点返回值和 RV64D 调用约定；这条能力刻意与空指针语义分离。
 
-`tests/external/cjson/probe.sh` permanently verifies stable early declarations, the crossed direct-member expression at line 104, pointer-return completion at line 105, the crossed `return ((void *)0);` at line 110, and the new `double cJSON_GetNumberValue(...)` frontier at line 115. It requires the exact line-115 diagnostic. Crossing that boundary intentionally fails the gate until the next bounded branch records the following real source frontier.
+`tests/external/cjson/probe.sh` permanently verifies stable early declarations, the crossed direct-member expression at line 104, pointer-return completion at line 105, the crossed `return ((void *)0);` at line 110, the `double cJSON_GetNumberValue(...)` signature at line 114, and its opening brace at line 115. It requires the exact line-115 diagnostic. Crossing that boundary intentionally fails the gate until the next bounded branch records the following real source frontier.
 
-`tests/external/cjson/probe.sh` 永久锚定稳定早期声明、第 104 行已越过的直接成员表达式、第 105 行指针返回 completion、第 110 行已越过的 `return ((void *)0);`，以及第 115 行新的 `double cJSON_GetNumberValue(...)` 前沿，并要求精确的 line-115 诊断。后续越过该边界时，门禁会主动失败，直到下一条范围受限分支记录新的真实源码前沿。
+`tests/external/cjson/probe.sh` 永久锚定稳定早期声明、第 104 行已越过的直接成员表达式、第 105 行指针返回 completion、第 110 行已越过的 `return ((void *)0);`、第 114 行 `double cJSON_GetNumberValue(...)` 签名，以及第 115 行函数体开括号，并要求精确的 line-115 诊断。后续越过该边界时，门禁会主动失败，直到下一条范围受限分支记录新的真实源码前沿。
 
 ## Validation ladder / 验证阶梯
 
