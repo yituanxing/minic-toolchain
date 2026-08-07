@@ -73,15 +73,22 @@ The clean-checkout probe preprocesses the unchanged core with a minimal Hosted h
 typedef long unsigned int size_t;
 ```
 
-MiniC now accepts this declaration with native signed and unsigned LONG rank identities, C integer conversions, eight-byte RV64 layout, and full-width code generation. The next unchanged cJSON source begins its linked object definition:
+MiniC accepts this declaration with native signed and unsigned LONG rank identities, C integer conversions, eight-byte RV64 layout, and full-width code generation. It also now introduces a tagged record before parsing its fields, keeps one stable record identity while the definition is incomplete, permits pointer self-reference, and rejects incomplete records used by value.
 
-MiniC 现已通过原生有符号/无符号 LONG Rank、C 整数转换、RV64 八字节布局与全宽代码生成接受该声明。随后未修改的 cJSON 源码开始定义链式对象：
+MiniC 已通过原生有符号/无符号 LONG Rank、C 整数转换、RV64 八字节布局与全宽代码生成接受该声明；同时现在会在解析字段前引入结构体标签，在定义未完成期间保持同一稳定记录身份，允许指针自引用，并拒绝按值使用不完整记录。
+
+The unchanged cJSON source now advances through its linked-object definition and reaches the first plain `char` member:
+
+未修改的 cJSON 源码现已越过链式对象的自引用定义，并到达首个 plain `char` 成员：
 
 ```c
 typedef struct cJSON
 {
     struct cJSON *next;
     struct cJSON *prev;
+    struct cJSON *child;
+    int type;
+    char *valuestring;
 ```
 
 The next exact MiniC diagnostic is:
@@ -89,16 +96,16 @@ The next exact MiniC diagnostic is:
 新的精确首条诊断为：
 
 ```text
-cJSON.i:2:16: error: use of undeclared record tag
+cJSON.i:8:10: error: expected type name
 ```
 
-The active blocker is incomplete record-tag introduction and self-reference: a tagged record must become visible while its definition is still incomplete so pointer members can refer to the same record. This is a category-A cross-project hotspot used by linked lists, trees, graphs, parser nodes, and runtime objects throughout cJSON, Lua, TinyCC, SQLite, musl, and Linux.
+The active blocker is plain `char` type support. The current compiler deliberately distinguishes its implemented `unsigned char` byte semantics from unsupported bare `char`; the next bounded branch must define plain-character type identity and target semantics rather than silently treating it as an existing integer spelling. This is again a category-A cross-project capability used throughout cJSON, Lua, TinyCC, SQLite, musl, and Linux.
 
-当前缺口是不完整结构体标签的引入与自引用：带标签结构体在定义尚未完成时就必须可见，才能让指针成员引用自身。它属于 A 类多项目热点，cJSON、Lua、TinyCC、SQLite、musl 与 Linux 中的链表、树、图、Parser 节点和运行时对象都会反复使用。
+当前缺口是 plain `char` 类型支持。现有编译器明确区分已经实现的 `unsigned char` 字节语义与尚未支持的 bare `char`；下一条范围受限分支必须建立 plain char 的独立类型身份与目标语义，不能把它静默当作已有整数写法。该能力同样属于 cJSON、Lua、TinyCC、SQLite、musl 与 Linux 反复使用的 A 类多项目热点。
 
-`tests/external/cjson/probe.sh` permanently verifies the vendored identities, recreates the target-accurate preprocessing environment without network access, and requires this exact frontier. Crossing it intentionally fails the gate until the next bounded branch records the following real source boundary.
+`tests/external/cjson/probe.sh` permanently verifies the vendored identities, recreates the target-accurate preprocessing environment without network access, verifies the exact eighth source line, and requires this diagnostic. Crossing it intentionally fails the gate until the next bounded branch records the following real source boundary.
 
-`tests/external/cjson/probe.sh` 永久校验 Vendor 身份，在无网络条件下重建目标正确的预处理环境，并要求该精确前沿。当 MiniC 越过此处时，门禁会主动失败，直到下一条范围受限分支记录后续真实源码边界。
+`tests/external/cjson/probe.sh` 永久校验 Vendor 身份，在无网络条件下重建目标正确的预处理环境，校验精确的第八行源码，并要求该诊断。当 MiniC 越过此处时，门禁会主动失败，直到下一条范围受限分支记录后续真实源码边界。
 
 ## Validation ladder / 验证阶梯
 

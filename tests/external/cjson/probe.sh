@@ -31,6 +31,18 @@ verify_vendor_file() {
     fi
 }
 
+verify_preprocessed_line() {
+    line_number=$1
+    expected=$2
+    actual=$(sed -n "${line_number}p" "$preprocessed")
+
+    if test "$actual" != "$expected"; then
+        printf '%s\n' \
+            "FAIL external/cjson: preprocessed line $line_number changed: $actual" >&2
+        exit 1
+    fi
+}
+
 if ! command -v "$riscv_cc" >/dev/null 2>&1; then
     printf '%s\n' "FAIL external/cjson: missing RISC-V preprocessor $riscv_cc" >&2
     exit 1
@@ -83,13 +95,10 @@ done
     "$vendor/cJSON.c" \
     -o "$preprocessed"
 
-first_line=$(sed -n '1p' "$preprocessed")
-expected_line='typedef long unsigned int size_t;'
-if test "$first_line" != "$expected_line"; then
-    printf '%s\n' \
-        "FAIL external/cjson: preprocessed first line changed: $first_line" >&2
-    exit 1
-fi
+verify_preprocessed_line 1 'typedef long unsigned int size_t;'
+verify_preprocessed_line 2 'typedef struct cJSON'
+verify_preprocessed_line 4 '    struct cJSON *next;'
+verify_preprocessed_line 8 '    char *valuestring;'
 
 set +e
 "$minic" -S "$preprocessed" -o "$work/cJSON.s" \
@@ -105,7 +114,7 @@ fi
 
 first_error=$(sed -n '/error:/p' "$diagnostic" | sed -n '1p')
 case "$first_error" in
-    *':2:16: error: use of undeclared record tag')
+    *':8:10: error: expected type name')
         ;;
     *)
         printf '%s\n' \
@@ -116,4 +125,4 @@ case "$first_error" in
 esac
 
 printf '%s\n' \
-    'PASS external/cjson frontier=self-referential-incomplete-record diagnostic=undeclared-record-tag source=cJSON-1.7.19 offline=1'
+    'PASS external/cjson frontier=plain-char-type-specifier diagnostic=expected-type-name source=cJSON-1.7.19 offline=1'

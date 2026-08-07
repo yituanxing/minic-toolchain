@@ -20,16 +20,49 @@ MinicTypeAliasId minic_parser_find_type_alias(const MinicParser *parser,
     return MINIC_TYPE_ALIAS_INVALID;
 }
 
+static bool typedef_starts_record_definition(MinicParser *parser, bool *is_definition) {
+    MinicParser probe;
+
+    if (parser == NULL || is_definition == NULL) {
+        return false;
+    }
+    *is_definition = false;
+    if (parser->current.kind != MINIC_TOKEN_KW_STRUCT) {
+        return true;
+    }
+
+    probe = *parser;
+    if (!minic_parser_advance(&probe)) {
+        return false;
+    }
+    if (probe.current.kind != MINIC_TOKEN_IDENTIFIER) {
+        return true;
+    }
+    if (!minic_parser_advance(&probe)) {
+        return false;
+    }
+    *is_definition = probe.current.kind == MINIC_TOKEN_LBRACE;
+    return true;
+}
+
 bool minic_parser_parse_typedef(MinicParser *parser) {
     MinicSourceSpan name_span;
     MinicType aliased_type;
     MinicTypeAliasId alias_id;
     size_t bounds[8];
     size_t bound_count;
+    bool is_record_definition;
 
     bound_count = 0U;
     if (!minic_parser_expect(parser, MINIC_TOKEN_KW_TYPEDEF, "expected keyword 'typedef'") ||
-        !minic_parser_parse_type_name(parser, &aliased_type)) {
+        !typedef_starts_record_definition(parser, &is_record_definition)) {
+        return false;
+    }
+    if (is_record_definition) {
+        if (!minic_parser_parse_record_definition_specifier(parser, &aliased_type)) {
+            return false;
+        }
+    } else if (!minic_parser_parse_type_name(parser, &aliased_type)) {
         return false;
     }
     if (minic_type_is_void(aliased_type)) {

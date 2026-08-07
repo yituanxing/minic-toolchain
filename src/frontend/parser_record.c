@@ -39,6 +39,10 @@ static bool parse_record_field(MinicParser *parser, MinicRecordId record_id) {
         minic_parser_error(parser, "record field typedef array is unsupported");
         return false;
     }
+    if (!minic_parser_require_complete_object_type(
+            parser, field_type, "record field cannot use incomplete type by value")) {
+        return false;
+    }
     if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
         minic_parser_error(parser, "expected record field name");
         return false;
@@ -80,10 +84,14 @@ static bool parse_record_field(MinicParser *parser, MinicRecordId record_id) {
     return true;
 }
 
-bool minic_parser_parse_record_definition(MinicParser *parser) {
+bool minic_parser_parse_record_definition_specifier(MinicParser *parser, MinicType *record_type) {
     MinicSourceSpan name_span;
     MinicRecordId record_id;
 
+    if (record_type == NULL) {
+        minic_parser_error(parser, "internal error: missing record type output");
+        return false;
+    }
     if (!minic_parser_expect(parser, MINIC_TOKEN_KW_STRUCT, "expected keyword 'struct'")) {
         return false;
     }
@@ -118,14 +126,21 @@ bool minic_parser_parse_record_definition(MinicParser *parser) {
             return false;
         }
     }
-    if (!minic_parser_expect(parser, MINIC_TOKEN_RBRACE, "expected '}' after record fields") ||
-        !minic_parser_expect(
-            parser, MINIC_TOKEN_SEMICOLON, "expected ';' after record definition")) {
+    if (!minic_parser_expect(parser, MINIC_TOKEN_RBRACE, "expected '}' after record fields")) {
         return false;
     }
     if (!minic_c0_program_finish_record(parser->program, record_id)) {
         minic_parser_error(parser, "record definition requires at least one field");
         return false;
     }
+    *record_type = minic_type_record(record_id);
     return true;
+}
+
+bool minic_parser_parse_record_definition(MinicParser *parser) {
+    MinicType record_type;
+
+    return minic_parser_parse_record_definition_specifier(parser, &record_type) &&
+           minic_parser_expect(
+               parser, MINIC_TOKEN_SEMICOLON, "expected ';' after record definition");
 }
