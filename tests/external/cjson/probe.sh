@@ -103,6 +103,7 @@ verify_preprocessed_line 10 '    double valuedouble;'
 verify_preprocessed_line 15 '      void *( *malloc_fn)(size_t sz);'
 verify_preprocessed_line 61 'cJSON * cJSON_CreateFloatArray(const float *numbers, int count);'
 verify_preprocessed_line 97 'typedef struct {'
+verify_preprocessed_line 101 'static error global_error = { ((void *)0), 0 };'
 
 set +e
 "$minic" -S "$preprocessed" -o "$work/cJSON.s" \
@@ -118,7 +119,7 @@ fi
 
 first_error=$(sed -n '/error:/p' "$diagnostic" | sed -n '1p')
 case "$first_error" in
-    *":97:16: error: expected record tag after 'struct'")
+    *':101:14: error: static global arrays currently require const integer elements')
         ;;
     *)
         printf '%s\n' \
@@ -129,4 +130,4 @@ case "$first_error" in
 esac
 
 printf '%s\n' \
-    'PASS external/cjson frontier=anonymous-struct-typedef diagnostic=expected-record-tag source=cJSON-1.7.19 offline=1'
+    'PASS external/cjson frontier=static-record-global-initializer diagnostic=static-global-integer-array-only source=cJSON-1.7.19 offline=1'
