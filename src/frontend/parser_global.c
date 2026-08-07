@@ -5,8 +5,14 @@
 
 MinicGlobalObjectId minic_parser_find_global_object(const MinicParser *parser,
                                                     MinicSourceSpan name_span) {
+    MinicGlobalObjectId static_local_id;
     size_t name_length;
     size_t index;
+
+    static_local_id = minic_parser_find_static_local(parser, name_span);
+    if (static_local_id != MINIC_GLOBAL_OBJECT_INVALID) {
+        return static_local_id;
+    }
 
     name_length = minic_parser_span_length(name_span);
     for (index = 0U; index < parser->program->global_object_count; ++index) {
