@@ -106,6 +106,9 @@ bool minic_c0_global_object_add_initializer(MinicC0Program *program,
         return false;
     }
     object = &program->global_objects[global_object_id];
+    if (object->is_zero_initialized) {
+        return false;
+    }
     if (!grow_array((void **)&object->initializer_values,
                     &object->initializer_capacity,
                     object->initializer_count,
@@ -114,6 +117,21 @@ bool minic_c0_global_object_add_initializer(MinicC0Program *program,
     }
     object->initializer_values[object->initializer_count] = value;
     object->initializer_count += 1U;
+    return true;
+}
+
+bool minic_c0_global_object_set_zero_initialized(MinicC0Program *program,
+                                                 MinicGlobalObjectId global_object_id) {
+    MinicGlobalObject *object;
+
+    if (program == NULL || global_object_id >= program->global_object_count) {
+        return false;
+    }
+    object = &program->global_objects[global_object_id];
+    if (object->initializer_count != 0U) {
+        return false;
+    }
+    object->is_zero_initialized = true;
     return true;
 }
 
