@@ -120,6 +120,7 @@ verify_preprocessed_line 116 '{'
 verify_preprocessed_line 119 '        return (double) 0.0/0.0;'
 verify_preprocessed_line 125 '    static char version[15];'
 verify_preprocessed_line 126 '    sprintf(version, "%i.%i.%i", 1, 7, 19);'
+verify_preprocessed_line 131 '    if ((string1 == ((void *)0)) || (string2 == ((void *)0)))'
 
 set +e
 "$minic" -S "$preprocessed" -o "$work/cJSON.s" \
@@ -135,7 +136,7 @@ fi
 
 first_error=$(sed -n '/error:/p' "$diagnostic" | sed -n '1p')
 case "$first_error" in
-    *":126:32: error: call argument count does not match declaration")
+    *":131:32: error: binary operator requires int operands")
         ;;
     *)
         printf '%s\n' \
@@ -146,4 +147,4 @@ case "$first_error" in
 esac
 
 printf '%s\n' \
-    'PASS external/cjson frontier=variadic-direct-call-arguments diagnostic=argument-count source=cJSON-1.7.19 offline=1'
+    'PASS external/cjson frontier=pointer-equality diagnostic=binary-int-operands source=cJSON-1.7.19 offline=1'
