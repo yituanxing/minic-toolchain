@@ -68,14 +68,25 @@ static bool minic_riscv64_emit_global_object(FILE *file,
 
     if (file == NULL || program == NULL || object == NULL || object->name_length == 0U ||
         object->storage_size == 0U || object->alignment == 0U ||
-        !minic_riscv64_global_scalar_type(program, object->type, &scalar_type, &scalar_width) ||
-        scalar_width == 0U || object->initializer_count > object->storage_size / scalar_width ||
         !minic_riscv64_alignment_power(object->alignment, &alignment_power)) {
         return false;
     }
-    directive = minic_type_is_char_integer(scalar_type)   ? ".byte"
-                : minic_type_is_long_integer(scalar_type) ? ".dword"
-                                                          : ".word";
+
+    directive = NULL;
+    scalar_width = 0U;
+    if (object->is_zero_initialized) {
+        if (object->initializer_count != 0U) {
+            return false;
+        }
+    } else {
+        if (!minic_riscv64_global_scalar_type(program, object->type, &scalar_type, &scalar_width) ||
+            scalar_width == 0U || object->initializer_count > object->storage_size / scalar_width) {
+            return false;
+        }
+        directive = minic_type_is_char_integer(scalar_type)   ? ".byte"
+                    : minic_type_is_long_integer(scalar_type) ? ".dword"
+                                                              : ".word";
+    }
 
     if (fprintf(file, "%s\n", object->is_read_only ? ".section .rodata" : ".data") < 0) {
         return false;
@@ -92,20 +103,26 @@ static bool minic_riscv64_emit_global_object(FILE *file,
                 object->name) < 0) {
         return false;
     }
-    for (initializer_index = 0U; initializer_index < object->initializer_count;
-         ++initializer_index) {
-        if (minic_type_is_char_integer(scalar_type)) {
-            unsigned int value;
+    if (object->is_zero_initialized) {
+        if (fprintf(file, "  .zero %zu\n", object->storage_size) < 0) {
+            return false;
+        }
+    } else {
+        for (initializer_index = 0U; initializer_index < object->initializer_count;
+             ++initializer_index) {
+            if (minic_type_is_char_integer(scalar_type)) {
+                unsigned int value;
 
-            value = (unsigned int)object->initializer_values[initializer_index] & 0xffU;
-            if (fprintf(file, "  %s %u\n", directive, value) < 0) {
+                value = (unsigned int)object->initializer_values[initializer_index] & 0xffU;
+                if (fprintf(file, "  %s %u\n", directive, value) < 0) {
+                    return false;
+                }
+            } else if (fprintf(file,
+                               "  %s %d\n",
+                               directive,
+                               object->initializer_values[initializer_index]) < 0) {
                 return false;
             }
-        } else if (fprintf(file,
-                           "  %s %d\n",
-                           directive,
-                           object->initializer_values[initializer_index]) < 0) {
-            return false;
         }
     }
     return fprintf(file, ".size %s, %zu\n", object->name, object->storage_size) >= 0;
