@@ -193,6 +193,10 @@ static bool expression_is_integer_zero(const MinicExpression *expression) {
            minic_type_is_integer(expression->type) && expression->value.integer_value == 0;
 }
 
+static bool type_is_condition_scalar(MinicType type) {
+    return minic_type_is_integer(type) || minic_type_is_pointer(type);
+}
+
 static bool same_floating_type(MinicType left, MinicType right) {
     return minic_type_equal(left, right) &&
            ((minic_type_is_double(left) && minic_type_is_double(right)) ||
@@ -507,27 +511,33 @@ static bool parse_unary(MinicParser *parser, MinicExpressionId *expression_id, b
         return finish_value_expression(parser, result_id, decay_array, expression_id);
     }
 
-    if (!minic_type_is_integer(operand_expression->type)) {
-        minic_parser_error(parser, "unary operator requires an int operand");
-        return false;
-    }
     expression.kind = MINIC_EXPRESSION_UNARY;
     expression.value_category = MINIC_VALUE_RVALUE;
+    if (operator_token.kind == MINIC_TOKEN_BANG) {
+        if (!type_is_condition_scalar(operand_expression->type)) {
+            minic_parser_error(parser, "logical not requires an integer or pointer operand");
+            return false;
+        }
+        expression.value.unary.operator_kind = MINIC_UNARY_LOGICAL_NOT;
+        expression.type = minic_type_int();
+        return minic_parser_add_expression(parser, &expression, expression_id);
+    }
+    if (!minic_type_is_integer(operand_expression->type)) {
+        minic_parser_error(parser, "unary arithmetic requires an integer operand");
+        return false;
+    }
     if (operator_token.kind == MINIC_TOKEN_PLUS) {
         expression.value.unary.operator_kind = MINIC_UNARY_PLUS;
         if (!minic_type_integer_common(
                 operand_expression->type, operand_expression->type, &expression.type)) {
             return false;
         }
-    } else if (operator_token.kind == MINIC_TOKEN_MINUS) {
+    } else {
         expression.value.unary.operator_kind = MINIC_UNARY_NEGATE;
         if (!minic_type_integer_common(
                 operand_expression->type, operand_expression->type, &expression.type)) {
             return false;
         }
-    } else {
-        expression.value.unary.operator_kind = MINIC_UNARY_LOGICAL_NOT;
-        expression.type = minic_type_int();
     }
     return minic_parser_add_expression(parser, &expression, expression_id);
 }
@@ -556,6 +566,10 @@ static unsigned int binary_precedence(MinicTokenKind kind) {
         return 20U;
     case MINIC_TOKEN_CARET:
         return 10U;
+    case MINIC_TOKEN_AMPERSAND_AMPERSAND:
+        return 2U;
+    case MINIC_TOKEN_PIPE_PIPE:
+        return 1U;
     default:
         return 0U;
     }
@@ -593,6 +607,10 @@ static MinicBinaryOperator binary_operator(MinicTokenKind kind) {
         return MINIC_BINARY_GREATER;
     case MINIC_TOKEN_GREATER_EQUAL:
         return MINIC_BINARY_GREATER_EQUAL;
+    case MINIC_TOKEN_AMPERSAND_AMPERSAND:
+        return MINIC_BINARY_LOGICAL_AND;
+    case MINIC_TOKEN_PIPE_PIPE:
+        return MINIC_BINARY_LOGICAL_OR;
     default:
         return MINIC_BINARY_ADD;
     }
@@ -606,6 +624,10 @@ static bool binary_is_comparison(MinicTokenKind kind) {
 
 static bool binary_is_equality(MinicTokenKind kind) {
     return kind == MINIC_TOKEN_EQUAL_EQUAL || kind == MINIC_TOKEN_BANG_EQUAL;
+}
+
+static bool binary_is_logical(MinicTokenKind kind) {
+    return kind == MINIC_TOKEN_AMPERSAND_AMPERSAND || kind == MINIC_TOKEN_PIPE_PIPE;
 }
 
 static bool binary_pointer_equality_compatible(MinicTokenKind kind,
@@ -689,6 +711,13 @@ static bool binary_result_type(const MinicC0Program *program,
     if (result == NULL) {
         return false;
     }
+    if (binary_is_logical(kind)) {
+        if (!type_is_condition_scalar(left) || !type_is_condition_scalar(right)) {
+            return false;
+        }
+        *result = minic_type_int();
+        return true;
+    }
     if (minic_type_is_integer(left) && minic_type_is_integer(right)) {
         if (binary_is_comparison(kind)) {
             *result = minic_type_int();
@@ -764,10 +793,15 @@ static bool parse_expression_internal(MinicParser *parser,
             MinicType pointer_type;
             MinicType pointee_type;
 
-            if (pointer_arithmetic_shape(
-                    token_kind, left_expression->type, right_expression->type, &pointer_type) &&
-                minic_type_pointee(pointer_type, &pointee_type) &&
-                !type_is_complete_object(parser->program, pointee_type)) {
+            if (binary_is_logical(token_kind)) {
+                minic_parser_error(parser, "logical operator requires integer or pointer operands");
+            } else if (pointer_arithmetic_shape(
+                           token_kind,
+                           left_expression->type,
+                           right_expression->type,
+                           &pointer_type) &&
+                       minic_type_pointee(pointer_type, &pointee_type) &&
+                       !type_is_complete_object(parser->program, pointee_type)) {
                 minic_parser_error(parser, "pointer arithmetic requires a complete object type");
             } else if (token_kind == MINIC_TOKEN_PLUS || token_kind == MINIC_TOKEN_MINUS) {
                 minic_parser_error(parser, "unsupported pointer arithmetic operands");
