@@ -60,9 +60,9 @@ static bool parse_function_pointer_parameters(MinicParser *parser,
 }
 
 static bool parse_function_pointer_field_declarator(MinicParser *parser,
-                                                    MinicType return_type,
-                                                    MinicSourceSpan *name_span,
-                                                    MinicType *field_type) {
+                                                     MinicType return_type,
+                                                     MinicSourceSpan *name_span,
+                                                     MinicType *field_type) {
     MinicType parameter_types[8];
     MinicType function_type;
     size_t parameter_count;
@@ -75,7 +75,8 @@ static bool parse_function_pointer_field_declarator(MinicParser *parser,
     (void)memset(parameter_types, 0, sizeof(parameter_types));
 
     if (!minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '('") ||
-        !minic_parser_expect(parser, MINIC_TOKEN_STAR, "expected '*' in function pointer declarator")) {
+        !minic_parser_expect(
+            parser, MINIC_TOKEN_STAR, "expected '*' in function pointer declarator")) {
         return false;
     }
     if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
@@ -84,10 +85,13 @@ static bool parse_function_pointer_field_declarator(MinicParser *parser,
     }
     *name_span = parser->current.span;
     if (!minic_parser_advance(parser) ||
-        !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')' after function pointer name") ||
-        !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected function pointer parameter list") ||
+        !minic_parser_expect(
+            parser, MINIC_TOKEN_RPAREN, "expected ')' after function pointer name") ||
+        !minic_parser_expect(
+            parser, MINIC_TOKEN_LPAREN, "expected function pointer parameter list") ||
         !parse_function_pointer_parameters(parser, parameter_types, &parameter_count) ||
-        !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')' after function pointer parameters")) {
+        !minic_parser_expect(
+            parser, MINIC_TOKEN_RPAREN, "expected ')' after function pointer parameters")) {
         return false;
     }
     if (!minic_c0_program_intern_function_type(
