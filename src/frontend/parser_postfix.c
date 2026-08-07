@@ -97,6 +97,12 @@ bool minic_parser_parse_postfix(MinicParser *parser,
             }
             continue;
         }
+        if (parser->current.kind == MINIC_TOKEN_DOT) {
+            if (!minic_parser_parse_direct_member(parser, current, &current)) {
+                return false;
+            }
+            continue;
+        }
         if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
             if (!parse_one_subscript(parser, current, &current)) {
                 return false;
