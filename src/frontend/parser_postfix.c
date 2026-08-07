@@ -73,6 +73,7 @@ bool minic_parser_apply_array_decay(MinicParser *parser,
                                     MinicExpressionId input_id,
                                     MinicExpressionId *expression_id) {
     const MinicExpression *base;
+    MinicSourceSpan base_span;
     MinicExpression zero;
     MinicExpression subscript;
     MinicExpression address;
@@ -85,6 +86,7 @@ bool minic_parser_apply_array_decay(MinicParser *parser,
         minic_parser_error(parser, "invalid array decay operand");
         return false;
     }
+    base_span = base->span;
     if (!array_object_element_type(parser, input_id, &element_type)) {
         *expression_id = input_id;
         return true;
@@ -92,7 +94,7 @@ bool minic_parser_apply_array_decay(MinicParser *parser,
 
     (void)memset(&zero, 0, sizeof(zero));
     zero.kind = MINIC_EXPRESSION_INTEGER;
-    zero.span = base->span;
+    zero.span = base_span;
     zero.type = minic_type_int();
     zero.value_category = MINIC_VALUE_RVALUE;
     zero.value.integer_value = 0;
@@ -102,7 +104,7 @@ bool minic_parser_apply_array_decay(MinicParser *parser,
 
     (void)memset(&subscript, 0, sizeof(subscript));
     subscript.kind = MINIC_EXPRESSION_SUBSCRIPT;
-    subscript.span = base->span;
+    subscript.span = base_span;
     subscript.type = element_type;
     subscript.value_category = MINIC_VALUE_LVALUE;
     subscript.value.subscript.base = input_id;
@@ -113,7 +115,7 @@ bool minic_parser_apply_array_decay(MinicParser *parser,
 
     (void)memset(&address, 0, sizeof(address));
     address.kind = MINIC_EXPRESSION_ADDRESS_OF;
-    address.span = base->span;
+    address.span = base_span;
     if (!minic_type_pointer_to(element_type, &address.type)) {
         minic_parser_error(parser, "array decay pointer depth is unsupported");
         return false;
