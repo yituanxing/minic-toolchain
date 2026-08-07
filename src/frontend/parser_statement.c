@@ -163,8 +163,8 @@ static bool parse_static_local_array_declarator(MinicParser *parser, MinicType b
         bound_count += 1U;
     }
     if (bound_count == 0U) {
-        minic_parser_error(
-            parser, "static local object currently requires a fixed array declarator");
+        minic_parser_error(parser,
+                           "static local object currently requires a fixed array declarator");
         return false;
     }
     if (parser->current.kind == MINIC_TOKEN_EQUAL) {
