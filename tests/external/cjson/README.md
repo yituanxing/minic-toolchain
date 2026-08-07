@@ -23,52 +23,58 @@ External GCC may preprocess, assemble, link, and provide CRT/libc. MiniC must co
 
 ## Accepted compiler capabilities / 已越过能力
 
-The unchanged core now crosses LONG semantics, self-referential records, plain `char`, float/double object types, function-pointer record fields, pointer qualifiers, anonymous struct typedefs, zero-initialized static records, direct record-member access, pointer returns, null-pointer constants, RV64D double returns, decimal double literals, same-type double arithmetic, function-scope static fixed arrays, variadic direct declarations and calls, contextual array-to-pointer decay, and narrow string literals.
+The unchanged core now crosses LONG semantics, self-referential records, plain `char`, float/double object types, function-pointer record fields, pointer qualifiers, anonymous struct typedefs, zero-initialized static records, direct record-member access, pointer returns, null-pointer constants, RV64D double returns, decimal double literals, same-type double arithmetic, function-scope static fixed arrays, variadic direct declarations and calls, contextual array-to-pointer decay, narrow string literals, pointer equality, and the integer/pointer scalar-condition cluster.
 
-未修改 cJSON 核心现已越过 LONG、自引用 record、plain `char`、float/double 对象、函数指针字段、pointer qualifier、匿名 struct typedef、静态 record 全零初始化、direct member access、pointer return、null pointer constant、RV64D double return、十进制 double literal、double 四则运算、函数作用域 static 定长数组、variadic direct declaration/call、上下文化 array-to-pointer decay 与窄字符串字面量。
+未修改 cJSON 核心现已越过 LONG、自引用 record、plain `char`、float/double 对象、函数指针字段、pointer qualifier、匿名 struct typedef、静态 record 全零初始化、direct member access、pointer return、null pointer constant、RV64D double return、十进制 double literal、double 四则运算、函数作用域 static 定长数组、variadic direct declaration/call、上下文化 array-to-pointer decay、窄字符串字面量、pointer equality，以及 integer/pointer scalar-condition 语义簇。
 
-This branch adds bounded pointer equality for `==` / `!=`:
+The scalar-condition cluster includes:
 
-- compatible pointer ↔ pointer comparisons reuse the existing assignment-compatibility model in either direction;
-- object pointer ↔ `void *` and qualification-compatible pointer comparisons are accepted;
-- pointer ↔ integer constant zero is accepted in either operand order as a null-pointer comparison;
-- pointer ↔ nonzero integer remains rejected;
-- incompatible pointer identities remain rejected;
-- relational pointer comparisons (`< <= > >=`) remain outside this branch;
-- the parsed/normalized AST verifier and RV64 backend consume the same accepted shapes;
-- RV64 lowering reuses address-bit `xor + seqz/snez`.
+- lexical and precedence support for `&&` and `||`;
+- true short-circuit lowering on RV64, so the RHS is skipped when required;
+- integer and pointer truth conditions for `if`, `while`, and `for` conditions;
+- logical `!` for integer and pointer operands;
+- parsed/normalized AST verification for the same accepted shapes;
+- no floating truth conversion in this cluster.
 
-本分支新增受控的 pointer equality：兼容 pointer↔pointer、object pointer↔`void *`、qualification-compatible pointer，以及 pointer↔整数常量 0；非零整数、不兼容 pointer、pointer relational comparison 均继续拒绝。parsed/normalized AST verifier 与 RV64 backend 使用同一组允许形状，后端复用地址位 `xor + seqz/snez`。
+scalar-condition 语义簇包括 `&&` / `||`、RV64 真短路、integer/pointer 条件值、integer/pointer 的 `!`，以及一致的 parsed/normalized AST verifier；本簇不包含 floating truth conversion。
 
-A permanent `pointer_equality` GCC/MiniC RV64 differential program is registered as the 49th program. It covers `p == 0`, `0 == p`, `p != q`, real object addresses, `int *`↔`const int *`, object pointer↔`void *`, and `(void *)0`. Focused negative fixtures preserve the nonzero-integer, incompatible-pointer, and relational-comparison boundaries.
+A permanent `scalar_conditions` GCC/MiniC RV64 differential program is registered as the 50th program. It verifies short-circuit side effects with a counter, pointer truthiness, `!pointer`, nested `&&`/`||`, and `&&` precedence over `||`.
 
-永久 `pointer_equality` GCC/MiniC RV64 differential 已登记为第 49 个程序，同时 focused negative fixtures 锁住 nonzero integer、不兼容 pointer 与 relational comparison 的边界。
+永久 `scalar_conditions` GCC/MiniC RV64 differential 已登记为第 50 个程序。它通过计数器副作用验证 RHS 是否真的被跳过，同时覆盖 pointer truth、`!pointer`、嵌套 `&&`/`||` 与优先级。
 
 ## Current exact frontier / 当前精确前沿
 
-The stable preprocessed line remains:
+The previous cJSON frontier at line 131:
 
 ```c
     if ((string1 == ((void *)0)) || (string2 == ((void *)0)))
 ```
 
-Discovery Run #868 crossed the first `string1 == ((void *)0)` comparison and produced the next exact diagnostic:
+is now crossed. Discovery Run #884 passed the 50th scalar-condition differential under QEMU and advanced the unchanged cJSON source to line 139:
 
-```text
-cJSON.i:131:34: error: unexpected character '|'
+```c
+    for(; tolower(*string1) == tolower(*string2); (void)string1++, string2++)
 ```
 
-The first new missing capability is therefore the logical-OR token / short-circuit condition path. This branch intentionally does **not** implement `||` or `&&`; they belong to the next scalar-condition semantic cluster.
+The new exact first diagnostic is:
 
-Run #868 已越过第一个 `string1 == NULL` 比较，并在第一个 `|` 上得到精确诊断。因此下一条真实能力已经进入 logical OR / short-circuit condition；本分支不顺手实现 `||`/`&&`，它们进入下一条 scalar-condition 语义簇。
+```text
+cJSON.i:139:9: error: for initializer requires an assignment
+```
+
+The next missing capability is therefore the broader `for`-clause grammar, beginning with an empty initializer. The postfix `++` and comma expression later on the same source line are visible downstream syntax, but they have **not** yet been proven to be the first blocker and are not claimed here.
+
+旧 line 131 `||` 前沿已经越过。Run #884 把 unchanged cJSON 推进到 line 139，新的首个诊断是 `for initializer requires an assignment`。因此下一条能力簇从更一般的 `for` clause grammar、首先是 empty initializer 开始。同一源码行后面的 postfix `++` 和 comma expression 只是已知下游语法，目前不能提前宣称它们是 first blocker。
 
 ## Validation / 验证
 
-Discovery Run #868 passed source inventory, clang-format 18, Debug, Release `-Werror`, ASan/UBSan, existing focused suites, RV64 focused tests, and frozen tiny-AES. It also proved that unchanged cJSON crosses the previous pointer-equality parser frontier.
+Discovery Run #884 passed source inventory, clang-format 18, Debug, Release `-Werror`, ASan/UBSan, existing focused suites, RV64 focused tests, 50 permanent GCC/MiniC differential programs including `scalar_conditions`, and frozen tiny-AES. The only failure was the intentionally stale cJSON frontier, which exposed line 139 as the next exact boundary.
 
-Run #868 同时暴露了两个收口缺口：新 `pointer_equality.c` 尚未登记进 permanent differential manifest，且 focused pointer-equality runner 尚未接入 Phase 2；因此不能把 #868 当作 pointer-equality runtime acceptance。Both are now wired, and the branch additionally closes parsed/normalized AST verification plus RV64 lowering. A latest-head clean run is required before merge.
+Run #884 通过 source inventory、clang-format 18、Debug、Release `-Werror`、ASan/UBSan、既有 focused suites、RV64 focused、50 个永久 GCC/MiniC differential（含 `scalar_conditions`）与冻结 tiny-AES。唯一失败是故意保持旧值的 cJSON frontier，并由此暴露 line 139 新边界。
 
-Run #868 通过 source inventory、clang-format 18、Debug、Release `-Werror`、ASan/UBSan、既有 focused suites、RV64 focused 与冻结 tiny-AES，并证明 unchanged cJSON 越过旧 pointer-equality Parser 前沿；但它也暴露了 differential manifest 与 focused gate 尚未接线的问题。当前分支已补齐这两项，并补齐 AST verifier 与 RV64 lowering；合并前必须以最新 Head clean run 为准。
+A latest-head clean GitHub Actions run with the updated line-139 probe is required before merge.
+
+合并前仍要求以更新后的 line-139 probe 跑一次 latest-head clean GitHub Actions。
 
 ## Completion result / 完成标志
 

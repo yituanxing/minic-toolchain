@@ -157,8 +157,12 @@ static bool binary_is_double_arithmetic(MinicBinaryOperator operator_kind) {
            operator_kind == MINIC_BINARY_MULTIPLY || operator_kind == MINIC_BINARY_DIVIDE;
 }
 
+static bool binary_is_logical(MinicBinaryOperator operator_kind) {
+    return operator_kind == MINIC_BINARY_LOGICAL_AND || operator_kind == MINIC_BINARY_LOGICAL_OR;
+}
+
 static bool binary_operator_is_valid(MinicBinaryOperator operator_kind) {
-    return operator_kind >= MINIC_BINARY_ADD && operator_kind <= MINIC_BINARY_GREATER_EQUAL;
+    return operator_kind >= MINIC_BINARY_ADD && operator_kind <= MINIC_BINARY_LOGICAL_OR;
 }
 
 static bool unary_operator_is_valid(MinicUnaryOperator operator_kind) {
@@ -168,6 +172,10 @@ static bool unary_operator_is_valid(MinicUnaryOperator operator_kind) {
 static bool expression_is_integer_zero(const MinicExpression *expression) {
     return expression != NULL && expression->kind == MINIC_EXPRESSION_INTEGER &&
            minic_type_is_integer(expression->type) && expression->value.integer_value == 0;
+}
+
+static bool type_is_condition_scalar(MinicType type) {
+    return minic_type_is_integer(type) || minic_type_is_pointer(type);
 }
 
 static bool is_normalized_integer_cast_add(const MinicExpression *expression,
@@ -193,6 +201,11 @@ static bool verify_binary_type(const MinicC0Program *program,
 
     if (!binary_operator_is_valid(expression->value.binary.operator_kind)) {
         return false;
+    }
+
+    if (binary_is_logical(expression->value.binary.operator_kind)) {
+        return type_is_condition_scalar(left->type) && type_is_condition_scalar(right->type) &&
+               minic_type_equal(expression->type, minic_type_int());
     }
 
     if ((expression->value.binary.operator_kind == MINIC_BINARY_EQUAL ||
@@ -372,13 +385,15 @@ verify_expression(const MinicC0Program *program, size_t expression_index, MinicC
 
         operand = expression_before(program, expression->value.unary.operand, expression_index);
         if (operand == NULL || expression->value_category != MINIC_VALUE_RVALUE ||
-            !minic_type_is_integer(operand->type) ||
             !unary_operator_is_valid(expression->value.unary.operator_kind)) {
             return false;
         }
         if (expression->value.unary.operator_kind == MINIC_UNARY_LOGICAL_NOT) {
-            expected_type = minic_type_int();
-        } else if (!minic_type_integer_promotion(operand->type, &expected_type)) {
+            return type_is_condition_scalar(operand->type) &&
+                   minic_type_equal(expression->type, minic_type_int());
+        }
+        if (!minic_type_is_integer(operand->type) ||
+            !minic_type_integer_promotion(operand->type, &expected_type)) {
             return false;
         }
         return minic_type_equal(expression->type, expected_type);
@@ -456,13 +471,13 @@ static bool verify_statement(const MinicC0Program *program, const MinicStatement
         return statement->target_expression == MINIC_EXPRESSION_INVALID &&
                statement->expression == MINIC_EXPRESSION_INVALID;
     case MINIC_STATEMENT_IF:
-        return expression != NULL && minic_type_is_integer(expression->type) &&
+        return expression != NULL && type_is_condition_scalar(expression->type) &&
                statement->then_block < program->block_count &&
                (statement->else_block == MINIC_BLOCK_INVALID ||
                 statement->else_block < program->block_count);
     case MINIC_STATEMENT_WHILE:
         return (statement->expression == MINIC_EXPRESSION_INVALID ||
-                (expression != NULL && minic_type_is_integer(expression->type))) &&
+                (expression != NULL && type_is_condition_scalar(expression->type))) &&
                statement->then_block < program->block_count;
     }
     return false;

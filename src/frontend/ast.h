@@ -63,7 +63,9 @@ typedef enum MinicBinaryOperator {
     MINIC_BINARY_LESS,
     MINIC_BINARY_LESS_EQUAL,
     MINIC_BINARY_GREATER,
-    MINIC_BINARY_GREATER_EQUAL
+    MINIC_BINARY_GREATER_EQUAL,
+    MINIC_BINARY_LOGICAL_AND,
+    MINIC_BINARY_LOGICAL_OR
 } MinicBinaryOperator;
 
 typedef struct MinicExpression {

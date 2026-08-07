@@ -80,6 +80,12 @@ const char *minic_token_kind_name(MinicTokenKind kind) {
         return "*";
     case MINIC_TOKEN_AMPERSAND:
         return "&";
+    case MINIC_TOKEN_AMPERSAND_AMPERSAND:
+        return "&&";
+    case MINIC_TOKEN_PIPE:
+        return "|";
+    case MINIC_TOKEN_PIPE_PIPE:
+        return "||";
     case MINIC_TOKEN_CARET:
         return "^";
     case MINIC_TOKEN_CARET_EQUAL:

@@ -63,6 +63,63 @@ static bool pointer_equality_shape(const MinicExpression *left, const MinicExpre
            (left_is_zero && minic_type_is_pointer(right->type));
 }
 
+static bool type_is_condition_scalar(MinicType type) {
+    return minic_type_is_integer(type) || minic_type_is_pointer(type);
+}
+
+static bool minic_riscv64_emit_logical_binary(FILE *file,
+                                              const MinicC0Program *program,
+                                              const MinicFunction *function,
+                                              const MinicExpression *expression,
+                                              MinicExpressionId expression_id) {
+    const MinicExpression *left;
+    const MinicExpression *right;
+    MinicBinaryOperator operator_kind;
+
+    if (expression == NULL || expression->kind != MINIC_EXPRESSION_BINARY ||
+        !minic_type_equal(expression->type, minic_type_int())) {
+        return false;
+    }
+    operator_kind = expression->value.binary.operator_kind;
+    if (operator_kind != MINIC_BINARY_LOGICAL_AND && operator_kind != MINIC_BINARY_LOGICAL_OR) {
+        return false;
+    }
+    left = minic_c0_program_expression(program, expression->value.binary.left);
+    right = minic_c0_program_expression(program, expression->value.binary.right);
+    if (left == NULL || right == NULL || !type_is_condition_scalar(left->type) ||
+        !type_is_condition_scalar(right->type) ||
+        !minic_riscv64_emit_expression(file, program, function, expression->value.binary.left)) {
+        return false;
+    }
+
+    if (operator_kind == MINIC_BINARY_LOGICAL_AND) {
+        return fprintf(file, "  beqz a0, .Lminic_logic_false_%zu\n", expression_id) >= 0 &&
+               minic_riscv64_emit_expression(
+                   file, program, function, expression->value.binary.right) &&
+               fprintf(file,
+                       "  snez a0, a0\n"
+                       "  j .Lminic_logic_end_%zu\n"
+                       ".Lminic_logic_false_%zu:\n"
+                       "  li a0, 0\n"
+                       ".Lminic_logic_end_%zu:\n",
+                       expression_id,
+                       expression_id,
+                       expression_id) >= 0;
+    }
+
+    return fprintf(file, "  bnez a0, .Lminic_logic_true_%zu\n", expression_id) >= 0 &&
+           minic_riscv64_emit_expression(file, program, function, expression->value.binary.right) &&
+           fprintf(file,
+                   "  snez a0, a0\n"
+                   "  j .Lminic_logic_end_%zu\n"
+                   ".Lminic_logic_true_%zu:\n"
+                   "  li a0, 1\n"
+                   ".Lminic_logic_end_%zu:\n",
+                   expression_id,
+                   expression_id,
+                   expression_id) >= 0;
+}
+
 static bool minic_riscv64_emit_double_binary(FILE *file, MinicBinaryOperator operator_kind) {
     const char *instruction;
 
@@ -350,6 +407,12 @@ bool minic_riscv64_emit_expression(FILE *file,
         bool has_pointer_equality;
         size_t element_size;
 
+        if (expression->value.binary.operator_kind == MINIC_BINARY_LOGICAL_AND ||
+            expression->value.binary.operator_kind == MINIC_BINARY_LOGICAL_OR) {
+            return minic_riscv64_emit_logical_binary(
+                file, program, function, expression, expression_id);
+        }
+
         left = minic_c0_program_expression(program, expression->value.binary.left);
         right = minic_c0_program_expression(program, expression->value.binary.right);
         has_integer_common_type =
@@ -497,6 +560,9 @@ bool minic_riscv64_emit_expression(FILE *file,
                            minic_type_is_unsigned_integer(common_integer_type)
                                ? "  sltu a0, t0, a0\n  xori a0, a0, 1\n"
                                : "  slt a0, t0, a0\n  xori a0, a0, 1\n") >= 0;
+        case MINIC_BINARY_LOGICAL_AND:
+        case MINIC_BINARY_LOGICAL_OR:
+            return false;
         }
         return false;
     }

@@ -395,7 +395,20 @@ bool minic_lexer_next(MinicLexer *lexer, MinicToken *token, MinicDiagnostic *dia
         token->kind = MINIC_TOKEN_STAR;
         break;
     case '&':
-        token->kind = MINIC_TOKEN_AMPERSAND;
+        if (minic_lexer_peek_next(lexer) == '&') {
+            token->kind = MINIC_TOKEN_AMPERSAND_AMPERSAND;
+            minic_lexer_advance(lexer);
+        } else {
+            token->kind = MINIC_TOKEN_AMPERSAND;
+        }
+        break;
+    case '|':
+        if (minic_lexer_peek_next(lexer) == '|') {
+            token->kind = MINIC_TOKEN_PIPE_PIPE;
+            minic_lexer_advance(lexer);
+        } else {
+            token->kind = MINIC_TOKEN_PIPE;
+        }
         break;
     case '^':
         if (minic_lexer_peek_next(lexer) == '=') {
