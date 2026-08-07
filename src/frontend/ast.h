@@ -201,9 +201,8 @@ typedef struct MinicGlobalObject {
     int *initializer_values;
     size_t initializer_count;
     size_t initializer_capacity;
-    MinicGlobalFunctionRelocation *function_relocations;
+    MinicGlobalFunctionRelocation function_relocations[8];
     size_t function_relocation_count;
-    size_t function_relocation_capacity;
     size_t storage_size;
     size_t alignment;
     bool is_internal;
