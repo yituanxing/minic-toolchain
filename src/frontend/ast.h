@@ -330,7 +330,8 @@ const MinicGlobalObject *minic_c0_program_global_object(const MinicC0Program *pr
                                                         MinicGlobalObjectId global_object_id);
 
 static inline const MinicFunctionType *
-minic_c0_program_function_type(const MinicC0Program *program, MinicFunctionTypeId function_type_id) {
+minic_c0_program_function_type(const MinicC0Program *program,
+                               MinicFunctionTypeId function_type_id) {
     if (program == NULL || function_type_id >= program->function_type_count) {
         return NULL;
     }
@@ -350,7 +351,8 @@ static inline bool minic_c0_program_intern_function_type(MinicC0Program *program
         return false;
     }
     for (index = 0U; index < parameter_count; ++index) {
-        if (minic_type_is_void(parameter_types[index]) || minic_type_is_array(parameter_types[index]) ||
+        if (minic_type_is_void(parameter_types[index]) ||
+            minic_type_is_array(parameter_types[index]) ||
             minic_type_is_function(parameter_types[index])) {
             return false;
         }
