@@ -1,5 +1,9 @@
+typedef struct {
+    int value;
+} error;
+
 int main(void)
 {
-    struct Missing *value;
+    struct error *value;
     return value == value;
 }
