@@ -47,9 +47,7 @@ static bool minic_riscv64_expression_is_integer_zero(const MinicExpression *expr
            minic_type_is_integer(expression->type) && expression->value.integer_value == 0;
 }
 
-static bool
-minic_riscv64_pointer_equality_compatible(const MinicExpression *left,
-                                          const MinicExpression *right) {
+static bool pointer_equality_shape(const MinicExpression *left, const MinicExpression *right) {
     bool left_is_zero;
     bool right_is_zero;
 
@@ -357,7 +355,7 @@ bool minic_riscv64_emit_expression(FILE *file,
         has_integer_common_type =
             left != NULL && right != NULL &&
             minic_type_integer_common(left->type, right->type, &common_integer_type);
-        has_pointer_equality = minic_riscv64_pointer_equality_compatible(left, right);
+        has_pointer_equality = pointer_equality_shape(left, right);
         if (left == NULL || right == NULL ||
             !minic_riscv64_emit_expression(
                 file, program, function, expression->value.binary.left) ||
