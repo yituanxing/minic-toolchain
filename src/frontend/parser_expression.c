@@ -504,6 +504,11 @@ static bool binary_is_shift(MinicTokenKind kind) {
     return kind == MINIC_TOKEN_LESS_LESS || kind == MINIC_TOKEN_GREATER_GREATER;
 }
 
+static bool binary_is_double_arithmetic(MinicTokenKind kind) {
+    return kind == MINIC_TOKEN_PLUS || kind == MINIC_TOKEN_MINUS || kind == MINIC_TOKEN_STAR ||
+           kind == MINIC_TOKEN_SLASH;
+}
+
 static bool type_is_complete_object(const MinicC0Program *program, MinicType type) {
     if (program == NULL || minic_type_is_void(type)) {
         return false;
@@ -572,6 +577,11 @@ static bool binary_result_type(const MinicC0Program *program,
             return minic_type_integer_common(left, left, result);
         }
         return minic_type_integer_common(left, right, result);
+    }
+    if (minic_type_is_double(left) && minic_type_is_double(right) &&
+        binary_is_double_arithmetic(kind)) {
+        *result = minic_type_double();
+        return true;
     }
     if (!pointer_arithmetic_shape(kind, left, right, &pointer_type) ||
         !minic_type_pointee(pointer_type, &pointee_type) ||
