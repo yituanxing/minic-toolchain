@@ -93,10 +93,13 @@ static bool parse_global_reference(MinicParser *parser,
 static bool token_starts_cast_type(const MinicParser *parser, MinicToken token) {
     switch (token.kind) {
     case MINIC_TOKEN_KW_CONST:
+    case MINIC_TOKEN_KW_CHAR:
     case MINIC_TOKEN_KW_INT:
     case MINIC_TOKEN_KW_LONG:
     case MINIC_TOKEN_KW_SIGNED:
     case MINIC_TOKEN_KW_UNSIGNED:
+    case MINIC_TOKEN_KW_FLOAT:
+    case MINIC_TOKEN_KW_DOUBLE:
     case MINIC_TOKEN_KW_VOID:
     case MINIC_TOKEN_KW_STRUCT:
         return true;

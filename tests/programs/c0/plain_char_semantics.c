@@ -66,5 +66,8 @@ int main(void)
     if (narrow_to_char(511) != 255) {
         return 10;
     }
+    if ((char)258 != 2) {
+        return 11;
+    }
     return 0;
 }

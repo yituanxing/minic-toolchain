@@ -50,19 +50,19 @@ External GCC may preprocess, assemble, link, and provide CRT/libc. MiniC must co
 
 The clean-checkout probe derives target-correct RV64 `size_t` from `__SIZE_TYPE__` and verifies the pinned source identities offline.
 
-MiniC now crosses the previously recorded foundations in the unchanged core, including native LONG semantics, self-referential tagged records, distinct plain `char`, `double` and `float` object types, function-pointer record fields, per-pointer-level `const`, anonymous struct typedefs, zero-initialized internal static record objects, ordinary direct `.` member access on record lvalues, pointer-return function completion, bounded null-pointer constant semantics, and now a **real RV64D double-return ABI slice**.
+MiniC now crosses the previously recorded foundations in the unchanged core, including native LONG semantics, self-referential tagged records, distinct plain `char`, `double` and `float` object types, function-pointer record fields, per-pointer-level `const`, anonymous struct typedefs, zero-initialized internal static record objects, ordinary direct `.` member access on record lvalues, pointer-return function completion, bounded null-pointer constant semantics, a real RV64D double-return ABI slice, and now **builtin cast-type lookahead for `char`, `float`, and `double`**.
 
-MiniC 现已越过原生 LONG、自引用标签结构体、独立 plain `char`、`double`/`float` 对象类型、函数指针字段、逐级指针 `const`、匿名 struct typedef、内部静态 record 全零初始化对象、record 左值普通 `.` 成员访问、指针返回函数 completion、受限空指针常量语义，以及当前新增的 **真实 RV64D double 返回 ABI 切片**。
+MiniC 现已越过原生 LONG、自引用标签结构体、独立 plain `char`、`double`/`float` 对象类型、函数指针字段、逐级指针 `const`、匿名 struct typedef、内部静态 record 全零初始化对象、record 左值普通 `.` 成员访问、指针返回函数 completion、受限空指针常量语义、真实 RV64D double 返回 ABI 切片，以及当前新增的 **`char`、`float`、`double` builtin cast-type lookahead**。
 
-The accepted double-return slice intentionally keeps MiniC's current scalar-expression convention: a returned double is represented internally as raw 64-bit bits in `a0`. At ABI boundaries, a direct double-returning call moves `fa0` to `a0` with `fmv.x.d`, and an explicit double return moves `a0` to `fa0` with `fmv.d.x`. Integer, pointer, and void call/return paths remain unchanged. Double parameters, floating constants, arithmetic, comparisons, conversions, and general double object loads/stores remain outside this slice.
+The cast discriminator now recognizes every builtin type specifier already accepted by the general type parser. Existing conversion policy is unchanged: plain `char` casts use the established integer-cast path, while integer-to-`float` and integer-to-`double` conversions remain intentionally rejected. Focused negative fixtures lock that boundary instead of silently widening floating conversion semantics.
 
-当前 double 返回切片刻意保留 MiniC 现有的标量表达式约定：double 值在编译器内部暂以 `a0` 中的 64 位 raw bits 表示。在 ABI 边界，直接 double 返回调用以 `fmv.x.d` 将 `fa0` 搬到 `a0`，显式 double return 以 `fmv.d.x` 将 `a0` 搬回 `fa0`。integer、pointer、void 调用/返回路径不变；double 参数、浮点字面量、算术、比较、转换以及通用 double 对象 load/store 仍不在本切片范围内。
+cast 判别器现在识别通用 type parser 已经接受的 builtin 类型说明符。既有转换策略保持不变：plain `char` cast 复用已存在的整数 cast 路径，而 integer-to-`float` 和 integer-to-`double` 仍刻意拒绝；focused 负例永久锁住该边界，避免借语法识别之名悄悄放宽浮点转换语义。
 
-A dedicated mixed-toolchain runtime gate proves the ABI behavior independently of unsupported MiniC floating expressions. GCC `seed()` returns `123.5` through `fa0`; MiniC `relay()` receives and returns that value; a GCC constructor calls `relay()` and exits with 73 if the result is not exactly `123.5`. Discovery Run #804 passed this test under QEMU with exit 0 and `abi=rv64d-fa0`, while all existing host, RV64, differential, and frozen tiny-AES gates also passed.
+The accepted double-return slice keeps MiniC's current scalar-expression convention: a returned double is represented internally as raw 64-bit bits in `a0`. At ABI boundaries, a direct double-returning call moves `fa0` to `a0` with `fmv.x.d`, and an explicit double return moves `a0` to `fa0` with `fmv.d.x`. Double parameters, floating constants, arithmetic, comparisons, conversions, and general double object loads/stores remain outside that slice.
 
-专用混合工具链运行门禁在不依赖 MiniC 尚未支持的浮点表达式前提下验证 ABI：GCC `seed()` 通过 `fa0` 返回 `123.5`；MiniC `relay()` 接收并再次返回该值；GCC constructor 调用 `relay()`，若结果不精确等于 `123.5` 则退出 73。Discovery Run #804 在 QEMU 下以 exit 0、`abi=rv64d-fa0` 通过，同时既有 host、RV64、差分和冻结 tiny-AES 门禁全部通过。
+已验收的 double 返回切片保留 MiniC 当前的标量表达式约定：double 值在编译器内部暂以 `a0` 中的 64 位 raw bits 表示。在 ABI 边界，直接 double 返回调用以 `fmv.x.d` 将 `fa0` 搬到 `a0`，显式 double return 以 `fmv.d.x` 将 `a0` 搬回 `fa0`。double 参数、浮点字面量、算术、比较、转换以及通用 double 对象 load/store 仍在该切片之外。
 
-The unchanged cJSON source therefore crosses the `double cJSON_GetNumberValue(...)` definition and reaches its first double cast:
+The unchanged cJSON source reaches:
 
 ```c
 return (double) NAN;
@@ -74,19 +74,23 @@ With the project-owned headers, `NAN` preprocesses to `0.0/0.0`, so preprocessed
         return (double) 0.0/0.0;
 ```
 
-The exact next MiniC diagnostic is:
+Discovery Run #809 proves the cast lookahead itself is crossed. The exact next MiniC diagnostic is:
 
 ```text
-cJSON.i:118:17: error: expected expression
+cJSON.i:118:26: error: direct member access requires a record lvalue
 ```
 
-The active blocker is now **recognizing `double` as a cast type in expression lookahead**. The general type parser already knows `double`, but the parenthesized-expression/cast discriminator does not yet include the floating type keywords. This is a frontend syntax/AST capability and is deliberately separate from the proven RV64D return ABI slice. Floating literals immediately after the cast remain a likely later frontier and must be discovered independently rather than folded into this branch.
+The column points to the decimal point in the first `0.0`. The lexer currently emits integer constant `0`, `.` and integer constant `0`; postfix parsing therefore interprets the decimal point as direct record-member syntax. The next independently reviewable capability is **floating literal tokenization and primary-expression representation**, not additional cast syntax.
 
-因此当前活动缺口已经变为 **在表达式 cast lookahead 中识别 `double` 类型**。通用 type parser 已认识 `double`，但括号表达式与 cast 的判别器尚未包含浮点类型关键字；这是独立的前端语法/AST 能力，不并入已经验收的 RV64D 返回 ABI。cast 后紧跟的浮点字面量很可能成为后续前沿，但必须由真实 cJSON discovery 独立确认，而不能提前塞入本分支。
+Discovery Run #809 已证明 cast lookahead 已经越过。当前精确下一条诊断落在第一个 `0.0` 的小数点：lexer 目前将其拆成整数常量 `0`、`.`、整数常量 `0`，postfix parser 因而把小数点误当成 record 直接成员语法。所以下一条可独立审查的能力是 **浮点字面量的词法 token 与 primary-expression 表示**，而不是继续扩展 cast 语法。
 
-`tests/external/cjson/probe.sh` permanently verifies stable early declarations, the crossed direct-member expression at line 104, pointer-return completion at line 105, the crossed null return at line 110, the crossed double-returning function definition at lines 114/115, and the new `(double) 0.0/0.0` frontier at line 118. It requires the exact line-118 diagnostic. Crossing that boundary intentionally fails the gate until the next bounded branch records the following real source frontier.
+Run #809 also passed source inventory, clang-format, Debug, Release `-Werror`, ASan/UBSan, all focused cast gates, RV64 focused validation including the mixed GCC↔MiniC double-return ABI test, all 45 GCC/MiniC differential programs, the extended plain-char cast behavior, and frozen tiny-AES. Its only failure was the intentionally stale cJSON frontier, which exposed the line-118 floating-literal boundary above.
 
-`tests/external/cjson/probe.sh` 永久锚定稳定早期声明、第 104 行已越过的直接成员表达式、第 105 行指针返回 completion、第 110 行已越过的空指针返回、第 114/115 行已越过的 double 返回函数定义，以及第 118 行新的 `(double) 0.0/0.0` 前沿，并要求精确的 line-118 诊断。后续越过该边界时，门禁会主动失败，直到下一条范围受限分支记录新的真实源码前沿。
+Run #809 同时通过 source inventory、clang-format、Debug、Release `-Werror`、ASan/UBSan、全部 focused cast 门禁、包含 GCC↔MiniC double-return ABI 的 RV64 focused 验证、45 个 GCC/MiniC 差分程序、扩展后的 plain-char cast 行为以及冻结 tiny-AES；唯一失败来自故意保留的旧 cJSON 前沿，并由此暴露上述 line-118 浮点字面量边界。
+
+`tests/external/cjson/probe.sh` permanently verifies stable early declarations, the crossed direct-member expression at line 104, pointer-return completion at line 105, the crossed null return at line 110, the crossed double-returning function definition at lines 114/115, and the `(double) 0.0/0.0` source at line 118. It now requires the exact line-118 decimal-point diagnostic. Crossing that boundary intentionally fails the gate until the next bounded branch records the following real source frontier.
+
+`tests/external/cjson/probe.sh` 永久锚定稳定早期声明、第 104 行已越过的直接成员表达式、第 105 行指针返回 completion、第 110 行已越过的空指针返回、第 114/115 行已越过的 double 返回函数定义，以及第 118 行 `(double) 0.0/0.0` 源码；当前要求精确的 line-118 小数点诊断。后续越过该边界时，门禁会主动失败，直到下一条范围受限分支记录新的真实源码前沿。
 
 ## Validation ladder / 验证阶梯
 
