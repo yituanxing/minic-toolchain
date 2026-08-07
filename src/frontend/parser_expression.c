@@ -251,7 +251,8 @@ static bool parse_call_argument(MinicParser *parser,
         return false;
     }
     argument = minic_c0_program_expression(
-        parser->program, call_expression->value.call.arguments[argument_index]);
+        parser->program,
+        call_expression->value.call.arguments[argument_index]);
     if (argument == NULL) {
         minic_parser_error(parser, "invalid call argument");
         return false;
