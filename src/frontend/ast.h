@@ -22,6 +22,7 @@ typedef size_t MinicGlobalObjectId;
 #define MINIC_FUNCTION_INVALID ((MinicFunctionId) - 1)
 #define MINIC_TYPE_ALIAS_INVALID ((MinicTypeAliasId) - 1)
 #define MINIC_GLOBAL_OBJECT_INVALID ((MinicGlobalObjectId) - 1)
+#define MINIC_FUNCTION_TYPE_CAPACITY 32U
 
 typedef enum MinicValueCategory { MINIC_VALUE_RVALUE = 0, MINIC_VALUE_LVALUE } MinicValueCategory;
 
@@ -145,6 +146,12 @@ typedef struct MinicFunction {
     bool is_internal;
 } MinicFunction;
 
+typedef struct MinicFunctionType {
+    MinicType return_type;
+    MinicType parameter_types[8];
+    size_t parameter_count;
+} MinicFunctionType;
+
 typedef struct MinicRecordField {
     char *name;
     size_t name_length;
@@ -210,6 +217,9 @@ typedef struct MinicC0Program {
     size_t function_count;
     size_t function_capacity;
     MinicFunctionId entry_function;
+
+    MinicFunctionType function_types[MINIC_FUNCTION_TYPE_CAPACITY];
+    size_t function_type_count;
 
     MinicRecord *records;
     size_t record_count;
@@ -318,5 +328,77 @@ const MinicTypeAlias *minic_c0_program_type_alias(const MinicC0Program *program,
                                                   MinicTypeAliasId alias_id);
 const MinicGlobalObject *minic_c0_program_global_object(const MinicC0Program *program,
                                                         MinicGlobalObjectId global_object_id);
+
+static inline const MinicFunctionType *
+minic_c0_program_function_type(const MinicC0Program *program, MinicFunctionTypeId function_type_id) {
+    if (program == NULL || function_type_id >= program->function_type_count) {
+        return NULL;
+    }
+    return &program->function_types[function_type_id];
+}
+
+static inline bool minic_c0_program_intern_function_type(MinicC0Program *program,
+                                                         MinicType return_type,
+                                                         const MinicType *parameter_types,
+                                                         size_t parameter_count,
+                                                         MinicType *function_type) {
+    size_t index;
+
+    if (program == NULL || function_type == NULL || parameter_count > 8U ||
+        (parameter_count != 0U && parameter_types == NULL) || minic_type_is_array(return_type) ||
+        minic_type_is_function(return_type)) {
+        return false;
+    }
+    for (index = 0U; index < parameter_count; ++index) {
+        if (minic_type_is_void(parameter_types[index]) || minic_type_is_array(parameter_types[index]) ||
+            minic_type_is_function(parameter_types[index])) {
+            return false;
+        }
+    }
+    for (index = 0U; index < program->function_type_count; ++index) {
+        const MinicFunctionType *existing;
+        size_t parameter_index;
+        bool matches;
+
+        existing = &program->function_types[index];
+        if (existing->parameter_count != parameter_count ||
+            !minic_type_equal(existing->return_type, return_type)) {
+            continue;
+        }
+        matches = true;
+        for (parameter_index = 0U; parameter_index < parameter_count; ++parameter_index) {
+            if (!minic_type_equal(existing->parameter_types[parameter_index],
+                                  parameter_types[parameter_index])) {
+                matches = false;
+                break;
+            }
+        }
+        if (matches) {
+            *function_type = minic_type_function(index);
+            return true;
+        }
+    }
+    if (program->function_type_count >= MINIC_FUNCTION_TYPE_CAPACITY) {
+        return false;
+    }
+    {
+        MinicFunctionType *descriptor;
+        size_t parameter_index;
+        MinicFunctionTypeId function_type_id;
+
+        function_type_id = program->function_type_count;
+        descriptor = &program->function_types[function_type_id];
+        descriptor->return_type = return_type;
+        descriptor->parameter_count = parameter_count;
+        for (parameter_index = 0U; parameter_index < 8U; ++parameter_index) {
+            descriptor->parameter_types[parameter_index] = parameter_index < parameter_count
+                                                               ? parameter_types[parameter_index]
+                                                               : minic_type_void();
+        }
+        program->function_type_count += 1U;
+        *function_type = minic_type_function(function_type_id);
+        return true;
+    }
+}
 
 #endif
