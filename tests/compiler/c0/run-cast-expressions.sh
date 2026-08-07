@@ -43,6 +43,7 @@ grep -F "  addw a0, t0, a0" "$work/cast_expressions.s" >/dev/null
 printf '%s\n' "PASS compiler/c0/cast_integer_lowering"
 
 compile_success cast_typedef_shadow
+compile_success cast_plain_char
 
 "$host_cc" -E -P -x c \
     "$root/tests/programs/c0/null_pointer_constant.c" \
@@ -57,6 +58,12 @@ expect_failure \
     "unsupported cast between these types"
 expect_failure \
     invalid_cast_integer_to_pointer \
+    "unsupported cast between these types"
+expect_failure \
+    invalid_cast_integer_to_float \
+    "unsupported cast between these types"
+expect_failure \
+    invalid_cast_integer_to_double \
     "unsupported cast between these types"
 expect_failure \
     invalid_cast_assignment_target \
