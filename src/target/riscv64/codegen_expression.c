@@ -47,18 +47,22 @@ static bool minic_riscv64_expression_is_integer_zero(const MinicExpression *expr
            minic_type_is_integer(expression->type) && expression->value.integer_value == 0;
 }
 
-static bool minic_riscv64_pointer_equality_compatible(const MinicExpression *left,
-                                                       const MinicExpression *right) {
+static bool
+minic_riscv64_pointer_equality_compatible(const MinicExpression *left,
+                                          const MinicExpression *right) {
+    bool left_is_zero;
+    bool right_is_zero;
+
     if (left == NULL || right == NULL) {
         return false;
     }
     if (minic_type_pointer_equality_compatible(left->type, right->type)) {
         return true;
     }
-    return (minic_type_is_pointer(left->type) &&
-            minic_riscv64_expression_is_integer_zero(right)) ||
-           (minic_riscv64_expression_is_integer_zero(left) &&
-            minic_type_is_pointer(right->type));
+    left_is_zero = minic_riscv64_expression_is_integer_zero(left);
+    right_is_zero = minic_riscv64_expression_is_integer_zero(right);
+    return (minic_type_is_pointer(left->type) && right_is_zero) ||
+           (left_is_zero && minic_type_is_pointer(right->type));
 }
 
 static bool minic_riscv64_emit_double_binary(FILE *file, MinicBinaryOperator operator_kind) {
@@ -235,6 +239,8 @@ static bool minic_riscv64_emit_member_address(FILE *file,
     return fprintf(file,
                    "  li t0, %zu\n"
                    "  add a0, a0, t0\n",
+                   field->storage_offset,
+                   field->storage_offset,
                    field->storage_offset) >= 0;
 }
 
