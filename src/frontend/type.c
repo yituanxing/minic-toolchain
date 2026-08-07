@@ -268,6 +268,29 @@ bool minic_type_integer_common(MinicType left, MinicType right, MinicType *resul
     return true;
 }
 
+static bool minic_type_void_object_pointer_compatible(MinicType target, MinicType source) {
+    MinicType target_pointee;
+    MinicType source_pointee;
+    bool target_is_void;
+    bool source_is_void;
+
+    if (target.pointer_depth != 1U || source.pointer_depth != 1U ||
+        !minic_type_pointee(target, &target_pointee) ||
+        !minic_type_pointee(source, &source_pointee)) {
+        return false;
+    }
+    target_is_void = minic_type_is_void(target_pointee);
+    source_is_void = minic_type_is_void(source_pointee);
+    if (target_is_void == source_is_void) {
+        return false;
+    }
+    if ((!target_is_void && minic_type_is_function(target_pointee)) ||
+        (!source_is_void && minic_type_is_function(source_pointee))) {
+        return false;
+    }
+    return (source_pointee.base_qualifiers & ~target_pointee.base_qualifiers) == 0U;
+}
+
 bool minic_type_assignment_compatible(MinicType target, MinicType source) {
     MinicType unqualified_target;
     MinicType unqualified_source;
@@ -282,7 +305,8 @@ bool minic_type_assignment_compatible(MinicType target, MinicType source) {
         return false;
     }
     return minic_type_equal(unqualified_target, unqualified_source) ||
-           minic_type_pointer_qualification_compatible(unqualified_target, unqualified_source);
+           minic_type_pointer_qualification_compatible(unqualified_target, unqualified_source) ||
+           minic_type_void_object_pointer_compatible(unqualified_target, unqualified_source);
 }
 
 bool minic_type_cast_compatible(MinicType target, MinicType source) {
