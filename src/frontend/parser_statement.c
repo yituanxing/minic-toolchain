@@ -547,9 +547,11 @@ static bool parse_for_update(MinicParser *parser, MinicStatementId *statement_id
         }
         name_span = parser->current.span;
         local_id = minic_parser_find_local(parser, name_span);
-        if (!minic_parser_advance(parser) ||
-            (parser->current.kind != MINIC_TOKEN_PLUS_PLUS &&
-             parser->current.kind != MINIC_TOKEN_MINUS_MINUS)) {
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
+        if (parser->current.kind != MINIC_TOKEN_PLUS_PLUS &&
+            parser->current.kind != MINIC_TOKEN_MINUS_MINUS) {
             minic_parser_error(parser, "postfix update requires '++' or '--'");
             return false;
         }
