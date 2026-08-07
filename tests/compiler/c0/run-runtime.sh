@@ -40,6 +40,31 @@ run_case() {
     printf '%s\n' "PASS compiler/c0/runtime/$name exit=$status"
 }
 
+run_double_return_abi() {
+    name=double_return_abi
+
+    "$riscv_cc" -E -P -x c \
+        "$root/tests/compiler/c0/$name.c" -o "$work/$name.i"
+    "$minic" -S "$work/$name.i" -o "$work/$name.s"
+    grep -F "  fmv.x.d a0, fa0" "$work/$name.s" >/dev/null
+    grep -F "  fmv.d.x fa0, a0" "$work/$name.s" >/dev/null
+    "$riscv_cc" -static \
+        "$work/$name.s" \
+        "$root/tests/compiler/c0/${name}_helper.c" \
+        -o "$work/$name.elf"
+
+    set +e
+    "$qemu" "$work/$name.elf"
+    status=$?
+    set -e
+
+    if test "$status" -ne 0; then
+        printf '%s\n' "FAIL compiler/c0/runtime/$name: expected=0 actual=$status" >&2
+        exit 1
+    fi
+    printf '%s\n' "PASS compiler/c0/runtime/$name exit=$status abi=rv64d-fa0"
+}
+
 run_case empty_main 0 empty_main
 run_case return_0 0 return_0
 run_case return_42 42 return_42
@@ -71,3 +96,4 @@ run_case if_branch_return 6 if_else -DCASE=5
 run_case if_false_fallthrough 2 if_else -DCASE=6
 run_case if_multi_statement 9 if_else -DCASE=7
 run_case array_declaration 0 array_declaration
+run_double_return_abi

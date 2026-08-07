@@ -466,6 +466,9 @@ bool minic_riscv64_emit_expression(FILE *file,
         if (minic_type_is_integer(expression->type)) {
             return minic_riscv64_emit_integer_conversion(file, expression->type, "a0");
         }
+        if (minic_type_is_double(expression->type)) {
+            return fprintf(file, "  fmv.x.d a0, fa0\n") >= 0;
+        }
         return minic_type_is_pointer(expression->type) || minic_type_is_void(expression->type);
     }
     }
