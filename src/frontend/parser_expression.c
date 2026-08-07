@@ -575,7 +575,7 @@ static bool binary_result_type(const MinicC0Program *program,
     }
     if (!pointer_arithmetic_shape(kind, left, right, &pointer_type) ||
         !minic_type_pointee(pointer_type, &pointee_type) ||
-        !type_is_complete_object(parser->program, pointee_type)) {
+        !type_is_complete_object(program, pointee_type)) {
         return false;
     }
     *result = pointer_type;
