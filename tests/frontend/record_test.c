@@ -14,6 +14,8 @@ int main(void)
     MinicC0Program program;
     MinicRecordId record_id;
     MinicRecordId duplicate_id;
+    MinicRecordId anonymous_record_id;
+    MinicRecordId other_anonymous_record_id;
     MinicRecordId hooks_record_id;
     MinicType integer_type;
     MinicType pointer_type;
@@ -31,6 +33,8 @@ int main(void)
     MinicType free_pointer_type;
     const MinicFunctionType *function_type;
     const MinicRecord *record;
+    const MinicRecord *anonymous_record;
+    const MinicRecord *other_anonymous_record;
     const MinicRecord *hooks_record;
     const MinicRecordField *field;
     char record_name[] = "AES_ctx";
@@ -109,9 +113,36 @@ int main(void)
             &program,
             "AES_ctx",
             7U,
-            &duplicate_id)) {
+            &duplicate_id) ||
+        minic_c0_program_add_record(&program, "", 0U, &duplicate_id)) {
         minic_c0_program_destroy(&program);
-        return fail("duplicate record accepted");
+        return fail("invalid tagged record accepted");
+    }
+
+    if (!minic_c0_program_add_anonymous_record(&program, &anonymous_record_id) ||
+        !minic_c0_record_add_field(
+            &program, anonymous_record_id, "json", 4U, pointer_type, 1U) ||
+        !minic_c0_record_add_field(
+            &program, anonymous_record_id, "position", 8U, integer_type, 1U) ||
+        !minic_c0_program_finish_record(&program, anonymous_record_id) ||
+        !minic_c0_program_add_anonymous_record(&program, &other_anonymous_record_id) ||
+        !minic_c0_record_add_field(
+            &program, other_anonymous_record_id, "value", 5U, integer_type, 1U) ||
+        !minic_c0_program_finish_record(&program, other_anonymous_record_id)) {
+        minic_c0_program_destroy(&program);
+        return fail("anonymous record insertion");
+    }
+    anonymous_record = minic_c0_program_record(&program, anonymous_record_id);
+    other_anonymous_record = minic_c0_program_record(&program, other_anonymous_record_id);
+    if (anonymous_record == NULL || other_anonymous_record == NULL ||
+        anonymous_record_id == other_anonymous_record_id ||
+        anonymous_record->name == NULL || other_anonymous_record->name == NULL ||
+        anonymous_record->name_length != 0U || other_anonymous_record->name_length != 0U ||
+        strcmp(anonymous_record->name, "") != 0 || strcmp(other_anonymous_record->name, "") != 0 ||
+        !anonymous_record->is_complete || !other_anonymous_record->is_complete ||
+        anonymous_record->field_count != 2U || other_anonymous_record->field_count != 1U) {
+        minic_c0_program_destroy(&program);
+        return fail("anonymous record identity and metadata");
     }
 
     record = minic_c0_program_record(&program, record_id);
