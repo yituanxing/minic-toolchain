@@ -84,10 +84,11 @@ bool minic_parser_parse_integer_value(MinicParser *parser, int *value) {
     size_t offset;
     unsigned long parsed;
     unsigned long base;
+    bool constant_kind;
 
-    if (value == NULL ||
-        (parser->current.kind != MINIC_TOKEN_INTEGER_CONSTANT &&
-         parser->current.kind != MINIC_TOKEN_CHARACTER_CONSTANT)) {
+    constant_kind = parser->current.kind == MINIC_TOKEN_INTEGER_CONSTANT ||
+                    parser->current.kind == MINIC_TOKEN_CHARACTER_CONSTANT;
+    if (value == NULL || !constant_kind) {
         minic_parser_error(parser, "expected integer or character constant");
         return false;
     }
