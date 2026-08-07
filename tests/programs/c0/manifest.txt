@@ -32,6 +32,7 @@ bitwise_xor
 pointer_member
 direct_record_member
 pointer_return
+null_pointer_constant
 expression_statement
 postfix_subscript
 compound_xor_assignment
