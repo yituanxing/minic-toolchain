@@ -50,33 +50,41 @@ External GCC may preprocess, assemble, link, and provide CRT/libc. MiniC must co
 
 The clean-checkout probe derives target-correct RV64 `size_t` from `__SIZE_TYPE__` and verifies the pinned source identities offline.
 
-MiniC now crosses the previously recorded foundations in the unchanged core, including native LONG semantics, self-referential tagged records, distinct plain `char`, `double` and `float` object types, function-pointer record fields, per-pointer-level `const`, anonymous struct typedefs, zero-initialized internal static record objects, and now **ordinary direct `.` member access on record lvalues**.
+MiniC now crosses the previously recorded foundations in the unchanged core, including native LONG semantics, self-referential tagged records, distinct plain `char`, `double` and `float` object types, function-pointer record fields, per-pointer-level `const`, anonymous struct typedefs, zero-initialized internal static record objects, ordinary direct `.` member access on record lvalues, and now **pointer-return function completion**.
 
-MiniC 现已越过原生 LONG、自引用标签结构体、独立 plain `char`、`double`/`float` 对象类型、函数指针字段、逐级指针 `const`、匿名 struct typedef、内部静态 record 全零初始化对象，以及当前新增的 **record 左值普通 `.` 成员访问**。
+MiniC 现已越过原生 LONG、自引用标签结构体、独立 plain `char`、`double`/`float` 对象类型、函数指针字段、逐级指针 `const`、匿名 struct typedef、内部静态 record 全零初始化对象、record 左值普通 `.` 成员访问，以及当前新增的 **指针返回函数 completion**。
 
-Direct member access reuses the existing pointer-member AST and RV64 lowering contract. The parser validates a record lvalue, forms its address, and feeds that pointer into the same MEMBER representation used by `->`. Static record globals may enter expression parsing when immediately followed by `.`, while unsupported bare global-record value use remains rejected.
+Pointer-returning functions no longer require a synthetic default pointer-valued return expression at the closing brace. Explicit pointer `return` statements retain the existing type-checking path and RV64 `a0` lowering. The permanent `pointer_return` differential program calls a pointer-returning helper, receives the pointer, dereferences it, and matches GCC with exit 29. Integer and `void` completion behavior remains unchanged.
 
-直接成员访问复用既有 pointer-member AST 与 RV64 lowering 契约：Parser 校验 record 左值并取得地址，再将该指针送入与 `->` 相同的 MEMBER 表示。静态 record 全局对象在后接 `.` 时可以进入表达式解析，而尚未支持的裸全局 record 值使用继续被拒绝。
+指针返回函数在闭合花括号处不再被强制构造 synthetic 默认指针返回表达式；显式 pointer `return` 继续沿用既有类型检查与 RV64 `a0` lowering。永久 `pointer_return` 差分程序真实调用指针返回 helper、接收返回指针并解引用，和 GCC 一致退出 29；integer/`void` completion 行为保持不变。
 
-The unchanged cJSON source now crosses:
+The unchanged cJSON source therefore crosses the closing brace of `cJSON_GetErrorPtr` and enters `cJSON_GetStringValue`:
 
 ```c
-return (const char*) (global_error.json + global_error.position);
+CJSON_PUBLIC(char *) cJSON_GetStringValue(const cJSON * const item)
+{
+    if (!cJSON_IsString(item))
+    {
+        return NULL;
+    }
+
+    return item->valuestring;
+}
 ```
 
-The next exact diagnostic occurs at the closing brace of that pointer-returning function:
+With the project-owned `<stddef.h>`, `NULL` preprocesses to `((void *)0)`. The exact next MiniC diagnostic is:
 
 ```text
-cJSON.i:105:1: error: unsupported implicit return type
+cJSON.i:110:26: error: unsupported cast between these types
 ```
 
-This diagnostic comes from MiniC's function-completion path: it currently synthesizes a default trailing return for every function and supports that synthetic completion only for integer and `void` return types. `cJSON_GetErrorPtr` returns `const char *`, so the next independently reviewable capability is **pointer-return function completion / fallthrough handling**, not additional record-member syntax.
+The active blocker is **C null pointer constant semantics**, specifically the integer constant zero cast to `void *` produced by `NULL`. MiniC intentionally still rejects general integer-to-pointer casts; the next branch must distinguish a valid null pointer constant from arbitrary integer-to-pointer conversion rather than weakening the general cast rule.
 
-该诊断来自 MiniC 的函数收尾路径：当前每个函数都会补一个默认尾部 return，而该 synthetic completion 目前只支持整数和 `void` 返回类型。`cJSON_GetErrorPtr` 返回 `const char *`，因此下一条独立能力是 **指针返回函数的 completion / fallthrough 处理**，而不是继续扩展 record 成员语法。
+当前活动缺口是 **C 空指针常量语义**，具体为 `NULL` 展开出的整数常量零到 `void *` 的转换。MiniC 仍刻意拒绝一般 integer-to-pointer cast；下一条分支应准确识别合法 null pointer constant，而不是放宽任意整数到指针的转换规则。
 
-`tests/external/cjson/probe.sh` permanently verifies stable early declarations, the float prototype at preprocessed line 61, the anonymous `typedef struct {` at line 97, the static `global_error` declaration at line 101, the crossed direct-member expression at line 104, and the closing brace at line 105. It requires the exact line-105 function-completion diagnostic. Crossing that boundary intentionally fails the gate until the next bounded branch records the following real source frontier.
+`tests/external/cjson/probe.sh` permanently verifies stable early declarations, the float prototype at preprocessed line 61, the anonymous `typedef struct {` at line 97, the static `global_error` declaration at line 101, the crossed direct-member expression at line 104, the crossed pointer-return closing brace at line 105, and the `return ((void *)0);` expansion at line 110. It requires the exact line-110 null-pointer diagnostic. Crossing that boundary intentionally fails the gate until the next bounded branch records the following real source frontier.
 
-`tests/external/cjson/probe.sh` 永久锚定稳定早期声明、预处理第 61 行的 `float` 原型、第 97 行匿名 `typedef struct {`、第 101 行静态 `global_error` 声明、已越过的第 104 行直接成员表达式，以及第 105 行函数闭合位置，并要求精确的 line-105 函数收尾诊断。后续越过该边界时，门禁会主动失败，直到下一条范围受限分支记录新的真实源码前沿。
+`tests/external/cjson/probe.sh` 永久锚定稳定早期声明、预处理第 61 行的 `float` 原型、第 97 行匿名 `typedef struct {`、第 101 行静态 `global_error` 声明、第 104 行已越过的直接成员表达式、第 105 行已越过的指针返回函数闭合位置，以及第 110 行 `return ((void *)0);` 展开，并要求精确的 line-110 空指针诊断。后续越过该边界时，门禁会主动失败，直到下一条范围受限分支记录新的真实源码前沿。
 
 ## Validation ladder / 验证阶梯
 
