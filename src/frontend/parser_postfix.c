@@ -69,9 +69,9 @@ static bool array_object_element_type(const MinicParser *parser,
     return false;
 }
 
-static bool append_array_decay(MinicParser *parser,
-                               MinicExpressionId base_id,
-                               MinicExpressionId *expression_id) {
+bool minic_parser_apply_array_decay(MinicParser *parser,
+                                    MinicExpressionId input_id,
+                                    MinicExpressionId *expression_id) {
     const MinicExpression *base;
     MinicExpression zero;
     MinicExpression subscript;
@@ -80,9 +80,14 @@ static bool append_array_decay(MinicParser *parser,
     MinicExpressionId subscript_id;
     MinicType element_type;
 
-    base = minic_c0_program_expression(parser->program, base_id);
-    if (base == NULL || !array_object_element_type(parser, base_id, &element_type)) {
+    base = minic_c0_program_expression(parser->program, input_id);
+    if (base == NULL) {
+        minic_parser_error(parser, "invalid array decay operand");
         return false;
+    }
+    if (!array_object_element_type(parser, input_id, &element_type)) {
+        *expression_id = input_id;
+        return true;
     }
 
     (void)memset(&zero, 0, sizeof(zero));
@@ -100,7 +105,7 @@ static bool append_array_decay(MinicParser *parser,
     subscript.span = base->span;
     subscript.type = element_type;
     subscript.value_category = MINIC_VALUE_LVALUE;
-    subscript.value.subscript.base = base_id;
+    subscript.value.subscript.base = input_id;
     subscript.value.subscript.index = zero_id;
     if (!minic_parser_add_expression(parser, &subscript, &subscript_id)) {
         return false;
@@ -144,7 +149,7 @@ static bool parse_one_subscript(MinicParser *parser,
         return false;
     }
     if (parser->current.kind != MINIC_TOKEN_RBRACKET) {
-        minic_parser_error(parser, "expected ']'");
+        minic_parser_error(parser, "expected ']'" );
         return false;
     }
     subscript_end = parser->current.span.end;
@@ -165,11 +170,8 @@ static bool parse_one_subscript(MinicParser *parser,
 
 bool minic_parser_parse_postfix(MinicParser *parser,
                                 MinicExpressionId base_id,
-                                bool array_object_hint,
                                 MinicExpressionId *expression_id) {
     MinicExpressionId current;
-    const MinicExpression *current_expression;
-    MinicType element_type;
 
     current = base_id;
     for (;;) {
@@ -194,13 +196,6 @@ bool minic_parser_parse_postfix(MinicParser *parser,
         break;
     }
 
-    current_expression = minic_c0_program_expression(parser->program, current);
-    if ((array_object_hint ||
-         (current_expression != NULL && minic_type_is_array(current_expression->type))) &&
-        array_object_element_type(parser, current, &element_type)) {
-        (void)element_type;
-        return append_array_decay(parser, current, expression_id);
-    }
     *expression_id = current;
     return true;
 }
