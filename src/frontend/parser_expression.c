@@ -244,15 +244,15 @@ static bool parse_call_argument(MinicParser *parser,
                                 const MinicFunction *callee,
                                 size_t argument_index) {
     const MinicExpression *argument;
+    MinicExpressionId argument_id;
 
     if (argument_index >= 8U ||
         !minic_parser_parse_expression(
             parser, &call_expression->value.call.arguments[argument_index], 0U)) {
         return false;
     }
-    argument = minic_c0_program_expression(
-        parser->program,
-        call_expression->value.call.arguments[argument_index]);
+    argument_id = call_expression->value.call.arguments[argument_index];
+    argument = minic_c0_program_expression(parser->program, argument_id);
     if (argument == NULL) {
         minic_parser_error(parser, "invalid call argument");
         return false;
