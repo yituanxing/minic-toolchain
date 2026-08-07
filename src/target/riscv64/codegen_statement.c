@@ -88,6 +88,10 @@ static bool minic_riscv64_emit_return(FILE *file,
             !minic_riscv64_emit_integer_conversion(file, function->return_type, "a0")) {
             return false;
         }
+        if (minic_type_is_double(function->return_type) &&
+            fprintf(file, "  fmv.d.x fa0, a0\n") < 0) {
+            return false;
+        }
     }
     return fprintf(file, "  j .L%s_return\n", function->name) >= 0;
 }
