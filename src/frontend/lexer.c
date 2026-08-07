@@ -164,6 +164,27 @@ static void minic_lexer_set_message(const MinicLexer *lexer,
     (void)snprintf(diagnostic->message, sizeof(diagnostic->message), "%s", message);
 }
 
+static bool minic_lexer_scan_decimal_exponent(MinicLexer *lexer,
+                                              MinicDiagnostic *diagnostic,
+                                              MinicSourcePosition begin) {
+    if (minic_lexer_peek(lexer) != 'e' && minic_lexer_peek(lexer) != 'E') {
+        return true;
+    }
+
+    minic_lexer_advance(lexer);
+    if (minic_lexer_peek(lexer) == '+' || minic_lexer_peek(lexer) == '-') {
+        minic_lexer_advance(lexer);
+    }
+    if (!minic_is_decimal_digit(minic_lexer_peek(lexer))) {
+        minic_lexer_set_message(lexer, diagnostic, begin, "expected decimal digit in exponent");
+        return false;
+    }
+    do {
+        minic_lexer_advance(lexer);
+    } while (minic_is_decimal_digit(minic_lexer_peek(lexer)));
+    return true;
+}
+
 void minic_lexer_initialize(MinicLexer *lexer,
                             const char *path,
                             const char *source,
@@ -207,6 +228,20 @@ bool minic_lexer_next(MinicLexer *lexer, MinicToken *token, MinicDiagnostic *dia
         return true;
     }
 
+    if (character == '.' && minic_is_decimal_digit(minic_lexer_peek_next(lexer))) {
+        minic_lexer_advance(lexer);
+        do {
+            minic_lexer_advance(lexer);
+        } while (minic_is_decimal_digit(minic_lexer_peek(lexer)));
+        if (!minic_lexer_scan_decimal_exponent(lexer, diagnostic, begin)) {
+            token->span.end = minic_lexer_position(lexer);
+            return false;
+        }
+        token->kind = MINIC_TOKEN_FLOATING_CONSTANT;
+        token->span.end = minic_lexer_position(lexer);
+        return true;
+    }
+
     if (minic_is_decimal_digit(character)) {
         if (character == '0' &&
             (minic_lexer_peek_next(lexer) == 'x' || minic_lexer_peek_next(lexer) == 'X')) {
@@ -221,12 +256,31 @@ bool minic_lexer_next(MinicLexer *lexer, MinicToken *token, MinicDiagnostic *dia
             do {
                 minic_lexer_advance(lexer);
             } while (minic_is_hexadecimal_digit(minic_lexer_peek(lexer)));
+            token->kind = MINIC_TOKEN_INTEGER_CONSTANT;
         } else {
+            bool is_floating;
+
+            is_floating = false;
             do {
                 minic_lexer_advance(lexer);
             } while (minic_is_decimal_digit(minic_lexer_peek(lexer)));
+            if (minic_lexer_peek(lexer) == '.') {
+                is_floating = true;
+                minic_lexer_advance(lexer);
+                while (minic_is_decimal_digit(minic_lexer_peek(lexer))) {
+                    minic_lexer_advance(lexer);
+                }
+            }
+            if (minic_lexer_peek(lexer) == 'e' || minic_lexer_peek(lexer) == 'E') {
+                is_floating = true;
+                if (!minic_lexer_scan_decimal_exponent(lexer, diagnostic, begin)) {
+                    token->span.end = minic_lexer_position(lexer);
+                    return false;
+                }
+            }
+            token->kind =
+                is_floating ? MINIC_TOKEN_FLOATING_CONSTANT : MINIC_TOKEN_INTEGER_CONSTANT;
         }
-        token->kind = MINIC_TOKEN_INTEGER_CONSTANT;
         token->span.end = minic_lexer_position(lexer);
         return true;
     }
