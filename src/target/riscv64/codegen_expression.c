@@ -239,8 +239,6 @@ static bool minic_riscv64_emit_member_address(FILE *file,
     return fprintf(file,
                    "  li t0, %zu\n"
                    "  add a0, a0, t0\n",
-                   field->storage_offset,
-                   field->storage_offset,
                    field->storage_offset) >= 0;
 }
 
