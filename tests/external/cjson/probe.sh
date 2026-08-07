@@ -169,6 +169,7 @@ verify_preprocessed_line 142 '    if ((string1 == ((void *)0)) || (string2 == ((
 verify_preprocessed_line 150 '    for(; tolower(*string1) == tolower(*string2); (void)string1++, string2++)'
 verify_preprocessed_line 152 "        if (*string1 == '\\0')"
 verify_preprocessed_line 165 'static internal_hooks global_hooks = { malloc, free, realloc };'
+verify_preprocessed_line 174 '    length = strlen((const char*)string) + sizeof("");'
 
 set +e
 "$minic" -S "$preprocessed" -o "$work/cJSON.s" \
@@ -184,7 +185,7 @@ fi
 
 first_error=$(sed -n '/error:/p' "$diagnostic" | sed -n '1p')
 case "$first_error" in
-    *":165:40: error: static pointer initializer must be null")
+    *":174:50: error: call to function not yet declared")
         ;;
     *)
         printf '%s\n' \
@@ -195,4 +196,4 @@ case "$first_error" in
 esac
 
 printf '%s\n' \
-    'PASS external/cjson frontier=function-valued-static-initializer diagnostic=static-pointer-must-be-null source=cJSON-1.7.19 offline=1'
+    'PASS external/cjson frontier=sizeof-expression diagnostic=call-not-declared source=cJSON-1.7.19 offline=1'
