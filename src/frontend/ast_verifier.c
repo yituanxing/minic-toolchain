@@ -267,6 +267,9 @@ verify_expression(const MinicC0Program *program, size_t expression_index, MinicC
     case MINIC_EXPRESSION_INTEGER:
         return expression->value_category == MINIC_VALUE_RVALUE &&
                minic_type_is_integer(expression->type);
+    case MINIC_EXPRESSION_FLOATING:
+        return expression->value_category == MINIC_VALUE_RVALUE &&
+               minic_type_is_double(expression->type);
     case MINIC_EXPRESSION_LOCAL: {
         const MinicLocal *local;
 
