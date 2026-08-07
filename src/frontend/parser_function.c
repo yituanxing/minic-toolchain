@@ -137,12 +137,8 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
 
     if (!minic_parser_advance(parser) ||
         !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '('") ||
-        !minic_parser_parse_parameter_list(parser,
-                                           parameter_name_spans,
-                                           parameter_types,
-                                           &parameter_count,
-                                           true,
-                                           &is_variadic) ||
+        !minic_parser_parse_parameter_list(
+            parser, parameter_name_spans, parameter_types, &parameter_count, true, &is_variadic) ||
         !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')'")) {
         return false;
     }
