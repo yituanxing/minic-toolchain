@@ -50,4 +50,4 @@ expect_failure \
     "assignment target must be a modifiable lvalue"
 expect_failure \
     invalid_bare_global_array \
-    "global array object requires a subscript"
+    "return expression does not match function return type"
