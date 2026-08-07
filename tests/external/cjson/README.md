@@ -23,57 +23,43 @@ External GCC may preprocess, assemble, link, and provide CRT/libc. MiniC must co
 
 ## Accepted compiler capabilities / 已越过能力
 
-The unchanged core now crosses the previously frozen language features plus the integer/pointer scalar-condition cluster and the bounded `for`-clause/update cluster.
+The unchanged core now crosses the previously frozen language features, scalar-condition semantics, generalized bounded `for` clauses, and narrow character constants.
 
-本分支继续越过 integer/pointer scalar-condition 之后的 `for` clause/update 语义簇。
+本分支新增窄字符常量：Lexer 保留独立 `CHARACTER_CONSTANT` token，Parser 将普通单字符和基本单字符 escape 解码为标准 C `int` rvalue，AST / verifier / RV64 继续复用既有 integer constant 路径。多字符常量以及 octal/hex escape 仍保留为后续边界。
 
-The `for` cluster keeps the existing `for` -> `while` lowering but broadens the parser scaffold to accept:
+A permanent `character_literals` GCC/MiniC RV64 differential is registered as the 52nd program. It covers `\0`, ordinary ASCII literals, newline/tab, slash/quote/question escapes, and integer-expression use.
 
-- empty `for` initializer and condition clauses;
-- comma-separated prefix/postfix `++` / `--` updates in the for-post clause;
-- integer and complete-object-pointer local updates;
-- discarded `(void)p++` spelling used by real C;
-- a real hosted `int tolower(int)` declaration in the cJSON probe.
-
-This is intentionally transitional: a final general `CommaExpr` / `AssignExpr` AST is **not** introduced until ordinary real-project expression contexts require it.
-
-当前实现继续复用 `for -> while` lowering，并支持 empty clause、for-post 中逗号分隔的前/后缀 `++/--`、integer/完整对象 pointer update，以及 `(void)p++`。这里没有为了当前一行源码提前建立最终 `CommaExpr` / `AssignExpr` 架构。
-
-A permanent `for_clause_updates` GCC/MiniC RV64 differential is registered as the 51st program. It verifies an empty initializer plus ordered `(void)pointer++, index++` updates and checks the resulting array contents, integer counter, and pointer position under QEMU.
-
-永久 `for_clause_updates` GCC/MiniC RV64 differential 已登记为第 51 个程序，并在 QEMU 中验证 empty initializer、pointer/integer comma update 的顺序及结果。
+永久 `character_literals` GCC/MiniC RV64 differential 已登记为第 52 个程序。
 
 ## Current exact frontier / 当前精确前沿
 
-Discovery Run #898 passed source inventory, clang-format 18, Debug, Release `-Werror`, ASan/UBSan, existing focused suites, all 51 permanent GCC/MiniC RV64 differential programs including `for_clause_updates`, and frozen tiny-AES.
+Discovery Run #903 passed source inventory, clang-format 18, Debug, Release `-Werror`, ASan/UBSan, existing focused suites, all 52 permanent GCC/MiniC RV64 differential programs including `character_literals`, and frozen tiny-AES.
 
 The unchanged cJSON source crossed:
-
-```c
-    for(; tolower(*string1) == tolower(*string2); (void)string1++, string2++)
-```
-
-and reached:
 
 ```c
         if (*string1 == '\0')
 ```
 
-with the exact first diagnostic:
+and reached the function-valued static record initializer:
 
-```text
-cJSON.i:142:25: error: unexpected character '''
+```c
+static internal_hooks global_hooks = { malloc, free, realloc };
 ```
 
-The next missing capability is therefore a narrow character literal. It is outside this `for`-clause cluster and will be handled on the next semantic line rather than widening this PR.
+with exact first diagnostic:
 
-Run #898 已证明 `for` clause/update 簇真实跨过并把 unchanged cJSON 推进到 `*string1 == '\0'`。下一条首个缺失能力是 character literal，不继续塞入当前分支。
+```text
+cJSON.i:155:40: error: static pointer initializer must be null
+```
+
+The next missing capability is therefore no longer a literal/`sizeof` issue. It is the function-value / static function-pointer initializer cluster: function designators must become pointer values and aggregate static initialization must be able to carry relocatable function addresses. `sizeof` appears later and is intentionally not pulled into this branch before real source reaches it.
+
+Run #903 已证明字符常量在 RV64/QEMU 中通过，并将 unchanged cJSON 推进到函数地址静态初始化。下一条转入 function-value / static initializer 语义簇；本分支不因为原计划名称包含 `sizeof` 就强行提前实现它。
 
 ## Validation / 验证
 
-Run #898 passed all compiler gates except the intentionally stale cJSON frontier and proved `for_clause_updates` under RV64/QEMU. A latest-head clean run with the updated character-literal frontier is required before merge.
-
-Run #898 除故意保持旧值的 cJSON frontier 外全部通过；最新 Head 仍需用更新后的 character-literal probe 完整 clean 验证后才可合并。
+Run #903 passed every compiler/runtime gate except the intentionally stale cJSON frontier. A latest-head clean run with the updated line-155 probe is required before merge.
 
 ## Completion result / 完成标志
 
