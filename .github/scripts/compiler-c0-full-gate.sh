@@ -151,6 +151,15 @@ variadic_declaration_focused() {
         sh tests/compiler/c0/run-variadic-declarations.sh
 }
 
+variadic_call_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" \
+    BUILD_DIR="$root/build/ci-variadic-direct-calls" \
+    RISCV_CC=riscv64-linux-gnu-gcc \
+    QEMU_RISCV64=qemu-riscv64 \
+    REQUIRE_RISCV_RUNTIME=1 \
+        sh tests/compiler/c0/run-variadic-direct-calls.sh
+}
+
 rv64_focused() {
     MINIC="$root/build/ci-debug/bin/minic" \
     BUILD_DIR="$root/build/ci-rv64-focused" \
@@ -196,9 +205,11 @@ if ! wait_phase; then
     exit 1
 fi
 
-printf '%s\n' 'Phase 2: focused declaration/static-local/RV64 suites, differential programs, tiny-AES, and cJSON'
+printf '%s\n' \
+    'Phase 2: focused declaration/static-local/variadic-call/RV64 suites, differential programs, tiny-AES, and cJSON'
 start_gate static-local-focused static_local_focused
 start_gate variadic-declarations-focused variadic_declaration_focused
+start_gate variadic-call-focused variadic_call_focused
 start_gate rv64-focused rv64_focused
 start_gate rv64-programs rv64_programs
 start_gate external-tiny-aes external_tiny_aes
