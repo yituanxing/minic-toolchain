@@ -149,7 +149,7 @@ static bool parse_one_subscript(MinicParser *parser,
         return false;
     }
     if (parser->current.kind != MINIC_TOKEN_RBRACKET) {
-        minic_parser_error(parser, "expected ']'" );
+        minic_parser_error(parser, "expected ']'");
         return false;
     }
     subscript_end = parser->current.span.end;
