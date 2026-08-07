@@ -195,6 +195,14 @@ static bool verify_binary_type(const MinicC0Program *program,
         return false;
     }
 
+    if ((expression->value.binary.operator_kind == MINIC_BINARY_EQUAL ||
+         expression->value.binary.operator_kind == MINIC_BINARY_NOT_EQUAL) &&
+        (minic_type_pointer_equality_compatible(left->type, right->type) ||
+         (minic_type_is_pointer(left->type) && expression_is_integer_zero(right)) ||
+         (expression_is_integer_zero(left) && minic_type_is_pointer(right->type)))) {
+        return minic_type_equal(expression->type, minic_type_int());
+    }
+
     if (minic_type_is_integer(left->type) && minic_type_is_integer(right->type)) {
         if (binary_is_comparison(expression->value.binary.operator_kind)) {
             expected_type = minic_type_int();
