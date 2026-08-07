@@ -370,8 +370,9 @@ static bool expression_is_integer_condition(MinicParser *parser, MinicExpression
     const MinicExpression *expression;
 
     expression = minic_c0_program_expression(parser->program, expression_id);
-    if (expression == NULL || !minic_type_is_integer(expression->type)) {
-        minic_parser_error(parser, "condition requires an integer expression");
+    if (expression == NULL ||
+        (!minic_type_is_integer(expression->type) && !minic_type_is_pointer(expression->type))) {
+        minic_parser_error(parser, "condition requires an integer or pointer expression");
         return false;
     }
     return true;
