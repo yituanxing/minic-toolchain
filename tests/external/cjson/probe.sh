@@ -100,6 +100,7 @@ verify_preprocessed_line 2 'typedef struct cJSON'
 verify_preprocessed_line 4 '    struct cJSON *next;'
 verify_preprocessed_line 8 '    char *valuestring;'
 verify_preprocessed_line 10 '    double valuedouble;'
+verify_preprocessed_line 15 '      void *( *malloc_fn)(size_t sz);'
 
 set +e
 "$minic" -S "$preprocessed" -o "$work/cJSON.s" \
@@ -115,7 +116,7 @@ fi
 
 first_error=$(sed -n '/error:/p' "$diagnostic" | sed -n '1p')
 case "$first_error" in
-    *':10:5: error: expected type name')
+    *':15:13: error: expected record field name')
         ;;
     *)
         printf '%s\n' \
@@ -126,4 +127,4 @@ case "$first_error" in
 esac
 
 printf '%s\n' \
-    'PASS external/cjson frontier=double-type-specifier diagnostic=expected-type-name source=cJSON-1.7.19 offline=1'
+    'PASS external/cjson frontier=function-pointer-record-field-declarator diagnostic=expected-record-field-name source=cJSON-1.7.19 offline=1'

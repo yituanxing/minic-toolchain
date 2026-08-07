@@ -19,6 +19,7 @@ int main(void)
     MinicFunctionId function_id;
     MinicLocalId local_id;
     MinicRecordId record_id;
+    MinicRecordId floating_record_id;
     MinicLocal local;
     MinicType byte_type;
     MinicType pointer_type;
@@ -26,10 +27,13 @@ int main(void)
     MinicDiagnostic diagnostic;
     const MinicFunction *function;
     const MinicRecord *record;
+    const MinicRecord *floating_record;
     size_t byte_size;
     size_t byte_alignment;
     size_t long_size;
     size_t long_alignment;
+    size_t double_size;
+    size_t double_alignment;
 
     minic_c0_program_initialize(&program);
     (void)memset(&diagnostic, 0, sizeof(diagnostic));
@@ -59,6 +63,47 @@ int main(void)
         long_size != 8U || long_alignment != 8U) {
         minic_c0_program_destroy(&program);
         return fail("RV64 long scalar layout");
+    }
+
+    if (!minic_riscv64_type_layout(
+            &program,
+            minic_type_double(),
+            &double_size,
+            &double_alignment) ||
+        double_size != 8U || double_alignment != 8U) {
+        minic_c0_program_destroy(&program);
+        return fail("RV64 double scalar layout");
+    }
+
+    if (!minic_c0_program_add_record(
+            &program,
+            "FloatPacket",
+            11U,
+            &floating_record_id) ||
+        !minic_c0_record_add_field(
+            &program,
+            floating_record_id,
+            "prefix",
+            6U,
+            byte_type,
+            1U) ||
+        !minic_c0_record_add_field(
+            &program,
+            floating_record_id,
+            "value",
+            5U,
+            minic_type_double(),
+            1U) ||
+        !minic_c0_record_add_field(
+            &program,
+            floating_record_id,
+            "suffix",
+            6U,
+            byte_type,
+            1U) ||
+        !minic_c0_program_finish_record(&program, floating_record_id)) {
+        minic_c0_program_destroy(&program);
+        return fail("construct double record");
     }
 
     if (!minic_c0_program_add_record(
@@ -170,6 +215,15 @@ int main(void)
             &diagnostic)) {
         minic_c0_program_destroy(&program);
         return fail("layout program");
+    }
+
+    floating_record = minic_c0_program_record(&program, floating_record_id);
+    if (floating_record == NULL || floating_record->storage_size != 24U ||
+        floating_record->alignment != 8U || floating_record->fields[0].storage_offset != 0U ||
+        floating_record->fields[1].storage_offset != 8U ||
+        floating_record->fields[2].storage_offset != 16U) {
+        minic_c0_program_destroy(&program);
+        return fail("double record field layout");
     }
 
     record = minic_c0_program_record(&program, record_id);

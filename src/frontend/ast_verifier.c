@@ -33,6 +33,11 @@ static bool type_is_valid(const MinicC0Program *program, MinicType type) {
                (type.integer_rank == MINIC_INTEGER_RANK_CHAR ||
                 type.integer_rank == MINIC_INTEGER_RANK_INT ||
                 type.integer_rank == MINIC_INTEGER_RANK_LONG);
+    case MINIC_TYPE_BASE_DOUBLE:
+        return type.record_id == MINIC_RECORD_INVALID &&
+               type.array_type_id == MINIC_ARRAY_TYPE_INVALID &&
+               type.integer_sign == MINIC_INTEGER_SIGN_NONE &&
+               type.integer_rank == MINIC_INTEGER_RANK_NONE && !type.is_plain_char;
     case MINIC_TYPE_BASE_RECORD:
         return type.record_id < program->record_count &&
                type.array_type_id == MINIC_ARRAY_TYPE_INVALID &&
@@ -53,7 +58,7 @@ static bool type_is_complete_object_bounded(const MinicC0Program *program,
     if (remaining_depth == 0U || minic_type_is_void(type)) {
         return false;
     }
-    if (minic_type_is_integer(type) || minic_type_is_pointer(type)) {
+    if (minic_type_is_integer(type) || minic_type_is_double(type) || minic_type_is_pointer(type)) {
         return true;
     }
     if (minic_type_is_record(type)) {

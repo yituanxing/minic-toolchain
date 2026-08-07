@@ -73,24 +73,24 @@ The clean-checkout probe preprocesses the unchanged core with a minimal Hosted h
 typedef long unsigned int size_t;
 ```
 
-MiniC accepts this declaration with native signed and unsigned LONG rank identities, C integer conversions, eight-byte RV64 layout, and full-width code generation. It introduces a tagged record before parsing its fields, keeps one stable record identity while the definition is incomplete, permits pointer self-reference, and rejects incomplete records used by value. It now also models plain `char` as a C type distinct from `unsigned char` while using the unsigned byte value behavior required by the active RV64 target; one-byte layout, integer promotion, byte loads/stores, function returns, and pointer scaling are covered by permanent gates.
+MiniC accepts this declaration with native signed and unsigned LONG rank identities, C integer conversions, eight-byte RV64 layout, and full-width code generation. It introduces a tagged record before parsing its fields, keeps one stable record identity while the definition is incomplete, permits pointer self-reference, and rejects incomplete records used by value. It models plain `char` as a C type distinct from `unsigned char` while using the unsigned byte value behavior required by the active RV64 target. It now also models `double` as a distinct non-integer complete object type with eight-byte size and eight-byte alignment on RV64; record layout, qualifiers, pointers, and AST type contracts understand that identity.
 
-MiniC 已通过原生有符号/无符号 LONG Rank、C 整数转换、RV64 八字节布局与全宽代码生成接受该声明；同时会在解析字段前引入结构体标签，在定义未完成期间保持同一稳定记录身份，允许指针自引用，并拒绝按值使用不完整记录。现在也已经建立与 `unsigned char` 不同的 plain `char` C 类型身份，同时采用当前 RV64 目标要求的 unsigned byte 值语义；一字节布局、整数提升、字节加载/存储、函数返回以及指针缩放均由永久门禁覆盖。
+MiniC 已通过原生有符号/无符号 LONG Rank、C 整数转换、RV64 八字节布局与全宽代码生成接受该声明；同时会在解析字段前引入结构体标签，在定义未完成期间保持同一稳定记录身份，允许指针自引用，并拒绝按值使用不完整记录。plain `char` 保持与 `unsigned char` 不同的 C 类型身份，同时采用当前 RV64 目标要求的 unsigned byte 值语义。现在还建立了独立的非整数 `double` 完整对象类型，在 RV64 上大小与对齐均为八字节，并由记录布局、限定符、指针及 AST 类型契约识别。
 
-The unchanged cJSON source now advances through the linked-object definition and both plain-character pointer fields, then reaches its first floating-point member:
+This `double` stage is deliberately an object-type/layout foundation. It does **not** yet claim floating constants, floating arithmetic/comparisons, integer-to-double conversions, floating-point register lowering, or the RISC-V floating-point call/return ABI.
 
-未修改的 cJSON 源码现已越过链式对象定义和 plain `char` 指针字段，并到达首个浮点成员：
+当前 `double` 阶段刻意只建立对象类型与布局地基，**尚不宣称**支持浮点常量、浮点算术/比较、整数与 `double` 转换、浮点寄存器 lowering 或 RISC-V 浮点调用/返回 ABI。
+
+The unchanged cJSON source now advances through the linked-object definition, the plain-character fields, and the first floating-point member, then reaches the allocation-hook function pointer declaration:
+
+未修改的 cJSON 源码现已越过链式对象定义、plain `char` 字段以及首个浮点成员，并到达分配 Hook 的函数指针声明：
 
 ```c
-typedef struct cJSON
+typedef struct cJSON_Hooks
 {
-    struct cJSON *next;
-    struct cJSON *prev;
-    struct cJSON *child;
-    int type;
-    char *valuestring;
-    int valueint;
-    double valuedouble;
+      void *(*malloc_fn)(size_t sz);
+      void (*free_fn)(void *ptr);
+} cJSON_Hooks;
 ```
 
 The next exact MiniC diagnostic is:
@@ -98,16 +98,16 @@ The next exact MiniC diagnostic is:
 新的精确首条诊断为：
 
 ```text
-cJSON.i:10:5: error: expected type name
+cJSON.i:15:13: error: expected record field name
 ```
 
-The active blocker is `double` and the floating-point type/value/ABI surface it introduces. The next bounded branch must establish a general floating-point model rather than a cJSON-specific spelling workaround. This is again a category-A cross-project capability used by cJSON and many larger C workloads.
+The active blocker is a function-pointer declarator used as a record field. The parser currently understands ordinary object pointers and function declarations, but not parenthesized declarators that bind `*malloc_fn` as a pointer to a function. The next bounded branch should introduce a general function-type / function-pointer declarator model rather than a cJSON-specific hook exception.
 
-当前缺口是 `double` 以及随之引入的浮点类型、值语义与 ABI 能力面。下一条范围受限分支必须建立通用浮点模型，而不是为 cJSON 增加特例拼写；这同样属于 cJSON 以及更大型 C 项目反复使用的 A 类通用能力。
+当前缺口是作为记录字段使用的函数指针声明器。Parser 已经理解普通对象指针和函数声明，但尚不能处理通过括号让 `*malloc_fn` 绑定为函数指针的声明器。下一条范围受限分支应建立通用函数类型/函数指针声明器模型，而不是为 cJSON Hook 增加特例。
 
-`tests/external/cjson/probe.sh` permanently verifies the vendored identities, recreates the target-accurate preprocessing environment without network access, verifies source lines 1, 2, 4, 8, and 10, and requires this diagnostic. Crossing it intentionally fails the gate until the next bounded branch records the following real source boundary.
+`tests/external/cjson/probe.sh` permanently verifies the vendored identities, recreates the target-accurate preprocessing environment without network access, verifies source lines 1, 2, 4, 8, 10, and 15, and requires this diagnostic. Crossing it intentionally fails the gate until the next bounded branch records the following real source boundary.
 
-`tests/external/cjson/probe.sh` 永久校验 Vendor 身份，在无网络条件下重建目标正确的预处理环境，校验第 1、2、4、8、10 行源码，并要求该诊断。当 MiniC 越过此处时，门禁会主动失败，直到下一条范围受限分支记录后续真实源码边界。
+`tests/external/cjson/probe.sh` 永久校验 Vendor 身份，在无网络条件下重建目标正确的预处理环境，校验第 1、2、4、8、10、15 行源码，并要求该诊断。当 MiniC 越过此处时，门禁会主动失败，直到下一条范围受限分支记录后续真实源码边界。
 
 ## Validation ladder / 验证阶梯
 
