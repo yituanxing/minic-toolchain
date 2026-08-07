@@ -111,6 +111,7 @@ verify_preprocessed_line 114 'double cJSON_GetNumberValue(const cJSON * const it
 verify_preprocessed_line 115 '{'
 verify_preprocessed_line 118 '        return (double) 0.0/0.0;'
 verify_preprocessed_line 124 '    static char version[15];'
+verify_preprocessed_line 125 '    sprintf(version, "%i.%i.%i", 1, 7, 19);'
 
 set +e
 "$minic" -S "$preprocessed" -o "$work/cJSON.s" \
@@ -126,7 +127,7 @@ fi
 
 first_error=$(sed -n '/error:/p' "$diagnostic" | sed -n '1p')
 case "$first_error" in
-    *":124:5: error: expected compound, if, while, for, break, declaration, expression, return, or '}'")
+    *":125:12: error: call to function not yet declared")
         ;;
     *)
         printf '%s\n' \
@@ -137,4 +138,4 @@ case "$first_error" in
 esac
 
 printf '%s\n' \
-    'PASS external/cjson frontier=static-local-object diagnostic=statement-dispatch-rejects-static source=cJSON-1.7.19 offline=1'
+    'PASS external/cjson frontier=hosted-function-declaration diagnostic=call-not-yet-declared source=cJSON-1.7.19 offline=1'
