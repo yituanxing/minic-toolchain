@@ -228,6 +228,16 @@ bool minic_lexer_next(MinicLexer *lexer, MinicToken *token, MinicDiagnostic *dia
         return true;
     }
 
+    if (character == '.' && minic_lexer_peek_next(lexer) == '.' &&
+        lexer->cursor + 2U < lexer->length && lexer->source[lexer->cursor + 2U] == '.') {
+        minic_lexer_advance(lexer);
+        minic_lexer_advance(lexer);
+        minic_lexer_advance(lexer);
+        token->kind = MINIC_TOKEN_ELLIPSIS;
+        token->span.end = minic_lexer_position(lexer);
+        return true;
+    }
+
     if (character == '.' && minic_is_decimal_digit(minic_lexer_peek_next(lexer))) {
         minic_lexer_advance(lexer);
         do {
