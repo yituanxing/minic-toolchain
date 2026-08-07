@@ -49,6 +49,10 @@ run_double_return_abi() {
     grep -F "  fmv.x.d a0, fa0" "$work/$name.s" >/dev/null
     grep -F "  fmv.d.x fa0, a0" "$work/$name.s" >/dev/null
     grep -F "  li a0, 0x405ee00000000000" "$work/$name.s" >/dev/null
+    grep -F "  fadd.d ft0, ft0, ft1" "$work/$name.s" >/dev/null
+    grep -F "  fsub.d ft0, ft0, ft1" "$work/$name.s" >/dev/null
+    grep -F "  fmul.d ft0, ft0, ft1" "$work/$name.s" >/dev/null
+    grep -F "  fdiv.d ft0, ft0, ft1" "$work/$name.s" >/dev/null
     "$riscv_cc" -static \
         "$work/$name.s" \
         "$root/tests/compiler/c0/${name}_helper.c" \
@@ -63,7 +67,8 @@ run_double_return_abi() {
         printf '%s\n' "FAIL compiler/c0/runtime/$name: expected=0 actual=$status" >&2
         exit 1
     fi
-    printf '%s\n' "PASS compiler/c0/runtime/$name exit=$status abi=rv64d-fa0 literal=binary64"
+    printf '%s\n' \
+        "PASS compiler/c0/runtime/$name exit=$status abi=rv64d-fa0 literal=binary64 arithmetic=add-sub-mul-div"
 }
 
 run_case empty_main 0 empty_main
