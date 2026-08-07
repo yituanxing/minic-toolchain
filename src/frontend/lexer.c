@@ -256,6 +256,9 @@ bool minic_lexer_next(MinicLexer *lexer, MinicToken *token, MinicDiagnostic *dia
     case ',':
         token->kind = MINIC_TOKEN_COMMA;
         break;
+    case '.':
+        token->kind = MINIC_TOKEN_DOT;
+        break;
     case '+':
         if (minic_lexer_peek_next(lexer) == '+') {
             token->kind = MINIC_TOKEN_PLUS_PLUS;

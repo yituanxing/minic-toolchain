@@ -83,6 +83,9 @@ bool minic_parser_parse_static_global(MinicParser *parser);
 bool minic_parser_parse_pointer_member(MinicParser *parser,
                                        MinicExpressionId base_id,
                                        MinicExpressionId *expression_id);
+bool minic_parser_parse_direct_member(MinicParser *parser,
+                                      MinicExpressionId base_id,
+                                      MinicExpressionId *expression_id);
 bool minic_parser_parse_postfix(MinicParser *parser,
                                 MinicExpressionId base_id,
                                 bool require_subscript,

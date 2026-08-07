@@ -105,6 +105,7 @@ verify_preprocessed_line 61 'cJSON * cJSON_CreateFloatArray(const float *numbers
 verify_preprocessed_line 97 'typedef struct {'
 verify_preprocessed_line 101 'static error global_error = { ((void *)0), 0 };'
 verify_preprocessed_line 104 '    return (const char*) (global_error.json + global_error.position);'
+verify_preprocessed_line 105 '}'
 
 set +e
 "$minic" -S "$preprocessed" -o "$work/cJSON.s" \
@@ -120,7 +121,7 @@ fi
 
 first_error=$(sed -n '/error:/p' "$diagnostic" | sed -n '1p')
 case "$first_error" in
-    *":104:39: error: unexpected character '.'")
+    *":105:1: error: unsupported implicit return type")
         ;;
     *)
         printf '%s\n' \
@@ -131,4 +132,4 @@ case "$first_error" in
 esac
 
 printf '%s\n' \
-    'PASS external/cjson frontier=direct-record-member-access diagnostic=unexpected-dot source=cJSON-1.7.19 offline=1'
+    'PASS external/cjson frontier=pointer-return-function-completion diagnostic=unsupported-implicit-return-type source=cJSON-1.7.19 offline=1'
