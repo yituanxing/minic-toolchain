@@ -50,42 +50,39 @@ External GCC may preprocess, assemble, link, and provide CRT/libc. MiniC must co
 
 The clean-checkout probe derives target-correct RV64 `size_t` from `__SIZE_TYPE__` and verifies the pinned source identities offline.
 
-MiniC now crosses the previously recorded foundations in the unchanged core, including native LONG semantics, self-referential tagged records, distinct plain `char`, `double` and `float` object types, function-pointer record fields, per-pointer-level `const`, and now **anonymous struct definitions bound through typedefs**.
+MiniC now crosses the previously recorded foundations in the unchanged core, including native LONG semantics, self-referential tagged records, distinct plain `char`, `double` and `float` object types, function-pointer record fields, per-pointer-level `const`, anonymous struct typedefs, and now **zero-initialized internal static record objects**.
 
-MiniC 现已越过原生 LONG、自引用标签结构体、独立 plain `char`、`double`/`float` 对象类型、函数指针字段、逐级指针 `const`，以及当前新增的 **typedef 绑定匿名 struct 定义**。
+MiniC 现已越过原生 LONG、自引用标签结构体、独立 plain `char`、`double`/`float` 对象类型、函数指针字段、逐级指针 `const`、匿名 struct typedef，以及当前新增的**内部静态 record 全零初始化对象**。
 
-The accepted anonymous record has a stable internal `record_id` but does not enter the record-tag namespace. Therefore:
+The accepted static-record slice is intentionally bounded to aggregate initializers whose semantic value is all zero. Integer fields accept only `0`; pointer fields accept null pointer constants such as preprocessed `((void *)0)`; nested complete record fields are checked recursively. The AST records whole-object zero initialization separately from the existing flat integer-array initializer list, target layout determines the exact storage size, and RV64 emission uses `.zero <size>` in the appropriate data section. Arbitrary nonzero aggregate constants remain outside this branch.
 
-```c
-typedef struct {
-    const unsigned char *json;
-    size_t position;
-} error;
-```
+当前静态 record 能力刻意限制为语义全零的聚合初始化：整数字段只接受 `0`，指针字段接受预处理后的 `((void *)0)` 等空指针常量，完整嵌套 record 递归校验。AST 将 whole-object zero initialization 与现有整数数组初始化列表分离，目标布局给出精确对象尺寸，RV64 以 `.zero <size>` 发射；任意非零聚合常量仍不在本分支范围内。
 
-is accepted, while the typedef name `error` does not make `struct error` a valid tag. Permanent focused tests cover both directions.
-
-匿名记录具有稳定内部 `record_id`，但不会进入 record-tag namespace；因此上述 `error` typedef 合法，而 `struct error` 仍不是有效 tag。永久正/负门禁同时锁定这两个方向。
-
-The unchanged cJSON source then reaches:
+The unchanged cJSON source therefore crosses:
 
 ```c
 static error global_error = { NULL, 0 };
 ```
 
+and reaches the first direct record-object member expression:
+
+```c
+return (const char*) (global_error.json + global_error.position);
+```
+
 The exact first MiniC diagnostic is:
 
 ```text
-cJSON.i:101:14: error: static global arrays currently require const integer elements
+cJSON.i:104:39: error: unexpected character '.'
 ```
 
-The parser currently restricts static globals to fixed arrays of const integer elements, so the active blocker is **a static record object with an aggregate initializer**. This is a separate global-object/initializer capability and is not folded into the anonymous-record branch.
+The active blocker is **ordinary `.` member access on a record object**. MiniC already has pointer-member `->`; direct-object member syntax and semantics are a separate, independently reviewable parser/AST capability and are not folded into the static-global initializer branch.
 
-当前 Parser 仍把静态全局对象限制为 const 整数元素固定数组，因此真实下一缺口是 **带聚合初始化器的静态 record 对象**。它属于独立的全局对象/初始化语义，不并入匿名记录分支。
+因此当前真实缺口已经转为 **record 对象上的普通 `.` 成员访问**。MiniC 已支持指针成员 `->`；直接对象成员的词法、Parser 与 AST 语义属于独立能力，不并入静态全局初始化分支。
 
-`tests/external/cjson/probe.sh` permanently verifies stable early declarations, the float prototype at preprocessed line 61, the anonymous `typedef struct {` at line 97, the static `global_error` declaration at line 101, and requires the exact line-101 diagnostic. Crossing that boundary intentionally fails the gate until the next bounded branch records the following real source frontier.
+`tests/external/cjson/probe.sh` permanently verifies stable early declarations, the float prototype at preprocessed line 61, the anonymous `typedef struct {` at line 97, the static `global_error` declaration at line 101, and the direct-member expression at line 104, and requires the exact line-104 diagnostic. Crossing that boundary intentionally fails the gate until the next bounded branch records the following real source frontier.
 
-`tests/external/cjson/probe.sh` 永久锚定稳定早期声明、预处理第 61 行的 `float` 原型、第 97 行匿名 `typedef struct {` 以及第 101 行静态 `global_error` 声明，并要求精确的 line-101 诊断。后续越过该边界时，门禁会主动失败，直到下一条范围受限分支记录新的真实源码前沿。
+`tests/external/cjson/probe.sh` 永久锚定稳定早期声明、预处理第 61 行的 `float` 原型、第 97 行匿名 `typedef struct {`、第 101 行静态 `global_error` 声明以及第 104 行直接成员表达式，并要求精确的 line-104 诊断。后续越过该边界时，门禁会主动失败，直到下一条范围受限分支记录新的真实源码前沿。
 
 ## Validation ladder / 验证阶梯
 

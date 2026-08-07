@@ -192,6 +192,7 @@ typedef struct MinicGlobalObject {
     size_t alignment;
     bool is_internal;
     bool is_read_only;
+    bool is_zero_initialized;
 } MinicGlobalObject;
 
 typedef struct MinicC0Program {
@@ -317,6 +318,8 @@ bool minic_c0_program_add_global_object(MinicC0Program *program,
 bool minic_c0_global_object_add_initializer(MinicC0Program *program,
                                             MinicGlobalObjectId global_object_id,
                                             int value);
+bool minic_c0_global_object_set_zero_initialized(MinicC0Program *program,
+                                                 MinicGlobalObjectId global_object_id);
 
 const MinicExpression *minic_c0_program_expression(const MinicC0Program *program,
                                                    MinicExpressionId expression_id);
