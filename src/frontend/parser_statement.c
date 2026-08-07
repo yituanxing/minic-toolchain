@@ -1,5 +1,6 @@
 #include "frontend/parser_internal.h"
 
+#include <stdio.h>
 #include <string.h>
 
 static bool add_local_lvalue_expression(MinicParser *parser,
@@ -45,7 +46,7 @@ static bool parse_local_declarator(MinicParser *parser, MinicType base_type) {
     local.type = declared_type;
     local.element_count = 1U;
     local.storage_offset = 0U;
-    if (minic_parser_find_local_in_current_scope(parser, local.name_span) != MINIC_LOCAL_INVALID) {
+    if (minic_parser_name_bound_in_current_scope(parser, local.name_span)) {
         minic_parser_error(parser, "duplicate local declaration");
         return false;
     }
@@ -110,6 +111,118 @@ static bool parse_declaration(MinicParser *parser) {
 
     for (;;) {
         if (!parse_local_declarator(parser, base_type)) {
+            return false;
+        }
+        if (parser->current.kind != MINIC_TOKEN_COMMA) {
+            break;
+        }
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
+    }
+    return minic_parser_expect(parser, MINIC_TOKEN_SEMICOLON, "expected ';'");
+}
+
+static bool parse_static_local_array_declarator(MinicParser *parser, MinicType base_type) {
+    char symbol_name[96];
+    MinicSourceSpan name_span;
+    MinicType declared_type;
+    MinicType object_type;
+    MinicGlobalObjectId object_id;
+    size_t bounds[8];
+    size_t bound_count;
+    size_t index;
+    int symbol_length;
+
+    if (!minic_parser_parse_pointer_declarator(parser, base_type, &declared_type)) {
+        return false;
+    }
+    if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
+        minic_parser_error(parser, "expected static local name");
+        return false;
+    }
+    name_span = parser->current.span;
+    if (minic_parser_name_bound_in_current_scope(parser, name_span)) {
+        minic_parser_error(parser, "duplicate local declaration");
+        return false;
+    }
+    if (!minic_parser_advance(parser)) {
+        return false;
+    }
+
+    bound_count = 0U;
+    while (parser->current.kind == MINIC_TOKEN_LBRACKET) {
+        if (bound_count >= sizeof(bounds) / sizeof(bounds[0])) {
+            minic_parser_error(parser, "at most eight array dimensions are supported");
+            return false;
+        }
+        if (!minic_parser_advance(parser) ||
+            !minic_parser_parse_fixed_array_bound(parser, &bounds[bound_count])) {
+            return false;
+        }
+        bound_count += 1U;
+    }
+    if (bound_count == 0U) {
+        minic_parser_error(parser,
+                           "static local object currently requires a fixed array declarator");
+        return false;
+    }
+    if (parser->current.kind == MINIC_TOKEN_EQUAL) {
+        minic_parser_error(parser, "static local initializers are not supported yet");
+        return false;
+    }
+    if (!minic_parser_require_complete_object_type(
+            parser, declared_type, "static local array requires a complete element type")) {
+        return false;
+    }
+
+    object_type = declared_type;
+    for (index = bound_count; index > 0U; --index) {
+        if (!minic_c0_program_add_array_type(
+                parser->program, object_type, bounds[index - 1U], &object_type)) {
+            minic_parser_error(parser, "out of memory while building static local array type");
+            return false;
+        }
+    }
+
+    symbol_length = snprintf(symbol_name,
+                             sizeof(symbol_name),
+                             "__minic_static_local_%zu_%zu",
+                             (size_t)parser->current_function,
+                             parser->program->global_object_count);
+    if (symbol_length <= 0 || (size_t)symbol_length >= sizeof(symbol_name)) {
+        minic_parser_error(parser, "cannot build static local symbol name");
+        return false;
+    }
+    if (!minic_c0_program_add_global_object(parser->program,
+                                            symbol_name,
+                                            (size_t)symbol_length,
+                                            object_type,
+                                            true,
+                                            minic_type_is_const(declared_type),
+                                            &object_id) ||
+        !minic_c0_global_object_set_zero_initialized(parser->program, object_id)) {
+        minic_parser_error(parser, "cannot add zero-initialized static local object");
+        return false;
+    }
+    return minic_parser_bind_static_local(parser, name_span, object_id);
+}
+
+static bool parse_static_local_declaration(MinicParser *parser) {
+    MinicType base_type;
+
+    if (parser->current_function == MINIC_FUNCTION_INVALID ||
+        !minic_parser_expect(parser, MINIC_TOKEN_KW_STATIC, "expected keyword 'static'") ||
+        !minic_parser_parse_type_specifiers(parser, &base_type)) {
+        return false;
+    }
+    if (minic_type_is_void(base_type)) {
+        minic_parser_error(parser, "static local object cannot have void type");
+        return false;
+    }
+
+    for (;;) {
+        if (!parse_static_local_array_declarator(parser, base_type)) {
             return false;
         }
         if (parser->current.kind != MINIC_TOKEN_COMMA) {
@@ -297,6 +410,8 @@ static bool parse_while(MinicParser *parser) {
     statement.kind = MINIC_STATEMENT_WHILE;
     statement.span.begin = parser->current.span.begin;
     statement.target_expression = MINIC_EXPRESSION_INVALID;
+    statement.expression = MINIC_EXPRESSION_INVALID;
+    statement.then_block = MINIC_BLOCK_INVALID;
     statement.else_block = MINIC_BLOCK_INVALID;
 
     if (!minic_parser_advance(parser) ||
@@ -568,7 +683,7 @@ static bool token_starts_local_declaration(const MinicParser *parser) {
     case MINIC_TOKEN_KW_STRUCT:
         return true;
     case MINIC_TOKEN_IDENTIFIER:
-        return minic_parser_find_local(parser, parser->current.span) == MINIC_LOCAL_INVALID &&
+        return !minic_parser_name_bound(parser, parser->current.span) &&
                minic_parser_find_type_alias(parser, parser->current.span) !=
                    MINIC_TYPE_ALIAS_INVALID;
     default:
@@ -597,6 +712,13 @@ bool minic_parser_parse_statement(MinicParser *parser, bool allow_declaration) {
     }
     if (parser->current.kind == MINIC_TOKEN_KW_BREAK) {
         return parse_break(parser);
+    }
+    if (parser->current.kind == MINIC_TOKEN_KW_STATIC) {
+        if (!allow_declaration) {
+            minic_parser_error(parser, "a declaration requires a compound statement scope");
+            return false;
+        }
+        return parse_static_local_declaration(parser);
     }
     if (token_starts_local_declaration(parser)) {
         if (!allow_declaration) {

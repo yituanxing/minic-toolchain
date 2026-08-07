@@ -12,6 +12,7 @@
 typedef struct MinicParserLocalBinding {
     MinicSourceSpan name_span;
     MinicLocalId local_id;
+    MinicGlobalObjectId global_object_id;
 } MinicParserLocalBinding;
 
 typedef struct MinicParser {
@@ -65,11 +66,18 @@ bool minic_parser_add_statement(MinicParser *parser, const MinicStatement *state
 bool minic_parser_begin_scope(MinicParser *parser);
 void minic_parser_end_scope(MinicParser *parser);
 bool minic_parser_bind_local(MinicParser *parser, MinicSourceSpan name_span, MinicLocalId local_id);
+bool minic_parser_bind_static_local(MinicParser *parser,
+                                    MinicSourceSpan name_span,
+                                    MinicGlobalObjectId global_object_id);
+bool minic_parser_name_bound_in_current_scope(const MinicParser *parser, MinicSourceSpan name_span);
 MinicLocalId minic_parser_find_local_in_current_scope(const MinicParser *parser,
                                                       MinicSourceSpan name_span);
 void minic_parser_destroy_scopes(MinicParser *parser);
 
 MinicLocalId minic_parser_find_local(const MinicParser *parser, MinicSourceSpan name_span);
+MinicGlobalObjectId minic_parser_find_static_local(const MinicParser *parser,
+                                                   MinicSourceSpan name_span);
+bool minic_parser_name_bound(const MinicParser *parser, MinicSourceSpan name_span);
 MinicFunctionId minic_parser_find_function(const MinicParser *parser, MinicSourceSpan name_span);
 MinicGlobalObjectId minic_parser_find_global_object(const MinicParser *parser,
                                                     MinicSourceSpan name_span);

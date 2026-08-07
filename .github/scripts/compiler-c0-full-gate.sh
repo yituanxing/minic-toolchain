@@ -137,6 +137,13 @@ host_sanitize() {
         check
 }
 
+static_local_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" \
+    HOST_CC=cc \
+    BUILD_DIR="$root/build/ci-static-local-focused" \
+        sh tests/compiler/c0/run-static-local-arrays.sh
+}
+
 rv64_focused() {
     MINIC="$root/build/ci-debug/bin/minic" \
     BUILD_DIR="$root/build/ci-rv64-focused" \
@@ -182,7 +189,8 @@ if ! wait_phase; then
     exit 1
 fi
 
-printf '%s\n' 'Phase 2: two RV64 suites, frozen tiny-AES, and the active cJSON frontier'
+printf '%s\n' 'Phase 2: focused static-local/RV64 suites, differential programs, tiny-AES, and cJSON'
+start_gate static-local-focused static_local_focused
 start_gate rv64-focused rv64_focused
 start_gate rv64-programs rv64_programs
 start_gate external-tiny-aes external_tiny_aes

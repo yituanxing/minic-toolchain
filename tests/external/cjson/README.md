@@ -48,53 +48,85 @@ External GCC may preprocess, assemble, link, and provide CRT/libc. MiniC must co
 
 ## Current exact frontier / 当前精确前沿
 
-The clean-checkout probe derives target-correct RV64 `size_t` from `__SIZE_TYPE__` and verifies the pinned source identities offline.
+The clean-checkout probe derives target-correct RV64 `size_t` from `__SIZE_TYPE__`, verifies the pinned vendor blobs offline, and fixes stable preprocessed anchors before checking MiniC's first diagnostic.
 
-MiniC now crosses the previously recorded foundations in the unchanged core, including native LONG semantics, self-referential tagged records, distinct plain `char`, `double` and `float` object types, function-pointer record fields, per-pointer-level `const`, anonymous struct typedefs, zero-initialized internal static record objects, ordinary direct `.` member access on record lvalues, pointer-return function completion, bounded null-pointer constant semantics, a real RV64D double-return ABI slice, builtin cast-type lookahead for `char`/`float`/`double`, unsuffixed decimal `double` floating constants, and now **same-type double binary arithmetic for `+`, `-`, `*`, and `/`**.
+MiniC now crosses the previously recorded foundations in the unchanged core, including native LONG semantics, self-referential tagged records, distinct plain `char`, `double` and `float` object types, function-pointer record fields, per-pointer-level `const`, anonymous struct typedefs, zero-initialized internal static record objects, direct `.` member access, pointer-return function completion, bounded null-pointer constants, the RV64D double-return ABI slice, `char`/`float`/`double` cast lookahead, decimal `double` literals, same-type double `+ - * /`, and now **function-scope static fixed arrays with static storage duration**.
 
-MiniC 现已越过原生 LONG、自引用标签结构体、独立 plain `char`、`double`/`float` 对象类型、函数指针字段、逐级指针 `const`、匿名 struct typedef、内部静态 record 全零初始化对象、record 左值普通 `.` 成员访问、指针返回函数 completion、受限空指针常量语义、真实 RV64D double 返回 ABI、`char`/`float`/`double` cast lookahead、无后缀十进制 `double` 浮点常量，以及当前新增的 **同类型 double `+`、`-`、`*`、`/` 二元算术**。
+MiniC 现已越过原生 LONG、自引用标签结构体、独立 plain `char`、`double`/`float` 对象类型、函数指针字段、逐级指针 `const`、匿名 struct typedef、内部静态 record 全零初始化对象、普通 `.` 成员访问、指针返回函数 completion、受限空指针常量、RV64D double 返回 ABI、`char`/`float`/`double` cast lookahead、十进制 `double` 字面量、同类型 double `+ - * /`，以及当前新增的 **具有静态存储期的函数作用域 static 定长数组**。
 
-The lexer forms one floating token for common decimal forms such as `0.0`, `1.`, `.5`, `1e3`, and `2.5e-4`, while preserving ordinary `record.member` dots and the existing hexadecimal-integer path. A floating literal is represented as a distinct `double` rvalue carrying binary64 raw bits. RV64 materializes those bits in `a0`, preserving the accepted internal double-value convention.
+### Static-local storage model / static local 存储模型
 
-Lexer 会把 `0.0`、`1.`、`.5`、`1e3`、`2.5e-4` 等常见十进制形式形成单个 floating token，同时保持普通 `record.member` 点号以及既有十六进制整数路径。浮点字面量在 AST 中是独立的 `double` rvalue，并携带 binary64 raw bits；RV64 将这些 raw bits 装入 `a0`，延续已验收的内部 double 表示。
-
-For double arithmetic, both operands are evaluated through that raw-bit convention. RV64 temporarily moves them into `ft0` and `ft1`, executes `fadd.d`, `fsub.d`, `fmul.d`, or `fdiv.d`, and moves the result bits back to `a0`. Integer, pointer, remainder, shift, bitwise, comparison, and mixed numeric rules are unchanged.
-
-对于 double 算术，两个操作数继续按 raw-bit 约定求值；RV64 临时将其搬入 `ft0`/`ft1`，执行 `fadd.d`、`fsub.d`、`fmul.d` 或 `fdiv.d`，再将结果 raw bits 搬回 `a0`。整数、指针、余数、移位、位运算、比较以及 mixed numeric 规则保持不变。
-
-The mixed GCC↔MiniC RV64D gate independently observes MiniC results for `1.5 + 2.25`, `9.0 - 2.5`, `1.5 * 4.0`, `9.0 / 4.0`, and verifies that `0.0 / 0.0` produces NaN. Discovery Run #818 passed all of these behavior checks, along with the existing exact `123.5` literal/return ABI test.
-
-混合 GCC↔MiniC RV64D 门禁会独立观察 MiniC 对 `1.5 + 2.25`、`9.0 - 2.5`、`1.5 * 4.0`、`9.0 / 4.0` 的结果，并验证 `0.0 / 0.0` 产生 NaN。Discovery Run #818 已通过这些真实行为检查，同时继续通过既有精确 `123.5` 字面量/返回 ABI 测试。
-
-The unchanged cJSON source therefore crosses:
+A function-scope declaration such as:
 
 ```c
-return (double) 0.0/0.0;
+static char version[15];
 ```
 
-and parser discovery continues beyond `return item->valuedouble;` into `cJSON_Version`. The next exact preprocessed source line is:
+keeps its source-level name in the parser's ordinary block-scope binding stack, while its storage is represented by a uniquely named internal `MinicGlobalObject`. The hidden object is emitted with whole-object `.zero` initialization and is not exported. Scope exit removes only the source-name binding; the storage itself remains for the lifetime of the program.
+
+类似 `static char version[15];` 的函数作用域声明，其源码名字继续存在于 Parser 的普通 block-scope binding 栈中，而实际存储由唯一命名的 internal `MinicGlobalObject` 表示。隐藏对象以 whole-object `.zero` 初始化且不导出；离开作用域只移除源码名字绑定，实际存储在整个进程生命周期内持续存在。
+
+This bounded capability currently accepts fixed arrays without explicit initializers. Scalar static locals, explicit static-local initializers, and function-scope static records remain intentionally unsupported rather than being partially implemented.
+
+当前能力边界只接受无显式 initializer 的定长数组。scalar static local、显式 static-local initializer 以及函数作用域 static record 继续明确拒绝，避免形成只能声明但无法完整使用的半实现语义。
+
+The permanent `static_local_array` GCC/MiniC RV64 differential program proves the behavior rather than only the syntax: one `static int[1]` persists across repeated calls (`1 -> 2 -> 3`), another function using the same source name receives independent storage, and a cJSON-shaped `static char version[15]` is writable and readable. The permanent differential inventory is therefore **46 programs**.
+
+永久 `static_local_array` GCC/MiniC RV64 差分程序不仅验证语法，还验证真实行为：一个 `static int[1]` 在重复调用间保持 `1 -> 2 -> 3`，另一个函数中相同源码名字拥有独立存储，同时 cJSON 形状的 `static char version[15]` 可以正确读写。永久差分程序数量因此增加到 **46 个**。
+
+The dedicated focused gate also checks hidden symbol generation, `.zero 4` / `.zero 15`, non-export, and the expected rejection of scalar static locals, explicit static-local initializers, and same-scope ordinary/static duplicate declarations.
+
+专用 focused gate 还会检查隐藏符号生成、`.zero 4` / `.zero 15`、不导出，以及 scalar static、显式 initializer、普通 local/static local 同作用域重名三类边界诊断。
+
+### New unchanged-cJSON frontier / 新的 unchanged cJSON 前沿
+
+The unchanged core now crosses preprocessed line 124:
 
 ```c
     static char version[15];
 ```
 
-at line 124. The first MiniC diagnostic is:
+and reaches line 125:
 
-```text
-cJSON.i:124:5: error: expected compound, if, while, for, break, declaration, expression, return, or '}'
+```c
+    sprintf(version, "%i.%i.%i", 1, 7, 19);
 ```
 
-The next independently reviewable frontend capability is therefore **function-scope static local objects**, first exposed by a static local character array. This only establishes the first parser frontier: because translation-unit parsing stops at line 124 before code generation, reaching `return item->valuedouble;` does not yet constitute a complete backend validation of double record-member loads.
+The exact first MiniC diagnostic is now:
 
-因此 unchanged cJSON 已越过 `(double) 0.0/0.0`，Parser 也继续越过 `return item->valuedouble;` 进入 `cJSON_Version`。当前精确下一行是预处理第 124 行 `static char version[15];`，第一条诊断落在函数体内 `static`。所以下一条可独立审查的前端能力是 **函数作用域 static local object**，此处首先由静态局部 char 数组暴露。需要特别说明：translation unit 在 line 124 的解析阶段即停止，因此越过 `return item->valuedouble;` 只表示 Parser 前沿已前进，并不等于 double record member load 的后端已经完整验证。
+```text
+cJSON.i:125:12: error: call to function not yet declared
+```
 
-Run #818 passed source inventory, clang-format, Debug, Release `-Werror`, ASan/UBSan, all focused front-end gates, RV64 focused validation, the extended mixed GCC↔MiniC double arithmetic/NaN ABI test, all 45 GCC/MiniC differential programs, and frozen tiny-AES. Its only failure was the intentionally stale cJSON frontier, which exposed the line-124 static-local boundary above.
+The project-owned probe intentionally keeps hosted headers minimal. Its current `<stdio.h>` does not declare `sprintf`, while MiniC requires a direct callee to be declared before use. The next independently reviewable capability is therefore **generic hosted/variadic function declaration and direct-call modeling**, not a cJSON-specific `sprintf` exception.
 
-Run #818 通过 source inventory、clang-format、Debug、Release `-Werror`、ASan/UBSan、全部 focused frontend 门禁、RV64 focused 验证、扩展后的 GCC↔MiniC double 四则运算/NaN ABI 测试、45 个 GCC/MiniC 差分程序以及冻结 tiny-AES；唯一失败来自故意保留的旧 cJSON 前沿，由此暴露上述 line-124 static local 边界。
+当前 project-owned probe 有意保持 hosted header 极简；其中 `<stdio.h>` 尚未声明 `sprintf`，而 MiniC 要求 direct callee 在调用前已经声明。因此下一条可独立审查的能力是 **通用 hosted/variadic function declaration 与 direct-call 建模**，而不是给 cJSON 的 `sprintf` 写特例。
 
-`tests/external/cjson/probe.sh` permanently verifies stable early declarations, the crossed direct-member expression at line 104, pointer-return completion at line 105, the crossed null return at line 110, the crossed double-returning function definition at lines 114/115, the crossed double arithmetic at line 118, and the new static-local source at line 124. It now requires the exact line-124 statement-dispatch diagnostic. Crossing that boundary intentionally fails the gate until the next bounded branch records the following real source frontier.
+After a real variadic declaration becomes available, this same source line is expected to expose further independent language requirements such as ordinary array-to-pointer decay for `version`, string literals for the format text, and variadic argument handling. Those are not claimed by the static-local milestone and will be ordered by the unchanged source's next first diagnostic.
 
-`tests/external/cjson/probe.sh` 永久锚定稳定早期声明、第 104 行直接成员表达式、第 105 行指针返回 completion、第 110 行空指针返回、第 114/115 行 double 返回函数定义、第 118 行已越过的 double 算术，以及第 124 行新的 static local 源码；当前要求精确的 line-124 statement-dispatch 诊断。后续越过该边界时，门禁会主动失败，直到下一条范围受限分支记录新的真实源码前沿。
+当真实 variadic declaration 可用后，同一行还会继续暴露 `version` 的普通 array-to-pointer decay、格式字符串字面量以及 variadic 参数处理等独立能力。本 static-local 里程碑不宣称已经支持这些功能；后续仍由 unchanged 源码的下一条 first diagnostic 决定实际顺序。
+
+## Validation / 验证
+
+GitHub Actions Run #834 passed the complete compiler gate on the branch head containing the production implementation, focused static-local gate, 46-program differential inventory, frozen tiny-AES gate, and the line-125 cJSON probe.
+
+GitHub Actions Run #834 已在包含 production 实现、static-local focused gate、46 个差分程序、冻结 tiny-AES 以及 line-125 cJSON probe 的分支 Head 上通过完整 compiler gate。
+
+The validated ladder includes:
+
+- source inventory and clang-format policy;
+- Debug host checks;
+- Release `-Werror` host checks;
+- ASan/UBSan host checks;
+- dedicated static-local focused checks;
+- RV64/QEMU focused checks;
+- all 46 GCC/MiniC differential programs;
+- frozen tiny-AES AES-128 ECB acceptance;
+- unchanged pinned cJSON frontier at line 125.
+
+Because the compiler currently stops while parsing the `sprintf` call, crossing earlier source such as `return item->valuedouble;` still must not be interpreted as complete backend validation of every preceding floating member-load path. Full-project acceptance remains reserved for the final compile/link/runtime differential milestone.
+
+由于编译器当前仍会在解析 `sprintf` 调用时停止，越过更早的 `return item->valuedouble;` 仍不能被解释成此前所有浮点成员读取路径都已经完成后端验收。完整项目验收仍保留到最终 compile/link/runtime differential 里程碑。
 
 ## Validation ladder / 验证阶梯
 

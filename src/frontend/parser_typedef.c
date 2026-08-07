@@ -7,6 +7,10 @@ MinicTypeAliasId minic_parser_find_type_alias(const MinicParser *parser,
     size_t name_length;
     size_t index;
 
+    if (minic_parser_name_bound(parser, name_span)) {
+        return MINIC_TYPE_ALIAS_INVALID;
+    }
+
     name_length = minic_parser_span_length(name_span);
     for (index = 0U; index < parser->program->type_alias_count; ++index) {
         const MinicTypeAlias *alias;
