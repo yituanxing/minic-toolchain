@@ -1,6 +1,8 @@
 #include "target/riscv64/codegen_internal.h"
 #include "target/riscv64/layout.h"
 
+#include <inttypes.h>
+
 static bool minic_riscv64_pointer_element_size(const MinicC0Program *program,
                                                MinicType pointer_type,
                                                size_t *element_size) {
@@ -224,6 +226,9 @@ bool minic_riscv64_emit_expression(FILE *file,
     case MINIC_EXPRESSION_INTEGER:
         return fprintf(file, "  li a0, %d\n", expression->value.integer_value) >= 0 &&
                minic_riscv64_emit_integer_conversion(file, expression->type, "a0");
+    case MINIC_EXPRESSION_FLOATING:
+        return minic_type_is_double(expression->type) &&
+               fprintf(file, "  li a0, 0x%016" PRIx64 "\n", expression->value.floating_bits) >= 0;
     case MINIC_EXPRESSION_LOCAL:
         return minic_riscv64_emit_object_load(file, program, function, expression->value.local_id);
     case MINIC_EXPRESSION_GLOBAL_OBJECT:
