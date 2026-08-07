@@ -252,7 +252,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
             return false;
         }
     }
-    if (!minic_parser_add_default_return(parser) ||
+    if ((!minic_type_is_pointer(return_type) && !minic_parser_add_default_return(parser)) ||
         !minic_parser_expect(parser, MINIC_TOKEN_RBRACE, "expected '}'")) {
         return false;
     }

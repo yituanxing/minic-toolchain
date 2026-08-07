@@ -31,6 +31,7 @@ global_array_read
 bitwise_xor
 pointer_member
 direct_record_member
+pointer_return
 expression_statement
 postfix_subscript
 compound_xor_assignment
