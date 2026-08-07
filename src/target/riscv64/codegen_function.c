@@ -61,9 +61,8 @@ static bool minic_riscv64_emit_zero_bytes(FILE *file, size_t size) {
     return size == 0U || fprintf(file, "  .zero %zu\n", size) >= 0;
 }
 
-static bool minic_riscv64_emit_function_relocations(FILE *file,
-                                                     const MinicC0Program *program,
-                                                     const MinicGlobalObject *object) {
+static bool
+emit_fn_relocs(FILE *file, const MinicC0Program *program, const MinicGlobalObject *object) {
     const MinicRecord *record;
     size_t cursor;
     size_t relocation_index;
@@ -156,7 +155,7 @@ static bool minic_riscv64_emit_global_object(FILE *file,
         return false;
     }
     if (object->function_relocation_count != 0U) {
-        if (!minic_riscv64_emit_function_relocations(file, program, object)) {
+        if (!emit_fn_relocs(file, program, object)) {
             return false;
         }
     } else if (object->is_zero_initialized) {
