@@ -107,7 +107,8 @@ verify_preprocessed_line 101 'static error global_error = { ((void *)0), 0 };'
 verify_preprocessed_line 104 '    return (const char*) (global_error.json + global_error.position);'
 verify_preprocessed_line 105 '}'
 verify_preprocessed_line 110 '        return ((void *)0);'
-verify_preprocessed_line 115 'double cJSON_GetNumberValue(const cJSON * const item)'
+verify_preprocessed_line 114 'double cJSON_GetNumberValue(const cJSON * const item)'
+verify_preprocessed_line 115 '{'
 
 set +e
 "$minic" -S "$preprocessed" -o "$work/cJSON.s" \
