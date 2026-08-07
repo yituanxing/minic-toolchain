@@ -44,6 +44,14 @@ printf '%s\n' "PASS compiler/c0/cast_integer_lowering"
 
 compile_success cast_typedef_shadow
 
+"$host_cc" -E -P -x c \
+    "$root/tests/programs/c0/null_pointer_constant.c" \
+    -o "$work/null_pointer_constant.i"
+"$minic" -S "$work/null_pointer_constant.i" -o "$work/null_pointer_constant.s"
+grep -F "  li a0, 0" "$work/null_pointer_constant.s" >/dev/null
+grep -F "  j .Lmake_null_return" "$work/null_pointer_constant.s" >/dev/null
+printf '%s\n' "PASS compiler/c0/null_pointer_constant"
+
 expect_failure \
     invalid_cast_pointer_to_integer \
     "unsupported cast between these types"

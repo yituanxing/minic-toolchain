@@ -50,41 +50,37 @@ External GCC may preprocess, assemble, link, and provide CRT/libc. MiniC must co
 
 The clean-checkout probe derives target-correct RV64 `size_t` from `__SIZE_TYPE__` and verifies the pinned source identities offline.
 
-MiniC now crosses the previously recorded foundations in the unchanged core, including native LONG semantics, self-referential tagged records, distinct plain `char`, `double` and `float` object types, function-pointer record fields, per-pointer-level `const`, anonymous struct typedefs, zero-initialized internal static record objects, ordinary direct `.` member access on record lvalues, and now **pointer-return function completion**.
+MiniC now crosses the previously recorded foundations in the unchanged core, including native LONG semantics, self-referential tagged records, distinct plain `char`, `double` and `float` object types, function-pointer record fields, per-pointer-level `const`, anonymous struct typedefs, zero-initialized internal static record objects, ordinary direct `.` member access on record lvalues, pointer-return function completion, and now **bounded null-pointer constant semantics**.
 
-MiniC 现已越过原生 LONG、自引用标签结构体、独立 plain `char`、`double`/`float` 对象类型、函数指针字段、逐级指针 `const`、匿名 struct typedef、内部静态 record 全零初始化对象、record 左值普通 `.` 成员访问，以及当前新增的 **指针返回函数 completion**。
+MiniC 现已越过原生 LONG、自引用标签结构体、独立 plain `char`、`double`/`float` 对象类型、函数指针字段、逐级指针 `const`、匿名 struct typedef、内部静态 record 全零初始化对象、record 左值普通 `.` 成员访问、指针返回函数 completion，以及当前新增的 **受限空指针常量语义**。
 
-Pointer-returning functions no longer require a synthetic default pointer-valued return expression at the closing brace. Explicit pointer `return` statements retain the existing type-checking path and RV64 `a0` lowering. The permanent `pointer_return` differential program calls a pointer-returning helper, receives the pointer, dereferences it, and matches GCC with exit 29. Integer and `void` completion behavior remains unchanged.
+The accepted null-pointer path is intentionally narrow. A pointer cast from an integer expression is accepted only when the operand is the integer literal zero; normalization preserves it through the existing value-preserving BITCAST path, while Parsed and Normalized AST verification both reject nonzero integer-to-pointer shapes. General integer-to-pointer casts such as `(int *)1` remain rejected. One-level `void *` and non-function object pointers are assignment-compatible only when pointee qualifiers are not discarded.
 
-指针返回函数在闭合花括号处不再被强制构造 synthetic 默认指针返回表达式；显式 pointer `return` 继续沿用既有类型检查与 RV64 `a0` lowering。永久 `pointer_return` 差分程序真实调用指针返回 helper、接收返回指针并解引用，和 GCC 一致退出 29；integer/`void` completion 行为保持不变。
+当前空指针路径刻意保持窄边界：只有整数表达式本身是字面量 `0` 时才允许 cast 到 pointer；normalize 通过既有值保持 BITCAST 路径承载，Parsed/Normalized AST verifier 都继续拒绝非零整数到指针的形态。`(int *)1` 等一般整数到指针转换仍然被拒绝。一级 `void *` 与非函数对象指针仅在不丢失 pointee qualifier 时允许赋值兼容。
 
-The unchanged cJSON source therefore crosses the closing brace of `cJSON_GetErrorPtr` and enters `cJSON_GetStringValue`:
+The permanent `null_pointer_constant` differential program executes `(void *)0` through a pointer-returning helper and matches GCC under QEMU with exit 31. The unchanged negative `(int *)1` compiler gate continues to fail as required.
+
+永久 `null_pointer_constant` 差分程序让 `(void *)0` 经由指针返回 helper 真正在 QEMU 下执行，并与 GCC 一致退出 31；既有 `(int *)1` 负向门禁仍按要求失败。
+
+The unchanged cJSON source therefore crosses `return NULL;` in `cJSON_GetStringValue` and reaches the next function definition:
 
 ```c
-CJSON_PUBLIC(char *) cJSON_GetStringValue(const cJSON * const item)
-{
-    if (!cJSON_IsString(item))
-    {
-        return NULL;
-    }
-
-    return item->valuestring;
-}
+CJSON_PUBLIC(double) cJSON_GetNumberValue(const cJSON * const item)
 ```
 
-With the project-owned `<stddef.h>`, `NULL` preprocesses to `((void *)0)`. The exact next MiniC diagnostic is:
+The preprocessed signature is pinned at line 114, followed by the opening `{` at line 115. MiniC reports the unsupported return type after consuming the declarator and reaching that function body. The exact next diagnostic is:
 
 ```text
-cJSON.i:110:26: error: unsupported cast between these types
+cJSON.i:115:1: error: unsupported function return type
 ```
 
-The active blocker is **C null pointer constant semantics**, specifically the integer constant zero cast to `void *` produced by `NULL`. MiniC intentionally still rejects general integer-to-pointer casts; the next branch must distinguish a valid null pointer constant from arbitrary integer-to-pointer conversion rather than weakening the general cast rule.
+The active blocker is now **a real `double` function return type**. MiniC already models `double` as a distinct complete 8-byte RV64 object type, but function definitions and execution do not yet implement floating-point return values or the RV64D calling convention. That capability is deliberately separate from null-pointer semantics.
 
-当前活动缺口是 **C 空指针常量语义**，具体为 `NULL` 展开出的整数常量零到 `void *` 的转换。MiniC 仍刻意拒绝一般 integer-to-pointer cast；下一条分支应准确识别合法 null pointer constant，而不是放宽任意整数到指针的转换规则。
+因此当前活动缺口已经变为 **真正的 `double` 函数返回类型**。MiniC 已将 `double` 建模为独立、完整、RV64 上 8 字节的对象类型，但函数定义与执行尚未实现浮点返回值和 RV64D 调用约定；这条能力刻意与空指针语义分离。
 
-`tests/external/cjson/probe.sh` permanently verifies stable early declarations, the float prototype at preprocessed line 61, the anonymous `typedef struct {` at line 97, the static `global_error` declaration at line 101, the crossed direct-member expression at line 104, the crossed pointer-return closing brace at line 105, and the `return ((void *)0);` expansion at line 110. It requires the exact line-110 null-pointer diagnostic. Crossing that boundary intentionally fails the gate until the next bounded branch records the following real source frontier.
+`tests/external/cjson/probe.sh` permanently verifies stable early declarations, the crossed direct-member expression at line 104, pointer-return completion at line 105, the crossed `return ((void *)0);` at line 110, the `double cJSON_GetNumberValue(...)` signature at line 114, and its opening brace at line 115. It requires the exact line-115 diagnostic. Crossing that boundary intentionally fails the gate until the next bounded branch records the following real source frontier.
 
-`tests/external/cjson/probe.sh` 永久锚定稳定早期声明、预处理第 61 行的 `float` 原型、第 97 行匿名 `typedef struct {`、第 101 行静态 `global_error` 声明、第 104 行已越过的直接成员表达式、第 105 行已越过的指针返回函数闭合位置，以及第 110 行 `return ((void *)0);` 展开，并要求精确的 line-110 空指针诊断。后续越过该边界时，门禁会主动失败，直到下一条范围受限分支记录新的真实源码前沿。
+`tests/external/cjson/probe.sh` 永久锚定稳定早期声明、第 104 行已越过的直接成员表达式、第 105 行指针返回 completion、第 110 行已越过的 `return ((void *)0);`、第 114 行 `double cJSON_GetNumberValue(...)` 签名，以及第 115 行函数体开括号，并要求精确的 line-115 诊断。后续越过该边界时，门禁会主动失败，直到下一条范围受限分支记录新的真实源码前沿。
 
 ## Validation ladder / 验证阶梯
 

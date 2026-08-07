@@ -107,6 +107,8 @@ verify_preprocessed_line 101 'static error global_error = { ((void *)0), 0 };'
 verify_preprocessed_line 104 '    return (const char*) (global_error.json + global_error.position);'
 verify_preprocessed_line 105 '}'
 verify_preprocessed_line 110 '        return ((void *)0);'
+verify_preprocessed_line 114 'double cJSON_GetNumberValue(const cJSON * const item)'
+verify_preprocessed_line 115 '{'
 
 set +e
 "$minic" -S "$preprocessed" -o "$work/cJSON.s" \
@@ -122,7 +124,7 @@ fi
 
 first_error=$(sed -n '/error:/p' "$diagnostic" | sed -n '1p')
 case "$first_error" in
-    *":110:26: error: unsupported cast between these types")
+    *":115:1: error: unsupported function return type")
         ;;
     *)
         printf '%s\n' \
@@ -133,4 +135,4 @@ case "$first_error" in
 esac
 
 printf '%s\n' \
-    'PASS external/cjson frontier=null-pointer-constant-cast diagnostic=unsupported-cast-between-types source=cJSON-1.7.19 offline=1'
+    'PASS external/cjson frontier=double-function-return-type diagnostic=unsupported-function-return-type source=cJSON-1.7.19 offline=1'

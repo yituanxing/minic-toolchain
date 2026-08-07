@@ -125,6 +125,11 @@ static bool parenthesis_starts_cast(const MinicParser *parser) {
     return token_starts_cast_type(parser, token);
 }
 
+static bool expression_is_integer_zero(const MinicExpression *expression) {
+    return expression != NULL && expression->kind == MINIC_EXPRESSION_INTEGER &&
+           minic_type_is_integer(expression->type) && expression->value.integer_value == 0;
+}
+
 static bool parse_cast(MinicParser *parser, MinicExpressionId *expression_id) {
     MinicSourcePosition begin;
     MinicExpression expression;
@@ -140,7 +145,9 @@ static bool parse_cast(MinicParser *parser, MinicExpressionId *expression_id) {
     }
 
     operand = minic_c0_program_expression(parser->program, operand_id);
-    if (operand == NULL || !minic_type_cast_compatible(target_type, operand->type)) {
+    if (operand == NULL ||
+        (!minic_type_cast_compatible(target_type, operand->type) &&
+         !(minic_type_is_pointer(target_type) && expression_is_integer_zero(operand)))) {
         minic_parser_error(parser, "unsupported cast between these types");
         return false;
     }
