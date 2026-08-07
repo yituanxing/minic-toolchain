@@ -106,7 +106,7 @@ bool minic_c0_global_object_add_initializer(MinicC0Program *program,
         return false;
     }
     object = &program->global_objects[global_object_id];
-    if (object->is_zero_initialized) {
+    if (object->is_zero_initialized || object->function_relocation_count != 0U) {
         return false;
     }
     if (!grow_array((void **)&object->initializer_values,
@@ -117,6 +117,28 @@ bool minic_c0_global_object_add_initializer(MinicC0Program *program,
     }
     object->initializer_values[object->initializer_count] = value;
     object->initializer_count += 1U;
+    return true;
+}
+
+bool minic_c0_global_object_add_function_relocation(MinicC0Program *program,
+                                                    MinicGlobalObjectId global_object_id,
+                                                    size_t field_index,
+                                                    MinicFunctionId function_id) {
+    MinicGlobalObject *object;
+    MinicGlobalFunctionRelocation *relocation;
+
+    if (program == NULL || global_object_id >= program->global_object_count ||
+        function_id >= program->function_count) {
+        return false;
+    }
+    object = &program->global_objects[global_object_id];
+    if (object->initializer_count != 0U || object->function_relocation_count >= 8U) {
+        return false;
+    }
+    relocation = &object->function_relocations[object->function_relocation_count];
+    relocation->field_index = field_index;
+    relocation->function_id = function_id;
+    object->function_relocation_count += 1U;
     return true;
 }
 
