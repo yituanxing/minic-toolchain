@@ -343,6 +343,57 @@ static int test_floating_constants(void)
     return 0;
 }
 
+static int test_string_literals(void)
+{
+    static const char source[] = "\"abc\" \"A\\\"B\"";
+    MinicLexer lexer;
+
+    minic_lexer_initialize(&lexer, "strings.c", source, sizeof(source) - 1U);
+    if (expect_token(&lexer, MINIC_TOKEN_STRING_LITERAL, 1U, 1U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_STRING_LITERAL, 1U, 7U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_EOF, 1U, 13U) != 0) {
+        return 1;
+    }
+    return 0;
+}
+
+static int test_invalid_string_literals(void)
+{
+    static const char unterminated[] = "\"abc";
+    static const char newline[] = "\"a\nb\"";
+    MinicDiagnostic diagnostic;
+    MinicLexer lexer;
+    MinicToken token;
+
+    minic_lexer_initialize(
+        &lexer, "string-unterminated.c", unterminated, sizeof(unterminated) - 1U);
+    diagnostic.message[0] = '\0';
+    if (minic_lexer_next(&lexer, &token, &diagnostic) ||
+        token.kind != MINIC_TOKEN_INVALID || diagnostic.line != 1U || diagnostic.column != 1U ||
+        strcmp(diagnostic.message, "unterminated string literal") != 0) {
+        (void)fprintf(stderr,
+                      "unterminated string diagnostic mismatch: %zu:%zu: %s\n",
+                      diagnostic.line,
+                      diagnostic.column,
+                      diagnostic.message);
+        return 1;
+    }
+
+    minic_lexer_initialize(&lexer, "string-newline.c", newline, sizeof(newline) - 1U);
+    diagnostic.message[0] = '\0';
+    if (minic_lexer_next(&lexer, &token, &diagnostic) ||
+        token.kind != MINIC_TOKEN_INVALID || diagnostic.line != 1U || diagnostic.column != 3U ||
+        strcmp(diagnostic.message, "newline in string literal") != 0) {
+        (void)fprintf(stderr,
+                      "newline string diagnostic mismatch: %zu:%zu: %s\n",
+                      diagnostic.line,
+                      diagnostic.column,
+                      diagnostic.message);
+        return 1;
+    }
+    return 0;
+}
+
 static int test_invalid_floating_exponent(void)
 {
     static const char source[] = "1e+";
@@ -411,6 +462,8 @@ int main(void)
         test_char_keyword_boundaries() != 0 ||
         test_keyword_boundaries() != 0 ||
         test_floating_constants() != 0 ||
+        test_string_literals() != 0 ||
+        test_invalid_string_literals() != 0 ||
         test_invalid_floating_exponent() != 0 ||
         test_invalid_character() != 0) {
         return 1;
