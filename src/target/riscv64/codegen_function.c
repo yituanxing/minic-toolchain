@@ -57,6 +57,56 @@ static bool minic_riscv64_global_scalar_type(const MinicC0Program *program,
     return true;
 }
 
+static bool minic_riscv64_emit_zero_bytes(FILE *file, size_t size) {
+    return size == 0U || fprintf(file, "  .zero %zu\n", size) >= 0;
+}
+
+static bool
+emit_fn_relocs(FILE *file, const MinicC0Program *program, const MinicGlobalObject *object) {
+    const MinicRecord *record;
+    size_t cursor;
+    size_t relocation_index;
+
+    if (file == NULL || program == NULL || object == NULL || !object->is_zero_initialized ||
+        !minic_type_is_record(object->type) || object->function_relocation_count == 0U ||
+        object->initializer_count != 0U) {
+        return false;
+    }
+    record = minic_c0_program_record(program, object->type.record_id);
+    if (record == NULL || !record->is_complete) {
+        return false;
+    }
+
+    cursor = 0U;
+    for (relocation_index = 0U; relocation_index < object->function_relocation_count;
+         ++relocation_index) {
+        const MinicGlobalFunctionRelocation *relocation;
+        const MinicRecordField *field;
+        const MinicFunction *function;
+        MinicType pointee;
+        size_t field_offset;
+
+        relocation = &object->function_relocations[relocation_index];
+        field = minic_c0_record_field(record, relocation->field_index);
+        function = minic_c0_program_function(program, relocation->function_id);
+        if (field == NULL || function == NULL || function->name_length == 0U ||
+            field->element_count != 1U || !minic_type_pointee(field->type, &pointee) ||
+            !minic_type_is_function(pointee)) {
+            return false;
+        }
+        field_offset = field->storage_offset;
+        if (field_offset < cursor || field_offset > object->storage_size ||
+            object->storage_size - field_offset < 8U ||
+            !minic_riscv64_emit_zero_bytes(file, field_offset - cursor) ||
+            fprintf(file, "  .dword %s\n", function->name) < 0) {
+            return false;
+        }
+        cursor = field_offset + 8U;
+    }
+    return cursor <= object->storage_size &&
+           minic_riscv64_emit_zero_bytes(file, object->storage_size - cursor);
+}
+
 static bool minic_riscv64_emit_global_object(FILE *file,
                                              const MinicC0Program *program,
                                              const MinicGlobalObject *object) {
@@ -79,7 +129,8 @@ static bool minic_riscv64_emit_global_object(FILE *file,
             return false;
         }
     } else {
-        if (!minic_riscv64_global_scalar_type(program, object->type, &scalar_type, &scalar_width) ||
+        if (object->function_relocation_count != 0U ||
+            !minic_riscv64_global_scalar_type(program, object->type, &scalar_type, &scalar_width) ||
             scalar_width == 0U || object->initializer_count > object->storage_size / scalar_width) {
             return false;
         }
@@ -103,8 +154,12 @@ static bool minic_riscv64_emit_global_object(FILE *file,
                 object->name) < 0) {
         return false;
     }
-    if (object->is_zero_initialized) {
-        if (fprintf(file, "  .zero %zu\n", object->storage_size) < 0) {
+    if (object->function_relocation_count != 0U) {
+        if (!emit_fn_relocs(file, program, object)) {
+            return false;
+        }
+    } else if (object->is_zero_initialized) {
+        if (!minic_riscv64_emit_zero_bytes(file, object->storage_size)) {
             return false;
         }
     } else {

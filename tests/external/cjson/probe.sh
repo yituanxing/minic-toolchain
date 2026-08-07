@@ -64,10 +64,40 @@ typedef __SIZE_TYPE__ size_t;
 #endif
 EOF
 
+cat >"$include/string.h" <<'EOF'
+#ifndef MINIC_CJSON_STRING_H
+#define MINIC_CJSON_STRING_H
+#include <stddef.h>
+size_t strlen(const char *string);
+void *memcpy(void *destination, const void *source, size_t count);
+void *memset(void *destination, int value, size_t count);
+char *strcpy(char *destination, const char *source);
+int strcmp(const char *left, const char *right);
+#endif
+EOF
+
 cat >"$include/stdio.h" <<'EOF'
 #ifndef MINIC_CJSON_STDIO_H
 #define MINIC_CJSON_STDIO_H
 int sprintf(char *buffer, const char *format, ...);
+#endif
+EOF
+
+cat >"$include/math.h" <<'EOF'
+#ifndef MINIC_CJSON_MATH_H
+#define MINIC_CJSON_MATH_H
+double fabs(double value);
+#endif
+EOF
+
+cat >"$include/stdlib.h" <<'EOF'
+#ifndef MINIC_CJSON_STDLIB_H
+#define MINIC_CJSON_STDLIB_H
+#include <stddef.h>
+void *malloc(size_t size);
+void free(void *pointer);
+void *realloc(void *pointer, size_t size);
+double strtod(const char *string, char **end_pointer);
 #endif
 EOF
 
@@ -93,14 +123,11 @@ cat >"$include/float.h" <<'EOF'
 #endif
 EOF
 
-for header in string.h math.h stdlib.h locale.h; do
-    guard=$(printf 'MINIC_CJSON_%s' "$header" | tr '[:lower:].' '[:upper:]_')
-    cat >"$include/$header" <<EOF
-#ifndef $guard
-#define $guard
+cat >"$include/locale.h" <<'EOF'
+#ifndef MINIC_CJSON_LOCALE_H
+#define MINIC_CJSON_LOCALE_H
 #endif
 EOF
-done
 
 "$riscv_cc" \
     -E -P -nostdinc -std=c11 \
@@ -109,29 +136,40 @@ done
     "$vendor/cJSON.c" \
     -o "$preprocessed"
 
-verify_preprocessed_line 1 'int sprintf(char *buffer, const char *format, ...);'
-verify_preprocessed_line 2 'int tolower(int character);'
-verify_preprocessed_line 3 'typedef long unsigned int size_t;'
-verify_preprocessed_line 4 'typedef struct cJSON'
-verify_preprocessed_line 6 '    struct cJSON *next;'
-verify_preprocessed_line 10 '    char *valuestring;'
-verify_preprocessed_line 12 '    double valuedouble;'
-verify_preprocessed_line 17 '      void *( *malloc_fn)(size_t sz);'
-verify_preprocessed_line 63 'cJSON * cJSON_CreateFloatArray(const float *numbers, int count);'
-verify_preprocessed_line 99 'typedef struct {'
-verify_preprocessed_line 103 'static error global_error = { ((void *)0), 0 };'
-verify_preprocessed_line 106 '    return (const char*) (global_error.json + global_error.position);'
-verify_preprocessed_line 107 '}'
-verify_preprocessed_line 112 '        return ((void *)0);'
-verify_preprocessed_line 116 'double cJSON_GetNumberValue(const cJSON * const item)'
-verify_preprocessed_line 117 '{'
-verify_preprocessed_line 120 '        return (double) 0.0/0.0;'
-verify_preprocessed_line 126 '    static char version[15];'
-verify_preprocessed_line 127 '    sprintf(version, "%i.%i.%i", 1, 7, 19);'
-verify_preprocessed_line 132 '    if ((string1 == ((void *)0)) || (string2 == ((void *)0)))'
-verify_preprocessed_line 140 '    for(; tolower(*string1) == tolower(*string2); (void)string1++, string2++)'
-verify_preprocessed_line 142 "        if (*string1 == '\\0')"
-verify_preprocessed_line 155 'static internal_hooks global_hooks = { malloc, free, realloc };'
+verify_preprocessed_line 1 'typedef long unsigned int size_t;'
+verify_preprocessed_line 2 'size_t strlen(const char *string);'
+verify_preprocessed_line 3 'void *memcpy(void *destination, const void *source, size_t count);'
+verify_preprocessed_line 4 'void *memset(void *destination, int value, size_t count);'
+verify_preprocessed_line 5 'char *strcpy(char *destination, const char *source);'
+verify_preprocessed_line 6 'int strcmp(const char *left, const char *right);'
+verify_preprocessed_line 7 'int sprintf(char *buffer, const char *format, ...);'
+verify_preprocessed_line 8 'double fabs(double value);'
+verify_preprocessed_line 9 'void *malloc(size_t size);'
+verify_preprocessed_line 10 'void free(void *pointer);'
+verify_preprocessed_line 11 'void *realloc(void *pointer, size_t size);'
+verify_preprocessed_line 12 'double strtod(const char *string, char **end_pointer);'
+verify_preprocessed_line 13 'int tolower(int character);'
+verify_preprocessed_line 14 'typedef struct cJSON'
+verify_preprocessed_line 16 '    struct cJSON *next;'
+verify_preprocessed_line 20 '    char *valuestring;'
+verify_preprocessed_line 22 '    double valuedouble;'
+verify_preprocessed_line 27 '      void *( *malloc_fn)(size_t sz);'
+verify_preprocessed_line 73 'cJSON * cJSON_CreateFloatArray(const float *numbers, int count);'
+verify_preprocessed_line 109 'typedef struct {'
+verify_preprocessed_line 113 'static error global_error = { ((void *)0), 0 };'
+verify_preprocessed_line 116 '    return (const char*) (global_error.json + global_error.position);'
+verify_preprocessed_line 117 '}'
+verify_preprocessed_line 122 '        return ((void *)0);'
+verify_preprocessed_line 126 'double cJSON_GetNumberValue(const cJSON * const item)'
+verify_preprocessed_line 127 '{'
+verify_preprocessed_line 130 '        return (double) 0.0/0.0;'
+verify_preprocessed_line 136 '    static char version[15];'
+verify_preprocessed_line 137 '    sprintf(version, "%i.%i.%i", 1, 7, 19);'
+verify_preprocessed_line 142 '    if ((string1 == ((void *)0)) || (string2 == ((void *)0)))'
+verify_preprocessed_line 150 '    for(; tolower(*string1) == tolower(*string2); (void)string1++, string2++)'
+verify_preprocessed_line 152 "        if (*string1 == '\\0')"
+verify_preprocessed_line 165 'static internal_hooks global_hooks = { malloc, free, realloc };'
+verify_preprocessed_line 174 '    length = strlen((const char*)string) + sizeof("");'
 
 set +e
 "$minic" -S "$preprocessed" -o "$work/cJSON.s" \
@@ -147,7 +185,7 @@ fi
 
 first_error=$(sed -n '/error:/p' "$diagnostic" | sed -n '1p')
 case "$first_error" in
-    *":155:40: error: static pointer initializer must be null")
+    *":174:50: error: call to function not yet declared")
         ;;
     *)
         printf '%s\n' \
@@ -158,4 +196,4 @@ case "$first_error" in
 esac
 
 printf '%s\n' \
-    'PASS external/cjson frontier=function-valued-static-initializer diagnostic=static-pointer-must-be-null source=cJSON-1.7.19 offline=1'
+    'PASS external/cjson frontier=sizeof-expression diagnostic=call-not-declared source=cJSON-1.7.19 offline=1'
