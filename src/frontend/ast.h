@@ -31,6 +31,7 @@ typedef enum MinicExpressionKind {
     MINIC_EXPRESSION_FLOATING,
     MINIC_EXPRESSION_LOCAL,
     MINIC_EXPRESSION_GLOBAL_OBJECT,
+    MINIC_EXPRESSION_FUNCTION_ADDRESS,
     MINIC_EXPRESSION_ADDRESS_OF,
     MINIC_EXPRESSION_DEREFERENCE,
     MINIC_EXPRESSION_CAST,
@@ -78,6 +79,7 @@ typedef struct MinicExpression {
         uint64_t floating_bits;
         MinicLocalId local_id;
         MinicGlobalObjectId global_object_id;
+        MinicFunctionId function_id;
         struct {
             MinicFunctionId function_id;
             size_t argument_count;
@@ -187,6 +189,11 @@ typedef struct MinicTypeAlias {
     MinicType type;
 } MinicTypeAlias;
 
+typedef struct MinicGlobalFunctionRelocation {
+    size_t field_index;
+    MinicFunctionId function_id;
+} MinicGlobalFunctionRelocation;
+
 typedef struct MinicGlobalObject {
     char *name;
     size_t name_length;
@@ -194,6 +201,9 @@ typedef struct MinicGlobalObject {
     int *initializer_values;
     size_t initializer_count;
     size_t initializer_capacity;
+    MinicGlobalFunctionRelocation *function_relocations;
+    size_t function_relocation_count;
+    size_t function_relocation_capacity;
     size_t storage_size;
     size_t alignment;
     bool is_internal;
@@ -327,6 +337,10 @@ bool minic_c0_program_add_global_object(MinicC0Program *program,
 bool minic_c0_global_object_add_initializer(MinicC0Program *program,
                                             MinicGlobalObjectId global_object_id,
                                             int value);
+bool minic_c0_global_object_add_function_relocation(MinicC0Program *program,
+                                                    MinicGlobalObjectId global_object_id,
+                                                    size_t field_index,
+                                                    MinicFunctionId function_id);
 bool minic_c0_global_object_set_zero_initialized(MinicC0Program *program,
                                                  MinicGlobalObjectId global_object_id);
 
