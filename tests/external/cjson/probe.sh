@@ -130,6 +130,7 @@ verify_preprocessed_line 126 '    static char version[15];'
 verify_preprocessed_line 127 '    sprintf(version, "%i.%i.%i", 1, 7, 19);'
 verify_preprocessed_line 132 '    if ((string1 == ((void *)0)) || (string2 == ((void *)0)))'
 verify_preprocessed_line 140 '    for(; tolower(*string1) == tolower(*string2); (void)string1++, string2++)'
+verify_preprocessed_line 142 "        if (*string1 == '\\0')"
 
 set +e
 "$minic" -S "$preprocessed" -o "$work/cJSON.s" \
@@ -145,7 +146,7 @@ fi
 
 first_error=$(sed -n '/error:/p' "$diagnostic" | sed -n '1p')
 case "$first_error" in
-    *":140:9: error: for initializer requires an assignment")
+    *":142:25: error: unexpected character '''")
         ;;
     *)
         printf '%s\n' \
@@ -156,4 +157,4 @@ case "$first_error" in
 esac
 
 printf '%s\n' \
-    'PASS external/cjson frontier=for-empty-initializer diagnostic=assignment-required source=cJSON-1.7.19 offline=1'
+    'PASS external/cjson frontier=character-literal diagnostic=unexpected-single-quote source=cJSON-1.7.19 offline=1'
