@@ -6,11 +6,12 @@
 static bool function_signature_matches(const MinicFunction *function,
                                        MinicType return_type,
                                        const MinicType *parameter_types,
-                                       size_t parameter_count) {
+                                       size_t parameter_count,
+                                       bool is_variadic) {
     size_t parameter_index;
 
     if (function == NULL || !minic_type_equal(function->return_type, return_type) ||
-        function->parameter_count != parameter_count) {
+        function->parameter_count != parameter_count || function->is_variadic != is_variadic) {
         return false;
     }
     for (parameter_index = 0U; parameter_index < parameter_count; ++parameter_index) {
@@ -28,12 +29,19 @@ bool minic_parser_parse_parameter_list(MinicParser *parser,
                                        MinicSourceSpan *parameter_name_spans,
                                        MinicType *parameter_types,
                                        size_t *parameter_count,
-                                       bool require_names) {
-    if (parser == NULL || parameter_types == NULL || parameter_count == NULL) {
+                                       bool require_names,
+                                       bool *is_variadic) {
+    if (parser == NULL || parameter_types == NULL || parameter_count == NULL ||
+        is_variadic == NULL) {
         return false;
     }
+    *is_variadic = false;
     if (parser->current.kind == MINIC_TOKEN_RPAREN) {
         return true;
+    }
+    if (parser->current.kind == MINIC_TOKEN_ELLIPSIS) {
+        minic_parser_error(parser, "ellipsis requires at least one fixed parameter");
+        return false;
     }
 
     for (;;) {
@@ -74,6 +82,10 @@ bool minic_parser_parse_parameter_list(MinicParser *parser,
         if (!minic_parser_advance(parser)) {
             return false;
         }
+        if (parser->current.kind == MINIC_TOKEN_ELLIPSIS) {
+            *is_variadic = true;
+            return minic_parser_advance(parser);
+        }
     }
 }
 
@@ -91,9 +103,11 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     size_t local_begin;
     size_t local_count;
     bool is_main;
+    bool is_variadic;
 
     body_block = MINIC_BLOCK_INVALID;
     parameter_count = 0U;
+    is_variadic = false;
     (void)memset(parameter_name_spans, 0, sizeof(parameter_name_spans));
     (void)memset(parameter_types, 0, sizeof(parameter_types));
     if (is_internal &&
@@ -123,12 +137,16 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
 
     if (!minic_parser_advance(parser) ||
         !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '('") ||
-        !minic_parser_parse_parameter_list(
-            parser, parameter_name_spans, parameter_types, &parameter_count, true) ||
+        !minic_parser_parse_parameter_list(parser,
+                                           parameter_name_spans,
+                                           parameter_types,
+                                           &parameter_count,
+                                           true,
+                                           &is_variadic) ||
         !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')'")) {
         return false;
     }
-    if (is_main && parameter_count != 0U) {
+    if (is_main && (parameter_count != 0U || is_variadic)) {
         minic_parser_error(parser, "main parameters are not supported yet");
         return false;
     }
@@ -136,7 +154,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     if (function_id != MINIC_FUNCTION_INVALID) {
         existing_function = minic_c0_program_function(parser->program, function_id);
         if (!function_signature_matches(
-                existing_function, return_type, parameter_types, parameter_count) ||
+                existing_function, return_type, parameter_types, parameter_count, is_variadic) ||
             existing_function->is_internal != is_internal) {
             minic_parser_error(parser, "conflicting function declaration");
             return false;
@@ -155,7 +173,9 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                 !minic_c0_program_set_function_signature(
                     parser->program, function_id, return_type, parameter_types, parameter_count) ||
                 !minic_c0_program_set_function_internal(
-                    parser->program, function_id, is_internal)) {
+                    parser->program, function_id, is_internal) ||
+                !minic_c0_program_set_function_variadic(
+                    parser->program, function_id, is_variadic)) {
                 minic_parser_error(parser, "out of memory while declaring function");
                 return false;
             }
@@ -163,6 +183,10 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
         return minic_parser_advance(parser);
     }
 
+    if (is_variadic) {
+        minic_parser_error(parser, "variadic function definitions are not supported yet");
+        return false;
+    }
     if (!minic_type_is_integer(return_type) && !minic_type_is_void(return_type) &&
         !minic_type_is_pointer(return_type) && !minic_type_is_double(return_type)) {
         minic_parser_error(parser, "unsupported function return type");
@@ -227,7 +251,8 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                                            &function_id) ||
             !minic_c0_program_set_function_signature(
                 parser->program, function_id, return_type, parameter_types, parameter_count) ||
-            !minic_c0_program_set_function_internal(parser->program, function_id, is_internal)) {
+            !minic_c0_program_set_function_internal(parser->program, function_id, is_internal) ||
+            !minic_c0_program_set_function_variadic(parser->program, function_id, false)) {
             minic_parser_error(parser, "out of memory while adding function");
             return false;
         }
