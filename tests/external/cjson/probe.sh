@@ -64,6 +64,13 @@ typedef __SIZE_TYPE__ size_t;
 #endif
 EOF
 
+cat >"$include/stdio.h" <<'EOF'
+#ifndef MINIC_CJSON_STDIO_H
+#define MINIC_CJSON_STDIO_H
+int sprintf(char *buffer, const char *format, ...);
+#endif
+EOF
+
 cat >"$include/limits.h" <<'EOF'
 #ifndef MINIC_CJSON_LIMITS_H
 #define MINIC_CJSON_LIMITS_H
@@ -79,7 +86,7 @@ cat >"$include/float.h" <<'EOF'
 #endif
 EOF
 
-for header in string.h stdio.h math.h stdlib.h ctype.h locale.h; do
+for header in string.h math.h stdlib.h ctype.h locale.h; do
     guard=$(printf 'MINIC_CJSON_%s' "$header" | tr '[:lower:].' '[:upper:]_')
     cat >"$include/$header" <<EOF
 #ifndef $guard
@@ -95,23 +102,24 @@ done
     "$vendor/cJSON.c" \
     -o "$preprocessed"
 
-verify_preprocessed_line 1 'typedef long unsigned int size_t;'
-verify_preprocessed_line 2 'typedef struct cJSON'
-verify_preprocessed_line 4 '    struct cJSON *next;'
-verify_preprocessed_line 8 '    char *valuestring;'
-verify_preprocessed_line 10 '    double valuedouble;'
-verify_preprocessed_line 15 '      void *( *malloc_fn)(size_t sz);'
-verify_preprocessed_line 61 'cJSON * cJSON_CreateFloatArray(const float *numbers, int count);'
-verify_preprocessed_line 97 'typedef struct {'
-verify_preprocessed_line 101 'static error global_error = { ((void *)0), 0 };'
-verify_preprocessed_line 104 '    return (const char*) (global_error.json + global_error.position);'
-verify_preprocessed_line 105 '}'
-verify_preprocessed_line 110 '        return ((void *)0);'
-verify_preprocessed_line 114 'double cJSON_GetNumberValue(const cJSON * const item)'
-verify_preprocessed_line 115 '{'
-verify_preprocessed_line 118 '        return (double) 0.0/0.0;'
-verify_preprocessed_line 124 '    static char version[15];'
-verify_preprocessed_line 125 '    sprintf(version, "%i.%i.%i", 1, 7, 19);'
+verify_preprocessed_line 1 'int sprintf(char *buffer, const char *format, ...);'
+verify_preprocessed_line 2 'typedef long unsigned int size_t;'
+verify_preprocessed_line 3 'typedef struct cJSON'
+verify_preprocessed_line 5 '    struct cJSON *next;'
+verify_preprocessed_line 9 '    char *valuestring;'
+verify_preprocessed_line 11 '    double valuedouble;'
+verify_preprocessed_line 16 '      void *( *malloc_fn)(size_t sz);'
+verify_preprocessed_line 62 'cJSON * cJSON_CreateFloatArray(const float *numbers, int count);'
+verify_preprocessed_line 98 'typedef struct {'
+verify_preprocessed_line 102 'static error global_error = { ((void *)0), 0 };'
+verify_preprocessed_line 105 '    return (const char*) (global_error.json + global_error.position);'
+verify_preprocessed_line 106 '}'
+verify_preprocessed_line 111 '        return ((void *)0);'
+verify_preprocessed_line 115 'double cJSON_GetNumberValue(const cJSON * const item)'
+verify_preprocessed_line 116 '{'
+verify_preprocessed_line 119 '        return (double) 0.0/0.0;'
+verify_preprocessed_line 125 '    static char version[15];'
+verify_preprocessed_line 126 '    sprintf(version, "%i.%i.%i", 1, 7, 19);'
 
 set +e
 "$minic" -S "$preprocessed" -o "$work/cJSON.s" \
@@ -127,7 +135,7 @@ fi
 
 first_error=$(sed -n '/error:/p' "$diagnostic" | sed -n '1p')
 case "$first_error" in
-    *":125:12: error: call to function not yet declared")
+    *":126:12: error: call to function not yet declared")
         ;;
     *)
         printf '%s\n' \
