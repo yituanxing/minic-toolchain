@@ -370,6 +370,10 @@ bool minic_c0_program_add_anonymous_record(MinicC0Program *program, MinicRecordI
     }
 
     (void)memset(&record, 0, sizeof(record));
+    record.name = minic_copy_name("", 0U);
+    if (record.name == NULL) {
+        return false;
+    }
     *record_id = program->record_count;
     program->records[program->record_count] = record;
     program->record_count += 1U;
