@@ -152,6 +152,11 @@ static bool binary_is_shift(MinicBinaryOperator operator_kind) {
     return operator_kind == MINIC_BINARY_SHIFT_LEFT || operator_kind == MINIC_BINARY_SHIFT_RIGHT;
 }
 
+static bool binary_is_double_arithmetic(MinicBinaryOperator operator_kind) {
+    return operator_kind == MINIC_BINARY_ADD || operator_kind == MINIC_BINARY_SUBTRACT ||
+           operator_kind == MINIC_BINARY_MULTIPLY || operator_kind == MINIC_BINARY_DIVIDE;
+}
+
 static bool binary_operator_is_valid(MinicBinaryOperator operator_kind) {
     return operator_kind >= MINIC_BINARY_ADD && operator_kind <= MINIC_BINARY_GREATER_EQUAL;
 }
@@ -202,6 +207,11 @@ static bool verify_binary_type(const MinicC0Program *program,
         }
         return minic_type_equal(expression->type, expected_type) ||
                is_normalized_integer_cast_add(expression, left, right, form);
+    }
+
+    if (minic_type_is_double(left->type) && minic_type_is_double(right->type) &&
+        binary_is_double_arithmetic(expression->value.binary.operator_kind)) {
+        return minic_type_is_double(expression->type);
     }
 
     if (expression->value.binary.operator_kind == MINIC_BINARY_ADD) {
