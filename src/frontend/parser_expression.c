@@ -235,6 +235,95 @@ static bool parse_cast(MinicParser *parser, MinicExpressionId *expression_id) {
     return minic_parser_add_expression(parser, &expression, expression_id);
 }
 
+static bool variadic_argument_type_supported(MinicType type) {
+    return minic_type_is_integer(type) || minic_type_is_pointer(type);
+}
+
+static bool parse_call_argument(MinicParser *parser,
+                                MinicExpression *call_expression,
+                                const MinicFunction *callee,
+                                size_t argument_index) {
+    const MinicExpression *argument;
+    MinicExpressionId argument_id;
+
+    if (argument_index >= 8U ||
+        !minic_parser_parse_expression(
+            parser, &call_expression->value.call.arguments[argument_index], 0U)) {
+        return false;
+    }
+    argument_id = call_expression->value.call.arguments[argument_index];
+    argument = minic_c0_program_expression(parser->program, argument_id);
+    if (argument == NULL) {
+        minic_parser_error(parser, "invalid call argument");
+        return false;
+    }
+    if (argument_index < callee->parameter_count) {
+        if (!minic_type_assignment_compatible(callee->parameter_types[argument_index],
+                                              argument->type)) {
+            minic_parser_error(parser, "call argument type does not match declaration");
+            return false;
+        }
+    } else if (!variadic_argument_type_supported(argument->type)) {
+        minic_parser_error(parser, "unsupported variadic argument type");
+        return false;
+    }
+    return true;
+}
+
+static bool parse_call_arguments(MinicParser *parser,
+                                 MinicExpression *call_expression,
+                                 const MinicFunction *callee) {
+    size_t argument_count;
+
+    argument_count = 0U;
+    while (argument_count < callee->parameter_count) {
+        if (parser->current.kind == MINIC_TOKEN_RPAREN) {
+            minic_parser_error(parser, "call argument count does not match declaration");
+            return false;
+        }
+        if (!parse_call_argument(parser, call_expression, callee, argument_count)) {
+            return false;
+        }
+        argument_count += 1U;
+        if (argument_count < callee->parameter_count) {
+            if (parser->current.kind != MINIC_TOKEN_COMMA) {
+                minic_parser_error(parser, "call argument count does not match declaration");
+                return false;
+            }
+            if (!minic_parser_advance(parser)) {
+                return false;
+            }
+        }
+    }
+
+    if (!callee->is_variadic) {
+        if (parser->current.kind != MINIC_TOKEN_RPAREN) {
+            minic_parser_error(parser, "call argument count does not match declaration");
+            return false;
+        }
+        call_expression->value.call.argument_count = argument_count;
+        return true;
+    }
+
+    while (parser->current.kind == MINIC_TOKEN_COMMA) {
+        if (argument_count >= 8U) {
+            minic_parser_error(parser, "variadic call supports at most 8 arguments");
+            return false;
+        }
+        if (!minic_parser_advance(parser) ||
+            !parse_call_argument(parser, call_expression, callee, argument_count)) {
+            return false;
+        }
+        argument_count += 1U;
+    }
+    if (parser->current.kind != MINIC_TOKEN_RPAREN) {
+        minic_parser_error(parser, "call argument count does not match declaration");
+        return false;
+    }
+    call_expression->value.call.argument_count = argument_count;
+    return true;
+}
+
 static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id, bool decay_array) {
     MinicExpression expression;
     MinicExpressionId primary_id;
@@ -301,45 +390,7 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
             expression.type = callee->return_type;
             expression.value_category = MINIC_VALUE_RVALUE;
             expression.value.call.function_id = function_id;
-            expression.value.call.argument_count = callee->parameter_count;
-            {
-                size_t argument_index;
-
-                for (argument_index = 0U; argument_index < callee->parameter_count;
-                     ++argument_index) {
-                    const MinicExpression *argument;
-
-                    if (parser->current.kind == MINIC_TOKEN_RPAREN) {
-                        minic_parser_error(parser,
-                                           "call argument count does not match declaration");
-                        return false;
-                    }
-                    if (!minic_parser_parse_expression(
-                            parser, &expression.value.call.arguments[argument_index], 0U)) {
-                        return false;
-                    }
-                    argument = minic_c0_program_expression(
-                        parser->program, expression.value.call.arguments[argument_index]);
-                    if (argument == NULL ||
-                        !minic_type_assignment_compatible(callee->parameter_types[argument_index],
-                                                          argument->type)) {
-                        minic_parser_error(parser, "call argument type does not match declaration");
-                        return false;
-                    }
-                    if (argument_index + 1U < callee->parameter_count) {
-                        if (parser->current.kind != MINIC_TOKEN_COMMA) {
-                            minic_parser_error(parser,
-                                               "call argument count does not match declaration");
-                            return false;
-                        }
-                        if (!minic_parser_advance(parser)) {
-                            return false;
-                        }
-                    }
-                }
-            }
-            if (parser->current.kind != MINIC_TOKEN_RPAREN) {
-                minic_parser_error(parser, "call argument count does not match declaration");
+            if (!parse_call_arguments(parser, &expression, callee)) {
                 return false;
             }
             call_end = parser->current.span.end;
