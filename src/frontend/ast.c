@@ -228,6 +228,7 @@ bool minic_c0_program_set_function_signature(MinicC0Program *program,
                                              const MinicType *parameter_types,
                                              size_t parameter_count) {
     MinicFunction *function;
+    MinicType normalized_parameter_types[8];
     size_t parameter_index;
 
     if (program == NULL || function_id >= program->function_count || parameter_count > 8U ||
@@ -235,7 +236,9 @@ bool minic_c0_program_set_function_signature(MinicC0Program *program,
         return false;
     }
     for (parameter_index = 0U; parameter_index < parameter_count; ++parameter_index) {
-        if (minic_type_is_void(parameter_types[parameter_index])) {
+        if (minic_type_is_void(parameter_types[parameter_index]) ||
+            !minic_type_unqualified(parameter_types[parameter_index],
+                                    &normalized_parameter_types[parameter_index])) {
             return false;
         }
     }
@@ -248,9 +251,12 @@ bool minic_c0_program_set_function_signature(MinicC0Program *program,
     function->return_type = return_type;
     function->parameter_count = parameter_count;
     for (parameter_index = 0U; parameter_index < 8U; ++parameter_index) {
-        function->parameter_types[parameter_index] = parameter_index < parameter_count
-                                                         ? parameter_types[parameter_index]
-                                                         : minic_type_void();
+        if (parameter_index < parameter_count) {
+            function->parameter_types[parameter_index] =
+                normalized_parameter_types[parameter_index];
+        } else {
+            function->parameter_types[parameter_index] = minic_type_void();
+        }
     }
     return true;
 }
@@ -463,6 +469,7 @@ bool minic_c0_program_add_function_type(MinicC0Program *program,
                                         size_t parameter_count,
                                         MinicType *function_type) {
     MinicFunctionType descriptor;
+    MinicType normalized_parameter_types[8];
     size_t function_type_index;
     size_t parameter_index;
 
@@ -473,7 +480,9 @@ bool minic_c0_program_add_function_type(MinicC0Program *program,
     }
     for (parameter_index = 0U; parameter_index < parameter_count; ++parameter_index) {
         if (minic_type_is_void(parameter_types[parameter_index]) ||
-            minic_type_is_function(parameter_types[parameter_index])) {
+            minic_type_is_function(parameter_types[parameter_index]) ||
+            !minic_type_unqualified(parameter_types[parameter_index],
+                                    &normalized_parameter_types[parameter_index])) {
             return false;
         }
     }
@@ -481,7 +490,7 @@ bool minic_c0_program_add_function_type(MinicC0Program *program,
          ++function_type_index) {
         if (minic_function_type_matches(&program->function_types[function_type_index],
                                         return_type,
-                                        parameter_types,
+                                        normalized_parameter_types,
                                         parameter_count)) {
             *function_type = minic_type_function(function_type_index);
             return true;
@@ -498,9 +507,12 @@ bool minic_c0_program_add_function_type(MinicC0Program *program,
     descriptor.return_type = return_type;
     descriptor.parameter_count = parameter_count;
     for (parameter_index = 0U; parameter_index < 8U; ++parameter_index) {
-        descriptor.parameter_types[parameter_index] = parameter_index < parameter_count
-                                                          ? parameter_types[parameter_index]
-                                                          : minic_type_void();
+        if (parameter_index < parameter_count) {
+            descriptor.parameter_types[parameter_index] =
+                normalized_parameter_types[parameter_index];
+        } else {
+            descriptor.parameter_types[parameter_index] = minic_type_void();
+        }
     }
     function_type_index = program->function_type_count;
     program->function_types[program->function_type_count] = descriptor;

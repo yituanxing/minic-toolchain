@@ -14,8 +14,10 @@ static bool function_signature_matches(const MinicFunction *function,
         return false;
     }
     for (parameter_index = 0U; parameter_index < parameter_count; ++parameter_index) {
-        if (!minic_type_equal(function->parameter_types[parameter_index],
-                              parameter_types[parameter_index])) {
+        MinicType parameter_type;
+
+        if (!minic_type_unqualified(parameter_types[parameter_index], &parameter_type) ||
+            !minic_type_equal(function->parameter_types[parameter_index], parameter_type)) {
             return false;
         }
     }

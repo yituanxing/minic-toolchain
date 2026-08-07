@@ -128,7 +128,7 @@ LAYOUT_TEST_BINARY  := $(BUILD_DIR)/tests/target/riscv64/layout-test
 	check-unsigned-declarations check-long-types check-for-loops check-unbounded-for-break \
 	check-prefix-decrement-update check-cast-expressions \
 	check-unsigned-char-layout check-pointer-subscripts check-pointer-arithmetic \
-	check-const-locals check-global-objects check-bitwise-xor \
+	check-pointer-object-const check-const-locals check-global-objects check-bitwise-xor \
 	check-integer-bit-operations check-pointer-members \
 	check-expression-statements check-postfix-subscripts \
 	check-compound-xor-assignment check-c0-runtime check-programs-c0 \
@@ -159,6 +159,7 @@ help:
 		"  make check-unsigned-char-layout Run byte layout, access, and promotion gates" \
 		"  make check-pointer-subscripts Run pointer subscript read/write gates" \
 		"  make check-pointer-arithmetic Run complete-object pointer scaling gates" \
+		"  make check-pointer-object-const Run per-pointer const qualifier gates" \
 		"  make check-const-locals Run const local initialization and mutability gates" \
 		"  make check-global-objects Run global array lookup and shadowing gates" \
 		"  make check-bitwise-xor  Run XOR precedence, type, and lowering gates" \
@@ -296,6 +297,12 @@ check-pointer-arithmetic: $(MINIC_BINARY)
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
 	sh tests/compiler/c0/run-pointer-arithmetic.sh
 
+check-pointer-object-const: $(MINIC_BINARY)
+	MINIC="$(abspath $(MINIC_BINARY))" \
+	HOST_CC="$(CC)" \
+	BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/compiler/c0/run-pointer-object-const.sh
+
 check-const-locals: $(MINIC_BINARY)
 	MINIC="$(abspath $(MINIC_BINARY))" \
 	HOST_CC="$(CC)" \
@@ -344,7 +351,7 @@ check-compound-xor-assignment: $(MINIC_BINARY)
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
 	sh tests/compiler/c0/run-compound-xor-assignment.sh
 
-check-fast: check-token-model check-lexer check-type check-record check-type-alias check-ast-contract check-layout check-static-functions check-unsigned-declarations check-long-types check-for-loops check-unbounded-for-break check-prefix-decrement-update check-cast-expressions check-unsigned-char-layout check-pointer-subscripts check-pointer-arithmetic check-const-locals check-global-objects check-bitwise-xor check-integer-bit-operations check-pointer-members check-expression-statements check-postfix-subscripts check-compound-xor-assignment $(MINIC_BINARY)
+check-fast: check-token-model check-lexer check-type check-record check-type-alias check-ast-contract check-layout check-static-functions check-unsigned-declarations check-long-types check-for-loops check-unbounded-for-break check-prefix-decrement-update check-cast-expressions check-unsigned-char-layout check-pointer-subscripts check-pointer-arithmetic check-pointer-object-const check-const-locals check-global-objects check-bitwise-xor check-integer-bit-operations check-pointer-members check-expression-statements check-postfix-subscripts check-compound-xor-assignment $(MINIC_BINARY)
 	MINIC="$(abspath $(MINIC_BINARY))" \
 	HOST_CC="$(CC)" \
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \

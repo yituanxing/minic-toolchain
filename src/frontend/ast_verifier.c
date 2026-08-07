@@ -1,12 +1,28 @@
 #include "frontend/ast_verifier.h"
 
+#include <limits.h>
+
 static bool storage_is_valid(const void *data, size_t count, size_t capacity) {
     return count <= capacity && (count == 0U || data != NULL);
 }
 
+static bool pointer_qualifiers_are_valid(MinicType type) {
+    unsigned int capacity;
+
+    capacity = (unsigned int)(sizeof(type.pointer_qualifiers) * CHAR_BIT);
+    if (type.pointer_depth > capacity) {
+        return false;
+    }
+    if (type.pointer_depth == capacity) {
+        return true;
+    }
+    return (type.pointer_qualifiers >> type.pointer_depth) == 0U;
+}
+
 static bool type_is_valid(const MinicC0Program *program, MinicType type) {
     if (program == NULL ||
-        (type.base_qualifiers & ~((unsigned int)MINIC_TYPE_QUALIFIER_CONST)) != 0U) {
+        (type.base_qualifiers & ~((unsigned int)MINIC_TYPE_QUALIFIER_CONST)) != 0U ||
+        !pointer_qualifiers_are_valid(type)) {
         return false;
     }
     if (type.is_plain_char && type.base_kind != MINIC_TYPE_BASE_INT) {
@@ -62,6 +78,12 @@ static bool type_is_valid(const MinicC0Program *program, MinicType type) {
                type.integer_rank == MINIC_INTEGER_RANK_NONE;
     }
     return false;
+}
+
+static bool type_is_top_level_unqualified(MinicType type) {
+    MinicType unqualified;
+
+    return minic_type_unqualified(type, &unqualified) && minic_type_equal(type, unqualified);
 }
 
 static bool type_is_complete_object_bounded(const MinicC0Program *program,
@@ -459,6 +481,7 @@ bool minic_c0_program_verify(const MinicC0Program *program, MinicC0AstForm form)
         for (parameter_index = 0U; parameter_index < function_type->parameter_count;
              ++parameter_index) {
             if (!type_is_valid(program, function_type->parameter_types[parameter_index]) ||
+                !type_is_top_level_unqualified(function_type->parameter_types[parameter_index]) ||
                 minic_type_is_void(function_type->parameter_types[parameter_index]) ||
                 minic_type_is_function(function_type->parameter_types[parameter_index])) {
                 return false;
@@ -508,6 +531,7 @@ bool minic_c0_program_verify(const MinicC0Program *program, MinicC0AstForm form)
         }
         for (parameter_index = 0U; parameter_index < function->parameter_count; ++parameter_index) {
             if (!type_is_valid(program, function->parameter_types[parameter_index]) ||
+                !type_is_top_level_unqualified(function->parameter_types[parameter_index]) ||
                 minic_type_is_void(function->parameter_types[parameter_index]) ||
                 minic_type_is_function(function->parameter_types[parameter_index])) {
                 return false;

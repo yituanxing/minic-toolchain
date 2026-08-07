@@ -48,6 +48,7 @@ typedef struct MinicType {
     MinicIntegerRank integer_rank;
     bool is_plain_char;
     unsigned int base_qualifiers;
+    unsigned int pointer_qualifiers;
     unsigned int pointer_depth;
 } MinicType;
 
@@ -63,6 +64,7 @@ MinicType minic_type_function(MinicFunctionTypeId function_type_id);
 MinicType minic_type_record(MinicRecordId record_id);
 MinicType minic_type_array(MinicArrayTypeId array_type_id);
 bool minic_type_add_const(MinicType type, MinicType *result);
+bool minic_type_unqualified(MinicType type, MinicType *result);
 bool minic_type_pointer_to(MinicType pointee, MinicType *result);
 bool minic_type_pointee(MinicType pointer, MinicType *result);
 bool minic_type_equal(MinicType left, MinicType right);
