@@ -160,6 +160,11 @@ static bool unary_operator_is_valid(MinicUnaryOperator operator_kind) {
     return operator_kind >= MINIC_UNARY_PLUS && operator_kind <= MINIC_UNARY_LOGICAL_NOT;
 }
 
+static bool expression_is_integer_zero(const MinicExpression *expression) {
+    return expression != NULL && expression->kind == MINIC_EXPRESSION_INTEGER &&
+           minic_type_is_integer(expression->type) && expression->value.integer_value == 0;
+}
+
 static bool is_normalized_integer_cast_add(const MinicExpression *expression,
                                            const MinicExpression *left,
                                            const MinicExpression *right,
@@ -297,13 +302,16 @@ verify_expression(const MinicC0Program *program, size_t expression_index, MinicC
         operand = expression_before(program, expression->value.unary.operand, expression_index);
         return form == MINIC_C0_AST_PARSED && operand != NULL &&
                expression->value_category == MINIC_VALUE_RVALUE &&
-               minic_type_cast_compatible(expression->type, operand->type);
+               (minic_type_cast_compatible(expression->type, operand->type) ||
+                (minic_type_is_pointer(expression->type) && expression_is_integer_zero(operand)));
     case MINIC_EXPRESSION_BITCAST:
         operand = expression_before(program, expression->value.unary.operand, expression_index);
         return form == MINIC_C0_AST_NORMALIZED && operand != NULL &&
                expression->value_category == MINIC_VALUE_RVALUE &&
-               minic_type_is_pointer(expression->type) && minic_type_is_pointer(operand->type) &&
-               minic_type_cast_compatible(expression->type, operand->type);
+               minic_type_is_pointer(expression->type) &&
+               ((minic_type_is_pointer(operand->type) &&
+                 minic_type_cast_compatible(expression->type, operand->type)) ||
+                expression_is_integer_zero(operand));
     case MINIC_EXPRESSION_SUBSCRIPT:
         left = expression_before(program, expression->value.subscript.base, expression_index);
         right = expression_before(program, expression->value.subscript.index, expression_index);
