@@ -18,12 +18,13 @@ grep -F "  call sum_four" "$work/pointer_member.s" >/dev/null
 printf '%s\n' "PASS compiler/c0/pointer_member"
 
 "$host_cc" -E -P -x c \
-    "$root/tests/compiler/c0/pointer_member.c" \
+    "$root/tests/programs/c0/direct_record_member.c" \
     -o "$work/direct_record_member.i"
 "$minic" -S \
     "$work/direct_record_member.i" \
     -o "$work/direct_record_member.s"
 grep -F "  addi a0, a0, 4" "$work/direct_record_member.s" >/dev/null
+grep -F "  la a0, global_pair" "$work/direct_record_member.s" >/dev/null
 printf '%s\n' "PASS compiler/c0/direct_record_member"
 
 "$host_cc" -E -P -x c \
