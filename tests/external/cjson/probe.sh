@@ -118,7 +118,7 @@ fi
 
 first_error=$(sed -n '/error:/p' "$diagnostic" | sed -n '1p')
 case "$first_error" in
-    *':97:16: error: expected record tag after '\''struct'\'')
+    *":97:16: error: expected record tag after 'struct'")
         ;;
     *)
         printf '%s\n' \
