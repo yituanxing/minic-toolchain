@@ -71,6 +71,16 @@ int sprintf(char *buffer, const char *format, ...);
 #endif
 EOF
 
+cat >"$include/stdlib.h" <<'EOF'
+#ifndef MINIC_CJSON_STDLIB_H
+#define MINIC_CJSON_STDLIB_H
+#include <stddef.h>
+void *malloc(size_t size);
+void free(void *pointer);
+void *realloc(void *pointer, size_t size);
+#endif
+EOF
+
 cat >"$include/limits.h" <<'EOF'
 #ifndef MINIC_CJSON_LIMITS_H
 #define MINIC_CJSON_LIMITS_H
@@ -93,7 +103,7 @@ cat >"$include/float.h" <<'EOF'
 #endif
 EOF
 
-for header in string.h math.h stdlib.h locale.h; do
+for header in string.h math.h locale.h; do
     guard=$(printf 'MINIC_CJSON_%s' "$header" | tr '[:lower:].' '[:upper:]_')
     cat >"$include/$header" <<EOF
 #ifndef $guard
@@ -110,28 +120,31 @@ done
     -o "$preprocessed"
 
 verify_preprocessed_line 1 'int sprintf(char *buffer, const char *format, ...);'
-verify_preprocessed_line 2 'int tolower(int character);'
-verify_preprocessed_line 3 'typedef long unsigned int size_t;'
-verify_preprocessed_line 4 'typedef struct cJSON'
-verify_preprocessed_line 6 '    struct cJSON *next;'
-verify_preprocessed_line 10 '    char *valuestring;'
-verify_preprocessed_line 12 '    double valuedouble;'
-verify_preprocessed_line 17 '      void *( *malloc_fn)(size_t sz);'
-verify_preprocessed_line 63 'cJSON * cJSON_CreateFloatArray(const float *numbers, int count);'
-verify_preprocessed_line 99 'typedef struct {'
-verify_preprocessed_line 103 'static error global_error = { ((void *)0), 0 };'
-verify_preprocessed_line 106 '    return (const char*) (global_error.json + global_error.position);'
-verify_preprocessed_line 107 '}'
-verify_preprocessed_line 112 '        return ((void *)0);'
-verify_preprocessed_line 116 'double cJSON_GetNumberValue(const cJSON * const item)'
-verify_preprocessed_line 117 '{'
-verify_preprocessed_line 120 '        return (double) 0.0/0.0;'
-verify_preprocessed_line 126 '    static char version[15];'
-verify_preprocessed_line 127 '    sprintf(version, "%i.%i.%i", 1, 7, 19);'
-verify_preprocessed_line 132 '    if ((string1 == ((void *)0)) || (string2 == ((void *)0)))'
-verify_preprocessed_line 140 '    for(; tolower(*string1) == tolower(*string2); (void)string1++, string2++)'
-verify_preprocessed_line 142 "        if (*string1 == '\\0')"
-verify_preprocessed_line 155 'static internal_hooks global_hooks = { malloc, free, realloc };'
+verify_preprocessed_line 2 'typedef long unsigned int size_t;'
+verify_preprocessed_line 3 'void *malloc(size_t size);'
+verify_preprocessed_line 4 'void free(void *pointer);'
+verify_preprocessed_line 5 'void *realloc(void *pointer, size_t size);'
+verify_preprocessed_line 6 'int tolower(int character);'
+verify_preprocessed_line 7 'typedef struct cJSON'
+verify_preprocessed_line 9 '    struct cJSON *next;'
+verify_preprocessed_line 13 '    char *valuestring;'
+verify_preprocessed_line 15 '    double valuedouble;'
+verify_preprocessed_line 20 '      void *( *malloc_fn)(size_t sz);'
+verify_preprocessed_line 66 'cJSON * cJSON_CreateFloatArray(const float *numbers, int count);'
+verify_preprocessed_line 102 'typedef struct {'
+verify_preprocessed_line 106 'static error global_error = { ((void *)0), 0 };'
+verify_preprocessed_line 109 '    return (const char*) (global_error.json + global_error.position);'
+verify_preprocessed_line 110 '}'
+verify_preprocessed_line 115 '        return ((void *)0);'
+verify_preprocessed_line 119 'double cJSON_GetNumberValue(const cJSON * const item)'
+verify_preprocessed_line 120 '{'
+verify_preprocessed_line 123 '        return (double) 0.0/0.0;'
+verify_preprocessed_line 129 '    static char version[15];'
+verify_preprocessed_line 130 '    sprintf(version, "%i.%i.%i", 1, 7, 19);'
+verify_preprocessed_line 135 '    if ((string1 == ((void *)0)) || (string2 == ((void *)0)))'
+verify_preprocessed_line 143 '    for(; tolower(*string1) == tolower(*string2); (void)string1++, string2++)'
+verify_preprocessed_line 145 "        if (*string1 == '\\0')"
+verify_preprocessed_line 158 'static internal_hooks global_hooks = { malloc, free, realloc };'
 
 set +e
 "$minic" -S "$preprocessed" -o "$work/cJSON.s" \
@@ -147,7 +160,7 @@ fi
 
 first_error=$(sed -n '/error:/p' "$diagnostic" | sed -n '1p')
 case "$first_error" in
-    *":155:40: error: static pointer initializer must be null")
+    *":158:40: error: static pointer initializer must be null")
         ;;
     *)
         printf '%s\n' \
