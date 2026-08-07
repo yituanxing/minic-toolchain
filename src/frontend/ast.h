@@ -244,13 +244,9 @@ typedef struct MinicC0Program {
     MinicExpressionId return_expression;
 } MinicC0Program;
 
-typedef enum MinicC0AstForm {
-    MINIC_C0_AST_PARSED = 0,
-    MINIC_C0_AST_NORMALIZED
-} MinicC0AstForm;
-
 void minic_c0_program_initialize(MinicC0Program *program);
 void minic_c0_program_destroy(MinicC0Program *program);
+
 bool minic_c0_program_add_expression(MinicC0Program *program,
                                      const MinicExpression *expression,
                                      MinicExpressionId *expression_id);
@@ -268,7 +264,7 @@ bool minic_c0_program_add_function(MinicC0Program *program,
                                    const char *name,
                                    size_t name_length,
                                    size_t local_begin,
-                                   size_t parameter_count,
+                                   size_t local_count,
                                    MinicBlockId body_block,
                                    MinicFunctionId *function_id);
 bool minic_c0_program_set_function_signature(MinicC0Program *program,
@@ -276,6 +272,9 @@ bool minic_c0_program_set_function_signature(MinicC0Program *program,
                                              MinicType return_type,
                                              const MinicType *parameter_types,
                                              size_t parameter_count);
+bool minic_c0_program_set_function_parameter_count(MinicC0Program *program,
+                                                   MinicFunctionId function_id,
+                                                   size_t parameter_count);
 bool minic_c0_program_set_function_internal(MinicC0Program *program,
                                             MinicFunctionId function_id,
                                             bool is_internal);
@@ -290,60 +289,58 @@ bool minic_c0_program_add_record(MinicC0Program *program,
                                  const char *name,
                                  size_t name_length,
                                  MinicRecordId *record_id);
+bool minic_c0_program_add_anonymous_record(MinicC0Program *program, MinicRecordId *record_id);
 bool minic_c0_record_add_field(MinicC0Program *program,
                                MinicRecordId record_id,
                                const char *name,
                                size_t name_length,
                                MinicType type,
                                size_t element_count);
-bool minic_c0_record_set_layout(MinicC0Program *program,
-                                MinicRecordId record_id,
-                                size_t storage_size,
-                                size_t alignment);
+bool minic_c0_program_finish_record(MinicC0Program *program, MinicRecordId record_id);
 bool minic_c0_program_add_array_type(MinicC0Program *program,
                                      MinicType element_type,
                                      size_t element_count,
-                                     MinicArrayTypeId *array_type_id);
+                                     MinicType *array_type);
 bool minic_c0_program_add_function_type(MinicC0Program *program,
                                         MinicType return_type,
                                         const MinicType *parameter_types,
                                         size_t parameter_count,
-                                        MinicFunctionTypeId *function_type_id);
+                                        MinicType *function_type);
 bool minic_c0_program_add_type_alias(MinicC0Program *program,
                                      const char *name,
                                      size_t name_length,
                                      MinicType type,
-                                     MinicTypeAliasId *type_alias_id);
+                                     MinicTypeAliasId *alias_id);
 bool minic_c0_program_add_global_object(MinicC0Program *program,
                                         const char *name,
                                         size_t name_length,
                                         MinicType type,
-                                        size_t storage_size,
-                                        size_t alignment,
                                         bool is_internal,
                                         bool is_read_only,
-                                        MinicGlobalObjectId *object_id);
+                                        MinicGlobalObjectId *global_object_id);
 bool minic_c0_global_object_add_initializer(MinicC0Program *program,
-                                            MinicGlobalObjectId object_id,
+                                            MinicGlobalObjectId global_object_id,
                                             int value);
 bool minic_c0_global_object_set_zero_initialized(MinicC0Program *program,
-                                                 MinicGlobalObjectId object_id);
+                                                 MinicGlobalObjectId global_object_id);
+
 const MinicExpression *minic_c0_program_expression(const MinicC0Program *program,
-                                                  MinicExpressionId expression_id);
+                                                   MinicExpressionId expression_id);
 const MinicLocal *minic_c0_program_local(const MinicC0Program *program, MinicLocalId local_id);
+const MinicStatement *minic_c0_program_statement(const MinicC0Program *program,
+                                                 MinicStatementId statement_id);
+const MinicBlock *minic_c0_program_block(const MinicC0Program *program, MinicBlockId block_id);
 const MinicFunction *minic_c0_program_function(const MinicC0Program *program,
-                                              MinicFunctionId function_id);
-const MinicRecord *minic_c0_program_record(const MinicC0Program *program,
-                                          MinicRecordId record_id);
+                                               MinicFunctionId function_id);
+const MinicRecord *minic_c0_program_record(const MinicC0Program *program, MinicRecordId record_id);
 const MinicRecordField *minic_c0_record_field(const MinicRecord *record, size_t field_index);
 const MinicArrayType *minic_c0_program_array_type(const MinicC0Program *program,
-                                                 MinicArrayTypeId array_type_id);
+                                                  MinicArrayTypeId array_type_id);
 const MinicFunctionType *minic_c0_program_function_type(const MinicC0Program *program,
-                                                       MinicFunctionTypeId function_type_id);
+                                                        MinicFunctionTypeId function_type_id);
 const MinicTypeAlias *minic_c0_program_type_alias(const MinicC0Program *program,
-                                                 MinicTypeAliasId type_alias_id);
+                                                  MinicTypeAliasId alias_id);
 const MinicGlobalObject *minic_c0_program_global_object(const MinicC0Program *program,
-                                                       MinicGlobalObjectId object_id);
-bool minic_c0_program_verify(const MinicC0Program *program, MinicC0AstForm form);
+                                                        MinicGlobalObjectId global_object_id);
 
 #endif
