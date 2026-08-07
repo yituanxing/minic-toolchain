@@ -181,9 +181,11 @@ bool minic_parser_parse_pointer_declarator(MinicParser *parser,
             return false;
         }
         while (parser->current.kind == MINIC_TOKEN_KW_CONST) {
-            if (!minic_type_add_const(parsed_type, &parsed_type) ||
-                !minic_parser_advance(parser)) {
+            if (!minic_type_add_const(parsed_type, &parsed_type)) {
                 minic_parser_error(parser, "cannot apply pointer const qualifier");
+                return false;
+            }
+            if (!minic_parser_advance(parser)) {
                 return false;
             }
         }
