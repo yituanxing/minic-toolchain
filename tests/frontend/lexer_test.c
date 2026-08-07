@@ -313,6 +313,61 @@ static int test_keyword_boundaries(void)
     return 0;
 }
 
+static int test_floating_constants(void)
+{
+    static const char source[] = "0 0.0 1. .5 1e3 2.5e-4 x.y";
+    static const struct {
+        MinicTokenKind kind;
+        size_t column;
+    } expected[] = {
+        {MINIC_TOKEN_INTEGER_CONSTANT, 1U},
+        {MINIC_TOKEN_FLOATING_CONSTANT, 3U},
+        {MINIC_TOKEN_FLOATING_CONSTANT, 7U},
+        {MINIC_TOKEN_FLOATING_CONSTANT, 10U},
+        {MINIC_TOKEN_FLOATING_CONSTANT, 13U},
+        {MINIC_TOKEN_FLOATING_CONSTANT, 17U},
+        {MINIC_TOKEN_IDENTIFIER, 24U},
+        {MINIC_TOKEN_DOT, 25U},
+        {MINIC_TOKEN_IDENTIFIER, 26U},
+        {MINIC_TOKEN_EOF, 27U}
+    };
+    MinicLexer lexer;
+    size_t index;
+
+    minic_lexer_initialize(&lexer, "floating.c", source, sizeof(source) - 1U);
+    for (index = 0U; index < sizeof(expected) / sizeof(expected[0]); ++index) {
+        if (expect_token(&lexer, expected[index].kind, 1U, expected[index].column) != 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int test_invalid_floating_exponent(void)
+{
+    static const char source[] = "1e+";
+    MinicDiagnostic diagnostic;
+    MinicLexer lexer;
+    MinicToken token;
+
+    minic_lexer_initialize(&lexer, "floating-invalid.c", source, sizeof(source) - 1U);
+    diagnostic.message[0] = '\0';
+    if (minic_lexer_next(&lexer, &token, &diagnostic)) {
+        (void)fprintf(stderr, "invalid floating exponent unexpectedly tokenized\n");
+        return 1;
+    }
+    if (token.kind != MINIC_TOKEN_INVALID || diagnostic.line != 1U || diagnostic.column != 1U ||
+        strcmp(diagnostic.message, "expected decimal digit in exponent") != 0) {
+        (void)fprintf(stderr,
+                      "floating diagnostic mismatch: %zu:%zu: %s\n",
+                      diagnostic.line,
+                      diagnostic.column,
+                      diagnostic.message);
+        return 1;
+    }
+    return 0;
+}
+
 static int test_invalid_character(void)
 {
     static const char source[] = "\n  @";
@@ -355,6 +410,8 @@ int main(void)
         test_long_keyword_boundaries() != 0 ||
         test_char_keyword_boundaries() != 0 ||
         test_keyword_boundaries() != 0 ||
+        test_floating_constants() != 0 ||
+        test_invalid_floating_exponent() != 0 ||
         test_invalid_character() != 0) {
         return 1;
     }
