@@ -285,6 +285,7 @@ bool minic_c0_program_add_record(MinicC0Program *program,
                                  const char *name,
                                  size_t name_length,
                                  MinicRecordId *record_id);
+bool minic_c0_program_add_anonymous_record(MinicC0Program *program, MinicRecordId *record_id);
 bool minic_c0_record_add_field(MinicC0Program *program,
                                MinicRecordId record_id,
                                const char *name,
