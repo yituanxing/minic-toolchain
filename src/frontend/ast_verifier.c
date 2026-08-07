@@ -385,9 +385,11 @@ verify_expression(const MinicC0Program *program, size_t expression_index, MinicC
         size_t argument_index;
 
         function = minic_c0_program_function(program, expression->value.call.function_id);
-        if (function == NULL ||
-            expression->value.call.argument_count != function->parameter_count ||
+        if (function == NULL || function->parameter_count > 8U ||
+            expression->value.call.argument_count < function->parameter_count ||
             expression->value.call.argument_count > 8U ||
+            (!function->is_variadic &&
+             expression->value.call.argument_count != function->parameter_count) ||
             expression->value_category != MINIC_VALUE_RVALUE ||
             !minic_type_equal(expression->type, function->return_type)) {
             return false;
@@ -396,8 +398,16 @@ verify_expression(const MinicC0Program *program, size_t expression_index, MinicC
              ++argument_index) {
             operand = expression_before(
                 program, expression->value.call.arguments[argument_index], expression_index);
-            if (operand == NULL || !minic_type_assignment_compatible(
-                                       function->parameter_types[argument_index], operand->type)) {
+            if (operand == NULL) {
+                return false;
+            }
+            if (argument_index < function->parameter_count) {
+                if (!minic_type_assignment_compatible(function->parameter_types[argument_index],
+                                                      operand->type)) {
+                    return false;
+                }
+            } else if (!minic_type_is_integer(operand->type) &&
+                       !minic_type_is_pointer(operand->type)) {
                 return false;
             }
         }
