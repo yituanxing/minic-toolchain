@@ -6,9 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-static bool parse_unary(MinicParser *parser,
-                        MinicExpressionId *expression_id,
-                        bool decay_array);
+static bool parse_unary(MinicParser *parser, MinicExpressionId *expression_id, bool decay_array);
 static bool parse_expression_internal(MinicParser *parser,
                                       MinicExpressionId *expression_id,
                                       unsigned int minimum_precedence,
@@ -237,9 +235,7 @@ static bool parse_cast(MinicParser *parser, MinicExpressionId *expression_id) {
     return minic_parser_add_expression(parser, &expression, expression_id);
 }
 
-static bool parse_primary(MinicParser *parser,
-                          MinicExpressionId *expression_id,
-                          bool decay_array) {
+static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id, bool decay_array) {
     MinicExpression expression;
     MinicExpressionId primary_id;
     MinicSourceSpan name_span;
@@ -393,9 +389,7 @@ static bool local_array_without_array_type(const MinicParser *parser,
     return local != NULL && local->element_count > 1U;
 }
 
-static bool parse_unary(MinicParser *parser,
-                        MinicExpressionId *expression_id,
-                        bool decay_array) {
+static bool parse_unary(MinicParser *parser, MinicExpressionId *expression_id, bool decay_array) {
     MinicToken operator_token;
     MinicExpression expression;
     MinicExpressionId operand;
@@ -666,8 +660,7 @@ static bool parse_expression_internal(MinicParser *parser,
         if (precedence == 0U || precedence < minimum_precedence) {
             break;
         }
-        if (!minic_parser_apply_array_decay(parser, left, &left) ||
-            !minic_parser_advance(parser) ||
+        if (!minic_parser_apply_array_decay(parser, left, &left) || !minic_parser_advance(parser) ||
             !parse_expression_internal(parser, &right, precedence + 1U, true)) {
             return false;
         }
