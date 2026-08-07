@@ -62,6 +62,8 @@ const char *minic_token_kind_name(MinicTokenKind kind) {
         return ",";
     case MINIC_TOKEN_DOT:
         return ".";
+    case MINIC_TOKEN_ELLIPSIS:
+        return "...";
     case MINIC_TOKEN_PLUS:
         return "+";
     case MINIC_TOKEN_PLUS_PLUS:

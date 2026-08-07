@@ -52,7 +52,8 @@ bool minic_parser_parse_parameter_list(MinicParser *parser,
                                        MinicSourceSpan *parameter_name_spans,
                                        MinicType *parameter_types,
                                        size_t *parameter_count,
-                                       bool require_names);
+                                       bool require_names,
+                                       bool *is_variadic);
 bool minic_parser_parse_fixed_array_bound(MinicParser *parser, size_t *element_count);
 size_t minic_parser_span_length(MinicSourceSpan span);
 bool minic_parser_span_equals(const MinicParser *parser,
