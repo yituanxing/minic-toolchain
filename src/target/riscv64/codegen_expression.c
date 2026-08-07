@@ -18,6 +18,19 @@ minic_riscv64_emit_normalize_integer(FILE *file, MinicType type, const char *reg
     return minic_riscv64_emit_integer_conversion(file, type, register_name);
 }
 
+static bool minic_riscv64_emit_variadic_argument_conversion(FILE *file, MinicType type) {
+    if (minic_type_is_pointer(type)) {
+        return true;
+    }
+    if (!minic_type_is_integer(type)) {
+        return false;
+    }
+    if (minic_type_is_long_integer(type)) {
+        return true;
+    }
+    return fprintf(file, "  addiw a0, a0, 0\n") >= 0;
+}
+
 static bool minic_riscv64_emit_integer_result_conversion(FILE *file,
                                                          MinicType operation_type,
                                                          MinicType result_type,
@@ -466,34 +479,49 @@ bool minic_riscv64_emit_expression(FILE *file,
     }
     case MINIC_EXPRESSION_CALL: {
         const MinicFunction *callee;
+        size_t argument_count;
         size_t argument_index;
         size_t temporary_bytes;
 
         callee = minic_c0_program_function(program, expression->value.call.function_id);
-        if (callee == NULL || callee->name_length == 0U ||
-            expression->value.call.argument_count != callee->parameter_count ||
-            callee->parameter_count > 8U) {
+        argument_count = expression->value.call.argument_count;
+        if (callee == NULL || callee->name_length == 0U || callee->parameter_count > 8U ||
+            argument_count < callee->parameter_count || argument_count > 8U ||
+            (!callee->is_variadic && argument_count != callee->parameter_count)) {
             return false;
         }
-        for (argument_index = 0U; argument_index < callee->parameter_count; ++argument_index) {
-            if (!minic_riscv64_emit_expression(
-                    file, program, function, expression->value.call.arguments[argument_index]) ||
-                (minic_type_is_integer(callee->parameter_types[argument_index]) &&
-                 !minic_riscv64_emit_integer_conversion(
-                     file, callee->parameter_types[argument_index], "a0")) ||
-                fprintf(file, "  addi sp, sp, -16\n  sd a0, 0(sp)\n") < 0) {
+        for (argument_index = 0U; argument_index < argument_count; ++argument_index) {
+            const MinicExpression *argument;
+
+            argument = minic_c0_program_expression(
+                program, expression->value.call.arguments[argument_index]);
+            if (argument == NULL ||
+                !minic_riscv64_emit_expression(
+                    file, program, function, expression->value.call.arguments[argument_index])) {
+                return false;
+            }
+            if (argument_index < callee->parameter_count) {
+                if (minic_type_is_integer(callee->parameter_types[argument_index]) &&
+                    !minic_riscv64_emit_integer_conversion(
+                        file, callee->parameter_types[argument_index], "a0")) {
+                    return false;
+                }
+            } else if (!minic_riscv64_emit_variadic_argument_conversion(file, argument->type)) {
+                return false;
+            }
+            if (fprintf(file, "  addi sp, sp, -16\n  sd a0, 0(sp)\n") < 0) {
                 return false;
             }
         }
-        for (argument_index = 0U; argument_index < callee->parameter_count; ++argument_index) {
+        for (argument_index = 0U; argument_index < argument_count; ++argument_index) {
             size_t offset;
 
-            offset = (callee->parameter_count - 1U - argument_index) * 16U;
+            offset = (argument_count - 1U - argument_index) * 16U;
             if (fprintf(file, "  ld a%zu, %zu(sp)\n", argument_index, offset) < 0) {
                 return false;
             }
         }
-        temporary_bytes = callee->parameter_count * 16U;
+        temporary_bytes = argument_count * 16U;
         if (temporary_bytes != 0U && fprintf(file, "  addi sp, sp, %zu\n", temporary_bytes) < 0) {
             return false;
         }
