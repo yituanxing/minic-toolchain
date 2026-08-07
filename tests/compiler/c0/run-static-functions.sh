@@ -28,6 +28,15 @@ if grep -F ".globl helper" "$work/static_functions.s" >/dev/null ||
 fi
 printf '%s\n' "PASS compiler/c0/static_functions"
 
+"$host_cc" -E -P -x c \
+    "$root/tests/programs/c0/pointer_return.c" \
+    -o "$work/pointer_return.i"
+"$minic" -S "$work/pointer_return.i" -o "$work/pointer_return.s"
+grep -F ".type identity, @function" "$work/pointer_return.s" >/dev/null
+grep -F "  j .Lidentity_return" "$work/pointer_return.s" >/dev/null
+grep -F "  call identity" "$work/pointer_return.s" >/dev/null
+printf '%s\n' "PASS compiler/c0/pointer_return"
+
 expect_failure() {
     name=$1
     message=$2
