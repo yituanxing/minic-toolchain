@@ -9,6 +9,15 @@ static bool type_is_valid(const MinicC0Program *program, MinicType type) {
         (type.base_qualifiers & ~((unsigned int)MINIC_TYPE_QUALIFIER_CONST)) != 0U) {
         return false;
     }
+    if (type.is_plain_char && type.base_kind != MINIC_TYPE_BASE_INT) {
+        return false;
+    }
+    if (type.is_plain_char && type.integer_sign != MINIC_INTEGER_SIGN_UNSIGNED) {
+        return false;
+    }
+    if (type.is_plain_char && type.integer_rank != MINIC_INTEGER_RANK_CHAR) {
+        return false;
+    }
 
     switch (type.base_kind) {
     case MINIC_TYPE_BASE_VOID:

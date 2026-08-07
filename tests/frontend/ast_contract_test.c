@@ -209,6 +209,8 @@ static int test_malformed_contracts(void)
     MinicExpressionId integer_id;
     MinicExpressionId malformed_id;
     MinicStatementId statement_id;
+    MinicLocal local;
+    MinicLocalId local_id;
 
     minic_c0_program_initialize(&program);
     if (!add_integer(&program, 1, &integer_id)) {
@@ -255,6 +257,19 @@ static int test_malformed_contracts(void)
         return 11;
     }
     minic_c0_program_destroy(&program);
+
+    minic_c0_program_initialize(&program);
+    (void)memset(&local, 0, sizeof(local));
+    local.name_span = test_span(0U);
+    local.type = minic_type_int();
+    local.type.is_plain_char = true;
+    local.element_count = 1U;
+    if (!minic_c0_program_add_local(&program, &local, &local_id) ||
+        minic_c0_program_verify(&program, MINIC_C0_AST_PARSED)) {
+        minic_c0_program_destroy(&program);
+        return 12;
+    }
+    minic_c0_program_destroy(&program);
     return 0;
 }
 
@@ -280,7 +295,7 @@ static int test_normalization_transaction(void)
             program.expression_count + 20U,
             &statement_id)) {
         minic_c0_program_destroy(&program);
-        return 12;
+        return 13;
     }
 
     original_expressions = program.expressions;
@@ -294,7 +309,7 @@ static int test_normalization_transaction(void)
             original_statement_expression ||
         program.expressions[cast_id].kind != MINIC_EXPRESSION_CAST) {
         minic_c0_program_destroy(&program);
-        return 13;
+        return 14;
     }
 
     minic_c0_program_destroy(&program);

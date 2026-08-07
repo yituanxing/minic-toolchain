@@ -29,6 +29,24 @@ fi
 printf '%s\n' "PASS compiler/c0/unsigned_char_layout"
 
 "$host_cc" -E -P -x c \
+    "$root/tests/programs/c0/plain_char_semantics.c" \
+    -o "$work/plain_char_semantics.i"
+"$minic" -S \
+    "$work/plain_char_semantics.i" \
+    -o "$work/plain_char_semantics.s"
+grep -F "  .byte 128" "$work/plain_char_semantics.s" >/dev/null
+grep -F "  .byte 255" "$work/plain_char_semantics.s" >/dev/null
+grep -F "  lbu " "$work/plain_char_semantics.s" >/dev/null
+grep -F "  sb " "$work/plain_char_semantics.s" >/dev/null
+grep -F "  andi a0, a0, 255" "$work/plain_char_semantics.s" >/dev/null
+if grep -F "  lb " "$work/plain_char_semantics.s" >/dev/null; then
+    printf '%s\n' \
+        "FAIL compiler/c0/plain_char_semantics: RV64 plain char used signed byte load" >&2
+    exit 1
+fi
+printf '%s\n' "PASS compiler/c0/plain_char_semantics"
+
+"$host_cc" -E -P -x c \
     "$root/tests/compiler/c0/hexadecimal_expression.c" \
     -o "$work/hexadecimal_expression.i"
 "$minic" -S \
@@ -37,17 +55,26 @@ printf '%s\n' "PASS compiler/c0/unsigned_char_layout"
 grep -F "  li a0, 77" "$work/hexadecimal_expression.s" >/dev/null
 printf '%s\n' "PASS compiler/c0/hexadecimal_expression"
 
-"$host_cc" -E -P -x c \
-    "$root/tests/compiler/c0/invalid_plain_char.c" \
-    -o "$work/invalid_plain_char.i"
-if "$minic" -S \
-    "$work/invalid_plain_char.i" \
-    -o "$work/invalid_plain_char.s" \
-    >"$work/invalid_plain_char.stdout" \
-    2>"$work/invalid_plain_char.stderr"; then
-    printf '%s\n' \
-        "FAIL compiler/c0/invalid_plain_char: compilation unexpectedly succeeded" >&2
-    exit 1
-fi
-grep -F "expected type name" "$work/invalid_plain_char.stderr" >/dev/null
-printf '%s\n' "PASS compiler/c0/invalid_plain_char"
+expect_failure() {
+    name=$1
+    expected=$2
+
+    "$host_cc" -E -P -x c \
+        "$root/tests/compiler/c0/$name.c" \
+        -o "$work/$name.i"
+    if "$minic" -S \
+        "$work/$name.i" \
+        -o "$work/$name.s" \
+        >"$work/$name.stdout" \
+        2>"$work/$name.stderr"; then
+        printf '%s\n' \
+            "FAIL compiler/c0/$name: compilation unexpectedly succeeded" >&2
+        exit 1
+    fi
+    grep -F "$expected" "$work/$name.stderr" >/dev/null
+    printf '%s\n' "PASS compiler/c0/$name"
+}
+
+expect_failure invalid_signed_char "signed char is not supported"
+expect_failure invalid_plain_unsigned_char_pointer_assignment \
+    "assignment type does not match target type"
