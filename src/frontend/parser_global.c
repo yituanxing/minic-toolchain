@@ -97,7 +97,8 @@ static bool parse_zero_initializer(MinicParser *parser, MinicType type) {
             minic_parser_error(parser, "static record initializer requires a complete record type");
             return false;
         }
-        if (!minic_parser_expect(parser, MINIC_TOKEN_LBRACE, "expected '{' in record initializer")) {
+        if (!minic_parser_expect(
+                parser, MINIC_TOKEN_LBRACE, "expected '{' in record initializer")) {
             return false;
         }
 
@@ -140,10 +141,9 @@ static bool parse_zero_initializer(MinicParser *parser, MinicType type) {
     return false;
 }
 
-static bool
-parse_static_zero_record_global(MinicParser *parser,
-                                MinicType record_type,
-                                MinicSourceSpan name_span) {
+static bool parse_static_zero_record_global(MinicParser *parser,
+                                            MinicType record_type,
+                                            MinicSourceSpan name_span) {
     MinicGlobalObjectId object_id;
     const MinicRecord *record;
 
