@@ -792,12 +792,14 @@ static bool parse_expression_internal(MinicParser *parser,
                                        &expression.type)) {
             MinicType pointer_type;
             MinicType pointee_type;
+            MinicType left_type;
+            MinicType right_type;
             bool has_pointer_arithmetic_shape;
 
-            has_pointer_arithmetic_shape = pointer_arithmetic_shape(token_kind,
-                                                                    left_expression->type,
-                                                                    right_expression->type,
-                                                                    &pointer_type);
+            left_type = left_expression->type;
+            right_type = right_expression->type;
+            has_pointer_arithmetic_shape =
+                pointer_arithmetic_shape(token_kind, left_type, right_type, &pointer_type);
             if (binary_is_logical(token_kind)) {
                 minic_parser_error(parser, "logical operator requires integer or pointer operands");
             } else if (has_pointer_arithmetic_shape &&
