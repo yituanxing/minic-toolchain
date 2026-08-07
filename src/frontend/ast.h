@@ -31,7 +31,6 @@ typedef enum MinicExpressionKind {
     MINIC_EXPRESSION_FLOATING,
     MINIC_EXPRESSION_LOCAL,
     MINIC_EXPRESSION_GLOBAL_OBJECT,
-    MINIC_EXPRESSION_FUNCTION_ADDRESS,
     MINIC_EXPRESSION_ADDRESS_OF,
     MINIC_EXPRESSION_DEREFERENCE,
     MINIC_EXPRESSION_CAST,
@@ -79,7 +78,6 @@ typedef struct MinicExpression {
         uint64_t floating_bits;
         MinicLocalId local_id;
         MinicGlobalObjectId global_object_id;
-        MinicFunctionId function_id;
         struct {
             MinicFunctionId function_id;
             size_t argument_count;
