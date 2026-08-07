@@ -48,6 +48,7 @@ run_double_return_abi() {
     "$minic" -S "$work/$name.i" -o "$work/$name.s"
     grep -F "  fmv.x.d a0, fa0" "$work/$name.s" >/dev/null
     grep -F "  fmv.d.x fa0, a0" "$work/$name.s" >/dev/null
+    grep -F "  li a0, 0x405ee00000000000" "$work/$name.s" >/dev/null
     "$riscv_cc" -static \
         "$work/$name.s" \
         "$root/tests/compiler/c0/${name}_helper.c" \
@@ -62,7 +63,7 @@ run_double_return_abi() {
         printf '%s\n' "FAIL compiler/c0/runtime/$name: expected=0 actual=$status" >&2
         exit 1
     fi
-    printf '%s\n' "PASS compiler/c0/runtime/$name exit=$status abi=rv64d-fa0"
+    printf '%s\n' "PASS compiler/c0/runtime/$name exit=$status abi=rv64d-fa0 literal=binary64"
 }
 
 run_case empty_main 0 empty_main
