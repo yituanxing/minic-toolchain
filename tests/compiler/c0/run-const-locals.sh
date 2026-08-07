@@ -47,4 +47,4 @@ expect_failure \
     "assignment target must be a modifiable lvalue"
 expect_failure \
     invalid_const_local_increment \
-    "prefix increment requires a modifiable integer local"
+    "for update requires a modifiable integer or pointer local"

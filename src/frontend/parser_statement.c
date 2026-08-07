@@ -427,14 +427,12 @@ static bool parse_while(MinicParser *parser) {
     return minic_parser_add_statement(parser, &statement);
 }
 
-static bool build_prefix_update(MinicParser *parser, MinicStatementId *statement_id) {
-    MinicSourceSpan update_span;
-    MinicSourceSpan name_span;
-    MinicTokenKind update_kind;
-    MinicBinaryOperator operator_kind;
-    const char *name_error;
-    const char *target_error;
-    MinicLocalId local_id;
+static bool add_for_update_statement(MinicParser *parser,
+                                     MinicSourcePosition begin,
+                                     MinicSourcePosition end,
+                                     MinicLocalId local_id,
+                                     MinicTokenKind update_kind,
+                                     MinicStatementId *statement_id) {
     const MinicLocal *local;
     MinicExpressionId target_id;
     MinicExpressionId value_id;
@@ -443,35 +441,24 @@ static bool build_prefix_update(MinicParser *parser, MinicStatementId *statement
     MinicExpression one;
     MinicExpression updated_value;
     MinicStatement statement;
+    MinicSourceSpan name_span;
+    MinicType pointee_type;
 
-    if (statement_id == NULL || (parser->current.kind != MINIC_TOKEN_PLUS_PLUS &&
-                                 parser->current.kind != MINIC_TOKEN_MINUS_MINUS)) {
-        minic_parser_error(parser, "for update requires prefix increment or decrement");
-        return false;
-    }
-
-    update_kind = parser->current.kind;
-    operator_kind = update_kind == MINIC_TOKEN_PLUS_PLUS ? MINIC_BINARY_ADD : MINIC_BINARY_SUBTRACT;
-    name_error = update_kind == MINIC_TOKEN_PLUS_PLUS ? "prefix increment requires a local name"
-                                                      : "prefix decrement requires a local name";
-    target_error = update_kind == MINIC_TOKEN_PLUS_PLUS
-                       ? "prefix increment requires a modifiable integer local"
-                       : "prefix decrement requires a modifiable integer local";
-    update_span = parser->current.span;
-
-    if (!minic_parser_advance(parser) || parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
-        minic_parser_error(parser, "%s", name_error);
-        return false;
-    }
-
-    name_span = parser->current.span;
-    local_id = minic_parser_find_local(parser, name_span);
     local = minic_c0_program_local(parser->program, local_id);
-    if (local == NULL || local->element_count != 1U || !minic_type_is_integer(local->type) ||
-        minic_type_is_const(local->type)) {
-        minic_parser_error(parser, "%s", target_error);
+    if (local == NULL || local->element_count != 1U || minic_type_is_const(local->type) ||
+        (!minic_type_is_integer(local->type) && !minic_type_is_pointer(local->type))) {
+        minic_parser_error(parser, "for update requires a modifiable integer or pointer local");
         return false;
     }
+    if (minic_type_is_pointer(local->type) &&
+        (!minic_type_pointee(local->type, &pointee_type) ||
+         !minic_parser_require_complete_object_type(
+             parser, pointee_type, "pointer update requires a complete object type"))) {
+        return false;
+    }
+
+    name_span.begin = begin;
+    name_span.end = end;
     if (!add_local_lvalue_expression(parser, local_id, name_span, &target_id) ||
         !add_local_lvalue_expression(parser, local_id, name_span, &value_id)) {
         return false;
@@ -479,7 +466,7 @@ static bool build_prefix_update(MinicParser *parser, MinicStatementId *statement
 
     (void)memset(&one, 0, sizeof(one));
     one.kind = MINIC_EXPRESSION_INTEGER;
-    one.span = update_span;
+    one.span = name_span;
     one.type = minic_type_int();
     one.value_category = MINIC_VALUE_RVALUE;
     one.value.integer_value = 1;
@@ -489,21 +476,24 @@ static bool build_prefix_update(MinicParser *parser, MinicStatementId *statement
 
     (void)memset(&updated_value, 0, sizeof(updated_value));
     updated_value.kind = MINIC_EXPRESSION_BINARY;
-    updated_value.span.begin = update_span.begin;
-    updated_value.span.end = name_span.end;
+    updated_value.span = name_span;
     updated_value.value_category = MINIC_VALUE_RVALUE;
-    updated_value.value.binary.operator_kind = operator_kind;
+    updated_value.value.binary.operator_kind =
+        update_kind == MINIC_TOKEN_PLUS_PLUS ? MINIC_BINARY_ADD : MINIC_BINARY_SUBTRACT;
     updated_value.value.binary.left = value_id;
     updated_value.value.binary.right = one_id;
-    if (!minic_type_integer_common(local->type, one.type, &updated_value.type) ||
-        !minic_parser_add_expression(parser, &updated_value, &updated_value_id)) {
+    if (minic_type_is_pointer(local->type)) {
+        updated_value.type = local->type;
+    } else if (!minic_type_integer_common(local->type, one.type, &updated_value.type)) {
+        return false;
+    }
+    if (!minic_parser_add_expression(parser, &updated_value, &updated_value_id)) {
         return false;
     }
 
     (void)memset(&statement, 0, sizeof(statement));
     statement.kind = MINIC_STATEMENT_ASSIGN;
-    statement.span.begin = update_span.begin;
-    statement.span.end = name_span.end;
+    statement.span = name_span;
     statement.target_expression = target_id;
     statement.expression = updated_value_id;
     statement.then_block = MINIC_BLOCK_INVALID;
@@ -512,12 +502,77 @@ static bool build_prefix_update(MinicParser *parser, MinicStatementId *statement
         minic_parser_error(parser, "out of memory while building for update");
         return false;
     }
-    return minic_parser_advance(parser);
+    return true;
+}
+
+static bool parse_for_update(MinicParser *parser, MinicStatementId *statement_id) {
+    MinicSourcePosition begin;
+    MinicSourceSpan name_span;
+    MinicTokenKind update_kind;
+    MinicLocalId local_id;
+    bool prefix;
+
+    if (statement_id == NULL) {
+        return false;
+    }
+    begin = parser->current.span.begin;
+    if (parser->current.kind == MINIC_TOKEN_LPAREN) {
+        if (!minic_parser_advance(parser) || parser->current.kind != MINIC_TOKEN_KW_VOID ||
+            !minic_parser_advance(parser) ||
+            !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')' after void cast")) {
+            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                minic_parser_error(parser, "for update only supports a discarded void cast here");
+            }
+            return false;
+        }
+    }
+
+    prefix = parser->current.kind == MINIC_TOKEN_PLUS_PLUS ||
+             parser->current.kind == MINIC_TOKEN_MINUS_MINUS;
+    if (prefix) {
+        update_kind = parser->current.kind;
+        if (!minic_parser_advance(parser) || parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
+            minic_parser_error(parser, "prefix update requires a local name");
+            return false;
+        }
+        name_span = parser->current.span;
+        local_id = minic_parser_find_local(parser, name_span);
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
+    } else {
+        if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
+            minic_parser_error(parser, "for update requires a local increment or decrement");
+            return false;
+        }
+        name_span = parser->current.span;
+        local_id = minic_parser_find_local(parser, name_span);
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
+        if (parser->current.kind != MINIC_TOKEN_PLUS_PLUS &&
+            parser->current.kind != MINIC_TOKEN_MINUS_MINUS) {
+            minic_parser_error(parser, "postfix update requires '++' or '--'");
+            return false;
+        }
+        update_kind = parser->current.kind;
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
+    }
+    if (local_id == MINIC_LOCAL_INVALID) {
+        minic_parser_error(parser, "for update requires a local name");
+        return false;
+    }
+    return add_for_update_statement(
+        parser, begin, name_span.end, local_id, update_kind, statement_id);
 }
 
 static bool parse_for(MinicParser *parser) {
     MinicStatement statement;
-    MinicStatementId update_statement;
+    MinicStatementId updates[8];
+    size_t update_count;
+    size_t update_index;
     MinicSourcePosition for_begin;
 
     (void)memset(&statement, 0, sizeof(statement));
@@ -532,14 +587,14 @@ static bool parse_for(MinicParser *parser) {
         !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '('")) {
         return false;
     }
-    if (parser->current.kind != MINIC_TOKEN_IDENTIFIER &&
-        parser->current.kind != MINIC_TOKEN_STAR && parser->current.kind != MINIC_TOKEN_LPAREN) {
-        minic_parser_error(parser, "for initializer requires an assignment");
+    if (parser->current.kind == MINIC_TOKEN_SEMICOLON) {
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
+    } else if (!parse_expression_or_assignment_statement(parser, false)) {
         return false;
     }
-    if (!parse_expression_or_assignment_statement(parser, false)) {
-        return false;
-    }
+
     if (parser->current.kind == MINIC_TOKEN_SEMICOLON) {
         if (!minic_parser_advance(parser)) {
             return false;
@@ -549,14 +604,39 @@ static bool parse_for(MinicParser *parser) {
                !minic_parser_expect(parser, MINIC_TOKEN_SEMICOLON, "expected ';'")) {
         return false;
     }
-    if (!build_prefix_update(parser, &update_statement) ||
-        !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')'") ||
+
+    update_count = 0U;
+    while (parser->current.kind != MINIC_TOKEN_RPAREN) {
+        if (update_count >= sizeof(updates) / sizeof(updates[0])) {
+            minic_parser_error(parser, "for update supports at most eight comma-separated items");
+            return false;
+        }
+        if (!parse_for_update(parser, &updates[update_count])) {
+            return false;
+        }
+        update_count += 1U;
+        if (parser->current.kind == MINIC_TOKEN_COMMA) {
+            if (!minic_parser_advance(parser)) {
+                return false;
+            }
+            continue;
+        }
+        if (parser->current.kind != MINIC_TOKEN_RPAREN) {
+            minic_parser_error(parser, "expected ',' or ')' after for update");
+            return false;
+        }
+    }
+
+    if (!minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')'") ||
         !parse_loop_branch(parser, &statement.then_block)) {
         return false;
     }
-    if (!minic_c0_block_add_statement(parser->program, statement.then_block, update_statement)) {
-        minic_parser_error(parser, "cannot append for-loop update");
-        return false;
+    for (update_index = 0U; update_index < update_count; ++update_index) {
+        if (!minic_c0_block_add_statement(
+                parser->program, statement.then_block, updates[update_index])) {
+            minic_parser_error(parser, "cannot append for-loop update");
+            return false;
+        }
     }
     statement.span.begin = for_begin;
     statement.span.end = parser->current.span.begin;

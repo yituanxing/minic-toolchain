@@ -19,6 +19,12 @@ grep -F "  addw a0" "$work/for_loop.s" >/dev/null
 grep -F "  lwu a0" "$work/for_loop.s" >/dev/null
 printf '%s\n' "PASS compiler/c0/for_loop_lowering"
 
+"$host_cc" -E -P -x c \
+    "$root/tests/compiler/c0/for_empty_initializer.c" \
+    -o "$work/for_empty_initializer.i"
+"$minic" -S "$work/for_empty_initializer.i" -o "$work/for_empty_initializer.s"
+printf '%s\n' "PASS compiler/c0/for_empty_initializer"
+
 expect_failure() {
     name=$1
     message=$2
@@ -37,11 +43,8 @@ expect_failure() {
 }
 
 expect_failure \
-    invalid_for_initializer \
-    "for initializer requires an assignment"
-expect_failure \
     invalid_for_update \
-    "for update requires prefix increment or decrement"
+    "postfix update requires '++' or '--'"
 expect_failure \
     invalid_for_increment_target \
-    "prefix increment requires a modifiable integer local"
+    "for update requires a modifiable integer or pointer local"

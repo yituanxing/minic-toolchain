@@ -23,58 +23,57 @@ External GCC may preprocess, assemble, link, and provide CRT/libc. MiniC must co
 
 ## Accepted compiler capabilities / 已越过能力
 
-The unchanged core now crosses LONG semantics, self-referential records, plain `char`, float/double object types, function-pointer record fields, pointer qualifiers, anonymous struct typedefs, zero-initialized static records, direct record-member access, pointer returns, null-pointer constants, RV64D double returns, decimal double literals, same-type double arithmetic, function-scope static fixed arrays, variadic direct declarations and calls, contextual array-to-pointer decay, narrow string literals, pointer equality, and the integer/pointer scalar-condition cluster.
+The unchanged core now crosses the previously frozen language features plus the integer/pointer scalar-condition cluster and the bounded `for`-clause/update cluster.
 
-未修改 cJSON 核心现已越过 LONG、自引用 record、plain `char`、float/double 对象、函数指针字段、pointer qualifier、匿名 struct typedef、静态 record 全零初始化、direct member access、pointer return、null pointer constant、RV64D double return、十进制 double literal、double 四则运算、函数作用域 static 定长数组、variadic direct declaration/call、上下文化 array-to-pointer decay、窄字符串字面量、pointer equality，以及 integer/pointer scalar-condition 语义簇。
+本分支继续越过 integer/pointer scalar-condition 之后的 `for` clause/update 语义簇。
 
-The scalar-condition cluster includes:
+The `for` cluster keeps the existing `for` -> `while` lowering but broadens the parser scaffold to accept:
 
-- lexical and precedence support for `&&` and `||`;
-- true short-circuit lowering on RV64, so the RHS is skipped when required;
-- integer and pointer truth conditions for `if`, `while`, and `for` conditions;
-- logical `!` for integer and pointer operands;
-- parsed/normalized AST verification for the same accepted shapes;
-- no floating truth conversion in this cluster.
+- empty `for` initializer and condition clauses;
+- comma-separated prefix/postfix `++` / `--` updates in the for-post clause;
+- integer and complete-object-pointer local updates;
+- discarded `(void)p++` spelling used by real C;
+- a real hosted `int tolower(int)` declaration in the cJSON probe.
 
-scalar-condition 语义簇包括 `&&` / `||`、RV64 真短路、integer/pointer 条件值、integer/pointer 的 `!`，以及一致的 parsed/normalized AST verifier；本簇不包含 floating truth conversion。
+This is intentionally transitional: a final general `CommaExpr` / `AssignExpr` AST is **not** introduced until ordinary real-project expression contexts require it.
 
-A permanent `scalar_conditions` GCC/MiniC RV64 differential program is registered as the 50th program. It verifies short-circuit side effects with a counter, pointer truthiness, `!pointer`, nested `&&`/`||`, and `&&` precedence over `||`.
+当前实现继续复用 `for -> while` lowering，并支持 empty clause、for-post 中逗号分隔的前/后缀 `++/--`、integer/完整对象 pointer update，以及 `(void)p++`。这里没有为了当前一行源码提前建立最终 `CommaExpr` / `AssignExpr` 架构。
 
-永久 `scalar_conditions` GCC/MiniC RV64 differential 已登记为第 50 个程序。它通过计数器副作用验证 RHS 是否真的被跳过，同时覆盖 pointer truth、`!pointer`、嵌套 `&&`/`||` 与优先级。
+A permanent `for_clause_updates` GCC/MiniC RV64 differential is registered as the 51st program. It verifies an empty initializer plus ordered `(void)pointer++, index++` updates and checks the resulting array contents, integer counter, and pointer position under QEMU.
+
+永久 `for_clause_updates` GCC/MiniC RV64 differential 已登记为第 51 个程序，并在 QEMU 中验证 empty initializer、pointer/integer comma update 的顺序及结果。
 
 ## Current exact frontier / 当前精确前沿
 
-The previous cJSON frontier at line 131:
+Discovery Run #898 passed source inventory, clang-format 18, Debug, Release `-Werror`, ASan/UBSan, existing focused suites, all 51 permanent GCC/MiniC RV64 differential programs including `for_clause_updates`, and frozen tiny-AES.
 
-```c
-    if ((string1 == ((void *)0)) || (string2 == ((void *)0)))
-```
-
-is now crossed. Discovery Run #884 passed the 50th scalar-condition differential under QEMU and advanced the unchanged cJSON source to line 139:
+The unchanged cJSON source crossed:
 
 ```c
     for(; tolower(*string1) == tolower(*string2); (void)string1++, string2++)
 ```
 
-The new exact first diagnostic is:
+and reached:
 
-```text
-cJSON.i:139:9: error: for initializer requires an assignment
+```c
+        if (*string1 == '\0')
 ```
 
-The next missing capability is therefore the broader `for`-clause grammar, beginning with an empty initializer. The postfix `++` and comma expression later on the same source line are visible downstream syntax, but they have **not** yet been proven to be the first blocker and are not claimed here.
+with the exact first diagnostic:
 
-旧 line 131 `||` 前沿已经越过。Run #884 把 unchanged cJSON 推进到 line 139，新的首个诊断是 `for initializer requires an assignment`。因此下一条能力簇从更一般的 `for` clause grammar、首先是 empty initializer 开始。同一源码行后面的 postfix `++` 和 comma expression 只是已知下游语法，目前不能提前宣称它们是 first blocker。
+```text
+cJSON.i:142:25: error: unexpected character '''
+```
+
+The next missing capability is therefore a narrow character literal. It is outside this `for`-clause cluster and will be handled on the next semantic line rather than widening this PR.
+
+Run #898 已证明 `for` clause/update 簇真实跨过并把 unchanged cJSON 推进到 `*string1 == '\0'`。下一条首个缺失能力是 character literal，不继续塞入当前分支。
 
 ## Validation / 验证
 
-Discovery Run #884 passed source inventory, clang-format 18, Debug, Release `-Werror`, ASan/UBSan, existing focused suites, RV64 focused tests, 50 permanent GCC/MiniC differential programs including `scalar_conditions`, and frozen tiny-AES. The only failure was the intentionally stale cJSON frontier, which exposed line 139 as the next exact boundary.
+Run #898 passed all compiler gates except the intentionally stale cJSON frontier and proved `for_clause_updates` under RV64/QEMU. A latest-head clean run with the updated character-literal frontier is required before merge.
 
-Run #884 通过 source inventory、clang-format 18、Debug、Release `-Werror`、ASan/UBSan、既有 focused suites、RV64 focused、50 个永久 GCC/MiniC differential（含 `scalar_conditions`）与冻结 tiny-AES。唯一失败是故意保持旧值的 cJSON frontier，并由此暴露 line 139 新边界。
-
-A latest-head clean GitHub Actions run with the updated line-139 probe is required before merge.
-
-合并前仍要求以更新后的 line-139 probe 跑一次 latest-head clean GitHub Actions。
+Run #898 除故意保持旧值的 cJSON frontier 外全部通过；最新 Head 仍需用更新后的 character-literal probe 完整 clean 验证后才可合并。
 
 ## Completion result / 完成标志
 

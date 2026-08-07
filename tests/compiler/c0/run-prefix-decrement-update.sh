@@ -19,17 +19,9 @@ grep -F "  subw a0, t0, a0" \
 printf '%s\n' "PASS compiler/c0/prefix_decrement_update"
 
 "$host_cc" -E -P -x c \
-    "$root/tests/compiler/c0/invalid_for_decrement_target.c" \
-    -o "$work/invalid_for_decrement_target.i"
-if "$minic" -S \
-    "$work/invalid_for_decrement_target.i" \
-    -o "$work/invalid_for_decrement_target.s" \
-    >"$work/invalid_for_decrement_target.stdout" \
-    2>"$work/invalid_for_decrement_target.stderr"; then
-    printf '%s\n' \
-        "FAIL compiler/c0/invalid_for_decrement_target: compilation unexpectedly succeeded" >&2
-    exit 1
-fi
-grep -F "prefix decrement requires a modifiable integer local" \
-    "$work/invalid_for_decrement_target.stderr" >/dev/null
-printf '%s\n' "PASS compiler/c0/invalid_for_decrement_target"
+    "$root/tests/compiler/c0/for_pointer_decrement_update.c" \
+    -o "$work/for_pointer_decrement_update.i"
+"$minic" -S \
+    "$work/for_pointer_decrement_update.i" \
+    -o "$work/for_pointer_decrement_update.s"
+printf '%s\n' "PASS compiler/c0/for_pointer_decrement_update"
