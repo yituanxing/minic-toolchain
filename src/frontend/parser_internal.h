@@ -69,9 +69,7 @@ bool minic_parser_bind_local(MinicParser *parser, MinicSourceSpan name_span, Min
 bool minic_parser_bind_static_local(MinicParser *parser,
                                     MinicSourceSpan name_span,
                                     MinicGlobalObjectId global_object_id);
-bool minic_parser_name_bound_in_current_scope(
-    const MinicParser *parser,
-    MinicSourceSpan name_span);
+bool minic_parser_name_bound_in_current_scope(const MinicParser *parser, MinicSourceSpan name_span);
 MinicLocalId minic_parser_find_local_in_current_scope(const MinicParser *parser,
                                                       MinicSourceSpan name_span);
 void minic_parser_destroy_scopes(MinicParser *parser);
