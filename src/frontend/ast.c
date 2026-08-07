@@ -82,6 +82,7 @@ void minic_c0_program_destroy(MinicC0Program *program) {
     free(program->functions);
     free(program->records);
     free(program->array_types);
+    free(program->function_types);
     free(program->type_aliases);
     free(program->global_objects);
     minic_c0_program_initialize(program);
@@ -418,7 +419,7 @@ bool minic_c0_program_add_array_type(MinicC0Program *program,
     MinicArrayTypeId array_type_id;
 
     if (program == NULL || array_type == NULL || element_count == 0U ||
-        minic_type_is_void(element_type)) {
+        minic_type_is_void(element_type) || minic_type_is_function(element_type)) {
         return false;
     }
     if (!minic_grow_array((void **)&program->array_types,
@@ -437,6 +438,77 @@ bool minic_c0_program_add_array_type(MinicC0Program *program,
     return true;
 }
 
+static bool minic_function_type_matches(const MinicFunctionType *descriptor,
+                                        MinicType return_type,
+                                        const MinicType *parameter_types,
+                                        size_t parameter_count) {
+    size_t parameter_index;
+
+    if (descriptor == NULL || descriptor->parameter_count != parameter_count ||
+        !minic_type_equal(descriptor->return_type, return_type)) {
+        return false;
+    }
+    for (parameter_index = 0U; parameter_index < parameter_count; ++parameter_index) {
+        if (!minic_type_equal(descriptor->parameter_types[parameter_index],
+                              parameter_types[parameter_index])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool minic_c0_program_add_function_type(MinicC0Program *program,
+                                        MinicType return_type,
+                                        const MinicType *parameter_types,
+                                        size_t parameter_count,
+                                        MinicType *function_type) {
+    MinicFunctionType descriptor;
+    size_t function_type_index;
+    size_t parameter_index;
+
+    if (program == NULL || function_type == NULL || parameter_count > 8U ||
+        (parameter_count != 0U && parameter_types == NULL) || minic_type_is_array(return_type) ||
+        minic_type_is_function(return_type)) {
+        return false;
+    }
+    for (parameter_index = 0U; parameter_index < parameter_count; ++parameter_index) {
+        if (minic_type_is_void(parameter_types[parameter_index]) ||
+            minic_type_is_function(parameter_types[parameter_index])) {
+            return false;
+        }
+    }
+    for (function_type_index = 0U; function_type_index < program->function_type_count;
+         ++function_type_index) {
+        if (minic_function_type_matches(&program->function_types[function_type_index],
+                                        return_type,
+                                        parameter_types,
+                                        parameter_count)) {
+            *function_type = minic_type_function(function_type_index);
+            return true;
+        }
+    }
+    if (!minic_grow_array((void **)&program->function_types,
+                          &program->function_type_capacity,
+                          program->function_type_count,
+                          sizeof(*program->function_types))) {
+        return false;
+    }
+
+    (void)memset(&descriptor, 0, sizeof(descriptor));
+    descriptor.return_type = return_type;
+    descriptor.parameter_count = parameter_count;
+    for (parameter_index = 0U; parameter_index < 8U; ++parameter_index) {
+        descriptor.parameter_types[parameter_index] = parameter_index < parameter_count
+                                                          ? parameter_types[parameter_index]
+                                                          : minic_type_void();
+    }
+    function_type_index = program->function_type_count;
+    program->function_types[program->function_type_count] = descriptor;
+    program->function_type_count += 1U;
+    *function_type = minic_type_function(function_type_index);
+    return true;
+}
+
 bool minic_c0_program_add_type_alias(MinicC0Program *program,
                                      const char *name,
                                      size_t name_length,
@@ -445,7 +517,8 @@ bool minic_c0_program_add_type_alias(MinicC0Program *program,
     MinicTypeAlias alias;
     size_t index;
 
-    if (program == NULL || name == NULL || alias_id == NULL || minic_type_is_void(type)) {
+    if (program == NULL || name == NULL || alias_id == NULL || minic_type_is_void(type) ||
+        minic_type_is_function(type)) {
         return false;
     }
     for (index = 0U; index < program->type_alias_count; ++index) {
@@ -535,6 +608,14 @@ const MinicArrayType *minic_c0_program_array_type(const MinicC0Program *program,
         return NULL;
     }
     return &program->array_types[array_type_id];
+}
+
+const MinicFunctionType *minic_c0_program_function_type(const MinicC0Program *program,
+                                                        MinicFunctionTypeId function_type_id) {
+    if (program == NULL || function_type_id >= program->function_type_count) {
+        return NULL;
+    }
+    return &program->function_types[function_type_id];
 }
 
 const MinicTypeAlias *minic_c0_program_type_alias(const MinicC0Program *program,

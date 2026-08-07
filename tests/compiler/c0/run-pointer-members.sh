@@ -26,6 +26,15 @@ printf '%s\n' "PASS compiler/c0/pointer_member"
 grep -F ".globl main" "$work/self_referential_record.s" >/dev/null
 printf '%s\n' "PASS compiler/c0/self_referential_record"
 
+"$host_cc" -E -P -x c \
+    "$root/tests/compiler/c0/function_pointer_record_fields.c" \
+    -o "$work/function_pointer_record_fields.i"
+"$minic" -S \
+    "$work/function_pointer_record_fields.i" \
+    -o "$work/function_pointer_record_fields.s"
+grep -F ".globl main" "$work/function_pointer_record_fields.s" >/dev/null
+printf '%s\n' "PASS compiler/c0/function_pointer_record_fields"
+
 expect_failure() {
     name=$1
     diagnostic=$2

@@ -22,10 +22,14 @@ static bool function_signature_matches(const MinicFunction *function,
     return true;
 }
 
-static bool parse_parameter_list(MinicParser *parser,
-                                 MinicSourceSpan *parameter_name_spans,
-                                 MinicType *parameter_types,
-                                 size_t *parameter_count) {
+bool minic_parser_parse_parameter_list(MinicParser *parser,
+                                       MinicSourceSpan *parameter_name_spans,
+                                       MinicType *parameter_types,
+                                       size_t *parameter_count,
+                                       bool require_names) {
+    if (parser == NULL || parameter_types == NULL || parameter_count == NULL) {
+        return false;
+    }
     if (parser->current.kind == MINIC_TOKEN_RPAREN) {
         return true;
     }
@@ -47,17 +51,21 @@ static bool parse_parameter_list(MinicParser *parser,
             minic_parser_error(parser, "parameter type cannot be bare void");
             return false;
         }
-        if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
+
+        if (parser->current.kind == MINIC_TOKEN_IDENTIFIER) {
+            if (parameter_name_spans != NULL) {
+                parameter_name_spans[*parameter_count] = parser->current.span;
+            }
+            if (!minic_parser_advance(parser)) {
+                return false;
+            }
+        } else if (require_names) {
             minic_parser_error(parser, "expected parameter name");
             return false;
         }
 
-        parameter_name_spans[*parameter_count] = parser->current.span;
         parameter_types[*parameter_count] = parameter_type;
         *parameter_count += 1U;
-        if (!minic_parser_advance(parser)) {
-            return false;
-        }
         if (parser->current.kind != MINIC_TOKEN_COMMA) {
             return true;
         }
@@ -113,7 +121,8 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
 
     if (!minic_parser_advance(parser) ||
         !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '('") ||
-        !parse_parameter_list(parser, parameter_name_spans, parameter_types, &parameter_count) ||
+        !minic_parser_parse_parameter_list(
+            parser, parameter_name_spans, parameter_types, &parameter_count, true) ||
         !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')'")) {
         return false;
     }

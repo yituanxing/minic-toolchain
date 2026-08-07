@@ -116,7 +116,7 @@ fi
 
 first_error=$(sed -n '/error:/p' "$diagnostic" | sed -n '1p')
 case "$first_error" in
-    *':15:13: error: expected record field name')
+    *':32:43: error: expected parameter name')
         ;;
     *)
         printf '%s\n' \
@@ -127,4 +127,4 @@ case "$first_error" in
 esac
 
 printf '%s\n' \
-    'PASS external/cjson frontier=function-pointer-record-field-declarator diagnostic=expected-record-field-name source=cJSON-1.7.19 offline=1'
+    'PASS external/cjson frontier=top-level-pointer-const-parameter diagnostic=expected-parameter-name source=cJSON-1.7.19 offline=1'

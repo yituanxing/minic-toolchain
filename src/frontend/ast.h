@@ -169,6 +169,12 @@ typedef struct MinicArrayType {
     size_t element_count;
 } MinicArrayType;
 
+typedef struct MinicFunctionType {
+    MinicType return_type;
+    MinicType parameter_types[8];
+    size_t parameter_count;
+} MinicFunctionType;
+
 typedef struct MinicTypeAlias {
     char *name;
     size_t name_length;
@@ -218,6 +224,10 @@ typedef struct MinicC0Program {
     MinicArrayType *array_types;
     size_t array_type_count;
     size_t array_type_capacity;
+
+    MinicFunctionType *function_types;
+    size_t function_type_count;
+    size_t function_type_capacity;
 
     MinicTypeAlias *type_aliases;
     size_t type_alias_count;
@@ -286,6 +296,11 @@ bool minic_c0_program_add_array_type(MinicC0Program *program,
                                      MinicType element_type,
                                      size_t element_count,
                                      MinicType *array_type);
+bool minic_c0_program_add_function_type(MinicC0Program *program,
+                                        MinicType return_type,
+                                        const MinicType *parameter_types,
+                                        size_t parameter_count,
+                                        MinicType *function_type);
 bool minic_c0_program_add_type_alias(MinicC0Program *program,
                                      const char *name,
                                      size_t name_length,
@@ -314,6 +329,8 @@ const MinicRecord *minic_c0_program_record(const MinicC0Program *program, MinicR
 const MinicRecordField *minic_c0_record_field(const MinicRecord *record, size_t field_index);
 const MinicArrayType *minic_c0_program_array_type(const MinicC0Program *program,
                                                   MinicArrayTypeId array_type_id);
+const MinicFunctionType *minic_c0_program_function_type(const MinicC0Program *program,
+                                                        MinicFunctionTypeId function_type_id);
 const MinicTypeAlias *minic_c0_program_type_alias(const MinicC0Program *program,
                                                   MinicTypeAliasId alias_id);
 const MinicGlobalObject *minic_c0_program_global_object(const MinicC0Program *program,
