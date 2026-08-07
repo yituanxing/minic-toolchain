@@ -5,14 +5,12 @@ int main(void)
     int *pointer;
     int *other;
     const int *const_pointer;
-    void *void_pointer;
 
     first = 11;
     second = 29;
     pointer = &first;
     other = &second;
     const_pointer = pointer;
-    void_pointer = pointer;
 
     if (pointer == 0) {
         return 1;
@@ -29,7 +27,7 @@ int main(void)
     if (pointer != const_pointer) {
         return 5;
     }
-    if (pointer != void_pointer) {
+    if (pointer != (void *)pointer) {
         return 6;
     }
     if (pointer == (void *)0) {
