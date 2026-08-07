@@ -309,6 +309,12 @@ bool minic_type_assignment_compatible(MinicType target, MinicType source) {
            minic_type_void_object_pointer_compatible(unqualified_target, unqualified_source);
 }
 
+bool minic_type_pointer_equality_compatible(MinicType left, MinicType right) {
+    return minic_type_is_pointer(left) && minic_type_is_pointer(right) &&
+           (minic_type_assignment_compatible(left, right) ||
+            minic_type_assignment_compatible(right, left));
+}
+
 bool minic_type_cast_compatible(MinicType target, MinicType source) {
     if (minic_type_is_integer(target) && minic_type_is_integer(source)) {
         return true;

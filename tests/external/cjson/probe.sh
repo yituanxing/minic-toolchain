@@ -136,7 +136,7 @@ fi
 
 first_error=$(sed -n '/error:/p' "$diagnostic" | sed -n '1p')
 case "$first_error" in
-    *":131:32: error: binary operator requires int operands")
+    *":131:34: error: unexpected character '|'")
         ;;
     *)
         printf '%s\n' \
@@ -147,4 +147,4 @@ case "$first_error" in
 esac
 
 printf '%s\n' \
-    'PASS external/cjson frontier=pointer-equality diagnostic=binary-int-operands source=cJSON-1.7.19 offline=1'
+    'PASS external/cjson frontier=logical-or-token diagnostic=unexpected-pipe source=cJSON-1.7.19 offline=1'

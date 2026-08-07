@@ -23,74 +23,52 @@ External GCC may preprocess, assemble, link, and provide CRT/libc. MiniC must co
 
 ## Accepted compiler capabilities / 已越过能力
 
-The unchanged core now crosses the previously frozen foundations including LONG semantics, self-referential records, plain `char`, float/double object types, function-pointer record fields, per-pointer `const`, anonymous struct typedefs, zero-initialized static record objects, direct record-member access, pointer-return completion, null-pointer constants, RV64D double return, decimal double literals, same-type double `+ - * /`, function-scope static fixed arrays, direct variadic function declaration identity, contextual array-to-pointer decay, and narrow string literal expressions.
+The unchanged core now crosses LONG semantics, self-referential records, plain `char`, float/double object types, function-pointer record fields, pointer qualifiers, anonymous struct typedefs, zero-initialized static records, direct record-member access, pointer returns, null-pointer constants, RV64D double returns, decimal double literals, same-type double arithmetic, function-scope static fixed arrays, variadic direct declarations and calls, contextual array-to-pointer decay, and narrow string literals.
 
-未修改 cJSON 核心现已越过 LONG 语义、自引用 record、plain `char`、float/double 对象类型、函数指针字段、逐级 `const`、匿名 struct typedef、静态 record 全零初始化、`.` 成员访问、指针返回 completion、空指针常量、RV64D double 返回、十进制 double 字面量、同类型 double 四则运算、函数作用域 static 定长数组、direct variadic function declaration identity、上下文化 array-to-pointer decay 以及窄字符串字面量等前沿。
+未修改 cJSON 核心现已越过 LONG、自引用 record、plain `char`、float/double 对象、函数指针字段、pointer qualifier、匿名 struct typedef、静态 record 全零初始化、direct member access、pointer return、null pointer constant、RV64D double return、十进制 double literal、double 四则运算、函数作用域 static 定长数组、variadic direct declaration/call、上下文化 array-to-pointer decay 与窄字符串字面量。
 
-This branch adds **variadic direct-call actual arguments and RV64 caller lowering** for integer/pointer extra arguments. Fixed parameters keep the existing declaration type checks. Variadic calls may record up to eight total actual arguments in the existing call AST. Extra arguments accept integer/pointer value paths only; floating extras remain explicitly unsupported.
+This branch adds bounded pointer equality for `==` / `!=`:
 
-本分支新增 **variadic direct-call actual arguments 与 RV64 caller lowering**，当前额外参数范围限定为 integer/pointer。固定参数继续执行既有声明类型检查；variadic call 使用现有 call AST 记录最多 8 个真实实际参数。额外参数只接受 integer/pointer value path，floating extra 继续明确不支持。
+- compatible pointer ↔ pointer comparisons reuse the existing assignment-compatibility model in either direction;
+- object pointer ↔ `void *` and qualification-compatible pointer comparisons are accepted;
+- pointer ↔ integer constant zero is accepted in either operand order as a null-pointer comparison;
+- pointer ↔ nonzero integer remains rejected;
+- incompatible pointer identities remain rejected;
+- relational pointer comparisons (`< <= > >=`) remain outside this branch;
+- the parsed/normalized AST verifier and RV64 backend consume the same accepted shapes;
+- RV64 lowering reuses address-bit `xor + seqz/snez`.
 
-The RV64 backend now lowers the actual argument count rather than the fixed declaration count. Fixed integer parameters retain their declared conversion. Variadic integer extras use the current default-promotion/RV64 integer-register subset: non-`long` integer values are normalized through a 32-bit `addiw`, while `long` and pointers retain XLEN values. All actual arguments are then restored into `a0..a7` according to their real position before the direct call.
+本分支新增受控的 pointer equality：兼容 pointer↔pointer、object pointer↔`void *`、qualification-compatible pointer，以及 pointer↔整数常量 0；非零整数、不兼容 pointer、pointer relational comparison 均继续拒绝。parsed/normalized AST verifier 与 RV64 backend 使用同一组允许形状，后端复用地址位 `xor + seqz/snez`。
 
-RV64 backend 现在按真实实际参数数 lowering，而不是固定声明参数数。固定整数参数保留声明类型转换；variadic integer extra 使用当前 default-promotion/RV64 integer-register 子集：非 `long` 整数通过 32-bit `addiw` 归一化，`long` 与 pointer 保持 XLEN 值，随后所有实际参数按真实位置恢复到 `a0..a7` 再执行 direct call。
+A permanent `pointer_equality` GCC/MiniC RV64 differential program is registered as the 49th program. It covers `p == 0`, `0 == p`, `p != q`, real object addresses, `int *`↔`const int *`, object pointer↔`void *`, and `(void *)0`. Focused negative fixtures preserve the nonzero-integer, incompatible-pointer, and relational-comparison boundaries.
 
-A permanent mixed ABI gate compiles the caller with MiniC and the variadic callee with GCC. GCC consumes the MiniC-provided extras through `va_list` as `int`, promoted `char`→`int`, `long`, and `int *`. Run #864 returned exit 0, proving the actual RV64 caller ABI behavior rather than merely accepting the syntax or matching assembly text.
-
-永久 mixed ABI gate 由 MiniC 编译 caller、GCC 编译 variadic callee；GCC 通过 `va_list` 真实读取 MiniC 提供的 `int`、`char` 默认提升后的 `int`、`long` 和 `int *`。Run #864 返回 exit 0，因此验证的是实际 RV64 caller ABI，而不是仅仅 Parser 放行或 grep 汇编。
-
-Negative gates preserve the capability boundary: floating variadic extras are rejected, more than eight total arguments are rejected, the full fixed prefix remains mandatory, and non-variadic calls still reject extra arguments.
-
-负例门禁同时锁住边界：floating variadic extra 拒绝、总参数超过 8 个拒绝、fixed prefix 必须完整提供，普通 non-variadic call 仍拒绝多余参数。
+永久 `pointer_equality` GCC/MiniC RV64 differential 已登记为第 49 个程序，同时 focused negative fixtures 锁住 nonzero integer、不兼容 pointer 与 relational comparison 的边界。
 
 ## Current exact frontier / 当前精确前沿
 
-The project-owned `stdio.h` contains the minimal hosted declaration:
-
-```c
-int sprintf(char *buffer, const char *format, ...);
-```
-
-The pinned cJSON source remains unchanged. MiniC now crosses the complete call:
-
-```c
-sprintf(version, "%i.%i.%i", 1, 7, 19);
-```
-
-The next stable preprocessed line is:
+The stable preprocessed line remains:
 
 ```c
     if ((string1 == ((void *)0)) || (string2 == ((void *)0)))
 ```
 
-Discovery Run #864 produced the exact first diagnostic:
+Discovery Run #868 crossed the first `string1 == ((void *)0)` comparison and produced the next exact diagnostic:
 
 ```text
-cJSON.i:131:32: error: binary operator requires int operands
+cJSON.i:131:34: error: unexpected character '|'
 ```
 
-The diagnostic occurs at the end of the first `string1 == ((void *)0)` comparison. MiniC's current binary comparison typing is integer-only, so the first new missing capability is **pointer equality / null-pointer comparison**. The following `||` has not yet become the first diagnostic and remains a separate later capability.
+The first new missing capability is therefore the logical-OR token / short-circuit condition path. This branch intentionally does **not** implement `||` or `&&`; they belong to the next scalar-condition semantic cluster.
 
-Run #864 的 first diagnostic 位于第一个 `string1 == ((void *)0)` 比较结束处。当前 MiniC binary comparison type 仍只接受 integer，因此下一条独立能力明确为 **pointer equality / null-pointer comparison**；后面的 `||` 尚未成为 first diagnostic，继续保持后续独立能力。
+Run #868 已越过第一个 `string1 == NULL` 比较，并在第一个 `|` 上得到精确诊断。因此下一条真实能力已经进入 logical OR / short-circuit condition；本分支不顺手实现 `||`/`&&`，它们进入下一条 scalar-condition 语义簇。
 
 ## Validation / 验证
 
-Discovery Run #864 passed:
+Discovery Run #868 passed source inventory, clang-format 18, Debug, Release `-Werror`, ASan/UBSan, existing focused suites, RV64 focused tests, and frozen tiny-AES. It also proved that unchanged cJSON crosses the previous pointer-equality parser frontier.
 
-- source inventory and clang-format 18;
-- Debug host checks;
-- Release `-Werror`;
-- ASan/UBSan;
-- static-local focused gate;
-- variadic-declaration focused gate;
-- mixed MiniC→GCC variadic caller ABI gate (`exit=0`);
-- RV64/QEMU focused gate;
-- all 48 GCC/MiniC differential programs;
-- frozen tiny-AES AES-128 ECB acceptance.
+Run #868 同时暴露了两个收口缺口：新 `pointer_equality.c` 尚未登记进 permanent differential manifest，且 focused pointer-equality runner 尚未接入 Phase 2；因此不能把 #868 当作 pointer-equality runtime acceptance。Both are now wired, and the branch additionally closes parsed/normalized AST verification plus RV64 lowering. A latest-head clean run is required before merge.
 
-Its only failure was the intentionally stale cJSON variadic-call frontier. The probe is now advanced to line 131 column 32 and also pins the preprocessed pointer/null comparison line. A final clean-head run is required before this branch can merge.
-
-Run #864 通过 source inventory、clang-format 18、Debug、Release `-Werror`、ASan/UBSan、static-local focused、variadic declaration focused、MiniC→GCC mixed variadic ABI（exit=0）、RV64/QEMU、全部 48 个 GCC/MiniC 差分程序以及冻结 tiny-AES；唯一失败是故意过期的 cJSON variadic-call 前沿。probe 已推进到 line 131 column 32，并锁定对应 pointer/null comparison 的预处理文本；合并前还需最新 Head final clean run。
+Run #868 通过 source inventory、clang-format 18、Debug、Release `-Werror`、ASan/UBSan、既有 focused suites、RV64 focused 与冻结 tiny-AES，并证明 unchanged cJSON 越过旧 pointer-equality Parser 前沿；但它也暴露了 differential manifest 与 focused gate 尚未接线的问题。当前分支已补齐这两项，并补齐 AST verifier 与 RV64 lowering；合并前必须以最新 Head clean run 为准。
 
 ## Completion result / 完成标志
 

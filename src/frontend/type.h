@@ -73,6 +73,7 @@ bool minic_type_equal(MinicType left, MinicType right);
 bool minic_type_integer_promotion(MinicType type, MinicType *result);
 bool minic_type_integer_common(MinicType left, MinicType right, MinicType *result);
 bool minic_type_assignment_compatible(MinicType target, MinicType source);
+bool minic_type_pointer_equality_compatible(MinicType left, MinicType right);
 bool minic_type_cast_compatible(MinicType target, MinicType source);
 bool minic_type_is_const(MinicType type);
 bool minic_type_is_void(MinicType type);
