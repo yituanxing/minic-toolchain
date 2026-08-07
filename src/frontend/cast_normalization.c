@@ -120,14 +120,12 @@ static bool append_normalized_cast(MinicC0Program *rewritten,
         operand_expression->kind == MINIC_EXPRESSION_INTEGER &&
         minic_type_is_integer(operand_expression->type) &&
         operand_expression->value.integer_value == 0) {
-        return append_normalized_bitcast(
-            rewritten, cast_expression, mapped_operand, normalized_id);
+        return append_normalized_bitcast(rewritten, cast_expression, mapped_operand, normalized_id);
     }
 
     if (minic_type_is_pointer(cast_expression->type) &&
         minic_type_is_pointer(operand_expression->type)) {
-        return append_normalized_bitcast(
-            rewritten, cast_expression, mapped_operand, normalized_id);
+        return append_normalized_bitcast(rewritten, cast_expression, mapped_operand, normalized_id);
     }
 
     if (minic_type_is_integer(cast_expression->type) &&
