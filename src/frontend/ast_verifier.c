@@ -553,6 +553,7 @@ bool minic_c0_program_verify(const MinicC0Program *program, MinicC0AstForm form)
         object = &program->global_objects[index];
         if (object->name == NULL || !type_is_valid(program, object->type) ||
             minic_type_is_function(object->type) ||
+            (object->is_zero_initialized && object->initializer_count != 0U) ||
             !storage_is_valid(object->initializer_values,
                               object->initializer_count,
                               object->initializer_capacity)) {
