@@ -11,6 +11,7 @@ static bool parse_expression_internal(MinicParser *parser,
                                       MinicExpressionId *expression_id,
                                       unsigned int minimum_precedence,
                                       bool decay_array);
+static bool type_is_complete_object(const MinicC0Program *program, MinicType type);
 
 static bool finish_value_expression(MinicParser *parser,
                                     MinicExpressionId input_id,
@@ -452,6 +453,85 @@ static bool local_array_without_array_type(const MinicParser *parser,
     return local != NULL && local->element_count > 1U;
 }
 
+static bool current_is_sizeof(const MinicParser *parser) {
+    size_t length;
+
+    if (parser->current.kind == MINIC_TOKEN_KW_SIZEOF) {
+        return true;
+    }
+    if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
+        return false;
+    }
+    length = minic_parser_span_length(parser->current.span);
+    return length == 6U &&
+           memcmp(parser->source + parser->current.span.begin.offset, "sizeof", 6U) == 0;
+}
+
+static bool parse_sizeof(MinicParser *parser, MinicExpressionId *expression_id) {
+    MinicExpression expression;
+    MinicSourcePosition begin;
+    MinicSourcePosition end;
+    MinicType measured_type;
+
+    begin = parser->current.span.begin;
+    if (!minic_parser_advance(parser)) {
+        return false;
+    }
+
+    if (parser->current.kind == MINIC_TOKEN_LPAREN && parenthesis_starts_cast(parser)) {
+        if (!minic_parser_advance(parser) || !minic_parser_parse_type_name(parser, &measured_type)) {
+            return false;
+        }
+        if (parser->current.kind != MINIC_TOKEN_RPAREN) {
+            minic_parser_error(parser, "expected ')' after sizeof type");
+            return false;
+        }
+        end = parser->current.span.end;
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
+    } else {
+        MinicExpressionId operand_id;
+        const MinicExpression *operand;
+
+        if (!parse_unary(parser, &operand_id, false)) {
+            return false;
+        }
+        operand = minic_c0_program_expression(parser->program, operand_id);
+        if (operand == NULL) {
+            minic_parser_error(parser, "invalid sizeof operand");
+            return false;
+        }
+        measured_type = operand->type;
+        if (local_array_without_array_type(parser, operand)) {
+            const MinicLocal *local;
+
+            local = minic_c0_program_local(parser->program, operand->value.local_id);
+            if (local == NULL ||
+                !minic_c0_program_add_array_type(
+                    parser->program, local->type, local->element_count, &measured_type)) {
+                minic_parser_error(parser, "cannot preserve local array type for sizeof");
+                return false;
+            }
+        }
+        end = operand->span.end;
+    }
+
+    if (!type_is_complete_object(parser->program, measured_type)) {
+        minic_parser_error(parser, "sizeof requires a complete object type");
+        return false;
+    }
+
+    (void)memset(&expression, 0, sizeof(expression));
+    expression.kind = MINIC_EXPRESSION_SIZEOF;
+    expression.span.begin = begin;
+    expression.span.end = end;
+    expression.type = minic_type_unsigned_long();
+    expression.value_category = MINIC_VALUE_RVALUE;
+    expression.value.sizeof_type = measured_type;
+    return minic_parser_add_expression(parser, &expression, expression_id);
+}
+
 static bool parse_unary(MinicParser *parser, MinicExpressionId *expression_id, bool decay_array) {
     MinicToken operator_token;
     MinicExpression expression;
@@ -459,6 +539,9 @@ static bool parse_unary(MinicParser *parser, MinicExpressionId *expression_id, b
     MinicExpressionId result_id;
     const MinicExpression *operand_expression;
 
+    if (current_is_sizeof(parser)) {
+        return parse_sizeof(parser, expression_id);
+    }
     if (parenthesis_starts_cast(parser)) {
         return parse_cast(parser, expression_id);
     }
@@ -654,10 +737,11 @@ static bool binary_is_double_arithmetic(MinicTokenKind kind) {
 }
 
 static bool type_is_complete_object(const MinicC0Program *program, MinicType type) {
-    if (program == NULL || minic_type_is_void(type)) {
+    if (program == NULL || minic_type_is_void(type) || minic_type_is_function(type)) {
         return false;
     }
-    if (minic_type_is_integer(type) || minic_type_is_pointer(type)) {
+    if (minic_type_is_integer(type) || minic_type_is_pointer(type) || minic_type_is_float(type) ||
+        minic_type_is_double(type)) {
         return true;
     }
     if (minic_type_is_record(type)) {
