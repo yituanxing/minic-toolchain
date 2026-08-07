@@ -28,9 +28,11 @@ static bool parse_function_pointer_field_declarator(MinicParser *parser,
     MinicType function_type;
     size_t parameter_count;
     size_t pointer_depth;
+    bool is_variadic;
 
     parameter_count = 0U;
     pointer_depth = 0U;
+    is_variadic = false;
     (void)memset(parameter_types, 0, sizeof(parameter_types));
 
     if (!minic_parser_expect(
@@ -58,9 +60,13 @@ static bool parse_function_pointer_field_declarator(MinicParser *parser,
         !minic_parser_expect(
             parser, MINIC_TOKEN_LPAREN, "expected '(' before function pointer parameters") ||
         !minic_parser_parse_parameter_list(
-            parser, NULL, parameter_types, &parameter_count, false) ||
+            parser, NULL, parameter_types, &parameter_count, false, &is_variadic) ||
         !minic_parser_expect(
             parser, MINIC_TOKEN_RPAREN, "expected ')' after function pointer parameters")) {
+        return false;
+    }
+    if (is_variadic) {
+        minic_parser_error(parser, "variadic function pointer fields are not supported yet");
         return false;
     }
     if (!minic_c0_program_add_function_type(
