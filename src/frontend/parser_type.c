@@ -110,6 +110,11 @@ bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type) {
         } else {
             parsed_type = saw_unsigned ? minic_type_unsigned_int() : minic_type_int();
         }
+    } else if (parser->current.kind == MINIC_TOKEN_KW_FLOAT) {
+        parsed_type = minic_type_float();
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
     } else if (parser->current.kind == MINIC_TOKEN_KW_DOUBLE) {
         parsed_type = minic_type_double();
         if (!minic_parser_advance(parser)) {

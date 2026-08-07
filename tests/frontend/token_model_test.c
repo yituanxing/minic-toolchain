@@ -40,6 +40,7 @@ int main(void)
         expect_name(MINIC_TOKEN_INTEGER_CONSTANT, "integer constant") != 0 ||
         expect_name(MINIC_TOKEN_KW_CHAR, "char") != 0 ||
         expect_name(MINIC_TOKEN_KW_DOUBLE, "double") != 0 ||
+        expect_name(MINIC_TOKEN_KW_FLOAT, "float") != 0 ||
         expect_name(MINIC_TOKEN_KW_LONG, "long") != 0 ||
         expect_name(MINIC_TOKEN_KW_SIGNED, "signed") != 0 ||
         expect_name(MINIC_TOKEN_KW_STRUCT, "struct") != 0 ||

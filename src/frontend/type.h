@@ -15,6 +15,7 @@ typedef size_t MinicFunctionTypeId;
 typedef enum MinicTypeBaseKind {
     MINIC_TYPE_BASE_VOID = 0,
     MINIC_TYPE_BASE_INT,
+    MINIC_TYPE_BASE_FLOAT,
     MINIC_TYPE_BASE_DOUBLE,
     MINIC_TYPE_BASE_FUNCTION,
     MINIC_TYPE_BASE_RECORD,
@@ -59,6 +60,7 @@ MinicType minic_type_int(void);
 MinicType minic_type_unsigned_int(void);
 MinicType minic_type_long(void);
 MinicType minic_type_unsigned_long(void);
+MinicType minic_type_float(void);
 MinicType minic_type_double(void);
 MinicType minic_type_function(MinicFunctionTypeId function_type_id);
 MinicType minic_type_record(MinicRecordId record_id);
@@ -80,6 +82,7 @@ bool minic_type_is_plain_char(MinicType type);
 bool minic_type_is_long_integer(MinicType type);
 bool minic_type_is_signed_integer(MinicType type);
 bool minic_type_is_unsigned_integer(MinicType type);
+bool minic_type_is_float(MinicType type);
 bool minic_type_is_double(MinicType type);
 bool minic_type_is_function(MinicType type);
 bool minic_type_is_record(MinicType type);

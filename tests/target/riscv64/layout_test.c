@@ -41,6 +41,8 @@ int main(void)
     size_t byte_alignment;
     size_t long_size;
     size_t long_alignment;
+    size_t float_size;
+    size_t float_alignment;
     size_t double_size;
     size_t double_alignment;
     size_t function_pointer_size;
@@ -74,6 +76,19 @@ int main(void)
         long_size != 8U || long_alignment != 8U) {
         minic_c0_program_destroy(&program);
         return fail("RV64 long scalar layout");
+    }
+
+    if (!minic_type_is_float(minic_type_float()) ||
+        minic_type_is_double(minic_type_float()) ||
+        minic_type_is_integer(minic_type_float()) ||
+        !minic_riscv64_type_layout(
+            &program,
+            minic_type_float(),
+            &float_size,
+            &float_alignment) ||
+        float_size != 4U || float_alignment != 4U) {
+        minic_c0_program_destroy(&program);
+        return fail("RV64 float scalar identity and layout");
     }
 
     if (!minic_riscv64_type_layout(
