@@ -6,6 +6,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 typedef size_t MinicExpressionId;
 typedef size_t MinicLocalId;
@@ -27,6 +28,7 @@ typedef enum MinicValueCategory { MINIC_VALUE_RVALUE = 0, MINIC_VALUE_LVALUE } M
 
 typedef enum MinicExpressionKind {
     MINIC_EXPRESSION_INTEGER = 0,
+    MINIC_EXPRESSION_FLOATING,
     MINIC_EXPRESSION_LOCAL,
     MINIC_EXPRESSION_GLOBAL_OBJECT,
     MINIC_EXPRESSION_ADDRESS_OF,
@@ -71,6 +73,7 @@ typedef struct MinicExpression {
     MinicValueCategory value_category;
     union {
         int integer_value;
+        uint64_t floating_bits;
         MinicLocalId local_id;
         MinicGlobalObjectId global_object_id;
         struct {

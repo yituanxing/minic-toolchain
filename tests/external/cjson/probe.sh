@@ -125,7 +125,7 @@ fi
 
 first_error=$(sed -n '/error:/p' "$diagnostic" | sed -n '1p')
 case "$first_error" in
-    *":118:26: error: direct member access requires a record lvalue")
+    *":118:32: error: binary operator requires int operands")
         ;;
     *)
         printf '%s\n' \
@@ -136,4 +136,4 @@ case "$first_error" in
 esac
 
 printf '%s\n' \
-    'PASS external/cjson frontier=floating-literal-token diagnostic=dot-treated-as-direct-member source=cJSON-1.7.19 offline=1'
+    'PASS external/cjson frontier=double-binary-arithmetic diagnostic=binary-operator-requires-int source=cJSON-1.7.19 offline=1'

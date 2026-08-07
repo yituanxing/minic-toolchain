@@ -1,6 +1,9 @@
 #include "frontend/parser_internal.h"
 
+#include <errno.h>
 #include <limits.h>
+#include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 static bool parse_unary(MinicParser *parser, MinicExpressionId *expression_id);
@@ -19,6 +22,54 @@ static bool parse_integer(MinicParser *parser, MinicExpressionId *expression_id)
     }
     expression.value.integer_value = value;
     return minic_parser_add_expression(parser, &expression, expression_id);
+}
+
+static bool parse_floating(MinicParser *parser, MinicExpressionId *expression_id) {
+    MinicExpression expression;
+    MinicSourceSpan span;
+    char *end;
+    char *text;
+    double value;
+    size_t length;
+
+    _Static_assert(sizeof(double) == sizeof(uint64_t), "MiniC requires binary64 host double");
+
+    if (parser->current.kind != MINIC_TOKEN_FLOATING_CONSTANT) {
+        minic_parser_error(parser, "expected floating constant");
+        return false;
+    }
+    span = parser->current.span;
+    length = span.end.offset - span.begin.offset;
+    if (length == SIZE_MAX) {
+        minic_parser_error(parser, "floating constant is too long");
+        return false;
+    }
+    text = (char *)malloc(length + 1U);
+    if (text == NULL) {
+        minic_parser_error(parser, "out of memory while parsing floating constant");
+        return false;
+    }
+    (void)memcpy(text, parser->source + span.begin.offset, length);
+    text[length] = '\0';
+
+    errno = 0;
+    end = NULL;
+    value = strtod(text, &end);
+    if (end != text + length || errno == ERANGE) {
+        free(text);
+        minic_parser_error(parser, "invalid or out-of-range floating constant");
+        return false;
+    }
+    free(text);
+
+    (void)memset(&expression, 0, sizeof(expression));
+    expression.kind = MINIC_EXPRESSION_FLOATING;
+    expression.span = span;
+    expression.type = minic_type_double();
+    expression.value_category = MINIC_VALUE_RVALUE;
+    (void)memcpy(&expression.value.floating_bits, &value, sizeof(value));
+    return minic_parser_advance(parser) &&
+           minic_parser_add_expression(parser, &expression, expression_id);
 }
 
 static bool parse_local_reference(MinicParser *parser,
@@ -133,6 +184,12 @@ static bool expression_is_integer_zero(const MinicExpression *expression) {
            minic_type_is_integer(expression->type) && expression->value.integer_value == 0;
 }
 
+static bool same_floating_type(MinicType left, MinicType right) {
+    return minic_type_equal(left, right) &&
+           ((minic_type_is_double(left) && minic_type_is_double(right)) ||
+            (minic_type_is_float(left) && minic_type_is_float(right)));
+}
+
 static bool parse_cast(MinicParser *parser, MinicExpressionId *expression_id) {
     MinicSourcePosition begin;
     MinicExpression expression;
@@ -148,6 +205,10 @@ static bool parse_cast(MinicParser *parser, MinicExpressionId *expression_id) {
     }
 
     operand = minic_c0_program_expression(parser->program, operand_id);
+    if (operand != NULL && same_floating_type(target_type, operand->type)) {
+        *expression_id = operand_id;
+        return true;
+    }
     if (operand == NULL ||
         (!minic_type_cast_compatible(target_type, operand->type) &&
          !(minic_type_is_pointer(target_type) && expression_is_integer_zero(operand)))) {
@@ -175,6 +236,10 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id)
 
     if (parser->current.kind == MINIC_TOKEN_INTEGER_CONSTANT) {
         return parse_integer(parser, &primary_id) &&
+               minic_parser_parse_postfix(parser, primary_id, false, expression_id);
+    }
+    if (parser->current.kind == MINIC_TOKEN_FLOATING_CONSTANT) {
+        return parse_floating(parser, &primary_id) &&
                minic_parser_parse_postfix(parser, primary_id, false, expression_id);
     }
     if (parser->current.kind == MINIC_TOKEN_IDENTIFIER) {
