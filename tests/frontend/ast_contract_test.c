@@ -32,10 +32,7 @@ static bool add_integer(
     expression.type = minic_type_int();
     expression.value_category = MINIC_VALUE_RVALUE;
     expression.value.integer_value = value;
-    return minic_c0_program_add_expression(
-        program,
-        &expression,
-        expression_id);
+    return minic_c0_program_add_expression(program, &expression, expression_id);
 }
 
 static bool add_cast(
@@ -52,10 +49,7 @@ static bool add_cast(
     expression.type = target_type;
     expression.value_category = MINIC_VALUE_RVALUE;
     expression.value.unary.operand = operand;
-    return minic_c0_program_add_expression(
-        program,
-        &expression,
-        expression_id);
+    return minic_c0_program_add_expression(program, &expression, expression_id);
 }
 
 static bool add_expression_statement(
@@ -72,10 +66,7 @@ static bool add_expression_statement(
     statement.expression = expression_id;
     statement.then_block = MINIC_BLOCK_INVALID;
     statement.else_block = MINIC_BLOCK_INVALID;
-    return minic_c0_program_add_statement(
-        program,
-        &statement,
-        statement_id);
+    return minic_c0_program_add_statement(program, &statement, statement_id);
 }
 
 static int test_integer_cast_topology(void)
@@ -89,11 +80,7 @@ static int test_integer_cast_topology(void)
 
     minic_c0_program_initialize(&program);
     if (!add_integer(&program, 257, &integer_id) ||
-        !add_cast(
-            &program,
-            integer_id,
-            minic_type_unsigned_char(),
-            &cast_id) ||
+        !add_cast(&program, integer_id, minic_type_unsigned_char(), &cast_id) ||
         !add_expression_statement(&program, cast_id, &statement_id) ||
         !minic_c0_program_verify(&program, MINIC_C0_AST_PARSED) ||
         minic_c0_program_verify(&program, MINIC_C0_AST_NORMALIZED) ||
@@ -107,15 +94,12 @@ static int test_integer_cast_topology(void)
     normalized = statement == NULL
         ? NULL
         : minic_c0_program_expression(&program, statement->expression);
-    if (program.expression_count != 3U || statement == NULL ||
-        normalized == NULL ||
+    if (program.expression_count != 3U || statement == NULL || normalized == NULL ||
         normalized->kind != MINIC_EXPRESSION_BINARY ||
         normalized->value.binary.operator_kind != MINIC_BINARY_ADD ||
         normalized->value.binary.left >= statement->expression ||
         normalized->value.binary.right >= statement->expression ||
-        !minic_type_equal(
-            normalized->type,
-            minic_type_unsigned_char())) {
+        !minic_type_equal(normalized->type, minic_type_unsigned_char())) {
         minic_c0_program_destroy(&program);
         return 2;
     }
@@ -160,15 +144,8 @@ static int test_pointer_bitcast_identity(void)
     local_expression.type = int_pointer;
     local_expression.value_category = MINIC_VALUE_LVALUE;
     local_expression.value.local_id = local_id;
-    if (!minic_c0_program_add_expression(
-            &program,
-            &local_expression,
-            &local_expression_id) ||
-        !add_cast(
-            &program,
-            local_expression_id,
-            void_pointer,
-            &cast_id) ||
+    if (!minic_c0_program_add_expression(&program, &local_expression, &local_expression_id) ||
+        !add_cast(&program, local_expression_id, void_pointer, &cast_id) ||
         !add_expression_statement(&program, cast_id, &statement_id) ||
         !minic_c0_program_verify(&program, MINIC_C0_AST_PARSED) ||
         !minic_c0_program_normalize_casts(&program) ||
@@ -184,16 +161,13 @@ static int test_pointer_bitcast_identity(void)
         : minic_c0_program_expression(&program, statement->expression);
     operand = bitcast == NULL
         ? NULL
-        : minic_c0_program_expression(
-              &program,
-              bitcast->value.unary.operand);
+        : minic_c0_program_expression(&program, bitcast->value.unary.operand);
     if (statement == NULL || bitcast == NULL || operand == NULL ||
         bitcast->kind != MINIC_EXPRESSION_BITCAST ||
         bitcast->value.unary.operand >= statement->expression ||
         !minic_type_equal(bitcast->type, void_pointer) ||
         operand->kind != MINIC_EXPRESSION_LOCAL ||
-        !minic_type_equal(operand->type, int_pointer) ||
-        operand->value.local_id != local_id) {
+        !minic_type_equal(operand->type, int_pointer) || operand->value.local_id != local_id) {
         minic_c0_program_destroy(&program);
         return 6;
     }
@@ -225,10 +199,7 @@ static int test_malformed_contracts(void)
     expression.value.binary.operator_kind = MINIC_BINARY_ADD;
     expression.value.binary.left = integer_id;
     expression.value.binary.right = 1U;
-    if (!minic_c0_program_add_expression(
-            &program,
-            &expression,
-            &malformed_id) ||
+    if (!minic_c0_program_add_expression(&program, &expression, &malformed_id) ||
         minic_c0_program_verify(&program, MINIC_C0_AST_PARSED)) {
         minic_c0_program_destroy(&program);
         return 8;
@@ -248,10 +219,7 @@ static int test_malformed_contracts(void)
 
     minic_c0_program_initialize(&program);
     if (!add_integer(&program, 3, &integer_id) ||
-        !add_expression_statement(
-            &program,
-            program.expression_count + 10U,
-            &statement_id) ||
+        !add_expression_statement(&program, program.expression_count + 10U, &statement_id) ||
         minic_c0_program_verify(&program, MINIC_C0_AST_PARSED)) {
         minic_c0_program_destroy(&program);
         return 11;
@@ -283,6 +251,19 @@ static int test_malformed_contracts(void)
         return 13;
     }
     minic_c0_program_destroy(&program);
+
+    minic_c0_program_initialize(&program);
+    (void)memset(&local, 0, sizeof(local));
+    local.name_span = test_span(0U);
+    local.type = minic_type_int();
+    local.type.pointer_qualifiers = 1U;
+    local.element_count = 1U;
+    if (!minic_c0_program_add_local(&program, &local, &local_id) ||
+        minic_c0_program_verify(&program, MINIC_C0_AST_PARSED)) {
+        minic_c0_program_destroy(&program);
+        return 14;
+    }
+    minic_c0_program_destroy(&program);
     return 0;
 }
 
@@ -298,31 +279,22 @@ static int test_normalization_transaction(void)
 
     minic_c0_program_initialize(&program);
     if (!add_integer(&program, 4, &integer_id) ||
-        !add_cast(
-            &program,
-            integer_id,
-            minic_type_unsigned_char(),
-            &cast_id) ||
-        !add_expression_statement(
-            &program,
-            program.expression_count + 20U,
-            &statement_id)) {
+        !add_cast(&program, integer_id, minic_type_unsigned_char(), &cast_id) ||
+        !add_expression_statement(&program, program.expression_count + 20U, &statement_id)) {
         minic_c0_program_destroy(&program);
-        return 14;
+        return 15;
     }
 
     original_expressions = program.expressions;
     original_expression_count = program.expression_count;
-    original_statement_expression =
-        program.statements[statement_id].expression;
+    original_statement_expression = program.statements[statement_id].expression;
     if (minic_c0_program_normalize_casts(&program) ||
         program.expressions != original_expressions ||
         program.expression_count != original_expression_count ||
-        program.statements[statement_id].expression !=
-            original_statement_expression ||
+        program.statements[statement_id].expression != original_statement_expression ||
         program.expressions[cast_id].kind != MINIC_EXPRESSION_CAST) {
         minic_c0_program_destroy(&program);
-        return 15;
+        return 16;
     }
 
     minic_c0_program_destroy(&program);

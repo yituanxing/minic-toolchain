@@ -18,11 +18,14 @@ int main(void)
     MinicType integer_type;
     MinicType pointer_type;
     MinicType void_pointer_type;
+    MinicType const_void_pointer_type;
     MinicType alloc_parameter_types[1];
     MinicType free_parameter_types[1];
+    MinicType const_free_parameter_types[1];
     MinicType alloc_function_type;
     MinicType duplicate_alloc_function_type;
     MinicType free_function_type;
+    MinicType duplicate_free_function_type;
     MinicType qualified_function_type;
     MinicType alloc_pointer_type;
     MinicType free_pointer_type;
@@ -37,7 +40,8 @@ int main(void)
     minic_c0_program_initialize(&program);
     integer_type = minic_type_int();
     if (!minic_type_pointer_to(integer_type, &pointer_type) ||
-        !minic_type_pointer_to(minic_type_void(), &void_pointer_type)) {
+        !minic_type_pointer_to(minic_type_void(), &void_pointer_type) ||
+        !minic_type_add_const(void_pointer_type, &const_void_pointer_type)) {
         minic_c0_program_destroy(&program);
         return fail("pointer type construction");
     }
@@ -139,6 +143,7 @@ int main(void)
 
     alloc_parameter_types[0] = minic_type_unsigned_long();
     free_parameter_types[0] = void_pointer_type;
+    const_free_parameter_types[0] = const_void_pointer_type;
     if (!minic_c0_program_add_function_type(&program,
                                             void_pointer_type,
                                             alloc_parameter_types,
@@ -153,16 +158,22 @@ int main(void)
                                             minic_type_void(),
                                             free_parameter_types,
                                             1U,
-                                            &free_function_type)) {
+                                            &free_function_type) ||
+        !minic_c0_program_add_function_type(&program,
+                                            minic_type_void(),
+                                            const_free_parameter_types,
+                                            1U,
+                                            &duplicate_free_function_type)) {
         minic_c0_program_destroy(&program);
         return fail("function type insertion");
     }
     if (!minic_type_is_function(alloc_function_type) ||
         !minic_type_equal(alloc_function_type, duplicate_alloc_function_type) ||
+        !minic_type_equal(free_function_type, duplicate_free_function_type) ||
         minic_type_equal(alloc_function_type, free_function_type) ||
         program.function_type_count != 2U) {
         minic_c0_program_destroy(&program);
-        return fail("function type interning");
+        return fail("function type interning and parameter qualifier normalization");
     }
     if (minic_type_add_const(alloc_function_type, &qualified_function_type)) {
         minic_c0_program_destroy(&program);
@@ -175,12 +186,13 @@ int main(void)
         return fail("qualified function type classified as valid");
     }
     function_type = minic_c0_program_function_type(
-        &program, alloc_function_type.function_type_id);
+        &program, free_function_type.function_type_id);
     if (function_type == NULL || function_type->parameter_count != 1U ||
-        !minic_type_equal(function_type->return_type, void_pointer_type) ||
-        !minic_type_equal(function_type->parameter_types[0], minic_type_unsigned_long())) {
+        !minic_type_equal(function_type->return_type, minic_type_void()) ||
+        !minic_type_equal(function_type->parameter_types[0], void_pointer_type) ||
+        minic_type_is_const(function_type->parameter_types[0])) {
         minic_c0_program_destroy(&program);
-        return fail("function signature metadata");
+        return fail("normalized function signature metadata");
     }
     if (!minic_type_pointer_to(alloc_function_type, &alloc_pointer_type) ||
         !minic_type_pointer_to(free_function_type, &free_pointer_type) ||

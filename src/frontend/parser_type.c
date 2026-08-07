@@ -180,6 +180,13 @@ bool minic_parser_parse_pointer_declarator(MinicParser *parser,
             minic_parser_error(parser, "pointer declarator depth is unsupported");
             return false;
         }
+        while (parser->current.kind == MINIC_TOKEN_KW_CONST) {
+            if (!minic_type_add_const(parsed_type, &parsed_type) ||
+                !minic_parser_advance(parser)) {
+                minic_parser_error(parser, "cannot apply pointer const qualifier");
+                return false;
+            }
+        }
     }
     *type = parsed_type;
     return true;

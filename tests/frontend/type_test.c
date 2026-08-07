@@ -29,11 +29,16 @@ int main(void)
     MinicType const_integer_type;
     MinicType const_pointer_type;
     MinicType pointer_type;
+    MinicType const_pointer_object_type;
     MinicType pointer_to_pointer_type;
+    MinicType pointer_to_const_pointer_type;
+    MinicType const_pointer_to_pointer_type;
     MinicType record_type;
     MinicType other_record_type;
     MinicType record_pointer_type;
     MinicType recovered_type;
+    MinicType unqualified_type;
+    MinicType malformed_type;
     MinicType overflow_type;
 
     void_type = minic_type_void();
@@ -168,55 +173,25 @@ int main(void)
         return fail("integer promotion");
     }
 
-    if (!minic_type_integer_common(
-            integer_type,
-            integer_type,
-            &common_type) ||
+    if (!minic_type_integer_common(integer_type, integer_type, &common_type) ||
         !minic_type_equal(common_type, integer_type) ||
-        !minic_type_integer_common(
-            unsigned_char_type,
-            unsigned_char_type,
-            &common_type) ||
+        !minic_type_integer_common(unsigned_char_type, unsigned_char_type, &common_type) ||
         !minic_type_equal(common_type, integer_type) ||
-        !minic_type_integer_common(
-            unsigned_char_type,
-            integer_type,
-            &common_type) ||
+        !minic_type_integer_common(unsigned_char_type, integer_type, &common_type) ||
         !minic_type_equal(common_type, integer_type) ||
-        !minic_type_integer_common(
-            unsigned_char_type,
-            unsigned_integer_type,
-            &common_type) ||
+        !minic_type_integer_common(unsigned_char_type, unsigned_integer_type, &common_type) ||
         !minic_type_equal(common_type, unsigned_integer_type) ||
-        !minic_type_integer_common(
-            integer_type,
-            unsigned_integer_type,
-            &common_type) ||
+        !minic_type_integer_common(integer_type, unsigned_integer_type, &common_type) ||
         !minic_type_equal(common_type, unsigned_integer_type) ||
-        !minic_type_integer_common(
-            unsigned_integer_type,
-            integer_type,
-            &common_type) ||
+        !minic_type_integer_common(unsigned_integer_type, integer_type, &common_type) ||
         !minic_type_equal(common_type, unsigned_integer_type) ||
-        !minic_type_integer_common(
-            integer_type,
-            signed_long_type,
-            &common_type) ||
+        !minic_type_integer_common(integer_type, signed_long_type, &common_type) ||
         !minic_type_equal(common_type, signed_long_type) ||
-        !minic_type_integer_common(
-            unsigned_integer_type,
-            signed_long_type,
-            &common_type) ||
+        !minic_type_integer_common(unsigned_integer_type, signed_long_type, &common_type) ||
         !minic_type_equal(common_type, signed_long_type) ||
-        !minic_type_integer_common(
-            integer_type,
-            unsigned_long_type,
-            &common_type) ||
+        !minic_type_integer_common(integer_type, unsigned_long_type, &common_type) ||
         !minic_type_equal(common_type, unsigned_long_type) ||
-        !minic_type_integer_common(
-            signed_long_type,
-            unsigned_long_type,
-            &common_type) ||
+        !minic_type_integer_common(signed_long_type, unsigned_long_type, &common_type) ||
         !minic_type_equal(common_type, unsigned_long_type) ||
         minic_type_integer_common(integer_type, void_type, &common_type) ||
         minic_type_integer_common(integer_type, double_type, &common_type) ||
@@ -234,25 +209,19 @@ int main(void)
         minic_type_cast_compatible(void_pointer_type, integer_type)) {
         return fail("integer assignment and cast conversions");
     }
-    if (!minic_type_pointer_to(
-            unsigned_integer_type,
-            &unsigned_pointer_type) ||
+    if (!minic_type_pointer_to(unsigned_integer_type, &unsigned_pointer_type) ||
         !minic_type_is_pointer(unsigned_pointer_type) ||
         minic_type_is_integer(unsigned_pointer_type) ||
         !minic_type_pointee(unsigned_pointer_type, &recovered_type) ||
         !minic_type_equal(recovered_type, unsigned_integer_type)) {
         return fail("unsigned int pointer preservation");
     }
-    if (!minic_type_pointer_to(
-            unsigned_char_type,
-            &unsigned_char_pointer_type) ||
+    if (!minic_type_pointer_to(unsigned_char_type, &unsigned_char_pointer_type) ||
         !minic_type_is_pointer(unsigned_char_pointer_type) ||
         minic_type_is_integer(unsigned_char_pointer_type) ||
         !minic_type_pointee(unsigned_char_pointer_type, &recovered_type) ||
         !minic_type_equal(recovered_type, unsigned_char_type) ||
-        !minic_type_cast_compatible(
-            unsigned_char_pointer_type,
-            unsigned_pointer_type)) {
+        !minic_type_cast_compatible(unsigned_char_pointer_type, unsigned_pointer_type)) {
         return fail("unsigned char pointer preservation");
     }
 
@@ -263,10 +232,10 @@ int main(void)
         minic_type_equal(integer_type, const_integer_type) ||
         !minic_type_assignment_compatible(const_integer_type, integer_type) ||
         !minic_type_pointer_to(const_integer_type, &const_pointer_type) ||
-        !minic_type_is_const(const_pointer_type) ||
+        minic_type_is_const(const_pointer_type) ||
         !minic_type_pointee(const_pointer_type, &recovered_type) ||
         !minic_type_equal(recovered_type, const_integer_type)) {
-        return fail("const int conversion and pointer preservation");
+        return fail("const int pointee preservation");
     }
     if (!minic_type_pointer_to(integer_type, &pointer_type) ||
         !minic_type_is_pointer(pointer_type) ||
@@ -279,14 +248,37 @@ int main(void)
         minic_type_equal(pointer_type, unsigned_pointer_type) ||
         minic_type_equal(pointer_type, double_pointer_type) ||
         minic_type_assignment_compatible(pointer_type, unsigned_pointer_type) ||
-        minic_type_assignment_compatible(pointer_type, double_pointer_type)) {
-        return fail("int pointer construction");
+        minic_type_assignment_compatible(pointer_type, double_pointer_type) ||
+        !minic_type_assignment_compatible(const_pointer_type, pointer_type) ||
+        minic_type_assignment_compatible(pointer_type, const_pointer_type)) {
+        return fail("int pointer construction and pointee qualification");
+    }
+    if (!minic_type_add_const(pointer_type, &const_pointer_object_type) ||
+        !minic_type_is_const(const_pointer_object_type) ||
+        !minic_type_is_pointer(const_pointer_object_type) ||
+        minic_type_equal(pointer_type, const_pointer_object_type) ||
+        !minic_type_assignment_compatible(pointer_type, const_pointer_object_type) ||
+        !minic_type_assignment_compatible(const_pointer_object_type, pointer_type) ||
+        !minic_type_unqualified(const_pointer_object_type, &unqualified_type) ||
+        !minic_type_equal(unqualified_type, pointer_type) ||
+        !minic_type_pointee(const_pointer_object_type, &recovered_type) ||
+        !minic_type_equal(recovered_type, integer_type)) {
+        return fail("top-level pointer const qualification");
     }
     if (!minic_type_pointer_to(pointer_type, &pointer_to_pointer_type) ||
         pointer_to_pointer_type.pointer_depth != 2U ||
-        !minic_type_equal(pointer_type, pointer_type) ||
-        minic_type_equal(pointer_type, pointer_to_pointer_type)) {
-        return fail("nested pointer construction");
+        !minic_type_pointer_to(const_pointer_object_type, &pointer_to_const_pointer_type) ||
+        minic_type_is_const(pointer_to_const_pointer_type) ||
+        !minic_type_pointee(pointer_to_const_pointer_type, &recovered_type) ||
+        !minic_type_equal(recovered_type, const_pointer_object_type) ||
+        !minic_type_add_const(pointer_to_pointer_type, &const_pointer_to_pointer_type) ||
+        !minic_type_is_const(const_pointer_to_pointer_type) ||
+        minic_type_equal(pointer_to_const_pointer_type, const_pointer_to_pointer_type) ||
+        !minic_type_unqualified(const_pointer_to_pointer_type, &unqualified_type) ||
+        !minic_type_equal(unqualified_type, pointer_to_pointer_type) ||
+        !minic_type_assignment_compatible(pointer_to_pointer_type, const_pointer_to_pointer_type) ||
+        !minic_type_assignment_compatible(const_pointer_to_pointer_type, pointer_to_pointer_type)) {
+        return fail("nested pointer qualifier identity");
     }
     if (!minic_type_pointee(pointer_type, &recovered_type) ||
         !minic_type_equal(recovered_type, integer_type) ||
@@ -321,7 +313,14 @@ int main(void)
         return fail("record pointer construction");
     }
 
-    if (minic_type_add_const(integer_type, NULL) ||
+    malformed_type = integer_type;
+    malformed_type.pointer_qualifiers = 1U;
+    if (minic_type_is_pointer(malformed_type) || minic_type_is_const(malformed_type) ||
+        minic_type_add_const(malformed_type, &recovered_type) ||
+        minic_type_unqualified(malformed_type, &recovered_type)) {
+        return fail("out-of-depth pointer qualifier accepted");
+    }
+    if (minic_type_add_const(integer_type, NULL) || minic_type_unqualified(integer_type, NULL) ||
         minic_type_pointer_to(integer_type, NULL)) {
         return fail("NULL type output accepted");
     }

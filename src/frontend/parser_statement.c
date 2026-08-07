@@ -25,7 +25,7 @@ static bool add_local_lvalue_expression(MinicParser *parser,
 
 static bool expression_is_modifiable_lvalue(const MinicExpression *expression) {
     return expression != NULL && expression->value_category == MINIC_VALUE_LVALUE &&
-           !(minic_type_is_const(expression->type) && !minic_type_is_pointer(expression->type));
+           !minic_type_is_const(expression->type);
 }
 
 static bool parse_local_declarator(MinicParser *parser, MinicType base_type) {
@@ -352,7 +352,7 @@ static bool build_prefix_update(MinicParser *parser, MinicStatementId *statement
     local_id = minic_parser_find_local(parser, name_span);
     local = minic_c0_program_local(parser->program, local_id);
     if (local == NULL || local->element_count != 1U || !minic_type_is_integer(local->type) ||
-        (minic_type_is_const(local->type) && !minic_type_is_pointer(local->type))) {
+        minic_type_is_const(local->type)) {
         minic_parser_error(parser, "%s", target_error);
         return false;
     }
