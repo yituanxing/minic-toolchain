@@ -244,7 +244,7 @@ expect_compile_failure \
     "array initializers are not supported yet"
 expect_compile_failure \
     invalid_bare_array_use \
-    "array object requires a subscript"
+    "return expression does not match function return type"
 expect_compile_failure \
     invalid_array_index_type \
     "array index must have integer type"
