@@ -26,9 +26,10 @@ static bool find_record_field(const MinicParser *parser,
     return false;
 }
 
-bool minic_parser_parse_pointer_member(MinicParser *parser,
-                                       MinicExpressionId base_id,
-                                       MinicExpressionId *expression_id) {
+static bool parse_record_member(MinicParser *parser,
+                                MinicExpressionId base_id,
+                                bool through_pointer,
+                                MinicExpressionId *expression_id) {
     const MinicExpression *base;
     const MinicRecord *record;
     const MinicRecordField *field;
@@ -39,21 +40,36 @@ bool minic_parser_parse_pointer_member(MinicParser *parser,
     size_t field_index;
 
     base = minic_c0_program_expression(parser->program, base_id);
-    if (base == NULL || !minic_type_pointee(base->type, &record_type) ||
-        !minic_type_is_record(record_type)) {
-        minic_parser_error(parser, "pointer member access requires a pointer to record");
+    if (base == NULL) {
+        minic_parser_error(parser, "invalid member base");
         return false;
     }
+    if (through_pointer) {
+        if (!minic_type_pointee(base->type, &record_type) || !minic_type_is_record(record_type)) {
+            minic_parser_error(parser, "pointer member access requires a pointer to record");
+            return false;
+        }
+        if (!minic_parser_expect(parser, MINIC_TOKEN_ARROW, "expected '->'")) {
+            return false;
+        }
+    } else {
+        if (base->value_category != MINIC_VALUE_LVALUE || !minic_type_is_record(base->type)) {
+            minic_parser_error(parser, "direct member access requires a record lvalue");
+            return false;
+        }
+        record_type = base->type;
+        if (!minic_parser_expect(parser, MINIC_TOKEN_DOT, "expected '.'")) {
+            return false;
+        }
+    }
+
     record = minic_c0_program_record(parser->program, record_type.record_id);
     if (record == NULL || !record->is_complete) {
-        minic_parser_error(parser, "pointer member access requires a complete record");
-        return false;
-    }
-    if (!minic_parser_expect(parser, MINIC_TOKEN_ARROW, "expected '->'")) {
+        minic_parser_error(parser, "member access requires a complete record");
         return false;
     }
     if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
-        minic_parser_error(parser, "expected member name after '->'");
+        minic_parser_error(parser, "expected record member name");
         return false;
     }
 
@@ -94,4 +110,16 @@ bool minic_parser_parse_pointer_member(MinicParser *parser,
         member.value_category = MINIC_VALUE_LVALUE;
     }
     return minic_parser_add_expression(parser, &member, expression_id);
+}
+
+bool minic_parser_parse_pointer_member(MinicParser *parser,
+                                       MinicExpressionId base_id,
+                                       MinicExpressionId *expression_id) {
+    return parse_record_member(parser, base_id, true, expression_id);
+}
+
+bool minic_parser_parse_direct_member(MinicParser *parser,
+                                      MinicExpressionId base_id,
+                                      MinicExpressionId *expression_id) {
+    return parse_record_member(parser, base_id, false, expression_id);
 }
