@@ -29,22 +29,18 @@ Pinned Git Blob identities / 固定 Git Blob：
 
 ## Why this project / 选择理由
 
-cJSON is a small, common application-style C library whose core exercises linked records, strings, allocation, parsing, printing, recursion, callbacks, integer and floating-point values, and hosted-library calls. Capabilities shared with Lua, TinyCC, SQLite, musl, and Linux are prioritized over isolated syntax.
+cJSON is a compact application-style C library whose unchanged core exercises linked records, strings, allocation, parsing, printing, recursion, callbacks, integer and floating-point types, and hosted-library calls. Shared cross-project capabilities are prioritized over cJSON-specific workarounds.
 
-cJSON 是小型、常见的应用式 C 库，核心覆盖链式记录、字符串、内存分配、解析、打印、递归、回调、整数与浮点值以及 Hosted 库调用。与 Lua、TinyCC、SQLite、musl 和 Linux 共享的能力优先于孤立语法。
+cJSON 是紧凑的应用式 C 库，未修改核心覆盖链式记录、字符串、内存分配、解析、打印、递归、回调、整数/浮点类型以及 Hosted 库调用。优先实现多项目共享能力，而不是 cJSON 专用绕行。
 
-## Accepted initial boundary / 初始验收边界
+## Accepted boundary / 验收边界
 
-The unchanged accepted core is:
+The unchanged accepted core remains:
 
 ```text
 cJSON.c
 cJSON.h
 ```
-
-Initially excluded are `cJSON_Utils`, examples and packaging, Windows-only paths, optional locale support unless required by the accepted core configuration, unreviewed upstream test dependencies, and MiniC-specific source patches.
-
-初始阶段排除 `cJSON_Utils`、示例与打包、Windows 专用路径、除非核心配置需要的可选 Locale、未审查的上游测试依赖，以及 MiniC 专用源码补丁。
 
 External GCC may preprocess, assemble, link, and provide CRT/libc. MiniC must compile every C function in the accepted input and may not silently delegate unsupported functions to GCC.
 
@@ -52,72 +48,51 @@ External GCC may preprocess, assemble, link, and provide CRT/libc. MiniC must co
 
 ## Current exact frontier / 当前精确前沿
 
-The clean-checkout probe derives RV64 `size_t` from the target compiler's `__SIZE_TYPE__`:
+The clean-checkout probe derives target-correct RV64 `size_t` from `__SIZE_TYPE__` and verifies the pinned source identities offline.
 
-```c
-typedef long unsigned int size_t;
-```
+MiniC now crosses the previously recorded foundations in the unchanged core, including native LONG semantics, self-referential tagged records, distinct plain `char`, `double` object types, function-pointer record fields, per-pointer-level `const`, and now a **distinct `float` object type**.
 
-MiniC now crosses the previously recorded foundations in the unchanged cJSON core:
+`float` is not an alias for `double`: it has its own type identity, remains outside the integer conversion model, and has RV64 size/alignment **4/4**. This branch does not add floating constants, floating arithmetic, float↔double or integer↔floating conversions, or FP call/return ABI lowering.
 
-- native signed/unsigned LONG and target-correct RV64 `size_t`;
-- incomplete tagged records and pointer self-reference;
-- distinct plain `char` identity with the active RV64 unsigned-byte value behavior;
-- `double` as a distinct non-integer complete object type with size/alignment 8/8;
-- stable function-type identities and cJSON-style pointer-to-function record fields;
-- `const` qualifiers on individual pointer declarator levels, including top-level pointer-object `const` in parameters such as `const cJSON * const object`;
-- canonical function parameter types that discard only top-level parameter-object qualifiers while preserving the qualified parameter local in a function body.
+MiniC 现已越过原生 LONG、自引用标签结构体、独立 plain `char`、`double` 对象类型、函数指针字段、逐级指针 `const`，以及当前新增的**独立 `float` 对象类型**。`float` 不与 `double` 混同，在 RV64 上大小/对齐为 **4/4**；本分支不加入浮点常量、浮点算术、float/double/整数之间的值转换或 FP ABI lowering。
 
-MiniC 现已在未修改 cJSON 核心中越过以下基础能力：原生 LONG 与目标正确的 RV64 `size_t`、不完整标签记录与指针自引用、独立 plain `char`、8/8 布局的 `double` 对象类型、稳定函数类型身份与 Hook 函数指针字段，以及逐级指针声明器 `const`。函数参数类型只去除顶层参数对象限定，同时函数体中的参数局部变量继续保留原限定。
-
-The unchanged source therefore crosses prototypes such as:
-
-```c
-cJSON *cJSON_GetObjectItem(const cJSON * const object,
-                           const char * const string);
-```
-
-The first remaining diagnostic is now in the array-construction API:
+The unchanged source therefore crosses:
 
 ```c
 cJSON *cJSON_CreateFloatArray(const float *numbers, int count);
 ```
 
-with the exact MiniC diagnostic:
+The next exact source frontier is the anonymous structure used for the internal error state:
 
-```text
-cJSON.i:61:38: error: expected type name
+```c
+typedef struct {
+    const unsigned char *json;
+    size_t position;
+} error;
 ```
 
-The active blocker is the `float` type specifier. This is a distinct C floating type and must not be implemented by aliasing it to `double`. A bounded follow-up should establish a real `float` type identity and target layout first, then continue according to the next observed cJSON frontier; floating constants, arithmetic, conversions, and ABI lowering remain separately reviewable unless the next accepted workload requires them together.
+The exact MiniC diagnostic is:
 
-当前精确缺口已经转为 `float` 类型说明符。`float` 是独立的 C 浮点类型，不能简单别名为 `double`。下一条范围受限分支应先建立真实 `float` 类型身份和目标布局，再按 cJSON 的下一条实际诊断继续；浮点常量、算术、转换和 ABI lowering 仍按实际负载独立审查。
+```text
+cJSON.i:97:16: error: expected record tag after 'struct'
+```
 
-`tests/external/cjson/probe.sh` permanently verifies the pinned vendor identities, recreates the target-accurate preprocessing environment without network access, anchors stable early declarations plus preprocessed line 61, and requires the exact `61:38 expected type name` diagnostic. Crossing that boundary intentionally fails the gate until a later branch records the following real source frontier.
+The active blocker is therefore **anonymous struct definition in typedef/declarator context**, not floating-point value semantics. The next bounded branch should generalize anonymous record definitions while preserving existing tagged-record identity and incomplete-record rules.
 
-`tests/external/cjson/probe.sh` 永久校验固定 Vendor 身份，在无网络条件下重建目标正确的预处理环境，锚定稳定早期声明及预处理第 61 行，并要求精确的 `61:38 expected type name` 诊断。后续分支越过该边界时，门禁会主动失败，直到记录下一条真实源码前沿。
+因此当前真实缺口已经转为 **typedef/声明器上下文中的匿名结构体定义**，而不是浮点值语义。下一条范围受限分支应通用化匿名记录定义，同时保持现有标签记录身份与不完整记录规则。
+
+`tests/external/cjson/probe.sh` permanently verifies stable early declarations, the float prototype at preprocessed line 61, the anonymous `typedef struct {` at line 97, and requires the exact `97:16 expected record tag after 'struct'` diagnostic. Crossing that boundary intentionally fails the gate until a later branch records the following real source frontier.
+
+`tests/external/cjson/probe.sh` 永久锚定稳定早期声明、预处理第 61 行的 `float` 原型以及第 97 行的匿名 `typedef struct {`，并要求精确的 `97:16 expected record tag after 'struct'` 诊断。后续越过该边界时，门禁会主动失败，直到记录下一条真实源码前沿。
 
 ## Validation ladder / 验证阶梯
 
-The project advances through independently reviewable results:
+The project advances through independently reviewable results: exact source identity, exact compiler frontiers, complete RV64 assembly generation, independent target linking/behavior comparison, and finally a frozen offline regression gate for the accepted cJSON configuration.
 
-1. pin and verify source/license identities / 固定并校验源码与许可证身份；
-2. establish exact compiler frontiers / 建立精确编译前沿；
-3. compile the complete core to RV64 assembly / 完整核心编译为 RV64 汇编；
-4. assemble and link an independent behavior harness / 汇编并链接独立行为 Harness；
-5. compare GCC and MiniC parsing of null, booleans, numbers, strings, arrays, and objects / 差分解析主要 JSON 值；
-6. compare lookup, mutation, deletion, and unformatted printing / 差分查询、修改、删除与非格式化打印；
-7. run a reviewed subset of cJSON's project-owned tests / 运行经审查的 cJSON 项目自带测试子集；
-8. freeze the accepted configuration as a permanent offline regression gate / 将验收配置冻结为永久离线回归门禁。
-
-## Gap policy / 缺口处理
-
-Failures follow `docs/architecture/real-project-selection.md`: common cross-project capabilities are generalized, core cJSON requirements are implemented without source-specific patches, officially optional paths may be disabled when the milestone remains meaningful, and isolated cold extensions are recorded for later evidence.
-
-失败按 `docs/architecture/real-project-selection.md` 分类：多项目通用热点进行通用化实现，cJSON 核心要求不使用源码特例，上游正式可选路径可在里程碑仍有意义时关闭，孤立冷门扩展则记录并等待后续证据。
+项目按可独立审查的结果推进：精确源码身份、精确编译前沿、完整 RV64 汇编生成、独立目标链接/行为差分，最终冻结为已验收 cJSON 配置的离线回归门禁。
 
 ## Completion result / 完成标志
 
-The cJSON milestone is complete only when the unchanged pinned core is compiled entirely by MiniC, linked with external target tools, and passes the declared behavior and project-owned test gates against a GCC reference.
+The cJSON milestone is complete only when the unchanged pinned core is compiled entirely by MiniC, linked with external target tools, and passes the declared behavior and reviewed project-owned tests against a GCC reference.
 
-只有当未修改的固定核心全部由 MiniC 编译、由外部目标工具链接，并相对 GCC 参考通过已声明行为测试和项目自测门禁时，cJSON 里程碑才算完成。
+只有当未修改的固定核心全部由 MiniC 编译、由外部目标工具链接，并相对 GCC 参考通过已声明行为测试和经审查的项目自测时，cJSON 里程碑才算完成。
