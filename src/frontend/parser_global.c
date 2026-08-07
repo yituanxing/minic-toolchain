@@ -171,14 +171,16 @@ static bool parse_static_record_field_initializer(MinicParser *parser,
                                                   size_t field_index,
                                                   const MinicRecordField *field) {
     MinicType pointee_type;
+    bool function_pointer_field;
 
     if (field == NULL || field->element_count != 1U) {
         minic_parser_error(parser, "unsupported static record initializer field");
         return false;
     }
-    if (minic_type_is_pointer(field->type) &&
-        minic_type_pointee(field->type, &pointee_type) && minic_type_is_function(pointee_type) &&
-        parser->current.kind == MINIC_TOKEN_IDENTIFIER) {
+    function_pointer_field = minic_type_is_pointer(field->type) &&
+                             minic_type_pointee(field->type, &pointee_type) &&
+                             minic_type_is_function(pointee_type);
+    if (function_pointer_field && parser->current.kind == MINIC_TOKEN_IDENTIFIER) {
         MinicFunctionId function_id;
         MinicType designator_type;
 
@@ -205,14 +207,12 @@ static bool parse_static_record_field_initializer(MinicParser *parser,
     return parse_zero_initializer(parser, field->type);
 }
 
-static bool parse_static_record_global(MinicParser *parser,
-                                       MinicType record_type,
-                                       MinicSourceSpan name_span) {
+static bool parse_static_record(MinicParser *parser, MinicType type, MinicSourceSpan name_span) {
     MinicGlobalObjectId object_id;
     const MinicRecord *record;
     size_t field_index;
 
-    record = minic_c0_program_record(parser->program, record_type.record_id);
+    record = minic_c0_program_record(parser->program, type.record_id);
     if (record == NULL || !record->is_complete) {
         minic_parser_error(parser, "static record global requires a complete record type");
         return false;
@@ -224,9 +224,9 @@ static bool parse_static_record_global(MinicParser *parser,
     if (!minic_c0_program_add_global_object(parser->program,
                                             parser->source + name_span.begin.offset,
                                             minic_parser_span_length(name_span),
-                                            record_type,
+                                            type,
                                             true,
-                                            minic_type_is_const(record_type),
+                                            minic_type_is_const(type),
                                             &object_id) ||
         !minic_parser_expect(parser, MINIC_TOKEN_EQUAL, "expected '='") ||
         !minic_parser_expect(parser, MINIC_TOKEN_LBRACE, "expected '{' in record initializer")) {
@@ -307,7 +307,7 @@ bool minic_parser_parse_static_global(MinicParser *parser) {
     }
 
     if (minic_type_is_record(element_type)) {
-        return parse_static_record_global(parser, element_type, name_span);
+        return parse_static_record(parser, element_type, name_span);
     }
 
     while (parser->current.kind == MINIC_TOKEN_LBRACKET) {
