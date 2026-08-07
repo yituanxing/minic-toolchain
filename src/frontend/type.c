@@ -11,6 +11,7 @@ static MinicType minic_type_integer(MinicIntegerSign sign, MinicIntegerRank rank
     type.array_type_id = MINIC_ARRAY_TYPE_INVALID;
     type.integer_sign = sign;
     type.integer_rank = rank;
+    type.is_plain_char = false;
     type.base_qualifiers = MINIC_TYPE_QUALIFIER_NONE;
     type.pointer_depth = 0U;
     return type;
@@ -19,7 +20,8 @@ static MinicType minic_type_integer(MinicIntegerSign sign, MinicIntegerRank rank
 static bool minic_type_same_unqualified_identity(MinicType left, MinicType right) {
     return left.base_kind == right.base_kind && left.record_id == right.record_id &&
            left.array_type_id == right.array_type_id && left.integer_sign == right.integer_sign &&
-           left.integer_rank == right.integer_rank && left.pointer_depth == right.pointer_depth;
+           left.integer_rank == right.integer_rank && left.is_plain_char == right.is_plain_char &&
+           left.pointer_depth == right.pointer_depth;
 }
 
 static bool minic_type_pointer_qualification_compatible(MinicType target, MinicType source) {
@@ -30,6 +32,16 @@ static bool minic_type_pointer_qualification_compatible(MinicType target, MinicT
     return (source.base_qualifiers & ~target.base_qualifiers) == 0U;
 }
 
+static bool minic_type_plain_char_identity_is_valid(MinicType type) {
+    if (!type.is_plain_char) {
+        return true;
+    }
+    if (type.integer_sign != MINIC_INTEGER_SIGN_UNSIGNED) {
+        return false;
+    }
+    return type.integer_rank == MINIC_INTEGER_RANK_CHAR;
+}
+
 MinicType minic_type_void(void) {
     MinicType type;
 
@@ -38,8 +50,17 @@ MinicType minic_type_void(void) {
     type.array_type_id = MINIC_ARRAY_TYPE_INVALID;
     type.integer_sign = MINIC_INTEGER_SIGN_NONE;
     type.integer_rank = MINIC_INTEGER_RANK_NONE;
+    type.is_plain_char = false;
     type.base_qualifiers = MINIC_TYPE_QUALIFIER_NONE;
     type.pointer_depth = 0U;
+    return type;
+}
+
+MinicType minic_type_char(void) {
+    MinicType type;
+
+    type = minic_type_integer(MINIC_INTEGER_SIGN_UNSIGNED, MINIC_INTEGER_RANK_CHAR);
+    type.is_plain_char = true;
     return type;
 }
 
@@ -71,6 +92,7 @@ MinicType minic_type_record(MinicRecordId record_id) {
     type.array_type_id = MINIC_ARRAY_TYPE_INVALID;
     type.integer_sign = MINIC_INTEGER_SIGN_NONE;
     type.integer_rank = MINIC_INTEGER_RANK_NONE;
+    type.is_plain_char = false;
     type.base_qualifiers = MINIC_TYPE_QUALIFIER_NONE;
     type.pointer_depth = 0U;
     return type;
@@ -84,6 +106,7 @@ MinicType minic_type_array(MinicArrayTypeId array_type_id) {
     type.array_type_id = array_type_id;
     type.integer_sign = MINIC_INTEGER_SIGN_NONE;
     type.integer_rank = MINIC_INTEGER_RANK_NONE;
+    type.is_plain_char = false;
     type.base_qualifiers = MINIC_TYPE_QUALIFIER_NONE;
     type.pointer_depth = 0U;
     return type;
@@ -208,7 +231,8 @@ bool minic_type_is_void(MinicType type) {
     return type.base_kind == MINIC_TYPE_BASE_VOID && type.record_id == MINIC_RECORD_INVALID &&
            type.array_type_id == MINIC_ARRAY_TYPE_INVALID &&
            type.integer_sign == MINIC_INTEGER_SIGN_NONE &&
-           type.integer_rank == MINIC_INTEGER_RANK_NONE && type.pointer_depth == 0U;
+           type.integer_rank == MINIC_INTEGER_RANK_NONE && !type.is_plain_char &&
+           type.pointer_depth == 0U;
 }
 
 bool minic_type_is_integer(MinicType type) {
@@ -219,11 +243,15 @@ bool minic_type_is_integer(MinicType type) {
            (type.integer_rank == MINIC_INTEGER_RANK_CHAR ||
             type.integer_rank == MINIC_INTEGER_RANK_INT ||
             type.integer_rank == MINIC_INTEGER_RANK_LONG) &&
-           type.pointer_depth == 0U;
+           minic_type_plain_char_identity_is_valid(type) && type.pointer_depth == 0U;
 }
 
 bool minic_type_is_char_integer(MinicType type) {
     return minic_type_is_integer(type) && type.integer_rank == MINIC_INTEGER_RANK_CHAR;
+}
+
+bool minic_type_is_plain_char(MinicType type) {
+    return minic_type_is_char_integer(type) && type.is_plain_char;
 }
 
 bool minic_type_is_long_integer(MinicType type) {
@@ -242,14 +270,16 @@ bool minic_type_is_record(MinicType type) {
     return type.base_kind == MINIC_TYPE_BASE_RECORD && type.record_id != MINIC_RECORD_INVALID &&
            type.array_type_id == MINIC_ARRAY_TYPE_INVALID &&
            type.integer_sign == MINIC_INTEGER_SIGN_NONE &&
-           type.integer_rank == MINIC_INTEGER_RANK_NONE && type.pointer_depth == 0U;
+           type.integer_rank == MINIC_INTEGER_RANK_NONE && !type.is_plain_char &&
+           type.pointer_depth == 0U;
 }
 
 bool minic_type_is_array(MinicType type) {
     return type.base_kind == MINIC_TYPE_BASE_ARRAY && type.record_id == MINIC_RECORD_INVALID &&
            type.array_type_id != MINIC_ARRAY_TYPE_INVALID &&
            type.integer_sign == MINIC_INTEGER_SIGN_NONE &&
-           type.integer_rank == MINIC_INTEGER_RANK_NONE && type.pointer_depth == 0U;
+           type.integer_rank == MINIC_INTEGER_RANK_NONE && !type.is_plain_char &&
+           type.pointer_depth == 0U;
 }
 
 bool minic_type_is_pointer(MinicType type) {

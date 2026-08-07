@@ -104,11 +104,7 @@ bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type) {
                 minic_parser_error(parser, "signed char is not supported");
                 return false;
             }
-            if (!saw_unsigned) {
-                minic_parser_error(parser, "expected type name");
-                return false;
-            }
-            parsed_type = minic_type_unsigned_char();
+            parsed_type = saw_unsigned ? minic_type_unsigned_char() : minic_type_char();
         } else if (saw_long) {
             parsed_type = saw_unsigned ? minic_type_unsigned_long() : minic_type_long();
         } else {

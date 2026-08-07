@@ -559,6 +559,7 @@ bool minic_parser_add_default_return(MinicParser *parser) {
 static bool token_starts_local_declaration(const MinicParser *parser) {
     switch (parser->current.kind) {
     case MINIC_TOKEN_KW_CONST:
+    case MINIC_TOKEN_KW_CHAR:
     case MINIC_TOKEN_KW_INT:
     case MINIC_TOKEN_KW_LONG:
     case MINIC_TOKEN_KW_SIGNED:

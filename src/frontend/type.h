@@ -41,11 +41,13 @@ typedef struct MinicType {
     MinicArrayTypeId array_type_id;
     MinicIntegerSign integer_sign;
     MinicIntegerRank integer_rank;
+    bool is_plain_char;
     unsigned int base_qualifiers;
     unsigned int pointer_depth;
 } MinicType;
 
 MinicType minic_type_void(void);
+MinicType minic_type_char(void);
 MinicType minic_type_unsigned_char(void);
 MinicType minic_type_int(void);
 MinicType minic_type_unsigned_int(void);
@@ -65,6 +67,7 @@ bool minic_type_is_const(MinicType type);
 bool minic_type_is_void(MinicType type);
 bool minic_type_is_integer(MinicType type);
 bool minic_type_is_char_integer(MinicType type);
+bool minic_type_is_plain_char(MinicType type);
 bool minic_type_is_long_integer(MinicType type);
 bool minic_type_is_signed_integer(MinicType type);
 bool minic_type_is_unsigned_integer(MinicType type);

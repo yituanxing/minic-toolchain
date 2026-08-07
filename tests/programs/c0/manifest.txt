@@ -41,3 +41,4 @@ unsigned_char_layout
 hexadecimal_expression
 long_integer_semantics
 self_referential_record
+plain_char_semantics

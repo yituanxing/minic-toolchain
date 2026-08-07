@@ -99,6 +99,7 @@ verify_preprocessed_line 1 'typedef long unsigned int size_t;'
 verify_preprocessed_line 2 'typedef struct cJSON'
 verify_preprocessed_line 4 '    struct cJSON *next;'
 verify_preprocessed_line 8 '    char *valuestring;'
+verify_preprocessed_line 10 '    double valuedouble;'
 
 set +e
 "$minic" -S "$preprocessed" -o "$work/cJSON.s" \
@@ -114,7 +115,7 @@ fi
 
 first_error=$(sed -n '/error:/p' "$diagnostic" | sed -n '1p')
 case "$first_error" in
-    *':8:10: error: expected type name')
+    *':10:5: error: expected type name')
         ;;
     *)
         printf '%s\n' \
@@ -125,4 +126,4 @@ case "$first_error" in
 esac
 
 printf '%s\n' \
-    'PASS external/cjson frontier=plain-char-type-specifier diagnostic=expected-type-name source=cJSON-1.7.19 offline=1'
+    'PASS external/cjson frontier=double-type-specifier diagnostic=expected-type-name source=cJSON-1.7.19 offline=1'
