@@ -28,6 +28,7 @@ static bool remap_non_cast_expression(MinicExpression *expression,
     }
     switch (expression->kind) {
     case MINIC_EXPRESSION_INTEGER:
+    case MINIC_EXPRESSION_FLOATING:
     case MINIC_EXPRESSION_LOCAL:
     case MINIC_EXPRESSION_GLOBAL_OBJECT:
         return true;
