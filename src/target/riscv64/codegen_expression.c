@@ -29,6 +29,34 @@ static bool minic_riscv64_emit_integer_result_conversion(FILE *file,
            minic_riscv64_emit_integer_conversion(file, result_type, register_name);
 }
 
+static bool minic_riscv64_emit_double_binary(FILE *file, MinicBinaryOperator operator_kind) {
+    const char *instruction;
+
+    switch (operator_kind) {
+    case MINIC_BINARY_ADD:
+        instruction = "fadd.d";
+        break;
+    case MINIC_BINARY_SUBTRACT:
+        instruction = "fsub.d";
+        break;
+    case MINIC_BINARY_MULTIPLY:
+        instruction = "fmul.d";
+        break;
+    case MINIC_BINARY_DIVIDE:
+        instruction = "fdiv.d";
+        break;
+    default:
+        return false;
+    }
+
+    return fprintf(file,
+                   "  fmv.d.x ft0, t0\n"
+                   "  fmv.d.x ft1, a0\n"
+                   "  %s ft0, ft0, ft1\n"
+                   "  fmv.x.d a0, ft0\n",
+                   instruction) >= 0;
+}
+
 static bool minic_riscv64_emit_scale_register(FILE *file,
                                               const char *register_name,
                                               const char *scratch_register,
@@ -304,6 +332,10 @@ bool minic_riscv64_emit_expression(FILE *file,
              !minic_riscv64_emit_normalize_integer(file, common_integer_type, "a0")) ||
             fprintf(file, "  ld t0, 0(sp)\n  addi sp, sp, 16\n") < 0) {
             return false;
+        }
+        if (minic_type_is_double(left->type) && minic_type_is_double(right->type) &&
+            minic_type_is_double(expression->type)) {
+            return minic_riscv64_emit_double_binary(file, expression->value.binary.operator_kind);
         }
         switch (expression->value.binary.operator_kind) {
         case MINIC_BINARY_ADD:
