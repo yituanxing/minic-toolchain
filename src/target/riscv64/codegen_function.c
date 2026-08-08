@@ -323,10 +323,25 @@ bool minic_riscv64_write_c0_program(const char *path,
                 const MinicStatement *failed_statement;
                 const MinicExpression *target;
                 const MinicExpression *value;
+                const MinicExpression *member_base;
+                const MinicLocal *target_local;
+                const MinicLocal *base_local;
 
                 failed_statement = &program->statements[1482U];
                 target = minic_c0_program_expression(program, failed_statement->target_expression);
                 value = minic_c0_program_expression(program, failed_statement->expression);
+                member_base =
+                    value != NULL && value->kind == MINIC_EXPRESSION_MEMBER
+                        ? minic_c0_program_expression(program, value->value.member.base)
+                        : NULL;
+                target_local =
+                    target != NULL && target->kind == MINIC_EXPRESSION_LOCAL
+                        ? minic_c0_program_local(program, target->value.local_id)
+                        : NULL;
+                base_local =
+                    member_base != NULL && member_base->kind == MINIC_EXPRESSION_LOCAL
+                        ? minic_c0_program_local(program, member_base->value.local_id)
+                        : NULL;
                 fprintf(stderr,
                         "CODEGEN_DETAIL statement=1482 kind=%d target=%zu target_kind=%d "
                         "target_cat=%d target_int=%d target_ptr=%d target_float=%d target_double=%d "
@@ -347,6 +362,32 @@ bool minic_riscv64_write_c0_program(const char *path,
                         value != NULL ? (int)minic_type_is_pointer(value->type) : -1,
                         value != NULL ? (int)minic_type_is_float(value->type) : -1,
                         value != NULL ? (int)minic_type_is_double(value->type) : -1);
+                fprintf(stderr,
+                        "CODEGEN_MEMBER field=%zu record=%zu base=%zu base_kind=%d base_cat=%d "
+                        "base_local=%zu base_storage=%zu target_local=%zu target_storage=%zu "
+                        "function_local_begin=%zu function_local_count=%zu function_storage=%zu\n",
+                        value != NULL && value->kind == MINIC_EXPRESSION_MEMBER
+                            ? value->value.member.field_index
+                            : (size_t)-1,
+                        value != NULL && value->kind == MINIC_EXPRESSION_MEMBER
+                            ? (size_t)value->value.member.record_id
+                            : (size_t)-1,
+                        value != NULL && value->kind == MINIC_EXPRESSION_MEMBER
+                            ? (size_t)value->value.member.base
+                            : (size_t)-1,
+                        member_base != NULL ? (int)member_base->kind : -1,
+                        member_base != NULL ? (int)member_base->value_category : -1,
+                        member_base != NULL && member_base->kind == MINIC_EXPRESSION_LOCAL
+                            ? (size_t)member_base->value.local_id
+                            : (size_t)-1,
+                        base_local != NULL ? base_local->storage_offset : (size_t)-1,
+                        target != NULL && target->kind == MINIC_EXPRESSION_LOCAL
+                            ? (size_t)target->value.local_id
+                            : (size_t)-1,
+                        target_local != NULL ? target_local->storage_offset : (size_t)-1,
+                        function->local_begin,
+                        function->local_count,
+                        function->local_storage_size);
             }
         }
     }
