@@ -1,0 +1,105 @@
+name: PR71 Variadic Double
+
+on:
+  push:
+    branches:
+      - frontend/additive-update-pointer-difference
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Add variadic double support
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              file = Path(path)
+              text = file.read_text()
+              if text.count(old) != 1:
+                  raise SystemExit(f'{path}: replacement site count={text.count(old)}')
+              file.write_text(text.replace(old, new, 1))
+
+          replace_once(
+              'src/frontend/parser_expression.c',
+              '''static bool variadic_argument_type_supported(MinicType type) {
+              return minic_type_is_integer(type) || minic_type_is_pointer(type);
+          }''',
+              '''static bool variadic_argument_type_supported(MinicType type) {
+              return minic_type_is_integer(type) || minic_type_is_pointer(type) ||
+                     minic_type_is_double(type);
+          }''')
+
+          replace_once(
+              'src/frontend/ast_verifier.c',
+              '''        } else if (!minic_type_is_integer(argument->type) &&
+                         !minic_type_is_pointer(argument->type)) {
+                  return false;
+              }''',
+              '''        } else if (!minic_type_is_integer(argument->type) &&
+                         !minic_type_is_pointer(argument->type) &&
+                         !minic_type_is_double(argument->type)) {
+                  return false;
+              }''')
+
+          replace_once(
+              'src/target/riscv64/codegen_expression.c',
+              '''static bool minic_riscv64_emit_variadic_argument_conversion(FILE *file, MinicType type) {
+              if (minic_type_is_pointer(type)) {
+                  return true;
+              }
+              if (!minic_type_is_integer(type)) {
+                  return false;
+              }
+              if (minic_type_is_long_integer(type)) {
+                  return true;
+              }
+              return fprintf(file, "  addiw a0, a0, 0\\n") >= 0;
+          }''',
+              '''static bool minic_riscv64_emit_variadic_argument_conversion(FILE *file, MinicType type) {
+              if (minic_type_is_pointer(type) || minic_type_is_double(type)) {
+                  return true;
+              }
+              if (!minic_type_is_integer(type)) {
+                  return false;
+              }
+              if (minic_type_is_long_integer(type)) {
+                  return true;
+              }
+              return fprintf(file, "  addiw a0, a0, 0\\n") >= 0;
+          }''')
+          PY
+          clang-format-18 -i \
+            src/frontend/parser_expression.c \
+            src/frontend/ast_verifier.c \
+            src/target/riscv64/codegen_expression.c
+
+      - name: Host validation
+        run: make -j2 BUILD_DIR=build/pr71-variadic-double check
+
+      - name: RV64 variadic ABI validation
+        env:
+          MINIC: build/pr71-variadic-double/bin/minic
+          REQUIRE_RISCV_RUNTIME: 1
+        run: tests/compiler/c0/run-variadic-direct-calls.sh
+
+      - name: Commit generated sources
+        env:
+          BRANCH: frontend/additive-update-pointer-difference
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add \
+            src/frontend/parser_expression.c \
+            src/frontend/ast_verifier.c \
+            src/target/riscv64/codegen_expression.c
+          git rm .github/workflows/pr71-variadic-double.yml
+          git commit -m 'target: support double variadic arguments on RV64'
+          git push origin HEAD:"$BRANCH"
