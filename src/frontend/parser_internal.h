@@ -9,11 +9,20 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+#define MINIC_PARSER_MAX_SWITCH_DEPTH 16U
+#define MINIC_PARSER_MAX_SWITCH_CASES 128U
+
 typedef struct MinicParserLocalBinding {
     MinicSourceSpan name_span;
     MinicLocalId local_id;
     MinicGlobalObjectId global_object_id;
 } MinicParserLocalBinding;
+
+typedef struct MinicParserSwitchContext {
+    int case_values[MINIC_PARSER_MAX_SWITCH_CASES];
+    size_t case_count;
+    bool has_default;
+} MinicParserSwitchContext;
 
 typedef struct MinicParser {
     const char *path;
@@ -26,6 +35,8 @@ typedef struct MinicParser {
     MinicFunctionId current_function;
     size_t local_begin;
     size_t loop_depth;
+    size_t switch_depth;
+    MinicParserSwitchContext switch_contexts[MINIC_PARSER_MAX_SWITCH_DEPTH];
 
     MinicParserLocalBinding *local_bindings;
     size_t local_binding_count;

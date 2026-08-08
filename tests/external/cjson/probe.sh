@@ -175,6 +175,7 @@ verify_preprocessed_line 187 '        global_hooks.allocate = malloc;'
 verify_preprocessed_line 193 '    if (hooks->malloc_fn != ((void *)0))'
 verify_preprocessed_line 255 '    double number = 0;'
 verify_preprocessed_line 268 '        switch (((input_buffer)->content + (input_buffer)->offset)[i])'
+verify_preprocessed_line 284 '                number_string_length++;'
 
 set +e
 "$minic" -S "$preprocessed" -o "$work/cJSON.s" \
@@ -190,7 +191,7 @@ fi
 
 first_error=$(sed -n '/error:/p' "$diagnostic" | sed -n '1p')
 case "$first_error" in
-    *":268:16: error: call to function not yet declared")
+    *":284:37: error: expected ';' after expression")
         ;;
     *)
         printf '%s\n' \
@@ -201,4 +202,4 @@ case "$first_error" in
 esac
 
 printf '%s\n' \
-    'PASS external/cjson frontier=switch-control-flow diagnostic=call-not-declared source=cJSON-1.7.19 offline=1'
+    'PASS external/cjson frontier=postfix-update-expression diagnostic=expected-semicolon source=cJSON-1.7.19 offline=1'

@@ -1,12 +1,32 @@
 #include "target/riscv64/codegen_internal.h"
 
+#include <string.h>
+
+typedef enum MinicBreakTargetKind {
+    MINIC_BREAK_TARGET_NONE = 0,
+    MINIC_BREAK_TARGET_WHILE,
+    MINIC_BREAK_TARGET_SWITCH
+} MinicBreakTargetKind;
+
+typedef struct MinicBreakTarget {
+    MinicBreakTargetKind kind;
+    size_t label;
+} MinicBreakTarget;
+
+#define MINIC_RISCV64_MAX_SWITCH_CASES 128U
+
+typedef struct MinicSwitchLabels {
+    MinicStatementId cases[MINIC_RISCV64_MAX_SWITCH_CASES];
+    size_t case_count;
+    MinicStatementId default_statement;
+} MinicSwitchLabels;
+
 static bool minic_riscv64_emit_block_with_break_target(FILE *file,
                                                        const MinicC0Program *program,
                                                        const MinicFunction *function,
                                                        MinicBlockId block_id,
                                                        size_t *label_counter,
-                                                       bool has_break_target,
-                                                       size_t break_target_label);
+                                                       MinicBreakTarget break_target);
 
 static bool
 minic_riscv64_emit_normalize_word(FILE *file, MinicType type, const char *register_name) {
@@ -97,13 +117,144 @@ static bool minic_riscv64_emit_return(FILE *file,
     return fprintf(file, "  j .L%s_return\n", function->name) >= 0;
 }
 
+static bool minic_riscv64_collect_switch_labels(const MinicC0Program *program,
+                                                MinicBlockId block_id,
+                                                MinicSwitchLabels *labels) {
+    const MinicBlock *block;
+    size_t index;
+
+    block = minic_c0_program_block(program, block_id);
+    if (block == NULL || labels == NULL) {
+        return false;
+    }
+    for (index = 0U; index < block->statement_count; ++index) {
+        MinicStatementId statement_id;
+        const MinicStatement *statement;
+
+        statement_id = block->statements[index];
+        statement = minic_c0_program_statement(program, statement_id);
+        if (statement == NULL) {
+            return false;
+        }
+        switch (statement->kind) {
+        case MINIC_STATEMENT_CASE:
+            if (labels->case_count >= MINIC_RISCV64_MAX_SWITCH_CASES) {
+                return false;
+            }
+            labels->cases[labels->case_count] = statement_id;
+            labels->case_count += 1U;
+            break;
+        case MINIC_STATEMENT_DEFAULT:
+            if (labels->default_statement != MINIC_STATEMENT_INVALID) {
+                return false;
+            }
+            labels->default_statement = statement_id;
+            break;
+        case MINIC_STATEMENT_IF:
+            if (!minic_riscv64_collect_switch_labels(program, statement->then_block, labels) ||
+                (statement->else_block != MINIC_BLOCK_INVALID &&
+                 !minic_riscv64_collect_switch_labels(program, statement->else_block, labels))) {
+                return false;
+            }
+            break;
+        case MINIC_STATEMENT_WHILE:
+            if (!minic_riscv64_collect_switch_labels(program, statement->then_block, labels)) {
+                return false;
+            }
+            break;
+        case MINIC_STATEMENT_SWITCH:
+            break;
+        case MINIC_STATEMENT_ASSIGN:
+        case MINIC_STATEMENT_XOR_ASSIGN:
+        case MINIC_STATEMENT_EXPRESSION:
+        case MINIC_STATEMENT_RETURN:
+        case MINIC_STATEMENT_BREAK:
+            break;
+        }
+    }
+    return true;
+}
+
+static bool minic_riscv64_emit_break(FILE *file, MinicBreakTarget target) {
+    switch (target.kind) {
+    case MINIC_BREAK_TARGET_WHILE:
+        return fprintf(file, "  j .Lwhile_end_%zu\n", target.label) >= 0;
+    case MINIC_BREAK_TARGET_SWITCH:
+        return fprintf(file, "  j .Lswitch_end_%zu\n", target.label) >= 0;
+    case MINIC_BREAK_TARGET_NONE:
+        return false;
+    }
+    return false;
+}
+
+static bool minic_riscv64_emit_switch(FILE *file,
+                                      const MinicC0Program *program,
+                                      const MinicFunction *function,
+                                      const MinicStatement *statement,
+                                      size_t *label_counter) {
+    MinicSwitchLabels labels;
+    MinicBreakTarget break_target;
+    const MinicExpression *selector;
+    size_t label;
+    size_t index;
+
+    (void)memset(&labels, 0, sizeof(labels));
+    labels.default_statement = MINIC_STATEMENT_INVALID;
+    selector = minic_c0_program_expression(program, statement->expression);
+    if (selector == NULL || !minic_type_is_integer(selector->type) ||
+        !minic_riscv64_collect_switch_labels(program, statement->then_block, &labels)) {
+        return false;
+    }
+
+    label = *label_counter;
+    *label_counter += 1U;
+    if (!minic_riscv64_emit_expression(file, program, function, statement->expression) ||
+        !minic_riscv64_emit_integer_conversion(file, selector->type, "a0") ||
+        fprintf(file, "  mv t0, a0\n") < 0) {
+        return false;
+    }
+    for (index = 0U; index < labels.case_count; ++index) {
+        MinicStatementId case_id;
+        const MinicStatement *case_statement;
+        const MinicExpression *case_expression;
+
+        case_id = labels.cases[index];
+        case_statement = minic_c0_program_statement(program, case_id);
+        if (case_statement == NULL) {
+            return false;
+        }
+        case_expression = minic_c0_program_expression(program, case_statement->expression);
+        if (case_expression == NULL || case_expression->kind != MINIC_EXPRESSION_INTEGER ||
+            fprintf(file,
+                    "  li t1, %d\n"
+                    "  beq t0, t1, .Lswitch_case_%zu\n",
+                    case_expression->value.integer_value,
+                    (size_t)case_id) < 0) {
+            return false;
+        }
+    }
+    if (labels.default_statement != MINIC_STATEMENT_INVALID) {
+        if (fprintf(file, "  j .Lswitch_default_%zu\n", (size_t)labels.default_statement) < 0) {
+            return false;
+        }
+    } else if (fprintf(file, "  j .Lswitch_end_%zu\n", label) < 0) {
+        return false;
+    }
+
+    break_target.kind = MINIC_BREAK_TARGET_SWITCH;
+    break_target.label = label;
+    return minic_riscv64_emit_block_with_break_target(
+               file, program, function, statement->then_block, label_counter, break_target) &&
+           fprintf(file, ".Lswitch_end_%zu:\n", label) >= 0;
+}
+
 static bool minic_riscv64_emit_statement(FILE *file,
                                          const MinicC0Program *program,
                                          const MinicFunction *function,
+                                         MinicStatementId statement_id,
                                          const MinicStatement *statement,
                                          size_t *label_counter,
-                                         bool has_break_target,
-                                         size_t break_target_label) {
+                                         MinicBreakTarget break_target) {
     if (statement == NULL) {
         return false;
     }
@@ -123,7 +274,7 @@ static bool minic_riscv64_emit_statement(FILE *file,
         return minic_riscv64_emit_return(file, program, function, statement);
 
     case MINIC_STATEMENT_BREAK:
-        return has_break_target && fprintf(file, "  j .Lwhile_end_%zu\n", break_target_label) >= 0;
+        return minic_riscv64_emit_break(file, break_target);
 
     case MINIC_STATEMENT_IF: {
         size_t label;
@@ -132,13 +283,8 @@ static bool minic_riscv64_emit_statement(FILE *file,
         *label_counter += 1U;
         if (!minic_riscv64_emit_expression(file, program, function, statement->expression) ||
             fprintf(file, "  beqz a0, .Lif_else_%zu\n", label) < 0 ||
-            !minic_riscv64_emit_block_with_break_target(file,
-                                                        program,
-                                                        function,
-                                                        statement->then_block,
-                                                        label_counter,
-                                                        has_break_target,
-                                                        break_target_label) ||
+            !minic_riscv64_emit_block_with_break_target(
+                file, program, function, statement->then_block, label_counter, break_target) ||
             fprintf(file,
                     "  j .Lif_end_%zu\n"
                     ".Lif_else_%zu:\n",
@@ -147,19 +293,15 @@ static bool minic_riscv64_emit_statement(FILE *file,
             return false;
         }
         if (statement->else_block != MINIC_BLOCK_INVALID &&
-            !minic_riscv64_emit_block_with_break_target(file,
-                                                        program,
-                                                        function,
-                                                        statement->else_block,
-                                                        label_counter,
-                                                        has_break_target,
-                                                        break_target_label)) {
+            !minic_riscv64_emit_block_with_break_target(
+                file, program, function, statement->else_block, label_counter, break_target)) {
             return false;
         }
         return fprintf(file, ".Lif_end_%zu:\n", label) >= 0;
     }
 
     case MINIC_STATEMENT_WHILE: {
+        MinicBreakTarget loop_break_target;
         size_t label;
 
         label = *label_counter;
@@ -172,14 +314,29 @@ static bool minic_riscv64_emit_statement(FILE *file,
              fprintf(file, "  beqz a0, .Lwhile_end_%zu\n", label) < 0)) {
             return false;
         }
-        return minic_riscv64_emit_block_with_break_target(
-                   file, program, function, statement->then_block, label_counter, true, label) &&
+        loop_break_target.kind = MINIC_BREAK_TARGET_WHILE;
+        loop_break_target.label = label;
+        return minic_riscv64_emit_block_with_break_target(file,
+                                                          program,
+                                                          function,
+                                                          statement->then_block,
+                                                          label_counter,
+                                                          loop_break_target) &&
                fprintf(file,
                        "  j .Lwhile_condition_%zu\n"
                        ".Lwhile_end_%zu:\n",
                        label,
                        label) >= 0;
     }
+
+    case MINIC_STATEMENT_SWITCH:
+        return minic_riscv64_emit_switch(file, program, function, statement, label_counter);
+
+    case MINIC_STATEMENT_CASE:
+        return fprintf(file, ".Lswitch_case_%zu:\n", (size_t)statement_id) >= 0;
+
+    case MINIC_STATEMENT_DEFAULT:
+        return fprintf(file, ".Lswitch_default_%zu:\n", (size_t)statement_id) >= 0;
     }
 
     return false;
@@ -190,8 +347,7 @@ static bool minic_riscv64_emit_block_with_break_target(FILE *file,
                                                        const MinicFunction *function,
                                                        MinicBlockId block_id,
                                                        size_t *label_counter,
-                                                       bool has_break_target,
-                                                       size_t break_target_label) {
+                                                       MinicBreakTarget break_target) {
     const MinicBlock *block;
     size_t index;
 
@@ -200,16 +356,13 @@ static bool minic_riscv64_emit_block_with_break_target(FILE *file,
         return false;
     }
     for (index = 0U; index < block->statement_count; ++index) {
+        MinicStatementId statement_id;
         const MinicStatement *statement;
 
-        statement = minic_c0_program_statement(program, block->statements[index]);
-        if (!minic_riscv64_emit_statement(file,
-                                          program,
-                                          function,
-                                          statement,
-                                          label_counter,
-                                          has_break_target,
-                                          break_target_label)) {
+        statement_id = block->statements[index];
+        statement = minic_c0_program_statement(program, statement_id);
+        if (!minic_riscv64_emit_statement(
+                file, program, function, statement_id, statement, label_counter, break_target)) {
             return false;
         }
     }
@@ -221,6 +374,10 @@ bool minic_riscv64_emit_block(FILE *file,
                               const MinicFunction *function,
                               MinicBlockId block_id,
                               size_t *label_counter) {
+    MinicBreakTarget break_target;
+
+    break_target.kind = MINIC_BREAK_TARGET_NONE;
+    break_target.label = 0U;
     return minic_riscv64_emit_block_with_break_target(
-        file, program, function, block_id, label_counter, false, 0U);
+        file, program, function, block_id, label_counter, break_target);
 }

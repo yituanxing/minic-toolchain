@@ -23,57 +23,48 @@ External GCC may preprocess, assemble, link, and provide CRT/libc. MiniC must co
 
 ## Accepted compiler capabilities / 已越过能力
 
-The unchanged core now crosses the previously frozen language features plus scalar conditions, generalized bounded `for` clauses, character constants, function-valued static relocations, bounded `sizeof`, indirect function calls, runtime function designators, bounded function-pointer null compatibility, local `double` storage, and integer-to-double numeric conversion.
+The unchanged core now crosses the previously frozen language features plus scalar conditions, generalized bounded `for` clauses, character constants, function-valued static relocations, bounded `sizeof`, indirect function calls, runtime function designators, bounded function-pointer null compatibility, local `double` storage, integer-to-double numeric conversion, and bounded `switch/case/default` control flow.
 
-本分支完成 **integer → double numeric conversion**，不是简单放宽类型兼容：
+本分支完成 **switch / case / default control flow**：
 
-- source `(double)integer` cast 现在合法；
-- local initialization、普通赋值、return 语境在目标为 `double`、源为整数时插入真实 parsed `CAST`；
-- normalization 将该 cast 降成独立 `MINIC_EXPRESSION_CONVERSION`，不把整数 bit pattern 当成 double；
-- RV64 按源整数 rank/sign 使用 `fcvt.d.w`、`fcvt.d.wu`、`fcvt.d.l`、`fcvt.d.lu`；
-- 转换后的 binary64 bits 通过 `fmv.x.d` 回到 C 后端既有的 `a0` raw-bits 表示；
-- `double → integer` 和 `integer → float` 仍由 focused negative gate 明确拒绝；
-- double function-call argument ABI 尚未扩大，因为它需要独立的 `fa0..fa7` ABI 能力。
+- `switch`、`case`、`default` 与 `:` 已进入正式 token 模型；
+- switch selector 当前要求整数表达式；
+- case label 当前接受已建模的单个整数/字符常量，重复 case 与重复 default 会被拒绝；
+- AST 使用独立 `SWITCH / CASE / DEFAULT` statement kind；
+- switch body 保持源码顺序，连续 case 与 fallthrough 不被改写成伪 if/else；
+- RV64 selector 只求值一次，然后 dispatch 到稳定的 case/default label；
+- `break` 不再绑定 `.Lwhile_end_*`，而是退出最内层 loop 或 switch；
+- nested switch 的 case/default 不会被外层 dispatch 收集。
 
-A permanent `integer_to_double_conversion` GCC/MiniC RV64 differential is registered as the 59th program. It checks implicit initialization/assignment/return, an explicit cast, signed/unsigned 32/64-bit conversion paths, and exact binary64 object bytes.
+A permanent `switch_control_flow` GCC/MiniC RV64 differential is registered as the 60th program. It covers selector single evaluation, adjacent cases, fallthrough, default dispatch, nested switch, and both switch-inside-loop and loop-inside-switch break targeting.
 
-永久第 59 个 differential `integer_to_double_conversion` 已在 RV64/QEMU 上通过。
+永久第 60 个 differential `switch_control_flow` 已在 RV64/QEMU 上与 GCC reference 对照通过。
 
 ## Current exact frontier / 当前精确前沿
 
-Discovery Run #956 passed source inventory, clang-format 18, Debug, Release `-Werror`, ASan/UBSan, all focused cast/null suites, all **59** permanent GCC/MiniC RV64 differential programs including `integer_to_double_conversion`, and frozen tiny-AES.
+Discovery Run #976 passed source inventory, clang-format 18, Debug, Release `-Werror`, ASan/UBSan, all focused switch tests, all **60** permanent GCC/MiniC RV64 differential programs including `switch_control_flow`, RV64 focused tests, and frozen tiny-AES. Its only failure was the intentionally stale cJSON frontier gate.
 
-The unchanged cJSON source crossed:
+Run #976 proves unchanged cJSON crossed the complete character-classification switch in `parse_number`, including adjacent character cases, fallthrough-compatible ordered labels, default dispatch, and `break`.
 
-```c
-    double number = 0;
-```
-
-and the subsequent local floating initialization path. It reached the `parse_number` dispatch:
-
-```c
-        switch (buffer_at_offset(input_buffer)[i])
-```
-
-which preprocesses to:
-
-```c
-        switch (((input_buffer)->content + (input_buffer)->offset)[i])
-```
-
-with exact first diagnostic:
+The new exact first diagnostic is:
 
 ```text
-cJSON.i:268:16: error: call to function not yet declared
+cJSON.i:284:37: error: expected ';' after expression
 ```
 
-`switch` is not yet a keyword in the C rewrite, so it is currently tokenized as an identifier and the following `(` is interpreted as an undeclared direct call. This is a new independent **switch/case/default control-flow** capability, not an integer-to-double conversion failure.
+at:
 
-当前下一能力簇因此是 **switch / case / default**。下一分支应建立真正的语法、AST/statement 表示与 RV64 control-flow lowering，并覆盖 fallthrough、`break`、default 和嵌套作用域，而不是针对 cJSON 的字符分类表做特例。
+```c
+                number_string_length++;
+```
+
+This is no longer switch control flow. MiniC already has bounded postfix `++/--` support in the special `for` update path, but ordinary postfix update expressions are not yet represented as general expression statements.
+
+当前下一能力簇因此是 **general postfix update expression semantics**，起点是普通语句中的 `number_string_length++`。它应复用已有 single-evaluation lvalue/update 经验，而不是把 `for` 专用 parser 继续复制到普通语句；后续 unchanged cJSON 再决定是否自然扩展到更一般的 update/assignment-expression 语义。
 
 ## Validation / 验证
 
-Run #956 is the discovery run proving the 59th differential and the new line-268 switch frontier. Final diff audit also restored `tests/frontend/type_test.c` to main formatting and kept only the single intended integer-to-double cast-contract assertion change. A latest-head clean run with that minimal diff and the updated line-268 probe is required before this branch is merged.
+Run #976 is the discovery run proving the 60th differential and the new line-284 postfix-update frontier. A latest-head clean run with the updated line-284 cJSON probe is required before this branch is marked Ready and Squash merged.
 
 ## Completion result / 完成标志
 

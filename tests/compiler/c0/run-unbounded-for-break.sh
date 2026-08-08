@@ -46,7 +46,7 @@ expect_failure() {
 
 expect_failure \
     invalid_break_outside_loop \
-    "break statement requires an enclosing loop"
+    "break statement requires an enclosing loop or switch"
 expect_failure \
     invalid_break_missing_semicolon \
     "expected ';' after break"
