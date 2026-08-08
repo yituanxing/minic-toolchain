@@ -198,4 +198,25 @@ diff --git a/tools/dev/pr71-update-platform.py b/tools/dev/pr71-update-platform.
 +''',
 +)
 +
-+print("staged general for-updates and library translation units")
++# Conditional expression branch conversions happen after the frontend has already validated and
++# selected a legal result type. All supported pointers use the same RV64 scalar representation,
++# so pointer-to-pointer branch conversion is a representation-preserving no-op (including
++# object-pointer/void-pointer composition and top-level qualification changes).
++replace_once(
++    "src/target/riscv64/codegen_expression.c",
++    '''    if (minic_type_equal(source_type, result_type)) {
++        return true;
++    }
++    if (minic_type_is_integer(source_type) && minic_type_is_integer(result_type)) {
++''',
++    '''    if (minic_type_equal(source_type, result_type)) {
++        return true;
++    }
++    if (minic_type_is_pointer(source_type) && minic_type_is_pointer(result_type)) {
++        return true;
++    }
++    if (minic_type_is_integer(source_type) && minic_type_is_integer(result_type)) {
++''',
++)
++
++print("staged general for-updates, library translation units, and conditional pointer lowering")
