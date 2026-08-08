@@ -614,7 +614,7 @@ static bool add_for_update_statement(MinicParser *parser,
     const MinicLocal *local;
     MinicExpressionId target_id;
     MinicExpressionId value_id;
-    MinicExpressionId one_id;
+    MinicExpressionId one;
     MinicExpressionId updated_value_id;
     MinicExpression one;
     MinicExpression updated_value;
@@ -934,8 +934,7 @@ static bool parse_label(MinicParser *parser, bool allow_declaration) {
         return false;
     }
 
-    for (statement_index = parser->function_statement_begin;
-         statement_index < label_statement_id;
+    for (statement_index = parser->function_statement_begin; statement_index < label_statement_id;
          ++statement_index) {
         MinicStatement *pending;
 
