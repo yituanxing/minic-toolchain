@@ -614,7 +614,7 @@ static bool add_for_update_statement(MinicParser *parser,
     const MinicLocal *local;
     MinicExpressionId target_id;
     MinicExpressionId value_id;
-    MinicExpressionId one;
+    MinicExpressionId one_id;
     MinicExpressionId updated_value_id;
     MinicExpression one;
     MinicExpression updated_value;
