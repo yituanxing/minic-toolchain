@@ -170,6 +170,93 @@ static bool parse_one_subscript(MinicParser *parser,
     return minic_parser_add_expression(parser, &subscript, expression_id);
 }
 
+static const MinicFunctionType *indirect_callee_type(const MinicParser *parser,
+                                                     MinicExpressionId callee_id) {
+    const MinicExpression *callee;
+    MinicType function_type;
+
+    callee = minic_c0_program_expression(parser->program, callee_id);
+    if (callee == NULL || !minic_type_pointee(callee->type, &function_type) ||
+        !minic_type_is_function(function_type)) {
+        return NULL;
+    }
+    return minic_c0_program_function_type(parser->program, function_type.function_type_id);
+}
+
+static bool parse_indirect_arguments(MinicParser *parser,
+                                     MinicExpression *call,
+                                     const MinicFunctionType *function_type) {
+    size_t argument_index;
+
+    if (function_type == NULL || function_type->parameter_count > 8U ||
+        !minic_parser_advance(parser)) {
+        return false;
+    }
+    for (argument_index = 0U; argument_index < function_type->parameter_count; ++argument_index) {
+        const MinicExpression *argument;
+        MinicExpressionId argument_id;
+
+        if (parser->current.kind == MINIC_TOKEN_RPAREN ||
+            !minic_parser_parse_expression(parser, &argument_id, 0U)) {
+            minic_parser_error(parser, "indirect call argument count does not match declaration");
+            return false;
+        }
+        argument = minic_c0_program_expression(parser->program, argument_id);
+        if (argument == NULL ||
+            !minic_type_assignment_compatible(function_type->parameter_types[argument_index],
+                                              argument->type)) {
+            minic_parser_error(parser, "indirect call argument type does not match declaration");
+            return false;
+        }
+        call->value.call.arguments[argument_index] = argument_id;
+        if (argument_index + 1U < function_type->parameter_count) {
+            if (parser->current.kind != MINIC_TOKEN_COMMA || !minic_parser_advance(parser)) {
+                minic_parser_error(parser, "indirect call argument count does not match declaration");
+                return false;
+            }
+        }
+    }
+    if (parser->current.kind != MINIC_TOKEN_RPAREN) {
+        minic_parser_error(parser, "indirect call argument count does not match declaration");
+        return false;
+    }
+    call->value.call.argument_count = function_type->parameter_count;
+    return true;
+}
+
+static bool parse_one_indirect_call(MinicParser *parser,
+                                    MinicExpressionId callee_id,
+                                    MinicExpressionId *expression_id) {
+    const MinicExpression *callee;
+    const MinicFunctionType *function_type;
+    MinicExpression call;
+    MinicSourcePosition call_end;
+
+    callee = minic_c0_program_expression(parser->program, callee_id);
+    function_type = indirect_callee_type(parser, callee_id);
+    if (callee == NULL || function_type == NULL) {
+        minic_parser_error(parser, "called expression must have function-pointer type");
+        return false;
+    }
+
+    (void)memset(&call, 0, sizeof(call));
+    call.kind = MINIC_EXPRESSION_CALL;
+    call.span.begin = callee->span.begin;
+    call.type = function_type->return_type;
+    call.value_category = MINIC_VALUE_RVALUE;
+    call.value.call.function_id = MINIC_FUNCTION_INVALID;
+    call.value.call.callee = callee_id;
+    if (!parse_indirect_arguments(parser, &call, function_type)) {
+        return false;
+    }
+    call_end = parser->current.span.end;
+    if (!minic_parser_advance(parser)) {
+        return false;
+    }
+    call.span.end = call_end;
+    return minic_parser_add_expression(parser, &call, expression_id);
+}
+
 bool minic_parser_parse_postfix(MinicParser *parser,
                                 MinicExpressionId base_id,
                                 MinicExpressionId *expression_id) {
@@ -191,6 +278,12 @@ bool minic_parser_parse_postfix(MinicParser *parser,
         }
         if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
             if (!parse_one_subscript(parser, current, &current)) {
+                return false;
+            }
+            continue;
+        }
+        if (parser->current.kind == MINIC_TOKEN_LPAREN) {
+            if (!parse_one_indirect_call(parser, current, &current)) {
                 return false;
             }
             continue;
