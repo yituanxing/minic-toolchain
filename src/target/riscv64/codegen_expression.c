@@ -579,18 +579,63 @@ bool minic_riscv64_emit_expression(FILE *file,
         return false;
     }
     case MINIC_EXPRESSION_CALL: {
-        const MinicFunction *callee;
+        const MinicFunction *direct_callee;
+        const MinicFunctionType *indirect_type;
+        const MinicExpression *indirect_callee;
+        const MinicType *parameter_types;
+        size_t parameter_count;
         size_t argument_count;
         size_t argument_index;
         size_t temporary_bytes;
+        bool is_indirect;
+        bool is_variadic;
 
-        callee = minic_c0_program_function(program, expression->value.call.function_id);
+        direct_callee = NULL;
+        indirect_type = NULL;
+        indirect_callee = NULL;
+        parameter_types = NULL;
+        parameter_count = 0U;
+        is_variadic = false;
+        is_indirect = expression->value.call.function_id == MINIC_FUNCTION_INVALID;
         argument_count = expression->value.call.argument_count;
-        if (callee == NULL || callee->name_length == 0U || callee->parameter_count > 8U ||
-            argument_count < callee->parameter_count || argument_count > 8U ||
-            (!callee->is_variadic && argument_count != callee->parameter_count)) {
-            return false;
+
+        if (is_indirect) {
+            MinicType function_type;
+
+            indirect_callee =
+                minic_c0_program_expression(program, expression->value.call.callee);
+            if (indirect_callee == NULL ||
+                !minic_type_pointee(indirect_callee->type, &function_type) ||
+                !minic_type_is_function(function_type)) {
+                return false;
+            }
+            indirect_type =
+                minic_c0_program_function_type(program, function_type.function_type_id);
+            if (indirect_type == NULL || indirect_type->parameter_count > 8U ||
+                argument_count != indirect_type->parameter_count ||
+                !minic_type_equal(expression->type, indirect_type->return_type) ||
+                !minic_riscv64_emit_expression(
+                    file, program, function, expression->value.call.callee) ||
+                fprintf(file, "  addi sp, sp, -16\n  sd a0, 0(sp)\n") < 0) {
+                return false;
+            }
+            parameter_types = indirect_type->parameter_types;
+            parameter_count = indirect_type->parameter_count;
+        } else {
+            direct_callee =
+                minic_c0_program_function(program, expression->value.call.function_id);
+            if (direct_callee == NULL || direct_callee->name_length == 0U ||
+                direct_callee->parameter_count > 8U ||
+                argument_count < direct_callee->parameter_count || argument_count > 8U ||
+                (!direct_callee->is_variadic &&
+                 argument_count != direct_callee->parameter_count)) {
+                return false;
+            }
+            parameter_types = direct_callee->parameter_types;
+            parameter_count = direct_callee->parameter_count;
+            is_variadic = direct_callee->is_variadic;
         }
+
         for (argument_index = 0U; argument_index < argument_count; ++argument_index) {
             const MinicExpression *argument;
 
@@ -601,13 +646,14 @@ bool minic_riscv64_emit_expression(FILE *file,
                     file, program, function, expression->value.call.arguments[argument_index])) {
                 return false;
             }
-            if (argument_index < callee->parameter_count) {
-                if (minic_type_is_integer(callee->parameter_types[argument_index]) &&
+            if (argument_index < parameter_count) {
+                if (minic_type_is_integer(parameter_types[argument_index]) &&
                     !minic_riscv64_emit_integer_conversion(
-                        file, callee->parameter_types[argument_index], "a0")) {
+                        file, parameter_types[argument_index], "a0")) {
                     return false;
                 }
-            } else if (!minic_riscv64_emit_variadic_argument_conversion(file, argument->type)) {
+            } else if (!is_variadic ||
+                       !minic_riscv64_emit_variadic_argument_conversion(file, argument->type)) {
                 return false;
             }
             if (fprintf(file, "  addi sp, sp, -16\n  sd a0, 0(sp)\n") < 0) {
@@ -622,13 +668,27 @@ bool minic_riscv64_emit_expression(FILE *file,
                 return false;
             }
         }
-        temporary_bytes = argument_count * 16U;
-        if (temporary_bytes != 0U && fprintf(file, "  addi sp, sp, %zu\n", temporary_bytes) < 0) {
+
+        if (is_indirect) {
+            if (fprintf(file, "  ld t0, %zu(sp)\n", argument_count * 16U) < 0) {
+                return false;
+            }
+            temporary_bytes = (argument_count + 1U) * 16U;
+        } else {
+            temporary_bytes = argument_count * 16U;
+        }
+        if (temporary_bytes != 0U &&
+            fprintf(file, "  addi sp, sp, %zu\n", temporary_bytes) < 0) {
             return false;
         }
-        if (fprintf(file, "  call %s\n", callee->name) < 0) {
+        if (is_indirect) {
+            if (fprintf(file, "  jalr ra, t0, 0\n") < 0) {
+                return false;
+            }
+        } else if (fprintf(file, "  call %s\n", direct_callee->name) < 0) {
             return false;
         }
+
         if (minic_type_is_integer(expression->type)) {
             return minic_riscv64_emit_integer_conversion(file, expression->type, "a0");
         }
