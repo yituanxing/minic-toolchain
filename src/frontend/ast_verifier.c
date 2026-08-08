@@ -304,10 +304,12 @@ static bool verify_call_arguments(const MinicC0Program *program,
             return false;
         }
         if (argument_index < parameter_count) {
-            if (!minic_type_assignment_compatible(parameter_types[argument_index], argument->type)) {
+            if (!minic_type_assignment_compatible(parameter_types[argument_index],
+                                                  argument->type)) {
                 return false;
             }
-        } else if (!minic_type_is_integer(argument->type) && !minic_type_is_pointer(argument->type)) {
+        } else if (!minic_type_is_integer(argument->type) &&
+                   !minic_type_is_pointer(argument->type)) {
             return false;
         }
     }
@@ -467,8 +469,7 @@ verify_expression(const MinicC0Program *program, size_t expression_index, MinicC
                 !minic_type_is_function(pointee)) {
                 return false;
             }
-            function_type =
-                minic_c0_program_function_type(program, pointee.function_type_id);
+            function_type = minic_c0_program_function_type(program, pointee.function_type_id);
             return function_type != NULL &&
                    minic_type_equal(expression->type, function_type->return_type) &&
                    verify_call_arguments(program,
