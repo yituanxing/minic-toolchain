@@ -352,6 +352,16 @@ bool minic_riscv64_emit_expression(FILE *file,
         return minic_riscv64_emit_object_load(file, program, function, expression->value.local_id);
     case MINIC_EXPRESSION_GLOBAL_OBJECT:
         return false;
+    case MINIC_EXPRESSION_FUNCTION: {
+        const MinicFunction *designator;
+        MinicType function_type;
+
+        designator = minic_c0_program_function(program, expression->value.function_id);
+        return designator != NULL && designator->name_length != 0U &&
+               minic_type_pointee(expression->type, &function_type) &&
+               minic_type_is_function(function_type) &&
+               fprintf(file, "  la a0, %s\n", designator->name) >= 0;
+    }
     case MINIC_EXPRESSION_SIZEOF: {
         MinicType measured_type;
         size_t alignment;
