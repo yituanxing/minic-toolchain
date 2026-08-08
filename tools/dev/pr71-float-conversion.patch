@@ -1,7 +1,7 @@
 diff --git a/tools/dev/pr71-update-platform.py b/tools/dev/pr71-update-platform.py
 --- a/tools/dev/pr71-update-platform.py
 +++ b/tools/dev/pr71-update-platform.py
-@@ -1,1 +1,108 @@
+@@ -660,1 +660,108 @@
  print("staged &=, |=, unary bitwise-not, and fixed-call int-to-double conversion")
 +
 +# cJSON CreateFloatArray explicitly casts float elements to double. Complete this path through
