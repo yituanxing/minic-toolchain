@@ -16,6 +16,12 @@ if [[ -f "$discovery_patch" ]]; then
     fi
 fi
 
+platform_update="$root/tools/dev/pr71-update-platform.py"
+if [[ -f "$platform_update" ]]; then
+    python3 "$platform_update"
+    CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+fi
+
 log_dir="$root/build/ci-logs"
 apt_cache=${APT_CACHE_DIR:-"$HOME/.cache/minic-apt/archives"}
 package_manifest="$root/tools/ci/ubuntu-24.04-packages.txt"
