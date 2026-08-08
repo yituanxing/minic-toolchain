@@ -1,9 +1,11 @@
 int main(void)
 {
     int value = 4;
-    int values[2] = {7, 11};
+    int values[2];
     unsigned char byte = 255;
 
+    values[0] = 7;
+    values[1] = 11;
     value++;
     value--;
     values[0]--;
