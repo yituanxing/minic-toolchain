@@ -1,0 +1,158 @@
+diff --git a/src/frontend/token.h b/src/frontend/token.h
+--- a/src/frontend/token.h
++++ b/src/frontend/token.h
+@@ -40,6 +40,7 @@ typedef enum MinicTokenKind {
+     MINIC_TOKEN_KW_IF,
+     MINIC_TOKEN_KW_ELSE,
+     MINIC_TOKEN_KW_WHILE,
++    MINIC_TOKEN_KW_DO,
+     MINIC_TOKEN_KW_FOR,
+     MINIC_TOKEN_KW_SWITCH,
+     MINIC_TOKEN_KW_CASE,
+diff --git a/src/frontend/token.c b/src/frontend/token.c
+--- a/src/frontend/token.c
++++ b/src/frontend/token.c
+@@ -50,6 +50,8 @@ const char *minic_token_kind_name(MinicTokenKind kind) {
+         return "else";
+     case MINIC_TOKEN_KW_WHILE:
+         return "while";
++    case MINIC_TOKEN_KW_DO:
++        return "do";
+     case MINIC_TOKEN_KW_FOR:
+         return "for";
+     case MINIC_TOKEN_KW_SWITCH:
+diff --git a/src/frontend/lexer.c b/src/frontend/lexer.c
+--- a/src/frontend/lexer.c
++++ b/src/frontend/lexer.c
+@@ -118,6 +118,9 @@ static MinicTokenKind minic_classify_identifier(const char *text, size_t length) {
+     if (length == 5U && memcmp(text, "while", 5U) == 0) {
+         return MINIC_TOKEN_KW_WHILE;
+     }
++    if (length == 2U && memcmp(text, "do", 2U) == 0) {
++        return MINIC_TOKEN_KW_DO;
++    }
+     if (length == 3U && memcmp(text, "for", 3U) == 0) {
+         return MINIC_TOKEN_KW_FOR;
+     }
+diff --git a/src/frontend/parser_statement.c b/src/frontend/parser_statement.c
+--- a/src/frontend/parser_statement.c
++++ b/src/frontend/parser_statement.c
+@@ -657,6 +657,112 @@ static bool parse_while(MinicParser *parser) {
+     return minic_parser_add_statement(parser, &statement);
+ }
+ 
++static bool parse_do_while(MinicParser *parser) {
++    MinicStatement statement;
++    MinicStatement condition_check;
++    MinicStatement break_statement;
++    MinicExpression loop_true;
++    MinicExpression negated_condition;
++    MinicStatementId continue_label;
++    MinicStatementId condition_check_id;
++    MinicStatementId break_statement_id;
++    MinicStatementId previous_continue_target;
++    MinicBlockId break_block;
++    MinicExpressionId condition_id;
++    MinicSourceSpan do_span;
++    bool success;
++
++    do_span = parser->current.span;
++    (void)memset(&statement, 0, sizeof(statement));
++    statement.kind = MINIC_STATEMENT_WHILE;
++    statement.span.begin = do_span.begin;
++    statement.target_expression = MINIC_EXPRESSION_INVALID;
++    statement.expression = MINIC_EXPRESSION_INVALID;
++    statement.then_block = MINIC_BLOCK_INVALID;
++    statement.else_block = MINIC_BLOCK_INVALID;
++
++    (void)memset(&loop_true, 0, sizeof(loop_true));
++    loop_true.kind = MINIC_EXPRESSION_INTEGER;
++    loop_true.span = do_span;
++    loop_true.type = minic_type_int();
++    loop_true.value_category = MINIC_VALUE_RVALUE;
++    loop_true.value.integer_value = 1;
++    if (!minic_parser_add_expression(parser, &loop_true, &statement.expression) ||
++        !add_internal_continue_label(parser, do_span, &continue_label) ||
++        !minic_parser_advance(parser)) {
++        return false;
++    }
++
++    previous_continue_target = parser->continue_target_statement;
++    parser->continue_target_statement = continue_label;
++    success = parse_loop_branch(parser, &statement.then_block);
++    parser->continue_target_statement = previous_continue_target;
++    if (!success || parser->current.kind != MINIC_TOKEN_KW_WHILE ||
++        !minic_c0_block_add_statement(parser->program, statement.then_block, continue_label)) {
++        if (success && parser->current.kind != MINIC_TOKEN_KW_WHILE) {
++            minic_parser_error(parser, "expected 'while' after do body");
++        }
++        return false;
++    }
++
++    if (!minic_parser_advance(parser) ||
++        !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '('") ||
++        !minic_parser_parse_expression(parser, &condition_id, 0U) ||
++        !expression_is_integer_condition(parser, condition_id) ||
++        !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')' after do-while condition") ||
++        !minic_parser_expect(parser, MINIC_TOKEN_SEMICOLON, "expected ';' after do-while")) {
++        return false;
++    }
++
++    (void)memset(&negated_condition, 0, sizeof(negated_condition));
++    negated_condition.kind = MINIC_EXPRESSION_UNARY;
++    negated_condition.span = do_span;
++    negated_condition.type = minic_type_int();
++    negated_condition.value_category = MINIC_VALUE_RVALUE;
++    negated_condition.value.unary.operator_kind = MINIC_UNARY_LOGICAL_NOT;
++    negated_condition.value.unary.operand = condition_id;
++    if (!minic_parser_add_expression(parser, &negated_condition, &condition_check.expression)) {
++        return false;
++    }
++
++    (void)memset(&break_statement, 0, sizeof(break_statement));
++    break_statement.kind = MINIC_STATEMENT_BREAK;
++    break_statement.span = do_span;
++    break_statement.target_expression = MINIC_EXPRESSION_INVALID;
++    break_statement.expression = MINIC_EXPRESSION_INVALID;
++    break_statement.target_statement = MINIC_STATEMENT_INVALID;
++    break_statement.then_block = MINIC_BLOCK_INVALID;
++    break_statement.else_block = MINIC_BLOCK_INVALID;
++    if (!minic_c0_program_add_block(parser->program, &break_block) ||
++        !minic_c0_program_add_statement(
++            parser->program, &break_statement, &break_statement_id) ||
++        !minic_c0_block_add_statement(parser->program, break_block, break_statement_id)) {
++        minic_parser_error(parser, "cannot build do-while exit block");
++        return false;
++    }
++
++    (void)memset(&condition_check, 0, sizeof(condition_check));
++    condition_check.kind = MINIC_STATEMENT_IF;
++    condition_check.span = do_span;
++    condition_check.target_expression = MINIC_EXPRESSION_INVALID;
++    condition_check.target_statement = MINIC_STATEMENT_INVALID;
++    condition_check.then_block = break_block;
++    condition_check.else_block = MINIC_BLOCK_INVALID;
++    if (!minic_c0_program_add_statement(
++            parser->program, &condition_check, &condition_check_id) ||
++        !minic_c0_block_add_statement(parser->program, statement.then_block, condition_check_id)) {
++        minic_parser_error(parser, "cannot append do-while condition check");
++        return false;
++    }
++
++    statement.span.end = parser->current.span.begin;
++    return minic_parser_add_statement(parser, &statement);
++}
++
+ static bool parse_switch(MinicParser *parser) {
+     MinicStatement statement;
+ 
+@@ -1264,6 +1370,9 @@ bool minic_parser_parse_statement(MinicParser *parser, bool allow_declaration) {
+     if (parser->current.kind == MINIC_TOKEN_KW_WHILE) {
+         return parse_while(parser);
+     }
++    if (parser->current.kind == MINIC_TOKEN_KW_DO) {
++        return parse_do_while(parser);
++    }
+     if (parser->current.kind == MINIC_TOKEN_KW_FOR) {
+         return parse_for(parser);
+     }
