@@ -4,11 +4,15 @@ set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 minic=${MINIC:-"$root/build/debug/bin/minic"}
 riscv_cc=${RISCV_CC:-riscv64-linux-gnu-gcc}
+qemu=${QEMU_RISCV64:-qemu-riscv64}
 vendor="$root/tests/vendor/cjson/upstream"
+harness="$root/tests/external/cjson/runtime_harness.c"
 work=${BUILD_DIR:-"$root/build/debug"}/tests/external/cjson
 include="$work/include"
 preprocessed="$work/cJSON.i"
+assembly="$work/cJSON.s"
 diagnostic="$work/minic.stderr"
+binary="$work/cjson-runtime"
 
 rm -rf "$work"
 mkdir -p "$include"
@@ -44,11 +48,19 @@ verify_preprocessed_line() {
 }
 
 if ! command -v "$riscv_cc" >/dev/null 2>&1; then
-    printf '%s\n' "FAIL external/cjson: missing RISC-V preprocessor $riscv_cc" >&2
+    printf '%s\n' "FAIL external/cjson: missing RISC-V compiler $riscv_cc" >&2
+    exit 1
+fi
+if ! command -v "$qemu" >/dev/null 2>&1; then
+    printf '%s\n' "FAIL external/cjson: missing RISC-V emulator $qemu" >&2
     exit 1
 fi
 if ! command -v git >/dev/null 2>&1; then
     printf '%s\n' 'FAIL external/cjson: missing git for vendor identity checks' >&2
+    exit 1
+fi
+if test ! -f "$harness"; then
+    printf '%s\n' "FAIL external/cjson: missing runtime harness $harness" >&2
     exit 1
 fi
 
@@ -184,7 +196,7 @@ verify_preprocessed_line 329 '        item->valueint = (int)number;'
 verify_preprocessed_line 332 '    input_buffer->offset += (size_t)(after_end - number_c_string);'
 
 set +e
-"$minic" -S "$preprocessed" -o "$work/cJSON.s" \
+"$minic" -S "$preprocessed" -o "$assembly" \
     >"$work/minic.stdout" 2>"$diagnostic"
 status=$?
 set -e
@@ -203,33 +215,37 @@ if test "$status" -ge 128 && test -x "$root/build/ci-sanitize/bin/minic"; then
     cat "$sanitizer_diagnostic" >&2
 fi
 
-if test "$status" -eq 0; then
-    printf '%s\n' \
-        'FAIL external/cjson: cJSON crossed the recorded frontier; advance the project gate' >&2
+if test "$status" -ne 0; then
+    printf '%s\n' "FAIL external/cjson: MiniC compile status=$status" >&2
+    cat "$diagnostic" >&2
     exit 1
 fi
 
-first_error=$(sed -n '/error:/p' "$diagnostic" | sed -n '1p')
-case "$first_error" in
-    *":332:27: error: expected expression")
-        ;;
-    *)
-        printf '%s\n' \
-            "FAIL external/cjson: unexpected first diagnostic: $first_error" >&2
-        frontier_line=$(printf '%s\n' "$first_error" | sed -n 's#.*cJSON\.i:\([0-9][0-9]*\):[0-9][0-9]*: error:.*#\1#p')
-        if test -n "$frontier_line"; then
-            start=$((frontier_line - 2))
-            end=$((frontier_line + 2))
-            if test "$start" -lt 1; then
-                start=1
-            fi
-            printf '%s\n' "cJSON frontier context lines $start-$end:" >&2
-            nl -ba "$preprocessed" | sed -n "${start},${end}p" >&2
-        fi
-        cat "$diagnostic" >&2
-        exit 1
-        ;;
-esac
+"$riscv_cc" -std=c11 -static \
+    -I"$vendor" \
+    "$assembly" "$harness" \
+    -lm \
+    -o "$binary"
 
+set +e
+"$qemu" "$binary" >"$work/runtime.stdout" 2>"$work/runtime.stderr"
+runtime_status=$?
+set -e
+
+if test "$runtime_status" -ne 0; then
+    printf '%s\n' \
+        "FAIL external/cjson: runtime acceptance exit=$runtime_status" >&2
+    if test -s "$work/runtime.stdout"; then
+        printf '%s\n' 'cJSON runtime stdout:' >&2
+        cat "$work/runtime.stdout" >&2
+    fi
+    if test -s "$work/runtime.stderr"; then
+        printf '%s\n' 'cJSON runtime stderr:' >&2
+        cat "$work/runtime.stderr" >&2
+    fi
+    exit 1
+fi
+
+object_size=$(wc -c <"$binary" | tr -d ' ')
 printf '%s\n' \
-    'PASS external/cjson frontier=compound-addition diagnostic=expected-expression source=cJSON-1.7.19 offline=1'
+    "PASS external/cjson acceptance=parse-object-array-print-roundtrip exit=0 source=cJSON-1.7.19 offline=1 object=$object_size"
