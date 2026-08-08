@@ -8,6 +8,12 @@ discovery_patch="$root/tools/dev/pr71-discovery.patch"
 if [[ -f "$discovery_patch" ]]; then
     git apply --check --recount "$discovery_patch"
     git apply --recount "$discovery_patch"
+    mapfile -t discovery_sources < <(
+        sed -n 's#^+++ b/##p' "$discovery_patch" | grep -E '\.(c|h)$' | sort -u
+    )
+    if (( ${#discovery_sources[@]} > 0 )); then
+        clang-format-18 -i "${discovery_sources[@]}"
+    fi
 fi
 
 log_dir="$root/build/ci-logs"
