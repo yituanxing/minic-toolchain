@@ -241,6 +241,18 @@ static bool verify_binary_type(const MinicC0Program *program,
         return minic_type_is_double(expression->type);
     }
 
+    if (expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT &&
+        minic_type_is_pointer(left->type) && minic_type_is_pointer(right->type)) {
+        MinicType left_pointee;
+        MinicType right_pointee;
+
+        return minic_type_equal(expression->type, minic_type_long()) &&
+               minic_type_pointee(left->type, &left_pointee) &&
+               minic_type_pointee(right->type, &right_pointee) &&
+               minic_type_equal(left_pointee, right_pointee) &&
+               type_is_complete_object(program, left_pointee);
+    }
+
     if (expression->value.binary.operator_kind == MINIC_BINARY_ADD) {
         if (minic_type_is_pointer(left->type) && minic_type_is_integer(right->type)) {
             pointer_type = left->type;
