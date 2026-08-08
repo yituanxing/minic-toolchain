@@ -261,6 +261,59 @@ static bool parse_one_indirect_call(MinicParser *parser,
     return minic_parser_add_expression(parser, &call, expression_id);
 }
 
+static bool parse_one_postfix_update(MinicParser *parser,
+                                     MinicExpressionId operand_id,
+                                     MinicExpressionId *expression_id) {
+    const MinicExpression *operand;
+    MinicExpression update;
+    MinicSourceSpan operand_span;
+    MinicSourcePosition update_end;
+    MinicType operand_type;
+    MinicType array_element_type;
+    MinicType pointee_type;
+    MinicUnaryOperator operator_kind;
+
+    operand = minic_c0_program_expression(parser->program, operand_id);
+    if (operand == NULL) {
+        minic_parser_error(parser, "invalid postfix update operand");
+        return false;
+    }
+    operand_span = operand->span;
+    operand_type = operand->type;
+    if (operand->value_category != MINIC_VALUE_LVALUE || minic_type_is_const(operand_type) ||
+        array_object_element_type(parser, operand_id, &array_element_type)) {
+        minic_parser_error(parser, "postfix update requires a modifiable scalar lvalue");
+        return false;
+    }
+    if (minic_type_is_pointer(operand_type)) {
+        if (!minic_type_pointee(operand_type, &pointee_type) ||
+            !minic_parser_require_complete_object_type(
+                parser, pointee_type, "pointer update requires a complete object type")) {
+            return false;
+        }
+    } else if (!minic_type_is_integer(operand_type)) {
+        minic_parser_error(parser, "postfix update currently requires an integer or pointer lvalue");
+        return false;
+    }
+
+    operator_kind = parser->current.kind == MINIC_TOKEN_PLUS_PLUS ? MINIC_UNARY_POST_INCREMENT
+                                                                  : MINIC_UNARY_POST_DECREMENT;
+    update_end = parser->current.span.end;
+    if (!minic_parser_advance(parser)) {
+        return false;
+    }
+
+    (void)memset(&update, 0, sizeof(update));
+    update.kind = MINIC_EXPRESSION_UNARY;
+    update.span.begin = operand_span.begin;
+    update.span.end = update_end;
+    update.type = operand_type;
+    update.value_category = MINIC_VALUE_RVALUE;
+    update.value.unary.operator_kind = operator_kind;
+    update.value.unary.operand = operand_id;
+    return minic_parser_add_expression(parser, &update, expression_id);
+}
+
 bool minic_parser_parse_postfix(MinicParser *parser,
                                 MinicExpressionId base_id,
                                 MinicExpressionId *expression_id) {
@@ -288,6 +341,13 @@ bool minic_parser_parse_postfix(MinicParser *parser,
         }
         if (parser->current.kind == MINIC_TOKEN_LPAREN) {
             if (!parse_one_indirect_call(parser, current, &current)) {
+                return false;
+            }
+            continue;
+        }
+        if (parser->current.kind == MINIC_TOKEN_PLUS_PLUS ||
+            parser->current.kind == MINIC_TOKEN_MINUS_MINUS) {
+            if (!parse_one_postfix_update(parser, current, &current)) {
                 return false;
             }
             continue;
