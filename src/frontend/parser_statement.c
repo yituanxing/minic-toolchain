@@ -404,6 +404,29 @@ static bool parse_loop_branch(MinicParser *parser, MinicBlockId *block_id) {
     return success;
 }
 
+static bool parse_switch_branch(MinicParser *parser, MinicBlockId *block_id) {
+    MinicParserSwitchContext *context;
+    bool success;
+
+    if (parser->switch_depth >= MINIC_PARSER_MAX_SWITCH_DEPTH) {
+        minic_parser_error(parser, "switch nesting exceeds implementation limit");
+        return false;
+    }
+    context = &parser->switch_contexts[parser->switch_depth];
+    (void)memset(context, 0, sizeof(*context));
+    parser->switch_depth += 1U;
+    success = parse_branch(parser, block_id);
+    parser->switch_depth -= 1U;
+    return success;
+}
+
+static MinicParserSwitchContext *current_switch_context(MinicParser *parser) {
+    if (parser->switch_depth == 0U) {
+        return NULL;
+    }
+    return &parser->switch_contexts[parser->switch_depth - 1U];
+}
+
 static bool expression_is_integer_condition(MinicParser *parser, MinicExpressionId expression_id) {
     const MinicExpression *expression;
 
@@ -411,6 +434,17 @@ static bool expression_is_integer_condition(MinicParser *parser, MinicExpression
     if (expression == NULL ||
         (!minic_type_is_integer(expression->type) && !minic_type_is_pointer(expression->type))) {
         minic_parser_error(parser, "condition requires an integer or pointer expression");
+        return false;
+    }
+    return true;
+}
+
+static bool expression_is_switch_selector(MinicParser *parser, MinicExpressionId expression_id) {
+    const MinicExpression *expression;
+
+    expression = minic_c0_program_expression(parser->program, expression_id);
+    if (expression == NULL || !minic_type_is_integer(expression->type)) {
+        minic_parser_error(parser, "switch selector requires an integer expression");
         return false;
     }
     return true;
@@ -459,6 +493,112 @@ static bool parse_while(MinicParser *parser) {
         !expression_is_integer_condition(parser, statement.expression) ||
         !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')'") ||
         !parse_loop_branch(parser, &statement.then_block)) {
+        return false;
+    }
+    statement.span.end = parser->current.span.begin;
+    return minic_parser_add_statement(parser, &statement);
+}
+
+static bool parse_switch(MinicParser *parser) {
+    MinicStatement statement;
+
+    (void)memset(&statement, 0, sizeof(statement));
+    statement.kind = MINIC_STATEMENT_SWITCH;
+    statement.span.begin = parser->current.span.begin;
+    statement.target_expression = MINIC_EXPRESSION_INVALID;
+    statement.expression = MINIC_EXPRESSION_INVALID;
+    statement.then_block = MINIC_BLOCK_INVALID;
+    statement.else_block = MINIC_BLOCK_INVALID;
+
+    if (!minic_parser_advance(parser) ||
+        !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '('") ||
+        !minic_parser_parse_expression(parser, &statement.expression, 0U) ||
+        !expression_is_switch_selector(parser, statement.expression) ||
+        !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')'") ||
+        !parse_switch_branch(parser, &statement.then_block)) {
+        return false;
+    }
+    statement.span.end = parser->current.span.begin;
+    return minic_parser_add_statement(parser, &statement);
+}
+
+static bool parse_case(MinicParser *parser) {
+    MinicParserSwitchContext *context;
+    MinicStatement statement;
+    const MinicExpression *constant;
+    int value;
+    size_t index;
+
+    context = current_switch_context(parser);
+    if (context == NULL) {
+        minic_parser_error(parser, "case label requires an enclosing switch");
+        return false;
+    }
+
+    (void)memset(&statement, 0, sizeof(statement));
+    statement.kind = MINIC_STATEMENT_CASE;
+    statement.span.begin = parser->current.span.begin;
+    statement.target_expression = MINIC_EXPRESSION_INVALID;
+    statement.expression = MINIC_EXPRESSION_INVALID;
+    statement.then_block = MINIC_BLOCK_INVALID;
+    statement.else_block = MINIC_BLOCK_INVALID;
+
+    if (!minic_parser_advance(parser) ||
+        !minic_parser_parse_expression(parser, &statement.expression, 0U)) {
+        return false;
+    }
+    constant = minic_c0_program_expression(parser->program, statement.expression);
+    if (constant == NULL || constant->kind != MINIC_EXPRESSION_INTEGER ||
+        !minic_type_is_integer(constant->type)) {
+        minic_parser_error(parser, "case label currently requires one integer constant");
+        return false;
+    }
+    value = constant->value.integer_value;
+    for (index = 0U; index < context->case_count; ++index) {
+        if (context->case_values[index] == value) {
+            minic_parser_error(parser, "duplicate case value");
+            return false;
+        }
+    }
+    if (context->case_count >= MINIC_PARSER_MAX_SWITCH_CASES) {
+        minic_parser_error(parser, "switch case count exceeds implementation limit");
+        return false;
+    }
+    context->case_values[context->case_count] = value;
+    context->case_count += 1U;
+
+    if (!minic_parser_expect(parser, MINIC_TOKEN_COLON, "expected ':' after case value")) {
+        return false;
+    }
+    statement.span.end = parser->current.span.begin;
+    return minic_parser_add_statement(parser, &statement);
+}
+
+static bool parse_default(MinicParser *parser) {
+    MinicParserSwitchContext *context;
+    MinicStatement statement;
+
+    context = current_switch_context(parser);
+    if (context == NULL) {
+        minic_parser_error(parser, "default label requires an enclosing switch");
+        return false;
+    }
+    if (context->has_default) {
+        minic_parser_error(parser, "duplicate default label");
+        return false;
+    }
+    context->has_default = true;
+
+    (void)memset(&statement, 0, sizeof(statement));
+    statement.kind = MINIC_STATEMENT_DEFAULT;
+    statement.span.begin = parser->current.span.begin;
+    statement.target_expression = MINIC_EXPRESSION_INVALID;
+    statement.expression = MINIC_EXPRESSION_INVALID;
+    statement.then_block = MINIC_BLOCK_INVALID;
+    statement.else_block = MINIC_BLOCK_INVALID;
+
+    if (!minic_parser_advance(parser) ||
+        !minic_parser_expect(parser, MINIC_TOKEN_COLON, "expected ':' after default")) {
         return false;
     }
     statement.span.end = parser->current.span.begin;
@@ -684,8 +824,8 @@ static bool parse_for(MinicParser *parser) {
 static bool parse_break(MinicParser *parser) {
     MinicStatement statement;
 
-    if (parser->loop_depth == 0U) {
-        minic_parser_error(parser, "break statement requires an enclosing loop");
+    if (parser->loop_depth == 0U && parser->switch_depth == 0U) {
+        minic_parser_error(parser, "break statement requires an enclosing loop or switch");
         return false;
     }
 
@@ -832,6 +972,15 @@ bool minic_parser_parse_statement(MinicParser *parser, bool allow_declaration) {
     if (parser->current.kind == MINIC_TOKEN_KW_FOR) {
         return parse_for(parser);
     }
+    if (parser->current.kind == MINIC_TOKEN_KW_SWITCH) {
+        return parse_switch(parser);
+    }
+    if (parser->current.kind == MINIC_TOKEN_KW_CASE) {
+        return parse_case(parser);
+    }
+    if (parser->current.kind == MINIC_TOKEN_KW_DEFAULT) {
+        return parse_default(parser);
+    }
     if (parser->current.kind == MINIC_TOKEN_KW_BREAK) {
         return parse_break(parser);
     }
@@ -855,8 +1004,8 @@ bool minic_parser_parse_statement(MinicParser *parser, bool allow_declaration) {
     if (token_starts_expression(parser->current.kind)) {
         return parse_expression_or_assignment_statement(parser, true);
     }
-    minic_parser_error(
-        parser,
-        "expected compound, if, while, for, break, declaration, expression, return, or '}'");
+    minic_parser_error(parser,
+                       "expected compound, if, while, for, switch, case/default, break, "
+                       "declaration, expression, return, or '}'");
     return false;
 }
