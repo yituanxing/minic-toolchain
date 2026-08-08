@@ -7,7 +7,7 @@ static bool minic_riscv64_scalar_width(MinicType type, size_t *width) {
     if (width == NULL) {
         return false;
     }
-    if (minic_type_is_pointer(type)) {
+    if (minic_type_is_pointer(type) || minic_type_is_double(type)) {
         *width = 8U;
         return true;
     }
@@ -19,7 +19,7 @@ static bool minic_riscv64_scalar_width(MinicType type, size_t *width) {
 }
 
 static const char *minic_riscv64_load_instruction(MinicType type) {
-    if (minic_type_is_pointer(type)) {
+    if (minic_type_is_pointer(type) || minic_type_is_double(type)) {
         return "ld";
     }
     if (!minic_type_is_integer(type)) {
@@ -35,7 +35,7 @@ static const char *minic_riscv64_load_instruction(MinicType type) {
 }
 
 static const char *minic_riscv64_store_instruction(MinicType type) {
-    if (minic_type_is_pointer(type)) {
+    if (minic_type_is_pointer(type) || minic_type_is_double(type)) {
         return "sd";
     }
     if (!minic_type_is_integer(type)) {

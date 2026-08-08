@@ -23,51 +23,46 @@ External GCC may preprocess, assemble, link, and provide CRT/libc. MiniC must co
 
 ## Accepted compiler capabilities / 已越过能力
 
-The unchanged core now crosses the previously frozen language features plus scalar conditions, generalized bounded `for` clauses, character constants, function-valued static relocations, bounded `sizeof`, indirect function calls, runtime function designators, and bounded function-pointer null compatibility.
+The unchanged core now crosses the previously frozen language features plus scalar conditions, generalized bounded `for` clauses, character constants, function-valued static relocations, bounded `sizeof`, indirect function calls, runtime function designators, bounded function-pointer null compatibility, and local `double` object storage.
 
-本分支完成 **function-pointer NULL compatibility**，但没有放宽任意 object pointer / function pointer 互转：
+本分支完成 **local double object / scalar double storage**：
 
-- AST 提供统一的 expression-aware assignment/equality compatibility；
-- 裸整数 `0` 与由 pointer cast/bitcast 包裹的确定零值可识别为 null pointer value；
-- `(void *)0` 因此可用于 function-pointer 赋值与 `==`/`!=`；
-- Parser、AST verifier 和 RV64 backend 共用同一规则；
-- local initializer、assignment、return、direct/indirect call fixed arguments 都使用同一 assignment helper；
-- 非空 `void *` 到 function pointer 的赋值和比较仍被 focused negative fixtures 拒绝。
+- RV64 layout 继续使用已有通用 local slot 规则，`double` 已天然是 8-byte / 8-align；
+- statement dispatcher 将 `double` 识别为局部声明起点；
+- scalar object memory helper 将 `double` 视为 8-byte 标量；
+- C 后端继续保持既有约定：double expression 的 binary64 raw bits 存在整数寄存器 `a0`，因此内存 load/store 使用 `ld` / `sd` 保留原始位模式；
+- 进入 double arithmetic 时继续由既有 `fmv.d.x` / `fmv.x.d` 桥接到 FP 寄存器，double return ABI 继续在 `a0` bits 与 `fa0` 间转换；
+- 没有引入第二套 local FP value representation，也没有修改已稳定的 generic local layout。
 
-A permanent `function_pointer_null` GCC/MiniC RV64 differential is registered as the 57th program. It covers `(void *)0`, bare zero, reversed comparison, restoration to a real function designator, and indirect execution.
+这一点与冻结 Python 编译器的成熟结构一致：局部浮点对象仍走通用 aligned local storage + typed load/store；具体寄存器表示则遵循当前 C rewrite 已冻结的 raw-bits convention。
 
-永久第 57 个 differential `function_pointer_null` 已在 RV64/QEMU 上通过。
+A permanent `local_double_objects` GCC/MiniC RV64 differential is registered as the 58th program. It validates binary64 object representation through the standards-defined `unsigned char *` alias path and covers literal initialization, local-to-local copy, double arithmetic reassignment, and storing a double function return.
+
+永久第 58 个 differential `local_double_objects` 已在 RV64/QEMU 上通过。
 
 ## Current exact frontier / 当前精确前沿
 
-Discovery Runs #941/#944 passed source inventory, clang-format 18, Debug, Release `-Werror`, ASan/UBSan, the focused null-boundary tests, all **57** permanent GCC/MiniC RV64 differential programs, and frozen tiny-AES. Run #944 specifically proves the two non-null `void *` negative fixtures reach the intended function-pointer incompatibility boundary.
+Discovery Run #948 passed source inventory, clang-format 18, Debug, Release `-Werror`, ASan/UBSan, focused suites, all **58** permanent GCC/MiniC RV64 differential programs including `local_double_objects`, and frozen tiny-AES.
 
-The unchanged cJSON source crossed all hook-null operations, including:
-
-```c
-if (hooks->malloc_fn != NULL)
-global_hooks.reallocate = NULL;
-```
-
-and continued through `cJSON_New_Item` and `cJSON_Delete`. The new exact first diagnostic is:
-
-```text
-cJSON.i:255:5: error: expected compound, if, while, for, break, declaration, expression, return, or '}'
-```
-
-The frozen preprocessed source line is:
+The unchanged cJSON source now recognizes and lays out:
 
 ```c
     double number = 0;
 ```
 
-This is the first true local `double` object in the unchanged cJSON path. MiniC already supports double type layout, literals, basic double arithmetic, and double return ABI, but does not yet support floating local stack objects and their initialization/load/store semantics.
+but stops at the initializer with exact first diagnostic:
 
-当前下一能力簇因此是 **local double object / floating local storage**，不是控制流语法。下一分支应建立局部 `double` 的栈布局、初始化、读取和写回，并继续由 unchanged cJSON 暴露后续转换/比较需求。
+```text
+cJSON.i:255:22: error: initializer type does not match local type
+```
+
+This is no longer a local-storage problem. The source initializer is integer `0`, while MiniC currently accepts only same-floating-type assignment and deliberately rejects integer-to-double conversion. The next independent capability is therefore bounded integer-to-double scalar conversion / assignment conversion.
+
+当前下一能力簇是 **int → double conversion**。下一分支应先建立通用转换表达式/ABI lowering，并让 local initialization、assignment、return/call 等需要 assignment conversion 的语境复用，而不是只对 `double number = 0` 打特例。
 
 ## Validation / 验证
 
-Run #944 is the discovery run proving the bounded function-pointer-null semantics and the new line-255 frontier. A latest-head clean run with the updated line-255 probe is required before this branch is merged.
+Run #948 is the discovery run proving the 58th differential and the new line-255 initializer-conversion frontier. A latest-head clean run with the updated cJSON probe is required before this branch is merged.
 
 ## Completion result / 完成标志
 

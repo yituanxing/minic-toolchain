@@ -189,7 +189,7 @@ fi
 
 first_error=$(sed -n '/error:/p' "$diagnostic" | sed -n '1p')
 case "$first_error" in
-    *":255:5: error: expected compound, if, while, for, break, declaration, expression, return, or '}'")
+    *":255:22: error: initializer type does not match local type")
         ;;
     *)
         printf '%s\n' \
@@ -200,4 +200,4 @@ case "$first_error" in
 esac
 
 printf '%s\n' \
-    'PASS external/cjson frontier=local-double-object diagnostic=statement-dispatch source=cJSON-1.7.19 offline=1'
+    'PASS external/cjson frontier=int-to-double-initialization diagnostic=initializer-type source=cJSON-1.7.19 offline=1'
