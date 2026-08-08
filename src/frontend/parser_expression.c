@@ -454,17 +454,7 @@ static bool local_array_without_array_type(const MinicParser *parser,
 }
 
 static bool current_is_sizeof(const MinicParser *parser) {
-    size_t length;
-
-    if (parser->current.kind == MINIC_TOKEN_KW_SIZEOF) {
-        return true;
-    }
-    if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
-        return false;
-    }
-    length = minic_parser_span_length(parser->current.span);
-    return length == 6U &&
-           memcmp(parser->source + parser->current.span.begin.offset, "sizeof", 6U) == 0;
+    return parser->current.kind == MINIC_TOKEN_KW_SIZEOF;
 }
 
 static bool parse_sizeof(MinicParser *parser, MinicExpressionId *expression_id) {
@@ -479,7 +469,8 @@ static bool parse_sizeof(MinicParser *parser, MinicExpressionId *expression_id) 
     }
 
     if (parser->current.kind == MINIC_TOKEN_LPAREN && parenthesis_starts_cast(parser)) {
-        if (!minic_parser_advance(parser) || !minic_parser_parse_type_name(parser, &measured_type)) {
+        if (!minic_parser_advance(parser) ||
+            !minic_parser_parse_type_name(parser, &measured_type)) {
             return false;
         }
         if (parser->current.kind != MINIC_TOKEN_RPAREN) {
