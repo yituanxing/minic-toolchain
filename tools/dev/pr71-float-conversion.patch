@@ -119,4 +119,49 @@ diff --git a/tools/dev/pr71-update-platform.py b/tools/dev/pr71-update-platform.
 +""",
 +)
 +
-+print("staged float-to-double scalar conversion")
++# Conditional operands undergo lvalue conversion before result type selection. In particular,
++# reading a pointer member through a const record yields a top-level-qualified pointer lvalue;
++# the rvalue result must drop that top-level qualifier before comparing branch types.
++conditional_old = r'''static bool conditional_result_type(MinicType when_true, MinicType when_false, MinicType *result) {
++    bool has_double_operand;
++    bool has_numeric_operands;
++
++    if (result == NULL) {
++        return false;
++    }
++    if (minic_type_equal(when_true, when_false)) {
++        *result = when_true;
++        return true;
++    }
++    if (minic_type_is_integer(when_true) && minic_type_is_integer(when_false)) {
++        return minic_type_integer_common(when_true, when_false, result);
++    }
++'''
++conditional_new = r'''static bool conditional_result_type(MinicType when_true, MinicType when_false, MinicType *result) {
++    MinicType unqualified_true;
++    MinicType unqualified_false;
++    bool has_double_operand;
++    bool has_numeric_operands;
++
++    if (result == NULL) {
++        return false;
++    }
++    if (minic_type_equal(when_true, when_false)) {
++        *result = when_true;
++        return true;
++    }
++    if (minic_type_is_pointer(when_true) && minic_type_is_pointer(when_false) &&
++        minic_type_unqualified(when_true, &unqualified_true) &&
++        minic_type_unqualified(when_false, &unqualified_false) &&
++        minic_type_equal(unqualified_true, unqualified_false)) {
++        *result = unqualified_true;
++        return true;
++    }
++    if (minic_type_is_integer(when_true) && minic_type_is_integer(when_false)) {
++        return minic_type_integer_common(when_true, when_false, result);
++    }
++'''
++for conditional_path in ("src/frontend/parser_expression.c", "src/frontend/ast_verifier.c"):
++    replace_once(conditional_path, conditional_old, conditional_new)
++
++print("staged float-to-double scalar conversion and conditional pointer lvalue conversion")
