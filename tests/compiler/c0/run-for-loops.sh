@@ -47,4 +47,4 @@ expect_failure \
     "postfix update requires '++' or '--'"
 expect_failure \
     invalid_for_increment_target \
-    "for update requires a modifiable integer or pointer local"
+    "prefix update requires a modifiable integer or pointer lvalue"
