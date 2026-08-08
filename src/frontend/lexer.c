@@ -459,6 +459,9 @@ bool minic_lexer_next(MinicLexer *lexer, MinicToken *token, MinicDiagnostic *dia
         if (minic_lexer_peek_next(lexer) == '+') {
             token->kind = MINIC_TOKEN_PLUS_PLUS;
             minic_lexer_advance(lexer);
+        } else if (minic_lexer_peek_next(lexer) == '=') {
+            token->kind = MINIC_TOKEN_PLUS_EQUAL;
+            minic_lexer_advance(lexer);
         } else {
             token->kind = MINIC_TOKEN_PLUS;
         }
