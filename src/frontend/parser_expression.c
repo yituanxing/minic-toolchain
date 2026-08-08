@@ -854,7 +854,8 @@ static bool binary_result_type(const MinicC0Program *program,
         MinicType left_pointee;
         MinicType right_pointee;
 
-        if (!minic_type_pointee(left, &left_pointee) || !minic_type_pointee(right, &right_pointee) ||
+        if (!minic_type_pointee(left, &left_pointee) ||
+            !minic_type_pointee(right, &right_pointee) ||
             !minic_type_equal(left_pointee, right_pointee) ||
             !type_is_complete_object(program, left_pointee)) {
             return false;
