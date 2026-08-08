@@ -48,10 +48,11 @@ typedef enum MinicExpressionKind {
 typedef enum MinicUnaryOperator {
     MINIC_UNARY_PLUS = 0,
     MINIC_UNARY_NEGATE,
-    MINIC_UNARY_LOGICAL_NOT,
-    MINIC_UNARY_POST_INCREMENT,
-    MINIC_UNARY_POST_DECREMENT
+    MINIC_UNARY_LOGICAL_NOT
 } MinicUnaryOperator;
+
+#define MINIC_UNARY_POST_INCREMENT ((MinicUnaryOperator)3)
+#define MINIC_UNARY_POST_DECREMENT ((MinicUnaryOperator)4)
 
 typedef enum MinicBinaryOperator {
     MINIC_BINARY_ADD = 0,
