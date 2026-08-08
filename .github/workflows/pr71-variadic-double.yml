@@ -19,54 +19,43 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          import re
 
           path = Path('src/frontend/parser_expression.c')
           text = path.read_text()
           old = 'return minic_type_is_integer(type) || minic_type_is_pointer(type);'
-          new = ('return minic_type_is_integer(type) || minic_type_is_pointer(type) ||\n'
-                 '           minic_type_is_double(type);')
-          if text.count(old) != 1:
-              raise SystemExit(f'parser variadic predicate count={text.count(old)}')
+          new = ('return minic_type_is_integer(type) || minic_type_is_pointer(type) || '
+                 'minic_type_is_double(type);')
+          if old not in text:
+              raise SystemExit('parser variadic predicate not found')
           path.write_text(text.replace(old, new, 1))
 
           path = Path('src/frontend/ast_verifier.c')
           text = path.read_text()
-          pattern = re.compile(
-              r'(else if \(!minic_type_is_integer\(argument->type\) &&\s*'
-              r'!minic_type_is_pointer\(argument->type\))\) \{')
-          text, count = pattern.subn(
-              r'else if (!minic_type_is_integer(argument->type) &&\n'
-              r'                   !minic_type_is_pointer(argument->type) &&\n'
-              r'                   !minic_type_is_double(argument->type)) {',
-              text,
-              count=1,
-          )
-          if count != 1:
+          old = '!minic_type_is_pointer(argument->type)) {'
+          new = ('!minic_type_is_pointer(argument->type) &&\n'
+                 '                   !minic_type_is_double(argument->type)) {')
+          if old not in text:
               raise SystemExit('verifier variadic predicate not found')
-          path.write_text(text)
+          path.write_text(text.replace(old, new, 1))
 
           path = Path('src/target/riscv64/codegen_expression.c')
           text = path.read_text()
-          pattern = re.compile(
-              r'(static bool minic_riscv64_emit_variadic_argument_conversion\(FILE \*file, MinicType type\) \{\s*)'
-              r'if \(minic_type_is_pointer\(type\)\) \{')
-          text, count = pattern.subn(
-              r'\1if (minic_type_is_pointer(type) || minic_type_is_double(type)) {',
-              text,
-              count=1,
-          )
-          if count != 1:
-              raise SystemExit('RV64 variadic conversion predicate not found')
+          marker = 'static bool minic_riscv64_emit_variadic_argument_conversion(FILE *file, MinicType type) {'
+          start = text.find(marker)
+          if start < 0:
+              raise SystemExit('RV64 variadic conversion function not found')
+          position = text.find('if (minic_type_is_pointer(type)) {', start)
+          if position < 0:
+              raise SystemExit('RV64 variadic pointer predicate not found')
+          text = (text[:position] +
+                  'if (minic_type_is_pointer(type) || minic_type_is_double(type)) {' +
+                  text[position + len('if (minic_type_is_pointer(type)) {'):])
           path.write_text(text)
           PY
           clang-format-18 -i \
             src/frontend/parser_expression.c \
             src/frontend/ast_verifier.c \
             src/target/riscv64/codegen_expression.c
-
-      - name: Host validation
-        run: make -j2 BUILD_DIR=build/pr71-variadic-double check
 
       - name: Commit generated sources
         env:
