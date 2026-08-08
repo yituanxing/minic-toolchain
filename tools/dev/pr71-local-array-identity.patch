@@ -1,0 +1,97 @@
+diff --git a/src/frontend/ast.h b/src/frontend/ast.h
+--- a/src/frontend/ast.h
++++ b/src/frontend/ast.h
+@@ -123,6 +123,7 @@ typedef struct MinicLocal {
+     MinicType type;
+     size_t element_count;
+     size_t storage_offset;
++    bool is_array;
+ } MinicLocal;
+ 
+ typedef enum MinicStatementKind {
+diff --git a/src/frontend/parser_function.c b/src/frontend/parser_function.c
+--- a/src/frontend/parser_function.c
++++ b/src/frontend/parser_function.c
+@@ -220,6 +220,7 @@ static bool parse_function_definition(MinicParser *parser,
+             parameter_local.type = parameter_types[parameter_index];
+             parameter_local.element_count = 1U;
+             parameter_local.storage_offset = 0U;
++            parameter_local.is_array = false;
+             if (minic_parser_find_local_in_current_scope(parser, parameter_local.name_span) !=
+                 MINIC_LOCAL_INVALID) {
+                 minic_parser_error(parser, "duplicate parameter name");
+diff --git a/src/frontend/parser_statement.c b/src/frontend/parser_statement.c
+--- a/src/frontend/parser_statement.c
++++ b/src/frontend/parser_statement.c
+@@ -187,6 +187,7 @@ static bool parse_local_declarator(MinicParser *parser, MinicType base_type) {
+     local.type = declared_type;
+     local.element_count = 1U;
+     local.storage_offset = 0U;
++    local.is_array = false;
+     if (minic_parser_name_bound_in_current_scope(parser, local.name_span)) {
+         minic_parser_error(parser, "duplicate local declaration");
+         return false;
+@@ -196,6 +197,7 @@ static bool parse_local_declarator(MinicParser *parser, MinicType base_type) {
+         if (!minic_parser_advance(parser) ||
+             !minic_parser_parse_fixed_array_bound(parser, &local.element_count)) {
+             return false;
+         }
++        local.is_array = true;
+     }
+     if (!minic_c0_program_add_local(parser->program, &local, &local_id)) {
+         minic_parser_error(parser, "out of memory while adding local");
+@@ -310,7 +312,7 @@ static bool parse_static_local_array_declarator(MinicParser *parser, MinicType b
+ 
+         if (!minic_type_is_const(declared_type) || parser->current.kind != MINIC_TOKEN_EQUAL) {
+-            minic_parser_error(
+-                parser, "static local scalar currently requires const with an initializer");
++            minic_parser_error(parser,
++                               "static local object currently requires a fixed array declarator");
+             return false;
+         }
+         (void)memset(&local, 0, sizeof(local));
+diff --git a/src/frontend/parser_postfix.c b/src/frontend/parser_postfix.c
+--- a/src/frontend/parser_postfix.c
++++ b/src/frontend/parser_postfix.c
+@@ -18,7 +18,7 @@ static bool postfix_element_type(const MinicParser *parser,
+         const MinicLocal *local;
+ 
+         local = minic_c0_program_local(parser->program, base->value.local_id);
+-        if (local != NULL && local->element_count > 1U) {
++        if (local != NULL && local->is_array) {
+             *element_type = local->type;
+             return true;
+         }
+@@ -51,7 +51,7 @@ static bool array_object_element_type(const MinicParser *parser,
+         const MinicLocal *local;
+ 
+         local = minic_c0_program_local(parser->program, expression->value.local_id);
+-        if (local != NULL && local->element_count > 1U) {
++        if (local != NULL && local->is_array) {
+             *element_type = local->type;
+             return true;
+         }
+diff --git a/src/frontend/parser_expression.c b/src/frontend/parser_expression.c
+--- a/src/frontend/parser_expression.c
++++ b/src/frontend/parser_expression.c
+@@ -499,7 +499,7 @@ static bool local_array_without_array_type(const MinicParser *parser,
+         return false;
+     }
+     local = minic_c0_program_local(parser->program, expression->value.local_id);
+-    return local != NULL && local->element_count > 1U;
++    return local != NULL && local->is_array;
+ }
+ 
+ static bool current_is_sizeof(const MinicParser *parser) {
+diff --git a/src/target/riscv64/codegen_expression.c b/src/target/riscv64/codegen_expression.c
+--- a/src/target/riscv64/codegen_expression.c
++++ b/src/target/riscv64/codegen_expression.c
+@@ -267,7 +267,7 @@ static bool minic_riscv64_emit_subscript_address(FILE *file,
+         const MinicLocal *local;
+ 
+         local = minic_c0_program_local(program, base->value.local_id);
+-        base_is_array_object = local != NULL && local->element_count > 1U;
++        base_is_array_object = local != NULL && local->is_array;
+         if (base_is_array_object && !minic_type_equal(local->type, expression->type)) {
+             return false;
+         }
