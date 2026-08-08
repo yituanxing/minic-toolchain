@@ -42,6 +42,16 @@ static bool minic_riscv64_emit_integer_result_conversion(FILE *file,
            minic_riscv64_emit_integer_conversion(file, result_type, register_name);
 }
 
+static const char *minic_riscv64_integer_to_double_instruction(MinicType type) {
+    if (!minic_type_is_integer(type)) {
+        return NULL;
+    }
+    if (minic_type_is_long_integer(type)) {
+        return minic_type_is_unsigned_integer(type) ? "fcvt.d.lu" : "fcvt.d.l";
+    }
+    return minic_type_is_unsigned_integer(type) ? "fcvt.d.wu" : "fcvt.d.w";
+}
+
 static bool type_is_condition_scalar(MinicType type) {
     return minic_type_is_integer(type) || minic_type_is_pointer(type);
 }
@@ -125,6 +135,50 @@ static bool minic_riscv64_emit_double_binary(FILE *file, MinicBinaryOperator ope
                    "  %s ft0, ft0, ft1\n"
                    "  fmv.x.d a0, ft0\n",
                    instruction) >= 0;
+}
+
+static bool minic_riscv64_emit_double_comparison(FILE *file,
+                                                 MinicBinaryOperator operator_kind,
+                                                 MinicType left_type,
+                                                 MinicType right_type) {
+    const char *left_conversion;
+    const char *right_conversion;
+
+    left_conversion = minic_riscv64_integer_to_double_instruction(left_type);
+    right_conversion = minic_riscv64_integer_to_double_instruction(right_type);
+    if (minic_type_is_double(left_type)) {
+        if (fprintf(file, "  fmv.d.x ft0, t0\n") < 0) {
+            return false;
+        }
+    } else if (left_conversion == NULL ||
+               fprintf(file, "  %s ft0, t0\n", left_conversion) < 0) {
+        return false;
+    }
+    if (minic_type_is_double(right_type)) {
+        if (fprintf(file, "  fmv.d.x ft1, a0\n") < 0) {
+            return false;
+        }
+    } else if (right_conversion == NULL ||
+               fprintf(file, "  %s ft1, a0\n", right_conversion) < 0) {
+        return false;
+    }
+
+    switch (operator_kind) {
+    case MINIC_BINARY_EQUAL:
+        return fprintf(file, "  feq.d a0, ft0, ft1\n") >= 0;
+    case MINIC_BINARY_NOT_EQUAL:
+        return fprintf(file, "  feq.d a0, ft0, ft1\n  xori a0, a0, 1\n") >= 0;
+    case MINIC_BINARY_LESS:
+        return fprintf(file, "  flt.d a0, ft0, ft1\n") >= 0;
+    case MINIC_BINARY_LESS_EQUAL:
+        return fprintf(file, "  fle.d a0, ft0, ft1\n") >= 0;
+    case MINIC_BINARY_GREATER:
+        return fprintf(file, "  flt.d a0, ft1, ft0\n") >= 0;
+    case MINIC_BINARY_GREATER_EQUAL:
+        return fprintf(file, "  fle.d a0, ft1, ft0\n") >= 0;
+    default:
+        return false;
+    }
 }
 
 static bool minic_riscv64_emit_scale_register(FILE *file,
@@ -367,12 +421,9 @@ bool minic_riscv64_emit_expression(FILE *file,
             !minic_type_is_integer(operand->type)) {
             return false;
         }
-        if (minic_type_is_long_integer(operand->type)) {
-            instruction = minic_type_is_unsigned_integer(operand->type) ? "fcvt.d.lu" : "fcvt.d.l";
-        } else {
-            instruction = minic_type_is_unsigned_integer(operand->type) ? "fcvt.d.wu" : "fcvt.d.w";
-        }
-        return minic_riscv64_emit_expression(
+        instruction = minic_riscv64_integer_to_double_instruction(operand->type);
+        return instruction != NULL &&
+               minic_riscv64_emit_expression(
                    file, program, function, expression->value.unary.operand) &&
                fprintf(file,
                        "  %s ft0, a0\n"
@@ -454,6 +505,13 @@ bool minic_riscv64_emit_expression(FILE *file,
              !minic_riscv64_emit_normalize_integer(file, common_integer_type, "a0")) ||
             fprintf(file, "  ld t0, 0(sp)\n  addi sp, sp, 16\n") < 0) {
             return false;
+        }
+        if (minic_type_equal(expression->type, minic_type_int()) &&
+            (minic_type_is_double(left->type) || minic_type_is_integer(left->type)) &&
+            (minic_type_is_double(right->type) || minic_type_is_integer(right->type)) &&
+            (minic_type_is_double(left->type) || minic_type_is_double(right->type))) {
+            return minic_riscv64_emit_double_comparison(
+                file, expression->value.binary.operator_kind, left->type, right->type);
         }
         if (minic_type_is_double(left->type) && minic_type_is_double(right->type) &&
             minic_type_is_double(expression->type)) {
