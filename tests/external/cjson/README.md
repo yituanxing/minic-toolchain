@@ -23,62 +23,51 @@ External GCC may preprocess, assemble, link, and provide CRT/libc. MiniC must co
 
 ## Accepted compiler capabilities / 已越过能力
 
-The unchanged core now crosses the previously frozen language features plus scalar conditions, generalized bounded `for` clauses, character constants, function-valued static relocations, bounded `sizeof`, generic non-variadic calls through function-pointer expressions, and generic runtime function designators.
+The unchanged core now crosses the previously frozen language features plus scalar conditions, generalized bounded `for` clauses, character constants, function-valued static relocations, bounded `sizeof`, indirect function calls, runtime function designators, and bounded function-pointer null compatibility.
 
-本分支完成通用 **runtime function designator value**：
+本分支完成 **function-pointer NULL compatibility**，但没有放宽任意 object pointer / function pointer 互转：
 
-- 新增独立 `MINIC_EXPRESSION_FUNCTION`，不把函数地址伪装成整数或普通全局对象；
-- 局部变量/参数和对象继续优先遮蔽同名函数，只有未遮蔽的已声明函数在普通表达式上下文形成函数指针 rvalue；
-- 从函数声明签名构造/复用 `MinicFunctionType`，再形成 pointer-to-function；
-- direct `function(...)` 路径保持不变；
-- verifier 校验 designator 的函数指针类型与声明返回值/参数逐项一致；
-- normalization 将 designator 作为无 child 的叶节点；
-- RV64 通过 `la a0, <symbol>` 形成可重定位运行时函数地址；
-- 当前函数类型模型尚无 variadic 标记，因此 variadic function designator 保留为显式后续边界。
+- AST 提供统一的 expression-aware assignment/equality compatibility；
+- 裸整数 `0` 与由 pointer cast/bitcast 包裹的确定零值可识别为 null pointer value；
+- `(void *)0` 因此可用于 function-pointer 赋值与 `==`/`!=`；
+- Parser、AST verifier 和 RV64 backend 共用同一规则；
+- local initializer、assignment、return、direct/indirect call fixed arguments 都使用同一 assignment helper；
+- 非空 `void *` 到 function pointer 的赋值和比较仍被 focused negative fixtures 拒绝。
 
-这一规则与冻结 Python 编译器一致：local/param shadowing 优先，未遮蔽 function symbol 在表达式中直接 lower 为 symbol address。
+A permanent `function_pointer_null` GCC/MiniC RV64 differential is registered as the 57th program. It covers `(void *)0`, bare zero, reversed comparison, restoration to a real function designator, and indirect execution.
 
-A permanent `runtime_function_designators` GCC/MiniC RV64 differential is registered as the 56th program. It covers static relocation baseline, runtime function-pointer assignment, equality in both operand orders, indirect calls after reassignment, and local shadowing.
-
-永久第 56 个 differential `runtime_function_designators` 已在 RV64/QEMU 上通过。
+永久第 57 个 differential `function_pointer_null` 已在 RV64/QEMU 上通过。
 
 ## Current exact frontier / 当前精确前沿
 
-Discovery Run #937 passed source inventory, clang-format 18, Debug, Release `-Werror`, ASan/UBSan, focused suites, all **56** permanent GCC/MiniC RV64 differential programs including `runtime_function_designators`, and frozen tiny-AES.
+Discovery Runs #941/#944 passed source inventory, clang-format 18, Debug, Release `-Werror`, ASan/UBSan, the focused null-boundary tests, all **57** permanent GCC/MiniC RV64 differential programs, and frozen tiny-AES. Run #944 specifically proves the two non-null `void *` negative fixtures reach the intended function-pointer incompatibility boundary.
 
-The unchanged cJSON source crossed runtime assignments such as:
-
-```c
-global_hooks.allocate = malloc;
-global_hooks.deallocate = free;
-global_hooks.reallocate = realloc;
-```
-
-and reached the function-pointer null comparison:
+The unchanged cJSON source crossed all hook-null operations, including:
 
 ```c
 if (hooks->malloc_fn != NULL)
+global_hooks.reallocate = NULL;
 ```
 
-With the probe's C11 `NULL` definition, the preprocessed form is:
-
-```c
-if (hooks->malloc_fn != ((void *)0))
-```
-
-with exact first diagnostic:
+and continued through `cJSON_New_Item` and `cJSON_Delete`. The new exact first diagnostic is:
 
 ```text
-cJSON.i:193:40: error: binary operator requires int operands
+cJSON.i:255:5: error: expected compound, if, while, for, break, declaration, expression, return, or '}'
 ```
 
-This is a new independent capability boundary. The existing pointer-equality path permits compatible pointers and integer-zero null pointer constants, while `void *` compatibility deliberately excludes function pointers. cJSON therefore exposes the bounded function-pointer / `(void *)0` null compatibility cluster next.
+The frozen preprocessed source line is:
 
-当前下一能力簇是 **function-pointer NULL compatibility**，不是 runtime function designator 的尾巴。后续分支应明确限定 null semantics，而不是放宽任意 object-pointer / function-pointer 互转。
+```c
+    double number = 0;
+```
+
+This is the first true local `double` object in the unchanged cJSON path. MiniC already supports double type layout, literals, basic double arithmetic, and double return ABI, but does not yet support floating local stack objects and their initialization/load/store semantics.
+
+当前下一能力簇因此是 **local double object / floating local storage**，不是控制流语法。下一分支应建立局部 `double` 的栈布局、初始化、读取和写回，并继续由 unchanged cJSON 暴露后续转换/比较需求。
 
 ## Validation / 验证
 
-Run #937 is the discovery run proving the 56th differential and the new line-193 frontier. A latest-head clean run with the updated line-193 probe is required before this branch is merged.
+Run #944 is the discovery run proving the bounded function-pointer-null semantics and the new line-255 frontier. A latest-head clean run with the updated line-255 probe is required before this branch is merged.
 
 ## Completion result / 完成标志
 
