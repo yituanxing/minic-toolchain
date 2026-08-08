@@ -319,8 +319,7 @@ static bool minic_riscv64_emit_statement(FILE *file,
 
     case MINIC_STATEMENT_GOTO:
         return statement->target_statement != MINIC_STATEMENT_INVALID &&
-               fprintf(file,
-                       "  j .Lminic_user_label_%zu\n",
+               fprintf(file, "  j .Lminic_user_label_%zu\n",
                        (size_t)statement->target_statement) >= 0;
 
     case MINIC_STATEMENT_LABEL:
