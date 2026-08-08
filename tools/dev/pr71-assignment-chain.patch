@@ -1,7 +1,7 @@
 diff --git a/src/frontend/parser_statement.c b/src/frontend/parser_statement.c
 --- a/src/frontend/parser_statement.c
 +++ b/src/frontend/parser_statement.c
-@@ -526,6 +526,80 @@ static bool add_record_copy_assignments(MinicParser *parser,
+@@ -526,6 +526,84 @@ static bool add_record_copy_assignments(MinicParser *parser,
      return true;
  }
  
@@ -27,6 +27,8 @@ diff --git a/src/frontend/parser_statement.c b/src/frontend/parser_statement.c
 +    const MinicExpression *assigned_expression;
 +    MinicExpressionId right_id;
 +    MinicStatement assignment;
++    MinicSourceSpan target_span;
++    MinicType target_type;
 +
 +    if (parser == NULL || value_id == NULL || parser->current.kind != MINIC_TOKEN_EQUAL) {
 +        return false;
@@ -37,6 +39,8 @@ diff --git a/src/frontend/parser_statement.c b/src/frontend/parser_statement.c
 +                           "assignment expression currently requires a stable scalar lvalue");
 +        return false;
 +    }
++    target_span = target->span;
++    target_type = target->type;
 +
 +    if (!minic_parser_advance(parser) ||
 +        !minic_parser_parse_expression(parser, &right_id, 0U)) {
@@ -47,19 +51,19 @@ diff --git a/src/frontend/parser_statement.c b/src/frontend/parser_statement.c
 +            return false;
 +        }
 +    }
-+    if (!apply_assignment_conversion(parser, target->type, &right_id)) {
++    if (!apply_assignment_conversion(parser, target_type, &right_id)) {
 +        return false;
 +    }
 +    assigned_expression = minic_c0_program_expression(parser->program, right_id);
 +    if (assigned_expression == NULL ||
-+        !minic_c0_assignment_compatible(parser->program, target->type, right_id)) {
++        !minic_c0_assignment_compatible(parser->program, target_type, right_id)) {
 +        minic_parser_error(parser, "assignment expression type does not match target type");
 +        return false;
 +    }
 +
 +    (void)memset(&assignment, 0, sizeof(assignment));
 +    assignment.kind = MINIC_STATEMENT_ASSIGN;
-+    assignment.span.begin = target->span.begin;
++    assignment.span.begin = target_span.begin;
 +    assignment.span.end = assigned_expression->span.end;
 +    assignment.target_expression = target_id;
 +    assignment.expression = right_id;
@@ -79,7 +83,7 @@ diff --git a/src/frontend/parser_statement.c b/src/frontend/parser_statement.c
  static bool parse_expression_or_assignment_statement(MinicParser *parser,
                                                       bool allow_expression_statement) {
      MinicStatement statement;
-@@ -576,6 +650,12 @@ static bool parse_expression_or_assignment_statement(MinicParser *parser,
+@@ -576,6 +654,12 @@ static bool parse_expression_or_assignment_statement(MinicParser *parser,
          !minic_parser_parse_expression(parser, &statement.expression, 0U)) {
          return false;
      }
