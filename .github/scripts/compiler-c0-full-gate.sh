@@ -6,7 +6,8 @@ cd "$root"
 
 for discovery_patch in \
     "$root/tools/dev/pr71-discovery.patch" \
-    "$root/tools/dev/pr71-record-copy.patch"; do
+    "$root/tools/dev/pr71-record-copy.patch" \
+    "$root/tools/dev/pr71-local-array-identity.patch"; do
     if [[ -f "$discovery_patch" ]]; then
         git apply --check --recount "$discovery_patch"
         git apply --recount "$discovery_patch"
