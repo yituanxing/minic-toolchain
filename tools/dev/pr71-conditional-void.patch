@@ -151,4 +151,16 @@ diff --git a/tools/dev/pr71-update-platform.py b/tools/dev/pr71-update-platform.
 +    parser_statement_text[for_update_end:]
 +)
 +
++# The old local-only updater is no longer referenced after general for-update lowering.
++parser_statement_text = parser_statement.read_text()
++legacy_update_start = parser_statement_text.find("static bool add_for_update_statement(")
++general_prefix_start = parser_statement_text.find(
++    "static bool add_general_prefix_for_update(", legacy_update_start
++)
++if legacy_update_start < 0 or general_prefix_start < 0:
++    raise RuntimeError("src/frontend/parser_statement.c: cannot locate legacy for-update helper")
++parser_statement.write_text(
++    parser_statement_text[:legacy_update_start] + parser_statement_text[general_prefix_start:]
++)
++
 +print("staged general expression and assignment for-updates")
