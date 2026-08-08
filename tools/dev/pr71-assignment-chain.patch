@@ -231,3 +231,19 @@ diff --git a/src/frontend/parser_statement.c b/src/frontend/parser_statement.c
          source_member.value_category = MINIC_VALUE_LVALUE;
          source_member.value.member.base = source_address_id;
          source_member.value.member.record_id = source_type.record_id;
++diff --git a/src/target/riscv64/codegen_statement.c b/src/target/riscv64/codegen_statement.c
++--- a/src/target/riscv64/codegen_statement.c
+++++ b/src/target/riscv64/codegen_statement.c
++@@ -411,6 +411,13 @@ static bool minic_riscv64_emit_block_with_break_target(FILE *file,
++         statement = minic_c0_program_statement(program, statement_id);
++         if (!minic_riscv64_emit_statement(
++                 file, program, function, statement_id, statement, label_counter, break_target)) {
+++            fprintf(stderr,
+++                    "CODEGEN_FAIL statement function=%s block=%zu statement=%zu kind=%d\n",
+++                    function != NULL ? function->name : "<null>",
+++                    (size_t)block_id,
+++                    (size_t)statement_id,
+++                    statement != NULL ? (int)statement->kind : -1);
++             return false;
++         }
++     }
