@@ -27,8 +27,8 @@ diff --git a/src/frontend/parser_statement.c b/src/frontend/parser_statement.c
 +        const MinicExpression *initializer;
 +
 +        if (!minic_type_is_const(declared_type) || parser->current.kind != MINIC_TOKEN_EQUAL) {
-+            minic_parser_error(
-+                parser, "static local scalar currently requires const with an initializer");
++            minic_parser_error(parser,
++                               "static local object currently requires a fixed array declarator");
 +            return false;
 +        }
 +        (void)memset(&local, 0, sizeof(local));
