@@ -158,36 +158,3 @@ diff --git a/src/frontend/parser_statement.c b/src/frontend/parser_statement.c
      if (parser->current.kind == MINIC_TOKEN_KW_FOR) {
          return parse_for(parser);
      }
-+
-+diff --git a/tools/dev/pr71-update-platform.py b/tools/dev/pr71-update-platform.py
-+--- a/tools/dev/pr71-update-platform.py
-++++ b/tools/dev/pr71-update-platform.py
-+@@ -477,1 +477,26 @@
-+ print("staged bitwise OR, >>=, pointer +=, value-context postfix, and record zero init")
-++
-++# The later bitwise discovery overlay first introduces bitwise-not as a temporary macro.
-++# Canonicalize it into the enum so Release -Wswitch remains clean, while preserving the
-++# already-used numeric ordering by moving the postfix discovery values upward.
-++bitwise_unary_enum = r'''typedef enum MinicUnaryOperator {
-++    MINIC_UNARY_PLUS = 0,
-++    MINIC_UNARY_NEGATE,
-++    MINIC_UNARY_LOGICAL_NOT
-++} MinicUnaryOperator;
-++
-++#define MINIC_UNARY_POST_INCREMENT ((MinicUnaryOperator)3)
-++#define MINIC_UNARY_POST_DECREMENT ((MinicUnaryOperator)4)
-++#define MINIC_UNARY_BITWISE_NOT ((MinicUnaryOperator)5)
-++'''
-++bitwise_unary_enum_fixed = r'''typedef enum MinicUnaryOperator {
-++    MINIC_UNARY_PLUS = 0,
-++    MINIC_UNARY_NEGATE,
-++    MINIC_UNARY_LOGICAL_NOT,
-++    MINIC_UNARY_BITWISE_NOT
-++} MinicUnaryOperator;
-++
-++#define MINIC_UNARY_POST_INCREMENT ((MinicUnaryOperator)4)
-++#define MINIC_UNARY_POST_DECREMENT ((MinicUnaryOperator)5)
-++'''
-++# This replacement executes after the later overlay inserts the temporary macro.
-++# It is intentionally deferred until runtime; see the chained patch order in the gate.
-++replace_once("src/frontend/ast.h", bitwise_unary_enum, bitwise_unary_enum_fixed)
