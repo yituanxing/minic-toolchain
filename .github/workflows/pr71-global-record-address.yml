@@ -1,0 +1,72 @@
+name: PR71 Global Record Address
+
+on:
+  push:
+    branches:
+      - frontend/additive-update-pointer-difference
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Allow address-of global record lvalues
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('src/frontend/parser_expression.c')
+          text = path.read_text()
+          old = '''static bool parse_global_reference(MinicParser *parser,
+                                           MinicSourceSpan name_span,
+                                           MinicGlobalObjectId global_object_id,
+                                           MinicExpressionId *expression_id) {'''
+          new = '''static bool parse_global_reference(MinicParser *parser,
+                                           MinicSourceSpan name_span,
+                                           MinicGlobalObjectId global_object_id,
+                                           bool allow_record_lvalue,
+                                           MinicExpressionId *expression_id) {'''
+          if text.count(old) != 1:
+              raise SystemExit('global reference signature site not found exactly once')
+          text = text.replace(old, new, 1)
+          old = '''    if (!array_object && minic_type_is_record(object->type)) {
+              if (parser->current.kind != MINIC_TOKEN_DOT) {
+                  minic_parser_error(parser, "global record object requires member access");
+                  return false;
+              }
+          } else if (!array_object) {'''
+          new = '''    if (!array_object && minic_type_is_record(object->type)) {
+              if (parser->current.kind != MINIC_TOKEN_DOT && !allow_record_lvalue) {
+                  minic_parser_error(parser, "global record object requires member access");
+                  return false;
+              }
+          } else if (!array_object) {'''
+          if text.count(old) != 1:
+              raise SystemExit('global record guard site not found exactly once')
+          text = text.replace(old, new, 1)
+          old = '''            if (!parse_global_reference(parser, name_span, global_object_id, &primary_id)) {'''
+          new = '''            if (!parse_global_reference(
+                    parser, name_span, global_object_id, !decay_array, &primary_id)) {'''
+          if text.count(old) != 1:
+              raise SystemExit('global reference call site not found exactly once')
+          path.write_text(text.replace(old, new, 1))
+          PY
+          clang-format-18 -i src/frontend/parser_expression.c
+
+      - name: Host validation
+        run: make -j2 BUILD_DIR=build/pr71-global-record-address check
+
+      - name: Commit generated source
+        env:
+          BRANCH: frontend/additive-update-pointer-difference
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/frontend/parser_expression.c
+          git rm .github/workflows/pr71-global-record-address.yml
+          git commit -m 'frontend: allow address-of global record objects'
+          git push origin HEAD:"$BRANCH"
