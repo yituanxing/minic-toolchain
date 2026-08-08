@@ -178,6 +178,23 @@ static bool type_is_condition_scalar(MinicType type) {
     return minic_type_is_integer(type) || minic_type_is_pointer(type);
 }
 
+static bool pointer_relational_compatible(const MinicC0Program *program,
+                                          MinicType left,
+                                          MinicType right) {
+    MinicType left_pointee;
+    MinicType right_pointee;
+    MinicType left_unqualified;
+    MinicType right_unqualified;
+
+    return minic_type_pointee(left, &left_pointee) &&
+           minic_type_pointee(right, &right_pointee) &&
+           minic_type_unqualified(left_pointee, &left_unqualified) &&
+           minic_type_unqualified(right_pointee, &right_unqualified) &&
+           minic_type_equal(left_unqualified, right_unqualified) &&
+           type_is_complete_object(program, left_pointee) &&
+           type_is_complete_object(program, right_pointee);
+}
+
 static bool is_normalized_integer_cast_add(const MinicExpression *expression,
                                            const MinicExpression *left,
                                            const MinicExpression *right,
@@ -212,6 +229,15 @@ static bool verify_binary_type(const MinicC0Program *program,
          expression->value.binary.operator_kind == MINIC_BINARY_NOT_EQUAL) &&
         minic_c0_pointer_equality_compatible(
             program, expression->value.binary.left, expression->value.binary.right)) {
+        return minic_type_equal(expression->type, minic_type_int());
+    }
+
+    if ((expression->value.binary.operator_kind == MINIC_BINARY_LESS ||
+         expression->value.binary.operator_kind == MINIC_BINARY_LESS_EQUAL ||
+         expression->value.binary.operator_kind == MINIC_BINARY_GREATER ||
+         expression->value.binary.operator_kind == MINIC_BINARY_GREATER_EQUAL) &&
+        minic_type_is_pointer(left->type) && minic_type_is_pointer(right->type) &&
+        pointer_relational_compatible(program, left->type, right->type)) {
         return minic_type_equal(expression->type, minic_type_int());
     }
 
