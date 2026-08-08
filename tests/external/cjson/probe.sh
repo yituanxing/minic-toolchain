@@ -202,6 +202,16 @@ case "$first_error" in
     *)
         printf '%s\n' \
             "FAIL external/cjson: unexpected first diagnostic: $first_error" >&2
+        frontier_line=$(printf '%s\n' "$first_error" | sed -n 's#.*cJSON\.i:\([0-9][0-9]*\):[0-9][0-9]*: error:.*#\1#p')
+        if test -n "$frontier_line"; then
+            start=$((frontier_line - 2))
+            end=$((frontier_line + 2))
+            if test "$start" -lt 1; then
+                start=1
+            fi
+            printf '%s\n' "cJSON frontier context lines $start-$end:" >&2
+            nl -ba "$preprocessed" | sed -n "${start},${end}p" >&2
+        fi
         cat "$diagnostic" >&2
         exit 1
         ;;
