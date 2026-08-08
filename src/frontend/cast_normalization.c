@@ -116,6 +116,21 @@ static bool append_normalized_bitcast(MinicC0Program *rewritten,
     return minic_c0_program_add_expression(rewritten, &normalized_expression, normalized_id);
 }
 
+static bool append_normalized_conversion(MinicC0Program *rewritten,
+                                         const MinicExpression *cast_expression,
+                                         MinicExpressionId mapped_operand,
+                                         MinicExpressionId *normalized_id) {
+    MinicExpression conversion;
+
+    (void)memset(&conversion, 0, sizeof(conversion));
+    conversion.kind = MINIC_EXPRESSION_CONVERSION;
+    conversion.span = cast_expression->span;
+    conversion.type = cast_expression->type;
+    conversion.value_category = MINIC_VALUE_RVALUE;
+    conversion.value.unary.operand = mapped_operand;
+    return minic_c0_program_add_expression(rewritten, &conversion, normalized_id);
+}
+
 static bool append_normalized_cast(MinicC0Program *rewritten,
                                    const MinicExpression *cast_expression,
                                    MinicExpressionId mapped_operand,
@@ -128,17 +143,12 @@ static bool append_normalized_cast(MinicC0Program *rewritten,
     }
     operand_expression = &rewritten->expressions[mapped_operand];
 
-    if (minic_type_is_double(cast_expression->type) &&
-        minic_type_is_integer(operand_expression->type)) {
-        MinicExpression conversion;
-
-        (void)memset(&conversion, 0, sizeof(conversion));
-        conversion.kind = MINIC_EXPRESSION_CONVERSION;
-        conversion.span = cast_expression->span;
-        conversion.type = cast_expression->type;
-        conversion.value_category = MINIC_VALUE_RVALUE;
-        conversion.value.unary.operand = mapped_operand;
-        return minic_c0_program_add_expression(rewritten, &conversion, normalized_id);
+    if ((minic_type_is_double(cast_expression->type) &&
+         minic_type_is_integer(operand_expression->type)) ||
+        (minic_type_is_integer(cast_expression->type) &&
+         minic_type_is_double(operand_expression->type))) {
+        return append_normalized_conversion(
+            rewritten, cast_expression, mapped_operand, normalized_id);
     }
 
     if (minic_type_is_pointer(cast_expression->type) &&
