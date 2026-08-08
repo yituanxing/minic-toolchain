@@ -4,6 +4,12 @@ set -Eeuo pipefail
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$root"
 
+discovery_patch="$root/tools/dev/pr71-discovery.patch"
+if [[ -f "$discovery_patch" ]]; then
+    git apply --check "$discovery_patch"
+    git apply "$discovery_patch"
+fi
+
 log_dir="$root/build/ci-logs"
 apt_cache=${APT_CACHE_DIR:-"$HOME/.cache/minic-apt/archives"}
 package_manifest="$root/tools/ci/ubuntu-24.04-packages.txt"
