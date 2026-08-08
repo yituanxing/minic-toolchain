@@ -23,43 +23,53 @@ External GCC may preprocess, assemble, link, and provide CRT/libc. MiniC must co
 
 ## Accepted compiler capabilities / 已越过能力
 
-The unchanged core now crosses the previously frozen language features, scalar-condition semantics, generalized bounded `for` clauses, and narrow character constants.
+The unchanged core now crosses the previously frozen language features plus scalar conditions, generalized bounded `for` clauses, character constants, function-valued static relocations, and bounded `sizeof` semantics.
 
-本分支新增窄字符常量：Lexer 保留独立 `CHARACTER_CONSTANT` token，Parser 将普通单字符和基本单字符 escape 解码为标准 C `int` rvalue，AST / verifier / RV64 继续复用既有 integer constant 路径。多字符常量以及 octal/hex escape 仍保留为后续边界。
+本分支完成 `sizeof` / no-decay 语义簇：
 
-A permanent `character_literals` GCC/MiniC RV64 differential is registered as the 52nd program. It covers `\0`, ordinary ASCII literals, newline/tab, slash/quote/question escapes, and integer-expression use.
+- Lexer 将 `sizeof` 识别为独立关键字；
+- AST 保留独立 `MINIC_EXPRESSION_SIZEOF`，记录被测类型而不是把 operand 作为运行时 child；
+- `sizeof(type-name)` 与 `sizeof unary-expression` 均受支持；
+- operand 在 array-to-pointer decay 之前保留真实对象类型；
+- local array 的既有 `element_count` 表示会在 `sizeof` 上下文重建为数组类型；
+- verifier 要求 bounded complete object type；
+- RV64 backend 通过 target layout 生成常量，不生成 operand 的运行时代码。
 
-永久 `character_literals` GCC/MiniC RV64 differential 已登记为第 52 个程序。
+这一结构与冻结 Python 编译器的成熟 `SizeOf(expr|type)` 模型一致：`sizeof` operand 是 unevaluated context，target size 在后续 lowering/layout 层确定，而不是在 Parser 中写死。
+
+A permanent `sizeof_semantics` GCC/MiniC RV64 differential is registered as the 54th program. It covers string literals, primitive integer/floating types, pointers, records, local arrays, and proves non-evaluation with `sizeof(bump(&side_effect))`.
+
+永久 `sizeof_semantics` differential 已登记为第 54 个 RV64/QEMU 程序，并验证 operand 不求值。
 
 ## Current exact frontier / 当前精确前沿
 
-Discovery Run #903 passed source inventory, clang-format 18, Debug, Release `-Werror`, ASan/UBSan, existing focused suites, all 52 permanent GCC/MiniC RV64 differential programs including `character_literals`, and frozen tiny-AES.
+Discovery Run #920 passed source inventory, clang-format 18, Debug, Release `-Werror`, ASan/UBSan, focused suites, all **54** permanent GCC/MiniC RV64 differential programs including `sizeof_semantics`, and frozen tiny-AES.
 
 The unchanged cJSON source crossed:
 
 ```c
-        if (*string1 == '\0')
+length = strlen((const char*)string) + sizeof("");
 ```
 
-and reached the function-valued static record initializer:
+and reached the function-pointer call:
 
 ```c
-static internal_hooks global_hooks = { malloc, free, realloc };
+copy = (unsigned char*)hooks->allocate(length);
 ```
 
 with exact first diagnostic:
 
 ```text
-cJSON.i:155:40: error: static pointer initializer must be null
+cJSON.i:175:43: error: expected ';'
 ```
 
-The next missing capability is therefore no longer a literal/`sizeof` issue. It is the function-value / static function-pointer initializer cluster: function designators must become pointer values and aggregate static initialization must be able to carry relocatable function addresses. `sizeof` appears later and is intentionally not pulled into this branch before real source reaches it.
+The member expression `hooks->allocate` already has the declared pointer-to-function type. The next missing capability is therefore generic postfix call on a function-pointer expression / indirect call lowering, not another cJSON-specific declaration or hook special case.
 
-Run #903 已证明字符常量在 RV64/QEMU 中通过，并将 unchanged cJSON 推进到函数地址静态初始化。下一条转入 function-value / static initializer 语义簇；本分支不因为原计划名称包含 `sizeof` 就强行提前实现它。
+当前下一能力簇是通用 **callee-expression / indirect function call**：postfix `()` 应接受函数指针表达式，调用节点应统一 direct/indirect callee，RV64 参数布置继续复用既有路径，indirect 分支最终使用 `jalr`。这一方向与冻结 Python 编译器的通用 `Call(name, args, callee)` 模型一致。
 
 ## Validation / 验证
 
-Run #903 passed every compiler/runtime gate except the intentionally stale cJSON frontier. A latest-head clean run with the updated line-155 probe is required before merge.
+Run #920 is the discovery run proving the 54th differential and the new line-175 frontier. A latest-head clean run with the updated line-175 probe is required before this branch is merged.
 
 ## Completion result / 完成标志
 

@@ -352,6 +352,18 @@ bool minic_riscv64_emit_expression(FILE *file,
         return minic_riscv64_emit_object_load(file, program, function, expression->value.local_id);
     case MINIC_EXPRESSION_GLOBAL_OBJECT:
         return false;
+    case MINIC_EXPRESSION_SIZEOF: {
+        MinicType measured_type;
+        size_t alignment;
+        size_t size;
+
+        measured_type = expression->value.sizeof_type;
+        if (!minic_type_equal(expression->type, minic_type_unsigned_long()) ||
+            !minic_riscv64_type_layout(program, measured_type, &size, &alignment)) {
+            return false;
+        }
+        return fprintf(file, "  li a0, %zu\n", size) >= 0;
+    }
     case MINIC_EXPRESSION_CAST:
         return false;
     case MINIC_EXPRESSION_BITCAST:

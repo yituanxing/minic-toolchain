@@ -53,3 +53,4 @@ scalar_conditions
 for_clause_updates
 character_literals
 static_function_relocations
+sizeof_semantics

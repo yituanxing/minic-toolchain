@@ -315,6 +315,11 @@ verify_expression(const MinicC0Program *program, size_t expression_index, MinicC
         return object != NULL && expression->value_category == MINIC_VALUE_LVALUE &&
                minic_type_equal(expression->type, object->type);
     }
+    case MINIC_EXPRESSION_SIZEOF:
+        return expression->value_category == MINIC_VALUE_RVALUE &&
+               minic_type_equal(expression->type, minic_type_unsigned_long()) &&
+               type_is_valid(program, expression->value.sizeof_type) &&
+               type_is_complete_object(program, expression->value.sizeof_type);
     case MINIC_EXPRESSION_ADDRESS_OF: {
         MinicType pointee_type;
 
