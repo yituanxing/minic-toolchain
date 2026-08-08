@@ -229,6 +229,13 @@ static bool verify_binary_type(const MinicC0Program *program,
                is_normalized_integer_cast_add(expression, left, right, form);
     }
 
+    if (binary_is_comparison(expression->value.binary.operator_kind) &&
+        (minic_type_is_double(left->type) || minic_type_is_integer(left->type)) &&
+        (minic_type_is_double(right->type) || minic_type_is_integer(right->type)) &&
+        (minic_type_is_double(left->type) || minic_type_is_double(right->type))) {
+        return minic_type_equal(expression->type, minic_type_int());
+    }
+
     if (minic_type_is_double(left->type) && minic_type_is_double(right->type) &&
         binary_is_double_arithmetic(expression->value.binary.operator_kind)) {
         return minic_type_is_double(expression->type);
