@@ -235,7 +235,7 @@ static bool expression_is_integer_zero(const MinicExpression *expression) {
 }
 
 static bool type_is_condition_scalar(MinicType type) {
-    return minic_type_is_integer(type) || minic_type_is_pointer(type) || minic_type_is_double(type);
+    return minic_type_is_integer(type) || minic_type_is_pointer(type);
 }
 
 static bool same_floating_type(MinicType left, MinicType right) {
@@ -281,7 +281,7 @@ static bool parse_cast(MinicParser *parser, MinicExpressionId *expression_id) {
 }
 
 static bool variadic_argument_type_supported(MinicType type) {
-    return minic_type_is_integer(type) || minic_type_is_pointer(type);
+    return minic_type_is_integer(type) || minic_type_is_pointer(type) || minic_type_is_double(type);
 }
 
 static bool parse_call_argument(MinicParser *parser,
