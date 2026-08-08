@@ -37,7 +37,7 @@ diff --git a/src/frontend/lexer.c b/src/frontend/lexer.c
 diff --git a/src/frontend/parser_statement.c b/src/frontend/parser_statement.c
 --- a/src/frontend/parser_statement.c
 +++ b/src/frontend/parser_statement.c
-@@ -657,6 +657,112 @@ static bool parse_while(MinicParser *parser) {
+@@ -657,6 +657,114 @@ static bool parse_while(MinicParser *parser) {
      return minic_parser_add_statement(parser, &statement);
  }
  
@@ -53,6 +53,7 @@ diff --git a/src/frontend/parser_statement.c b/src/frontend/parser_statement.c
 +    MinicStatementId previous_continue_target;
 +    MinicBlockId break_block;
 +    MinicExpressionId condition_id;
++    MinicExpressionId negated_condition_id;
 +    MinicSourceSpan do_span;
 +    bool success;
 +
@@ -105,7 +106,7 @@ diff --git a/src/frontend/parser_statement.c b/src/frontend/parser_statement.c
 +    negated_condition.value_category = MINIC_VALUE_RVALUE;
 +    negated_condition.value.unary.operator_kind = MINIC_UNARY_LOGICAL_NOT;
 +    negated_condition.value.unary.operand = condition_id;
-+    if (!minic_parser_add_expression(parser, &negated_condition, &condition_check.expression)) {
++    if (!minic_parser_add_expression(parser, &negated_condition, &negated_condition_id)) {
 +        return false;
 +    }
 +
@@ -129,6 +130,7 @@ diff --git a/src/frontend/parser_statement.c b/src/frontend/parser_statement.c
 +    condition_check.kind = MINIC_STATEMENT_IF;
 +    condition_check.span = do_span;
 +    condition_check.target_expression = MINIC_EXPRESSION_INVALID;
++    condition_check.expression = negated_condition_id;
 +    condition_check.target_statement = MINIC_STATEMENT_INVALID;
 +    condition_check.then_block = break_block;
 +    condition_check.else_block = MINIC_BLOCK_INVALID;
@@ -146,7 +148,7 @@ diff --git a/src/frontend/parser_statement.c b/src/frontend/parser_statement.c
  static bool parse_switch(MinicParser *parser) {
      MinicStatement statement;
  
-@@ -1264,6 +1370,9 @@ bool minic_parser_parse_statement(MinicParser *parser, bool allow_declaration) {
+@@ -1264,6 +1372,9 @@ bool minic_parser_parse_statement(MinicParser *parser, bool allow_declaration) {
      if (parser->current.kind == MINIC_TOKEN_KW_WHILE) {
          return parse_while(parser);
      }
