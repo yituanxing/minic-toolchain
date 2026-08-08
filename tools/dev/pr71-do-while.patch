@@ -197,34 +197,34 @@ diff --git a/src/frontend/parser_statement.c b/src/frontend/parser_statement.c
  
      if (!minic_parser_expect(parser, MINIC_TOKEN_COLON, "expected ':' after case value")) {
          return false;
-+diff --git a/src/frontend/ast_verifier.c b/src/frontend/ast_verifier.c
-+--- a/src/frontend/ast_verifier.c
-++++ b/src/frontend/ast_verifier.c
-+@@ -1,5 +1,6 @@
-+ #include "frontend/ast_internal.h"
-+ 
-++#include <stdio.h>
-+ #include <stdlib.h>
-+ #include <string.h>
-+ 
-+@@ -819,11 +820,19 @@ bool minic_c0_program_verify(const MinicC0Program *program, MinicC0AstForm form) {
-+     }
-+     for (index = 0U; index < program->expression_count; ++index) {
-+         if (!verify_expression(program, index, form)) {
-++            fprintf(stderr,
-++                    "VERIFY_FAIL expression=%zu kind=%d form=%d\n",
-++                    index,
-++                    (int)program->expressions[index].kind,
-++                    (int)form);
-+             return false;
-+         }
-+     }
-+     for (index = 0U; index < program->statement_count; ++index) {
-+         if (!verify_statement(program, &program->statements[index])) {
-++            fprintf(stderr,
-++                    "VERIFY_FAIL statement=%zu kind=%d\n",
-++                    index,
-++                    (int)program->statements[index].kind);
-+             return false;
-+         }
-+     }
+diff --git a/src/frontend/ast_verifier.c b/src/frontend/ast_verifier.c
+--- a/src/frontend/ast_verifier.c
++++ b/src/frontend/ast_verifier.c
+@@ -1,5 +1,6 @@
+ #include "frontend/ast_internal.h"
+ 
++#include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
+ 
+@@ -819,11 +820,19 @@ bool minic_c0_program_verify(const MinicC0Program *program, MinicC0AstForm form) {
+     }
+     for (index = 0U; index < program->expression_count; ++index) {
+         if (!verify_expression(program, index, form)) {
++            fprintf(stderr,
++                    "VERIFY_FAIL expression=%zu kind=%d form=%d\n",
++                    index,
++                    (int)program->expressions[index].kind,
++                    (int)form);
+             return false;
+         }
+     }
+     for (index = 0U; index < program->statement_count; ++index) {
+         if (!verify_statement(program, &program->statements[index])) {
++            fprintf(stderr,
++                    "VERIFY_FAIL statement=%zu kind=%d\n",
++                    index,
++                    (int)program->statements[index].kind);
+             return false;
+         }
+     }
