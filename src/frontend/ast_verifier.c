@@ -351,6 +351,31 @@ verify_expression(const MinicC0Program *program, size_t expression_index, MinicC
         return object != NULL && expression->value_category == MINIC_VALUE_LVALUE &&
                minic_type_equal(expression->type, object->type);
     }
+    case MINIC_EXPRESSION_FUNCTION: {
+        const MinicFunction *function;
+        const MinicFunctionType *function_type;
+        MinicType pointee;
+        size_t parameter_index;
+
+        function = minic_c0_program_function(program, expression->value.function_id);
+        if (function == NULL || function->is_variadic ||
+            expression->value_category != MINIC_VALUE_RVALUE ||
+            !minic_type_pointee(expression->type, &pointee) || !minic_type_is_function(pointee)) {
+            return false;
+        }
+        function_type = minic_c0_program_function_type(program, pointee.function_type_id);
+        if (function_type == NULL || function_type->parameter_count != function->parameter_count ||
+            !minic_type_equal(function_type->return_type, function->return_type)) {
+            return false;
+        }
+        for (parameter_index = 0U; parameter_index < function->parameter_count; ++parameter_index) {
+            if (!minic_type_equal(function_type->parameter_types[parameter_index],
+                                  function->parameter_types[parameter_index])) {
+                return false;
+            }
+        }
+        return true;
+    }
     case MINIC_EXPRESSION_SIZEOF:
         return expression->value_category == MINIC_VALUE_RVALUE &&
                minic_type_equal(expression->type, minic_type_unsigned_long()) &&

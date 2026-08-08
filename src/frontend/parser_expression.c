@@ -151,6 +151,45 @@ static bool parse_global_reference(MinicParser *parser,
     return minic_parser_parse_postfix(parser, base_id, expression_id);
 }
 
+static bool parse_function_reference(MinicParser *parser,
+                                     MinicSourceSpan name_span,
+                                     MinicFunctionId function_id,
+                                     MinicExpressionId *expression_id) {
+    const MinicFunction *function;
+    MinicExpression expression;
+    MinicExpressionId base_id;
+    MinicType function_type;
+
+    function = minic_c0_program_function(parser->program, function_id);
+    if (function == NULL) {
+        minic_parser_error(parser, "invalid function reference");
+        return false;
+    }
+    if (function->is_variadic) {
+        minic_parser_error(parser, "variadic function designator is not supported yet");
+        return false;
+    }
+
+    (void)memset(&expression, 0, sizeof(expression));
+    if (!minic_c0_program_add_function_type(parser->program,
+                                            function->return_type,
+                                            function->parameter_types,
+                                            function->parameter_count,
+                                            &function_type) ||
+        !minic_type_pointer_to(function_type, &expression.type)) {
+        minic_parser_error(parser, "cannot form function pointer type");
+        return false;
+    }
+    expression.kind = MINIC_EXPRESSION_FUNCTION;
+    expression.span = name_span;
+    expression.value_category = MINIC_VALUE_RVALUE;
+    expression.value.function_id = function_id;
+    if (!minic_parser_add_expression(parser, &expression, &base_id)) {
+        return false;
+    }
+    return minic_parser_parse_postfix(parser, base_id, expression_id);
+}
+
 static bool token_starts_cast_type(const MinicParser *parser, MinicToken token) {
     switch (token.kind) {
     case MINIC_TOKEN_KW_CONST:
@@ -419,6 +458,12 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
         }
         if (global_object_id != MINIC_GLOBAL_OBJECT_INVALID) {
             if (!parse_global_reference(parser, name_span, global_object_id, &primary_id)) {
+                return false;
+            }
+            return finish_value_expression(parser, primary_id, decay_array, expression_id);
+        }
+        if (function_id != MINIC_FUNCTION_INVALID) {
+            if (!parse_function_reference(parser, name_span, function_id, &primary_id)) {
                 return false;
             }
             return finish_value_expression(parser, primary_id, decay_array, expression_id);

@@ -172,6 +172,7 @@ verify_preprocessed_line 165 'static internal_hooks global_hooks = { malloc, fre
 verify_preprocessed_line 174 '    length = strlen((const char*)string) + sizeof("");'
 verify_preprocessed_line 175 '    copy = (unsigned char*)hooks->allocate(length);'
 verify_preprocessed_line 187 '        global_hooks.allocate = malloc;'
+verify_preprocessed_line 193 '    if (hooks->malloc_fn != ((void *)0))'
 
 set +e
 "$minic" -S "$preprocessed" -o "$work/cJSON.s" \
@@ -187,7 +188,7 @@ fi
 
 first_error=$(sed -n '/error:/p' "$diagnostic" | sed -n '1p')
 case "$first_error" in
-    *":187:39: error: use of undeclared local")
+    *":193:40: error: binary operator requires int operands")
         ;;
     *)
         printf '%s\n' \
@@ -198,4 +199,4 @@ case "$first_error" in
 esac
 
 printf '%s\n' \
-    'PASS external/cjson frontier=runtime-function-designator diagnostic=undeclared-local source=cJSON-1.7.19 offline=1'
+    'PASS external/cjson frontier=function-pointer-null-comparison diagnostic=binary-operands source=cJSON-1.7.19 offline=1'
