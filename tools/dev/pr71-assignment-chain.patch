@@ -41,7 +41,7 @@ diff --git a/src/frontend/cast_normalization.c b/src/frontend/cast_normalization
 diff --git a/src/target/riscv64/codegen_expression.c b/src/target/riscv64/codegen_expression.c
 --- a/src/target/riscv64/codegen_expression.c
 +++ b/src/target/riscv64/codegen_expression.c
-@@ -516,6 +516,10 @@ bool minic_riscv64_emit_expression(FILE *file,
+@@ -506,6 +506,10 @@ bool minic_riscv64_emit_expression(FILE *file,
          }
          return minic_riscv64_emit_scalar_load(file, expression->type, "a0", "a0");
      }
