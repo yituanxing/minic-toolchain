@@ -88,6 +88,9 @@ static MinicTokenKind minic_classify_identifier(const char *text, size_t length)
     if (length == 6U && memcmp(text, "signed", 6U) == 0) {
         return MINIC_TOKEN_KW_SIGNED;
     }
+    if (length == 6U && memcmp(text, "sizeof", 6U) == 0) {
+        return MINIC_TOKEN_KW_SIZEOF;
+    }
     if (length == 8U && memcmp(text, "unsigned", 8U) == 0) {
         return MINIC_TOKEN_KW_UNSIGNED;
     }
