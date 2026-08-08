@@ -207,6 +207,15 @@ diff --git a/src/frontend/ast_verifier.c b/src/frontend/ast_verifier.c
 +#include <stdio.h>
  
  static bool storage_is_valid(const void *data, size_t count, size_t capacity) {
+@@ -323,7 +324,7 @@ static bool verify_subscript_type(const MinicC0Program *program,
+         const MinicLocal *local;
+ 
+         local = minic_c0_program_local(program, base->value.local_id);
+-        if (local != NULL && local->element_count > 1U) {
++        if (local != NULL && local->is_array) {
+             return minic_type_equal(local->type, result_type);
+         }
+     }
 @@ -819,11 +820,19 @@ bool minic_c0_program_verify(const MinicC0Program *program, MinicC0AstForm form) {
      }
      for (index = 0U; index < program->expression_count; ++index) {
