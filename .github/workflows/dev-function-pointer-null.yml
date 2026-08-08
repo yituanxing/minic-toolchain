@@ -1,0 +1,176 @@
+name: Dev function pointer null patch
+
+on:
+  push:
+    branches:
+      - frontend/function-pointer-null
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: frontend/function-pointer-null
+          fetch-depth: 0
+      - name: Apply exact compiler patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one anchor, found {count}")
+              p.write_text(text.replace(old, new, 1))
+
+          replace_once(
+              "src/frontend/ast.h",
+              '''const MinicExpression *minic_c0_program_expression(const MinicC0Program *program,\n                                                   MinicExpressionId expression_id);\nconst MinicLocal *minic_c0_program_local''',
+              '''const MinicExpression *minic_c0_program_expression(const MinicC0Program *program,\n                                                   MinicExpressionId expression_id);\nbool minic_c0_assignment_compatible(const MinicC0Program *program,\n                                    MinicType target_type,\n                                    MinicExpressionId source_expression_id);\nbool minic_c0_pointer_equality_compatible(const MinicC0Program *program,\n                                          MinicExpressionId left_expression_id,\n                                          MinicExpressionId right_expression_id);\nconst MinicLocal *minic_c0_program_local''')
+
+          replace_once(
+              "src/frontend/ast.c",
+              '''const MinicExpression *minic_c0_program_expression(const MinicC0Program *program,\n                                                   MinicExpressionId expression_id) {\n    if (expression_id >= program->expression_count) {\n        return NULL;\n    }\n    return &program->expressions[expression_id];\n}\n\nconst MinicLocal *minic_c0_program_local''',
+              '''const MinicExpression *minic_c0_program_expression(const MinicC0Program *program,\n                                                   MinicExpressionId expression_id) {\n    if (expression_id >= program->expression_count) {\n        return NULL;\n    }\n    return &program->expressions[expression_id];\n}\n\nstatic bool expression_is_null_pointer_value(const MinicC0Program *program,\n                                             MinicExpressionId expression_id) {\n    size_t remaining;\n\n    if (program == NULL) {\n        return false;\n    }\n    remaining = program->expression_count + 1U;\n    while (remaining > 0U) {\n        const MinicExpression *expression;\n\n        expression = minic_c0_program_expression(program, expression_id);\n        if (expression == NULL) {\n            return false;\n        }\n        if (expression->kind == MINIC_EXPRESSION_INTEGER) {\n            return minic_type_is_integer(expression->type) &&\n                   expression->value.integer_value == 0;\n        }\n        if ((expression->kind != MINIC_EXPRESSION_CAST &&\n             expression->kind != MINIC_EXPRESSION_BITCAST) ||\n            !minic_type_is_pointer(expression->type)) {\n            return false;\n        }\n        expression_id = expression->value.unary.operand;\n        remaining -= 1U;\n    }\n    return false;\n}\n\nstatic bool type_is_function_pointer(MinicType type) {\n    MinicType pointee;\n\n    return minic_type_pointee(type, &pointee) && minic_type_is_function(pointee);\n}\n\nbool minic_c0_assignment_compatible(const MinicC0Program *program,\n                                    MinicType target_type,\n                                    MinicExpressionId source_expression_id) {\n    const MinicExpression *source;\n\n    if (program == NULL) {\n        return false;\n    }\n    source = minic_c0_program_expression(program, source_expression_id);\n    if (source == NULL) {\n        return false;\n    }\n    if (minic_type_assignment_compatible(target_type, source->type)) {\n        return true;\n    }\n    return type_is_function_pointer(target_type) &&\n           expression_is_null_pointer_value(program, source_expression_id);\n}\n\nbool minic_c0_pointer_equality_compatible(const MinicC0Program *program,\n                                          MinicExpressionId left_expression_id,\n                                          MinicExpressionId right_expression_id) {\n    const MinicExpression *left;\n    const MinicExpression *right;\n\n    if (program == NULL) {\n        return false;\n    }\n    left = minic_c0_program_expression(program, left_expression_id);\n    right = minic_c0_program_expression(program, right_expression_id);\n    if (left == NULL || right == NULL) {\n        return false;\n    }\n    if (minic_type_pointer_equality_compatible(left->type, right->type)) {\n        return true;\n    }\n    return (minic_type_is_pointer(left->type) &&\n            expression_is_null_pointer_value(program, right_expression_id)) ||\n           (expression_is_null_pointer_value(program, left_expression_id) &&\n            minic_type_is_pointer(right->type));\n}\n\nconst MinicLocal *minic_c0_program_local''')
+
+          replace_once(
+              "src/frontend/parser_expression.c",
+              '''        if (!minic_type_assignment_compatible(callee->parameter_types[argument_index],\n                                              argument->type)) {''',
+              '''        if (!minic_c0_assignment_compatible(parser->program,\n                                            callee->parameter_types[argument_index],\n                                            argument_id)) {''')
+
+          replace_once(
+              "src/frontend/parser_expression.c",
+              '''static bool binary_pointer_equality_compatible(MinicTokenKind kind,\n                                               const MinicExpression *left,\n                                               const MinicExpression *right) {\n    if (!binary_is_equality(kind) || left == NULL || right == NULL) {\n        return false;\n    }\n    if (minic_type_pointer_equality_compatible(left->type, right->type)) {\n        return true;\n    }\n    return (minic_type_is_pointer(left->type) && expression_is_integer_zero(right)) ||\n           (expression_is_integer_zero(left) && minic_type_is_pointer(right->type));\n}\n\n''',
+              '''''')
+
+          replace_once(
+              "src/frontend/parser_expression.c",
+              '''        if (binary_pointer_equality_compatible(token_kind, left_expression, right_expression)) {\n            expression.type = minic_type_int();''',
+              '''        if (binary_is_equality(token_kind) &&\n            minic_c0_pointer_equality_compatible(parser->program, left, right)) {\n            expression.type = minic_type_int();''')
+
+          replace_once(
+              "src/frontend/parser_postfix.c",
+              '''        if (argument == NULL ||\n            !minic_type_assignment_compatible(function_type->parameter_types[argument_index],\n                                              argument->type)) {''',
+              '''        if (argument == NULL ||\n            !minic_c0_assignment_compatible(parser->program,\n                                            function_type->parameter_types[argument_index],\n                                            argument_id)) {''')
+
+          replace_once(
+              "src/frontend/parser_statement.c",
+              '''        if (initializer == NULL ||\n            !minic_type_assignment_compatible(local.type, initializer->type)) {''',
+              '''        if (initializer == NULL ||\n            !minic_c0_assignment_compatible(parser->program, local.type, statement.expression)) {''')
+
+          replace_once(
+              "src/frontend/parser_statement.c",
+              '''        } else if (assigned_expression == NULL ||\n                   !minic_type_assignment_compatible(first_type, assigned_expression->type)) {''',
+              '''        } else if (assigned_expression == NULL ||\n                   !minic_c0_assignment_compatible(\n                       parser->program, first_type, statement.expression)) {''')
+
+          replace_once(
+              "src/frontend/parser_statement.c",
+              '''        if (returned_expression == NULL ||\n            !minic_type_assignment_compatible(function->return_type, returned_expression->type)) {''',
+              '''        if (returned_expression == NULL ||\n            !minic_c0_assignment_compatible(\n                parser->program, function->return_type, statement.expression)) {''')
+
+          replace_once(
+              "src/frontend/ast_verifier.c",
+              '''    if ((expression->value.binary.operator_kind == MINIC_BINARY_EQUAL ||\n         expression->value.binary.operator_kind == MINIC_BINARY_NOT_EQUAL) &&\n        (minic_type_pointer_equality_compatible(left->type, right->type) ||\n         (minic_type_is_pointer(left->type) && expression_is_integer_zero(right)) ||\n         (expression_is_integer_zero(left) && minic_type_is_pointer(right->type)))) {\n        return minic_type_equal(expression->type, minic_type_int());\n    }''',
+              '''    if ((expression->value.binary.operator_kind == MINIC_BINARY_EQUAL ||\n         expression->value.binary.operator_kind == MINIC_BINARY_NOT_EQUAL) &&\n        minic_c0_pointer_equality_compatible(\n            program, expression->value.binary.left, expression->value.binary.right)) {\n        return minic_type_equal(expression->type, minic_type_int());\n    }''')
+
+          replace_once(
+              "src/frontend/ast_verifier.c",
+              '''            if (!minic_type_assignment_compatible(parameter_types[argument_index],\n                                                  argument->type)) {''',
+              '''            if (!minic_c0_assignment_compatible(\n                    program,\n                    parameter_types[argument_index],\n                    expression->value.call.arguments[argument_index])) {''')
+
+          replace_once(
+              "src/frontend/ast_verifier.c",
+              '''    case MINIC_STATEMENT_ASSIGN:\n        return target != NULL && expression != NULL &&\n               target->value_category == MINIC_VALUE_LVALUE &&\n               minic_type_assignment_compatible(target->type, expression->type);''',
+              '''    case MINIC_STATEMENT_ASSIGN:\n        return target != NULL && expression != NULL &&\n               target->value_category == MINIC_VALUE_LVALUE &&\n               minic_c0_assignment_compatible(\n                   program, target->type, statement->expression);''')
+
+          replace_once(
+              "src/target/riscv64/codegen_expression.c",
+              '''static bool minic_riscv64_expression_is_integer_zero(const MinicExpression *expression) {\n    return expression != NULL && expression->kind == MINIC_EXPRESSION_INTEGER &&\n           minic_type_is_integer(expression->type) && expression->value.integer_value == 0;\n}\n\nstatic bool pointer_equality_shape(const MinicExpression *left, const MinicExpression *right) {\n    bool left_is_zero;\n    bool right_is_zero;\n\n    if (left == NULL || right == NULL) {\n        return false;\n    }\n    if (minic_type_pointer_equality_compatible(left->type, right->type)) {\n        return true;\n    }\n    left_is_zero = minic_riscv64_expression_is_integer_zero(left);\n    right_is_zero = minic_riscv64_expression_is_integer_zero(right);\n    return (minic_type_is_pointer(left->type) && right_is_zero) ||\n           (left_is_zero && minic_type_is_pointer(right->type));\n}\n\n''',
+              '''''')
+
+          replace_once(
+              "src/target/riscv64/codegen_expression.c",
+              '''        has_pointer_equality = pointer_equality_shape(left, right);''',
+              '''        has_pointer_equality = minic_c0_pointer_equality_compatible(\n            program, expression->value.binary.left, expression->value.binary.right);''')
+
+          replace_once(
+              "src/target/riscv64/codegen_statement.c",
+              '''    if (target == NULL || value == NULL || target->value_category != MINIC_VALUE_LVALUE ||\n        !minic_type_assignment_compatible(target->type, value->type)) {''',
+              '''    if (target == NULL || value == NULL || target->value_category != MINIC_VALUE_LVALUE ||\n        !minic_c0_assignment_compatible(program, target->type, statement->expression)) {''')
+
+          replace_once(
+              "src/target/riscv64/codegen_statement.c",
+              '''        if (minic_type_is_void(function->return_type) || value == NULL ||\n            !minic_type_assignment_compatible(function->return_type, value->type) ||\n            !minic_riscv64_emit_expression(file, program, function, statement->expression)) {''',
+              '''        if (minic_type_is_void(function->return_type) || value == NULL ||\n            !minic_c0_assignment_compatible(program, function->return_type, statement->expression) ||\n            !minic_riscv64_emit_expression(file, program, function, statement->expression)) {''')
+
+          positive = Path("tests/programs/c0/function_pointer_null.c")
+          if positive.exists():
+              raise SystemExit(f"{positive}: already exists")
+          positive.write_text('''struct Hooks {\n    int (*apply)(int);\n};\n\nstatic int increment(int value)\n{\n    return value + 1;\n}\n\nstatic struct Hooks hooks = { increment };\n\nint main(void)\n{\n    if (hooks.apply == (void *)0) {\n        return 1;\n    }\n    hooks.apply = (void *)0;\n    if (hooks.apply != (void *)0) {\n        return 2;\n    }\n    if ((void *)0 != hooks.apply) {\n        return 3;\n    }\n    hooks.apply = 0;\n    if (hooks.apply != 0) {\n        return 4;\n    }\n    hooks.apply = increment;\n    if (hooks.apply(41) != 42) {\n        return 5;\n    }\n    return 0;\n}\n''')
+
+          invalid_assign = Path("tests/compiler/c0/invalid_function_pointer_void_assignment.c")
+          invalid_assign.write_text('''struct Hooks {\n    int (*apply)(int);\n};\n\nstatic int increment(int value)\n{\n    return value + 1;\n}\n\nstatic struct Hooks hooks = { increment };\n\nint main(void)\n{\n    int value;\n    void *object_pointer;\n    object_pointer = &value;\n    hooks.apply = object_pointer;\n    return 0;\n}\n''')
+
+          invalid_compare = Path("tests/compiler/c0/invalid_function_pointer_void_comparison.c")
+          invalid_compare.write_text('''struct Hooks {\n    int (*apply)(int);\n};\n\nstatic int increment(int value)\n{\n    return value + 1;\n}\n\nstatic struct Hooks hooks = { increment };\n\nint main(void)\n{\n    int value;\n    void *object_pointer;\n    object_pointer = &value;\n    if (hooks.apply == object_pointer) {\n        return 1;\n    }\n    return 0;\n}\n''')
+
+          replace_once(
+              "tests/compiler/c0/run-pointer-equality.sh",
+              '''compile_failure invalid_pointer_equality_nonzero_integer 'binary operator requires int operands'\ncompile_failure invalid_pointer_equality_incompatible 'binary operator requires int operands'\ncompile_failure invalid_pointer_relational_comparison 'binary operator requires int operands'\n''',
+              '''compile_failure invalid_pointer_equality_nonzero_integer 'binary operator requires int operands'\ncompile_failure invalid_pointer_equality_incompatible 'binary operator requires int operands'\ncompile_failure invalid_pointer_relational_comparison 'binary operator requires int operands'\ncompile_failure invalid_function_pointer_void_assignment 'assignment type does not match target type'\ncompile_failure invalid_function_pointer_void_comparison 'binary operator requires int operands'\n''')
+
+          manifest = Path("tests/programs/c0/manifest.txt")
+          text = manifest.read_text()
+          if "function_pointer_null\n" in text:
+              raise SystemExit("manifest already contains function_pointer_null")
+          if not text.endswith("\n"):
+              raise SystemExit("manifest must end in newline")
+          manifest.write_text(text + "function_pointer_null\n")
+          PY
+
+          if ! command -v clang-format-18 >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y clang-format-18
+          fi
+          clang-format-18 -i \
+            src/frontend/ast.h \
+            src/frontend/ast.c \
+            src/frontend/parser_expression.c \
+            src/frontend/parser_postfix.c \
+            src/frontend/parser_statement.c \
+            src/frontend/ast_verifier.c \
+            src/target/riscv64/codegen_expression.c \
+            src/target/riscv64/codegen_statement.c \
+            tests/programs/c0/function_pointer_null.c \
+            tests/compiler/c0/invalid_function_pointer_void_assignment.c \
+            tests/compiler/c0/invalid_function_pointer_void_comparison.c
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/dev-function-pointer-null.yml
+          git add \
+            src/frontend/ast.h \
+            src/frontend/ast.c \
+            src/frontend/parser_expression.c \
+            src/frontend/parser_postfix.c \
+            src/frontend/parser_statement.c \
+            src/frontend/ast_verifier.c \
+            src/target/riscv64/codegen_expression.c \
+            src/target/riscv64/codegen_statement.c \
+            tests/programs/c0/function_pointer_null.c \
+            tests/programs/c0/manifest.txt \
+            tests/compiler/c0/invalid_function_pointer_void_assignment.c \
+            tests/compiler/c0/invalid_function_pointer_void_comparison.c \
+            tests/compiler/c0/run-pointer-equality.sh
+          git diff --cached --check
+          git commit -m "frontend: add function pointer null compatibility"
+          git push origin HEAD:frontend/function-pointer-null
