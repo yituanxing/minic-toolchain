@@ -2,7 +2,7 @@ diff --git a/src/frontend/ast.h b/src/frontend/ast.h
 --- a/src/frontend/ast.h
 +++ b/src/frontend/ast.h
 @@ -40,6 +40,7 @@ typedef enum MinicExpressionKind {
-     MINIC_EXPRESSION_DEREFERENCE,
+     MINIC_EXPRESSION_CONVERSION,
      MINIC_EXPRESSION_SUBSCRIPT,
      MINIC_EXPRESSION_MEMBER,
 +    MINIC_EXPRESSION_LVALUE_READ,
