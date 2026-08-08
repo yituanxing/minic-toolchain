@@ -1,0 +1,39 @@
+name: PR71 Synthesize
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  synthesize:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Apply conditional expression patch
+        run: python3 tools/dev/apply-pr71-conditional.py
+
+      - name: Format generated sources
+        run: |
+          clang-format-18 -i \
+            src/frontend/parser_expression.c \
+            src/frontend/ast_verifier.c \
+            src/frontend/cast_normalization.c \
+            src/target/riscv64/codegen_expression.c
+
+      - name: Host validation
+        run: make -j2 BUILD_DIR=build/pr71-synth check
+
+      - name: Capture generated sources
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr71-generated-sources
+          path: |
+            src/frontend/parser_expression.c
+            src/frontend/ast_verifier.c
+            src/frontend/cast_normalization.c
+            src/target/riscv64/codegen_expression.c
+          if-no-files-found: error
+          retention-days: 1
