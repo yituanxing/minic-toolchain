@@ -567,6 +567,18 @@ bool minic_riscv64_emit_expression(FILE *file,
                        minic_riscv64_emit_integer_result_conversion(
                            file, common_integer_type, expression->type, "a0");
             }
+            if (minic_type_is_pointer(left->type) && minic_type_is_pointer(right->type) &&
+                minic_type_equal(expression->type, minic_type_long()) &&
+                minic_riscv64_pointer_element_size(program, left->type, &element_size)) {
+                if (element_size == 1U) {
+                    return fprintf(file, "  sub a0, t0, a0\n") >= 0;
+                }
+                return fprintf(file,
+                               "  sub a0, t0, a0\n"
+                               "  li t1, %zu\n"
+                               "  div a0, a0, t1\n",
+                               element_size) >= 0;
+            }
             if (minic_type_is_pointer(left->type) && minic_type_is_integer(right->type) &&
                 minic_riscv64_pointer_element_size(program, left->type, &element_size)) {
                 return minic_riscv64_emit_scale_register(file, "a0", "t1", element_size) &&
