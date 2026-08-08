@@ -1,7 +1,7 @@
 diff --git a/tools/dev/pr71-update-platform.py b/tools/dev/pr71-update-platform.py
 --- a/tools/dev/pr71-update-platform.py
 +++ b/tools/dev/pr71-update-platform.py
-@@ -477,1 +477,184 @@
+@@ -477,1 +477,233 @@
  print("staged bitwise OR, >>=, pointer +=, value-context postfix, and record zero init")
 +
 +# Complete the adjacent integer-bitwise cluster exposed by cJSON: |=, &=, and unary ~.
@@ -244,4 +244,67 @@ diff --git a/tools/dev/pr71-update-platform.py b/tools/dev/pr71-update-platform.
 +""",
 +)
 +
-+print("staged &=, |=, and unary bitwise-not")
++# Fixed direct-call parameters use assignment conversion semantics. cJSON's integer arrays
++# exercise the standard implicit int-to-double conversion when calling cJSON_CreateNumber.
++call_conversion_helper = r'''static bool apply_fixed_call_argument_conversion(
++    MinicParser *parser, MinicType target_type, MinicExpressionId *argument_id) {
++    const MinicExpression *source;
++    MinicExpression conversion;
++    MinicExpressionId source_id;
++    MinicSourceSpan source_span;
++
++    if (parser == NULL || argument_id == NULL) {
++        return false;
++    }
++    source_id = *argument_id;
++    source = minic_c0_program_expression(parser->program, source_id);
++    if (source == NULL) {
++        minic_parser_error(parser, "invalid call argument conversion source");
++        return false;
++    }
++    if (minic_c0_assignment_compatible(parser->program, target_type, source_id)) {
++        return true;
++    }
++    if (!minic_type_is_double(target_type) || !minic_type_is_integer(source->type)) {
++        return true;
++    }
++    source_span = source->span;
++
++    (void)memset(&conversion, 0, sizeof(conversion));
++    conversion.kind = MINIC_EXPRESSION_CAST;
++    conversion.span = source_span;
++    conversion.type = target_type;
++    conversion.value_category = MINIC_VALUE_RVALUE;
++    conversion.value.unary.operand = source_id;
++    return minic_parser_add_expression(parser, &conversion, argument_id);
++}
++
++'''
++replace_once(
++    "src/frontend/parser_expression.c",
++    "static bool parse_call_argument(MinicParser *parser,\n",
++    call_conversion_helper + "static bool parse_call_argument(MinicParser *parser,\n",
++)
++replace_once(
++    "src/frontend/parser_expression.c",
++    """    if (argument_index < callee->parameter_count) {
++        if (!minic_c0_assignment_compatible(
++                parser->program, callee->parameter_types[argument_index], argument_id)) {
++""",
++    """    if (argument_index < callee->parameter_count) {
++        if (!apply_fixed_call_argument_conversion(
++                parser, callee->parameter_types[argument_index], &argument_id)) {
++            return false;
++        }
++        call_expression->value.call.arguments[argument_index] = argument_id;
++        argument = minic_c0_program_expression(parser->program, argument_id);
++        if (argument == NULL) {
++            minic_parser_error(parser, "invalid converted call argument");
++            return false;
++        }
++        if (!minic_c0_assignment_compatible(
++                parser->program, callee->parameter_types[argument_index], argument_id)) {
++""",
++)
++
++print("staged &=, |=, unary bitwise-not, and fixed-call int-to-double conversion")
