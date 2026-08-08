@@ -558,6 +558,22 @@ static bool verify_statement(const MinicC0Program *program, const MinicStatement
     case MINIC_STATEMENT_BREAK:
         return statement->target_expression == MINIC_EXPRESSION_INVALID &&
                statement->expression == MINIC_EXPRESSION_INVALID;
+    case MINIC_STATEMENT_GOTO: {
+        const MinicStatement *target_statement;
+
+        target_statement = minic_c0_program_statement(program, statement->target_statement);
+        return statement->target_expression == MINIC_EXPRESSION_INVALID &&
+               statement->expression == MINIC_EXPRESSION_INVALID && target_statement != NULL &&
+               target_statement->kind == MINIC_STATEMENT_LABEL &&
+               statement->then_block == MINIC_BLOCK_INVALID &&
+               statement->else_block == MINIC_BLOCK_INVALID;
+    }
+    case MINIC_STATEMENT_LABEL:
+        return statement->target_expression == MINIC_EXPRESSION_INVALID &&
+               statement->expression == MINIC_EXPRESSION_INVALID &&
+               statement->target_statement == MINIC_STATEMENT_INVALID &&
+               statement->then_block == MINIC_BLOCK_INVALID &&
+               statement->else_block == MINIC_BLOCK_INVALID;
     case MINIC_STATEMENT_IF:
         return expression != NULL && type_is_condition_scalar(expression->type) &&
                statement->then_block < program->block_count &&
