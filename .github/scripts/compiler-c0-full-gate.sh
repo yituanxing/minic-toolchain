@@ -6,8 +6,8 @@ cd "$root"
 
 discovery_patch="$root/tools/dev/pr71-discovery.patch"
 if [[ -f "$discovery_patch" ]]; then
-    git apply --check "$discovery_patch"
-    git apply "$discovery_patch"
+    git apply --check --recount "$discovery_patch"
+    git apply --recount "$discovery_patch"
 fi
 
 log_dir="$root/build/ci-logs"
