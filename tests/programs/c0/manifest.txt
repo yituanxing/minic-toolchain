@@ -63,3 +63,4 @@ switch_control_flow
 postfix_integer_updates
 named_goto_labels
 floating_scalar_conversions
+conditional_expression
