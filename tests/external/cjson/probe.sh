@@ -177,6 +177,8 @@ verify_preprocessed_line 255 '    double number = 0;'
 verify_preprocessed_line 268 '        switch (((input_buffer)->content + (input_buffer)->offset)[i])'
 verify_preprocessed_line 284 '                number_string_length++;'
 verify_preprocessed_line 291 '                goto loop_end;'
+verify_preprocessed_line 294 'loop_end:'
+verify_preprocessed_line 318 '    item->valuedouble = number;'
 
 set +e
 "$minic" -S "$preprocessed" -o "$work/cJSON.s" \
@@ -192,7 +194,7 @@ fi
 
 first_error=$(sed -n '/error:/p' "$diagnostic" | sed -n '1p')
 case "$first_error" in
-    *":291:22: error: use of undeclared local")
+    *":319:29: error: binary operator requires int operands")
         ;;
     *)
         printf '%s\n' \
@@ -203,4 +205,4 @@ case "$first_error" in
 esac
 
 printf '%s\n' \
-    'PASS external/cjson frontier=goto-label diagnostic=undeclared-local source=cJSON-1.7.19 offline=1'
+    'PASS external/cjson frontier=mixed-double-integer-comparison diagnostic=binary-int-operands source=cJSON-1.7.19 offline=1'

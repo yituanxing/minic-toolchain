@@ -38,6 +38,10 @@ typedef struct MinicParser {
     size_t switch_depth;
     MinicParserSwitchContext switch_contexts[MINIC_PARSER_MAX_SWITCH_DEPTH];
 
+    bool label_context_initialized;
+    MinicFunctionId label_context_function;
+    size_t function_statement_begin;
+
     MinicParserLocalBinding *local_bindings;
     size_t local_binding_count;
     size_t local_binding_capacity;
