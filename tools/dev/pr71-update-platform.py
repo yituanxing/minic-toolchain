@@ -278,4 +278,197 @@ replace_once(
 """,
 )
 
-print("staged bitwise OR, >>=, pointer +=, and value-context postfix updates")
+# cJSON next uses a nested all-zero record initializer. During discovery, accept only braces
+# whose leaves are literal integer zero, then lower the record to ordinary scalar assignments.
+record_zero_helpers = r'''static bool parse_zero_aggregate_initializer(MinicParser *parser,
+                                             MinicSourceSpan *initializer_span) {
+    MinicSourcePosition begin;
+    bool saw_value;
+
+    if (parser == NULL || initializer_span == NULL ||
+        parser->current.kind != MINIC_TOKEN_LBRACE) {
+        minic_parser_error(parser, "expected aggregate zero initializer");
+        return false;
+    }
+    begin = parser->current.span.begin;
+    saw_value = false;
+    if (!minic_parser_advance(parser)) {
+        return false;
+    }
+    for (;;) {
+        if (parser->current.kind == MINIC_TOKEN_RBRACE) {
+            if (!saw_value) {
+                minic_parser_error(parser, "empty aggregate initializer is unsupported");
+                return false;
+            }
+            initializer_span->begin = begin;
+            initializer_span->end = parser->current.span.end;
+            return minic_parser_advance(parser);
+        }
+        if (parser->current.kind == MINIC_TOKEN_LBRACE) {
+            MinicSourceSpan nested_span;
+
+            if (!parse_zero_aggregate_initializer(parser, &nested_span)) {
+                return false;
+            }
+        } else if (parser->current.kind == MINIC_TOKEN_INTEGER_CONSTANT) {
+            int value;
+
+            if (!minic_parser_parse_integer_value(parser, &value) || value != 0) {
+                minic_parser_error(parser, "only all-zero aggregate initializers are supported");
+                return false;
+            }
+        } else {
+            minic_parser_error(parser, "only all-zero aggregate initializers are supported");
+            return false;
+        }
+        saw_value = true;
+        if (parser->current.kind == MINIC_TOKEN_COMMA) {
+            if (!minic_parser_advance(parser)) {
+                return false;
+            }
+            continue;
+        }
+        if (parser->current.kind != MINIC_TOKEN_RBRACE) {
+            minic_parser_error(parser, "expected ',' or '}' in aggregate initializer");
+            return false;
+        }
+    }
+}
+
+static bool add_zero_assignment_to_lvalue(MinicParser *parser,
+                                          MinicExpressionId target_id,
+                                          MinicSourceSpan initializer_span) {
+    const MinicExpression *target;
+    MinicExpression zero;
+    MinicExpressionId value_id;
+    MinicStatement statement;
+
+    target = minic_c0_program_expression(parser->program, target_id);
+    if (target == NULL || target->value_category != MINIC_VALUE_LVALUE) {
+        minic_parser_error(parser, "invalid aggregate zero target");
+        return false;
+    }
+    (void)memset(&zero, 0, sizeof(zero));
+    zero.kind = MINIC_EXPRESSION_INTEGER;
+    zero.span = initializer_span;
+    zero.type = minic_type_int();
+    zero.value_category = MINIC_VALUE_RVALUE;
+    zero.value.integer_value = 0;
+    if (!minic_parser_add_expression(parser, &zero, &value_id) ||
+        !apply_assignment_conversion(parser, target->type, &value_id) ||
+        !minic_c0_assignment_compatible(parser->program, target->type, value_id)) {
+        minic_parser_error(parser, "aggregate zero initializer does not match member type");
+        return false;
+    }
+
+    (void)memset(&statement, 0, sizeof(statement));
+    statement.kind = MINIC_STATEMENT_ASSIGN;
+    statement.span = initializer_span;
+    statement.target_expression = target_id;
+    statement.expression = value_id;
+    statement.target_statement = MINIC_STATEMENT_INVALID;
+    statement.then_block = MINIC_BLOCK_INVALID;
+    statement.else_block = MINIC_BLOCK_INVALID;
+    return minic_parser_add_statement(parser, &statement);
+}
+
+static bool add_zero_initialized_record_lvalue(MinicParser *parser,
+                                               MinicExpressionId base_id,
+                                               MinicSourceSpan initializer_span) {
+    const MinicExpression *base;
+    const MinicRecord *record;
+    MinicExpression address;
+    MinicExpressionId address_id;
+    size_t field_index;
+
+    base = minic_c0_program_expression(parser->program, base_id);
+    if (base == NULL || base->value_category != MINIC_VALUE_LVALUE ||
+        !minic_type_is_record(base->type)) {
+        minic_parser_error(parser, "aggregate zero initializer requires a record lvalue");
+        return false;
+    }
+    record = minic_c0_program_record(parser->program, base->type.record_id);
+    if (record == NULL || !record->is_complete) {
+        minic_parser_error(parser, "aggregate zero initializer requires a complete record");
+        return false;
+    }
+
+    (void)memset(&address, 0, sizeof(address));
+    address.kind = MINIC_EXPRESSION_ADDRESS_OF;
+    address.span = base->span;
+    if (!minic_type_pointer_to(base->type, &address.type)) {
+        minic_parser_error(parser, "record initializer address depth is unsupported");
+        return false;
+    }
+    address.value_category = MINIC_VALUE_RVALUE;
+    address.value.unary.operand = base_id;
+    if (!minic_parser_add_expression(parser, &address, &address_id)) {
+        return false;
+    }
+
+    for (field_index = 0U; field_index < record->field_count; ++field_index) {
+        const MinicRecordField *field;
+        MinicExpression member;
+        MinicExpressionId member_id;
+
+        field = minic_c0_record_field(record, field_index);
+        if (field == NULL || field->element_count != 1U) {
+            minic_parser_error(parser, "record array members in aggregate initialization are unsupported");
+            return false;
+        }
+        (void)memset(&member, 0, sizeof(member));
+        member.kind = MINIC_EXPRESSION_MEMBER;
+        member.span = initializer_span;
+        member.type = field->type;
+        member.value_category = MINIC_VALUE_LVALUE;
+        member.value.member.base = address_id;
+        member.value.member.record_id = base->type.record_id;
+        member.value.member.field_index = field_index;
+        if (!minic_parser_add_expression(parser, &member, &member_id)) {
+            return false;
+        }
+        if (minic_type_is_record(field->type)) {
+            if (!add_zero_initialized_record_lvalue(parser, member_id, initializer_span)) {
+                return false;
+            }
+        } else if (!add_zero_assignment_to_lvalue(parser, member_id, initializer_span)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+'''
+replace_once(
+    "src/frontend/parser_statement.c",
+    "static bool parse_local_declarator(MinicParser *parser, MinicType base_type) {\n",
+    record_zero_helpers + "static bool parse_local_declarator(MinicParser *parser, MinicType base_type) {\n",
+)
+replace_once(
+    "src/frontend/parser_statement.c",
+    """        if (local.element_count != 1U) {
+            return parse_local_array_zero_initializer(parser, local_id, local.name_span);
+        }
+        (void)memset(&statement, 0, sizeof(statement));
+""",
+    """        if (local.element_count != 1U) {
+            return parse_local_array_zero_initializer(parser, local_id, local.name_span);
+        }
+        if (minic_type_is_record(local.type)) {
+            MinicExpressionId target_id;
+            MinicSourceSpan initializer_span;
+
+            if (!add_local_lvalue_expression(parser, local_id, local.name_span, &target_id) ||
+                !minic_parser_advance(parser) ||
+                !parse_zero_aggregate_initializer(parser, &initializer_span) ||
+                !add_zero_initialized_record_lvalue(parser, target_id, initializer_span)) {
+                return false;
+            }
+            return true;
+        }
+        (void)memset(&statement, 0, sizeof(statement));
+""",
+)
+
+print("staged bitwise OR, >>=, pointer +=, value-context postfix, and record zero init")
