@@ -163,7 +163,16 @@ diff --git a/src/frontend/parser_statement.c b/src/frontend/parser_statement.c
  static bool parse_case(MinicParser *parser) {
      MinicParserSwitchContext *context;
      MinicStatement statement;
-@@ -689,12 +793,9 @@ static bool parse_case(MinicParser *parser) {
+@@ -674,6 +778,9 @@ static bool parse_case(MinicParser *parser) {
+     MinicStatement statement;
+     const MinicExpression *constant;
++    MinicExpression folded_constant;
++    MinicType constant_type;
++    MinicSourceSpan constant_span;
+     int value;
+     size_t index;
+ 
+@@ -689,12 +796,12 @@ static bool parse_case(MinicParser *parser) {
          !minic_parser_parse_expression(parser, &statement.expression, 0U)) {
          return false;
      }
@@ -175,10 +184,28 @@ diff --git a/src/frontend/parser_statement.c b/src/frontend/parser_statement.c
          return false;
      }
 -    value = constant->value.integer_value;
++    constant_type = constant->type;
++    constant_span = constant->span;
      for (index = 0U; index < context->case_count; ++index) {
          if (context->case_values[index] == value) {
              minic_parser_error(parser, "duplicate case value");
-             return false;
+@@ -706,6 +813,15 @@ static bool parse_case(MinicParser *parser) {
+     }
+     context->case_values[context->case_count] = value;
+     context->case_count += 1U;
++
++    (void)memset(&folded_constant, 0, sizeof(folded_constant));
++    folded_constant.kind = MINIC_EXPRESSION_INTEGER;
++    folded_constant.span = constant_span;
++    folded_constant.type = constant_type;
++    folded_constant.value_category = MINIC_VALUE_RVALUE;
++    folded_constant.value.integer_value = value;
++    if (!minic_parser_add_expression(parser, &folded_constant, &statement.expression)) {
++        return false;
++    }
+ 
+     if (!minic_parser_expect(parser, MINIC_TOKEN_COLON, "expected ':' after case value")) {
+         return false;
 diff --git a/src/frontend/parser_postfix.c b/src/frontend/parser_postfix.c
 --- a/src/frontend/parser_postfix.c
 +++ b/src/frontend/parser_postfix.c
