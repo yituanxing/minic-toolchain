@@ -412,6 +412,11 @@ verify_expression(const MinicC0Program *program, size_t expression_index, MinicC
                ((minic_type_is_pointer(operand->type) &&
                  minic_type_cast_compatible(expression->type, operand->type)) ||
                 expression_is_integer_zero(operand));
+    case MINIC_EXPRESSION_CONVERSION:
+        operand = expression_before(program, expression->value.unary.operand, expression_index);
+        return form == MINIC_C0_AST_NORMALIZED && operand != NULL &&
+               expression->value_category == MINIC_VALUE_RVALUE &&
+               minic_type_is_double(expression->type) && minic_type_is_integer(operand->type);
     case MINIC_EXPRESSION_SUBSCRIPT:
         left = expression_before(program, expression->value.subscript.base, expression_index);
         right = expression_before(program, expression->value.subscript.index, expression_index);

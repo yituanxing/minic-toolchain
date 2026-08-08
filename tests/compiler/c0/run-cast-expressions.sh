@@ -44,6 +44,9 @@ printf '%s\n' "PASS compiler/c0/cast_integer_lowering"
 
 compile_success cast_typedef_shadow
 compile_success cast_plain_char
+compile_success cast_integer_to_double
+grep -F "  fcvt.d.w ft0, a0" "$work/cast_integer_to_double.s" >/dev/null
+printf '%s\n' "PASS compiler/c0/cast_integer_to_double_lowering"
 
 "$host_cc" -E -P -x c \
     "$root/tests/programs/c0/null_pointer_constant.c" \
@@ -61,9 +64,6 @@ expect_failure \
     "unsupported cast between these types"
 expect_failure \
     invalid_cast_integer_to_float \
-    "unsupported cast between these types"
-expect_failure \
-    invalid_cast_integer_to_double \
     "unsupported cast between these types"
 expect_failure \
     invalid_cast_assignment_target \
