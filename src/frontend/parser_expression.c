@@ -302,8 +302,8 @@ static bool parse_call_argument(MinicParser *parser,
         return false;
     }
     if (argument_index < callee->parameter_count) {
-        if (!minic_type_assignment_compatible(callee->parameter_types[argument_index],
-                                              argument->type)) {
+        if (!minic_c0_assignment_compatible(
+                parser->program, callee->parameter_types[argument_index], argument_id)) {
             minic_parser_error(parser, "call argument type does not match declaration");
             return false;
         }
@@ -750,19 +750,6 @@ static bool binary_is_logical(MinicTokenKind kind) {
     return kind == MINIC_TOKEN_AMPERSAND_AMPERSAND || kind == MINIC_TOKEN_PIPE_PIPE;
 }
 
-static bool binary_pointer_equality_compatible(MinicTokenKind kind,
-                                               const MinicExpression *left,
-                                               const MinicExpression *right) {
-    if (!binary_is_equality(kind) || left == NULL || right == NULL) {
-        return false;
-    }
-    if (minic_type_pointer_equality_compatible(left->type, right->type)) {
-        return true;
-    }
-    return (minic_type_is_pointer(left->type) && expression_is_integer_zero(right)) ||
-           (expression_is_integer_zero(left) && minic_type_is_pointer(right->type));
-}
-
 static bool binary_is_shift(MinicTokenKind kind) {
     return kind == MINIC_TOKEN_LESS_LESS || kind == MINIC_TOKEN_GREATER_GREATER;
 }
@@ -904,7 +891,8 @@ static bool parse_expression_internal(MinicParser *parser,
         expression.value.binary.operator_kind = binary_operator(token_kind);
         expression.value.binary.left = left;
         expression.value.binary.right = right;
-        if (binary_pointer_equality_compatible(token_kind, left_expression, right_expression)) {
+        if (binary_is_equality(token_kind) &&
+            minic_c0_pointer_equality_compatible(parser->program, left, right)) {
             expression.type = minic_type_int();
         } else if (!binary_result_type(parser->program,
                                        token_kind,

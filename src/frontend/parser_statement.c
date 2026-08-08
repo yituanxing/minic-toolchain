@@ -86,7 +86,7 @@ static bool parse_local_declarator(MinicParser *parser, MinicType base_type) {
         }
         initializer = minic_c0_program_expression(parser->program, statement.expression);
         if (initializer == NULL ||
-            !minic_type_assignment_compatible(local.type, initializer->type)) {
+            !minic_c0_assignment_compatible(parser->program, local.type, statement.expression)) {
             minic_parser_error(parser, "initializer type does not match local type");
             return false;
         }
@@ -298,7 +298,8 @@ static bool parse_expression_or_assignment_statement(MinicParser *parser,
                 return false;
             }
         } else if (assigned_expression == NULL ||
-                   !minic_type_assignment_compatible(first_type, assigned_expression->type)) {
+                   !minic_c0_assignment_compatible(
+                       parser->program, first_type, statement.expression)) {
             minic_parser_error(parser, "assignment type does not match target type");
             return false;
         }
@@ -703,8 +704,9 @@ static bool parse_return(MinicParser *parser) {
             return false;
         }
         returned_expression = minic_c0_program_expression(parser->program, statement.expression);
-        if (returned_expression == NULL ||
-            !minic_type_assignment_compatible(function->return_type, returned_expression->type)) {
+        if (returned_expression == NULL || !minic_c0_assignment_compatible(parser->program,
+                                                                           function->return_type,
+                                                                           statement.expression)) {
             minic_parser_error(parser, "return expression does not match function return type");
             return false;
         }

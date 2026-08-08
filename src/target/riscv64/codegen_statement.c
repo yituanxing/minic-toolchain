@@ -23,7 +23,7 @@ static bool minic_riscv64_emit_assignment(FILE *file,
     target = minic_c0_program_expression(program, statement->target_expression);
     value = minic_c0_program_expression(program, statement->expression);
     if (target == NULL || value == NULL || target->value_category != MINIC_VALUE_LVALUE ||
-        !minic_type_assignment_compatible(target->type, value->type)) {
+        !minic_c0_assignment_compatible(program, target->type, statement->expression)) {
         return false;
     }
     return minic_riscv64_emit_expression(file, program, function, statement->expression) &&
@@ -80,7 +80,8 @@ static bool minic_riscv64_emit_return(FILE *file,
 
         value = minic_c0_program_expression(program, statement->expression);
         if (minic_type_is_void(function->return_type) || value == NULL ||
-            !minic_type_assignment_compatible(function->return_type, value->type) ||
+            !minic_c0_assignment_compatible(
+                program, function->return_type, statement->expression) ||
             !minic_riscv64_emit_expression(file, program, function, statement->expression)) {
             return false;
         }

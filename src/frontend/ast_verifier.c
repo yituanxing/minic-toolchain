@@ -210,9 +210,8 @@ static bool verify_binary_type(const MinicC0Program *program,
 
     if ((expression->value.binary.operator_kind == MINIC_BINARY_EQUAL ||
          expression->value.binary.operator_kind == MINIC_BINARY_NOT_EQUAL) &&
-        (minic_type_pointer_equality_compatible(left->type, right->type) ||
-         (minic_type_is_pointer(left->type) && expression_is_integer_zero(right)) ||
-         (expression_is_integer_zero(left) && minic_type_is_pointer(right->type)))) {
+        minic_c0_pointer_equality_compatible(
+            program, expression->value.binary.left, expression->value.binary.right)) {
         return minic_type_equal(expression->type, minic_type_int());
     }
 
@@ -304,8 +303,9 @@ static bool verify_call_arguments(const MinicC0Program *program,
             return false;
         }
         if (argument_index < parameter_count) {
-            if (!minic_type_assignment_compatible(parameter_types[argument_index],
-                                                  argument->type)) {
+            if (!minic_c0_assignment_compatible(program,
+                                                parameter_types[argument_index],
+                                                expression->value.call.arguments[argument_index])) {
                 return false;
             }
         } else if (!minic_type_is_integer(argument->type) &&
@@ -522,7 +522,7 @@ static bool verify_statement(const MinicC0Program *program, const MinicStatement
     case MINIC_STATEMENT_ASSIGN:
         return target != NULL && expression != NULL &&
                target->value_category == MINIC_VALUE_LVALUE &&
-               minic_type_assignment_compatible(target->type, expression->type);
+               minic_c0_assignment_compatible(program, target->type, statement->expression);
     case MINIC_STATEMENT_XOR_ASSIGN: {
         MinicType common_type;
 
