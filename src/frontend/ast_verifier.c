@@ -376,7 +376,8 @@ static bool verify_call_arguments(const MinicC0Program *program,
                 return false;
             }
         } else if (!minic_type_is_integer(argument->type) &&
-                   !minic_type_is_pointer(argument->type)) {
+                   !minic_type_is_pointer(argument->type) &&
+                   !minic_type_is_double(argument->type)) {
             return false;
         }
     }

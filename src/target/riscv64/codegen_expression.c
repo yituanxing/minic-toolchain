@@ -19,7 +19,7 @@ minic_riscv64_emit_normalize_integer(FILE *file, MinicType type, const char *reg
 }
 
 static bool minic_riscv64_emit_variadic_argument_conversion(FILE *file, MinicType type) {
-    if (minic_type_is_pointer(type)) {
+    if (minic_type_is_pointer(type) || minic_type_is_double(type)) {
         return true;
     }
     if (!minic_type_is_integer(type)) {
