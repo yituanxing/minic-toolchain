@@ -850,6 +850,18 @@ static bool binary_result_type(const MinicC0Program *program,
         *result = minic_type_double();
         return true;
     }
+    if (kind == MINIC_TOKEN_MINUS && minic_type_is_pointer(left) && minic_type_is_pointer(right)) {
+        MinicType left_pointee;
+        MinicType right_pointee;
+
+        if (!minic_type_pointee(left, &left_pointee) || !minic_type_pointee(right, &right_pointee) ||
+            !minic_type_equal(left_pointee, right_pointee) ||
+            !type_is_complete_object(program, left_pointee)) {
+            return false;
+        }
+        *result = minic_type_long();
+        return true;
+    }
     if (!pointer_arithmetic_shape(kind, left, right, &pointer_type) ||
         !minic_type_pointee(pointer_type, &pointee_type) ||
         !type_is_complete_object(program, pointee_type)) {
