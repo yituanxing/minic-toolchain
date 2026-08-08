@@ -11,6 +11,9 @@ int main(void)
     char *printed;
     cJSON *roundtrip;
     cJSON *roundtrip_name;
+    cJSON *number_a;
+    cJSON *number_b;
+    double number_value;
 
     root = cJSON_Parse("{\"name\":\"minic\",\"values\":[1,2,3]}");
     if (root == NULL) {
@@ -57,6 +60,33 @@ int main(void)
         return 7;
     }
 
+    number_a = cJSON_CreateNumber(3.5);
+    number_b = cJSON_CreateNumber(3.5);
+    if (number_a == NULL || number_b == NULL) {
+        cJSON_Delete(number_b);
+        cJSON_Delete(number_a);
+        cJSON_Delete(roundtrip);
+        cJSON_Delete(root);
+        return 8;
+    }
+    if (!cJSON_Compare(number_a, number_b, 1)) {
+        cJSON_Delete(number_b);
+        cJSON_Delete(number_a);
+        cJSON_Delete(roundtrip);
+        cJSON_Delete(root);
+        return 9;
+    }
+    number_value = cJSON_GetNumberValue(number_a);
+    if (number_value != 3.5) {
+        cJSON_Delete(number_b);
+        cJSON_Delete(number_a);
+        cJSON_Delete(roundtrip);
+        cJSON_Delete(root);
+        return 10;
+    }
+
+    cJSON_Delete(number_b);
+    cJSON_Delete(number_a);
     cJSON_Delete(roundtrip);
     cJSON_Delete(root);
     return 0;
