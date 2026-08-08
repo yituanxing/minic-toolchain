@@ -498,6 +498,7 @@ bool minic_riscv64_emit_expression(FILE *file,
         MinicType common_integer_type;
         bool has_integer_common_type;
         bool has_pointer_equality;
+        bool has_pointer_relational;
         size_t element_size;
 
         if (expression->value.binary.operator_kind == MINIC_BINARY_LOGICAL_AND ||
@@ -513,6 +514,10 @@ bool minic_riscv64_emit_expression(FILE *file,
             minic_type_integer_common(left->type, right->type, &common_integer_type);
         has_pointer_equality = minic_c0_pointer_equality_compatible(
             program, expression->value.binary.left, expression->value.binary.right);
+        has_pointer_relational =
+            left != NULL && right != NULL && minic_type_is_pointer(left->type) &&
+            minic_type_is_pointer(right->type) &&
+            minic_type_equal(expression->type, minic_type_int());
         if (left == NULL || right == NULL ||
             !minic_riscv64_emit_expression(
                 file, program, function, expression->value.binary.left) ||
@@ -650,24 +655,36 @@ bool minic_riscv64_emit_expression(FILE *file,
             return (has_integer_common_type || has_pointer_equality) &&
                    fprintf(file, "  xor a0, t0, a0\n  snez a0, a0\n") >= 0;
         case MINIC_BINARY_LESS:
+            if (has_pointer_relational) {
+                return fprintf(file, "  sltu a0, t0, a0\n") >= 0;
+            }
             return has_integer_common_type &&
                    fprintf(file,
                            minic_type_is_unsigned_integer(common_integer_type)
                                ? "  sltu a0, t0, a0\n"
                                : "  slt a0, t0, a0\n") >= 0;
         case MINIC_BINARY_LESS_EQUAL:
+            if (has_pointer_relational) {
+                return fprintf(file, "  sltu a0, a0, t0\n  xori a0, a0, 1\n") >= 0;
+            }
             return has_integer_common_type &&
                    fprintf(file,
                            minic_type_is_unsigned_integer(common_integer_type)
                                ? "  sltu a0, a0, t0\n  xori a0, a0, 1\n"
                                : "  slt a0, a0, t0\n  xori a0, a0, 1\n") >= 0;
         case MINIC_BINARY_GREATER:
+            if (has_pointer_relational) {
+                return fprintf(file, "  sltu a0, a0, t0\n") >= 0;
+            }
             return has_integer_common_type &&
                    fprintf(file,
                            minic_type_is_unsigned_integer(common_integer_type)
                                ? "  sltu a0, a0, t0\n"
                                : "  slt a0, a0, t0\n") >= 0;
         case MINIC_BINARY_GREATER_EQUAL:
+            if (has_pointer_relational) {
+                return fprintf(file, "  sltu a0, t0, a0\n  xori a0, a0, 1\n") >= 0;
+            }
             return has_integer_common_type &&
                    fprintf(file,
                            minic_type_is_unsigned_integer(common_integer_type)
