@@ -72,6 +72,8 @@ const char *minic_token_kind_name(MinicTokenKind kind) {
         return ";";
     case MINIC_TOKEN_COMMA:
         return ",";
+    case MINIC_TOKEN_QUESTION:
+        return "?";
     case MINIC_TOKEN_COLON:
         return ":";
     case MINIC_TOKEN_DOT:
