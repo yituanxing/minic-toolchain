@@ -126,6 +126,8 @@ typedef enum MinicStatementKind {
     MINIC_STATEMENT_EXPRESSION,
     MINIC_STATEMENT_RETURN,
     MINIC_STATEMENT_BREAK,
+    MINIC_STATEMENT_GOTO,
+    MINIC_STATEMENT_LABEL,
     MINIC_STATEMENT_IF,
     MINIC_STATEMENT_WHILE,
     MINIC_STATEMENT_SWITCH,
@@ -138,6 +140,7 @@ typedef struct MinicStatement {
     MinicSourceSpan span;
     MinicExpressionId target_expression;
     MinicExpressionId expression;
+    MinicStatementId target_statement;
     MinicBlockId then_block;
     MinicBlockId else_block;
 } MinicStatement;
