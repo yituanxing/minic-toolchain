@@ -62,6 +62,18 @@ diff --git a/src/frontend/parser_postfix.c b/src/frontend/parser_postfix.c
              *element_type = local->type;
              return true;
          }
+@@ -332,7 +332,10 @@ bool minic_parser_parse_postfix(MinicParser *parser,
+     current = base_id;
+     for (;;) {
+         if (parser->current.kind == MINIC_TOKEN_ARROW) {
+-            if (!minic_parser_parse_pointer_member(parser, current, &current)) {
++            MinicExpressionId pointer_base;
++
++            if (!minic_parser_apply_array_decay(parser, current, &pointer_base) ||
++                !minic_parser_parse_pointer_member(parser, pointer_base, &current)) {
+                 return false;
+             }
+             continue;
 diff --git a/src/frontend/parser_expression.c b/src/frontend/parser_expression.c
 --- a/src/frontend/parser_expression.c
 +++ b/src/frontend/parser_expression.c
