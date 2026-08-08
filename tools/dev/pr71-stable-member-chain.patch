@@ -1,0 +1,58 @@
+diff --git a/src/frontend/parser_statement.c b/src/frontend/parser_statement.c
+--- a/src/frontend/parser_statement.c
++++ b/src/frontend/parser_statement.c
+@@ -527,20 +527,43 @@ static bool add_record_copy_assignments(MinicParser *parser,
+     return true;
+ }
+ 
++static bool assignment_chain_expression_is_stable(const MinicParser *parser,
++                                                  MinicExpressionId expression_id) {
++    const MinicExpression *expression;
++
++    if (parser == NULL) {
++        return false;
++    }
++    expression = minic_c0_program_expression(parser->program, expression_id);
++    if (expression == NULL) {
++        return false;
++    }
++    if (expression->kind == MINIC_EXPRESSION_LOCAL) {
++        const MinicLocal *local;
++
++        local = minic_c0_program_local(parser->program, expression->value.local_id);
++        return local != NULL && !local->is_array;
++    }
++    if (expression->kind == MINIC_EXPRESSION_GLOBAL_OBJECT) {
++        return true;
++    }
++    if (expression->kind == MINIC_EXPRESSION_MEMBER) {
++        return assignment_chain_expression_is_stable(parser, expression->value.member.base);
++    }
++    if (expression->kind == MINIC_EXPRESSION_ADDRESS_OF) {
++        return assignment_chain_expression_is_stable(parser, expression->value.unary.operand);
++    }
++    return false;
++}
++
+ static bool assignment_chain_target_is_stable(const MinicParser *parser,
+-                                              const MinicExpression *target) {
++                                              const MinicExpression *target) {
+     if (parser == NULL || target == NULL || !expression_is_modifiable_lvalue(target) ||
+         minic_type_is_record(target->type)) {
+         return false;
+     }
+     if (target->kind == MINIC_EXPRESSION_LOCAL) {
+         const MinicLocal *local;
+ 
+         local = minic_c0_program_local(parser->program, target->value.local_id);
+         return local != NULL && !local->is_array;
+     }
+-    return target->kind == MINIC_EXPRESSION_GLOBAL_OBJECT;
++    if (target->kind == MINIC_EXPRESSION_GLOBAL_OBJECT) {
++        return true;
++    }
++    return target->kind == MINIC_EXPRESSION_MEMBER &&
++           assignment_chain_expression_is_stable(parser, target->value.member.base);
+ }
+ 
+ static bool parse_stable_assignment_chain_value(MinicParser *parser,
