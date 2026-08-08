@@ -201,12 +201,12 @@ diff --git a/src/frontend/ast_verifier.c b/src/frontend/ast_verifier.c
 --- a/src/frontend/ast_verifier.c
 +++ b/src/frontend/ast_verifier.c
 @@ -1,5 +1,6 @@
- #include "frontend/ast_internal.h"
+ #include "frontend/ast_verifier.h"
  
+ #include <limits.h>
 +#include <stdio.h>
- #include <stdlib.h>
- #include <string.h>
  
+ static bool storage_is_valid(const void *data, size_t count, size_t capacity) {
 @@ -819,11 +820,19 @@ bool minic_c0_program_verify(const MinicC0Program *program, MinicC0AstForm form) {
      }
      for (index = 0U; index < program->expression_count; ++index) {
