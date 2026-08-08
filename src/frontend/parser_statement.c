@@ -821,6 +821,139 @@ static bool parse_for(MinicParser *parser) {
     return minic_parser_add_statement(parser, &statement);
 }
 
+static bool ensure_function_label_context(MinicParser *parser) {
+    if (parser->current_function == MINIC_FUNCTION_INVALID) {
+        minic_parser_error(parser, "goto/label statement outside a function");
+        return false;
+    }
+    if (!parser->label_context_initialized ||
+        parser->label_context_function != parser->current_function) {
+        parser->label_context_initialized = true;
+        parser->label_context_function = parser->current_function;
+        parser->function_statement_begin = parser->program->statement_count;
+    }
+    return true;
+}
+
+static bool identifier_equals(const MinicParser *parser,
+                              MinicSourceSpan span,
+                              const char *text,
+                              size_t text_length) {
+    return minic_parser_span_length(span) == text_length &&
+           memcmp(parser->source + span.begin.offset, text, text_length) == 0;
+}
+
+static bool current_identifier_is_goto(const MinicParser *parser) {
+    return parser->current.kind == MINIC_TOKEN_IDENTIFIER &&
+           identifier_equals(parser, parser->current.span, "goto", 4U);
+}
+
+static MinicStatementId find_function_label(MinicParser *parser, MinicSourceSpan name_span) {
+    size_t statement_index;
+
+    for (statement_index = parser->function_statement_begin;
+         statement_index < parser->program->statement_count;
+         ++statement_index) {
+        const MinicStatement *statement;
+
+        statement = minic_c0_program_statement(parser->program, statement_index);
+        if (statement != NULL && statement->kind == MINIC_STATEMENT_LABEL &&
+            minic_parser_span_equals(parser, statement->span, name_span)) {
+            return statement_index;
+        }
+    }
+    return MINIC_STATEMENT_INVALID;
+}
+
+static bool parse_goto(MinicParser *parser) {
+    MinicStatement statement;
+    MinicSourceSpan name_span;
+
+    (void)memset(&statement, 0, sizeof(statement));
+    statement.kind = MINIC_STATEMENT_GOTO;
+    statement.target_expression = MINIC_EXPRESSION_INVALID;
+    statement.expression = MINIC_EXPRESSION_INVALID;
+    statement.target_statement = MINIC_STATEMENT_INVALID;
+    statement.then_block = MINIC_BLOCK_INVALID;
+    statement.else_block = MINIC_BLOCK_INVALID;
+
+    if (!minic_parser_advance(parser) || parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
+        minic_parser_error(parser, "expected label name after goto");
+        return false;
+    }
+    name_span = parser->current.span;
+    statement.span = name_span;
+    statement.target_statement = find_function_label(parser, name_span);
+    if (!minic_parser_advance(parser) ||
+        !minic_parser_expect(parser, MINIC_TOKEN_SEMICOLON, "expected ';' after goto")) {
+        return false;
+    }
+    return minic_parser_add_statement(parser, &statement);
+}
+
+static bool identifier_starts_label(MinicParser *parser) {
+    MinicDiagnostic diagnostic;
+    MinicLexer lookahead;
+    MinicToken token;
+
+    if (parser->current.kind != MINIC_TOKEN_IDENTIFIER || current_identifier_is_goto(parser)) {
+        return false;
+    }
+    lookahead = parser->lexer;
+    (void)memset(&diagnostic, 0, sizeof(diagnostic));
+    return minic_lexer_next(&lookahead, &token, &diagnostic) && token.kind == MINIC_TOKEN_COLON;
+}
+
+static bool parse_label(MinicParser *parser, bool allow_declaration) {
+    MinicStatement statement;
+    MinicSourceSpan name_span;
+    MinicStatementId label_statement_id;
+    size_t statement_index;
+
+    name_span = parser->current.span;
+    if (find_function_label(parser, name_span) != MINIC_STATEMENT_INVALID) {
+        minic_parser_error(parser, "duplicate label definition");
+        return false;
+    }
+
+    (void)memset(&statement, 0, sizeof(statement));
+    statement.kind = MINIC_STATEMENT_LABEL;
+    statement.span = name_span;
+    statement.target_expression = MINIC_EXPRESSION_INVALID;
+    statement.expression = MINIC_EXPRESSION_INVALID;
+    statement.target_statement = MINIC_STATEMENT_INVALID;
+    statement.then_block = MINIC_BLOCK_INVALID;
+    statement.else_block = MINIC_BLOCK_INVALID;
+
+    if (!minic_parser_advance(parser) ||
+        !minic_parser_expect(parser, MINIC_TOKEN_COLON, "expected ':' after label")) {
+        return false;
+    }
+    label_statement_id = parser->program->statement_count;
+    if (!minic_parser_add_statement(parser, &statement)) {
+        return false;
+    }
+
+    for (statement_index = parser->function_statement_begin;
+         statement_index < label_statement_id;
+         ++statement_index) {
+        MinicStatement *pending;
+
+        pending = &parser->program->statements[statement_index];
+        if (pending->kind == MINIC_STATEMENT_GOTO &&
+            pending->target_statement == MINIC_STATEMENT_INVALID &&
+            minic_parser_span_equals(parser, pending->span, name_span)) {
+            pending->target_statement = label_statement_id;
+        }
+    }
+
+    if (parser->current.kind == MINIC_TOKEN_RBRACE || parser->current.kind == MINIC_TOKEN_EOF) {
+        minic_parser_error(parser, "label must be followed by a statement");
+        return false;
+    }
+    return minic_parser_parse_statement(parser, allow_declaration);
+}
+
 static bool parse_break(MinicParser *parser) {
     MinicStatement statement;
 
@@ -960,6 +1093,9 @@ static bool token_starts_expression(MinicTokenKind kind) {
 }
 
 bool minic_parser_parse_statement(MinicParser *parser, bool allow_declaration) {
+    if (!ensure_function_label_context(parser)) {
+        return false;
+    }
     if (parser->current.kind == MINIC_TOKEN_LBRACE) {
         return parse_compound_statement(parser);
     }
@@ -984,6 +1120,12 @@ bool minic_parser_parse_statement(MinicParser *parser, bool allow_declaration) {
     if (parser->current.kind == MINIC_TOKEN_KW_BREAK) {
         return parse_break(parser);
     }
+    if (current_identifier_is_goto(parser)) {
+        return parse_goto(parser);
+    }
+    if (identifier_starts_label(parser)) {
+        return parse_label(parser, allow_declaration);
+    }
     if (parser->current.kind == MINIC_TOKEN_KW_STATIC) {
         if (!allow_declaration) {
             minic_parser_error(parser, "a declaration requires a compound statement scope");
@@ -1006,6 +1148,6 @@ bool minic_parser_parse_statement(MinicParser *parser, bool allow_declaration) {
     }
     minic_parser_error(parser,
                        "expected compound, if, while, for, switch, case/default, break, "
-                       "declaration, expression, return, or '}'");
+                       "goto/label, declaration, expression, return, or '}'");
     return false;
 }
