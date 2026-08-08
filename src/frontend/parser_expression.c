@@ -836,6 +836,13 @@ static bool binary_result_type(const MinicC0Program *program,
         }
         return minic_type_integer_common(left, right, result);
     }
+    if (binary_is_comparison(kind) &&
+        (minic_type_is_double(left) || minic_type_is_integer(left)) &&
+        (minic_type_is_double(right) || minic_type_is_integer(right)) &&
+        (minic_type_is_double(left) || minic_type_is_double(right))) {
+        *result = minic_type_int();
+        return true;
+    }
     if (minic_type_is_double(left) && minic_type_is_double(right) &&
         binary_is_double_arithmetic(kind)) {
         *result = minic_type_double();
