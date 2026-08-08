@@ -87,6 +87,34 @@ static bool minic_riscv64_emit_xor_assignment(FILE *file,
     return true;
 }
 
+static bool minic_riscv64_emit_discarded_postfix_update(FILE *file,
+                                                        const MinicC0Program *program,
+                                                        const MinicFunction *function,
+                                                        const MinicExpression *expression) {
+    const MinicExpression *operand;
+    int step;
+
+    if (expression == NULL || expression->kind != MINIC_EXPRESSION_UNARY ||
+        (expression->value.unary.operator_kind != MINIC_UNARY_POST_INCREMENT &&
+         expression->value.unary.operator_kind != MINIC_UNARY_POST_DECREMENT)) {
+        return false;
+    }
+    operand = minic_c0_program_expression(program, expression->value.unary.operand);
+    if (operand == NULL || operand->value_category != MINIC_VALUE_LVALUE ||
+        !minic_type_is_integer(operand->type)) {
+        return false;
+    }
+    step = expression->value.unary.operator_kind == MINIC_UNARY_POST_INCREMENT ? 1 : -1;
+    return minic_riscv64_emit_lvalue_address(
+               file, program, function, expression->value.unary.operand) &&
+           fprintf(file, "  addi sp, sp, -16\n  sd a0, 0(sp)\n") >= 0 &&
+           minic_riscv64_emit_scalar_load(file, operand->type, "t0", "a0") &&
+           fprintf(file, "  addi t0, t0, %d\n", step) >= 0 &&
+           minic_riscv64_emit_integer_conversion(file, operand->type, "t0") &&
+           fprintf(file, "  ld a0, 0(sp)\n  addi sp, sp, 16\n") >= 0 &&
+           minic_riscv64_emit_scalar_store(file, operand->type, "t0", "a0");
+}
+
 static bool minic_riscv64_emit_return(FILE *file,
                                       const MinicC0Program *program,
                                       const MinicFunction *function,
@@ -266,9 +294,20 @@ static bool minic_riscv64_emit_statement(FILE *file,
     case MINIC_STATEMENT_XOR_ASSIGN:
         return minic_riscv64_emit_xor_assignment(file, program, function, statement);
 
-    case MINIC_STATEMENT_EXPRESSION:
-        return statement->expression != MINIC_EXPRESSION_INVALID &&
-               minic_riscv64_emit_expression(file, program, function, statement->expression);
+    case MINIC_STATEMENT_EXPRESSION: {
+        const MinicExpression *expression;
+
+        if (statement->expression == MINIC_EXPRESSION_INVALID) {
+            return false;
+        }
+        expression = minic_c0_program_expression(program, statement->expression);
+        if (expression != NULL && expression->kind == MINIC_EXPRESSION_UNARY &&
+            (expression->value.unary.operator_kind == MINIC_UNARY_POST_INCREMENT ||
+             expression->value.unary.operator_kind == MINIC_UNARY_POST_DECREMENT)) {
+            return minic_riscv64_emit_discarded_postfix_update(file, program, function, expression);
+        }
+        return minic_riscv64_emit_expression(file, program, function, statement->expression);
+    }
 
     case MINIC_STATEMENT_RETURN:
         return minic_riscv64_emit_return(file, program, function, statement);

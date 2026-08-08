@@ -166,7 +166,7 @@ static bool binary_operator_is_valid(MinicBinaryOperator operator_kind) {
 }
 
 static bool unary_operator_is_valid(MinicUnaryOperator operator_kind) {
-    return operator_kind >= MINIC_UNARY_PLUS && operator_kind <= MINIC_UNARY_LOGICAL_NOT;
+    return operator_kind >= MINIC_UNARY_PLUS && operator_kind <= MINIC_UNARY_POST_DECREMENT;
 }
 
 static bool expression_is_integer_zero(const MinicExpression *expression) {
@@ -453,11 +453,26 @@ verify_expression(const MinicC0Program *program, size_t expression_index, MinicC
     }
     case MINIC_EXPRESSION_UNARY: {
         MinicType expected_type;
+        MinicType pointee_type;
 
         operand = expression_before(program, expression->value.unary.operand, expression_index);
         if (operand == NULL || expression->value_category != MINIC_VALUE_RVALUE ||
             !unary_operator_is_valid(expression->value.unary.operator_kind)) {
             return false;
+        }
+        if (expression->value.unary.operator_kind == MINIC_UNARY_POST_INCREMENT ||
+            expression->value.unary.operator_kind == MINIC_UNARY_POST_DECREMENT) {
+            if (operand->value_category != MINIC_VALUE_LVALUE ||
+                minic_type_is_const(operand->type) ||
+                !minic_type_equal(expression->type, operand->type)) {
+                return false;
+            }
+            if (minic_type_is_integer(operand->type)) {
+                return true;
+            }
+            return minic_type_is_pointer(operand->type) &&
+                   minic_type_pointee(operand->type, &pointee_type) &&
+                   type_is_complete_object(program, pointee_type);
         }
         if (expression->value.unary.operator_kind == MINIC_UNARY_LOGICAL_NOT) {
             return type_is_condition_scalar(operand->type) &&

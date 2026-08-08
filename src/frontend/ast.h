@@ -51,6 +51,9 @@ typedef enum MinicUnaryOperator {
     MINIC_UNARY_LOGICAL_NOT
 } MinicUnaryOperator;
 
+#define MINIC_UNARY_POST_INCREMENT ((MinicUnaryOperator)3)
+#define MINIC_UNARY_POST_DECREMENT ((MinicUnaryOperator)4)
+
 typedef enum MinicBinaryOperator {
     MINIC_BINARY_ADD = 0,
     MINIC_BINARY_SUBTRACT,
