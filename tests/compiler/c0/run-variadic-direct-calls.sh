@@ -34,7 +34,7 @@ compile_failure() {
 name=variadic_direct_call
 "$riscv_cc" -E -P -x c "$root/tests/compiler/c0/$name.c" -o "$work/$name.i"
 "$minic" -S "$work/$name.i" -o "$work/$name.s"
-grep -F '  ld a4,' "$work/$name.s" >/dev/null
+grep -F '  ld a5,' "$work/$name.s" >/dev/null
 "$riscv_cc" -static \
     "$work/$name.s" \
     "$root/tests/compiler/c0/${name}_helper.c" \
@@ -50,9 +50,8 @@ if test "$status" -ne 0; then
     exit 1
 fi
 printf '%s\n' \
-    "PASS compiler/c0/$name exit=$status abi=rv64-varargs actual=5 fixed=1 extras=int,char,long,pointer"
+    "PASS compiler/c0/$name exit=$status abi=rv64-varargs actual=6 fixed=1 extras=int,char,long,pointer,double"
 
-compile_failure invalid_variadic_floating_argument 'unsupported variadic argument type'
 compile_failure invalid_variadic_too_many_arguments 'variadic call supports at most 8 arguments'
 compile_failure invalid_variadic_missing_fixed_argument \
     'call argument count does not match declaration'
