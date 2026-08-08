@@ -164,4 +164,148 @@ diff --git a/tools/dev/pr71-update-platform.py b/tools/dev/pr71-update-platform.
 +for conditional_path in ("src/frontend/parser_expression.c", "src/frontend/ast_verifier.c"):
 +    replace_once(conditional_path, conditional_old, conditional_new)
 +
-+print("staged float-to-double scalar conversion and conditional pointer lvalue conversion")
++# A for-update prefix expression has a discarded value, so it can reuse the already verified
++# postfix update expression node while preserving the same update side effect. Parse the operand
++# as a real modifiable lvalue instead of restricting prefix updates to one local identifier.
++general_prefix_helper = r'''static bool add_general_prefix_for_update(MinicParser *parser,
++                                          MinicSourcePosition begin,
++                                          MinicExpressionId target_id,
++                                          MinicTokenKind update_kind,
++                                          MinicStatementId *statement_id) {
++    const MinicExpression *target;
++    MinicExpression update;
++    MinicExpressionId update_id;
++    MinicStatement statement;
++    MinicType pointee_type;
++
++    target = minic_c0_program_expression(parser->program, target_id);
++    if (!expression_is_modifiable_lvalue(target) ||
++        (!minic_type_is_integer(target->type) && !minic_type_is_pointer(target->type))) {
++        minic_parser_error(parser, "prefix update requires a modifiable integer or pointer lvalue");
++        return false;
++    }
++    if (minic_type_is_pointer(target->type) &&
++        (!minic_type_pointee(target->type, &pointee_type) ||
++         !minic_parser_require_complete_object_type(
++             parser, pointee_type, "pointer update requires a complete object type"))) {
++        return false;
++    }
++
++    (void)memset(&update, 0, sizeof(update));
++    update.kind = MINIC_EXPRESSION_UNARY;
++    update.span.begin = begin;
++    update.span.end = target->span.end;
++    update.type = target->type;
++    update.value_category = MINIC_VALUE_RVALUE;
++    update.value.unary.operator_kind =
++        update_kind == MINIC_TOKEN_PLUS_PLUS ? MINIC_UNARY_POST_INCREMENT
++                                             : MINIC_UNARY_POST_DECREMENT;
++    update.value.unary.operand = target_id;
++    if (!minic_parser_add_expression(parser, &update, &update_id)) {
++        return false;
++    }
++
++    (void)memset(&statement, 0, sizeof(statement));
++    statement.kind = MINIC_STATEMENT_EXPRESSION;
++    statement.span = update.span;
++    statement.target_expression = MINIC_EXPRESSION_INVALID;
++    statement.expression = update_id;
++    statement.target_statement = MINIC_STATEMENT_INVALID;
++    statement.then_block = MINIC_BLOCK_INVALID;
++    statement.else_block = MINIC_BLOCK_INVALID;
++    return minic_c0_program_add_statement(parser->program, &statement, statement_id);
++}
++
++'''
++replace_once(
++    "src/frontend/parser_statement.c",
++    "static bool parse_for_update(MinicParser *parser, MinicStatementId *statement_id) {\n",
++    general_prefix_helper +
++    "static bool parse_for_update(MinicParser *parser, MinicStatementId *statement_id) {\n",
++)
++replace_once(
++    "src/frontend/parser_statement.c",
++    r'''    if (prefix) {
++        update_kind = parser->current.kind;
++        if (!minic_parser_advance(parser) || parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
++            minic_parser_error(parser, "prefix update requires a local name");
++            return false;
++        }
++        name_span = parser->current.span;
++        local_id = minic_parser_find_local(parser, name_span);
++        if (!minic_parser_advance(parser)) {
++            return false;
++        }
++    } else {
++''',
++    r'''    if (prefix) {
++        MinicExpressionId target_id;
++
++        update_kind = parser->current.kind;
++        if (!minic_parser_advance(parser) ||
++            !minic_parser_parse_expression(parser, &target_id, 0U)) {
++            return false;
++        }
++        return add_general_prefix_for_update(
++            parser, begin, target_id, update_kind, statement_id);
++    } else {
++''',
++)
++
++# Expression codegen now has the address-once postfix updater for both integer and pointer
++# lvalues. Route discarded update statements through it too; the old statement-only helper was
++# integer-local-era machinery and would incorrectly reject pointer updates.
++discarded_postfix_old = r'''static bool minic_riscv64_emit_discarded_postfix_update(FILE *file,
++                                                        const MinicC0Program *program,
++                                                        const MinicFunction *function,
++                                                        const MinicExpression *expression) {
++    const MinicExpression *operand;
++    int step;
++
++    if (expression == NULL || expression->kind != MINIC_EXPRESSION_UNARY ||
++        (expression->value.unary.operator_kind != MINIC_UNARY_POST_INCREMENT &&
++         expression->value.unary.operator_kind != MINIC_UNARY_POST_DECREMENT)) {
++        return false;
++    }
++    operand = minic_c0_program_expression(program, expression->value.unary.operand);
++    if (operand == NULL || operand->value_category != MINIC_VALUE_LVALUE ||
++        !minic_type_is_integer(operand->type)) {
++        return false;
++    }
++    step = expression->value.unary.operator_kind == MINIC_UNARY_POST_INCREMENT ? 1 : -1;
++    return minic_riscv64_emit_lvalue_address(
++               file, program, function, expression->value.unary.operand) &&
++           fprintf(file, "  addi sp, sp, -16\n  sd a0, 0(sp)\n") >= 0 &&
++           minic_riscv64_emit_scalar_load(file, operand->type, "t0", "a0") &&
++           fprintf(file, "  addi t0, t0, %d\n", step) >= 0 &&
++           minic_riscv64_emit_integer_conversion(file, operand->type, "t0") &&
++           fprintf(file, "  ld a0, 0(sp)\n  addi sp, sp, 16\n") >= 0 &&
++           minic_riscv64_emit_scalar_store(file, operand->type, "t0", "a0");
++}
++
++'''
++replace_once("src/target/riscv64/codegen_statement.c", discarded_postfix_old, "")
++replace_once(
++    "src/target/riscv64/codegen_statement.c",
++    r'''    case MINIC_STATEMENT_EXPRESSION: {
++        const MinicExpression *expression;
++
++        if (statement->expression == MINIC_EXPRESSION_INVALID) {
++            return false;
++        }
++        expression = minic_c0_program_expression(program, statement->expression);
++        if (expression != NULL && expression->kind == MINIC_EXPRESSION_UNARY &&
++            (expression->value.unary.operator_kind == MINIC_UNARY_POST_INCREMENT ||
++             expression->value.unary.operator_kind == MINIC_UNARY_POST_DECREMENT)) {
++            return minic_riscv64_emit_discarded_postfix_update(file, program, function, expression);
++        }
++        return minic_riscv64_emit_expression(file, program, function, statement->expression);
++    }
++''',
++    r'''    case MINIC_STATEMENT_EXPRESSION:
++        return statement->expression != MINIC_EXPRESSION_INVALID &&
++               minic_riscv64_emit_expression(file, program, function, statement->expression);
++''',
++)
++
++print("staged float conversion, conditional pointer conversion, and general prefix updates")
