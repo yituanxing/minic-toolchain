@@ -57,3 +57,4 @@ sizeof_semantics
 indirect_function_calls
 runtime_function_designators
 function_pointer_null
+local_double_objects
