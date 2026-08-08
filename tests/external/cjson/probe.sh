@@ -79,7 +79,7 @@ EOF
 cat >"$include/stdio.h" <<'EOF'
 #ifndef MINIC_CJSON_STDIO_H
 #define MINIC_CJSON_STDIO_H
-int sprintf(char *buffer, const char *format, ...);
+int sprintf(char *buffer, const char *format, ...); int sscanf(const char *buffer, const char *format, ...);
 #endif
 EOF
 
@@ -142,7 +142,7 @@ verify_preprocessed_line 3 'void *memcpy(void *destination, const void *source, 
 verify_preprocessed_line 4 'void *memset(void *destination, int value, size_t count);'
 verify_preprocessed_line 5 'char *strcpy(char *destination, const char *source);'
 verify_preprocessed_line 6 'int strcmp(const char *left, const char *right);'
-verify_preprocessed_line 7 'int sprintf(char *buffer, const char *format, ...);'
+verify_preprocessed_line 7 'int sprintf(char *buffer, const char *format, ...); int sscanf(const char *buffer, const char *format, ...);'
 verify_preprocessed_line 8 'double fabs(double value);'
 verify_preprocessed_line 9 'void *malloc(size_t size);'
 verify_preprocessed_line 10 'void free(void *pointer);'
