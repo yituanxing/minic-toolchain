@@ -194,7 +194,7 @@ fi
 
 first_error=$(sed -n '/error:/p' "$diagnostic" | sed -n '1p')
 case "$first_error" in
-    *":318:22: error: invalid expression start token=return")
+    *":319:29: error: binary operator requires int operands")
         ;;
     *)
         printf '%s\n' \
@@ -205,4 +205,4 @@ case "$first_error" in
 esac
 
 printf '%s\n' \
-    'PASS external/cjson frontier=post-goto-expression-state diagnostic=invalid-expression source=cJSON-1.7.19 offline=1'
+    'PASS external/cjson frontier=mixed-double-integer-comparison diagnostic=binary-int-operands source=cJSON-1.7.19 offline=1'
