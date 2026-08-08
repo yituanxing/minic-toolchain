@@ -179,6 +179,9 @@ verify_preprocessed_line 284 '                number_string_length++;'
 verify_preprocessed_line 291 '                goto loop_end;'
 verify_preprocessed_line 294 'loop_end:'
 verify_preprocessed_line 318 '    item->valuedouble = number;'
+verify_preprocessed_line 319 '    if (number >= 0x7fffffff)'
+verify_preprocessed_line 329 '        item->valueint = (int)number;'
+verify_preprocessed_line 332 '    input_buffer->offset += (size_t)(after_end - number_c_string);'
 
 set +e
 "$minic" -S "$preprocessed" -o "$work/cJSON.s" \
@@ -194,7 +197,7 @@ fi
 
 first_error=$(sed -n '/error:/p' "$diagnostic" | sed -n '1p')
 case "$first_error" in
-    *":319:29: error: binary operator requires int operands")
+    *":332:27: error: expected expression")
         ;;
     *)
         printf '%s\n' \
@@ -205,4 +208,4 @@ case "$first_error" in
 esac
 
 printf '%s\n' \
-    'PASS external/cjson frontier=mixed-double-integer-comparison diagnostic=binary-int-operands source=cJSON-1.7.19 offline=1'
+    'PASS external/cjson frontier=compound-addition diagnostic=expected-expression source=cJSON-1.7.19 offline=1'

@@ -815,6 +815,8 @@ static bool binary_result_type(const MinicC0Program *program,
                                MinicType *result) {
     MinicType pointer_type;
     MinicType pointee_type;
+    bool has_double_operand;
+    bool has_numeric_operands;
 
     if (result == NULL) {
         return false;
@@ -835,6 +837,13 @@ static bool binary_result_type(const MinicC0Program *program,
             return minic_type_integer_common(left, left, result);
         }
         return minic_type_integer_common(left, right, result);
+    }
+    has_double_operand = minic_type_is_double(left) || minic_type_is_double(right);
+    has_numeric_operands = (minic_type_is_double(left) || minic_type_is_integer(left)) &&
+                           (minic_type_is_double(right) || minic_type_is_integer(right));
+    if (binary_is_comparison(kind) && has_double_operand && has_numeric_operands) {
+        *result = minic_type_int();
+        return true;
     }
     if (minic_type_is_double(left) && minic_type_is_double(right) &&
         binary_is_double_arithmetic(kind)) {
