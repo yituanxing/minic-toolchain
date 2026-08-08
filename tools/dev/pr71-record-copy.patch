@@ -1,0 +1,225 @@
+diff --git a/src/frontend/parser_expression.c b/src/frontend/parser_expression.c
+--- a/src/frontend/parser_expression.c
++++ b/src/frontend/parser_expression.c
+@@ -458,8 +458,8 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
+         }
+         if (global_object_id != MINIC_GLOBAL_OBJECT_INVALID) {
+             if (!parse_global_reference(
+-                    parser, name_span, global_object_id, !decay_array, &primary_id)) {
++                    parser, name_span, global_object_id, true, &primary_id)) {
+                 return false;
+             }
+             return finish_value_expression(parser, primary_id, decay_array, expression_id);
+         }
+diff --git a/src/frontend/parser_statement.c b/src/frontend/parser_statement.c
+--- a/src/frontend/parser_statement.c
++++ b/src/frontend/parser_statement.c
+@@ -287,10 +287,55 @@ static bool parse_static_local_array_declarator(MinicParser *parser, MinicType b
+         bound_count += 1U;
+     }
+     if (bound_count == 0U) {
+-        minic_parser_error(parser,
+-                           "static local object currently requires a fixed array declarator");
+-        return false;
++        MinicLocal local;
++        MinicLocalId local_id;
++        MinicStatement statement;
++        const MinicExpression *initializer;
++
++        if (!minic_type_is_const(declared_type) || parser->current.kind != MINIC_TOKEN_EQUAL) {
++            minic_parser_error(parser,
++                               "static local object currently requires a fixed array declarator");
++            return false;
++        }
++        (void)memset(&local, 0, sizeof(local));
++        local.name_span = name_span;
++        local.type = declared_type;
++        local.element_count = 1U;
++        local.storage_offset = 0U;
++        if (!minic_c0_program_add_local(parser->program, &local, &local_id) ||
++            !minic_parser_bind_local(parser, name_span, local_id)) {
++            minic_parser_error(parser, "cannot add static const scalar discovery local");
++            return false;
++        }
++
++        (void)memset(&statement, 0, sizeof(statement));
++        statement.kind = MINIC_STATEMENT_ASSIGN;
++        statement.span.begin = name_span.begin;
++        statement.target_expression = MINIC_EXPRESSION_INVALID;
++        statement.expression = MINIC_EXPRESSION_INVALID;
++        statement.target_statement = MINIC_STATEMENT_INVALID;
++        statement.then_block = MINIC_BLOCK_INVALID;
++        statement.else_block = MINIC_BLOCK_INVALID;
++        if (!add_local_lvalue_expression(parser, local_id, name_span, &statement.target_expression) ||
++            !minic_parser_advance(parser) ||
++            !minic_parser_parse_expression(parser, &statement.expression, 0U) ||
++            !apply_assignment_conversion(parser, local.type, &statement.expression)) {
++            return false;
++        }
++        initializer = minic_c0_program_expression(parser->program, statement.expression);
++        if (initializer == NULL ||
++            !minic_c0_assignment_compatible(parser->program, local.type, statement.expression)) {
++            minic_parser_error(parser, "static const scalar initializer type mismatch");
++            return false;
++        }
++        statement.span.end = initializer->span.end;
++        return minic_parser_add_statement(parser, &statement);
+     }
+     if (parser->current.kind == MINIC_TOKEN_EQUAL) {
+         minic_parser_error(parser, "static local initializers are not supported yet");
+@@ -370,6 +415,125 @@ static bool parse_static_local_declaration(MinicParser *parser) {
+     return minic_parser_expect(parser, MINIC_TOKEN_SEMICOLON, "expected ';'");
+ }
+ 
++static bool add_record_copy_assignments(MinicParser *parser,
++                                        MinicExpressionId target_id,
++                                        MinicExpressionId source_id,
++                                        MinicSourceSpan span) {
++    const MinicExpression *target;
++    const MinicExpression *source;
++    const MinicRecord *record;
++    MinicExpression target_address;
++    MinicExpression source_address;
++    MinicExpressionId target_address_id;
++    MinicExpressionId source_address_id;
++    MinicType target_type;
++    MinicType source_type;
++    MinicSourceSpan target_span;
++    MinicSourceSpan source_span;
++    size_t field_index;
++
++    target = minic_c0_program_expression(parser->program, target_id);
++    source = minic_c0_program_expression(parser->program, source_id);
++    if (target == NULL || source == NULL || target->value_category != MINIC_VALUE_LVALUE ||
++        source->value_category != MINIC_VALUE_LVALUE || !minic_type_is_record(target->type) ||
++        !minic_type_is_record(source->type) || target->type.record_id != source->type.record_id) {
++        minic_parser_error(parser, "record assignment requires matching record lvalues");
++        return false;
++    }
++
++    /* Expression storage may realloc whenever a new expression is appended. Freeze every
++       target/source property needed below before the first append and retain only stable IDs. */
++    target_type = target->type;
++    source_type = source->type;
++    target_span = target->span;
++    source_span = source->span;
++
++    record = minic_c0_program_record(parser->program, target_type.record_id);
++    if (record == NULL || !record->is_complete) {
++        minic_parser_error(parser, "record assignment requires a complete record");
++        return false;
++    }
++
++    (void)memset(&target_address, 0, sizeof(target_address));
++    target_address.kind = MINIC_EXPRESSION_ADDRESS_OF;
++    target_address.span = target_span;
++    target_address.value_category = MINIC_VALUE_RVALUE;
++    target_address.value.unary.operand = target_id;
++    if (!minic_type_pointer_to(target_type, &target_address.type) ||
++        !minic_parser_add_expression(parser, &target_address, &target_address_id)) {
++        minic_parser_error(parser, "cannot form record assignment target address");
++        return false;
++    }
++
++    (void)memset(&source_address, 0, sizeof(source_address));
++    source_address.kind = MINIC_EXPRESSION_ADDRESS_OF;
++    source_address.span = source_span;
++    source_address.value_category = MINIC_VALUE_RVALUE;
++    source_address.value.unary.operand = source_id;
++    if (!minic_type_pointer_to(source_type, &source_address.type) ||
++        !minic_parser_add_expression(parser, &source_address, &source_address_id)) {
++        minic_parser_error(parser, "cannot form record assignment source address");
++        return false;
++    }
++
++    for (field_index = 0U; field_index < record->field_count; ++field_index) {
++        const MinicRecordField *field;
++        MinicExpression target_member;
++        MinicExpression source_member;
++        MinicExpressionId target_member_id;
++        MinicExpressionId source_member_id;
++
++        field = minic_c0_record_field(record, field_index);
++        if (field == NULL || field->element_count != 1U) {
++            minic_parser_error(parser, "record assignment with array members is unsupported");
++            return false;
++        }
++
++        (void)memset(&target_member, 0, sizeof(target_member));
++        target_member.kind = MINIC_EXPRESSION_MEMBER;
++        target_member.span = span;
++        target_member.type = field->type;
++        target_member.value_category = MINIC_VALUE_LVALUE;
++        target_member.value.member.base = target_address_id;
++        target_member.value.member.record_id = target_type.record_id;
++        target_member.value.member.field_index = field_index;
++        if (!minic_parser_add_expression(parser, &target_member, &target_member_id)) {
++            return false;
++        }
++
++        (void)memset(&source_member, 0, sizeof(source_member));
++        source_member.kind = MINIC_EXPRESSION_MEMBER;
++        source_member.span = span;
++        source_member.type = field->type;
++        source_member.value_category = MINIC_VALUE_LVALUE;
++        source_member.value.member.base = source_address_id;
++        source_member.value.member.record_id = source_type.record_id;
++        source_member.value.member.field_index = field_index;
++        if (!minic_parser_add_expression(parser, &source_member, &source_member_id)) {
++            return false;
++        }
++
++        if (minic_type_is_record(field->type)) {
++            if (!add_record_copy_assignments(parser, target_member_id, source_member_id, span)) {
++                return false;
++            }
++        } else {
++            MinicStatement assignment;
++
++            if (!expression_is_modifiable_lvalue(
++                    minic_c0_program_expression(parser->program, target_member_id)) ||
++                !minic_c0_assignment_compatible(parser->program, field->type, source_member_id)) {
++                minic_parser_error(parser, "record member cannot be copied");
++                return false;
++            }
++            (void)memset(&assignment, 0, sizeof(assignment));
++            assignment.kind = MINIC_STATEMENT_ASSIGN;
++            assignment.span = span;
++            assignment.target_expression = target_member_id;
++            assignment.expression = source_member_id;
++            assignment.target_statement = MINIC_STATEMENT_INVALID;
++            assignment.then_block = MINIC_BLOCK_INVALID;
++            assignment.else_block = MINIC_BLOCK_INVALID;
++            if (!minic_parser_add_statement(parser, &assignment)) {
++                return false;
++            }
++        }
++    }
++    return true;
++}
++
+ static bool parse_expression_or_assignment_statement(MinicParser *parser,
+                                                      bool allow_expression_statement) {
+     MinicStatement statement;
+@@ -420,6 +584,18 @@ static bool parse_expression_or_assignment_statement(MinicParser *parser,
+     if (!minic_parser_advance(parser) ||
+         !minic_parser_parse_expression(parser, &statement.expression, 0U)) {
+         return false;
+     }
++    if (assignment_token == MINIC_TOKEN_EQUAL && minic_type_is_record(first_type)) {
++        const MinicExpression *source;
++
++        source = minic_c0_program_expression(parser->program, statement.expression);
++        if (source == NULL || !minic_type_is_record(source->type) ||
++            source->type.record_id != first_type.record_id ||
++            !add_record_copy_assignments(parser,
++                                         statement.target_expression,
++                                         statement.expression,
++                                         source->span)) {
++            return false;
++        }
++        return minic_parser_expect(parser, MINIC_TOKEN_SEMICOLON, "expected ';'");
++    }
+     if (assignment_token == MINIC_TOKEN_PLUS_EQUAL) {
+         const MinicExpression *right_expression;
+         MinicExpression addition;

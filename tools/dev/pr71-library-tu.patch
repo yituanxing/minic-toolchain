@@ -1,0 +1,37 @@
+diff --git a/src/frontend/parser_function.c b/src/frontend/parser_function.c
+--- a/src/frontend/parser_function.c
++++ b/src/frontend/parser_function.c
+@@ -349,10 +349,6 @@ bool minic_parse_c0_program(const char *path,
+             success = parse_function(&parser, false);
+         }
+     }
+-    if (success && program->entry_function == MINIC_FUNCTION_INVALID) {
+-        minic_parser_error(&parser, "translation unit requires an int main function");
+-        success = false;
+-    }
+-
+     minic_parser_destroy_scopes(&parser);
+     return success;
+ }
+diff --git a/src/target/riscv64/codegen_function.c b/src/target/riscv64/codegen_function.c
+--- a/src/target/riscv64/codegen_function.c
++++ b/src/target/riscv64/codegen_function.c
+@@ -268,16 +268,11 @@ bool minic_riscv64_write_c0_program(const char *path,
+     size_t label_counter;
+     bool success;
+ 
+-    {
+-        const MinicFunction *entry_function;
+-
+-        entry_function = minic_c0_program_function(program, program->entry_function);
+-        if (entry_function == NULL || !entry_function->is_defined ||
+-            program->function_count == 0U) {
+-            minic_riscv64_set_diagnostic(diagnostic, path, "entry function is missing or invalid");
+-            return false;
+-        }
++    if (program == NULL) {
++        minic_riscv64_set_diagnostic(diagnostic, path, "program is required");
++        return false;
+     }
+ 
+     file = fopen(path, "wb");

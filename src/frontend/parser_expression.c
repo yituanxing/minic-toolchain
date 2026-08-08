@@ -117,6 +117,7 @@ static bool parse_local_reference(MinicParser *parser,
 static bool parse_global_reference(MinicParser *parser,
                                    MinicSourceSpan name_span,
                                    MinicGlobalObjectId global_object_id,
+                                   bool allow_record_lvalue,
                                    MinicExpressionId *expression_id) {
     const MinicGlobalObject *object;
     MinicExpression base_expression;
@@ -130,7 +131,7 @@ static bool parse_global_reference(MinicParser *parser,
     }
     array_object = minic_type_is_array(object->type);
     if (!array_object && minic_type_is_record(object->type)) {
-        if (parser->current.kind != MINIC_TOKEN_DOT) {
+        if (parser->current.kind != MINIC_TOKEN_DOT && !allow_record_lvalue) {
             minic_parser_error(parser, "global record object requires member access");
             return false;
         }
@@ -280,7 +281,7 @@ static bool parse_cast(MinicParser *parser, MinicExpressionId *expression_id) {
 }
 
 static bool variadic_argument_type_supported(MinicType type) {
-    return minic_type_is_integer(type) || minic_type_is_pointer(type);
+    return minic_type_is_integer(type) || minic_type_is_pointer(type) || minic_type_is_double(type);
 }
 
 static bool parse_call_argument(MinicParser *parser,
@@ -457,7 +458,8 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
             return finish_value_expression(parser, primary_id, decay_array, expression_id);
         }
         if (global_object_id != MINIC_GLOBAL_OBJECT_INVALID) {
-            if (!parse_global_reference(parser, name_span, global_object_id, &primary_id)) {
+            if (!parse_global_reference(
+                    parser, name_span, global_object_id, !decay_array, &primary_id)) {
                 return false;
             }
             return finish_value_expression(parser, primary_id, decay_array, expression_id);
@@ -808,6 +810,45 @@ static bool pointer_arithmetic_shape(MinicTokenKind kind,
     return false;
 }
 
+static bool
+pointer_relational_compatible(const MinicC0Program *program, MinicType left, MinicType right) {
+    MinicType left_pointee;
+    MinicType right_pointee;
+    MinicType left_unqualified;
+    MinicType right_unqualified;
+
+    return minic_type_pointee(left, &left_pointee) && minic_type_pointee(right, &right_pointee) &&
+           minic_type_unqualified(left_pointee, &left_unqualified) &&
+           minic_type_unqualified(right_pointee, &right_unqualified) &&
+           minic_type_equal(left_unqualified, right_unqualified) &&
+           type_is_complete_object(program, left_pointee) &&
+           type_is_complete_object(program, right_pointee);
+}
+
+static bool conditional_result_type(MinicType when_true, MinicType when_false, MinicType *result) {
+    bool has_double_operand;
+    bool has_numeric_operands;
+
+    if (result == NULL) {
+        return false;
+    }
+    if (minic_type_equal(when_true, when_false)) {
+        *result = when_true;
+        return true;
+    }
+    if (minic_type_is_integer(when_true) && minic_type_is_integer(when_false)) {
+        return minic_type_integer_common(when_true, when_false, result);
+    }
+    has_double_operand = minic_type_is_double(when_true) || minic_type_is_double(when_false);
+    has_numeric_operands = (minic_type_is_double(when_true) || minic_type_is_integer(when_true)) &&
+                           (minic_type_is_double(when_false) || minic_type_is_integer(when_false));
+    if (has_double_operand && has_numeric_operands) {
+        *result = minic_type_double();
+        return true;
+    }
+    return false;
+}
+
 static bool binary_result_type(const MinicC0Program *program,
                                MinicTokenKind kind,
                                MinicType left,
@@ -845,9 +886,27 @@ static bool binary_result_type(const MinicC0Program *program,
         *result = minic_type_int();
         return true;
     }
+    if (binary_is_comparison(kind) && !binary_is_equality(kind) && minic_type_is_pointer(left) &&
+        minic_type_is_pointer(right) && pointer_relational_compatible(program, left, right)) {
+        *result = minic_type_int();
+        return true;
+    }
     if (minic_type_is_double(left) && minic_type_is_double(right) &&
         binary_is_double_arithmetic(kind)) {
         *result = minic_type_double();
+        return true;
+    }
+    if (kind == MINIC_TOKEN_MINUS && minic_type_is_pointer(left) && minic_type_is_pointer(right)) {
+        MinicType left_pointee;
+        MinicType right_pointee;
+
+        if (!minic_type_pointee(left, &left_pointee) ||
+            !minic_type_pointee(right, &right_pointee) ||
+            !minic_type_equal(left_pointee, right_pointee) ||
+            !type_is_complete_object(program, left_pointee)) {
+            return false;
+        }
+        *result = minic_type_long();
         return true;
     }
     if (!pointer_arithmetic_shape(kind, left, right, &pointer_type) ||
@@ -932,6 +991,54 @@ static bool parse_expression_internal(MinicParser *parser,
             return false;
         }
         if (!minic_parser_add_expression(parser, &expression, &left)) {
+            return false;
+        }
+    }
+    if (minimum_precedence == 0U && parser->current.kind == MINIC_TOKEN_QUESTION) {
+        const MinicExpression *condition_expression;
+        const MinicExpression *true_expression;
+        const MinicExpression *false_expression;
+        MinicExpression conditional;
+        MinicExpressionId when_true;
+        MinicExpressionId when_false;
+
+        if (!minic_parser_apply_array_decay(parser, left, &left)) {
+            return false;
+        }
+        condition_expression = minic_c0_program_expression(parser->program, left);
+        if (condition_expression == NULL || !type_is_condition_scalar(condition_expression->type)) {
+            minic_parser_error(parser,
+                               "conditional expression requires an integer or pointer condition");
+            return false;
+        }
+        if (!minic_parser_advance(parser) ||
+            !parse_expression_internal(parser, &when_true, 0U, true) ||
+            !minic_parser_expect(
+                parser, MINIC_TOKEN_COLON, "expected ':' in conditional expression") ||
+            !parse_expression_internal(parser, &when_false, 0U, true)) {
+            return false;
+        }
+        true_expression = minic_c0_program_expression(parser->program, when_true);
+        false_expression = minic_c0_program_expression(parser->program, when_false);
+        if (true_expression == NULL || false_expression == NULL) {
+            minic_parser_error(parser, "invalid conditional expression operand");
+            return false;
+        }
+
+        (void)memset(&conditional, 0, sizeof(conditional));
+        conditional.kind = MINIC_EXPRESSION_CONDITIONAL;
+        conditional.span.begin = condition_expression->span.begin;
+        conditional.span.end = false_expression->span.end;
+        conditional.value_category = MINIC_VALUE_RVALUE;
+        conditional.value.conditional.condition = left;
+        conditional.value.conditional.when_true = when_true;
+        conditional.value.conditional.when_false = when_false;
+        if (!conditional_result_type(
+                true_expression->type, false_expression->type, &conditional.type)) {
+            minic_parser_error(parser, "conditional expression branches have incompatible types");
+            return false;
+        }
+        if (!minic_parser_add_expression(parser, &conditional, &left)) {
             return false;
         }
     }

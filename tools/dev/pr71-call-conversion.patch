@@ -1,0 +1,61 @@
+diff --git a/src/frontend/parser_expression.c b/src/frontend/parser_expression.c
+--- a/src/frontend/parser_expression.c
++++ b/src/frontend/parser_expression.c
+@@ -274,6 +274,38 @@ static bool variadic_argument_type_supported(MinicType type) {
+     return minic_type_is_integer(type) || minic_type_is_pointer(type) || minic_type_is_double(type);
+ }
+ 
++static bool apply_fixed_call_argument_conversion(MinicParser *parser,
++                                                 MinicType target_type,
++                                                 MinicExpressionId *argument_id) {
++    const MinicExpression *source;
++    MinicExpression conversion;
++    MinicExpressionId source_id;
++    MinicSourceSpan source_span;
++
++    if (parser == NULL || argument_id == NULL) {
++        return false;
++    }
++    source_id = *argument_id;
++    source = minic_c0_program_expression(parser->program, source_id);
++    if (source == NULL) {
++        minic_parser_error(parser, "invalid call argument conversion source");
++        return false;
++    }
++    if (minic_c0_assignment_compatible(parser->program, target_type, source_id)) {
++        return true;
++    }
++    if (!minic_type_is_double(target_type) || !minic_type_is_integer(source->type)) {
++        return true;
++    }
++    source_span = source->span;
++
++    (void)memset(&conversion, 0, sizeof(conversion));
++    conversion.kind = MINIC_EXPRESSION_CAST;
++    conversion.span = source_span;
++    conversion.type = target_type;
++    conversion.value_category = MINIC_VALUE_RVALUE;
++    conversion.value.unary.operand = source_id;
++    return minic_parser_add_expression(parser, &conversion, argument_id);
++}
++
+ static bool parse_call_argument(MinicParser *parser,
+                                 MinicExpression *call_expression,
+                                 const MinicFunction *callee,
+@@ -294,8 +326,15 @@ static bool parse_call_argument(MinicParser *parser,
+         return false;
+     }
+     if (argument_index < callee->parameter_count) {
++        if (!apply_fixed_call_argument_conversion(
++                parser, callee->parameter_types[argument_index], &argument_id)) {
++            return false;
++        }
++        call_expression->value.call.arguments[argument_index] = argument_id;
++        argument = minic_c0_program_expression(parser->program, argument_id);
++        if (argument == NULL) {
++            minic_parser_error(parser, "invalid converted call argument");
++            return false;
++        }
+         if (!minic_c0_assignment_compatible(
+                 parser->program, callee->parameter_types[argument_index], argument_id)) {
+             minic_parser_error(parser, "call argument type does not match declaration");

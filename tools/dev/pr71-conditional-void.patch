@@ -1,0 +1,222 @@
+diff --git a/tools/dev/pr71-update-platform.py b/tools/dev/pr71-update-platform.py
+--- a/tools/dev/pr71-update-platform.py
++++ b/tools/dev/pr71-update-platform.py
+@@ -660,1 +660,49 @@
+ print("staged float conversion, conditional pointer conversion, and general prefix updates")
++
++# C conditional pointer composition also permits one void pointer and one object pointer.
++# Reuse the type layer's existing assignment-compatibility boundary so function pointers and
++# qualifier-removing combinations remain rejected.
++conditional_void_old = r'''    if (minic_type_is_pointer(when_true) && minic_type_is_pointer(when_false) &&
++        minic_type_unqualified(when_true, &unqualified_true) &&
++        minic_type_unqualified(when_false, &unqualified_false) &&
++        minic_type_equal(unqualified_true, unqualified_false)) {
++        *result = unqualified_true;
++        return true;
++    }
++'''
++conditional_void_new = r'''    if (minic_type_is_pointer(when_true) && minic_type_is_pointer(when_false) &&
++        minic_type_unqualified(when_true, &unqualified_true) &&
++        minic_type_unqualified(when_false, &unqualified_false)) {
++        MinicType true_pointee;
++        MinicType false_pointee;
++
++        if (minic_type_equal(unqualified_true, unqualified_false)) {
++            *result = unqualified_true;
++            return true;
++        }
++        if (minic_type_pointee(unqualified_true, &true_pointee) &&
++            minic_type_pointee(unqualified_false, &false_pointee) &&
++            (minic_type_assignment_compatible(unqualified_true, unqualified_false) ||
++             minic_type_assignment_compatible(unqualified_false, unqualified_true))) {
++            if (minic_type_is_void(true_pointee) && !minic_type_is_function(false_pointee)) {
++                *result = unqualified_true;
++                return true;
++            }
++            if (minic_type_is_void(false_pointee) && !minic_type_is_function(true_pointee)) {
++                *result = unqualified_false;
++                return true;
++            }
++        }
++    }
++'''
++for conditional_path in ("src/frontend/parser_expression.c", "src/frontend/ast_verifier.c"):
++    replace_once(conditional_path, conditional_void_old, conditional_void_new)
++
++print("staged conditional void/object pointer composition")
++
++# General for-update expressions are parsed into detached statement IDs and appended to the
++# lowered loop body after the user body. This admits ordinary assignments such as
++# `cursor = cursor->next` without changing the existing while-based loop lowering.
++parser_statement = Path("src/frontend/parser_statement.c")
++parser_statement_text = parser_statement.read_text()
++for_update_start = parser_statement_text.find("static bool parse_for_update(")
++for_update_end = parser_statement_text.find("\nstatic bool parse_for(", for_update_start)
++if for_update_start < 0 or for_update_end < 0:
++    raise RuntimeError("src/frontend/parser_statement.c: cannot locate parse_for_update")
++
++general_for_update = r'''static bool parse_for_update(MinicParser *parser, MinicStatementId *statement_id) {
++    MinicSourcePosition begin;
++    MinicExpressionId first_id;
++    const MinicExpression *first;
++    MinicStatement statement;
++    MinicTokenKind assignment_token;
++
++    if (parser == NULL || statement_id == NULL) {
++        return false;
++    }
++    begin = parser->current.span.begin;
++    if (parser->current.kind == MINIC_TOKEN_LPAREN) {
++        if (!minic_parser_advance(parser) || parser->current.kind != MINIC_TOKEN_KW_VOID ||
++            !minic_parser_advance(parser) ||
++            !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')' after void cast")) {
++            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
++                minic_parser_error(parser, "for update only supports a discarded void cast here");
++            }
++            return false;
++        }
++    }
++
++    if (parser->current.kind == MINIC_TOKEN_PLUS_PLUS ||
++        parser->current.kind == MINIC_TOKEN_MINUS_MINUS) {
++        MinicTokenKind update_kind;
++        MinicExpressionId target_id;
++
++        update_kind = parser->current.kind;
++        if (!minic_parser_advance(parser) ||
++            !minic_parser_parse_expression(parser, &target_id, 0U)) {
++            return false;
++        }
++        return add_general_prefix_for_update(
++            parser, begin, target_id, update_kind, statement_id);
++    }
++
++    if (!minic_parser_parse_expression(parser, &first_id, 0U)) {
++        return false;
++    }
++    first = minic_c0_program_expression(parser->program, first_id);
++    if (first == NULL) {
++        minic_parser_error(parser, "invalid for update expression");
++        return false;
++    }
++    assignment_token = parser->current.kind;
++
++    (void)memset(&statement, 0, sizeof(statement));
++    statement.span.begin = begin;
++    statement.target_expression = MINIC_EXPRESSION_INVALID;
++    statement.expression = first_id;
++    statement.target_statement = MINIC_STATEMENT_INVALID;
++    statement.then_block = MINIC_BLOCK_INVALID;
++    statement.else_block = MINIC_BLOCK_INVALID;
++
++    if (assignment_token == MINIC_TOKEN_EQUAL) {
++        MinicType target_type;
++        MinicSourceSpan target_span;
++        const MinicExpression *assigned;
++
++        if (!expression_is_modifiable_lvalue(first)) {
++            minic_parser_error(parser, "assignment target must be a modifiable lvalue");
++            return false;
++        }
++        target_type = first->type;
++        target_span = first->span;
++        statement.kind = MINIC_STATEMENT_ASSIGN;
++        statement.target_expression = first_id;
++        statement.expression = MINIC_EXPRESSION_INVALID;
++        if (!minic_parser_advance(parser) ||
++            !minic_parser_parse_expression(parser, &statement.expression, 0U) ||
++            !apply_assignment_conversion(parser, target_type, &statement.expression)) {
++            return false;
++        }
++        assigned = minic_c0_program_expression(parser->program, statement.expression);
++        if (assigned == NULL ||
++            !minic_c0_assignment_compatible(parser->program, target_type, statement.expression)) {
++            minic_parser_error(parser, "assignment type does not match target type");
++            return false;
++        }
++        statement.span.begin = target_span.begin;
++        statement.span.end = assigned->span.end;
++        return minic_c0_program_add_statement(parser->program, &statement, statement_id);
++    }
++
++    statement.kind = MINIC_STATEMENT_EXPRESSION;
++    statement.span.end = first->span.end;
++    return minic_c0_program_add_statement(parser->program, &statement, statement_id);
++}
++'''
++
++parser_statement.write_text(
++    parser_statement_text[:for_update_start] +
++    general_for_update +
++    parser_statement_text[for_update_end:]
++)
++
++# The old local-only updater is no longer referenced after general for-update lowering.
++parser_statement_text = parser_statement.read_text()
++legacy_update_start = parser_statement_text.find("static bool add_for_update_statement(")
++general_prefix_start = parser_statement_text.find(
++    "static bool add_general_prefix_for_update(", legacy_update_start
++)
++if legacy_update_start < 0 or general_prefix_start < 0:
++    raise RuntimeError("src/frontend/parser_statement.c: cannot locate legacy for-update helper")
++parser_statement.write_text(
++    parser_statement_text[:legacy_update_start] + parser_statement_text[general_prefix_start:]
++)
++
++# `-S` compiles translation units, not executables. Keep main metadata when main exists, but do
++# not reject library source merely because it has no entry point; the RV64 writer already emits
++# every defined function independently.
++replace_once(
++    "src/frontend/parser_function.c",
++    '''    if (success && program->entry_function == MINIC_FUNCTION_INVALID) {
++        minic_parser_error(&parser, "translation unit requires an int main function");
++        success = false;
++    }
++
++''',
++    "",
++)
++replace_once(
++    "src/target/riscv64/codegen_function.c",
++    '''    {
++        const MinicFunction *entry_function;
++
++        entry_function = minic_c0_program_function(program, program->entry_function);
++        if (entry_function == NULL || !entry_function->is_defined ||
++            program->function_count == 0U) {
++            minic_riscv64_set_diagnostic(diagnostic, path, "entry function is missing or invalid");
++            return false;
++        }
++    }
++
++''',
++    '''    if (program == NULL) {
++        minic_riscv64_set_diagnostic(diagnostic, path, "program is required");
++        return false;
++    }
++
++''',
++)
++
++# Conditional expression branch conversions happen after the frontend has already validated and
++# selected a legal result type. All supported pointers use the same RV64 scalar representation,
++# so pointer-to-pointer branch conversion is a representation-preserving no-op (including
++# object-pointer/void-pointer composition and top-level qualification changes).
++replace_once(
++    "src/target/riscv64/codegen_expression.c",
++    '''    if (minic_type_equal(source_type, result_type)) {
++        return true;
++    }
++    if (minic_type_is_integer(source_type) && minic_type_is_integer(result_type)) {
++''',
++    '''    if (minic_type_equal(source_type, result_type)) {
++        return true;
++    }
++    if (minic_type_is_pointer(source_type) && minic_type_is_pointer(result_type)) {
++        return true;
++    }
++    if (minic_type_is_integer(source_type) && minic_type_is_integer(result_type)) {
++''',
++)
++
++print("staged general for-updates, library translation units, and conditional pointer lowering")

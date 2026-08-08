@@ -74,6 +74,22 @@ static bool remap_non_cast_expression(MinicExpression *expression,
                                    current_old_index,
                                    expression->value.binary.right,
                                    &expression->value.binary.right);
+    case MINIC_EXPRESSION_CONDITIONAL:
+        return remap_expression_id(mapping,
+                                   old_expression_count,
+                                   current_old_index,
+                                   expression->value.conditional.condition,
+                                   &expression->value.conditional.condition) &&
+               remap_expression_id(mapping,
+                                   old_expression_count,
+                                   current_old_index,
+                                   expression->value.conditional.when_true,
+                                   &expression->value.conditional.when_true) &&
+               remap_expression_id(mapping,
+                                   old_expression_count,
+                                   current_old_index,
+                                   expression->value.conditional.when_false,
+                                   &expression->value.conditional.when_false);
     case MINIC_EXPRESSION_CALL:
         if (expression->value.call.argument_count > 8U) {
             return false;

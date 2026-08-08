@@ -19,7 +19,7 @@ minic_riscv64_emit_normalize_integer(FILE *file, MinicType type, const char *reg
 }
 
 static bool minic_riscv64_emit_variadic_argument_conversion(FILE *file, MinicType type) {
-    if (minic_type_is_pointer(type)) {
+    if (minic_type_is_pointer(type) || minic_type_is_double(type)) {
         return true;
     }
     if (!minic_type_is_integer(type)) {
@@ -185,6 +185,22 @@ static bool minic_riscv64_emit_double_comparison(FILE *file,
     default:
         return false;
     }
+}
+
+static bool minic_riscv64_emit_conditional_result_conversion(FILE *file,
+                                                             MinicType source_type,
+                                                             MinicType result_type) {
+    if (minic_type_equal(source_type, result_type)) {
+        return true;
+    }
+    if (minic_type_is_integer(source_type) && minic_type_is_integer(result_type)) {
+        return minic_riscv64_emit_integer_conversion(file, result_type, "a0");
+    }
+    if (minic_type_is_integer(source_type) && minic_type_is_double(result_type)) {
+        return minic_riscv64_emit_integer_to_double(file, source_type, "a0", "ft0") &&
+               fprintf(file, "  fmv.x.d a0, ft0\n") >= 0;
+    }
+    return false;
 }
 
 static bool minic_riscv64_emit_scale_register(FILE *file,
@@ -498,6 +514,7 @@ bool minic_riscv64_emit_expression(FILE *file,
         MinicType common_integer_type;
         bool has_integer_common_type;
         bool has_pointer_equality;
+        bool has_pointer_relational;
         size_t element_size;
 
         if (expression->value.binary.operator_kind == MINIC_BINARY_LOGICAL_AND ||
@@ -513,6 +530,10 @@ bool minic_riscv64_emit_expression(FILE *file,
             minic_type_integer_common(left->type, right->type, &common_integer_type);
         has_pointer_equality = minic_c0_pointer_equality_compatible(
             program, expression->value.binary.left, expression->value.binary.right);
+        has_pointer_relational = left != NULL && right != NULL &&
+                                 minic_type_is_pointer(left->type) &&
+                                 minic_type_is_pointer(right->type) &&
+                                 minic_type_equal(expression->type, minic_type_int());
         if (left == NULL || right == NULL ||
             !minic_riscv64_emit_expression(
                 file, program, function, expression->value.binary.left) ||
@@ -566,6 +587,18 @@ bool minic_riscv64_emit_expression(FILE *file,
                                    : "  subw a0, t0, a0\n") >= 0 &&
                        minic_riscv64_emit_integer_result_conversion(
                            file, common_integer_type, expression->type, "a0");
+            }
+            if (minic_type_is_pointer(left->type) && minic_type_is_pointer(right->type) &&
+                minic_type_equal(expression->type, minic_type_long()) &&
+                minic_riscv64_pointer_element_size(program, left->type, &element_size)) {
+                if (element_size == 1U) {
+                    return fprintf(file, "  sub a0, t0, a0\n") >= 0;
+                }
+                return fprintf(file,
+                               "  sub a0, t0, a0\n"
+                               "  li t1, %zu\n"
+                               "  div a0, a0, t1\n",
+                               element_size) >= 0;
             }
             if (minic_type_is_pointer(left->type) && minic_type_is_integer(right->type) &&
                 minic_riscv64_pointer_element_size(program, left->type, &element_size)) {
@@ -638,24 +671,36 @@ bool minic_riscv64_emit_expression(FILE *file,
             return (has_integer_common_type || has_pointer_equality) &&
                    fprintf(file, "  xor a0, t0, a0\n  snez a0, a0\n") >= 0;
         case MINIC_BINARY_LESS:
+            if (has_pointer_relational) {
+                return fprintf(file, "  sltu a0, t0, a0\n") >= 0;
+            }
             return has_integer_common_type &&
                    fprintf(file,
                            minic_type_is_unsigned_integer(common_integer_type)
                                ? "  sltu a0, t0, a0\n"
                                : "  slt a0, t0, a0\n") >= 0;
         case MINIC_BINARY_LESS_EQUAL:
+            if (has_pointer_relational) {
+                return fprintf(file, "  sltu a0, a0, t0\n  xori a0, a0, 1\n") >= 0;
+            }
             return has_integer_common_type &&
                    fprintf(file,
                            minic_type_is_unsigned_integer(common_integer_type)
                                ? "  sltu a0, a0, t0\n  xori a0, a0, 1\n"
                                : "  slt a0, a0, t0\n  xori a0, a0, 1\n") >= 0;
         case MINIC_BINARY_GREATER:
+            if (has_pointer_relational) {
+                return fprintf(file, "  sltu a0, a0, t0\n") >= 0;
+            }
             return has_integer_common_type &&
                    fprintf(file,
                            minic_type_is_unsigned_integer(common_integer_type)
                                ? "  sltu a0, a0, t0\n"
                                : "  slt a0, a0, t0\n") >= 0;
         case MINIC_BINARY_GREATER_EQUAL:
+            if (has_pointer_relational) {
+                return fprintf(file, "  sltu a0, t0, a0\n  xori a0, a0, 1\n") >= 0;
+            }
             return has_integer_common_type &&
                    fprintf(file,
                            minic_type_is_unsigned_integer(common_integer_type)
@@ -666,6 +711,36 @@ bool minic_riscv64_emit_expression(FILE *file,
             return false;
         }
         return false;
+    }
+    case MINIC_EXPRESSION_CONDITIONAL: {
+        const MinicExpression *condition;
+        const MinicExpression *when_true;
+        const MinicExpression *when_false;
+
+        condition = minic_c0_program_expression(program, expression->value.conditional.condition);
+        when_true = minic_c0_program_expression(program, expression->value.conditional.when_true);
+        when_false = minic_c0_program_expression(program, expression->value.conditional.when_false);
+        if (condition == NULL || when_true == NULL || when_false == NULL ||
+            !type_is_condition_scalar(condition->type) ||
+            !minic_riscv64_emit_expression(
+                file, program, function, expression->value.conditional.condition) ||
+            fprintf(file, "  beqz a0, .Lminic_cond_false_%zu\n", expression_id) < 0 ||
+            !minic_riscv64_emit_expression(
+                file, program, function, expression->value.conditional.when_true) ||
+            !minic_riscv64_emit_conditional_result_conversion(
+                file, when_true->type, expression->type) ||
+            fprintf(file,
+                    "  j .Lminic_cond_end_%zu\n"
+                    ".Lminic_cond_false_%zu:\n",
+                    expression_id,
+                    expression_id) < 0 ||
+            !minic_riscv64_emit_expression(
+                file, program, function, expression->value.conditional.when_false) ||
+            !minic_riscv64_emit_conditional_result_conversion(
+                file, when_false->type, expression->type)) {
+            return false;
+        }
+        return fprintf(file, ".Lminic_cond_end_%zu:\n", expression_id) >= 0;
     }
     case MINIC_EXPRESSION_CALL: {
         const MinicFunction *direct_callee;

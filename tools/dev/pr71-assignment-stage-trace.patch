@@ -1,0 +1,54 @@
+diff --git a/src/target/riscv64/codegen_statement.c b/src/target/riscv64/codegen_statement.c
+--- a/src/target/riscv64/codegen_statement.c
++++ b/src/target/riscv64/codegen_statement.c
+@@ -39,14 +39,39 @@ static bool minic_riscv64_emit_assignment(FILE *file,
+ 
+     target = minic_c0_program_expression(program, statement->target_expression);
+     value = minic_c0_program_expression(program, statement->expression);
+-    if (target == NULL || value == NULL || target->value_category != MINIC_VALUE_LVALUE ||
+-        !minic_c0_assignment_compatible(program, target->type, statement->expression)) {
++    if (target == NULL || value == NULL || target->value_category != MINIC_VALUE_LVALUE) {
++        fprintf(stderr, "ASSIGN_FAIL shape target=%zu value=%zu\n",
++                (size_t)statement->target_expression,
++                (size_t)statement->expression);
+         return false;
+     }
+-    return minic_riscv64_emit_expression(file, program, function, statement->expression) &&
+-           fprintf(file, "  addi sp, sp, -16\n  sd a0, 0(sp)\n") >= 0 &&
+-           minic_riscv64_emit_lvalue_address(
+-               file, program, function, statement->target_expression) &&
+-           fprintf(file, "  ld t0, 0(sp)\n  addi sp, sp, 16\n") >= 0 &&
+-           minic_riscv64_emit_scalar_store(file, target->type, "t0", "a0");
++    if (!minic_c0_assignment_compatible(program, target->type, statement->expression)) {
++        fprintf(stderr, "ASSIGN_FAIL compatibility target=%zu value=%zu\n",
++                (size_t)statement->target_expression,
++                (size_t)statement->expression);
++        return false;
++    }
++    if (!minic_riscv64_emit_expression(file, program, function, statement->expression)) {
++        fprintf(stderr, "ASSIGN_FAIL rhs target=%zu value=%zu value_kind=%d\n",
++                (size_t)statement->target_expression,
++                (size_t)statement->expression,
++                (int)value->kind);
++        return false;
++    }
++    if (fprintf(file, "  addi sp, sp, -16\n  sd a0, 0(sp)\n") < 0) {
++        return false;
++    }
++    if (!minic_riscv64_emit_lvalue_address(
++            file, program, function, statement->target_expression)) {
++        fprintf(stderr, "ASSIGN_FAIL target-address target=%zu target_kind=%d\n",
++                (size_t)statement->target_expression,
++                (int)target->kind);
++        return false;
++    }
++    if (fprintf(file, "  ld t0, 0(sp)\n  addi sp, sp, 16\n") < 0) {
++        return false;
++    }
++    if (!minic_riscv64_emit_scalar_store(file, target->type, "t0", "a0")) {
++        fprintf(stderr, "ASSIGN_FAIL store target=%zu\n",
++                (size_t)statement->target_expression);
++        return false;
++    }
++    return true;
+ }
