@@ -19,15 +19,16 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          import re
 
           path = Path('src/frontend/parser_statement.c')
           text = path.read_text()
 
-          old = '#include <stdio.h>\n#include <string.h>\n'
-          new = '#include <limits.h>\n#include <stdio.h>\n#include <string.h>\n'
-          if text.count(old) != 1:
+          include_old = '#include <stdio.h>\n#include <string.h>\n'
+          include_new = '#include <limits.h>\n#include <stdio.h>\n#include <string.h>\n'
+          if text.count(include_old) != 1:
               raise SystemExit('include insertion site not found')
-          text = text.replace(old, new, 1)
+          text = text.replace(include_old, include_new, 1)
 
           marker = 'static bool parse_local_declarator(MinicParser *parser, MinicType base_type) {\n'
           helper = r'''static bool add_zero_initialized_local_array(MinicParser *parser,
@@ -42,7 +43,8 @@ jobs:
               size_t index;
 
               local = minic_c0_program_local(parser->program, local_id);
-              if (local == NULL || local->element_count <= 1U || local->element_count > (size_t)INT_MAX) {
+              if (local == NULL || local->element_count <= 1U ||
+                  local->element_count > (size_t)INT_MAX) {
                   minic_parser_error(parser, "unsupported local array zero initializer");
                   return false;
               }
@@ -145,18 +147,20 @@ jobs:
               raise SystemExit('local declarator insertion site not found')
           text = text.replace(marker, helper + marker, 1)
 
-          old = '''        if (local.element_count != 1U) {
-              minic_parser_error(parser, "array initializers are not supported yet");
-              return false;
-          }
-          (void)memset(&statement, 0, sizeof(statement));'''
-          new = '''        if (local.element_count != 1U) {
+          pattern = re.compile(
+              r'if \(local\.element_count != 1U\) \{\s*'
+              r'minic_parser_error\(parser, "array initializers are not supported yet"\);\s*'
+              r'return false;\s*\}',
+              re.MULTILINE,
+          )
+          replacement = '''if (local.element_count != 1U) {
               return parse_local_array_zero_initializer(parser, local_id, local.name_span);
-          }
-          (void)memset(&statement, 0, sizeof(statement));'''
-          if text.count(old) != 1:
+          }'''
+          text, count = pattern.subn(replacement, text, count=1)
+          if count != 1:
               raise SystemExit('array initializer guard site not found')
-          path.write_text(text.replace(old, new, 1))
+
+          path.write_text(text)
           PY
           clang-format-18 -i src/frontend/parser_statement.c
 
