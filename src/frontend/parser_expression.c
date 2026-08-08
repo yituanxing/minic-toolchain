@@ -117,6 +117,7 @@ static bool parse_local_reference(MinicParser *parser,
 static bool parse_global_reference(MinicParser *parser,
                                    MinicSourceSpan name_span,
                                    MinicGlobalObjectId global_object_id,
+                                   bool allow_record_lvalue,
                                    MinicExpressionId *expression_id) {
     const MinicGlobalObject *object;
     MinicExpression base_expression;
@@ -130,7 +131,7 @@ static bool parse_global_reference(MinicParser *parser,
     }
     array_object = minic_type_is_array(object->type);
     if (!array_object && minic_type_is_record(object->type)) {
-        if (parser->current.kind != MINIC_TOKEN_DOT) {
+        if (parser->current.kind != MINIC_TOKEN_DOT && !allow_record_lvalue) {
             minic_parser_error(parser, "global record object requires member access");
             return false;
         }
@@ -457,7 +458,8 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
             return finish_value_expression(parser, primary_id, decay_array, expression_id);
         }
         if (global_object_id != MINIC_GLOBAL_OBJECT_INVALID) {
-            if (!parse_global_reference(parser, name_span, global_object_id, &primary_id)) {
+            if (!parse_global_reference(
+                    parser, name_span, global_object_id, !decay_array, &primary_id)) {
                 return false;
             }
             return finish_value_expression(parser, primary_id, decay_array, expression_id);
