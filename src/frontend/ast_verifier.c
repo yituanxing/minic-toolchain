@@ -423,7 +423,8 @@ verify_expression(const MinicC0Program *program, size_t expression_index, MinicC
         operand = expression_before(program, expression->value.unary.operand, expression_index);
         return form == MINIC_C0_AST_NORMALIZED && operand != NULL &&
                expression->value_category == MINIC_VALUE_RVALUE &&
-               minic_type_is_double(expression->type) && minic_type_is_integer(operand->type);
+               ((minic_type_is_double(expression->type) && minic_type_is_integer(operand->type)) ||
+                (minic_type_is_integer(expression->type) && minic_type_is_double(operand->type)));
     case MINIC_EXPRESSION_SUBSCRIPT:
         left = expression_before(program, expression->value.subscript.base, expression_index);
         right = expression_before(program, expression->value.subscript.index, expression_index);
