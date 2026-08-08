@@ -23,53 +23,53 @@ External GCC may preprocess, assemble, link, and provide CRT/libc. MiniC must co
 
 ## Accepted compiler capabilities / 已越过能力
 
-The unchanged core now crosses the previously frozen language features plus scalar conditions, generalized bounded `for` clauses, character constants, function-valued static relocations, and bounded `sizeof` semantics.
+The unchanged core now crosses the previously frozen language features plus scalar conditions, generalized bounded `for` clauses, character constants, function-valued static relocations, bounded `sizeof`, and generic non-variadic calls through function-pointer expressions.
 
-本分支完成 `sizeof` / no-decay 语义簇：
+本分支完成通用 **callee-expression / indirect function call**：
 
-- Lexer 将 `sizeof` 识别为独立关键字；
-- AST 保留独立 `MINIC_EXPRESSION_SIZEOF`，记录被测类型而不是把 operand 作为运行时 child；
-- `sizeof(type-name)` 与 `sizeof unary-expression` 均受支持；
-- operand 在 array-to-pointer decay 之前保留真实对象类型；
-- local array 的既有 `element_count` 表示会在 `sizeof` 上下文重建为数组类型；
-- verifier 要求 bounded complete object type；
-- RV64 backend 通过 target layout 生成常量，不生成 operand 的运行时代码。
+- 继续复用单一 `MINIC_EXPRESSION_CALL`；
+- direct call 保留 `function_id`，indirect call 使用 callee expression；
+- postfix `()` 可作用于 pointer-to-function expression，包括 record member；
+- 参数类型从既有 `MinicFunctionType` 验证；
+- normalization 与 verifier 都把 indirect callee 作为真实表达式边处理；
+- RV64 在求值参数之前保存 callee 地址，参数恢复到 `a0..a7` 后重新加载到 `t0`，最后执行 `jalr ra, t0, 0`；
+- direct / indirect 共用返回值规范化路径。
 
-这一结构与冻结 Python 编译器的成熟 `SizeOf(expr|type)` 模型一致：`sizeof` operand 是 unevaluated context，target size 在后续 lowering/layout 层确定，而不是在 Parser 中写死。
+这一结构与冻结 Python 编译器的通用 `Call(name, args, callee)` 模型一致，没有引入 cJSON hook 特判。
 
-A permanent `sizeof_semantics` GCC/MiniC RV64 differential is registered as the 54th program. It covers string literals, primitive integer/floating types, pointers, records, local arrays, and proves non-evaluation with `sizeof(bump(&side_effect))`.
+A permanent `indirect_function_calls` GCC/MiniC RV64 differential is registered as the 55th program. It covers static record function-pointer initialization, ordinary indirect calls, and nested indirect calls so the outer callee must survive evaluation of an inner call argument.
 
-永久 `sizeof_semantics` differential 已登记为第 54 个 RV64/QEMU 程序，并验证 operand 不求值。
+永久第 55 个 differential `indirect_function_calls` 已在 RV64/QEMU 上验证，包括 nested indirect call 的 callee 生命周期。
 
 ## Current exact frontier / 当前精确前沿
 
-Discovery Run #920 passed source inventory, clang-format 18, Debug, Release `-Werror`, ASan/UBSan, focused suites, all **54** permanent GCC/MiniC RV64 differential programs including `sizeof_semantics`, and frozen tiny-AES.
+Discovery Run #933 passed source inventory, clang-format 18, Debug, Release `-Werror`, ASan/UBSan, focused suites, all **55** permanent GCC/MiniC RV64 differential programs including `indirect_function_calls`, and frozen tiny-AES.
 
 The unchanged cJSON source crossed:
-
-```c
-length = strlen((const char*)string) + sizeof("");
-```
-
-and reached the function-pointer call:
 
 ```c
 copy = (unsigned char*)hooks->allocate(length);
 ```
 
+and continued into `cJSON_InitHooks`, where it reached:
+
+```c
+global_hooks.allocate = malloc;
+```
+
 with exact first diagnostic:
 
 ```text
-cJSON.i:175:43: error: expected ';'
+cJSON.i:187:39: error: use of undeclared local
 ```
 
-The member expression `hooks->allocate` already has the declared pointer-to-function type. The next missing capability is therefore generic postfix call on a function-pointer expression / indirect call lowering, not another cJSON-specific declaration or hook special case.
+This is a new capability boundary. Static function-address relocations already exist, but a bare function designator such as `malloc` is not yet accepted as a general runtime expression value on the right-hand side of an assignment. The next branch should therefore add generic runtime function-designator-to-pointer semantics and RV64 symbol-address materialization, rather than extending the indirect-call PR.
 
-当前下一能力簇是通用 **callee-expression / indirect function call**：postfix `()` 应接受函数指针表达式，调用节点应统一 direct/indirect callee，RV64 参数布置继续复用既有路径，indirect 分支最终使用 `jalr`。这一方向与冻结 Python 编译器的通用 `Call(name, args, callee)` 模型一致。
+当前下一能力簇是通用 **runtime function designator value**：让函数名在普通表达式上下文中衰变/形成函数指针值，并可参与赋值；这与本分支已经完成的“通过函数指针调用”是相邻但独立的语义层。
 
 ## Validation / 验证
 
-Run #920 is the discovery run proving the 54th differential and the new line-175 frontier. A latest-head clean run with the updated line-175 probe is required before this branch is merged.
+Run #933 is the discovery run proving the 55th differential and the new line-187 frontier. A latest-head clean run with the updated line-187 probe is required before this branch is merged.
 
 ## Completion result / 完成标志
 
