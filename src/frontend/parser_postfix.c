@@ -211,7 +211,9 @@ static bool parse_indirect_arguments(MinicParser *parser,
         call->value.call.arguments[argument_index] = argument_id;
         if (argument_index + 1U < function_type->parameter_count) {
             if (parser->current.kind != MINIC_TOKEN_COMMA || !minic_parser_advance(parser)) {
-                minic_parser_error(parser, "indirect call argument count does not match declaration");
+                minic_parser_error(
+                    parser,
+                    "indirect call argument count does not match declaration");
                 return false;
             }
         }
