@@ -52,6 +52,21 @@ static const char *minic_riscv64_integer_to_double_instruction(MinicType type) {
     return minic_type_is_unsigned_integer(type) ? "fcvt.d.wu" : "fcvt.d.w";
 }
 
+static bool minic_riscv64_emit_integer_to_double(FILE *file,
+                                                 MinicType type,
+                                                 const char *integer_register,
+                                                 const char *floating_register) {
+    const char *instruction;
+
+    instruction = minic_riscv64_integer_to_double_instruction(type);
+    return instruction != NULL &&
+           fprintf(file,
+                   "  %s %s, %s\n",
+                   instruction,
+                   floating_register,
+                   integer_register) >= 0;
+}
+
 static bool type_is_condition_scalar(MinicType type) {
     return minic_type_is_integer(type) || minic_type_is_pointer(type);
 }
@@ -141,25 +156,18 @@ static bool minic_riscv64_emit_double_comparison(FILE *file,
                                                  MinicBinaryOperator operator_kind,
                                                  MinicType left_type,
                                                  MinicType right_type) {
-    const char *left_conversion;
-    const char *right_conversion;
-
-    left_conversion = minic_riscv64_integer_to_double_instruction(left_type);
-    right_conversion = minic_riscv64_integer_to_double_instruction(right_type);
     if (minic_type_is_double(left_type)) {
         if (fprintf(file, "  fmv.d.x ft0, t0\n") < 0) {
             return false;
         }
-    } else if (left_conversion == NULL ||
-               fprintf(file, "  %s ft0, t0\n", left_conversion) < 0) {
+    } else if (!minic_riscv64_emit_integer_to_double(file, left_type, "t0", "ft0")) {
         return false;
     }
     if (minic_type_is_double(right_type)) {
         if (fprintf(file, "  fmv.d.x ft1, a0\n") < 0) {
             return false;
         }
-    } else if (right_conversion == NULL ||
-               fprintf(file, "  %s ft1, a0\n", right_conversion) < 0) {
+    } else if (!minic_riscv64_emit_integer_to_double(file, right_type, "a0", "ft1")) {
         return false;
     }
 
@@ -414,21 +422,16 @@ bool minic_riscv64_emit_expression(FILE *file,
             file, program, function, expression->value.unary.operand);
     case MINIC_EXPRESSION_CONVERSION: {
         const MinicExpression *operand;
-        const char *instruction;
 
         operand = minic_c0_program_expression(program, expression->value.unary.operand);
         if (operand == NULL || !minic_type_is_double(expression->type) ||
             !minic_type_is_integer(operand->type)) {
             return false;
         }
-        instruction = minic_riscv64_integer_to_double_instruction(operand->type);
-        return instruction != NULL &&
-               minic_riscv64_emit_expression(
+        return minic_riscv64_emit_expression(
                    file, program, function, expression->value.unary.operand) &&
-               fprintf(file,
-                       "  %s ft0, a0\n"
-                       "  fmv.x.d a0, ft0\n",
-                       instruction) >= 0;
+               minic_riscv64_emit_integer_to_double(file, operand->type, "a0", "ft0") &&
+               fprintf(file, "  fmv.x.d a0, ft0\n") >= 0;
     }
     case MINIC_EXPRESSION_ADDRESS_OF:
         return minic_riscv64_emit_lvalue_address(
