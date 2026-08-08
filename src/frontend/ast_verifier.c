@@ -462,7 +462,8 @@ verify_expression(const MinicC0Program *program, size_t expression_index, MinicC
         }
         if (expression->value.unary.operator_kind == MINIC_UNARY_POST_INCREMENT ||
             expression->value.unary.operator_kind == MINIC_UNARY_POST_DECREMENT) {
-            if (operand->value_category != MINIC_VALUE_LVALUE || minic_type_is_const(operand->type) ||
+            if (operand->value_category != MINIC_VALUE_LVALUE ||
+                minic_type_is_const(operand->type) ||
                 !minic_type_equal(expression->type, operand->type)) {
                 return false;
             }
