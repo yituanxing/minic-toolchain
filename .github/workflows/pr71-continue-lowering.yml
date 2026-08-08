@@ -15,7 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Add continue token and parser lowering
+      - name: Apply continue token and internal-label lowering
         run: |
           python3 - <<'PY'
           from pathlib import Path
@@ -29,7 +29,6 @@ jobs:
                   raise SystemExit(f'{path}: expected one replacement for {old!r}, got {count}')
               p.write_text(text.replace(old, new, 1))
 
-          # Token model.
           replace_once(
               'src/frontend/token.h',
               '    MINIC_TOKEN_KW_BREAK,\n',
@@ -42,8 +41,6 @@ jobs:
               'src/frontend/lexer.c',
               '    if (length == 5U && memcmp(text, "break", 5U) == 0) {\n        return MINIC_TOKEN_KW_BREAK;\n    }\n',
               '    if (length == 5U && memcmp(text, "break", 5U) == 0) {\n        return MINIC_TOKEN_KW_BREAK;\n    }\n    if (length == 8U && memcmp(text, "continue", 8U) == 0) {\n        return MINIC_TOKEN_KW_CONTINUE;\n    }\n')
-
-          # Parser state: one active continue target, saved/restored by nested loops.
           replace_once(
               'src/frontend/parser_internal.h',
               '    size_t loop_depth;\n    size_t switch_depth;\n',
@@ -55,7 +52,6 @@ jobs:
 
           path = Path('src/frontend/parser_statement.c')
           text = path.read_text()
-
           helper_marker = 'static bool parse_while(MinicParser *parser) {\n'
           helper = r'''static bool add_internal_continue_label(MinicParser *parser,
                                                MinicSourceSpan span,
@@ -139,7 +135,6 @@ jobs:
                       parser->program, parser->current_block, continue_label)) {
                   return false;
               }
-
               previous_continue_target = parser->continue_target_statement;
               parser->continue_target_statement = continue_label;
               success = parse_loop_branch(parser, &statement.then_block);
@@ -189,7 +184,6 @@ jobs:
               } else if (!parse_expression_or_assignment_statement(parser, false)) {
                   return false;
               }
-
               if (parser->current.kind == MINIC_TOKEN_SEMICOLON) {
                   if (!minic_parser_advance(parser)) {
                       return false;
@@ -269,14 +263,7 @@ jobs:
           if (current_identifier_is_goto(parser)) {'''
           if text.count(dispatch_old) != 1:
               raise SystemExit('statement dispatch site not found')
-          text = text.replace(dispatch_old, dispatch_new, 1)
-
-          error_old = '"expected compound, if, while, for, switch, case/default, break, "\n                       "goto/label, declaration, expression, return, or \'}\'"'
-          error_new = '"expected compound, if, while, for, switch, case/default, break/continue, "\n                       "goto/label, declaration, expression, return, or \'}\'"'
-          if error_old in text:
-              text = text.replace(error_old, error_new, 1)
-
-          path.write_text(text)
+          path.write_text(text.replace(dispatch_old, dispatch_new, 1))
           PY
           clang-format-18 -i \
             src/frontend/token.h \
