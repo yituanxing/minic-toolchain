@@ -42,6 +42,7 @@ typedef enum MinicExpressionKind {
     MINIC_EXPRESSION_MEMBER,
     MINIC_EXPRESSION_UNARY,
     MINIC_EXPRESSION_BINARY,
+    MINIC_EXPRESSION_CONDITIONAL,
     MINIC_EXPRESSION_CALL
 } MinicExpressionKind;
 
@@ -110,6 +111,11 @@ typedef struct MinicExpression {
             MinicExpressionId left;
             MinicExpressionId right;
         } binary;
+        struct {
+            MinicExpressionId condition;
+            MinicExpressionId when_true;
+            MinicExpressionId when_false;
+        } conditional;
     } value;
 } MinicExpression;
 
