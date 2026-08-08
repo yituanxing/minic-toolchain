@@ -52,6 +52,12 @@ const char *minic_token_kind_name(MinicTokenKind kind) {
         return "while";
     case MINIC_TOKEN_KW_FOR:
         return "for";
+    case MINIC_TOKEN_KW_SWITCH:
+        return "switch";
+    case MINIC_TOKEN_KW_CASE:
+        return "case";
+    case MINIC_TOKEN_KW_DEFAULT:
+        return "default";
     case MINIC_TOKEN_KW_BREAK:
         return "break";
     case MINIC_TOKEN_LPAREN:
@@ -66,6 +72,8 @@ const char *minic_token_kind_name(MinicTokenKind kind) {
         return ";";
     case MINIC_TOKEN_COMMA:
         return ",";
+    case MINIC_TOKEN_COLON:
+        return ":";
     case MINIC_TOKEN_DOT:
         return ".";
     case MINIC_TOKEN_ELLIPSIS:
