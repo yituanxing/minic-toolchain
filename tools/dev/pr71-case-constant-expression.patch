@@ -1,0 +1,140 @@
+diff --git a/src/frontend/parser_statement.c b/src/frontend/parser_statement.c
+--- a/src/frontend/parser_statement.c
++++ b/src/frontend/parser_statement.c
+@@ -663,6 +663,108 @@ static bool parse_switch(MinicParser *parser) {
+     return minic_parser_add_statement(parser, &statement);
+ }
+ 
++static bool case_integer_constant_value(const MinicC0Program *program,
++                                        MinicExpressionId expression_id,
++                                        int *value) {
++    const MinicExpression *expression;
++    int left;
++    int right;
++
++    if (program == NULL || value == NULL) {
++        return false;
++    }
++    expression = minic_c0_program_expression(program, expression_id);
++    if (expression == NULL || !minic_type_is_integer(expression->type)) {
++        return false;
++    }
++    switch (expression->kind) {
++    case MINIC_EXPRESSION_INTEGER:
++        *value = expression->value.integer_value;
++        return true;
++    case MINIC_EXPRESSION_UNARY:
++        if (!case_integer_constant_value(program, expression->value.unary.operand, &left)) {
++            return false;
++        }
++        switch (expression->value.unary.operator_kind) {
++        case MINIC_UNARY_PLUS:
++            *value = left;
++            return true;
++        case MINIC_UNARY_NEGATE:
++            *value = -left;
++            return true;
++        case MINIC_UNARY_LOGICAL_NOT:
++            *value = left == 0;
++            return true;
++        default:
++            return false;
++        }
++    case MINIC_EXPRESSION_BINARY:
++        if (!case_integer_constant_value(program, expression->value.binary.left, &left) ||
++            !case_integer_constant_value(program, expression->value.binary.right, &right)) {
++            return false;
++        }
++        switch (expression->value.binary.operator_kind) {
++        case MINIC_BINARY_ADD:
++            *value = left + right;
++            return true;
++        case MINIC_BINARY_SUBTRACT:
++            *value = left - right;
++            return true;
++        case MINIC_BINARY_MULTIPLY:
++            *value = left * right;
++            return true;
++        case MINIC_BINARY_DIVIDE:
++            if (right == 0) {
++                return false;
++            }
++            *value = left / right;
++            return true;
++        case MINIC_BINARY_REMAINDER:
++            if (right == 0) {
++                return false;
++            }
++            *value = left % right;
++            return true;
++        case MINIC_BINARY_SHIFT_LEFT:
++            if (right < 0 || right >= 31 || left < 0) {
++                return false;
++            }
++            *value = (int)((unsigned int)left << (unsigned int)right);
++            return true;
++        case MINIC_BINARY_SHIFT_RIGHT:
++            if (right < 0 || right >= 31) {
++                return false;
++            }
++            *value = left >> (unsigned int)right;
++            return true;
++        case MINIC_BINARY_BITWISE_AND:
++            *value = left & right;
++            return true;
++        case MINIC_BINARY_BITWISE_XOR:
++            *value = left ^ right;
++            return true;
++        case MINIC_BINARY_BITWISE_OR:
++            *value = left | right;
++            return true;
++        case MINIC_BINARY_EQUAL:
++            *value = left == right;
++            return true;
++        case MINIC_BINARY_NOT_EQUAL:
++            *value = left != right;
++            return true;
++        case MINIC_BINARY_LESS:
++            *value = left < right;
++            return true;
++        case MINIC_BINARY_LESS_EQUAL:
++            *value = left <= right;
++            return true;
++        case MINIC_BINARY_GREATER:
++            *value = left > right;
++            return true;
++        case MINIC_BINARY_GREATER_EQUAL:
++            *value = left >= right;
++            return true;
++        case MINIC_BINARY_LOGICAL_AND:
++            *value = left != 0 && right != 0;
++            return true;
++        case MINIC_BINARY_LOGICAL_OR:
++            *value = left != 0 || right != 0;
++            return true;
++        default:
++            return false;
++        }
++    default:
++        return false;
++    }
++}
++
+ static bool parse_case(MinicParser *parser) {
+     MinicParserSwitchContext *context;
+     MinicStatement statement;
+@@ -689,12 +791,9 @@ static bool parse_case(MinicParser *parser) {
+         !minic_parser_parse_expression(parser, &statement.expression, 0U)) {
+         return false;
+     }
+     constant = minic_c0_program_expression(parser->program, statement.expression);
+-    if (constant == NULL || constant->kind != MINIC_EXPRESSION_INTEGER ||
+-        !minic_type_is_integer(constant->type)) {
++    if (constant == NULL || !case_integer_constant_value(parser->program, statement.expression, &value)) {
+         minic_parser_error(parser, "case label currently requires one integer constant");
+         return false;
+     }
+-    value = constant->value.integer_value;
+     for (index = 0U; index < context->case_count; ++index) {
+         if (context->case_values[index] == value) {
+             minic_parser_error(parser, "duplicate case value");
