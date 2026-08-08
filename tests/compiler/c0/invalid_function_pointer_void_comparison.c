@@ -8,12 +8,14 @@ static int increment(int value) {
 
 static struct Hooks hooks = {increment};
 
-int main(void) {
-    int value;
-    void *object_pointer;
-    object_pointer = &value;
-    if (hooks.apply == object_pointer) {
+static int compare_object_pointer(struct Hooks *target, void *object_pointer) {
+    if (target->apply == object_pointer) {
         return 1;
     }
     return 0;
+}
+
+int main(void) {
+    int value;
+    return compare_object_pointer(&hooks, &value);
 }
