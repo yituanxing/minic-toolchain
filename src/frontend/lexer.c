@@ -449,6 +449,9 @@ bool minic_lexer_next(MinicLexer *lexer, MinicToken *token, MinicDiagnostic *dia
     case ',':
         token->kind = MINIC_TOKEN_COMMA;
         break;
+    case '?':
+        token->kind = MINIC_TOKEN_QUESTION;
+        break;
     case ':':
         token->kind = MINIC_TOKEN_COLON;
         break;
