@@ -293,7 +293,8 @@ static bool parse_expression_or_assignment_statement(MinicParser *parser,
     first_type = first_expression->type;
     assignment_token = parser->current.kind;
 
-    if (assignment_token != MINIC_TOKEN_EQUAL && assignment_token != MINIC_TOKEN_CARET_EQUAL) {
+    if (assignment_token != MINIC_TOKEN_EQUAL && assignment_token != MINIC_TOKEN_CARET_EQUAL &&
+        assignment_token != MINIC_TOKEN_PLUS_EQUAL) {
         if (!allow_expression_statement) {
             minic_parser_error(parser, "for initializer requires an assignment");
             return false;
@@ -316,6 +317,33 @@ static bool parse_expression_or_assignment_statement(MinicParser *parser,
     if (!minic_parser_advance(parser) ||
         !minic_parser_parse_expression(parser, &statement.expression, 0U)) {
         return false;
+    }
+    if (assignment_token == MINIC_TOKEN_PLUS_EQUAL) {
+        const MinicExpression *right_expression;
+        MinicExpression addition;
+        MinicExpressionId right_id;
+        MinicType common_type;
+
+        right_id = statement.expression;
+        right_expression = minic_c0_program_expression(parser->program, right_id);
+        if (right_expression == NULL || !minic_type_is_integer(first_type) ||
+            !minic_type_is_integer(right_expression->type) ||
+            !minic_type_integer_common(first_type, right_expression->type, &common_type)) {
+            minic_parser_error(parser, "compound addition assignment requires integer operands");
+            return false;
+        }
+        (void)memset(&addition, 0, sizeof(addition));
+        addition.kind = MINIC_EXPRESSION_BINARY;
+        addition.span.begin = statement.span.begin;
+        addition.span.end = right_expression->span.end;
+        addition.type = common_type;
+        addition.value_category = MINIC_VALUE_RVALUE;
+        addition.value.binary.operator_kind = MINIC_BINARY_ADD;
+        addition.value.binary.left = statement.target_expression;
+        addition.value.binary.right = right_id;
+        if (!minic_parser_add_expression(parser, &addition, &statement.expression)) {
+            return false;
+        }
     }
     if (statement.kind == MINIC_STATEMENT_ASSIGN &&
         !apply_assignment_conversion(parser, first_type, &statement.expression)) {
