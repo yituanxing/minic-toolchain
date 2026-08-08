@@ -163,4 +163,39 @@ diff --git a/tools/dev/pr71-update-platform.py b/tools/dev/pr71-update-platform.
 +    parser_statement_text[:legacy_update_start] + parser_statement_text[general_prefix_start:]
 +)
 +
-+print("staged general expression and assignment for-updates")
++# `-S` compiles translation units, not executables. Keep main metadata when main exists, but do
++# not reject library source merely because it has no entry point; the RV64 writer already emits
++# every defined function independently.
++replace_once(
++    "src/frontend/parser_function.c",
++    '''    if (success && program->entry_function == MINIC_FUNCTION_INVALID) {
++        minic_parser_error(&parser, "translation unit requires an int main function");
++        success = false;
++    }
++
++''',
++    "",
++)
++replace_once(
++    "src/target/riscv64/codegen_function.c",
++    '''    {
++        const MinicFunction *entry_function;
++
++        entry_function = minic_c0_program_function(program, program->entry_function);
++        if (entry_function == NULL || !entry_function->is_defined ||
++            program->function_count == 0U) {
++            minic_riscv64_set_diagnostic(diagnostic, path, "entry function is missing or invalid");
++            return false;
++        }
++    }
++
++''',
++    '''    if (program == NULL) {
++        minic_riscv64_set_diagnostic(diagnostic, path, "program is required");
++        return false;
++    }
++
++''',
++)
++
++print("staged general for-updates and library translation units")
