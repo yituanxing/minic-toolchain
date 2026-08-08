@@ -12,7 +12,7 @@ diff --git a/src/frontend/ast.h b/src/frontend/ast.h
 diff --git a/src/frontend/ast_verifier.c b/src/frontend/ast_verifier.c
 --- a/src/frontend/ast_verifier.c
 +++ b/src/frontend/ast_verifier.c
-@@ -516,6 +516,14 @@ verify_expression(const MinicC0Program *program, size_t expression_index, MinicC
+@@ -518,6 +518,14 @@ verify_expression(const MinicC0Program *program, size_t expression_index, MinicC
          return expression->value_category == MINIC_VALUE_LVALUE &&
                 minic_type_equal(expression->type, expected_type);
      }
@@ -41,7 +41,7 @@ diff --git a/src/frontend/cast_normalization.c b/src/frontend/cast_normalization
 diff --git a/src/target/riscv64/codegen_expression.c b/src/target/riscv64/codegen_expression.c
 --- a/src/target/riscv64/codegen_expression.c
 +++ b/src/target/riscv64/codegen_expression.c
-@@ -492,6 +492,10 @@ bool minic_riscv64_emit_expression(FILE *file,
+@@ -516,6 +516,10 @@ bool minic_riscv64_emit_expression(FILE *file,
          }
          return minic_riscv64_emit_scalar_load(file, expression->type, "a0", "a0");
      }
