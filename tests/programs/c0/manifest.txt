@@ -61,3 +61,4 @@ local_double_objects
 integer_to_double_conversion
 switch_control_flow
 postfix_integer_updates
+named_goto_labels
