@@ -1,7 +1,61 @@
+diff --git a/src/frontend/ast.h b/src/frontend/ast.h
+--- a/src/frontend/ast.h
++++ b/src/frontend/ast.h
+@@ -40,6 +40,7 @@ typedef enum MinicExpressionKind {
+     MINIC_EXPRESSION_DEREFERENCE,
+     MINIC_EXPRESSION_SUBSCRIPT,
+     MINIC_EXPRESSION_MEMBER,
++    MINIC_EXPRESSION_LVALUE_READ,
+     MINIC_EXPRESSION_UNARY,
+     MINIC_EXPRESSION_BINARY,
+     MINIC_EXPRESSION_CONDITIONAL,
+diff --git a/src/frontend/ast_verifier.c b/src/frontend/ast_verifier.c
+--- a/src/frontend/ast_verifier.c
++++ b/src/frontend/ast_verifier.c
+@@ -516,6 +516,14 @@ verify_expression(const MinicC0Program *program, size_t expression_index, MinicC
+         return expression->value_category == MINIC_VALUE_LVALUE &&
+                minic_type_equal(expression->type, expected_type);
+     }
++    case MINIC_EXPRESSION_LVALUE_READ:
++        operand = expression_before(program, expression->value.unary.operand, expression_index);
++        return operand != NULL && operand->value_category == MINIC_VALUE_LVALUE &&
++               expression->value_category == MINIC_VALUE_RVALUE &&
++               minic_type_equal(expression->type, operand->type) &&
++               (minic_type_is_integer(expression->type) ||
++                minic_type_is_pointer(expression->type) ||
++                minic_type_is_double(expression->type));
+     case MINIC_EXPRESSION_UNARY: {
+         MinicType expected_type;
+         MinicType pointee_type;
+diff --git a/src/frontend/cast_normalization.c b/src/frontend/cast_normalization.c
+--- a/src/frontend/cast_normalization.c
++++ b/src/frontend/cast_normalization.c
+@@ -34,6 +34,7 @@ static bool remap_non_cast_expression(MinicExpression *expression,
+     case MINIC_EXPRESSION_DEREFERENCE:
+     case MINIC_EXPRESSION_BITCAST:
+     case MINIC_EXPRESSION_CONVERSION:
++    case MINIC_EXPRESSION_LVALUE_READ:
+     case MINIC_EXPRESSION_UNARY:
+         return remap_expression_id(mapping,
+                                    old_expression_count,
+diff --git a/src/target/riscv64/codegen_expression.c b/src/target/riscv64/codegen_expression.c
+--- a/src/target/riscv64/codegen_expression.c
++++ b/src/target/riscv64/codegen_expression.c
+@@ -492,6 +492,10 @@ bool minic_riscv64_emit_expression(FILE *file,
+         }
+         return minic_riscv64_emit_scalar_load(file, expression->type, "a0", "a0");
+     }
++    case MINIC_EXPRESSION_LVALUE_READ:
++        return minic_riscv64_emit_lvalue_address(
++                   file, program, function, expression->value.unary.operand) &&
++               minic_riscv64_emit_scalar_load(file, expression->type, "a0", "a0");
+     case MINIC_EXPRESSION_UNARY:
+         if (!minic_riscv64_emit_expression(
+                 file, program, function, expression->value.unary.operand)) {
 diff --git a/src/frontend/parser_statement.c b/src/frontend/parser_statement.c
 --- a/src/frontend/parser_statement.c
 +++ b/src/frontend/parser_statement.c
-@@ -526,6 +526,107 @@ static bool add_record_copy_assignments(MinicParser *parser,
+@@ -526,6 +526,108 @@ static bool add_record_copy_assignments(MinicParser *parser,
      return true;
  }
  
@@ -58,6 +112,7 @@ diff --git a/src/frontend/parser_statement.c b/src/frontend/parser_statement.c
 +                                                MinicExpressionId *value_id) {
 +    const MinicExpression *target;
 +    const MinicExpression *assigned_expression;
++    MinicExpression read;
 +    MinicExpressionId right_id;
 +    MinicStatement assignment;
 +    MinicSourceSpan target_span;
@@ -107,16 +162,19 @@ diff --git a/src/frontend/parser_statement.c b/src/frontend/parser_statement.c
 +        return false;
 +    }
 +
-+    /* Reloading a stable lvalue gives the assignment result without evaluating the
-+     * original RHS twice. Stable members are allowed only when their base is stable. */
-+    *value_id = target_id;
-+    return true;
++    (void)memset(&read, 0, sizeof(read));
++    read.kind = MINIC_EXPRESSION_LVALUE_READ;
++    read.span = target_span;
++    read.type = target_type;
++    read.value_category = MINIC_VALUE_RVALUE;
++    read.value.unary.operand = target_id;
++    return minic_parser_add_expression(parser, &read, value_id);
 +}
 +
  static bool parse_expression_or_assignment_statement(MinicParser *parser,
                                                       bool allow_expression_statement) {
      MinicStatement statement;
-@@ -576,6 +677,12 @@ static bool parse_expression_or_assignment_statement(MinicParser *parser,
+@@ -576,6 +678,12 @@ static bool parse_expression_or_assignment_statement(MinicParser *parser,
          !minic_parser_parse_expression(parser, &statement.expression, 0U)) {
          return false;
      }
