@@ -1,5 +1,7 @@
 #include "target/riscv64/codegen_internal.h"
 
+#include <string.h>
+
 typedef enum MinicBreakTargetKind {
     MINIC_BREAK_TARGET_NONE = 0,
     MINIC_BREAK_TARGET_WHILE,
@@ -232,9 +234,7 @@ static bool minic_riscv64_emit_switch(FILE *file,
         }
     }
     if (labels.default_statement != MINIC_STATEMENT_INVALID) {
-        if (fprintf(file,
-                    "  j .Lswitch_default_%zu\n",
-                    (size_t)labels.default_statement) < 0) {
+        if (fprintf(file, "  j .Lswitch_default_%zu\n", (size_t)labels.default_statement) < 0) {
             return false;
         }
     } else if (fprintf(file, "  j .Lswitch_end_%zu\n", label) < 0) {
@@ -283,12 +283,8 @@ static bool minic_riscv64_emit_statement(FILE *file,
         *label_counter += 1U;
         if (!minic_riscv64_emit_expression(file, program, function, statement->expression) ||
             fprintf(file, "  beqz a0, .Lif_else_%zu\n", label) < 0 ||
-            !minic_riscv64_emit_block_with_break_target(file,
-                                                        program,
-                                                        function,
-                                                        statement->then_block,
-                                                        label_counter,
-                                                        break_target) ||
+            !minic_riscv64_emit_block_with_break_target(
+                file, program, function, statement->then_block, label_counter, break_target) ||
             fprintf(file,
                     "  j .Lif_end_%zu\n"
                     ".Lif_else_%zu:\n",
@@ -297,12 +293,8 @@ static bool minic_riscv64_emit_statement(FILE *file,
             return false;
         }
         if (statement->else_block != MINIC_BLOCK_INVALID &&
-            !minic_riscv64_emit_block_with_break_target(file,
-                                                        program,
-                                                        function,
-                                                        statement->else_block,
-                                                        label_counter,
-                                                        break_target)) {
+            !minic_riscv64_emit_block_with_break_target(
+                file, program, function, statement->else_block, label_counter, break_target)) {
             return false;
         }
         return fprintf(file, ".Lif_end_%zu:\n", label) >= 0;
@@ -369,13 +361,8 @@ static bool minic_riscv64_emit_block_with_break_target(FILE *file,
 
         statement_id = block->statements[index];
         statement = minic_c0_program_statement(program, statement_id);
-        if (!minic_riscv64_emit_statement(file,
-                                          program,
-                                          function,
-                                          statement_id,
-                                          statement,
-                                          label_counter,
-                                          break_target)) {
+        if (!minic_riscv64_emit_statement(
+                file, program, function, statement_id, statement, label_counter, break_target)) {
             return false;
         }
     }
