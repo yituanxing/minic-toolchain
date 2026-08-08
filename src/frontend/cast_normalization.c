@@ -76,6 +76,14 @@ static bool remap_non_cast_expression(MinicExpression *expression,
         if (expression->value.call.argument_count > 8U) {
             return false;
         }
+        if (expression->value.call.function_id == MINIC_FUNCTION_INVALID &&
+            !remap_expression_id(mapping,
+                                 old_expression_count,
+                                 current_old_index,
+                                 expression->value.call.callee,
+                                 &expression->value.call.callee)) {
+            return false;
+        }
         for (argument_index = 0U; argument_index < expression->value.call.argument_count;
              ++argument_index) {
             if (!remap_expression_id(mapping,
