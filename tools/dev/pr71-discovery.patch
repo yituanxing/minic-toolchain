@@ -208,3 +208,50 @@ diff --git a/src/frontend/parser_statement.c b/src/frontend/parser_statement.c
      if (current_identifier_is_goto(parser)) {
          return parse_goto(parser);
      }
+diff --git a/src/frontend/ast.h b/src/frontend/ast.h
+--- a/src/frontend/ast.h
++++ b/src/frontend/ast.h
+@@ -66,6 +66,7 @@ typedef enum MinicBinaryOperator {
+     MINIC_BINARY_SHIFT_RIGHT,
+     MINIC_BINARY_BITWISE_AND,
+     MINIC_BINARY_BITWISE_XOR,
++    MINIC_BINARY_BITWISE_OR,
+     MINIC_BINARY_EQUAL,
+     MINIC_BINARY_NOT_EQUAL,
+     MINIC_BINARY_LESS,
+diff --git a/src/frontend/parser_expression.c b/src/frontend/parser_expression.c
+--- a/src/frontend/parser_expression.c
++++ b/src/frontend/parser_expression.c
+@@ -691,6 +691,8 @@ static unsigned int binary_precedence(MinicTokenKind kind) {
+         return 20U;
+     case MINIC_TOKEN_CARET:
+         return 10U;
++    case MINIC_TOKEN_PIPE:
++        return 5U;
+     case MINIC_TOKEN_AMPERSAND_AMPERSAND:
+         return 2U;
+     case MINIC_TOKEN_PIPE_PIPE:
+@@ -717,6 +719,8 @@ static MinicBinaryOperator binary_operator(MinicTokenKind kind) {
+         return MINIC_BINARY_BITWISE_AND;
+     case MINIC_TOKEN_CARET:
+         return MINIC_BINARY_BITWISE_XOR;
++    case MINIC_TOKEN_PIPE:
++        return MINIC_BINARY_BITWISE_OR;
+     case MINIC_TOKEN_EQUAL_EQUAL:
+         return MINIC_BINARY_EQUAL;
+     case MINIC_TOKEN_BANG_EQUAL:
+diff --git a/src/target/riscv64/codegen_expression.c b/src/target/riscv64/codegen_expression.c
+--- a/src/target/riscv64/codegen_expression.c
++++ b/src/target/riscv64/codegen_expression.c
+@@ -653,6 +653,10 @@ bool minic_riscv64_emit_expression(FILE *file,
+         case MINIC_BINARY_BITWISE_XOR:
+             return has_integer_common_type && fprintf(file, "  xor a0, t0, a0\n") >= 0 &&
+                    minic_riscv64_emit_integer_result_conversion(
+                        file, common_integer_type, expression->type, "a0");
++        case MINIC_BINARY_BITWISE_OR:
++            return has_integer_common_type && fprintf(file, "  or a0, t0, a0\n") >= 0 &&
++                   minic_riscv64_emit_integer_result_conversion(
++                       file, common_integer_type, expression->type, "a0");
+         case MINIC_BINARY_EQUAL:
+             return (has_integer_common_type || has_pointer_equality) &&
+                    fprintf(file, "  xor a0, t0, a0\n  seqz a0, a0\n") >= 0;
