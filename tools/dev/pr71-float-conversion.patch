@@ -1,0 +1,122 @@
+diff --git a/tools/dev/pr71-update-platform.py b/tools/dev/pr71-update-platform.py
+--- a/tools/dev/pr71-update-platform.py
++++ b/tools/dev/pr71-update-platform.py
+@@ -1,1 +1,108 @@
+ print("staged &=, |=, unary bitwise-not, and fixed-call int-to-double conversion")
++
++# cJSON CreateFloatArray explicitly casts float elements to double. Complete this path through
++# parsed cast compatibility, normalized conversion, scalar RV64 access, and fcvt.d.s lowering.
++replace_once(
++    "src/frontend/type.c",
++    """    if (minic_type_is_double(target) && minic_type_is_integer(source)) {
++        return true;
++    }
++""",
++    """    if (minic_type_is_double(target) &&
++        (minic_type_is_integer(source) || minic_type_is_float(source))) {
++        return true;
++    }
++""",
++)
++replace_once(
++    "src/frontend/cast_normalization.c",
++    """    if ((minic_type_is_double(cast_expression->type) &&
++         minic_type_is_integer(operand_expression->type)) ||
++        (minic_type_is_integer(cast_expression->type) &&
++         minic_type_is_double(operand_expression->type))) {
++""",
++    """    if ((minic_type_is_double(cast_expression->type) &&
++         (minic_type_is_integer(operand_expression->type) ||
++          minic_type_is_float(operand_expression->type))) ||
++        (minic_type_is_integer(cast_expression->type) &&
++         minic_type_is_double(operand_expression->type))) {
++""",
++)
++replace_once(
++    "src/frontend/ast_verifier.c",
++    """               ((minic_type_is_double(expression->type) && minic_type_is_integer(operand->type)) ||
++                (minic_type_is_integer(expression->type) && minic_type_is_double(operand->type)));
++""",
++    """               ((minic_type_is_double(expression->type) &&
++                 (minic_type_is_integer(operand->type) || minic_type_is_float(operand->type))) ||
++                (minic_type_is_integer(expression->type) && minic_type_is_double(operand->type)));
++""",
++)
++replace_once(
++    "src/target/riscv64/codegen_support.c",
++    """    if (minic_type_is_pointer(type) || minic_type_is_double(type)) {
++        *width = 8U;
++        return true;
++    }
++    if (!minic_type_is_integer(type)) {
++""",
++    """    if (minic_type_is_pointer(type) || minic_type_is_double(type)) {
++        *width = 8U;
++        return true;
++    }
++    if (minic_type_is_float(type)) {
++        *width = 4U;
++        return true;
++    }
++    if (!minic_type_is_integer(type)) {
++""",
++)
++replace_once(
++    "src/target/riscv64/codegen_support.c",
++    """    if (minic_type_is_pointer(type) || minic_type_is_double(type)) {
++        return "ld";
++    }
++    if (!minic_type_is_integer(type)) {
++""",
++    """    if (minic_type_is_pointer(type) || minic_type_is_double(type)) {
++        return "ld";
++    }
++    if (minic_type_is_float(type)) {
++        return "lwu";
++    }
++    if (!minic_type_is_integer(type)) {
++""",
++)
++replace_once(
++    "src/target/riscv64/codegen_support.c",
++    """    if (minic_type_is_pointer(type) || minic_type_is_double(type)) {
++        return "sd";
++    }
++    if (!minic_type_is_integer(type)) {
++""",
++    """    if (minic_type_is_pointer(type) || minic_type_is_double(type)) {
++        return "sd";
++    }
++    if (minic_type_is_float(type)) {
++        return "sw";
++    }
++    if (!minic_type_is_integer(type)) {
++""",
++)
++replace_once(
++    "src/target/riscv64/codegen_expression.c",
++    """        if (minic_type_is_double(expression->type) && minic_type_is_integer(operand->type)) {
++            return minic_riscv64_emit_expression(
++                       file, program, function, expression->value.unary.operand) &&
++                   minic_riscv64_emit_integer_to_double(file, operand->type, "a0", "ft0") &&
++                   fprintf(file, "  fmv.x.d a0, ft0\\n") >= 0;
++        }
++""",
++    """        if (minic_type_is_double(expression->type) && minic_type_is_float(operand->type)) {
++            return minic_riscv64_emit_expression(
++                       file, program, function, expression->value.unary.operand) &&
++                   fprintf(file,
++                           "  fmv.w.x ft0, a0\\n"
++                           "  fcvt.d.s ft0, ft0\\n"
++                           "  fmv.x.d a0, ft0\\n") >= 0;
++        }
++        if (minic_type_is_double(expression->type) && minic_type_is_integer(operand->type)) {
++            return minic_riscv64_emit_expression(
++                       file, program, function, expression->value.unary.operand) &&
++                   minic_riscv64_emit_integer_to_double(file, operand->type, "a0", "ft0") &&
++                   fprintf(file, "  fmv.x.d a0, ft0\\n") >= 0;
++        }
++""",
++)
++
++print("staged float-to-double scalar conversion")
