@@ -178,21 +178,43 @@ static bool type_is_condition_scalar(MinicType type) {
     return minic_type_is_integer(type) || minic_type_is_pointer(type);
 }
 
-static bool pointer_relational_compatible(const MinicC0Program *program,
-                                          MinicType left,
-                                          MinicType right) {
+static bool
+pointer_relational_compatible(const MinicC0Program *program, MinicType left, MinicType right) {
     MinicType left_pointee;
     MinicType right_pointee;
     MinicType left_unqualified;
     MinicType right_unqualified;
 
-    return minic_type_pointee(left, &left_pointee) &&
-           minic_type_pointee(right, &right_pointee) &&
+    return minic_type_pointee(left, &left_pointee) && minic_type_pointee(right, &right_pointee) &&
            minic_type_unqualified(left_pointee, &left_unqualified) &&
            minic_type_unqualified(right_pointee, &right_unqualified) &&
            minic_type_equal(left_unqualified, right_unqualified) &&
            type_is_complete_object(program, left_pointee) &&
            type_is_complete_object(program, right_pointee);
+}
+
+static bool conditional_result_type(MinicType when_true, MinicType when_false, MinicType *result) {
+    bool has_double_operand;
+    bool has_numeric_operands;
+
+    if (result == NULL) {
+        return false;
+    }
+    if (minic_type_equal(when_true, when_false)) {
+        *result = when_true;
+        return true;
+    }
+    if (minic_type_is_integer(when_true) && minic_type_is_integer(when_false)) {
+        return minic_type_integer_common(when_true, when_false, result);
+    }
+    has_double_operand = minic_type_is_double(when_true) || minic_type_is_double(when_false);
+    has_numeric_operands = (minic_type_is_double(when_true) || minic_type_is_integer(when_true)) &&
+                           (minic_type_is_double(when_false) || minic_type_is_integer(when_false));
+    if (has_double_operand && has_numeric_operands) {
+        *result = minic_type_double();
+        return true;
+    }
+    return false;
 }
 
 static bool is_normalized_integer_cast_add(const MinicExpression *expression,
@@ -535,6 +557,24 @@ verify_expression(const MinicC0Program *program, size_t expression_index, MinicC
         right = expression_before(program, expression->value.binary.right, expression_index);
         return left != NULL && right != NULL && expression->value_category == MINIC_VALUE_RVALUE &&
                verify_binary_type(program, expression, left, right, form);
+    case MINIC_EXPRESSION_CONDITIONAL: {
+        const MinicExpression *condition;
+        const MinicExpression *when_true;
+        const MinicExpression *when_false;
+        MinicType expected_type;
+
+        condition =
+            expression_before(program, expression->value.conditional.condition, expression_index);
+        when_true =
+            expression_before(program, expression->value.conditional.when_true, expression_index);
+        when_false =
+            expression_before(program, expression->value.conditional.when_false, expression_index);
+        return condition != NULL && when_true != NULL && when_false != NULL &&
+               expression->value_category == MINIC_VALUE_RVALUE &&
+               type_is_condition_scalar(condition->type) &&
+               conditional_result_type(when_true->type, when_false->type, &expected_type) &&
+               minic_type_equal(expression->type, expected_type);
+    }
     case MINIC_EXPRESSION_CALL:
         if (expression->value_category != MINIC_VALUE_RVALUE) {
             return false;
