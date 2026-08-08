@@ -167,6 +167,13 @@ pointer_equality_focused() {
         sh tests/compiler/c0/run-pointer-equality.sh
 }
 
+switch_control_flow_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" \
+    HOST_CC=cc \
+    BUILD_DIR="$root/build/ci-switch-control-flow" \
+        sh tests/compiler/c0/run-switch-control-flow.sh
+}
+
 rv64_focused() {
     MINIC="$root/build/ci-debug/bin/minic" \
     BUILD_DIR="$root/build/ci-rv64-focused" \
@@ -213,11 +220,12 @@ if ! wait_phase; then
 fi
 
 printf '%s\n' \
-    'Phase 2: focused declaration/static-local/variadic-call/pointer-equality/RV64 suites, differential programs, tiny-AES, and cJSON'
+    'Phase 2: focused declaration/static-local/variadic-call/pointer-equality/switch/RV64 suites, differential programs, tiny-AES, and cJSON'
 start_gate static-local-focused static_local_focused
 start_gate variadic-declarations-focused variadic_declaration_focused
 start_gate variadic-call-focused variadic_call_focused
 start_gate pointer-equality-focused pointer_equality_focused
+start_gate switch-control-flow-focused switch_control_flow_focused
 start_gate rv64-focused rv64_focused
 start_gate rv64-programs rv64_programs
 start_gate external-tiny-aes external_tiny_aes
