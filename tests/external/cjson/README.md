@@ -23,53 +23,62 @@ External GCC may preprocess, assemble, link, and provide CRT/libc. MiniC must co
 
 ## Accepted compiler capabilities / 已越过能力
 
-The unchanged core now crosses the previously frozen language features plus scalar conditions, generalized bounded `for` clauses, character constants, function-valued static relocations, bounded `sizeof`, and generic non-variadic calls through function-pointer expressions.
+The unchanged core now crosses the previously frozen language features plus scalar conditions, generalized bounded `for` clauses, character constants, function-valued static relocations, bounded `sizeof`, generic non-variadic calls through function-pointer expressions, and generic runtime function designators.
 
-本分支完成通用 **callee-expression / indirect function call**：
+本分支完成通用 **runtime function designator value**：
 
-- 继续复用单一 `MINIC_EXPRESSION_CALL`；
-- direct call 保留 `function_id`，indirect call 使用 callee expression；
-- postfix `()` 可作用于 pointer-to-function expression，包括 record member；
-- 参数类型从既有 `MinicFunctionType` 验证；
-- normalization 与 verifier 都把 indirect callee 作为真实表达式边处理；
-- RV64 在求值参数之前保存 callee 地址，参数恢复到 `a0..a7` 后重新加载到 `t0`，最后执行 `jalr ra, t0, 0`；
-- direct / indirect 共用返回值规范化路径。
+- 新增独立 `MINIC_EXPRESSION_FUNCTION`，不把函数地址伪装成整数或普通全局对象；
+- 局部变量/参数和对象继续优先遮蔽同名函数，只有未遮蔽的已声明函数在普通表达式上下文形成函数指针 rvalue；
+- 从函数声明签名构造/复用 `MinicFunctionType`，再形成 pointer-to-function；
+- direct `function(...)` 路径保持不变；
+- verifier 校验 designator 的函数指针类型与声明返回值/参数逐项一致；
+- normalization 将 designator 作为无 child 的叶节点；
+- RV64 通过 `la a0, <symbol>` 形成可重定位运行时函数地址；
+- 当前函数类型模型尚无 variadic 标记，因此 variadic function designator 保留为显式后续边界。
 
-这一结构与冻结 Python 编译器的通用 `Call(name, args, callee)` 模型一致，没有引入 cJSON hook 特判。
+这一规则与冻结 Python 编译器一致：local/param shadowing 优先，未遮蔽 function symbol 在表达式中直接 lower 为 symbol address。
 
-A permanent `indirect_function_calls` GCC/MiniC RV64 differential is registered as the 55th program. It covers static record function-pointer initialization, ordinary indirect calls, and nested indirect calls so the outer callee must survive evaluation of an inner call argument.
+A permanent `runtime_function_designators` GCC/MiniC RV64 differential is registered as the 56th program. It covers static relocation baseline, runtime function-pointer assignment, equality in both operand orders, indirect calls after reassignment, and local shadowing.
 
-永久第 55 个 differential `indirect_function_calls` 已在 RV64/QEMU 上验证，包括 nested indirect call 的 callee 生命周期。
+永久第 56 个 differential `runtime_function_designators` 已在 RV64/QEMU 上通过。
 
 ## Current exact frontier / 当前精确前沿
 
-Discovery Run #933 passed source inventory, clang-format 18, Debug, Release `-Werror`, ASan/UBSan, focused suites, all **55** permanent GCC/MiniC RV64 differential programs including `indirect_function_calls`, and frozen tiny-AES.
+Discovery Run #937 passed source inventory, clang-format 18, Debug, Release `-Werror`, ASan/UBSan, focused suites, all **56** permanent GCC/MiniC RV64 differential programs including `runtime_function_designators`, and frozen tiny-AES.
 
-The unchanged cJSON source crossed:
-
-```c
-copy = (unsigned char*)hooks->allocate(length);
-```
-
-and continued into `cJSON_InitHooks`, where it reached:
+The unchanged cJSON source crossed runtime assignments such as:
 
 ```c
 global_hooks.allocate = malloc;
+global_hooks.deallocate = free;
+global_hooks.reallocate = realloc;
+```
+
+and reached the function-pointer null comparison:
+
+```c
+if (hooks->malloc_fn != NULL)
+```
+
+With the probe's C11 `NULL` definition, the preprocessed form is:
+
+```c
+if (hooks->malloc_fn != ((void *)0))
 ```
 
 with exact first diagnostic:
 
 ```text
-cJSON.i:187:39: error: use of undeclared local
+cJSON.i:193:40: error: binary operator requires int operands
 ```
 
-This is a new capability boundary. Static function-address relocations already exist, but a bare function designator such as `malloc` is not yet accepted as a general runtime expression value on the right-hand side of an assignment. The next branch should therefore add generic runtime function-designator-to-pointer semantics and RV64 symbol-address materialization, rather than extending the indirect-call PR.
+This is a new independent capability boundary. The existing pointer-equality path permits compatible pointers and integer-zero null pointer constants, while `void *` compatibility deliberately excludes function pointers. cJSON therefore exposes the bounded function-pointer / `(void *)0` null compatibility cluster next.
 
-当前下一能力簇是通用 **runtime function designator value**：让函数名在普通表达式上下文中衰变/形成函数指针值，并可参与赋值；这与本分支已经完成的“通过函数指针调用”是相邻但独立的语义层。
+当前下一能力簇是 **function-pointer NULL compatibility**，不是 runtime function designator 的尾巴。后续分支应明确限定 null semantics，而不是放宽任意 object-pointer / function-pointer 互转。
 
 ## Validation / 验证
 
-Run #933 is the discovery run proving the 55th differential and the new line-187 frontier. A latest-head clean run with the updated line-187 probe is required before this branch is merged.
+Run #937 is the discovery run proving the 56th differential and the new line-193 frontier. A latest-head clean run with the updated line-193 probe is required before this branch is merged.
 
 ## Completion result / 完成标志
 
