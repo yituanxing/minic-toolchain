@@ -66,6 +66,9 @@ expect_failure \
     invalid_cast_integer_to_float \
     "unsupported cast between these types"
 expect_failure \
+    invalid_cast_double_to_integer \
+    "unsupported cast between these types"
+expect_failure \
     invalid_cast_assignment_target \
     "assignment target must be a modifiable lvalue"
 
