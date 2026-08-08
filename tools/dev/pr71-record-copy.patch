@@ -14,7 +14,60 @@ diff --git a/src/frontend/parser_expression.c b/src/frontend/parser_expression.c
 diff --git a/src/frontend/parser_statement.c b/src/frontend/parser_statement.c
 --- a/src/frontend/parser_statement.c
 +++ b/src/frontend/parser_statement.c
-@@ -370,6 +370,117 @@ static bool parse_static_local_declaration(MinicParser *parser) {
+@@ -287,10 +287,55 @@ static bool parse_static_local_array_declarator(MinicParser *parser, MinicType b
+         bound_count += 1U;
+     }
+     if (bound_count == 0U) {
+-        minic_parser_error(parser,
+-                           "static local object currently requires a fixed array declarator");
+-        return false;
++        MinicLocal local;
++        MinicLocalId local_id;
++        MinicStatement statement;
++        const MinicExpression *initializer;
++
++        if (!minic_type_is_const(declared_type) || parser->current.kind != MINIC_TOKEN_EQUAL) {
++            minic_parser_error(
++                parser, "static local scalar currently requires const with an initializer");
++            return false;
++        }
++        (void)memset(&local, 0, sizeof(local));
++        local.name_span = name_span;
++        local.type = declared_type;
++        local.element_count = 1U;
++        local.storage_offset = 0U;
++        if (!minic_c0_program_add_local(parser->program, &local, &local_id) ||
++            !minic_parser_bind_local(parser, name_span, local_id)) {
++            minic_parser_error(parser, "cannot add static const scalar discovery local");
++            return false;
++        }
++
++        (void)memset(&statement, 0, sizeof(statement));
++        statement.kind = MINIC_STATEMENT_ASSIGN;
++        statement.span.begin = name_span.begin;
++        statement.target_expression = MINIC_EXPRESSION_INVALID;
++        statement.expression = MINIC_EXPRESSION_INVALID;
++        statement.target_statement = MINIC_STATEMENT_INVALID;
++        statement.then_block = MINIC_BLOCK_INVALID;
++        statement.else_block = MINIC_BLOCK_INVALID;
++        if (!add_local_lvalue_expression(parser, local_id, name_span, &statement.target_expression) ||
++            !minic_parser_advance(parser) ||
++            !minic_parser_parse_expression(parser, &statement.expression, 0U) ||
++            !apply_assignment_conversion(parser, local.type, &statement.expression)) {
++            return false;
++        }
++        initializer = minic_c0_program_expression(parser->program, statement.expression);
++        if (initializer == NULL ||
++            !minic_c0_assignment_compatible(parser->program, local.type, statement.expression)) {
++            minic_parser_error(parser, "static const scalar initializer type mismatch");
++            return false;
++        }
++        statement.span.end = initializer->span.end;
++        return minic_parser_add_statement(parser, &statement);
+     }
+     if (parser->current.kind == MINIC_TOKEN_EQUAL) {
+         minic_parser_error(parser, "static local initializers are not supported yet");
+@@ -370,6 +415,117 @@ static bool parse_static_local_declaration(MinicParser *parser) {
      return minic_parser_expect(parser, MINIC_TOKEN_SEMICOLON, "expected ';'");
  }
  
@@ -136,7 +189,7 @@ diff --git a/src/frontend/parser_statement.c b/src/frontend/parser_statement.c
  static bool parse_expression_or_assignment_statement(MinicParser *parser,
                                                       bool allow_expression_statement) {
      MinicStatement statement;
-@@ -420,6 +531,18 @@ static bool parse_expression_or_assignment_statement(MinicParser *parser,
+@@ -420,6 +576,18 @@ static bool parse_expression_or_assignment_statement(MinicParser *parser,
      if (!minic_parser_advance(parser) ||
          !minic_parser_parse_expression(parser, &statement.expression, 0U)) {
          return false;
