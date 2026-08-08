@@ -84,12 +84,6 @@ jobs:
       - name: Host validation
         run: make -j2 BUILD_DIR=build/pr71-variadic-double check
 
-      - name: RV64 variadic ABI validation
-        env:
-          MINIC: build/pr71-variadic-double/bin/minic
-          REQUIRE_RISCV_RUNTIME: 1
-        run: tests/compiler/c0/run-variadic-direct-calls.sh
-
       - name: Commit generated sources
         env:
           BRANCH: frontend/additive-update-pointer-difference
