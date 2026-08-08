@@ -82,6 +82,7 @@ typedef struct MinicExpression {
         MinicType sizeof_type;
         struct {
             MinicFunctionId function_id;
+            MinicExpressionId callee;
             size_t argument_count;
             MinicExpressionId arguments[8];
         } call;
