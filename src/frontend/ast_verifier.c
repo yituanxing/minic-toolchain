@@ -280,6 +280,40 @@ static bool verify_subscript_type(const MinicC0Program *program,
     return false;
 }
 
+static bool verify_call_arguments(const MinicC0Program *program,
+                                  const MinicExpression *expression,
+                                  size_t expression_index,
+                                  const MinicType *parameter_types,
+                                  size_t parameter_count,
+                                  bool is_variadic) {
+    size_t argument_index;
+
+    if (expression == NULL || parameter_count > 8U ||
+        expression->value.call.argument_count < parameter_count ||
+        expression->value.call.argument_count > 8U ||
+        (!is_variadic && expression->value.call.argument_count != parameter_count)) {
+        return false;
+    }
+    for (argument_index = 0U; argument_index < expression->value.call.argument_count;
+         ++argument_index) {
+        const MinicExpression *argument;
+
+        argument = expression_before(
+            program, expression->value.call.arguments[argument_index], expression_index);
+        if (argument == NULL) {
+            return false;
+        }
+        if (argument_index < parameter_count) {
+            if (!minic_type_assignment_compatible(parameter_types[argument_index], argument->type)) {
+                return false;
+            }
+        } else if (!minic_type_is_integer(argument->type) && !minic_type_is_pointer(argument->type)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool
 verify_expression(const MinicC0Program *program, size_t expression_index, MinicC0AstForm form) {
     const MinicExpression *expression;
@@ -408,39 +442,42 @@ verify_expression(const MinicC0Program *program, size_t expression_index, MinicC
         right = expression_before(program, expression->value.binary.right, expression_index);
         return left != NULL && right != NULL && expression->value_category == MINIC_VALUE_RVALUE &&
                verify_binary_type(program, expression, left, right, form);
-    case MINIC_EXPRESSION_CALL: {
-        const MinicFunction *function;
-        size_t argument_index;
-
-        function = minic_c0_program_function(program, expression->value.call.function_id);
-        if (function == NULL || function->parameter_count > 8U ||
-            expression->value.call.argument_count < function->parameter_count ||
-            expression->value.call.argument_count > 8U ||
-            (!function->is_variadic &&
-             expression->value.call.argument_count != function->parameter_count) ||
-            expression->value_category != MINIC_VALUE_RVALUE ||
-            !minic_type_equal(expression->type, function->return_type)) {
+    case MINIC_EXPRESSION_CALL:
+        if (expression->value_category != MINIC_VALUE_RVALUE) {
             return false;
         }
-        for (argument_index = 0U; argument_index < expression->value.call.argument_count;
-             ++argument_index) {
-            operand = expression_before(
-                program, expression->value.call.arguments[argument_index], expression_index);
-            if (operand == NULL) {
+        if (expression->value.call.function_id != MINIC_FUNCTION_INVALID) {
+            const MinicFunction *function;
+
+            function = minic_c0_program_function(program, expression->value.call.function_id);
+            return function != NULL && minic_type_equal(expression->type, function->return_type) &&
+                   verify_call_arguments(program,
+                                         expression,
+                                         expression_index,
+                                         function->parameter_types,
+                                         function->parameter_count,
+                                         function->is_variadic);
+        } else {
+            const MinicExpression *callee;
+            const MinicFunctionType *function_type;
+            MinicType pointee;
+
+            callee = expression_before(program, expression->value.call.callee, expression_index);
+            if (callee == NULL || !minic_type_pointee(callee->type, &pointee) ||
+                !minic_type_is_function(pointee)) {
                 return false;
             }
-            if (argument_index < function->parameter_count) {
-                if (!minic_type_assignment_compatible(function->parameter_types[argument_index],
-                                                      operand->type)) {
-                    return false;
-                }
-            } else if (!minic_type_is_integer(operand->type) &&
-                       !minic_type_is_pointer(operand->type)) {
-                return false;
-            }
+            function_type =
+                minic_c0_program_function_type(program, pointee.function_type_id);
+            return function_type != NULL &&
+                   minic_type_equal(expression->type, function_type->return_type) &&
+                   verify_call_arguments(program,
+                                         expression,
+                                         expression_index,
+                                         function_type->parameter_types,
+                                         function_type->parameter_count,
+                                         false);
         }
-        return true;
-    }
     }
     return false;
 }
