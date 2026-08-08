@@ -65,3 +65,4 @@ named_goto_labels
 floating_scalar_conversions
 conditional_expression
 global_record_address
+local_array_zero_initializer
