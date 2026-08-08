@@ -8,10 +8,12 @@ static int increment(int value) {
 
 static struct Hooks hooks = {increment};
 
+static int assign_object_pointer(struct Hooks *target, void *object_pointer) {
+    target->apply = object_pointer;
+    return 0;
+}
+
 int main(void) {
     int value;
-    void *object_pointer;
-    object_pointer = &value;
-    hooks.apply = object_pointer;
-    return 0;
+    return assign_object_pointer(&hooks, &value);
 }
