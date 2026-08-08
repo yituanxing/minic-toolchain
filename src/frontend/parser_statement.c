@@ -1037,8 +1037,47 @@ static bool parse_return(MinicParser *parser) {
             minic_parser_error(parser, "non-void function requires a return value");
             return false;
         }
-        if (!minic_parser_parse_expression(parser, &statement.expression, 0U) ||
-            !apply_assignment_conversion(parser, function->return_type, &statement.expression)) {
+        if (!minic_parser_parse_expression(parser, &statement.expression, 0U)) {
+            return false;
+        }
+        if (parser->current.kind == MINIC_TOKEN_EQUAL) {
+            MinicStatement assignment;
+            const MinicExpression *assigned_expression;
+            const MinicExpression *target;
+            MinicExpressionId target_id;
+
+            target_id = statement.expression;
+            target = minic_c0_program_expression(parser->program, target_id);
+            if (!expression_is_modifiable_lvalue(target)) {
+                minic_parser_error(parser, "assignment target must be a modifiable lvalue");
+                return false;
+            }
+            (void)memset(&assignment, 0, sizeof(assignment));
+            assignment.kind = MINIC_STATEMENT_ASSIGN;
+            assignment.span.begin = target->span.begin;
+            assignment.target_expression = target_id;
+            assignment.then_block = MINIC_BLOCK_INVALID;
+            assignment.else_block = MINIC_BLOCK_INVALID;
+            if (!minic_parser_advance(parser) ||
+                !minic_parser_parse_expression(parser, &assignment.expression, 0U) ||
+                !apply_assignment_conversion(parser, target->type, &assignment.expression)) {
+                return false;
+            }
+            assigned_expression =
+                minic_c0_program_expression(parser->program, assignment.expression);
+            if (assigned_expression == NULL ||
+                !minic_c0_assignment_compatible(
+                    parser->program, target->type, assignment.expression)) {
+                minic_parser_error(parser, "assignment type does not match target type");
+                return false;
+            }
+            assignment.span.end = assigned_expression->span.end;
+            if (!minic_parser_add_statement(parser, &assignment)) {
+                return false;
+            }
+            statement.expression = target_id;
+        }
+        if (!apply_assignment_conversion(parser, function->return_type, &statement.expression)) {
             return false;
         }
         returned_expression = minic_c0_program_expression(parser->program, statement.expression);
