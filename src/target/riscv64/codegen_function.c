@@ -292,6 +292,12 @@ bool minic_riscv64_write_c0_program(const char *path,
          ++global_index) {
         success =
             minic_riscv64_emit_global_object(file, program, &program->global_objects[global_index]);
+        if (!success) {
+            fprintf(stderr,
+                    "CODEGEN_FAIL global=%zu name=%s\n",
+                    global_index,
+                    program->global_objects[global_index].name);
+        }
     }
     if (success) {
         success = fprintf(file, ".text\n") >= 0;
@@ -307,6 +313,13 @@ bool minic_riscv64_write_c0_program(const char *path,
             continue;
         }
         success = minic_riscv64_emit_function(file, program, function, &label_counter);
+        if (!success) {
+            fprintf(stderr,
+                    "CODEGEN_FAIL function=%zu name=%s body=%zu\n",
+                    function_index,
+                    function->name,
+                    (size_t)function->body_block);
+        }
     }
 
     if (!success) {
