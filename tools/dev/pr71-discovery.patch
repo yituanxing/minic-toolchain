@@ -188,7 +188,7 @@ diff --git a/src/frontend/parser_statement.c b/src/frontend/parser_statement.c
 +        }
          return false;
      }
-     for (update_index = 0U; index < update_count; ++update_index) {
+     for (update_index = 0U; update_index < update_count; ++update_index) {
          if (!minic_c0_block_add_statement(
                  parser->program, statement.then_block, updates[update_index])) {
              return false;
