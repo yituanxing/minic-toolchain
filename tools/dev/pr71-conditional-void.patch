@@ -44,3 +44,111 @@ diff --git a/tools/dev/pr71-update-platform.py b/tools/dev/pr71-update-platform.
 +    replace_once(conditional_path, conditional_void_old, conditional_void_new)
 +
 +print("staged conditional void/object pointer composition")
++
++# General for-update expressions are parsed into detached statement IDs and appended to the
++# lowered loop body after the user body. This admits ordinary assignments such as
++# `cursor = cursor->next` without changing the existing while-based loop lowering.
++parser_statement = Path("src/frontend/parser_statement.c")
++parser_statement_text = parser_statement.read_text()
++for_update_start = parser_statement_text.find("static bool parse_for_update(")
++for_update_end = parser_statement_text.find("\nstatic bool parse_for(", for_update_start)
++if for_update_start < 0 or for_update_end < 0:
++    raise RuntimeError("src/frontend/parser_statement.c: cannot locate parse_for_update")
++
++general_for_update = r'''static bool parse_for_update(MinicParser *parser, MinicStatementId *statement_id) {
++    MinicSourcePosition begin;
++    MinicExpressionId first_id;
++    const MinicExpression *first;
++    MinicStatement statement;
++    MinicTokenKind assignment_token;
++
++    if (parser == NULL || statement_id == NULL) {
++        return false;
++    }
++    begin = parser->current.span.begin;
++    if (parser->current.kind == MINIC_TOKEN_LPAREN) {
++        if (!minic_parser_advance(parser) || parser->current.kind != MINIC_TOKEN_KW_VOID ||
++            !minic_parser_advance(parser) ||
++            !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')' after void cast")) {
++            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
++                minic_parser_error(parser, "for update only supports a discarded void cast here");
++            }
++            return false;
++        }
++    }
++
++    if (parser->current.kind == MINIC_TOKEN_PLUS_PLUS ||
++        parser->current.kind == MINIC_TOKEN_MINUS_MINUS) {
++        MinicTokenKind update_kind;
++        MinicExpressionId target_id;
++
++        update_kind = parser->current.kind;
++        if (!minic_parser_advance(parser) ||
++            !minic_parser_parse_expression(parser, &target_id, 0U)) {
++            return false;
++        }
++        return add_general_prefix_for_update(
++            parser, begin, target_id, update_kind, statement_id);
++    }
++
++    if (!minic_parser_parse_expression(parser, &first_id, 0U)) {
++        return false;
++    }
++    first = minic_c0_program_expression(parser->program, first_id);
++    if (first == NULL) {
++        minic_parser_error(parser, "invalid for update expression");
++        return false;
++    }
++    assignment_token = parser->current.kind;
++
++    (void)memset(&statement, 0, sizeof(statement));
++    statement.span.begin = begin;
++    statement.target_expression = MINIC_EXPRESSION_INVALID;
++    statement.expression = first_id;
++    statement.target_statement = MINIC_STATEMENT_INVALID;
++    statement.then_block = MINIC_BLOCK_INVALID;
++    statement.else_block = MINIC_BLOCK_INVALID;
++
++    if (assignment_token == MINIC_TOKEN_EQUAL) {
++        MinicType target_type;
++        MinicSourceSpan target_span;
++        const MinicExpression *assigned;
++
++        if (!expression_is_modifiable_lvalue(first)) {
++            minic_parser_error(parser, "assignment target must be a modifiable lvalue");
++            return false;
++        }
++        target_type = first->type;
++        target_span = first->span;
++        statement.kind = MINIC_STATEMENT_ASSIGN;
++        statement.target_expression = first_id;
++        statement.expression = MINIC_EXPRESSION_INVALID;
++        if (!minic_parser_advance(parser) ||
++            !minic_parser_parse_expression(parser, &statement.expression, 0U) ||
++            !apply_assignment_conversion(parser, target_type, &statement.expression)) {
++            return false;
++        }
++        assigned = minic_c0_program_expression(parser->program, statement.expression);
++        if (assigned == NULL ||
++            !minic_c0_assignment_compatible(parser->program, target_type, statement.expression)) {
++            minic_parser_error(parser, "assignment type does not match target type");
++            return false;
++        }
++        statement.span.begin = target_span.begin;
++        statement.span.end = assigned->span.end;
++        return minic_c0_program_add_statement(parser->program, &statement, statement_id);
++    }
++
++    statement.kind = MINIC_STATEMENT_EXPRESSION;
++    statement.span.end = first->span.end;
++    return minic_c0_program_add_statement(parser->program, &statement, statement_id);
++}
++'''
++
++parser_statement.write_text(
++    parser_statement_text[:for_update_start] +
++    general_for_update +
++    parser_statement_text[for_update_end:]
++)
++
++print("staged general expression and assignment for-updates")
