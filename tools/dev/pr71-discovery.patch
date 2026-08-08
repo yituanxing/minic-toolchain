@@ -188,8 +188,9 @@ diff --git a/src/frontend/parser_statement.c b/src/frontend/parser_statement.c
 +        }
          return false;
      }
-     for (update_index = 0U; update_index < update_count; ++update_index) {
-@@ -946,7 +1018,7 @@ static bool parse_for(MinicParser *parser) {
+     for (update_index = 0U; index < update_count; ++update_index) {
+         if (!minic_c0_block_add_statement(
+                 parser->program, statement.then_block, updates[update_index])) {
              return false;
          }
      }
@@ -208,6 +209,31 @@ diff --git a/src/frontend/parser_statement.c b/src/frontend/parser_statement.c
      if (current_identifier_is_goto(parser)) {
          return parse_goto(parser);
      }
+diff --git a/src/frontend/ast.c b/src/frontend/ast.c
+--- a/src/frontend/ast.c
++++ b/src/frontend/ast.c
+@@ -626,12 +626,6 @@ static bool expression_is_null_pointer_value(const MinicC0Program *program,
+     return false;
+ }
+ 
+-static bool type_is_function_pointer(MinicType type) {
+-    MinicType pointee;
+-
+-    return minic_type_pointee(type, &pointee) && minic_type_is_function(pointee);
+-}
+-
+ bool minic_c0_assignment_compatible(const MinicC0Program *program,
+                                     MinicType target_type,
+                                     MinicExpressionId source_expression_id) {
+@@ -649,7 +643,7 @@ bool minic_c0_assignment_compatible(const MinicC0Program *program,
+     if (minic_type_assignment_compatible(target_type, source->type)) {
+         return true;
+     }
+-    return type_is_function_pointer(target_type) &&
++    return minic_type_is_pointer(target_type) &&
+            expression_is_null_pointer_value(program, source_expression_id);
+ }
+ 
 diff --git a/tests/external/cjson/probe.sh b/tests/external/cjson/probe.sh
 --- a/tests/external/cjson/probe.sh
 +++ b/tests/external/cjson/probe.sh
