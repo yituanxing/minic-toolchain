@@ -48,6 +48,10 @@ compile_success cast_integer_to_double
 grep -F "  fcvt.d.w ft0, a0" "$work/cast_integer_to_double.s" >/dev/null
 printf '%s\n' "PASS compiler/c0/cast_integer_to_double_lowering"
 
+compile_success cast_double_to_integer
+grep -F "  fcvt.w.d a0, ft0, rtz" "$work/cast_double_to_integer.s" >/dev/null
+printf '%s\n' "PASS compiler/c0/cast_double_to_integer_lowering"
+
 "$host_cc" -E -P -x c \
     "$root/tests/programs/c0/null_pointer_constant.c" \
     -o "$work/null_pointer_constant.i"
@@ -64,9 +68,6 @@ expect_failure \
     "unsupported cast between these types"
 expect_failure \
     invalid_cast_integer_to_float \
-    "unsupported cast between these types"
-expect_failure \
-    invalid_cast_double_to_integer \
     "unsupported cast between these types"
 expect_failure \
     invalid_cast_assignment_target \
