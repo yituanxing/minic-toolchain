@@ -319,6 +319,35 @@ bool minic_riscv64_write_c0_program(const char *path,
                     function_index,
                     function->name,
                     (size_t)function->body_block);
+            if (program->statement_count > 1482U) {
+                const MinicStatement *failed_statement;
+                const MinicExpression *target;
+                const MinicExpression *value;
+
+                failed_statement = &program->statements[1482U];
+                target = minic_c0_program_expression(program, failed_statement->target_expression);
+                value = minic_c0_program_expression(program, failed_statement->expression);
+                fprintf(stderr,
+                        "CODEGEN_DETAIL statement=1482 kind=%d target=%zu target_kind=%d "
+                        "target_cat=%d target_int=%d target_ptr=%d target_float=%d target_double=%d "
+                        "value=%zu value_kind=%d value_cat=%d value_int=%d value_ptr=%d "
+                        "value_float=%d value_double=%d\n",
+                        (int)failed_statement->kind,
+                        (size_t)failed_statement->target_expression,
+                        target != NULL ? (int)target->kind : -1,
+                        target != NULL ? (int)target->value_category : -1,
+                        target != NULL ? (int)minic_type_is_integer(target->type) : -1,
+                        target != NULL ? (int)minic_type_is_pointer(target->type) : -1,
+                        target != NULL ? (int)minic_type_is_float(target->type) : -1,
+                        target != NULL ? (int)minic_type_is_double(target->type) : -1,
+                        (size_t)failed_statement->expression,
+                        value != NULL ? (int)value->kind : -1,
+                        value != NULL ? (int)value->value_category : -1,
+                        value != NULL ? (int)minic_type_is_integer(value->type) : -1,
+                        value != NULL ? (int)minic_type_is_pointer(value->type) : -1,
+                        value != NULL ? (int)minic_type_is_float(value->type) : -1,
+                        value != NULL ? (int)minic_type_is_double(value->type) : -1);
+            }
         }
     }
 
