@@ -1,0 +1,94 @@
+diff --git a/src/frontend/parser_statement.c b/src/frontend/parser_statement.c
+--- a/src/frontend/parser_statement.c
++++ b/src/frontend/parser_statement.c
+@@ -526,6 +526,80 @@ static bool add_record_copy_assignments(MinicParser *parser,
+     return true;
+ }
+ 
++static bool assignment_chain_target_is_stable(const MinicParser *parser,
++                                              const MinicExpression *target) {
++    if (parser == NULL || target == NULL || !expression_is_modifiable_lvalue(target) ||
++        minic_type_is_record(target->type)) {
++        return false;
++    }
++    if (target->kind == MINIC_EXPRESSION_LOCAL) {
++        const MinicLocal *local;
++
++        local = minic_c0_program_local(parser->program, target->value.local_id);
++        return local != NULL && !local->is_array;
++    }
++    return target->kind == MINIC_EXPRESSION_GLOBAL_OBJECT;
++}
++
++static bool parse_stable_assignment_chain_value(MinicParser *parser,
++                                                MinicExpressionId target_id,
++                                                MinicExpressionId *value_id) {
++    const MinicExpression *target;
++    const MinicExpression *assigned_expression;
++    MinicExpressionId right_id;
++    MinicStatement assignment;
++
++    if (parser == NULL || value_id == NULL || parser->current.kind != MINIC_TOKEN_EQUAL) {
++        return false;
++    }
++    target = minic_c0_program_expression(parser->program, target_id);
++    if (!assignment_chain_target_is_stable(parser, target)) {
++        minic_parser_error(parser,
++                           "assignment expression currently requires a stable scalar lvalue");
++        return false;
++    }
++
++    if (!minic_parser_advance(parser) ||
++        !minic_parser_parse_expression(parser, &right_id, 0U)) {
++        return false;
++    }
++    if (parser->current.kind == MINIC_TOKEN_EQUAL) {
++        if (!parse_stable_assignment_chain_value(parser, right_id, &right_id)) {
++            return false;
++        }
++    }
++    if (!apply_assignment_conversion(parser, target->type, &right_id)) {
++        return false;
++    }
++    assigned_expression = minic_c0_program_expression(parser->program, right_id);
++    if (assigned_expression == NULL ||
++        !minic_c0_assignment_compatible(parser->program, target->type, right_id)) {
++        minic_parser_error(parser, "assignment expression type does not match target type");
++        return false;
++    }
++
++    (void)memset(&assignment, 0, sizeof(assignment));
++    assignment.kind = MINIC_STATEMENT_ASSIGN;
++    assignment.span.begin = target->span.begin;
++    assignment.span.end = assigned_expression->span.end;
++    assignment.target_expression = target_id;
++    assignment.expression = right_id;
++    assignment.target_statement = MINIC_STATEMENT_INVALID;
++    assignment.then_block = MINIC_BLOCK_INVALID;
++    assignment.else_block = MINIC_BLOCK_INVALID;
++    if (!minic_parser_add_statement(parser, &assignment)) {
++        return false;
++    }
++
++    /* Reloading a stable local/global target gives the assignment result without
++     * evaluating the original RHS twice. */
++    *value_id = target_id;
++    return true;
++}
++
+ static bool parse_expression_or_assignment_statement(MinicParser *parser,
+                                                      bool allow_expression_statement) {
+     MinicStatement statement;
+@@ -576,6 +650,12 @@ static bool parse_expression_or_assignment_statement(MinicParser *parser,
+         !minic_parser_parse_expression(parser, &statement.expression, 0U)) {
+         return false;
+     }
++    if (assignment_token == MINIC_TOKEN_EQUAL && parser->current.kind == MINIC_TOKEN_EQUAL) {
++        if (!parse_stable_assignment_chain_value(
++                parser, statement.expression, &statement.expression)) {
++            return false;
++        }
++    }
+     if (assignment_token == MINIC_TOKEN_EQUAL && minic_type_is_record(first_type)) {
+         const MinicExpression *source;
+ 
