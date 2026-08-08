@@ -1,0 +1,99 @@
+name: Dev runtime function designators patch
+
+on:
+  push:
+    branches:
+      - frontend/runtime-function-designators
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: frontend/runtime-function-designators
+          fetch-depth: 0
+      - name: Apply exact compiler patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one anchor, found {count}")
+              p.write_text(text.replace(old, new, 1))
+
+          replace_once(
+              "src/frontend/parser_expression.c",
+              '''    return minic_parser_parse_postfix(parser, base_id, expression_id);\n}\n\nstatic bool token_starts_cast_type''',
+              '''    return minic_parser_parse_postfix(parser, base_id, expression_id);\n}\n\nstatic bool parse_function_reference(MinicParser *parser,\n                                     MinicSourceSpan name_span,\n                                     MinicFunctionId function_id,\n                                     MinicExpressionId *expression_id) {\n    const MinicFunction *function;\n    MinicExpression expression;\n    MinicExpressionId base_id;\n    MinicType function_type;\n\n    function = minic_c0_program_function(parser->program, function_id);\n    if (function == NULL) {\n        minic_parser_error(parser, "invalid function reference");\n        return false;\n    }\n    if (function->is_variadic) {\n        minic_parser_error(parser, "variadic function designator is not supported yet");\n        return false;\n    }\n\n    (void)memset(&expression, 0, sizeof(expression));\n    if (!minic_c0_program_add_function_type(parser->program,\n                                            function->return_type,\n                                            function->parameter_types,\n                                            function->parameter_count,\n                                            &function_type) ||\n        !minic_type_pointer_to(function_type, &expression.type)) {\n        minic_parser_error(parser, "cannot form function pointer type");\n        return false;\n    }\n    expression.kind = MINIC_EXPRESSION_FUNCTION;\n    expression.span = name_span;\n    expression.value_category = MINIC_VALUE_RVALUE;\n    expression.value.function_id = function_id;\n    if (!minic_parser_add_expression(parser, &expression, &base_id)) {\n        return false;\n    }\n    return minic_parser_parse_postfix(parser, base_id, expression_id);\n}\n\nstatic bool token_starts_cast_type''')
+
+          replace_once(
+              "src/frontend/parser_expression.c",
+              '''        if (global_object_id != MINIC_GLOBAL_OBJECT_INVALID) {\n            if (!parse_global_reference(parser, name_span, global_object_id, &primary_id)) {\n                return false;\n            }\n            return finish_value_expression(parser, primary_id, decay_array, expression_id);\n        }\n        minic_parser_error(parser, "use of undeclared local");''',
+              '''        if (global_object_id != MINIC_GLOBAL_OBJECT_INVALID) {\n            if (!parse_global_reference(parser, name_span, global_object_id, &primary_id)) {\n                return false;\n            }\n            return finish_value_expression(parser, primary_id, decay_array, expression_id);\n        }\n        if (function_id != MINIC_FUNCTION_INVALID) {\n            if (!parse_function_reference(parser, name_span, function_id, &primary_id)) {\n                return false;\n            }\n            return finish_value_expression(parser, primary_id, decay_array, expression_id);\n        }\n        minic_parser_error(parser, "use of undeclared local");''')
+
+          replace_once(
+              "src/frontend/cast_normalization.c",
+              '''    case MINIC_EXPRESSION_LOCAL:\n    case MINIC_EXPRESSION_GLOBAL_OBJECT:\n    case MINIC_EXPRESSION_SIZEOF:\n        return true;''',
+              '''    case MINIC_EXPRESSION_LOCAL:\n    case MINIC_EXPRESSION_GLOBAL_OBJECT:\n    case MINIC_EXPRESSION_FUNCTION:\n    case MINIC_EXPRESSION_SIZEOF:\n        return true;''')
+
+          replace_once(
+              "src/frontend/ast_verifier.c",
+              '''    case MINIC_EXPRESSION_GLOBAL_OBJECT: {\n        const MinicGlobalObject *object;\n\n        object = minic_c0_program_global_object(program, expression->value.global_object_id);\n        return object != NULL && expression->value_category == MINIC_VALUE_LVALUE &&\n               minic_type_equal(expression->type, object->type);\n    }\n    case MINIC_EXPRESSION_SIZEOF:''',
+              '''    case MINIC_EXPRESSION_GLOBAL_OBJECT: {\n        const MinicGlobalObject *object;\n\n        object = minic_c0_program_global_object(program, expression->value.global_object_id);\n        return object != NULL && expression->value_category == MINIC_VALUE_LVALUE &&\n               minic_type_equal(expression->type, object->type);\n    }\n    case MINIC_EXPRESSION_FUNCTION: {\n        const MinicFunction *function;\n        const MinicFunctionType *function_type;\n        MinicType pointee;\n        size_t parameter_index;\n\n        function = minic_c0_program_function(program, expression->value.function_id);\n        if (function == NULL || function->is_variadic ||\n            expression->value_category != MINIC_VALUE_RVALUE ||\n            !minic_type_pointee(expression->type, &pointee) || !minic_type_is_function(pointee)) {\n            return false;\n        }\n        function_type = minic_c0_program_function_type(program, pointee.function_type_id);\n        if (function_type == NULL || function_type->parameter_count != function->parameter_count ||\n            !minic_type_equal(function_type->return_type, function->return_type)) {\n            return false;\n        }\n        for (parameter_index = 0U; parameter_index < function->parameter_count; ++parameter_index) {\n            if (!minic_type_equal(function_type->parameter_types[parameter_index],\n                                  function->parameter_types[parameter_index])) {\n                return false;\n            }\n        }\n        return true;\n    }\n    case MINIC_EXPRESSION_SIZEOF:''')
+
+          replace_once(
+              "src/target/riscv64/codegen_expression.c",
+              '''    case MINIC_EXPRESSION_LOCAL:\n        return minic_riscv64_emit_object_load(file, program, function, expression->value.local_id);\n    case MINIC_EXPRESSION_GLOBAL_OBJECT:\n        return false;\n    case MINIC_EXPRESSION_SIZEOF: {''',
+              '''    case MINIC_EXPRESSION_LOCAL:\n        return minic_riscv64_emit_object_load(file, program, function, expression->value.local_id);\n    case MINIC_EXPRESSION_GLOBAL_OBJECT:\n        return false;\n    case MINIC_EXPRESSION_FUNCTION: {\n        const MinicFunction *designator;\n        MinicType function_type;\n\n        designator = minic_c0_program_function(program, expression->value.function_id);\n        return designator != NULL && designator->name_length != 0U &&\n               minic_type_pointee(expression->type, &function_type) &&\n               minic_type_is_function(function_type) &&\n               fprintf(file, "  la a0, %s\\n", designator->name) >= 0;\n    }\n    case MINIC_EXPRESSION_SIZEOF: {''')
+
+          test = Path("tests/programs/c0/runtime_function_designators.c")
+          if test.exists():
+              raise SystemExit(f"{test}: already exists")
+          test.write_text('''struct Hooks {\n    int (*apply)(int);\n};\n\nstatic int increment(int value)\n{\n    return value + 1;\n}\n\nstatic int decrement(int value)\n{\n    return value - 1;\n}\n\nstatic struct Hooks hooks = { decrement };\n\nstatic int shadow(void)\n{\n    int increment;\n    increment = 7;\n    return increment;\n}\n\nint main(void)\n{\n    if (hooks.apply(10) != 9) {\n        return 1;\n    }\n    hooks.apply = increment;\n    if (hooks.apply != increment) {\n        return 2;\n    }\n    if (increment != hooks.apply) {\n        return 3;\n    }\n    if (hooks.apply(41) != 42) {\n        return 4;\n    }\n    hooks.apply = decrement;\n    if (hooks.apply(10) != 9) {\n        return 5;\n    }\n    if (shadow() != 7) {\n        return 6;\n    }\n    return 0;\n}\n''')
+
+          manifest = Path("tests/programs/c0/manifest.txt")
+          text = manifest.read_text()
+          if "runtime_function_designators\n" in text:
+              raise SystemExit("manifest already contains runtime_function_designators")
+          if not text.endswith("\n"):
+              raise SystemExit("manifest must end in newline")
+          manifest.write_text(text + "runtime_function_designators\n")
+          PY
+
+          if ! command -v clang-format-18 >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y clang-format-18
+          fi
+          clang-format-18 -i \
+            src/frontend/ast.h \
+            src/frontend/parser_expression.c \
+            src/frontend/ast_verifier.c \
+            src/frontend/cast_normalization.c \
+            src/target/riscv64/codegen_expression.c \
+            tests/programs/c0/runtime_function_designators.c
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/dev-runtime-function-designators.yml
+          git add \
+            src/frontend/ast.h \
+            src/frontend/parser_expression.c \
+            src/frontend/ast_verifier.c \
+            src/frontend/cast_normalization.c \
+            src/target/riscv64/codegen_expression.c \
+            tests/programs/c0/runtime_function_designators.c \
+            tests/programs/c0/manifest.txt
+          git diff --cached --check
+          git commit -m "frontend: add runtime function designators"
+          git push origin HEAD:frontend/runtime-function-designators
