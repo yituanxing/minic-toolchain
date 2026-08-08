@@ -189,6 +189,20 @@ set +e
 status=$?
 set -e
 
+if test "$status" -ge 128 && test -x "$root/build/ci-sanitize/bin/minic"; then
+    sanitizer_diagnostic="$work/minic-sanitize.stderr"
+    set +e
+    ASAN_OPTIONS=detect_leaks=0:abort_on_error=1 \
+    UBSAN_OPTIONS=print_stacktrace=1 \
+        "$root/build/ci-sanitize/bin/minic" -S "$preprocessed" -o "$work/cJSON-sanitize.s" \
+        >"$work/minic-sanitize.stdout" 2>"$sanitizer_diagnostic"
+    sanitizer_status=$?
+    set -e
+    printf '%s\n' \
+        "cJSON release compiler crashed status=$status; sanitizer rerun status=$sanitizer_status" >&2
+    cat "$sanitizer_diagnostic" >&2
+fi
+
 if test "$status" -eq 0; then
     printf '%s\n' \
         'FAIL external/cjson: cJSON crossed the recorded frontier; advance the project gate' >&2
