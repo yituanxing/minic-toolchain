@@ -808,6 +808,23 @@ static bool pointer_arithmetic_shape(MinicTokenKind kind,
     return false;
 }
 
+static bool pointer_relational_compatible(const MinicC0Program *program,
+                                          MinicType left,
+                                          MinicType right) {
+    MinicType left_pointee;
+    MinicType right_pointee;
+    MinicType left_unqualified;
+    MinicType right_unqualified;
+
+    return minic_type_pointee(left, &left_pointee) &&
+           minic_type_pointee(right, &right_pointee) &&
+           minic_type_unqualified(left_pointee, &left_unqualified) &&
+           minic_type_unqualified(right_pointee, &right_unqualified) &&
+           minic_type_equal(left_unqualified, right_unqualified) &&
+           type_is_complete_object(program, left_pointee) &&
+           type_is_complete_object(program, right_pointee);
+}
+
 static bool binary_result_type(const MinicC0Program *program,
                                MinicTokenKind kind,
                                MinicType left,
@@ -842,6 +859,12 @@ static bool binary_result_type(const MinicC0Program *program,
     has_numeric_operands = (minic_type_is_double(left) || minic_type_is_integer(left)) &&
                            (minic_type_is_double(right) || minic_type_is_integer(right));
     if (binary_is_comparison(kind) && has_double_operand && has_numeric_operands) {
+        *result = minic_type_int();
+        return true;
+    }
+    if (binary_is_comparison(kind) && !binary_is_equality(kind) &&
+        minic_type_is_pointer(left) && minic_type_is_pointer(right) &&
+        pointer_relational_compatible(program, left, right)) {
         *result = minic_type_int();
         return true;
     }
