@@ -608,8 +608,7 @@ bool minic_riscv64_emit_expression(FILE *file,
                 !minic_type_is_function(function_type)) {
                 return false;
             }
-            indirect_type =
-                minic_c0_program_function_type(program, function_type.function_type_id);
+            indirect_type = minic_c0_program_function_type(program, function_type.function_type_id);
             if (indirect_type == NULL || indirect_type->parameter_count > 8U ||
                 argument_count != indirect_type->parameter_count ||
                 !minic_type_equal(expression->type, indirect_type->return_type) ||
@@ -621,8 +620,7 @@ bool minic_riscv64_emit_expression(FILE *file,
             parameter_types = indirect_type->parameter_types;
             parameter_count = indirect_type->parameter_count;
         } else {
-            direct_callee =
-                minic_c0_program_function(program, expression->value.call.function_id);
+            direct_callee = minic_c0_program_function(program, expression->value.call.function_id);
             if (direct_callee == NULL || direct_callee->name_length == 0U ||
                 direct_callee->parameter_count > 8U) {
                 return false;
