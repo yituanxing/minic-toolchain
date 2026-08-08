@@ -602,8 +602,7 @@ bool minic_riscv64_emit_expression(FILE *file,
         if (is_indirect) {
             MinicType function_type;
 
-            indirect_callee =
-                minic_c0_program_expression(program, expression->value.call.callee);
+            indirect_callee = minic_c0_program_expression(program, expression->value.call.callee);
             if (indirect_callee == NULL ||
                 !minic_type_pointee(indirect_callee->type, &function_type) ||
                 !minic_type_is_function(function_type)) {
@@ -625,15 +624,16 @@ bool minic_riscv64_emit_expression(FILE *file,
             direct_callee =
                 minic_c0_program_function(program, expression->value.call.function_id);
             if (direct_callee == NULL || direct_callee->name_length == 0U ||
-                direct_callee->parameter_count > 8U ||
-                argument_count < direct_callee->parameter_count || argument_count > 8U ||
-                (!direct_callee->is_variadic &&
-                 argument_count != direct_callee->parameter_count)) {
+                direct_callee->parameter_count > 8U) {
                 return false;
             }
             parameter_types = direct_callee->parameter_types;
             parameter_count = direct_callee->parameter_count;
             is_variadic = direct_callee->is_variadic;
+            if (argument_count < parameter_count || argument_count > 8U ||
+                (!is_variadic && argument_count != parameter_count)) {
+                return false;
+            }
         }
 
         for (argument_index = 0U; argument_index < argument_count; ++argument_index) {
@@ -677,9 +677,10 @@ bool minic_riscv64_emit_expression(FILE *file,
         } else {
             temporary_bytes = argument_count * 16U;
         }
-        if (temporary_bytes != 0U &&
-            fprintf(file, "  addi sp, sp, %zu\n", temporary_bytes) < 0) {
-            return false;
+        if (temporary_bytes != 0U) {
+            if (fprintf(file, "  addi sp, sp, %zu\n", temporary_bytes) < 0) {
+                return false;
+            }
         }
         if (is_indirect) {
             if (fprintf(file, "  jalr ra, t0, 0\n") < 0) {
