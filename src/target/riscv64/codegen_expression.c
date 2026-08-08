@@ -420,16 +420,35 @@ bool minic_riscv64_emit_expression(FILE *file,
             file, program, function, expression->value.unary.operand);
     case MINIC_EXPRESSION_CONVERSION: {
         const MinicExpression *operand;
+        const char *instruction;
 
         operand = minic_c0_program_expression(program, expression->value.unary.operand);
-        if (operand == NULL || !minic_type_is_double(expression->type) ||
-            !minic_type_is_integer(operand->type)) {
+        if (operand == NULL) {
             return false;
+        }
+        if (minic_type_is_double(expression->type) && minic_type_is_integer(operand->type)) {
+            return minic_riscv64_emit_expression(
+                       file, program, function, expression->value.unary.operand) &&
+                   minic_riscv64_emit_integer_to_double(file, operand->type, "a0", "ft0") &&
+                   fprintf(file, "  fmv.x.d a0, ft0\n") >= 0;
+        }
+        if (!minic_type_is_integer(expression->type) || !minic_type_is_double(operand->type)) {
+            return false;
+        }
+        if (minic_type_is_long_integer(expression->type)) {
+            instruction =
+                minic_type_is_unsigned_integer(expression->type) ? "fcvt.lu.d" : "fcvt.l.d";
+        } else {
+            instruction =
+                minic_type_is_unsigned_integer(expression->type) ? "fcvt.wu.d" : "fcvt.w.d";
         }
         return minic_riscv64_emit_expression(
                    file, program, function, expression->value.unary.operand) &&
-               minic_riscv64_emit_integer_to_double(file, operand->type, "a0", "ft0") &&
-               fprintf(file, "  fmv.x.d a0, ft0\n") >= 0;
+               fprintf(file,
+                       "  fmv.d.x ft0, a0\n"
+                       "  %s a0, ft0, rtz\n",
+                       instruction) >= 0 &&
+               minic_riscv64_emit_integer_conversion(file, expression->type, "a0");
     }
     case MINIC_EXPRESSION_ADDRESS_OF:
         return minic_riscv64_emit_lvalue_address(
@@ -601,7 +620,7 @@ bool minic_riscv64_emit_expression(FILE *file,
                                       ? "  srl a0, t0, a0\n"
                                       : "  sra a0, t0, a0\n")
                                : (minic_type_is_unsigned_integer(expression->type)
-                                      ? "  srlw a0, t0, a0\n"
+                                      ? "  srlw a0, a0, t0\n"
                                       : "  sraw a0, t0, a0\n")) >= 0 &&
                    minic_riscv64_emit_normalize_integer(file, expression->type, "a0");
         case MINIC_BINARY_BITWISE_AND:
