@@ -187,3 +187,47 @@ diff --git a/src/frontend/parser_statement.c b/src/frontend/parser_statement.c
      if (assignment_token == MINIC_TOKEN_EQUAL && minic_type_is_record(first_type)) {
          const MinicExpression *source;
  
+diff --git a/src/frontend/parser_statement.c b/src/frontend/parser_statement.c
+--- a/src/frontend/parser_statement.c
++++ b/src/frontend/parser_statement.c
+@@ -492,10 +492,12 @@ static bool add_record_copy_assignments(MinicParser *parser,
+         MinicExpression target_member;
+         MinicExpression source_member;
+         MinicExpressionId target_member_id;
+         MinicExpressionId source_member_id;
++        MinicType target_member_type;
++        MinicType source_member_type;
+ 
+         field = minic_c0_record_field(record, field_index);
+         if (field == NULL || field->element_count != 1U) {
+             minic_parser_error(parser, "record assignment with array members is unsupported");
+             return false;
+         }
++
++        target_member_type = field->type;
++        source_member_type = field->type;
++        if ((minic_type_is_const(target_type) &&
++             !minic_type_add_const(target_member_type, &target_member_type)) ||
++            (minic_type_is_const(source_type) &&
++             !minic_type_add_const(source_member_type, &source_member_type))) {
++            minic_parser_error(parser, "cannot propagate const through record assignment");
++            return false;
++        }
+ 
+         (void)memset(&target_member, 0, sizeof(target_member));
+         target_member.kind = MINIC_EXPRESSION_MEMBER;
+         target_member.span = span;
+-        target_member.type = field->type;
++        target_member.type = target_member_type;
+         target_member.value_category = MINIC_VALUE_LVALUE;
+         target_member.value.member.base = target_address_id;
+         target_member.value.member.record_id = target_type.record_id;
+@@ -507,7 +519,7 @@ static bool add_record_copy_assignments(MinicParser *parser,
+         (void)memset(&source_member, 0, sizeof(source_member));
+         source_member.kind = MINIC_EXPRESSION_MEMBER;
+         source_member.span = span;
+-        source_member.type = field->type;
++        source_member.type = source_member_type;
+         source_member.value_category = MINIC_VALUE_LVALUE;
+         source_member.value.member.base = source_address_id;
+         source_member.value.member.record_id = source_type.record_id;
