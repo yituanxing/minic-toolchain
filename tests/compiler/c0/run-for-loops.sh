@@ -25,6 +25,12 @@ printf '%s\n' "PASS compiler/c0/for_loop_lowering"
 "$minic" -S "$work/for_empty_initializer.i" -o "$work/for_empty_initializer.s"
 printf '%s\n' "PASS compiler/c0/for_empty_initializer"
 
+"$host_cc" -E -P -x c \
+    "$root/tests/compiler/c0/for_assignment_update.c" \
+    -o "$work/for_assignment_update.i"
+"$minic" -S "$work/for_assignment_update.i" -o "$work/for_assignment_update.s"
+printf '%s\n' "PASS compiler/c0/for_assignment_update"
+
 expect_failure() {
     name=$1
     message=$2
@@ -44,7 +50,7 @@ expect_failure() {
 
 expect_failure \
     invalid_for_update \
-    "postfix update requires '++' or '--'"
+    "assignment target must be a modifiable lvalue"
 expect_failure \
     invalid_for_increment_target \
     "prefix update requires a modifiable integer or pointer lvalue"
