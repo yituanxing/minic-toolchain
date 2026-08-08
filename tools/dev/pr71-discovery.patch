@@ -208,3 +208,22 @@ diff --git a/src/frontend/parser_statement.c b/src/frontend/parser_statement.c
      if (current_identifier_is_goto(parser)) {
          return parse_goto(parser);
      }
+diff --git a/tests/external/cjson/probe.sh b/tests/external/cjson/probe.sh
+--- a/tests/external/cjson/probe.sh
++++ b/tests/external/cjson/probe.sh
+@@ -72,7 +72,7 @@ void *memcpy(void *destination, const void *source, size_t count);
+ void *memset(void *destination, int value, size_t count);
+ char *strcpy(char *destination, const char *source);
+-int strcmp(const char *left, const char *right);
++int strcmp(const char *left, const char *right); int strncmp(const char *left, const char *right, size_t count);
+ #endif
+ EOF
+ 
+@@ -143,7 +143,7 @@ verify_preprocessed_line 3 'void *memcpy(void *destination, const void *source,
+ verify_preprocessed_line 4 'void *memset(void *destination, int value, size_t count);'
+ verify_preprocessed_line 5 'char *strcpy(char *destination, const char *source);'
+-verify_preprocessed_line 6 'int strcmp(const char *left, const char *right);'
++verify_preprocessed_line 6 'int strcmp(const char *left, const char *right); int strncmp(const char *left, const char *right, size_t count);'
+ verify_preprocessed_line 7 'int sprintf(char *buffer, const char *format, ...); int sscanf(const char *buffer, const char *format, ...);'
+ verify_preprocessed_line 8 'double fabs(double value);'
+ verify_preprocessed_line 9 'void *malloc(size_t size);'
