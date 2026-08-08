@@ -183,6 +183,10 @@ static const MinicFunctionType *indirect_callee_type(const MinicParser *parser,
     return minic_c0_program_function_type(parser->program, function_type.function_type_id);
 }
 
+static void indirect_argument_count_error(MinicParser *parser) {
+    minic_parser_error(parser, "indirect call argument count does not match declaration");
+}
+
 static bool parse_indirect_arguments(MinicParser *parser,
                                      MinicExpression *call,
                                      const MinicFunctionType *function_type) {
@@ -198,7 +202,7 @@ static bool parse_indirect_arguments(MinicParser *parser,
 
         if (parser->current.kind == MINIC_TOKEN_RPAREN ||
             !minic_parser_parse_expression(parser, &argument_id, 0U)) {
-            minic_parser_error(parser, "indirect call argument count does not match declaration");
+            indirect_argument_count_error(parser);
             return false;
         }
         argument = minic_c0_program_expression(parser->program, argument_id);
@@ -211,15 +215,13 @@ static bool parse_indirect_arguments(MinicParser *parser,
         call->value.call.arguments[argument_index] = argument_id;
         if (argument_index + 1U < function_type->parameter_count) {
             if (parser->current.kind != MINIC_TOKEN_COMMA || !minic_parser_advance(parser)) {
-                minic_parser_error(
-                    parser,
-                    "indirect call argument count does not match declaration");
+                indirect_argument_count_error(parser);
                 return false;
             }
         }
     }
     if (parser->current.kind != MINIC_TOKEN_RPAREN) {
-        minic_parser_error(parser, "indirect call argument count does not match declaration");
+        indirect_argument_count_error(parser);
         return false;
     }
     call->value.call.argument_count = function_type->parameter_count;
