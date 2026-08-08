@@ -170,6 +170,7 @@ verify_preprocessed_line 150 '    for(; tolower(*string1) == tolower(*string2); 
 verify_preprocessed_line 152 "        if (*string1 == '\\0')"
 verify_preprocessed_line 165 'static internal_hooks global_hooks = { malloc, free, realloc };'
 verify_preprocessed_line 174 '    length = strlen((const char*)string) + sizeof("");'
+verify_preprocessed_line 175 '    copy = (unsigned char*)hooks->allocate(length);'
 
 set +e
 "$minic" -S "$preprocessed" -o "$work/cJSON.s" \
@@ -185,7 +186,7 @@ fi
 
 first_error=$(sed -n '/error:/p' "$diagnostic" | sed -n '1p')
 case "$first_error" in
-    *":174:50: error: call to function not yet declared")
+    *":175:43: error: expected ';'")
         ;;
     *)
         printf '%s\n' \
@@ -196,4 +197,4 @@ case "$first_error" in
 esac
 
 printf '%s\n' \
-    'PASS external/cjson frontier=sizeof-expression diagnostic=call-not-declared source=cJSON-1.7.19 offline=1'
+    'PASS external/cjson frontier=indirect-function-call diagnostic=expected-semicolon source=cJSON-1.7.19 offline=1'
