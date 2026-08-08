@@ -1,0 +1,46 @@
+diff --git a/tools/dev/pr71-update-platform.py b/tools/dev/pr71-update-platform.py
+--- a/tools/dev/pr71-update-platform.py
++++ b/tools/dev/pr71-update-platform.py
+@@ -660,1 +660,49 @@
+ print("staged float conversion, conditional pointer conversion, and general prefix updates")
++
++# C conditional pointer composition also permits one void pointer and one object pointer.
++# Reuse the type layer's existing assignment-compatibility boundary so function pointers and
++# qualifier-removing combinations remain rejected.
++conditional_void_old = r'''    if (minic_type_is_pointer(when_true) && minic_type_is_pointer(when_false) &&
++        minic_type_unqualified(when_true, &unqualified_true) &&
++        minic_type_unqualified(when_false, &unqualified_false) &&
++        minic_type_equal(unqualified_true, unqualified_false)) {
++        *result = unqualified_true;
++        return true;
++    }
++'''
++conditional_void_new = r'''    if (minic_type_is_pointer(when_true) && minic_type_is_pointer(when_false) &&
++        minic_type_unqualified(when_true, &unqualified_true) &&
++        minic_type_unqualified(when_false, &unqualified_false)) {
++        MinicType true_pointee;
++        MinicType false_pointee;
++
++        if (minic_type_equal(unqualified_true, unqualified_false)) {
++            *result = unqualified_true;
++            return true;
++        }
++        if (minic_type_pointee(unqualified_true, &true_pointee) &&
++            minic_type_pointee(unqualified_false, &false_pointee) &&
++            (minic_type_assignment_compatible(unqualified_true, unqualified_false) ||
++             minic_type_assignment_compatible(unqualified_false, unqualified_true))) {
++            if (minic_type_is_void(true_pointee) && !minic_type_is_function(false_pointee)) {
++                *result = unqualified_true;
++                return true;
++            }
++            if (minic_type_is_void(false_pointee) && !minic_type_is_function(true_pointee)) {
++                *result = unqualified_false;
++                return true;
++            }
++        }
++    }
++'''
++for conditional_path in ("src/frontend/parser_expression.c", "src/frontend/ast_verifier.c"):
++    replace_once(conditional_path, conditional_void_old, conditional_void_new)
++
++print("staged conditional void/object pointer composition")
