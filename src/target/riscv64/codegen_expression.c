@@ -198,7 +198,7 @@ static bool minic_riscv64_emit_conditional_result_conversion(FILE *file,
     }
     if (minic_type_is_integer(source_type) && minic_type_is_double(result_type)) {
         return minic_riscv64_emit_integer_to_double(file, source_type, "a0", "ft0") &&
-               fprintf(file, "  fmv.x.d a0, ft0\\n") >= 0;
+               fprintf(file, "  fmv.x.d a0, ft0\n") >= 0;
     }
     return false;
 }
@@ -724,14 +724,14 @@ bool minic_riscv64_emit_expression(FILE *file,
             !type_is_condition_scalar(condition->type) ||
             !minic_riscv64_emit_expression(
                 file, program, function, expression->value.conditional.condition) ||
-            fprintf(file, "  beqz a0, .Lminic_cond_false_%zu\\n", expression_id) < 0 ||
+            fprintf(file, "  beqz a0, .Lminic_cond_false_%zu\n", expression_id) < 0 ||
             !minic_riscv64_emit_expression(
                 file, program, function, expression->value.conditional.when_true) ||
             !minic_riscv64_emit_conditional_result_conversion(
                 file, when_true->type, expression->type) ||
             fprintf(file,
-                    "  j .Lminic_cond_end_%zu\\n"
-                    ".Lminic_cond_false_%zu:\\n",
+                    "  j .Lminic_cond_end_%zu\n"
+                    ".Lminic_cond_false_%zu:\n",
                     expression_id,
                     expression_id) < 0 ||
             !minic_riscv64_emit_expression(
@@ -740,7 +740,7 @@ bool minic_riscv64_emit_expression(FILE *file,
                 file, when_false->type, expression->type)) {
             return false;
         }
-        return fprintf(file, ".Lminic_cond_end_%zu:\\n", expression_id) >= 0;
+        return fprintf(file, ".Lminic_cond_end_%zu:\n", expression_id) >= 0;
     }
     case MINIC_EXPRESSION_CALL: {
         const MinicFunction *direct_callee;
