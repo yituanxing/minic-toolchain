@@ -124,6 +124,15 @@ static MinicTokenKind minic_classify_identifier(const char *text, size_t length)
     if (length == 3U && memcmp(text, "for", 3U) == 0) {
         return MINIC_TOKEN_KW_FOR;
     }
+    if (length == 6U && memcmp(text, "switch", 6U) == 0) {
+        return MINIC_TOKEN_KW_SWITCH;
+    }
+    if (length == 4U && memcmp(text, "case", 4U) == 0) {
+        return MINIC_TOKEN_KW_CASE;
+    }
+    if (length == 7U && memcmp(text, "default", 7U) == 0) {
+        return MINIC_TOKEN_KW_DEFAULT;
+    }
     if (length == 5U && memcmp(text, "break", 5U) == 0) {
         return MINIC_TOKEN_KW_BREAK;
     }
@@ -439,6 +448,9 @@ bool minic_lexer_next(MinicLexer *lexer, MinicToken *token, MinicDiagnostic *dia
         break;
     case ',':
         token->kind = MINIC_TOKEN_COMMA;
+        break;
+    case ':':
+        token->kind = MINIC_TOKEN_COLON;
         break;
     case '.':
         token->kind = MINIC_TOKEN_DOT;
