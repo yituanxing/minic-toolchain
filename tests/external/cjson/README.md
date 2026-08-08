@@ -73,7 +73,7 @@ cJSON.i:268:16: error: call to function not yet declared
 
 ## Validation / 验证
 
-Run #956 is the discovery run proving the 59th differential and the new line-268 switch frontier. A latest-head clean run with the updated line-268 probe is required before this branch is merged.
+Run #956 is the discovery run proving the 59th differential and the new line-268 switch frontier. Final diff audit also restored `tests/frontend/type_test.c` to main formatting and kept only the single intended integer-to-double cast-contract assertion change. A latest-head clean run with that minimal diff and the updated line-268 probe is required before this branch is merged.
 
 ## Completion result / 完成标志
 
