@@ -179,7 +179,7 @@ verify_preprocessed_line 284 '                number_string_length++;'
 verify_preprocessed_line 291 '                goto loop_end;'
 verify_preprocessed_line 294 'loop_end:'
 verify_preprocessed_line 318 '    item->valuedouble = number;'
-verify_preprocessed_line 319 '    if (number >= 2147483647)'
+verify_preprocessed_line 319 '    if (number >= 0x7fffffff)'
 verify_preprocessed_line 329 '        item->valueint = (int)number;'
 verify_preprocessed_line 332 '    input_buffer->offset += (size_t)(after_end - number_c_string);'
 
