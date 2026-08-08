@@ -292,7 +292,8 @@ static bool parse_one_postfix_update(MinicParser *parser,
             return false;
         }
     } else if (!minic_type_is_integer(operand_type)) {
-        minic_parser_error(parser, "postfix update currently requires an integer or pointer lvalue");
+        minic_parser_error(
+            parser, "postfix update currently requires an integer or pointer lvalue");
         return false;
     }
 
