@@ -65,7 +65,7 @@ cJSON.i:175:43: error: expected ';'
 
 The member expression `hooks->allocate` already has the declared pointer-to-function type. The next missing capability is therefore generic postfix call on a function-pointer expression / indirect call lowering, not another cJSON-specific declaration or hook special case.
 
-当前下一能力簇是通用 **callee-expression / indirect function call**：postfix `()` 应接受函数指针表达式，调用节点应统一 direct/indirect callee，RV64 参数布置继续复用既有路径，indirect 分支最终使用 `jalr`。
+当前下一能力簇是通用 **callee-expression / indirect function call**：postfix `()` 应接受函数指针表达式，调用节点应统一 direct/indirect callee，RV64 参数布置继续复用既有路径，indirect 分支最终使用 `jalr`。这一方向与冻结 Python 编译器的通用 `Call(name, args, callee)` 模型一致。
 
 ## Validation / 验证
 
