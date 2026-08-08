@@ -23,46 +23,57 @@ External GCC may preprocess, assemble, link, and provide CRT/libc. MiniC must co
 
 ## Accepted compiler capabilities / 已越过能力
 
-The unchanged core now crosses the previously frozen language features plus scalar conditions, generalized bounded `for` clauses, character constants, function-valued static relocations, bounded `sizeof`, indirect function calls, runtime function designators, bounded function-pointer null compatibility, and local `double` object storage.
+The unchanged core now crosses the previously frozen language features plus scalar conditions, generalized bounded `for` clauses, character constants, function-valued static relocations, bounded `sizeof`, indirect function calls, runtime function designators, bounded function-pointer null compatibility, local `double` storage, and integer-to-double numeric conversion.
 
-本分支完成 **local double object / scalar double storage**：
+本分支完成 **integer → double numeric conversion**，不是简单放宽类型兼容：
 
-- RV64 layout 继续使用已有通用 local slot 规则，`double` 已天然是 8-byte / 8-align；
-- statement dispatcher 将 `double` 识别为局部声明起点；
-- scalar object memory helper 将 `double` 视为 8-byte 标量；
-- C 后端继续保持既有约定：double expression 的 binary64 raw bits 存在整数寄存器 `a0`，因此内存 load/store 使用 `ld` / `sd` 保留原始位模式；
-- 进入 double arithmetic 时继续由既有 `fmv.d.x` / `fmv.x.d` 桥接到 FP 寄存器，double return ABI 继续在 `a0` bits 与 `fa0` 间转换；
-- 没有引入第二套 local FP value representation，也没有修改已稳定的 generic local layout。
+- source `(double)integer` cast 现在合法；
+- local initialization、普通赋值、return 语境在目标为 `double`、源为整数时插入真实 parsed `CAST`；
+- normalization 将该 cast 降成独立 `MINIC_EXPRESSION_CONVERSION`，不把整数 bit pattern 当成 double；
+- RV64 按源整数 rank/sign 使用 `fcvt.d.w`、`fcvt.d.wu`、`fcvt.d.l`、`fcvt.d.lu`；
+- 转换后的 binary64 bits 通过 `fmv.x.d` 回到 C 后端既有的 `a0` raw-bits 表示；
+- `double → integer` 和 `integer → float` 仍由 focused negative gate 明确拒绝；
+- double function-call argument ABI 尚未扩大，因为它需要独立的 `fa0..fa7` ABI 能力。
 
-这一点与冻结 Python 编译器的成熟结构一致：局部浮点对象仍走通用 aligned local storage + typed load/store；具体寄存器表示则遵循当前 C rewrite 已冻结的 raw-bits convention。
+A permanent `integer_to_double_conversion` GCC/MiniC RV64 differential is registered as the 59th program. It checks implicit initialization/assignment/return, an explicit cast, signed/unsigned 32/64-bit conversion paths, and exact binary64 object bytes.
 
-A permanent `local_double_objects` GCC/MiniC RV64 differential is registered as the 58th program. It validates binary64 object representation through the standards-defined `unsigned char *` alias path and covers literal initialization, local-to-local copy, double arithmetic reassignment, and storing a double function return.
-
-永久第 58 个 differential `local_double_objects` 已在 RV64/QEMU 上通过。
+永久第 59 个 differential `integer_to_double_conversion` 已在 RV64/QEMU 上通过。
 
 ## Current exact frontier / 当前精确前沿
 
-Discovery Run #948 passed source inventory, clang-format 18, Debug, Release `-Werror`, ASan/UBSan, focused suites, all **58** permanent GCC/MiniC RV64 differential programs including `local_double_objects`, and frozen tiny-AES.
+Discovery Run #956 passed source inventory, clang-format 18, Debug, Release `-Werror`, ASan/UBSan, all focused cast/null suites, all **59** permanent GCC/MiniC RV64 differential programs including `integer_to_double_conversion`, and frozen tiny-AES.
 
-The unchanged cJSON source now recognizes and lays out:
+The unchanged cJSON source crossed:
 
 ```c
     double number = 0;
 ```
 
-but stops at the initializer with exact first diagnostic:
+and the subsequent local floating initialization path. It reached the `parse_number` dispatch:
 
-```text
-cJSON.i:255:22: error: initializer type does not match local type
+```c
+        switch (buffer_at_offset(input_buffer)[i])
 ```
 
-This is no longer a local-storage problem. The source initializer is integer `0`, while MiniC currently accepts only same-floating-type assignment and deliberately rejects integer-to-double conversion. The next independent capability is therefore bounded integer-to-double scalar conversion / assignment conversion.
+which preprocesses to:
 
-当前下一能力簇是 **int → double conversion**。下一分支应先建立通用转换表达式/ABI lowering，并让 local initialization、assignment、return/call 等需要 assignment conversion 的语境复用，而不是只对 `double number = 0` 打特例。
+```c
+        switch (((input_buffer)->content + (input_buffer)->offset)[i])
+```
+
+with exact first diagnostic:
+
+```text
+cJSON.i:268:16: error: call to function not yet declared
+```
+
+`switch` is not yet a keyword in the C rewrite, so it is currently tokenized as an identifier and the following `(` is interpreted as an undeclared direct call. This is a new independent **switch/case/default control-flow** capability, not an integer-to-double conversion failure.
+
+当前下一能力簇因此是 **switch / case / default**。下一分支应建立真正的语法、AST/statement 表示与 RV64 control-flow lowering，并覆盖 fallthrough、`break`、default 和嵌套作用域，而不是针对 cJSON 的字符分类表做特例。
 
 ## Validation / 验证
 
-Run #948 is the discovery run proving the 58th differential and the new line-255 initializer-conversion frontier. A latest-head clean run with the updated cJSON probe is required before this branch is merged.
+Run #956 is the discovery run proving the 59th differential and the new line-268 switch frontier. Final diff audit also restored `tests/frontend/type_test.c` to main formatting and kept only the single intended integer-to-double cast-contract assertion change. A latest-head clean run with that minimal diff and the updated line-268 probe is required before this branch is merged.
 
 ## Completion result / 完成标志
 

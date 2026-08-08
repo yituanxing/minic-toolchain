@@ -37,6 +37,7 @@ static bool remap_non_cast_expression(MinicExpression *expression,
     case MINIC_EXPRESSION_ADDRESS_OF:
     case MINIC_EXPRESSION_DEREFERENCE:
     case MINIC_EXPRESSION_BITCAST:
+    case MINIC_EXPRESSION_CONVERSION:
     case MINIC_EXPRESSION_UNARY:
         return remap_expression_id(mapping,
                                    old_expression_count,
@@ -126,6 +127,19 @@ static bool append_normalized_cast(MinicC0Program *rewritten,
         return false;
     }
     operand_expression = &rewritten->expressions[mapped_operand];
+
+    if (minic_type_is_double(cast_expression->type) &&
+        minic_type_is_integer(operand_expression->type)) {
+        MinicExpression conversion;
+
+        (void)memset(&conversion, 0, sizeof(conversion));
+        conversion.kind = MINIC_EXPRESSION_CONVERSION;
+        conversion.span = cast_expression->span;
+        conversion.type = cast_expression->type;
+        conversion.value_category = MINIC_VALUE_RVALUE;
+        conversion.value.unary.operand = mapped_operand;
+        return minic_c0_program_add_expression(rewritten, &conversion, normalized_id);
+    }
 
     if (minic_type_is_pointer(cast_expression->type) &&
         operand_expression->kind == MINIC_EXPRESSION_INTEGER &&

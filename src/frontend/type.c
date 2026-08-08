@@ -319,6 +319,9 @@ bool minic_type_cast_compatible(MinicType target, MinicType source) {
     if (minic_type_is_integer(target) && minic_type_is_integer(source)) {
         return true;
     }
+    if (minic_type_is_double(target) && minic_type_is_integer(source)) {
+        return true;
+    }
     return minic_type_is_pointer(target) && minic_type_is_pointer(source);
 }
 

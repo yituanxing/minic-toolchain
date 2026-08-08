@@ -29,6 +29,38 @@ static bool expression_is_modifiable_lvalue(const MinicExpression *expression) {
            !minic_type_is_const(expression->type);
 }
 
+static bool apply_assignment_conversion(MinicParser *parser,
+                                        MinicType target_type,
+                                        MinicExpressionId *expression_id) {
+    const MinicExpression *source;
+    MinicExpression conversion;
+    MinicExpressionId source_id;
+
+    if (parser == NULL || expression_id == NULL) {
+        return false;
+    }
+    source_id = *expression_id;
+    source = minic_c0_program_expression(parser->program, source_id);
+    if (source == NULL) {
+        minic_parser_error(parser, "invalid assignment conversion source");
+        return false;
+    }
+    if (minic_c0_assignment_compatible(parser->program, target_type, source_id)) {
+        return true;
+    }
+    if (!minic_type_is_double(target_type) || !minic_type_is_integer(source->type)) {
+        return true;
+    }
+
+    (void)memset(&conversion, 0, sizeof(conversion));
+    conversion.kind = MINIC_EXPRESSION_CAST;
+    conversion.span = source->span;
+    conversion.type = target_type;
+    conversion.value_category = MINIC_VALUE_RVALUE;
+    conversion.value.unary.operand = source_id;
+    return minic_parser_add_expression(parser, &conversion, expression_id);
+}
+
 static bool parse_local_declarator(MinicParser *parser, MinicType base_type) {
     MinicLocal local;
     MinicLocalId local_id;
@@ -81,7 +113,8 @@ static bool parse_local_declarator(MinicParser *parser, MinicType base_type) {
         if (!add_local_lvalue_expression(
                 parser, local_id, local.name_span, &statement.target_expression) ||
             !minic_parser_advance(parser) ||
-            !minic_parser_parse_expression(parser, &statement.expression, 0U)) {
+            !minic_parser_parse_expression(parser, &statement.expression, 0U) ||
+            !apply_assignment_conversion(parser, local.type, &statement.expression)) {
             return false;
         }
         initializer = minic_c0_program_expression(parser->program, statement.expression);
@@ -282,6 +315,10 @@ static bool parse_expression_or_assignment_statement(MinicParser *parser,
     }
     if (!minic_parser_advance(parser) ||
         !minic_parser_parse_expression(parser, &statement.expression, 0U)) {
+        return false;
+    }
+    if (statement.kind == MINIC_STATEMENT_ASSIGN &&
+        !apply_assignment_conversion(parser, first_type, &statement.expression)) {
         return false;
     }
     {
@@ -700,7 +737,8 @@ static bool parse_return(MinicParser *parser) {
             minic_parser_error(parser, "non-void function requires a return value");
             return false;
         }
-        if (!minic_parser_parse_expression(parser, &statement.expression, 0U)) {
+        if (!minic_parser_parse_expression(parser, &statement.expression, 0U) ||
+            !apply_assignment_conversion(parser, function->return_type, &statement.expression)) {
             return false;
         }
         returned_expression = minic_c0_program_expression(parser->program, statement.expression);

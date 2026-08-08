@@ -129,7 +129,7 @@ int main(void)
         !minic_type_assignment_compatible(const_double_type, double_type) ||
         minic_type_assignment_compatible(double_type, integer_type) ||
         minic_type_assignment_compatible(integer_type, double_type) ||
-        minic_type_cast_compatible(double_type, integer_type) ||
+        !minic_type_cast_compatible(double_type, integer_type) ||
         minic_type_cast_compatible(integer_type, double_type) ||
         minic_type_integer_promotion(double_type, &promoted_type)) {
         return fail("bounded double conversions");

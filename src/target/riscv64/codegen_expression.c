@@ -358,6 +358,27 @@ bool minic_riscv64_emit_expression(FILE *file,
     case MINIC_EXPRESSION_BITCAST:
         return minic_riscv64_emit_expression(
             file, program, function, expression->value.unary.operand);
+    case MINIC_EXPRESSION_CONVERSION: {
+        const MinicExpression *operand;
+        const char *instruction;
+
+        operand = minic_c0_program_expression(program, expression->value.unary.operand);
+        if (operand == NULL || !minic_type_is_double(expression->type) ||
+            !minic_type_is_integer(operand->type)) {
+            return false;
+        }
+        if (minic_type_is_long_integer(operand->type)) {
+            instruction = minic_type_is_unsigned_integer(operand->type) ? "fcvt.d.lu" : "fcvt.d.l";
+        } else {
+            instruction = minic_type_is_unsigned_integer(operand->type) ? "fcvt.d.wu" : "fcvt.d.w";
+        }
+        return minic_riscv64_emit_expression(
+                   file, program, function, expression->value.unary.operand) &&
+               fprintf(file,
+                       "  %s ft0, a0\n"
+                       "  fmv.x.d a0, ft0\n",
+                       instruction) >= 0;
+    }
     case MINIC_EXPRESSION_ADDRESS_OF:
         return minic_riscv64_emit_lvalue_address(
             file, program, function, expression->value.unary.operand);
