@@ -82,6 +82,8 @@ const char *minic_token_kind_name(MinicTokenKind kind) {
         return "+";
     case MINIC_TOKEN_PLUS_PLUS:
         return "++";
+    case MINIC_TOKEN_PLUS_EQUAL:
+        return "+=";
     case MINIC_TOKEN_MINUS:
         return "-";
     case MINIC_TOKEN_MINUS_MINUS:
