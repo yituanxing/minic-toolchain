@@ -54,17 +54,15 @@ static const char *minic_riscv64_integer_to_double_instruction(MinicType type) {
 
 static bool minic_riscv64_emit_integer_to_double(FILE *file,
                                                  MinicType type,
-                                                 const char *integer_register,
-                                                 const char *floating_register) {
+                                                 const char *int_reg,
+                                                 const char *fp_reg) {
     const char *instruction;
 
     instruction = minic_riscv64_integer_to_double_instruction(type);
-    return instruction != NULL &&
-           fprintf(file,
-                   "  %s %s, %s\n",
-                   instruction,
-                   floating_register,
-                   integer_register) >= 0;
+    if (instruction == NULL) {
+        return false;
+    }
+    return fprintf(file, "  %s %s, %s\n", instruction, fp_reg, int_reg) >= 0;
 }
 
 static bool type_is_condition_scalar(MinicType type) {
