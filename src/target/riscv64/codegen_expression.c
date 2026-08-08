@@ -42,27 +42,6 @@ static bool minic_riscv64_emit_integer_result_conversion(FILE *file,
            minic_riscv64_emit_integer_conversion(file, result_type, register_name);
 }
 
-static bool minic_riscv64_expression_is_integer_zero(const MinicExpression *expression) {
-    return expression != NULL && expression->kind == MINIC_EXPRESSION_INTEGER &&
-           minic_type_is_integer(expression->type) && expression->value.integer_value == 0;
-}
-
-static bool pointer_equality_shape(const MinicExpression *left, const MinicExpression *right) {
-    bool left_is_zero;
-    bool right_is_zero;
-
-    if (left == NULL || right == NULL) {
-        return false;
-    }
-    if (minic_type_pointer_equality_compatible(left->type, right->type)) {
-        return true;
-    }
-    left_is_zero = minic_riscv64_expression_is_integer_zero(left);
-    right_is_zero = minic_riscv64_expression_is_integer_zero(right);
-    return (minic_type_is_pointer(left->type) && right_is_zero) ||
-           (left_is_zero && minic_type_is_pointer(right->type));
-}
-
 static bool type_is_condition_scalar(MinicType type) {
     return minic_type_is_integer(type) || minic_type_is_pointer(type);
 }
@@ -440,7 +419,8 @@ bool minic_riscv64_emit_expression(FILE *file,
         has_integer_common_type =
             left != NULL && right != NULL &&
             minic_type_integer_common(left->type, right->type, &common_integer_type);
-        has_pointer_equality = pointer_equality_shape(left, right);
+        has_pointer_equality = minic_c0_pointer_equality_compatible(
+            program, expression->value.binary.left, expression->value.binary.right);
         if (left == NULL || right == NULL ||
             !minic_riscv64_emit_expression(
                 file, program, function, expression->value.binary.left) ||

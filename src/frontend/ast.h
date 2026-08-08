@@ -348,6 +348,12 @@ bool minic_c0_global_object_set_zero_initialized(MinicC0Program *program,
 
 const MinicExpression *minic_c0_program_expression(const MinicC0Program *program,
                                                    MinicExpressionId expression_id);
+bool minic_c0_assignment_compatible(const MinicC0Program *program,
+                                    MinicType target_type,
+                                    MinicExpressionId source_expression_id);
+bool minic_c0_pointer_equality_compatible(const MinicC0Program *program,
+                                          MinicExpressionId left_expression_id,
+                                          MinicExpressionId right_expression_id);
 const MinicLocal *minic_c0_program_local(const MinicC0Program *program, MinicLocalId local_id);
 const MinicStatement *minic_c0_program_statement(const MinicC0Program *program,
                                                  MinicStatementId statement_id);

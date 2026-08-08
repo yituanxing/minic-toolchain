@@ -19,7 +19,11 @@ compile_failure() {
         printf '%s\n' "FAIL compiler/c0/$name: compilation unexpectedly succeeded" >&2
         exit 1
     fi
-    grep -F "$expected" "$work/$name.stderr" >/dev/null
+    if ! grep -F "$expected" "$work/$name.stderr" >/dev/null; then
+        printf '%s\n' "FAIL compiler/c0/$name: expected diagnostic: $expected" >&2
+        cat "$work/$name.stderr" >&2
+        exit 1
+    fi
     printf '%s\n' "PASS compiler/c0/$name"
 }
 
@@ -33,3 +37,5 @@ printf '%s\n' 'PASS compiler/c0/pointer_equality lowering=xor-seqz-snez'
 compile_failure invalid_pointer_equality_nonzero_integer 'binary operator requires int operands'
 compile_failure invalid_pointer_equality_incompatible 'binary operator requires int operands'
 compile_failure invalid_pointer_relational_comparison 'binary operator requires int operands'
+compile_failure invalid_function_pointer_void_assignment 'assignment type does not match target type'
+compile_failure invalid_function_pointer_void_comparison 'binary operator requires int operands'

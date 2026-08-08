@@ -594,6 +594,83 @@ const MinicExpression *minic_c0_program_expression(const MinicC0Program *program
     return &program->expressions[expression_id];
 }
 
+static bool expression_is_null_pointer_value(const MinicC0Program *program,
+                                             MinicExpressionId expression_id) {
+    size_t remaining;
+
+    if (program == NULL) {
+        return false;
+    }
+    remaining = program->expression_count + 1U;
+    while (remaining > 0U) {
+        const MinicExpression *expression;
+
+        expression = minic_c0_program_expression(program, expression_id);
+        if (expression == NULL) {
+            return false;
+        }
+        if (expression->kind == MINIC_EXPRESSION_INTEGER) {
+            return minic_type_is_integer(expression->type) && expression->value.integer_value == 0;
+        }
+        if ((expression->kind != MINIC_EXPRESSION_CAST &&
+             expression->kind != MINIC_EXPRESSION_BITCAST) ||
+            !minic_type_is_pointer(expression->type)) {
+            return false;
+        }
+        expression_id = expression->value.unary.operand;
+        remaining -= 1U;
+    }
+    return false;
+}
+
+static bool type_is_function_pointer(MinicType type) {
+    MinicType pointee;
+
+    return minic_type_pointee(type, &pointee) && minic_type_is_function(pointee);
+}
+
+bool minic_c0_assignment_compatible(const MinicC0Program *program,
+                                    MinicType target_type,
+                                    MinicExpressionId source_expression_id) {
+    const MinicExpression *source;
+
+    if (program == NULL) {
+        return false;
+    }
+    source = minic_c0_program_expression(program, source_expression_id);
+    if (source == NULL) {
+        return false;
+    }
+    if (minic_type_assignment_compatible(target_type, source->type)) {
+        return true;
+    }
+    return type_is_function_pointer(target_type) &&
+           expression_is_null_pointer_value(program, source_expression_id);
+}
+
+bool minic_c0_pointer_equality_compatible(const MinicC0Program *program,
+                                          MinicExpressionId left_expression_id,
+                                          MinicExpressionId right_expression_id) {
+    const MinicExpression *left;
+    const MinicExpression *right;
+
+    if (program == NULL) {
+        return false;
+    }
+    left = minic_c0_program_expression(program, left_expression_id);
+    right = minic_c0_program_expression(program, right_expression_id);
+    if (left == NULL || right == NULL) {
+        return false;
+    }
+    if (minic_type_pointer_equality_compatible(left->type, right->type)) {
+        return true;
+    }
+    return (minic_type_is_pointer(left->type) &&
+            expression_is_null_pointer_value(program, right_expression_id)) ||
+           (expression_is_null_pointer_value(program, left_expression_id) &&
+            minic_type_is_pointer(right->type));
+}
+
 const MinicLocal *minic_c0_program_local(const MinicC0Program *program, MinicLocalId local_id) {
     if (local_id >= program->local_count) {
         return NULL;
