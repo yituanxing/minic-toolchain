@@ -620,7 +620,7 @@ bool minic_riscv64_emit_expression(FILE *file,
                                       ? "  srl a0, t0, a0\n"
                                       : "  sra a0, t0, a0\n")
                                : (minic_type_is_unsigned_integer(expression->type)
-                                      ? "  srlw a0, a0, t0\n"
+                                      ? "  srlw a0, t0, a0\n"
                                       : "  sraw a0, t0, a0\n")) >= 0 &&
                    minic_riscv64_emit_normalize_integer(file, expression->type, "a0");
         case MINIC_BINARY_BITWISE_AND:
