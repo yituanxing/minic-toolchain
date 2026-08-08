@@ -9,7 +9,8 @@ for discovery_patch in \
     "$root/tools/dev/pr71-record-copy.patch" \
     "$root/tools/dev/pr71-local-array-identity.patch" \
     "$root/tools/dev/pr71-do-while.patch" \
-    "$root/tools/dev/pr71-assignment-chain.patch"; do
+    "$root/tools/dev/pr71-assignment-chain.patch" \
+    "$root/tools/dev/pr71-bitwise-platform.patch"; do
     if [[ -f "$discovery_patch" ]]; then
         git apply --check --recount "$discovery_patch"
         git apply --recount "$discovery_patch"
