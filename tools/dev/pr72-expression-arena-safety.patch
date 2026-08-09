@@ -1,0 +1,28 @@
+diff --git a/src/frontend/parser_expression.c b/src/frontend/parser_expression.c
+--- a/src/frontend/parser_expression.c
++++ b/src/frontend/parser_expression.c
+@@ -1000,6 +1000,7 @@ static bool parse_expression_internal(MinicParser *parser,
+         const MinicExpression *true_expression;
+         const MinicExpression *false_expression;
+         MinicExpression conditional;
++        MinicSourceSpan condition_span;
+         MinicExpressionId when_true;
+         MinicExpressionId when_false;
+ 
+@@ -1012,6 +1013,7 @@ static bool parse_expression_internal(MinicParser *parser,
+                                "conditional expression requires an integer or pointer condition");
+             return false;
+         }
++        condition_span = condition_expression->span;
+         if (!minic_parser_advance(parser) ||
+             !parse_expression_internal(parser, &when_true, 0U, true) ||
+             !minic_parser_expect(
+@@ -1028,7 +1030,7 @@ static bool parse_expression_internal(MinicParser *parser,
+ 
+         (void)memset(&conditional, 0, sizeof(conditional));
+         conditional.kind = MINIC_EXPRESSION_CONDITIONAL;
+-        conditional.span.begin = condition_expression->span.begin;
++        conditional.span.begin = condition_span.begin;
+         conditional.span.end = false_expression->span.end;
+         conditional.value_category = MINIC_VALUE_RVALUE;
+         conditional.value.conditional.condition = left;
