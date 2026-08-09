@@ -28,7 +28,8 @@ jobs:
             tools/dev/pr72-enum-frontier.patch \
             tools/dev/pr72-union-frontier.patch \
             tools/dev/pr72-static-scalar.patch \
-            tools/dev/pr72-integer-suffix-type.patch; do
+            tools/dev/pr72-integer-suffix-type.patch \
+            tools/dev/pr72-global-scalar-read.patch; do
             if test -f "$patch"; then
               git apply --check --recount "$patch"
               git apply --recount "$patch"
