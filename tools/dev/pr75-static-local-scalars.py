@@ -1,6 +1,36 @@
 #!/usr/bin/env python3
 from pathlib import Path
 
+
+def replace_once(path: str, old: str, new: str, label: str) -> None:
+    target = Path(path)
+    text = target.read_text()
+    count = text.count(old)
+    if count != 1:
+        raise SystemExit(f"{label}: expected 1 match, found {count}")
+    target.write_text(text.replace(old, new, 1))
+
+
+# Reuse the same token-level null-pointer parser already used by static globals.
+# This keeps global and function-scope static pointer initialization semantics aligned.
+replace_once(
+    "src/frontend/parser_internal.h",
+    "bool minic_parser_parse_integer_value64(MinicParser *parser, int64_t *value);\n",
+    "bool minic_parser_parse_integer_value64(MinicParser *parser, int64_t *value);\n"
+    "bool minic_parser_parse_zero_pointer_constant(MinicParser *parser);\n",
+    "zero pointer parser declaration",
+)
+
+path = Path("src/frontend/parser_global.c")
+text = path.read_text()
+old = "static bool parse_zero_pointer_constant(MinicParser *parser) {"
+if text.count(old) != 1:
+    raise SystemExit(f"zero pointer parser definition: expected 1 match, found {text.count(old)}")
+text = text.replace(old, "bool minic_parser_parse_zero_pointer_constant(MinicParser *parser) {", 1)
+text = text.replace("parse_zero_pointer_constant(parser)",
+                    "minic_parser_parse_zero_pointer_constant(parser)")
+path.write_text(text)
+
 path = Path("src/frontend/parser_statement.c")
 text = path.read_text()
 anchor = text.index("static bool parse_static_local_array_declarator(MinicParser *parser, MinicType base_type) {\n")
@@ -22,8 +52,9 @@ replacement = r'''    if (bound_count == 0U) {
         if (minic_type_is_record(declared_type)) {
             return parse_static_local_record_initializer(parser, declared_type, name_span);
         }
-        if (!minic_type_is_integer(declared_type)) {
-            minic_parser_error(parser, "static local scalar currently requires an integer type");
+        if (!minic_type_is_integer(declared_type) && !minic_type_is_pointer(declared_type)) {
+            minic_parser_error(parser,
+                               "static local scalar currently requires an integer or pointer type");
             return false;
         }
 
@@ -44,8 +75,26 @@ replacement = r'''    if (bound_count == 0U) {
                                                 true,
                                                 minic_type_is_const(declared_type),
                                                 &scalar_object_id) ||
-            !minic_parser_expect(parser, MINIC_TOKEN_EQUAL, "expected '=' after static scalar") ||
-            !minic_parser_parse_expression(parser, &scalar_initializer_id, 0U) ||
+            !minic_parser_expect(parser, MINIC_TOKEN_EQUAL, "expected '=' after static scalar")) {
+            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                minic_parser_error(parser, "cannot begin static local scalar initializer");
+            }
+            return false;
+        }
+
+        if (minic_type_is_pointer(declared_type)) {
+            if (!minic_parser_parse_zero_pointer_constant(parser) ||
+                !minic_c0_global_object_set_zero_initialized(parser->program, scalar_object_id) ||
+                !minic_parser_bind_static_local(parser, name_span, scalar_object_id)) {
+                if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                    minic_parser_error(parser, "cannot finalize static local null pointer storage");
+                }
+                return false;
+            }
+            return true;
+        }
+
+        if (!minic_parser_parse_expression(parser, &scalar_initializer_id, 0U) ||
             !static_record_integer_constant(
                 parser->program, scalar_initializer_id, &scalar_value)) {
             if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
@@ -68,4 +117,4 @@ replacement = r'''    if (bound_count == 0U) {
 '''
 
 path.write_text(text[:start] + replacement + text[end:])
-print("staged writable static local integer scalars as internal global storage")
+print("staged static local integer/null-pointer scalars as internal global storage")
