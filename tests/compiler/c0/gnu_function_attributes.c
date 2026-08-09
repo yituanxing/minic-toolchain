@@ -9,6 +9,7 @@ extern void *allocate_like(unsigned long count)
     __attribute__((__nothrow__, __malloc__));
 
 extern void __attribute__((noreturn)) fatal_error(void);
+extern int old_api(void) __attribute__((__deprecated__("use new_api instead")));
 
 extern int memory_compare(const void *left, const void *right, unsigned long count)
     __attribute__((__nothrow__, __pure__))
