@@ -1,0 +1,52 @@
+name: linenoise PR Validation
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linenoise-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  linenoise-compile:
+    name: linenoise-compile
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build committed MiniC
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release BUILD_DIR=build/linenoise-compiler
+          make -j4 MODE=sanitize BUILD_DIR=build/linenoise-sanitize
+
+      - name: Compile unchanged linenoise
+        shell: bash
+        run: |
+          set +e
+          MINIC="$GITHUB_WORKSPACE/build/linenoise-compiler/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/linenoise-discovery" \
+          HOST_CC=cc \
+            sh tests/external/linenoise/probe.sh
+          status=$?
+          set -e
+
+          if test "$status" -ge 128 && test -f "$GITHUB_WORKSPACE/build/linenoise-discovery/linenoise.i"; then
+            echo "LINENOISE_SANITIZER_RERUN release_status=$status"
+            set +e
+            ASAN_OPTIONS=detect_leaks=0:abort_on_error=1 \
+            UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 \
+              "$GITHUB_WORKSPACE/build/linenoise-sanitize/bin/minic" \
+              -S "$GITHUB_WORKSPACE/build/linenoise-discovery/linenoise.i" \
+              -o "$GITHUB_WORKSPACE/build/linenoise-discovery/linenoise-sanitize.s"
+            sanitize_status=$?
+            set -e
+            echo "LINENOISE_SANITIZER_STATUS=$sanitize_status"
+          fi
+          exit "$status"
