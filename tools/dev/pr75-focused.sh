@@ -16,6 +16,7 @@ for test_script in \
     run-enum-constant-expressions.sh \
     run-integer-constant-bitwise.sh \
     run-unsigned-64-literals.sh \
+    run-builtin-va-list.sh \
     run-record-forward-declarations.sh \
     run-record-multi-declarators.sh \
     run-volatile-qualifiers.sh \
