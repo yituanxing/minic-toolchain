@@ -79,7 +79,7 @@ expect_failure \
     "record has no such member"
 expect_failure \
     invalid_const_pointer_member_assignment \
-    "assignment target must be a modifiable lvalue"
+    "assignment expression requires a modifiable scalar lvalue"
 expect_failure \
     invalid_self_record_by_value \
     "record field cannot use incomplete type by value"
