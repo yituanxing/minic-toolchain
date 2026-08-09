@@ -35,7 +35,7 @@ for test_script in \
     run-record-multidimensional-arrays.sh \
     run-record-length-one-arrays.sh \
     run-pointer-compound-subtraction.sh \
-    run-builtin-offset-of.sh \
+    run-builtin offsetof.sh \
     run-pointer-integer-casts.sh \
     run-record-assignment-expressions.sh \
     run-bitwise-and-assignment-expressions.sh \
