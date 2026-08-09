@@ -42,11 +42,7 @@ if ! command -v "$target_cc" >/dev/null 2>&1; then
     exit 1
 fi
 
-sources='lapi.c lcode.c lctype.c ldebug.c ldo.c ldump.c lfunc.c lgc.c llex.c lmem.c lobject.c lopcodes.c lparser.c lstate.c lstring.c ltable.c ltm.c lundump.c lvm.c lzio.c lauxlib.c lbaselib.c lcorolib.c ldblib.c liolib.c lmathlib.c loadlib.c oslib.c lstrlib.c ltablib.c lutf8lib.c linit.c lua.c'
-
-# Keep the exact upstream file name here. The explicit assignment avoids hiding an
-# accidental spelling change in the long source list above.
-sources=$(printf '%s\n' "$sources" | sed 's/ oslib\.c / loslib.c /')
+sources='lapi.c lcode.c lctype.c ldebug.c ldo.c ldump.c lfunc.c lgc.c llex.c lmem.c lobject.c lopcodes.c lparser.c lstate.c lstring.c ltable.c ltm.c lundump.c lvm.c lzio.c lauxlib.c lbaselib.c lcorolib.c ldblib.c liolib.c lmathlib.c loadlib.c loslib.c lstrlib.c ltablib.c lutf8lib.c linit.c lua.c'
 
 passed=0
 for source in $sources; do
