@@ -15,5 +15,5 @@ mkdir -p "$work"
     -o "$work/top_level_comma_condition.s"
 
 grep -F 'comma_condition_loop:' "$work/top_level_comma_condition.s" >/dev/null
-grep -E '^[[:space:]]+b(eq|ne|lt|ge)' "$work/top_level_comma_condition.s" >/dev/null
+grep -F '  beqz a0, .Lwhile_end_' "$work/top_level_comma_condition.s" >/dev/null
 printf '%s\n' 'PASS compiler/c0/top_level_comma_condition while=1 void-left=1 result=right-scalar side-effect=sequenced'
