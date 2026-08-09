@@ -14,4 +14,5 @@ python3 tools/dev/pr73-multiply-assignment.py
 python3 tools/dev/pr73-static-local-string-array.py
 python3 tools/dev/pr73-external-global-definition.py
 python3 tools/dev/pr73-adjacent-string-literals.py
+python3 tools/dev/pr73-codegen-diagnostics.py
 printf '%s\n' 'staged linenoise discovery semantics'
