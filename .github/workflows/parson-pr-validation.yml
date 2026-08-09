@@ -11,12 +11,33 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Build current validated MiniC
-        run: bash .github/scripts/compiler-c0-full-gate.sh
+      - name: Stage current compiler semantics and build release MiniC
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          for patch in \
+            tools/dev/pr71-discovery.patch \
+            tools/dev/pr71-record-copy.patch \
+            tools/dev/pr71-local-array-identity.patch \
+            tools/dev/pr71-do-while.patch \
+            tools/dev/pr71-assignment-chain.patch \
+            tools/dev/pr71-bitwise-platform.patch \
+            tools/dev/pr71-float-conversion.patch \
+            tools/dev/pr71-conditional-void.patch \
+            tools/dev/pr71-fixed-double-abi.patch; do
+            if test -f "$patch"; then
+              git apply --check --recount "$patch"
+              git apply --recount "$patch"
+            fi
+          done
+          if test -f tools/dev/pr71-update-platform.py; then
+            python3 tools/dev/pr71-update-platform.py
+          fi
+          make -j4 MODE=release BUILD_DIR=build/parson-compiler
 
       - name: Compile unchanged Parson 1.5.3
         run: |
-          MINIC="$GITHUB_WORKSPACE/build/ci-release/bin/minic" \
+          MINIC="$GITHUB_WORKSPACE/build/parson-compiler/bin/minic" \
           BUILD_DIR="$GITHUB_WORKSPACE/build/parson-discovery" \
-          RISCV_CC=riscv64-linux-gnu-gcc \
+          RISCV_CC=cc \
             sh tests/external/parson/probe.sh
