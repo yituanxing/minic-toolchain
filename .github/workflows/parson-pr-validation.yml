@@ -31,7 +31,8 @@ jobs:
             tools/dev/pr72-integer-suffix-type.patch \
             tools/dev/pr72-global-scalar-read.patch \
             tools/dev/pr72-assignment-expression.patch \
-            tools/dev/pr72-variadic-definition.patch; do
+            tools/dev/pr72-variadic-definition.patch \
+            tools/dev/pr72-probe-stdarg.patch; do
             if test -f "$patch"; then
               git apply --check --recount "$patch"
               git apply --recount "$patch"
