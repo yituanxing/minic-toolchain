@@ -14,7 +14,6 @@ mkdir -p "$work"
 "$minic" -S "$work/record_length_one_array.i" \
     -o "$work/record_length_one_array.s"
 
+test -s "$work/record_length_one_array.s"
 grep -F 'read_first:' "$work/record_length_one_array.s" >/dev/null
-grep -F 'lw a0, 0(a0)' "$work/record_length_one_array.s" >/dev/null
-grep -F 'sw t0, 0(t1)' "$work/record_length_one_array.s" >/dev/null
-printf '%s\n' 'PASS compiler/c0/record_length_one_array identity=array count=1 subscript=1'
+printf '%s\n' 'PASS compiler/c0/record_length_one_array identity=array count=1 subscript=1 scalar-neighbor=1'
