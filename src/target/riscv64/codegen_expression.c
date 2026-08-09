@@ -19,7 +19,7 @@ minic_riscv64_emit_normalize_integer(FILE *file, MinicType type, const char *reg
 }
 
 static bool minic_riscv64_emit_variadic_argument_conversion(FILE *file, MinicType type) {
-    if (minic_type_is_pointer(type)) {
+    if (minic_type_is_pointer(type) || minic_type_is_double(type)) {
         return true;
     }
     if (!minic_type_is_integer(type)) {
@@ -187,6 +187,25 @@ static bool minic_riscv64_emit_double_comparison(FILE *file,
     }
 }
 
+static bool minic_riscv64_emit_conditional_result_conversion(FILE *file,
+                                                             MinicType source_type,
+                                                             MinicType result_type) {
+    if (minic_type_equal(source_type, result_type)) {
+        return true;
+    }
+    if (minic_type_is_pointer(source_type) && minic_type_is_pointer(result_type)) {
+        return true;
+    }
+    if (minic_type_is_integer(source_type) && minic_type_is_integer(result_type)) {
+        return minic_riscv64_emit_integer_conversion(file, result_type, "a0");
+    }
+    if (minic_type_is_integer(source_type) && minic_type_is_double(result_type)) {
+        return minic_riscv64_emit_integer_to_double(file, source_type, "a0", "ft0") &&
+               fprintf(file, "  fmv.x.d a0, ft0\n") >= 0;
+    }
+    return false;
+}
+
 static bool minic_riscv64_emit_scale_register(FILE *file,
                                               const char *register_name,
                                               const char *scratch_register,
@@ -219,6 +238,61 @@ static bool minic_riscv64_emit_scale_register(FILE *file,
                    scratch_register) >= 0;
 }
 
+static bool minic_riscv64_emit_postfix_update(FILE *file,
+                                              const MinicC0Program *program,
+                                              const MinicFunction *function,
+                                              const MinicExpression *expression) {
+    const MinicExpression *operand;
+    size_t element_size;
+    bool increment;
+
+    if (expression == NULL || expression->kind != MINIC_EXPRESSION_UNARY ||
+        (expression->value.unary.operator_kind != MINIC_UNARY_POST_INCREMENT &&
+         expression->value.unary.operator_kind != MINIC_UNARY_POST_DECREMENT)) {
+        return false;
+    }
+    operand = minic_c0_program_expression(program, expression->value.unary.operand);
+    if (operand == NULL || operand->value_category != MINIC_VALUE_LVALUE ||
+        (!minic_type_is_integer(operand->type) && !minic_type_is_pointer(operand->type))) {
+        return false;
+    }
+    increment = expression->value.unary.operator_kind == MINIC_UNARY_POST_INCREMENT;
+    element_size = 1U;
+    if (minic_type_is_pointer(operand->type) &&
+        !minic_riscv64_pointer_element_size(program, operand->type, &element_size)) {
+        return false;
+    }
+
+    if (!minic_riscv64_emit_lvalue_address(
+            file, program, function, expression->value.unary.operand) ||
+        fprintf(file, "  addi sp, sp, -16\n  sd a0, 0(sp)\n") < 0 ||
+        !minic_riscv64_emit_scalar_load(file, operand->type, "t0", "a0") ||
+        fprintf(file, "  sd t0, 8(sp)\n") < 0) {
+        return false;
+    }
+    if (minic_type_is_pointer(operand->type)) {
+        if (element_size <= 2047U) {
+            if (fprintf(file,
+                        increment ? "  addi t0, t0, %zu\n" : "  addi t0, t0, -%zu\n",
+                        element_size) < 0) {
+                return false;
+            }
+        } else if (fprintf(file,
+                           "  li t1, %zu\n"
+                           "  %s t0, t0, t1\n",
+                           element_size,
+                           increment ? "add" : "sub") < 0) {
+            return false;
+        }
+    } else if (fprintf(file, increment ? "  addi t0, t0, 1\n" : "  addi t0, t0, -1\n") < 0 ||
+               !minic_riscv64_emit_integer_conversion(file, operand->type, "t0")) {
+        return false;
+    }
+    return fprintf(file, "  ld t1, 0(sp)\n") >= 0 &&
+           minic_riscv64_emit_scalar_store(file, operand->type, "t0", "t1") &&
+           fprintf(file, "  ld a0, 8(sp)\n  addi sp, sp, 16\n") >= 0;
+}
+
 static bool minic_riscv64_emit_subscript_address(FILE *file,
                                                  const MinicC0Program *program,
                                                  const MinicFunction *function,
@@ -243,7 +317,7 @@ static bool minic_riscv64_emit_subscript_address(FILE *file,
         const MinicLocal *local;
 
         local = minic_c0_program_local(program, base->value.local_id);
-        base_is_array_object = local != NULL && local->element_count > 1U;
+        base_is_array_object = local != NULL && local->is_array;
         if (base_is_array_object && !minic_type_equal(local->type, expression->type)) {
             return false;
         }
@@ -426,6 +500,14 @@ bool minic_riscv64_emit_expression(FILE *file,
         if (operand == NULL) {
             return false;
         }
+        if (minic_type_is_double(expression->type) && minic_type_is_float(operand->type)) {
+            return minic_riscv64_emit_expression(
+                       file, program, function, expression->value.unary.operand) &&
+                   fprintf(file,
+                           "  fmv.w.x ft0, a0\n"
+                           "  fcvt.d.s ft0, ft0\n"
+                           "  fmv.x.d a0, ft0\n") >= 0;
+        }
         if (minic_type_is_double(expression->type) && minic_type_is_integer(operand->type)) {
             return minic_riscv64_emit_expression(
                        file, program, function, expression->value.unary.operand) &&
@@ -475,7 +557,15 @@ bool minic_riscv64_emit_expression(FILE *file,
         }
         return minic_riscv64_emit_scalar_load(file, expression->type, "a0", "a0");
     }
+    case MINIC_EXPRESSION_LVALUE_READ:
+        return minic_riscv64_emit_lvalue_address(
+                   file, program, function, expression->value.unary.operand) &&
+               minic_riscv64_emit_scalar_load(file, expression->type, "a0", "a0");
     case MINIC_EXPRESSION_UNARY:
+        if (expression->value.unary.operator_kind == MINIC_UNARY_POST_INCREMENT ||
+            expression->value.unary.operator_kind == MINIC_UNARY_POST_DECREMENT) {
+            return minic_riscv64_emit_postfix_update(file, program, function, expression);
+        }
         if (!minic_riscv64_emit_expression(
                 file, program, function, expression->value.unary.operand)) {
             return false;
@@ -490,6 +580,9 @@ bool minic_riscv64_emit_expression(FILE *file,
                    minic_riscv64_emit_normalize_integer(file, expression->type, "a0");
         case MINIC_UNARY_LOGICAL_NOT:
             return fprintf(file, "  seqz a0, a0\n") >= 0;
+        case MINIC_UNARY_BITWISE_NOT:
+            return fprintf(file, "  not a0, a0\n") >= 0 &&
+                   minic_riscv64_emit_normalize_integer(file, expression->type, "a0");
         }
         return false;
     case MINIC_EXPRESSION_BINARY: {
@@ -498,6 +591,7 @@ bool minic_riscv64_emit_expression(FILE *file,
         MinicType common_integer_type;
         bool has_integer_common_type;
         bool has_pointer_equality;
+        bool has_pointer_relational;
         size_t element_size;
 
         if (expression->value.binary.operator_kind == MINIC_BINARY_LOGICAL_AND ||
@@ -513,6 +607,10 @@ bool minic_riscv64_emit_expression(FILE *file,
             minic_type_integer_common(left->type, right->type, &common_integer_type);
         has_pointer_equality = minic_c0_pointer_equality_compatible(
             program, expression->value.binary.left, expression->value.binary.right);
+        has_pointer_relational = left != NULL && right != NULL &&
+                                 minic_type_is_pointer(left->type) &&
+                                 minic_type_is_pointer(right->type) &&
+                                 minic_type_equal(expression->type, minic_type_int());
         if (left == NULL || right == NULL ||
             !minic_riscv64_emit_expression(
                 file, program, function, expression->value.binary.left) ||
@@ -566,6 +664,18 @@ bool minic_riscv64_emit_expression(FILE *file,
                                    : "  subw a0, t0, a0\n") >= 0 &&
                        minic_riscv64_emit_integer_result_conversion(
                            file, common_integer_type, expression->type, "a0");
+            }
+            if (minic_type_is_pointer(left->type) && minic_type_is_pointer(right->type) &&
+                minic_type_equal(expression->type, minic_type_long()) &&
+                minic_riscv64_pointer_element_size(program, left->type, &element_size)) {
+                if (element_size == 1U) {
+                    return fprintf(file, "  sub a0, t0, a0\n") >= 0;
+                }
+                return fprintf(file,
+                               "  sub a0, t0, a0\n"
+                               "  li t1, %zu\n"
+                               "  div a0, a0, t1\n",
+                               element_size) >= 0;
             }
             if (minic_type_is_pointer(left->type) && minic_type_is_integer(right->type) &&
                 minic_riscv64_pointer_element_size(program, left->type, &element_size)) {
@@ -631,6 +741,10 @@ bool minic_riscv64_emit_expression(FILE *file,
             return has_integer_common_type && fprintf(file, "  xor a0, t0, a0\n") >= 0 &&
                    minic_riscv64_emit_integer_result_conversion(
                        file, common_integer_type, expression->type, "a0");
+        case MINIC_BINARY_BITWISE_OR:
+            return has_integer_common_type && fprintf(file, "  or a0, t0, a0\n") >= 0 &&
+                   minic_riscv64_emit_integer_result_conversion(
+                       file, common_integer_type, expression->type, "a0");
         case MINIC_BINARY_EQUAL:
             return (has_integer_common_type || has_pointer_equality) &&
                    fprintf(file, "  xor a0, t0, a0\n  seqz a0, a0\n") >= 0;
@@ -638,24 +752,36 @@ bool minic_riscv64_emit_expression(FILE *file,
             return (has_integer_common_type || has_pointer_equality) &&
                    fprintf(file, "  xor a0, t0, a0\n  snez a0, a0\n") >= 0;
         case MINIC_BINARY_LESS:
+            if (has_pointer_relational) {
+                return fprintf(file, "  sltu a0, t0, a0\n") >= 0;
+            }
             return has_integer_common_type &&
                    fprintf(file,
                            minic_type_is_unsigned_integer(common_integer_type)
                                ? "  sltu a0, t0, a0\n"
                                : "  slt a0, t0, a0\n") >= 0;
         case MINIC_BINARY_LESS_EQUAL:
+            if (has_pointer_relational) {
+                return fprintf(file, "  sltu a0, a0, t0\n  xori a0, a0, 1\n") >= 0;
+            }
             return has_integer_common_type &&
                    fprintf(file,
                            minic_type_is_unsigned_integer(common_integer_type)
                                ? "  sltu a0, a0, t0\n  xori a0, a0, 1\n"
                                : "  slt a0, a0, t0\n  xori a0, a0, 1\n") >= 0;
         case MINIC_BINARY_GREATER:
+            if (has_pointer_relational) {
+                return fprintf(file, "  sltu a0, a0, t0\n") >= 0;
+            }
             return has_integer_common_type &&
                    fprintf(file,
                            minic_type_is_unsigned_integer(common_integer_type)
                                ? "  sltu a0, a0, t0\n"
                                : "  slt a0, a0, t0\n") >= 0;
         case MINIC_BINARY_GREATER_EQUAL:
+            if (has_pointer_relational) {
+                return fprintf(file, "  sltu a0, t0, a0\n  xori a0, a0, 1\n") >= 0;
+            }
             return has_integer_common_type &&
                    fprintf(file,
                            minic_type_is_unsigned_integer(common_integer_type)
@@ -666,6 +792,36 @@ bool minic_riscv64_emit_expression(FILE *file,
             return false;
         }
         return false;
+    }
+    case MINIC_EXPRESSION_CONDITIONAL: {
+        const MinicExpression *condition;
+        const MinicExpression *when_true;
+        const MinicExpression *when_false;
+
+        condition = minic_c0_program_expression(program, expression->value.conditional.condition);
+        when_true = minic_c0_program_expression(program, expression->value.conditional.when_true);
+        when_false = minic_c0_program_expression(program, expression->value.conditional.when_false);
+        if (condition == NULL || when_true == NULL || when_false == NULL ||
+            !type_is_condition_scalar(condition->type) ||
+            !minic_riscv64_emit_expression(
+                file, program, function, expression->value.conditional.condition) ||
+            fprintf(file, "  beqz a0, .Lminic_cond_false_%zu\n", expression_id) < 0 ||
+            !minic_riscv64_emit_expression(
+                file, program, function, expression->value.conditional.when_true) ||
+            !minic_riscv64_emit_conditional_result_conversion(
+                file, when_true->type, expression->type) ||
+            fprintf(file,
+                    "  j .Lminic_cond_end_%zu\n"
+                    ".Lminic_cond_false_%zu:\n",
+                    expression_id,
+                    expression_id) < 0 ||
+            !minic_riscv64_emit_expression(
+                file, program, function, expression->value.conditional.when_false) ||
+            !minic_riscv64_emit_conditional_result_conversion(
+                file, when_false->type, expression->type)) {
+            return false;
+        }
+        return fprintf(file, ".Lminic_cond_end_%zu:\n", expression_id) >= 0;
     }
     case MINIC_EXPRESSION_CALL: {
         const MinicFunction *direct_callee;
@@ -747,12 +903,38 @@ bool minic_riscv64_emit_expression(FILE *file,
                 return false;
             }
         }
-        for (argument_index = 0U; argument_index < argument_count; ++argument_index) {
-            size_t offset;
+        {
+            size_t integer_register_index;
+            size_t floating_register_index;
 
-            offset = (argument_count - 1U - argument_index) * 16U;
-            if (fprintf(file, "  ld a%zu, %zu(sp)\n", argument_index, offset) < 0) {
-                return false;
+            integer_register_index = 0U;
+            floating_register_index = 0U;
+            for (argument_index = 0U; argument_index < argument_count; ++argument_index) {
+                size_t offset;
+                bool fixed_floating;
+
+                offset = (argument_count - 1U - argument_index) * 16U;
+                fixed_floating = argument_index < parameter_count &&
+                                 (minic_type_is_double(parameter_types[argument_index]) ||
+                                  minic_type_is_float(parameter_types[argument_index]));
+                if (fixed_floating) {
+                    if (floating_register_index >= 8U ||
+                        fprintf(file,
+                                minic_type_is_double(parameter_types[argument_index])
+                                    ? "  ld t0, %zu(sp)\n  fmv.d.x fa%zu, t0\n"
+                                    : "  ld t0, %zu(sp)\n  fmv.w.x fa%zu, t0\n",
+                                offset,
+                                floating_register_index) < 0) {
+                        return false;
+                    }
+                    floating_register_index += 1U;
+                } else {
+                    if (integer_register_index >= 8U ||
+                        fprintf(file, "  ld a%zu, %zu(sp)\n", integer_register_index, offset) < 0) {
+                        return false;
+                    }
+                    integer_register_index += 1U;
+                }
             }
         }
 

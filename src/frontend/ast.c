@@ -623,12 +623,6 @@ static bool expression_is_null_pointer_value(const MinicC0Program *program,
     return false;
 }
 
-static bool type_is_function_pointer(MinicType type) {
-    MinicType pointee;
-
-    return minic_type_pointee(type, &pointee) && minic_type_is_function(pointee);
-}
-
 bool minic_c0_assignment_compatible(const MinicC0Program *program,
                                     MinicType target_type,
                                     MinicExpressionId source_expression_id) {
@@ -644,7 +638,7 @@ bool minic_c0_assignment_compatible(const MinicC0Program *program,
     if (minic_type_assignment_compatible(target_type, source->type)) {
         return true;
     }
-    return type_is_function_pointer(target_type) &&
+    return minic_type_is_pointer(target_type) &&
            expression_is_null_pointer_value(program, source_expression_id);
 }
 

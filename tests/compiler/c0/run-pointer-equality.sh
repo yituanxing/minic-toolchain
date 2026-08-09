@@ -36,6 +36,5 @@ printf '%s\n' 'PASS compiler/c0/pointer_equality lowering=xor-seqz-snez'
 
 compile_failure invalid_pointer_equality_nonzero_integer 'binary operator requires int operands'
 compile_failure invalid_pointer_equality_incompatible 'binary operator requires int operands'
-compile_failure invalid_pointer_relational_comparison 'binary operator requires int operands'
 compile_failure invalid_function_pointer_void_assignment 'assignment type does not match target type'
 compile_failure invalid_function_pointer_void_comparison 'binary operator requires int operands'

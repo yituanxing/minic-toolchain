@@ -49,6 +49,50 @@ static bool decode_simple_escape(char character, int *value) {
     }
 }
 
+static int hex_digit_value(char character) {
+    if (character >= '0' && character <= '9') {
+        return character - '0';
+    }
+    if (character >= 'a' && character <= 'f') {
+        return character - 'a' + 10;
+    }
+    if (character >= 'A' && character <= 'F') {
+        return character - 'A' + 10;
+    }
+    return -1;
+}
+
+static bool decode_string_escape(const char *source, size_t *cursor, size_t end, int *value) {
+    unsigned int decoded;
+    int digit;
+
+    if (source == NULL || cursor == NULL || value == NULL || *cursor >= end) {
+        return false;
+    }
+    if (source[*cursor] != 'x') {
+        if (!decode_simple_escape(source[*cursor], value)) {
+            return false;
+        }
+        *cursor += 1U;
+        return true;
+    }
+
+    *cursor += 1U;
+    if (*cursor >= end || hex_digit_value(source[*cursor]) < 0) {
+        return false;
+    }
+    decoded = 0U;
+    while (*cursor < end && (digit = hex_digit_value(source[*cursor])) >= 0) {
+        if (decoded > (255U - (unsigned int)digit) / 16U) {
+            return false;
+        }
+        decoded = decoded * 16U + (unsigned int)digit;
+        *cursor += 1U;
+    }
+    *value = (int)decoded;
+    return true;
+}
+
 static bool decoded_string_length(MinicParser *parser, MinicSourceSpan span, size_t *length) {
     size_t cursor;
     size_t end;
@@ -65,17 +109,18 @@ static bool decoded_string_length(MinicParser *parser, MinicSourceSpan span, siz
             int value;
 
             cursor += 1U;
-            if (cursor >= end || !decode_simple_escape(parser->source[cursor], &value)) {
+            if (!decode_string_escape(parser->source, &cursor, end, &value)) {
                 minic_parser_error(parser, "unsupported string escape");
                 return false;
             }
+        } else {
+            cursor += 1U;
         }
         if (result == SIZE_MAX) {
             minic_parser_error(parser, "string literal is too long");
             return false;
         }
         result += 1U;
-        cursor += 1U;
     }
     *length = result;
     return true;
@@ -93,18 +138,18 @@ add_string_initializers(MinicParser *parser, MinicSourceSpan span, MinicGlobalOb
 
         if (parser->source[cursor] == '\\') {
             cursor += 1U;
-            if (cursor >= end || !decode_simple_escape(parser->source[cursor], &value)) {
+            if (!decode_string_escape(parser->source, &cursor, end, &value)) {
                 minic_parser_error(parser, "unsupported string escape");
                 return false;
             }
         } else {
             value = (int)(unsigned char)parser->source[cursor];
+            cursor += 1U;
         }
         if (!minic_c0_global_object_add_initializer(parser->program, object_id, value)) {
             minic_parser_error(parser, "out of memory while storing string literal");
             return false;
         }
-        cursor += 1U;
     }
     if (!minic_c0_global_object_add_initializer(parser->program, object_id, 0)) {
         minic_parser_error(parser, "out of memory while terminating string literal");

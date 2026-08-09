@@ -14,7 +14,7 @@ mkdir -p "$work"
 "$minic" -S \
     "$work/prefix_decrement_update.i" \
     -o "$work/prefix_decrement_update.s"
-grep -F "  subw a0, t0, a0" \
+grep -F "  addi t0, t0, -1" \
     "$work/prefix_decrement_update.s" >/dev/null
 printf '%s\n' "PASS compiler/c0/prefix_decrement_update"
 

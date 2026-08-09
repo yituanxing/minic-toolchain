@@ -18,7 +18,7 @@ static bool postfix_element_type(const MinicParser *parser,
         const MinicLocal *local;
 
         local = minic_c0_program_local(parser->program, base->value.local_id);
-        if (local != NULL && local->element_count > 1U) {
+        if (local != NULL && local->is_array) {
             *element_type = local->type;
             return true;
         }
@@ -52,7 +52,7 @@ static bool array_object_element_type(const MinicParser *parser,
         const MinicLocal *local;
 
         local = minic_c0_program_local(parser->program, expression->value.local_id);
-        if (local != NULL && local->element_count > 1U) {
+        if (local != NULL && local->is_array) {
             *element_type = local->type;
             return true;
         }
@@ -322,7 +322,10 @@ bool minic_parser_parse_postfix(MinicParser *parser,
     current = base_id;
     for (;;) {
         if (parser->current.kind == MINIC_TOKEN_ARROW) {
-            if (!minic_parser_parse_pointer_member(parser, current, &current)) {
+            MinicExpressionId pointer_base;
+
+            if (!minic_parser_apply_array_decay(parser, current, &pointer_base) ||
+                !minic_parser_parse_pointer_member(parser, pointer_base, &current)) {
                 return false;
             }
             continue;

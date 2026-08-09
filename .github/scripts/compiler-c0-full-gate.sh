@@ -56,9 +56,9 @@ wait_phase() {
     done
 
     names=()
-    pids=()
-    logs=()
-    starts=()
+pids=()
+logs=()
+starts=()
     return "$failed"
 }
 

@@ -40,19 +40,22 @@ typedef enum MinicExpressionKind {
     MINIC_EXPRESSION_CONVERSION,
     MINIC_EXPRESSION_SUBSCRIPT,
     MINIC_EXPRESSION_MEMBER,
+    MINIC_EXPRESSION_LVALUE_READ,
     MINIC_EXPRESSION_UNARY,
     MINIC_EXPRESSION_BINARY,
+    MINIC_EXPRESSION_CONDITIONAL,
     MINIC_EXPRESSION_CALL
 } MinicExpressionKind;
 
 typedef enum MinicUnaryOperator {
     MINIC_UNARY_PLUS = 0,
     MINIC_UNARY_NEGATE,
-    MINIC_UNARY_LOGICAL_NOT
+    MINIC_UNARY_LOGICAL_NOT,
+    MINIC_UNARY_BITWISE_NOT
 } MinicUnaryOperator;
 
-#define MINIC_UNARY_POST_INCREMENT ((MinicUnaryOperator)3)
-#define MINIC_UNARY_POST_DECREMENT ((MinicUnaryOperator)4)
+#define MINIC_UNARY_POST_INCREMENT ((MinicUnaryOperator)4)
+#define MINIC_UNARY_POST_DECREMENT ((MinicUnaryOperator)5)
 
 typedef enum MinicBinaryOperator {
     MINIC_BINARY_ADD = 0,
@@ -64,6 +67,7 @@ typedef enum MinicBinaryOperator {
     MINIC_BINARY_SHIFT_RIGHT,
     MINIC_BINARY_BITWISE_AND,
     MINIC_BINARY_BITWISE_XOR,
+    MINIC_BINARY_BITWISE_OR,
     MINIC_BINARY_EQUAL,
     MINIC_BINARY_NOT_EQUAL,
     MINIC_BINARY_LESS,
@@ -110,6 +114,11 @@ typedef struct MinicExpression {
             MinicExpressionId left;
             MinicExpressionId right;
         } binary;
+        struct {
+            MinicExpressionId condition;
+            MinicExpressionId when_true;
+            MinicExpressionId when_false;
+        } conditional;
     } value;
 } MinicExpression;
 
@@ -118,6 +127,7 @@ typedef struct MinicLocal {
     MinicType type;
     size_t element_count;
     size_t storage_offset;
+    bool is_array;
 } MinicLocal;
 
 typedef enum MinicStatementKind {
