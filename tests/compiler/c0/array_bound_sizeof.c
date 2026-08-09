@@ -8,9 +8,10 @@ struct Sizes {
     int arithmetic[sizeof(long) + 2 * sizeof(short)];
     int enum_bound[SIZE_TOTAL];
     int cast_bound[((int)(SIZE_TOTAL) + 1)];
+    unsigned char literal_bytes[sizeof("\x1bLua") + sizeof("\x19\x93\r\n\x1a\n")];
 };
 
 int read_sizes(struct Sizes *sizes) {
     return sizes->pointer_bytes[7] + sizes->arithmetic[11] + sizes->enum_bound[5] +
-           sizes->cast_bound[6];
+           sizes->cast_bound[6] + sizes->literal_bytes[11];
 }
