@@ -1,5 +1,7 @@
 #include "frontend/parser_internal.h"
 
+#include <limits.h>
+#include <stdlib.h>
 #include <string.h>
 
 MinicTypeAliasId minic_parser_find_type_alias(const MinicParser *parser,
@@ -22,6 +24,146 @@ MinicTypeAliasId minic_parser_find_type_alias(const MinicParser *parser,
         }
     }
     return MINIC_TYPE_ALIAS_INVALID;
+}
+
+bool minic_parser_find_enum_constant(const MinicParser *parser,
+                                     MinicSourceSpan name_span,
+                                     int *value) {
+    size_t index;
+
+    if (parser == NULL) {
+        return false;
+    }
+    for (index = parser->enum_constant_count; index > 0U; --index) {
+        const MinicParserEnumConstant *constant;
+
+        constant = &parser->enum_constants[index - 1U];
+        if (minic_parser_span_equals(parser, name_span, constant->name_span)) {
+            if (value != NULL) {
+                *value = constant->value;
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+bool minic_parser_bind_enum_constant(MinicParser *parser, MinicSourceSpan name_span, int value) {
+    MinicParserEnumConstant *resized;
+    size_t new_capacity;
+
+    if (parser == NULL || minic_parser_find_enum_constant(parser, name_span, NULL)) {
+        if (parser != NULL) {
+            minic_parser_error(parser, "duplicate enumerator name");
+        }
+        return false;
+    }
+    if (parser->enum_constant_count == parser->enum_constant_capacity) {
+        new_capacity = parser->enum_constant_capacity == 0U ? 16U : parser->enum_constant_capacity * 2U;
+        if (new_capacity < parser->enum_constant_capacity ||
+            new_capacity > SIZE_MAX / sizeof(*parser->enum_constants)) {
+            minic_parser_error(parser, "too many enum constants");
+            return false;
+        }
+        resized = (MinicParserEnumConstant *)realloc(
+            parser->enum_constants, new_capacity * sizeof(*parser->enum_constants));
+        if (resized == NULL) {
+            minic_parser_error(parser, "out of memory while binding enum constant");
+            return false;
+        }
+        parser->enum_constants = resized;
+        parser->enum_constant_capacity = new_capacity;
+    }
+    parser->enum_constants[parser->enum_constant_count].name_span = name_span;
+    parser->enum_constants[parser->enum_constant_count].value = value;
+    parser->enum_constant_count += 1U;
+    return true;
+}
+
+void minic_parser_destroy_enum_constants(MinicParser *parser) {
+    if (parser == NULL) {
+        return;
+    }
+    free(parser->enum_constants);
+    parser->enum_constants = NULL;
+    parser->enum_constant_count = 0U;
+    parser->enum_constant_capacity = 0U;
+}
+
+static bool parse_enum_integer_value(MinicParser *parser, int *value) {
+    bool negative;
+    int parsed;
+
+    negative = parser->current.kind == MINIC_TOKEN_MINUS;
+    if (negative && !minic_parser_advance(parser)) {
+        return false;
+    }
+    if (!minic_parser_parse_integer_value(parser, &parsed)) {
+        return false;
+    }
+    *value = negative ? -parsed : parsed;
+    return true;
+}
+
+bool minic_parser_parse_enum_definition(MinicParser *parser) {
+    int next_value;
+
+    if (!minic_parser_expect(parser, MINIC_TOKEN_KW_ENUM, "expected keyword 'enum'")) {
+        return false;
+    }
+    if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
+        minic_parser_error(parser, "expected enum tag");
+        return false;
+    }
+    if (!minic_parser_advance(parser) ||
+        !minic_parser_expect(parser, MINIC_TOKEN_LBRACE, "expected '{' after enum tag")) {
+        return false;
+    }
+
+    next_value = 0;
+    while (parser->current.kind != MINIC_TOKEN_RBRACE) {
+        MinicSourceSpan name_span;
+        int value;
+
+        if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
+            minic_parser_error(parser, "expected enumerator name");
+            return false;
+        }
+        name_span = parser->current.span;
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
+        value = next_value;
+        if (parser->current.kind == MINIC_TOKEN_EQUAL) {
+            if (!minic_parser_advance(parser) || !parse_enum_integer_value(parser, &value)) {
+                return false;
+            }
+        }
+        if (!minic_parser_bind_enum_constant(parser, name_span, value)) {
+            return false;
+        }
+        if (value == INT_MAX) {
+            next_value = INT_MAX;
+        } else {
+            next_value = value + 1;
+        }
+
+        if (parser->current.kind == MINIC_TOKEN_COMMA) {
+            if (!minic_parser_advance(parser)) {
+                return false;
+            }
+            if (parser->current.kind == MINIC_TOKEN_RBRACE) {
+                break;
+            }
+        } else if (parser->current.kind != MINIC_TOKEN_RBRACE) {
+            minic_parser_error(parser, "expected ',' or '}' after enumerator");
+            return false;
+        }
+    }
+    if (!minic_parser_expect(parser, MINIC_TOKEN_RBRACE, "expected '}' after enum definition")) {
+        return false;
+    }
+    return minic_parser_expect(parser, MINIC_TOKEN_SEMICOLON, "expected ';' after enum definition");
 }
 
 static bool typedef_starts_record_definition(MinicParser *parser, bool *is_definition) {
