@@ -16,4 +16,6 @@ mkdir -p "$work"
 
 test "$(grep -c -F '  call next_slot' "$work/compound_assignment_expression.s")" -eq 1
 grep -F '  slli a0, a0, 2' "$work/compound_assignment_expression.s" >/dev/null
-printf '%s\n' 'PASS compiler/c0/compound_assignment_expression operator=+= result=value lvalue-evaluation=once pointer-scale=4'
+grep -F '  divu a0, t0, a0' "$work/compound_assignment_expression.s" >/dev/null
+grep -F '  div a0, t0, a0' "$work/compound_assignment_expression.s" >/dev/null
+printf '%s\n' 'PASS compiler/c0/compound_assignment_expression operators=+=,/= result=value lvalue-evaluation=once pointer-scale=4 divide=signed,unsigned'
