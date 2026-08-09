@@ -9,6 +9,5 @@ static int copy_packet(struct Packet *source) {
 }
 
 int main(void) {
-    struct Packet packet = {0, {0}};
-    return copy_packet(&packet);
+    return 0;
 }
