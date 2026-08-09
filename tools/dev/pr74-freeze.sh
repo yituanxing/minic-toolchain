@@ -65,30 +65,6 @@ text = text.replace(
     1)
 gate.write_text(text)
 
-workflow = Path('.github/workflows/sds-pr-validation.yml')
-text = workflow.read_text()
-old = '''      - name: Stage current discovery semantics and build MiniC
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          sh tools/dev/pr74-stage.sh
-          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
-          make -j4 MODE=release BUILD_DIR=build/sds-compiler
-          make -j4 MODE=sanitize BUILD_DIR=build/sds-sanitize
-'''
-new = '''      - name: Build committed MiniC semantics
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          make -j4 MODE=release BUILD_DIR=build/sds-compiler
-          make -j4 MODE=sanitize BUILD_DIR=build/sds-sanitize
-'''
-if old not in text:
-    raise SystemExit('SDS workflow staging block mismatch')
-text = text.replace(old, new, 1)
-text = text.replace('Verify focused discovery semantics', 'Verify focused frozen semantics', 1)
-workflow.write_text(text)
-
 probe = Path('tests/external/sds/probe.sh')
 text = probe.read_text()
 text = text.replace('vendor="$work/upstream"', 'vendor="$root/tests/vendor/sds"', 1)
@@ -118,7 +94,6 @@ runtime.write_text(text)
 PY
 
 rm -f tools/dev/pr74-*.py tools/dev/pr74-stage.sh
-rm -f .github/workflows/sds-freeze-materialize.yml .github/workflows/sds-freeze-pr.yml
 CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
 
 printf '%s\n' 'FREEZE phase=strict-check'
