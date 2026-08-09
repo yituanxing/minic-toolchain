@@ -10,3 +10,7 @@ int read_union_cast(void *pointer) {
 int read_volatile_cast(int *pointer) {
     return *((volatile int *)pointer);
 }
+
+int narrow_short(int value) {
+    return (int)((short)value);
+}
