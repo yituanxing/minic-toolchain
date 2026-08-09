@@ -1,0 +1,38 @@
+name: SDS For-Init Debug
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sds-for-init-debug-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  debug:
+    if: github.event.pull_request.number == 74
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build diagnostic MiniC
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/pr74-debug-for-init.py
+          make -j4 MODE=release BUILD_DIR=build/sds-debug
+      - name: Reproduce upstream test frontier
+        shell: bash
+        run: |
+          set +e
+          MINIC="$GITHUB_WORKSPACE/build/sds-debug/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/sds-debug-frontier" \
+          HOST_CC=cc \
+            sh tests/external/sds/upstream_test_probe.sh
+          status=$?
+          set -e
+          echo "debug_status=$status"
+          cat "$GITHUB_WORKSPACE/build/sds-debug-frontier/sds-test.stderr" || true
+          exit 0
