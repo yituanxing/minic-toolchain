@@ -38,6 +38,9 @@ jobs:
           if test -f tools/dev/pr71-update-platform.py; then
             python3 tools/dev/pr71-update-platform.py
           fi
+          if test -f tools/dev/pr72-update-platform.py; then
+            python3 tools/dev/pr72-update-platform.py
+          fi
           make -j4 MODE=release BUILD_DIR=build/parson-compiler
 
       - name: Compile unchanged Parson 1.5.3
