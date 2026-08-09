@@ -3,6 +3,7 @@
 
 #include "frontend/ast.h"
 #include "minic/compiler.h"
+#include "target/riscv64/layout.h"
 
 #include <stdbool.h>
 #include <stddef.h>
