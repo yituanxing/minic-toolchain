@@ -40,11 +40,12 @@ replace_once(
 """,
 )
 
-marker = "static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id, bool decay_array) {\n"
 parser_path = Path("src/frontend/parser_expression.c")
 text = parser_path.read_text()
-if text.count(marker) != 1:
-    raise SystemExit(f"unexpected parse_primary marker count={text.count(marker)}")
+marker = "static bool parse_primary("
+start = text.find(marker)
+if start < 0 or text.find(marker, start + 1) >= 0:
+    raise SystemExit("unexpected parse_primary function start")
 helper = r'''static bool current_is_builtin_offsetof(const MinicParser *parser) {
     static const char name[] = "__builtin_offsetof";
     size_t length;
@@ -125,7 +126,7 @@ static bool parse_builtin_offsetof(MinicParser *parser, MinicExpressionId *expre
 }
 
 '''
-parser_path.write_text(text.replace(marker, helper + marker, 1))
+parser_path.write_text(text[:start] + helper + text[start:])
 
 replace_once(
     "src/frontend/parser_expression.c",
