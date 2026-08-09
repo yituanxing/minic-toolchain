@@ -1,0 +1,158 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+root=$(git rev-parse --show-toplevel)
+cd "$root"
+
+printf '%s\n' 'FREEZE phase=materialize'
+sh tools/dev/pr74-stage.sh
+CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+
+printf '%s\n' 'FREEZE phase=vendor'
+vendor=tests/vendor/sds
+upstream=5347739b1581fcba74fd5cab1fc21d2aef317d71
+mkdir -p "$vendor"
+curl -fsSL "https://raw.githubusercontent.com/antirez/sds/$upstream/sds.c" -o "$vendor/sds.c"
+curl -fsSL "https://raw.githubusercontent.com/antirez/sds/$upstream/sds.h" -o "$vendor/sds.h"
+curl -fsSL "https://raw.githubusercontent.com/antirez/sds/$upstream/sdsalloc.h" -o "$vendor/sdsalloc.h"
+curl -fsSL "https://raw.githubusercontent.com/antirez/sds/$upstream/testhelp.h" -o "$vendor/testhelp.h"
+test "$(git hash-object "$vendor/sds.c")" = 3a7eae72f7591b3669af73954c42088ebbeccc4f
+test "$(git hash-object "$vendor/sds.h")" = adcc12c0a7646d2c88a796ad5591931017140999
+test "$(git hash-object "$vendor/sdsalloc.h")" = f43023c48438961445f6064ae8d0cc25f2b42f21
+test "$(git hash-object "$vendor/testhelp.h")" = 450334046af86a5e0f00126f9790e9a14e170f84
+
+printf '%s\n' 'FREEZE phase=promote-gates'
+python3 - <<'PY'
+from pathlib import Path
+
+gate = Path('.github/scripts/compiler-c0-full-gate.sh')
+text = gate.read_text()
+function_anchor = 'rv64_focused() {\n'
+if text.count(function_anchor) != 1:
+    raise SystemExit('C0 gate function anchor mismatch')
+sds_function = '''sds_driven_focused() {
+    local script
+    for script in \\
+        run-packed-record-layout.sh \\
+        run-flexible-array-members.sh \\
+        run-inline-functions.sh \\
+        run-postfix-const.sh \\
+        run-long-long-types.sh \\
+        run-wide-integer-literals.sh \\
+        run-array-bound-constant-expressions.sh \\
+        run-for-declaration-initializers.sh \\
+        run-void-pointer-locals.sh \\
+        run-compound-assignment-expressions.sh \\
+        run-void-casts.sh \\
+        run-external-scalar-definitions.sh; do
+        MINIC="$root/build/ci-debug/bin/minic" \\
+        HOST_CC=cc \\
+        BUILD_DIR="$root/build/ci-sds-driven" \\
+            sh "$root/tests/compiler/c0/$script"
+    done
+}
+
+'''
+text = text.replace(function_anchor, sds_function + function_anchor, 1)
+start_anchor = 'start_gate linenoise-driven-focused linenoise_driven_focused\n'
+if text.count(start_anchor) != 1:
+    raise SystemExit('C0 gate start anchor mismatch')
+text = text.replace(start_anchor,
+                    start_anchor + 'start_gate sds-driven-focused sds_driven_focused\n', 1)
+text = text.replace(
+    "'Phase 2: focused declaration/static-local/variadic-call/pointer-equality/switch/RV64 suites, differential programs, tiny-AES, and cJSON'",
+    "'Phase 2: focused declaration/static-local/variadic-call/pointer-equality/switch/linenoise/SDS/RV64 suites, differential programs, tiny-AES, and cJSON'",
+    1)
+gate.write_text(text)
+
+workflow = Path('.github/workflows/sds-pr-validation.yml')
+text = workflow.read_text()
+old = '''      - name: Stage current discovery semantics and build MiniC
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sh tools/dev/pr74-stage.sh
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+          make -j4 MODE=release BUILD_DIR=build/sds-compiler
+          make -j4 MODE=sanitize BUILD_DIR=build/sds-sanitize
+'''
+new = '''      - name: Build committed MiniC semantics
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release BUILD_DIR=build/sds-compiler
+          make -j4 MODE=sanitize BUILD_DIR=build/sds-sanitize
+'''
+if old not in text:
+    raise SystemExit('SDS workflow staging block mismatch')
+text = text.replace(old, new, 1)
+text = text.replace('Verify focused discovery semantics', 'Verify focused frozen semantics', 1)
+workflow.write_text(text)
+
+probe = Path('tests/external/sds/probe.sh')
+text = probe.read_text()
+text = text.replace('vendor="$work/upstream"', 'vendor="$root/tests/vendor/sds"', 1)
+text = text.replace('mkdir -p "$vendor" "$include/sys"', 'mkdir -p "$work" "$include/sys"', 1)
+for line in [
+    'curl -fsSL "https://raw.githubusercontent.com/antirez/sds/$upstream/sds.c" -o "$vendor/sds.c"\n',
+    'curl -fsSL "https://raw.githubusercontent.com/antirez/sds/$upstream/sds.h" -o "$vendor/sds.h"\n',
+    'curl -fsSL "https://raw.githubusercontent.com/antirez/sds/$upstream/sdsalloc.h" -o "$vendor/sdsalloc.h"\n',
+]:
+    text = text.replace(line, '', 1)
+probe.write_text(text)
+
+tests = Path('tests/external/sds/upstream_test_probe.sh')
+text = tests.read_text()
+text = text.replace('vendor="$work/upstream"', 'vendor="$root/tests/vendor/sds"', 1)
+text = text.replace('curl -fsSL "https://raw.githubusercontent.com/antirez/sds/$upstream/testhelp.h" -o "$vendor/testhelp.h"\n', '', 1)
+tests.write_text(text)
+
+runtime = Path('tests/external/sds/runtime_differential.sh')
+text = runtime.read_text()
+text = text.replace('vendor="$work/upstream"', 'vendor="$root/tests/vendor/sds"', 1)
+text = text.replace('archive="$work/sds.tar.gz"\n', '', 1)
+text = text.replace('rm -rf "$work"\nmkdir -p "$vendor"', 'rm -rf "$work"\nmkdir -p "$work"', 1)
+text = text.replace('curl -fsSL "https://github.com/antirez/sds/archive/$upstream.tar.gz" -o "$archive"\n', '', 1)
+text = text.replace('tar -xzf "$archive" --strip-components=1 -C "$vendor"\n', '', 1)
+runtime.write_text(text)
+PY
+
+rm -f tools/dev/pr74-*.py tools/dev/pr74-stage.sh
+rm -f .github/workflows/sds-freeze-materialize.yml .github/workflows/sds-freeze-pr.yml
+CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+
+printf '%s\n' 'FREEZE phase=strict-check'
+make -j4 MODE=release BUILD_DIR=build/sds-freeze-release CFLAGS=-Werror check
+make -j4 MODE=sanitize BUILD_DIR=build/sds-freeze-sanitize check
+
+for script in \
+    run-packed-record-layout.sh \
+    run-flexible-array-members.sh \
+    run-inline-functions.sh \
+    run-postfix-const.sh \
+    run-long-long-types.sh \
+    run-wide-integer-literals.sh \
+    run-array-bound-constant-expressions.sh \
+    run-for-declaration-initializers.sh \
+    run-void-pointer-locals.sh \
+    run-compound-assignment-expressions.sh \
+    run-void-casts.sh \
+    run-external-scalar-definitions.sh; do
+    MINIC="$root/build/sds-freeze-release/bin/minic" \
+    BUILD_DIR="$root/build/sds-freeze-focused" \
+    HOST_CC=cc \
+        sh "$root/tests/compiler/c0/$script"
+done
+MINIC="$root/build/sds-freeze-release/bin/minic" BUILD_DIR="$root/build/sds-freeze-discovery" HOST_CC=cc \
+    sh tests/external/sds/probe.sh
+MINIC="$root/build/sds-freeze-release/bin/minic" BUILD_DIR="$root/build/sds-freeze-discovery" HOST_CC=cc \
+    sh tests/external/sds/upstream_test_probe.sh
+
+printf '%s\n' 'FREEZE phase=commit'
+git config user.name github-actions[bot]
+git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+git add -A
+git diff --cached --check
+git status --short
+git commit -m 'compiler: freeze SDS-driven semantics'
+git push origin HEAD:external/sds-discovery
