@@ -32,7 +32,8 @@ jobs:
             tools/dev/pr72-global-scalar-read.patch \
             tools/dev/pr72-assignment-expression.patch \
             tools/dev/pr72-variadic-definition.patch \
-            tools/dev/pr72-probe-stdarg.patch; do
+            tools/dev/pr72-probe-stdarg.patch \
+            tools/dev/pr72-void-object-pointer.patch; do
             if test -f "$patch"; then
               git apply --check --recount "$patch"
               git apply --recount "$patch"
