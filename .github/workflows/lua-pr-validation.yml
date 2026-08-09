@@ -40,6 +40,7 @@ jobs:
           MINIC="$GITHUB_WORKSPACE/build/lua-compiler/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/lua-focused" HOST_CC=cc sh tests/compiler/c0/run-record-forward-declarations.sh
           MINIC="$GITHUB_WORKSPACE/build/lua-compiler/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/lua-focused" HOST_CC=cc sh tests/compiler/c0/run-record-multi-declarators.sh
           MINIC="$GITHUB_WORKSPACE/build/lua-compiler/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/lua-focused" HOST_CC=cc sh tests/compiler/c0/run-volatile-qualifiers.sh
+          MINIC="$GITHUB_WORKSPACE/build/lua-compiler/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/lua-focused" HOST_CC=cc sh tests/compiler/c0/run-array-bound-sizeof.sh
 
       - name: Compile official Lua 5.5.0 translation units
         shell: bash
