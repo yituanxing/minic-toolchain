@@ -15,24 +15,43 @@ NEW = """        if (name_length == existing->name_length &&
 """
 
 
-def rewrite_in_function(text: str, function_name: str, next_function_name: str) -> str:
-    start = text.find(f"bool {function_name}(")
-    end = text.find(f"\nbool {next_function_name}(", start)
-    if start < 0 or end < 0:
-        raise SystemExit(f"cannot locate function scope: {function_name}")
-    body = text[start:end]
-    count = body.count(OLD)
-    if count != 1:
-        raise SystemExit(f"{function_name}: expected one duplicate-name anchor, found {count}")
-    return text[:start] + body.replace(OLD, NEW, 1) + text[end:]
-
-
 text = PATH.read_text()
+record_start = text.find("bool minic_c0_record_add_field(")
+record_end = text.find("\nbool ", record_start + 1)
+if record_start < 0 or record_end < 0:
+    raise SystemExit("cannot locate minic_c0_record_add_field scope")
+
+positions = []
+search_from = 0
+while True:
+    position = text.find(OLD, search_from)
+    if position < 0:
+        break
+    positions.append(position)
+    search_from = position + len(OLD)
+
+record_positions = [position for position in positions if record_start <= position < record_end]
+if len(record_positions) != 1:
+    raise SystemExit(
+        f"expected exactly one duplicate-name anchor in minic_c0_record_add_field, found {len(record_positions)}"
+    )
+if len(positions) < 2:
+    raise SystemExit(f"expected duplicate textual anchors outside record fields, found {len(positions)} total")
+
 # pr76-anonymous-record-members.py intentionally changes duplicate-name handling only for
-# record fields. Lua staging has made the same textual condition appear in several symbol
-# tables; rewrite the two unrelated occurrences to an equivalent spelling so the Linux patch
-# remains scoped to minic_c0_record_add_field instead of matching by accident.
-text = rewrite_in_function(text, "minic_c0_program_add_record", "minic_c0_program_add_anonymous_record")
-text = rewrite_in_function(text, "minic_c0_program_add_type_alias", "minic_c0_program_expression")
-PATH.write_text(text)
-print("stabilized Linux anonymous-member patch anchors without semantic changes")
+# record fields. Lua staging can create the same textual condition in unrelated symbol tables.
+# Rewrite every unrelated occurrence to an equivalent spelling while leaving the one inside
+# minic_c0_record_add_field untouched, so the subsequent semantic patch has one structural
+# target rather than depending on function names or occurrence counts elsewhere.
+record_position = record_positions[0]
+parts = []
+cursor = 0
+for position in positions:
+    parts.append(text[cursor:position])
+    parts.append(OLD if position == record_position else NEW)
+    cursor = position + len(OLD)
+parts.append(text[cursor:])
+PATH.write_text("".join(parts))
+print(
+    "stabilized Linux anonymous-member patch anchor structurally without semantic changes"
+)
