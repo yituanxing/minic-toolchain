@@ -14,7 +14,20 @@ static int *advance_pointer(int *pointer) {
     return pointer;
 }
 
+static unsigned long long divide_unsigned(unsigned long long value) {
+    value /= 10;
+    return value;
+}
+
+static long long divide_signed(long long value) {
+    value /= 10;
+    return value;
+}
+
 int main(void) {
     int values[4];
-    return update_once() == 14 && advance_pointer(values) == values + 2 ? 0 : 1;
+    return update_once() == 14 && advance_pointer(values) == values + 2 &&
+                   divide_unsigned(100ULL) == 10ULL && divide_signed(-100LL) == -10LL
+               ? 0
+               : 1;
 }
