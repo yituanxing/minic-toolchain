@@ -71,7 +71,7 @@ expect_failure \
     "unsupported cast between these types"
 expect_failure \
     invalid_cast_assignment_target \
-    "assignment target must be a modifiable lvalue"
+    "assignment expression requires a modifiable scalar lvalue"
 
 MINIC="$minic" \
 HOST_CC="$host_cc" \

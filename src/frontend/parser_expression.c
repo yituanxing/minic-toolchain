@@ -1214,7 +1214,9 @@ static bool parse_expression_internal(MinicParser *parser,
         if (!minic_c0_assignment_compatible(parser->program, target_type, value_id)) {
             MinicExpression cast_expression;
 
-            if (!minic_type_cast_compatible(target_type, value_expression->type)) {
+            if (minic_type_is_pointer(target_type) ||
+                minic_type_is_pointer(value_expression->type) ||
+                !minic_type_cast_compatible(target_type, value_expression->type)) {
                 minic_parser_error(parser, "assignment expression type does not match target type");
                 return false;
             }
