@@ -68,9 +68,19 @@ bool minic_parser_parse_expression(MinicParser *parser,
             return false;
         }
         if (!minic_c0_assignment_compatible(parser->program, target_type, value_id)) {
-            if (!minic_type_cast_compatible(target_type, value_expression->type) ||
-                !parser_add_cast(parser, value_id, target_type, &value_id)) {
+            MinicExpression cast_expression;
+
+            if (!minic_type_cast_compatible(target_type, value_expression->type)) {
                 minic_parser_error(parser, "assignment expression type does not match target type");
+                return false;
+            }
+            (void)memset(&cast_expression, 0, sizeof(cast_expression));
+            cast_expression.kind = MINIC_EXPRESSION_CAST;
+            cast_expression.span = value_expression->span;
+            cast_expression.type = target_type;
+            cast_expression.value_category = MINIC_VALUE_RVALUE;
+            cast_expression.value.unary.operand = value_id;
+            if (!minic_parser_add_expression(parser, &cast_expression, &value_id)) {
                 return false;
             }
         }
