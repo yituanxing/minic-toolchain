@@ -225,10 +225,6 @@ static bool parse_function_pointer_typedef(MinicParser *parser,
             return false;
         }
     }
-    if (pointer_depth == 0U) {
-        minic_parser_error(parser, "function pointer typedef requires '*'");
-        return false;
-    }
     if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
         minic_parser_error(parser, "expected function pointer typedef name");
         return false;

@@ -54,6 +54,63 @@ static bool minic_riscv64_emit_assignment(FILE *file,
            minic_riscv64_emit_scalar_store(file, target->type, "t0", "a0");
 }
 
+static bool minic_riscv64_emit_record_copy(FILE *file,
+                                           const MinicC0Program *program,
+                                           const MinicFunction *function,
+                                           const MinicStatement *statement) {
+    const MinicExpression *target;
+    const MinicExpression *source;
+    const MinicRecord *record;
+    size_t storage_size;
+    size_t temporary_size;
+    size_t index;
+
+    target = minic_c0_program_expression(program, statement->target_expression);
+    source = minic_c0_program_expression(program, statement->expression);
+    if (target == NULL || source == NULL || target->value_category != MINIC_VALUE_LVALUE ||
+        source->value_category != MINIC_VALUE_LVALUE || minic_type_is_const(target->type) ||
+        !minic_type_is_record(target->type) || !minic_type_is_record(source->type) ||
+        target->type.record_id != source->type.record_id) {
+        return false;
+    }
+    record = minic_c0_program_record(program, target->type.record_id);
+    if (record == NULL || !record->is_complete || record->storage_size == 0U ||
+        record->storage_size > SIZE_MAX - 15U) {
+        return false;
+    }
+    storage_size = record->storage_size;
+    temporary_size = (storage_size + 15U) & ~(size_t)15U;
+
+    if (!minic_riscv64_emit_lvalue_address(file, program, function, statement->expression) ||
+        !minic_riscv64_emit_stack_allocate(file, temporary_size) ||
+        fprintf(file, "  mv t2, a0\n  mv t3, sp\n") < 0) {
+        return false;
+    }
+    for (index = 0U; index < storage_size; ++index) {
+        if (fprintf(file,
+                    "  lbu t0, 0(t2)\n"
+                    "  sb t0, 0(t3)\n"
+                    "  addi t2, t2, 1\n"
+                    "  addi t3, t3, 1\n") < 0) {
+            return false;
+        }
+    }
+    if (!minic_riscv64_emit_lvalue_address(file, program, function, statement->target_expression) ||
+        fprintf(file, "  mv t2, sp\n  mv t3, a0\n") < 0) {
+        return false;
+    }
+    for (index = 0U; index < storage_size; ++index) {
+        if (fprintf(file,
+                    "  lbu t0, 0(t2)\n"
+                    "  sb t0, 0(t3)\n"
+                    "  addi t2, t2, 1\n"
+                    "  addi t3, t3, 1\n") < 0) {
+            return false;
+        }
+    }
+    return minic_riscv64_emit_stack_release(file, temporary_size);
+}
+
 static bool minic_riscv64_emit_xor_assignment(FILE *file,
                                               const MinicC0Program *program,
                                               const MinicFunction *function,
@@ -165,6 +222,7 @@ static bool minic_riscv64_collect_switch_labels(const MinicC0Program *program,
         case MINIC_STATEMENT_SWITCH:
             break;
         case MINIC_STATEMENT_ASSIGN:
+        case MINIC_STATEMENT_RECORD_COPY:
         case MINIC_STATEMENT_XOR_ASSIGN:
         case MINIC_STATEMENT_EXPRESSION:
         case MINIC_STATEMENT_RETURN:
@@ -264,6 +322,9 @@ static bool minic_riscv64_emit_statement(FILE *file,
     switch (statement->kind) {
     case MINIC_STATEMENT_ASSIGN:
         return minic_riscv64_emit_assignment(file, program, function, statement);
+
+    case MINIC_STATEMENT_RECORD_COPY:
+        return minic_riscv64_emit_record_copy(file, program, function, statement);
 
     case MINIC_STATEMENT_XOR_ASSIGN:
         return minic_riscv64_emit_xor_assignment(file, program, function, statement);

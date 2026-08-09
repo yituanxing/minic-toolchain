@@ -99,6 +99,14 @@ MinicType minic_type_unsigned_char(void) {
     return minic_type_integer(MINIC_INTEGER_SIGN_UNSIGNED, MINIC_INTEGER_RANK_CHAR);
 }
 
+MinicType minic_type_short(void) {
+    return minic_type_integer(MINIC_INTEGER_SIGN_SIGNED, MINIC_INTEGER_RANK_SHORT);
+}
+
+MinicType minic_type_unsigned_short(void) {
+    return minic_type_integer(MINIC_INTEGER_SIGN_UNSIGNED, MINIC_INTEGER_RANK_SHORT);
+}
+
 MinicType minic_type_int(void) {
     return minic_type_integer(MINIC_INTEGER_SIGN_SIGNED, MINIC_INTEGER_RANK_INT);
 }
@@ -208,7 +216,8 @@ bool minic_type_integer_promotion(MinicType type, MinicType *result) {
     if (result == NULL || !minic_type_is_integer(type)) {
         return false;
     }
-    if (type.integer_rank == MINIC_INTEGER_RANK_CHAR) {
+    if (type.integer_rank == MINIC_INTEGER_RANK_CHAR ||
+        type.integer_rank == MINIC_INTEGER_RANK_SHORT) {
         *result = minic_type_int();
         return true;
     }
@@ -359,6 +368,7 @@ bool minic_type_is_integer(MinicType type) {
            (type.integer_sign == MINIC_INTEGER_SIGN_SIGNED ||
             type.integer_sign == MINIC_INTEGER_SIGN_UNSIGNED) &&
            (type.integer_rank == MINIC_INTEGER_RANK_CHAR ||
+            type.integer_rank == MINIC_INTEGER_RANK_SHORT ||
             type.integer_rank == MINIC_INTEGER_RANK_INT ||
             type.integer_rank == MINIC_INTEGER_RANK_LONG) &&
            minic_type_plain_char_identity_is_valid(type) &&
@@ -371,6 +381,10 @@ bool minic_type_is_char_integer(MinicType type) {
 
 bool minic_type_is_plain_char(MinicType type) {
     return minic_type_is_char_integer(type) && type.is_plain_char;
+}
+
+bool minic_type_is_short_integer(MinicType type) {
+    return minic_type_is_integer(type) && type.integer_rank == MINIC_INTEGER_RANK_SHORT;
 }
 
 bool minic_type_is_long_integer(MinicType type) {

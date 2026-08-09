@@ -82,6 +82,9 @@ static MinicTokenKind minic_classify_identifier(const char *text, size_t length)
     if (length == 4U && memcmp(text, "long", 4U) == 0) {
         return MINIC_TOKEN_KW_LONG;
     }
+    if (length == 5U && memcmp(text, "short", 5U) == 0) {
+        return MINIC_TOKEN_KW_SHORT;
+    }
     if (length == 6U && memcmp(text, "signed", 6U) == 0) {
         return MINIC_TOKEN_KW_SIGNED;
     }
@@ -105,6 +108,9 @@ static MinicTokenKind minic_classify_identifier(const char *text, size_t length)
     }
     if (length == 7U && memcmp(text, "typedef", 7U) == 0) {
         return MINIC_TOKEN_KW_TYPEDEF;
+    }
+    if (length == 6U && memcmp(text, "extern", 6U) == 0) {
+        return MINIC_TOKEN_KW_EXTERN;
     }
     if (length == 6U && memcmp(text, "static", 6U) == 0) {
         return MINIC_TOKEN_KW_STATIC;
@@ -551,7 +557,12 @@ bool minic_lexer_next(MinicLexer *lexer, MinicToken *token, MinicDiagnostic *dia
         }
         break;
     case '*':
-        token->kind = MINIC_TOKEN_STAR;
+        if (minic_lexer_peek_next(lexer) == '=') {
+            token->kind = MINIC_TOKEN_STAR_EQUAL;
+            minic_lexer_advance(lexer);
+        } else {
+            token->kind = MINIC_TOKEN_STAR;
+        }
         break;
     case '&':
         if (minic_lexer_peek_next(lexer) == '=') {

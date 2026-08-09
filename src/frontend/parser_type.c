@@ -2,8 +2,8 @@
 
 static bool minic_parser_is_integer_type_specifier(MinicTokenKind kind) {
     return kind == MINIC_TOKEN_KW_CHAR || kind == MINIC_TOKEN_KW_INT ||
-           kind == MINIC_TOKEN_KW_LONG || kind == MINIC_TOKEN_KW_SIGNED ||
-           kind == MINIC_TOKEN_KW_UNSIGNED;
+           kind == MINIC_TOKEN_KW_LONG || kind == MINIC_TOKEN_KW_SHORT ||
+           kind == MINIC_TOKEN_KW_SIGNED || kind == MINIC_TOKEN_KW_UNSIGNED;
 }
 
 bool minic_parser_require_complete_object_type(MinicParser *parser,
@@ -43,6 +43,7 @@ bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type) {
         bool saw_char = false;
         bool saw_int = false;
         bool saw_long = false;
+        bool saw_short = false;
         bool saw_signed = false;
         bool saw_unsigned = false;
 
@@ -68,6 +69,13 @@ bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type) {
                     return false;
                 }
                 saw_long = true;
+                break;
+            case MINIC_TOKEN_KW_SHORT:
+                if (saw_short) {
+                    minic_parser_error(parser, "duplicate short type specifier");
+                    return false;
+                }
+                saw_short = true;
                 break;
             case MINIC_TOKEN_KW_SIGNED:
                 if (saw_signed) {
@@ -95,9 +103,13 @@ bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type) {
             minic_parser_error(parser, "conflicting signed and unsigned type specifiers");
             return false;
         }
+        if (saw_short && saw_long) {
+            minic_parser_error(parser, "short cannot be combined with long");
+            return false;
+        }
         if (saw_char) {
-            if (saw_long || saw_int) {
-                minic_parser_error(parser, "char cannot be combined with int or long");
+            if (saw_short || saw_long || saw_int) {
+                minic_parser_error(parser, "char cannot be combined with short, int, or long");
                 return false;
             }
             if (saw_signed) {
@@ -105,6 +117,8 @@ bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type) {
                 return false;
             }
             parsed_type = saw_unsigned ? minic_type_unsigned_char() : minic_type_char();
+        } else if (saw_short) {
+            parsed_type = saw_unsigned ? minic_type_unsigned_short() : minic_type_short();
         } else if (saw_long) {
             parsed_type = saw_unsigned ? minic_type_unsigned_long() : minic_type_long();
         } else {

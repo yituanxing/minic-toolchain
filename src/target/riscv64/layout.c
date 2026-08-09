@@ -30,6 +30,9 @@ bool minic_riscv64_type_layout(const MinicC0Program *program,
         if (minic_type_is_char_integer(type)) {
             *size = 1U;
             *alignment = 1U;
+        } else if (minic_type_is_short_integer(type)) {
+            *size = 2U;
+            *alignment = 2U;
         } else if (minic_type_is_long_integer(type)) {
             *size = 8U;
             *alignment = 8U;

@@ -29,4 +29,4 @@ check_invalid() {
 
 check_invalid invalid_long_long "long long is not supported"
 check_invalid invalid_signed_unsigned "conflicting signed and unsigned type specifiers"
-check_invalid invalid_long_char "char cannot be combined with int or long"
+check_invalid invalid_long_char "char cannot be combined with short, int, or long"

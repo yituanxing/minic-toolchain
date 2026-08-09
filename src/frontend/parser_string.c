@@ -127,7 +127,7 @@ static bool decoded_string_length(MinicParser *parser, MinicSourceSpan span, siz
 }
 
 static bool
-add_string_initializers(MinicParser *parser, MinicSourceSpan span, MinicGlobalObjectId object_id) {
+add_string_payload(MinicParser *parser, MinicSourceSpan span, MinicGlobalObjectId object_id) {
     size_t cursor;
     size_t end;
 
@@ -151,33 +151,46 @@ add_string_initializers(MinicParser *parser, MinicSourceSpan span, MinicGlobalOb
             return false;
         }
     }
-    if (!minic_c0_global_object_add_initializer(parser->program, object_id, 0)) {
-        minic_parser_error(parser, "out of memory while terminating string literal");
-        return false;
-    }
     return true;
 }
 
-bool minic_parser_parse_string_literal(MinicParser *parser, MinicExpressionId *expression_id) {
+bool minic_parser_create_string_literal_object(MinicParser *parser,
+                                               MinicGlobalObjectId *object_id,
+                                               MinicType *array_type,
+                                               MinicSourceSpan *span) {
+    MinicParser probe;
     char object_name[64];
     int object_name_length;
     size_t decoded_length;
-    MinicSourceSpan span;
-    MinicType array_type;
-    MinicGlobalObjectId object_id;
-    MinicExpression expression;
+    size_t total_length;
+    MinicSourceSpan combined_span;
 
-    if (parser == NULL || expression_id == NULL ||
+    if (parser == NULL || object_id == NULL || array_type == NULL || span == NULL ||
         parser->current.kind != MINIC_TOKEN_STRING_LITERAL) {
         return false;
     }
-    span = parser->current.span;
-    if (!decoded_string_length(parser, span, &decoded_length) || decoded_length == SIZE_MAX ||
-        !minic_c0_program_add_array_type(
-            parser->program, minic_type_char(), decoded_length + 1U, &array_type)) {
-        if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
-            minic_parser_error(parser, "cannot build string literal array type");
+
+    probe = *parser;
+    combined_span = probe.current.span;
+    total_length = 0U;
+    while (probe.current.kind == MINIC_TOKEN_STRING_LITERAL) {
+        if (!decoded_string_length(&probe, probe.current.span, &decoded_length) ||
+            total_length > SIZE_MAX - decoded_length) {
+            if (probe.diagnostic != NULL && probe.diagnostic->message[0] == '\0') {
+                minic_parser_error(&probe, "concatenated string literal is too long");
+            }
+            return false;
         }
+        total_length += decoded_length;
+        combined_span.end = probe.current.span.end;
+        if (!minic_parser_advance(&probe)) {
+            return false;
+        }
+    }
+    if (total_length == SIZE_MAX ||
+        !minic_c0_program_add_array_type(
+            parser->program, minic_type_char(), total_length + 1U, array_type)) {
+        minic_parser_error(parser, "cannot build string literal array type");
         return false;
     }
 
@@ -189,14 +202,39 @@ bool minic_parser_parse_string_literal(MinicParser *parser, MinicExpressionId *e
         !minic_c0_program_add_global_object(parser->program,
                                             object_name,
                                             (size_t)object_name_length,
-                                            array_type,
+                                            *array_type,
                                             true,
                                             true,
-                                            &object_id) ||
-        !add_string_initializers(parser, span, object_id)) {
-        if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
-            minic_parser_error(parser, "cannot create string literal object");
+                                            object_id)) {
+        minic_parser_error(parser, "cannot create string literal object");
+        return false;
+    }
+
+    while (parser->current.kind == MINIC_TOKEN_STRING_LITERAL) {
+        MinicSourceSpan literal_span;
+
+        literal_span = parser->current.span;
+        if (!add_string_payload(parser, literal_span, *object_id) ||
+            !minic_parser_advance(parser)) {
+            return false;
         }
+    }
+    if (!minic_c0_global_object_add_initializer(parser->program, *object_id, 0)) {
+        minic_parser_error(parser, "out of memory while terminating string literal");
+        return false;
+    }
+    *span = combined_span;
+    return true;
+}
+
+bool minic_parser_parse_string_literal(MinicParser *parser, MinicExpressionId *expression_id) {
+    MinicSourceSpan span;
+    MinicType array_type;
+    MinicGlobalObjectId object_id;
+    MinicExpression expression;
+
+    if (parser == NULL || expression_id == NULL ||
+        !minic_parser_create_string_literal_object(parser, &object_id, &array_type, &span)) {
         return false;
     }
 
@@ -206,6 +244,5 @@ bool minic_parser_parse_string_literal(MinicParser *parser, MinicExpressionId *e
     expression.type = array_type;
     expression.value_category = MINIC_VALUE_LVALUE;
     expression.value.global_object_id = object_id;
-    return minic_parser_advance(parser) &&
-           minic_parser_add_expression(parser, &expression, expression_id);
+    return minic_parser_add_expression(parser, &expression, expression_id);
 }

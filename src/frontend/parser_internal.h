@@ -120,6 +120,7 @@ bool minic_parser_parse_record_definition(MinicParser *parser);
 bool minic_parser_parse_enum_definition(MinicParser *parser);
 bool minic_parser_parse_typedef(MinicParser *parser);
 bool minic_parser_parse_static_global(MinicParser *parser);
+bool minic_parser_parse_extern_global(MinicParser *parser);
 bool minic_parser_parse_pointer_member(MinicParser *parser,
                                        MinicExpressionId base_id,
                                        MinicExpressionId *expression_id);
@@ -132,6 +133,10 @@ bool minic_parser_apply_array_decay(MinicParser *parser,
 bool minic_parser_parse_postfix(MinicParser *parser,
                                 MinicExpressionId base_id,
                                 MinicExpressionId *expression_id);
+bool minic_parser_create_string_literal_object(MinicParser *parser,
+                                               MinicGlobalObjectId *object_id,
+                                               MinicType *array_type,
+                                               MinicSourceSpan *span);
 bool minic_parser_parse_string_literal(MinicParser *parser, MinicExpressionId *expression_id);
 bool minic_parser_parse_expression(MinicParser *parser,
                                    MinicExpressionId *expression_id,

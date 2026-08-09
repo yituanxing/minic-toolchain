@@ -333,17 +333,20 @@ static bool minic_riscv64_emit_subscript_address(FILE *file,
     } else if (base->kind == MINIC_EXPRESSION_GLOBAL_OBJECT &&
                base->value_category == MINIC_VALUE_LVALUE) {
         const MinicGlobalObject *object;
-        const MinicArrayType *array_type;
 
         object = minic_c0_program_global_object(program, base->value.global_object_id);
-        if (object == NULL || !minic_type_is_array(object->type)) {
+        if (object == NULL) {
             return false;
         }
-        array_type = minic_c0_program_array_type(program, object->type.array_type_id);
-        base_is_array_object = array_type != NULL;
-        if (!base_is_array_object ||
-            !minic_type_equal(array_type->element_type, expression->type)) {
-            return false;
+        if (minic_type_is_array(object->type)) {
+            const MinicArrayType *array_type;
+
+            array_type = minic_c0_program_array_type(program, object->type.array_type_id);
+            base_is_array_object = array_type != NULL;
+            if (!base_is_array_object ||
+                !minic_type_equal(array_type->element_type, expression->type)) {
+                return false;
+            }
         }
     } else if (base->value_category == MINIC_VALUE_LVALUE && minic_type_is_array(base->type)) {
         const MinicArrayType *array_type;

@@ -50,6 +50,7 @@ static bool type_is_valid(const MinicC0Program *program, MinicType type) {
                (type.integer_sign == MINIC_INTEGER_SIGN_SIGNED ||
                 type.integer_sign == MINIC_INTEGER_SIGN_UNSIGNED) &&
                (type.integer_rank == MINIC_INTEGER_RANK_CHAR ||
+                type.integer_rank == MINIC_INTEGER_RANK_SHORT ||
                 type.integer_rank == MINIC_INTEGER_RANK_INT ||
                 type.integer_rank == MINIC_INTEGER_RANK_LONG);
     case MINIC_TYPE_BASE_FLOAT:
@@ -673,6 +674,13 @@ static bool verify_statement(const MinicC0Program *program, const MinicStatement
         return target != NULL && expression != NULL &&
                target->value_category == MINIC_VALUE_LVALUE &&
                minic_c0_assignment_compatible(program, target->type, statement->expression);
+    case MINIC_STATEMENT_RECORD_COPY:
+        return target != NULL && expression != NULL &&
+               target->value_category == MINIC_VALUE_LVALUE &&
+               expression->value_category == MINIC_VALUE_LVALUE &&
+               !minic_type_is_const(target->type) && minic_type_is_record(target->type) &&
+               minic_type_is_record(expression->type) &&
+               target->type.record_id == expression->type.record_id;
     case MINIC_STATEMENT_XOR_ASSIGN: {
         MinicType common_type;
 
@@ -846,8 +854,7 @@ bool minic_c0_program_verify(const MinicC0Program *program, MinicC0AstForm form)
     }
     for (index = 0U; index < program->type_alias_count; ++index) {
         if (program->type_aliases[index].name == NULL ||
-            !type_is_valid(program, program->type_aliases[index].type) ||
-            minic_type_is_function(program->type_aliases[index].type)) {
+            !type_is_valid(program, program->type_aliases[index].type)) {
             return false;
         }
     }
@@ -857,11 +864,32 @@ bool minic_c0_program_verify(const MinicC0Program *program, MinicC0AstForm form)
         object = &program->global_objects[index];
         if (object->name == NULL || !type_is_valid(program, object->type) ||
             minic_type_is_function(object->type) ||
+            (object->is_extern &&
+             (object->is_internal || object->is_zero_initialized ||
+              object->initializer_count != 0U || object->function_relocation_count != 0U ||
+              object->object_relocation_count != 0U)) ||
             (object->is_zero_initialized && object->initializer_count != 0U) ||
+            (object->object_relocation_count != 0U &&
+             (!object->is_zero_initialized || object->function_relocation_count != 0U ||
+              object->initializer_count != 0U)) ||
             !storage_is_valid(object->initializer_values,
                               object->initializer_count,
-                              object->initializer_capacity)) {
+                              object->initializer_capacity) ||
+            !storage_is_valid(object->object_relocations,
+                              object->object_relocation_count,
+                              object->object_relocation_capacity)) {
             return false;
+        }
+        {
+            size_t relocation_index;
+
+            for (relocation_index = 0U; relocation_index < object->object_relocation_count;
+                 ++relocation_index) {
+                if (object->object_relocations[relocation_index].target_object_id >=
+                    program->global_object_count) {
+                    return false;
+                }
+            }
         }
     }
     for (index = 0U; index < program->expression_count; ++index) {

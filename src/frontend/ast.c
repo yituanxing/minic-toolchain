@@ -74,6 +74,7 @@ void minic_c0_program_destroy(MinicC0Program *program) {
     for (index = 0U; index < program->global_object_count; ++index) {
         free(program->global_objects[index].name);
         free(program->global_objects[index].initializer_values);
+        free(program->global_objects[index].object_relocations);
     }
     free(program->expressions);
     free(program->locals);
@@ -553,8 +554,7 @@ bool minic_c0_program_add_type_alias(MinicC0Program *program,
     MinicTypeAlias alias;
     size_t index;
 
-    if (program == NULL || name == NULL || alias_id == NULL || minic_type_is_void(type) ||
-        minic_type_is_function(type)) {
+    if (program == NULL || name == NULL || alias_id == NULL || minic_type_is_void(type)) {
         return false;
     }
     for (index = 0U; index < program->type_alias_count; ++index) {
