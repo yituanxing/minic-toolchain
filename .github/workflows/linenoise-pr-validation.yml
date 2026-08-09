@@ -39,6 +39,10 @@ jobs:
           BUILD_DIR="$GITHUB_WORKSPACE/build/linenoise-focused" \
           HOST_CC=cc \
             sh tests/compiler/c0/run-extern-objects.sh
+          MINIC="$GITHUB_WORKSPACE/build/linenoise-compiler/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/linenoise-focused" \
+          HOST_CC=cc \
+            sh tests/compiler/c0/run-function-type-typedefs.sh
 
       - name: Compile unchanged linenoise
         shell: bash
