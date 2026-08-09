@@ -8,11 +8,11 @@ start = text.index("    if (bound_count == 0U) {\n", anchor)
 end = text.index("    if (parser->current.kind == MINIC_TOKEN_EQUAL) {\n", start)
 
 replacement = r'''    if (bound_count == 0U) {
-        char symbol_name[96];
-        MinicGlobalObjectId object_id;
-        MinicExpressionId initializer_id;
-        int value;
-        int symbol_length;
+        char scalar_symbol_name[96];
+        MinicGlobalObjectId scalar_object_id;
+        MinicExpressionId scalar_initializer_id;
+        int scalar_value;
+        int scalar_symbol_length;
 
         if (parser->current.kind != MINIC_TOKEN_EQUAL) {
             minic_parser_error(parser,
@@ -27,27 +27,30 @@ replacement = r'''    if (bound_count == 0U) {
             return false;
         }
 
-        symbol_length = snprintf(symbol_name,
-                                 sizeof(symbol_name),
-                                 "__minic_static_local_%zu_%zu",
-                                 (size_t)parser->current_function,
-                                 parser->program->global_object_count);
-        if (symbol_length <= 0 || (size_t)symbol_length >= sizeof(symbol_name)) {
+        scalar_symbol_length = snprintf(scalar_symbol_name,
+                                        sizeof(scalar_symbol_name),
+                                        "__minic_static_local_%zu_%zu",
+                                        (size_t)parser->current_function,
+                                        parser->program->global_object_count);
+        if (scalar_symbol_length <= 0 ||
+            (size_t)scalar_symbol_length >= sizeof(scalar_symbol_name)) {
             minic_parser_error(parser, "cannot build static local scalar symbol name");
             return false;
         }
         if (!minic_c0_program_add_global_object(parser->program,
-                                                symbol_name,
-                                                (size_t)symbol_length,
+                                                scalar_symbol_name,
+                                                (size_t)scalar_symbol_length,
                                                 declared_type,
                                                 true,
                                                 minic_type_is_const(declared_type),
-                                                &object_id) ||
+                                                &scalar_object_id) ||
             !minic_parser_expect(parser, MINIC_TOKEN_EQUAL, "expected '=' after static scalar") ||
-            !minic_parser_parse_expression(parser, &initializer_id, 0U) ||
-            !static_record_integer_constant(parser->program, initializer_id, &value) ||
-            !minic_c0_global_object_add_initializer(parser->program, object_id, value) ||
-            !minic_parser_bind_static_local(parser, name_span, object_id)) {
+            !minic_parser_parse_expression(parser, &scalar_initializer_id, 0U) ||
+            !static_record_integer_constant(
+                parser->program, scalar_initializer_id, &scalar_value) ||
+            !minic_c0_global_object_add_initializer(
+                parser->program, scalar_object_id, scalar_value) ||
+            !minic_parser_bind_static_local(parser, name_span, scalar_object_id)) {
             if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
                 minic_parser_error(parser,
                                    "static local integer requires a supported constant initializer");
