@@ -189,6 +189,15 @@ replace_once(
 """,
     "bool-local-declaration",
 )
+replace_once(
+    "src/frontend/parser_expression.c",
+    """    case MINIC_TOKEN_KW_CHAR:
+""",
+    """    case MINIC_TOKEN_KW_BOOL:
+    case MINIC_TOKEN_KW_CHAR:
+""",
+    "bool-cast-sizeof-lookahead",
+)
 
 replace_once(
     "src/frontend/ast_verifier.c",
