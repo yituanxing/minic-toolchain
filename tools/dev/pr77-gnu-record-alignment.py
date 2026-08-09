@@ -35,7 +35,7 @@ def replace_in_function(path: str, signature: str, old: str, new: str, label: st
 
 
 # pr75-enum-constant-expressions.py already promoted the fixed-array evaluator into
-# minic_parser_parse_integer_constant_expression().  Reuse that exact parser here so
+# minic_parser_parse_integer_constant_expression(). Reuse that exact parser here so
 # sizeof/enum/cast/bitwise semantics do not fork for attributes.
 replace_once(
     "src/frontend/ast.h",
@@ -141,12 +141,16 @@ replace_in_function(
     "rv64-record-explicit-alignment",
 )
 
-replace_in_function(
+# constant_type_layout has a forward declaration. This aggregate-finalization sequence is
+# unique in parser_core.c after PR75 staging, so patch the semantic site directly instead
+# of mistaking the declaration for the definition.
+replace_once(
     "src/frontend/parser_core.c",
-    "static bool constant_type_layout(",
     """        if (!constant_align_up(storage_size, record_alignment, size)) {
             return false;
         }
+        *alignment = record_alignment;
+        return true;
 """,
     """        if (record->explicit_alignment != 0U) {
             if ((record->explicit_alignment & (record->explicit_alignment - 1U)) != 0U) {
@@ -159,6 +163,8 @@ replace_in_function(
         if (!constant_align_up(storage_size, record_alignment, size)) {
             return false;
         }
+        *alignment = record_alignment;
+        return true;
 """,
     "constant-record-explicit-alignment",
 )
