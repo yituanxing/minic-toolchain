@@ -12,4 +12,5 @@ python3 tools/dev/pr74-divide-assignment-token.py
 python3 tools/dev/pr74-compound-assignment-expression.py
 python3 tools/dev/pr74-divide-assignment-extension.py
 python3 tools/dev/pr74-void-cast.py
+python3 tools/dev/pr74-external-scalar-definition.py
 printf '%s\n' 'staged SDS discovery semantics'
