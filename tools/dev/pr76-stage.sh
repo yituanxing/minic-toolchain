@@ -6,6 +6,7 @@ python3 tools/dev/pr76-preprocessed-line-markers.py
 python3 tools/dev/pr77-gnu-signed-keyword.py
 python3 tools/dev/pr77-gnu-int128-type.py
 python3 tools/dev/pr77-gnu-int128-contracts.py
+python3 tools/dev/pr77-bool-type.py
 python3 tools/dev/pr77-gnu-typedef-redundant-aligned.py
 python3 tools/dev/pr77-gnu-extension-prefix.py
 python3 tools/dev/pr77-stabilize-ast-anchors.py
