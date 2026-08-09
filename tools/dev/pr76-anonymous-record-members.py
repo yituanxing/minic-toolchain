@@ -233,7 +233,6 @@ replace_once(
     """    MinicType record_type;
     MinicSourceSpan field_span;
     MinicRecordFieldPath path;
-    MinicRecordId record_stack[MINIC_ANONYMOUS_MEMBER_MAX_DEPTH];
     MinicExpressionId current_pointer_id;
     size_t path_index;
 """,
@@ -289,7 +288,6 @@ replace_once(
     }
 
     current_pointer_id = pointer_base_id;
-    (void)memset(record_stack, 0, sizeof(record_stack));
     for (path_index = 0U; path_index < path.depth; ++path_index) {
         MinicExpressionId member_id;
 
@@ -333,17 +331,6 @@ replace_once(
     minic_parser_error(parser, "empty anonymous member path");
     return false;
 """,
-)
-# Remove an unused local introduced only to keep staged structure stable if the compiler warns.
-replace_once(
-    "src/frontend/parser_member.c",
-    "    MinicRecordId record_stack[MINIC_ANONYMOUS_MEMBER_MAX_DEPTH];\n",
-    "",
-)
-replace_once(
-    "src/frontend/parser_member.c",
-    "    (void)memset(record_stack, 0, sizeof(record_stack));\n",
-    "",
 )
 
 print("staged C11/GNU anonymous struct/union members with promoted member access")
