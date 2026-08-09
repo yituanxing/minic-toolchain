@@ -99,7 +99,8 @@ EOF
 cat >"$include/errno.h" <<'EOF'
 #ifndef MINIC_PARSON_ERRNO_H
 #define MINIC_PARSON_ERRNO_H
-extern int errno;
+int *__errno_location(void);
+#define errno (*__errno_location())
 #define ERANGE 34
 #endif
 EOF
