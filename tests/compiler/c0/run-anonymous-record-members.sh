@@ -14,7 +14,7 @@ fail() {
     printf '%s\n' "FAIL compiler/c0/anonymous_record_members $*" >&2
     if test -s "$assembly"; then
         printf '%s\n' 'anonymous member assembly evidence:' >&2
-        grep -n -E 'read_correct:|read_hit:|read_second_counter:|branch_data_size:|addi a0|li a0' \
+        grep -n -E 'read_correct:|read_hit:|read_second_counter:|branch_data_size:|addi a0|li a0|slli a0' \
             "$assembly" >&2 || true
     fi
     exit 1
@@ -32,7 +32,9 @@ done
 grep -F '  li a0, 40' "$assembly" >/dev/null || fail 'sizeof expected=40'
 offset24=$(grep -c '  addi a0, a0, 24' "$assembly" || true)
 offset8=$(grep -c '  addi a0, a0, 8' "$assembly" || true)
-test "$offset24" -ge 1 || fail "offset24 expected>=1 actual=$offset24"
-test "$offset8" -ge 2 || fail "offset8 expected>=2 actual=$offset8"
+scale8=$(grep -c '  slli a0, a0, 3' "$assembly" || true)
+test "$offset24" -ge 3 || fail "anonymous-union-base expected>=3 actual=$offset24"
+test "$offset8" -ge 1 || fail "promoted-second-field expected>=1 actual=$offset8"
+test "$scale8" -ge 1 || fail "array-index-scale8 expected>=1 actual=$scale8"
 
-printf '%s\n' 'PASS compiler/c0/anonymous_record_members union=1 anonymous-structs=2 promoted-access=correct,hit array-overlay=1 size=40'
+printf '%s\n' 'PASS compiler/c0/anonymous_record_members union-offset=24 promoted-access=correct,hit array-overlay=index-scale8 size=40'
