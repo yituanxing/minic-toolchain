@@ -51,5 +51,8 @@ fi
 if test -f tools/dev/pr72-qualified-conditional.py; then
     python3 tools/dev/pr72-qualified-conditional.py
 fi
+if test -f tools/dev/pr72-varargs-abi.py; then
+    python3 tools/dev/pr72-varargs-abi.py
+fi
 
 printf '%s\n' 'staged Parson discovery semantics'
