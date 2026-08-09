@@ -27,6 +27,6 @@ check_invalid() {
     printf '%s\n' "PASS compiler/c0/$name"
 }
 
-check_invalid invalid_long_long "long long is not supported"
+check_invalid invalid_too_many_long_specifiers "too many long type specifiers"
 check_invalid invalid_signed_unsigned "conflicting signed and unsigned type specifiers"
 check_invalid invalid_long_char "char cannot be combined with short, int, or long"
