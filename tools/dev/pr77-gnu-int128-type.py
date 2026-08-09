@@ -103,41 +103,59 @@ static bool minic_parser_gnu_int128_name(const MinicParser *parser, bool *is_uns
     return false;
 }
 
+static bool minic_parser_try_gnu_int128(MinicParser *parser,
+                                        MinicType *type,
+                                        bool *matched) {
+    MinicParser probe;
+    bool direct_unsigned;
+    bool explicit_signed;
+    bool explicit_unsigned;
+
+    if (parser == NULL || type == NULL || matched == NULL) {
+        return false;
+    }
+    *matched = false;
+    direct_unsigned = false;
+    explicit_signed = false;
+    explicit_unsigned = false;
+
+    if (parser->current.kind == MINIC_TOKEN_KW_SIGNED ||
+        parser->current.kind == MINIC_TOKEN_KW_UNSIGNED) {
+        explicit_signed = parser->current.kind == MINIC_TOKEN_KW_SIGNED;
+        explicit_unsigned = parser->current.kind == MINIC_TOKEN_KW_UNSIGNED;
+        probe = *parser;
+        if (!minic_parser_advance(&probe) ||
+            !minic_parser_gnu_int128_name(&probe, &direct_unsigned)) {
+            return true;
+        }
+        *parser = probe;
+    } else if (!minic_parser_gnu_int128_name(parser, &direct_unsigned)) {
+        return true;
+    }
+
+    if (direct_unsigned && explicit_signed) {
+        minic_parser_error(parser, "signed cannot be combined with __uint128");
+        return false;
+    }
+    *type = (direct_unsigned || explicit_unsigned) ? minic_type_unsigned_int128()
+                                                   : minic_type_int128();
+    *matched = true;
+    return minic_parser_advance(parser);
+}
+
 '''
 text = replace_once(text, include_anchor, helper, "parser-int128-helper")
 
-start_anchor = """    if (minic_parser_is_integer_type_specifier(parser->current.kind)) {\n        bool saw_char = false;\n"""
-start_replacement = """    {\n        bool int128_unsigned_name = false;\n        bool starts_int128 = minic_parser_gnu_int128_name(parser, &int128_unsigned_name);\n\n        if (minic_parser_is_integer_type_specifier(parser->current.kind) || starts_int128) {\n        bool saw_char = false;\n"""
-text = replace_once(text, start_anchor, start_replacement, "parser-int128-start")
+parse_anchor = """    if (minic_parser_is_integer_type_specifier(parser->current.kind)) {\n        bool saw_char = false;\n"""
+parse_replacement = """    {\n        bool parsed_gnu_int128 = false;\n\n        if (!minic_parser_try_gnu_int128(parser, &parsed_type, &parsed_gnu_int128)) {\n            return false;\n        }\n        if (parsed_gnu_int128) {\n            /* parsed_type already holds the semantic GNU 128-bit integer type. */\n        } else if (minic_parser_is_integer_type_specifier(parser->current.kind)) {\n        bool saw_char = false;\n"""
+text = replace_once(text, parse_anchor, parse_replacement, "parser-int128-entry")
 
-selection_anchor = """        if (saw_signed && saw_unsigned) {\n            minic_parser_error(parser, \"conflicting signed and unsigned type specifiers\");\n            return false;\n        }\n        if (saw_short && long_count != 0U) {\n"""
-selection_replacement = """        if (saw_signed && saw_unsigned) {\n            minic_parser_error(parser, \"conflicting signed and unsigned type specifiers\");\n            return false;\n        }\n        if (minic_parser_gnu_int128_name(parser, &int128_unsigned_name)) {\n            if (saw_char || saw_int || saw_short || long_count != 0U ||\n                (int128_unsigned_name && saw_signed)) {\n                minic_parser_error(parser, \"invalid specifiers for GNU __int128 type\");\n                return false;\n            }\n            parsed_type = (saw_unsigned || int128_unsigned_name) ? minic_type_unsigned_int128()\n                                                                 : minic_type_int128();\n            if (!minic_parser_advance(parser)) {\n                return false;\n            }\n        } else if (saw_short && long_count != 0U) {\n"""
-text = replace_once(text, selection_anchor, selection_replacement, "parser-int128-select")
-
-# The previous replacement turns the old following `if (saw_char)` chain into the
-# `else if` continuation of the new int128 branch.
-text = replace_once(
-    text,
-    """            return false;\n        }\n        if (saw_char) {\n""",
-    """            return false;\n        } else if (saw_char) {\n""",
-    "parser-int128-chain",
-)
-
-# Close the scope introduced around the integer/GNU-int128 decision immediately
-# before the existing float branch.
-text = replace_once(
-    text,
-    """        } else {\n            parsed_type = saw_unsigned ? minic_type_unsigned_int() : minic_type_int();\n        }\n    } else if (parser->current.kind == MINIC_TOKEN_KW_FLOAT) {\n""",
-    """        } else {\n            parsed_type = saw_unsigned ? minic_type_unsigned_int() : minic_type_int();\n        }\n        } else if (parser->current.kind == MINIC_TOKEN_KW_FLOAT) {\n""",
-    "parser-int128-float-chain",
-)
-# Match the extra opening block with a closing brace before qualifier processing.
-text = replace_once(
-    text,
-    """    } else {\n        minic_parser_error(parser, \"expected type name\");\n        return false;\n    }\n\n    while (parser->current.kind == MINIC_TOKEN_KW_CONST) {\n""",
-    """        } else {\n            minic_parser_error(parser, \"expected type name\");\n            return false;\n        }\n    }\n\n    while (parser->current.kind == MINIC_TOKEN_KW_CONST) {\n""",
-    "parser-int128-close-scope",
-)
+# Close only the small dispatch scope introduced above.  Match the transition from
+# the generic type-name error to qualifier processing structurally rather than
+# rewriting the surrounding parser branches.
+qualifier_anchor = """        minic_parser_error(parser, \"expected type name\");\n        return false;\n    }\n\n    while (parser->current.kind == MINIC_TOKEN_KW_CONST) {\n"""
+qualifier_replacement = """        minic_parser_error(parser, \"expected type name\");\n        return false;\n        }\n    }\n\n    while (parser->current.kind == MINIC_TOKEN_KW_CONST) {\n"""
+text = replace_once(text, qualifier_anchor, qualifier_replacement, "parser-int128-dispatch-close")
 path.write_text(text)
 
 
