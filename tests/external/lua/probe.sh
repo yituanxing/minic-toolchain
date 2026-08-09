@@ -42,6 +42,16 @@ if ! command -v "$target_cc" >/dev/null 2>&1; then
     exit 1
 fi
 
+# GCC's generic va_list target hook defaults to void*. Verify that the actual RV64 GCC
+# installed for this validation really uses that target model before MiniC mirrors it.
+cat >"$work/rv64-va-list-model.c" <<'EOF'
+_Static_assert(__builtin_types_compatible_p(__builtin_va_list, void *),
+               "RV64 GCC __builtin_va_list is not void *");
+int main(void) { return 0; }
+EOF
+"$target_cc" -std=c11 -c "$work/rv64-va-list-model.c" -o "$work/rv64-va-list-model.o"
+printf '%s\n' 'PASS external/lua-target-model __builtin_va_list=void-pointer'
+
 sources='lapi.c lcode.c lctype.c ldebug.c ldo.c ldump.c lfunc.c lgc.c llex.c lmem.c lobject.c lopcodes.c lparser.c lstate.c lstring.c ltable.c ltm.c lundump.c lvm.c lzio.c lauxlib.c lbaselib.c lcorolib.c ldblib.c liolib.c lmathlib.c loadlib.c loslib.c lstrlib.c ltablib.c lutf8lib.c linit.c lua.c'
 
 passed=0
