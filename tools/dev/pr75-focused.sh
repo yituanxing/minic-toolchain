@@ -18,6 +18,7 @@ for test_script in \
     run-unsigned-64-literals.sh \
     run-builtin-va-list.sh \
     run-restrict-qualifiers.sh \
+    run-gnu-extension-declaration.sh \
     run-gnu-function-attributes.sh \
     run-gnu-function-asm-labels.sh \
     run-gnu-function-visibility.sh \
@@ -33,7 +34,7 @@ for test_script in \
     run-record-multidimensional-arrays.sh \
     run-record-length-one-arrays.sh \
     run-pointer-compound-subtraction.sh \
-    run-builtin-offsetof.sh \
+    run-builtin offsetof.sh \
     run-pointer-integer-casts.sh \
     run-record-assignment-expressions.sh \
     run-bitwise-and-assignment-expressions.sh \
