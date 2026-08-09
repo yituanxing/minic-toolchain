@@ -35,6 +35,7 @@ python3 tools/dev/pr75-conditional-pointer-qualifiers.py
 python3 tools/dev/pr75-stack-arguments.py
 python3 tools/dev/pr75-static-local-record-initializers.py
 python3 tools/dev/pr75-static-record-array-initializers.py
+python3 tools/dev/pr75-static-nested-record-initializers.py
 python3 tools/dev/pr75-static-local-scalars.py
 python3 tools/dev/pr75-static-local-inferred-arrays.py
 python3 tools/dev/pr75-static-local-fixed-array-initializers.py
