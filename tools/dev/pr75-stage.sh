@@ -28,6 +28,7 @@ python3 tools/dev/pr75-record-assignment-expression.py
 python3 tools/dev/pr75-compound-assignment-expressions.py
 python3 tools/dev/pr75-remainder-assignment.py
 python3 tools/dev/pr75-mixed-double-arithmetic.py
+python3 tools/dev/pr75-conditional-pointer-qualifiers.py
 python3 tools/dev/pr75-stack-arguments.py
 python3 tools/dev/pr75-static-local-record-initializers.py
 python3 tools/dev/pr75-external-integer-array-initializers.py
