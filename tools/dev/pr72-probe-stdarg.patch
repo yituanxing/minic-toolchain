@@ -1,13 +1,14 @@
 diff --git a/tests/external/parson/probe.sh b/tests/external/parson/probe.sh
 --- a/tests/external/parson/probe.sh
 +++ b/tests/external/parson/probe.sh
-@@ -27,8 +27,8 @@ cat >"$include/stdarg.h" <<'EOF'
+@@ -27,8 +27,9 @@ cat >"$include/stdarg.h" <<'EOF'
  #ifndef MINIC_PARSON_STDARG_H
  #define MINIC_PARSON_STDARG_H
  typedef void *va_list;
 -#define va_start(ap, last) ((void)0)
 -#define va_end(ap) ((void)0)
-+#define va_start(ap, last) 0
++void *__minic_va_start(void);
++#define va_start(ap, last) ((ap) = __minic_va_start())
 +#define va_end(ap) 0
  #endif
  EOF
