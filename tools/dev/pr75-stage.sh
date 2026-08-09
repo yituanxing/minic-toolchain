@@ -23,6 +23,7 @@ python3 tools/dev/pr75-unsigned-64-literals.py
 python3 tools/dev/pr75-builtin-va-list.py
 python3 tools/dev/pr75-restrict-qualifier.py
 python3 tools/dev/pr75-gnu-extension-marker.py
+python3 tools/dev/pr75-builtin-expect.py
 python3 tools/dev/pr75-gnu-function-attributes.py
 python3 tools/dev/pr75-record-forward-declarations.py
 python3 tools/dev/pr75-record-top-level-dispatch.py
