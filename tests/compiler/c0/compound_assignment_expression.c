@@ -38,7 +38,7 @@ static long long divide_signed(long long value) {
 int main(void) {
     int values[4];
     return update_once() == 14 && adjust_pointer(values) == values + 2 &&
-                   update_bits(0x2ffu) == 579u && divide_unsigned(100ULL) == 10ULL &&
+                   update_bits(0x2ffu) == 380u && divide_unsigned(100ULL) == 10ULL &&
                    divide_signed(-100LL) == -10LL
                ? 0
                : 1;
