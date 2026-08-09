@@ -1,6 +1,6 @@
 enum {
     SIZE_WIDTH = 5,
-    SIZE_TOTAL = SIZE_WIDTH + 1
+    SIZE_TOTAL
 };
 
 struct Sizes {
