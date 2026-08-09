@@ -16,4 +16,4 @@ mkdir -p "$work"
 
 test -s "$work/volatile_qualifiers.s"
 grep -F 'read_state:' "$work/volatile_qualifiers.s" >/dev/null
-printf '%s\n' 'PASS compiler/c0/volatile_qualifiers base=1 const-volatile=1 local=1 pointer-level=deferred'
+printf '%s\n' 'PASS compiler/c0/volatile_qualifiers base=1 const-volatile=1 local=1 pointer-level=1 typedef-pointer=1'
