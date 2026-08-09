@@ -19,12 +19,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Build committed MiniC
+      - name: Stage current discovery semantics and build MiniC
         shell: bash
         run: |
           set -Eeuo pipefail
+          sh tools/dev/pr74-stage.sh
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
           make -j4 MODE=release BUILD_DIR=build/sds-compiler
           make -j4 MODE=sanitize BUILD_DIR=build/sds-sanitize
+
+      - name: Verify focused discovery semantics
+        shell: bash
+        run: |
+          MINIC="$GITHUB_WORKSPACE/build/sds-compiler/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/sds-focused" \
+          HOST_CC=cc \
+            sh tests/compiler/c0/run-packed-record-layout.sh
 
       - name: Compile unchanged SDS
         shell: bash
