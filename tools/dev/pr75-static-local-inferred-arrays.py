@@ -4,7 +4,7 @@ from pathlib import Path
 path = Path("src/frontend/parser_statement.c")
 text = path.read_text()
 start_marker = "static bool parse_inferred_static_local_string_array(MinicParser *parser,\n"
-end_marker = "static bool parse_static_local_array_declarator(MinicParser *parser, MinicType base_type) {\n"
+end_marker = "static bool static_record_integer_constant(const MinicC0Program *program,\n"
 start = text.find(start_marker)
 end = text.find(end_marker, start)
 if start < 0 or end < 0:
