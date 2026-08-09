@@ -34,6 +34,8 @@ const char *minic_token_kind_name(MinicTokenKind kind) {
         return "void";
     case MINIC_TOKEN_KW_STRUCT:
         return "struct";
+    case MINIC_TOKEN_KW_ENUM:
+        return "enum";
     case MINIC_TOKEN_KW_CONST:
         return "const";
     case MINIC_TOKEN_KW_TYPEDEF:
