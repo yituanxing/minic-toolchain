@@ -127,17 +127,20 @@ bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type) {
         }
     } else if (parser->current.kind == MINIC_TOKEN_KW_STRUCT) {
         MinicRecordId record_id;
-        const MinicRecord *record;
 
         if (!minic_parser_advance(parser) || parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
             minic_parser_error(parser, "expected record tag after 'struct'");
             return false;
         }
         record_id = minic_parser_find_record(parser, parser->current.span);
-        record = minic_c0_program_record(parser->program, record_id);
-        if (record == NULL) {
-            minic_parser_error(parser, "use of undeclared record tag");
-            return false;
+        if (record_id == MINIC_RECORD_INVALID) {
+            if (!minic_c0_program_add_record(parser->program,
+                                             parser->source + parser->current.span.begin.offset,
+                                             minic_parser_span_length(parser->current.span),
+                                             &record_id)) {
+                minic_parser_error(parser, "out of memory while declaring record tag");
+                return false;
+            }
         }
         parsed_type = minic_type_record(record_id);
         if (!minic_parser_advance(parser)) {

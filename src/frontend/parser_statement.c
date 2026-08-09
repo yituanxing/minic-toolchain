@@ -867,11 +867,11 @@ static bool parse_expression_or_assignment_statement(MinicParser *parser,
     assignment_token = parser->current.kind;
 
     if (assignment_token != MINIC_TOKEN_EQUAL && assignment_token != MINIC_TOKEN_CARET_EQUAL &&
-        assignment_token != MINIC_TOKEN_PLUS_EQUAL &&
+        assignment_token != MINIC_TOKEN_PLUS_EQUAL && assignment_token != MINIC_TOKEN_MINUS_EQUAL &&
         assignment_token != MINIC_TOKEN_AMPERSAND_EQUAL &&
         assignment_token != MINIC_TOKEN_PIPE_EQUAL &&
         assignment_token != MINIC_TOKEN_GREATER_GREATER_EQUAL) {
-        if (!allow_expression_statement) {
+        if (!allow_expression_statement && first_expression->kind != MINIC_EXPRESSION_ASSIGNMENT) {
             minic_parser_error(parser, "for initializer requires an assignment");
             return false;
         }
@@ -982,6 +982,32 @@ static bool parse_expression_or_assignment_statement(MinicParser *parser,
         addition.value.binary.left = statement.target_expression;
         addition.value.binary.right = right_id;
         if (!minic_parser_add_expression(parser, &addition, &statement.expression)) {
+            return false;
+        }
+    } else if (assignment_token == MINIC_TOKEN_MINUS_EQUAL) {
+        const MinicExpression *right_expression;
+        MinicExpression subtraction;
+        MinicExpressionId right_id;
+        MinicType common_type;
+
+        right_id = statement.expression;
+        right_expression = minic_c0_program_expression(parser->program, right_id);
+        if (right_expression == NULL || !minic_type_is_integer(first_type) ||
+            !minic_type_is_integer(right_expression->type) ||
+            !minic_type_integer_common(first_type, right_expression->type, &common_type)) {
+            minic_parser_error(parser, "compound subtraction assignment requires integer operands");
+            return false;
+        }
+        (void)memset(&subtraction, 0, sizeof(subtraction));
+        subtraction.kind = MINIC_EXPRESSION_BINARY;
+        subtraction.span.begin = statement.span.begin;
+        subtraction.span.end = right_expression->span.end;
+        subtraction.type = common_type;
+        subtraction.value_category = MINIC_VALUE_RVALUE;
+        subtraction.value.binary.operator_kind = MINIC_BINARY_SUBTRACT;
+        subtraction.value.binary.left = statement.target_expression;
+        subtraction.value.binary.right = right_id;
+        if (!minic_parser_add_expression(parser, &subtraction, &statement.expression)) {
             return false;
         }
     } else if (assignment_token == MINIC_TOKEN_GREATER_GREATER_EQUAL) {
@@ -2124,6 +2150,9 @@ static bool token_starts_expression(MinicTokenKind kind) {
 bool minic_parser_parse_statement(MinicParser *parser, bool allow_declaration) {
     if (!ensure_function_label_context(parser)) {
         return false;
+    }
+    if (parser->current.kind == MINIC_TOKEN_SEMICOLON) {
+        return minic_parser_advance(parser);
     }
     if (parser->current.kind == MINIC_TOKEN_LBRACE) {
         return parse_compound_statement(parser);

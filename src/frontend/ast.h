@@ -41,6 +41,7 @@ typedef enum MinicExpressionKind {
     MINIC_EXPRESSION_SUBSCRIPT,
     MINIC_EXPRESSION_MEMBER,
     MINIC_EXPRESSION_LVALUE_READ,
+    MINIC_EXPRESSION_ASSIGNMENT,
     MINIC_EXPRESSION_UNARY,
     MINIC_EXPRESSION_BINARY,
     MINIC_EXPRESSION_CONDITIONAL,
@@ -192,6 +193,7 @@ typedef struct MinicRecord {
     size_t field_capacity;
     size_t storage_size;
     size_t alignment;
+    bool is_union;
     bool is_complete;
 } MinicRecord;
 

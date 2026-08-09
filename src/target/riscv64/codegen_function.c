@@ -64,12 +64,30 @@ static bool minic_riscv64_emit_zero_bytes(FILE *file, size_t size) {
 static bool
 emit_fn_relocs(FILE *file, const MinicC0Program *program, const MinicGlobalObject *object) {
     const MinicRecord *record;
+    MinicType pointee;
     size_t cursor;
     size_t relocation_index;
 
     if (file == NULL || program == NULL || object == NULL || !object->is_zero_initialized ||
-        !minic_type_is_record(object->type) || object->function_relocation_count == 0U ||
-        object->initializer_count != 0U) {
+        object->function_relocation_count == 0U || object->initializer_count != 0U) {
+        return false;
+    }
+    if (minic_type_pointee(object->type, &pointee) && minic_type_is_function(pointee)) {
+        const MinicGlobalFunctionRelocation *relocation;
+        const MinicFunction *function;
+
+        if (object->function_relocation_count != 1U || object->storage_size < 8U) {
+            return false;
+        }
+        relocation = &object->function_relocations[0];
+        function = minic_c0_program_function(program, relocation->function_id);
+        if (function == NULL || function->name_length == 0U ||
+            fprintf(file, "  .dword %s\n", function->name) < 0) {
+            return false;
+        }
+        return minic_riscv64_emit_zero_bytes(file, object->storage_size - 8U);
+    }
+    if (!minic_type_is_record(object->type)) {
         return false;
     }
     record = minic_c0_program_record(program, object->type.record_id);
@@ -187,14 +205,16 @@ static bool minic_riscv64_emit_function(FILE *file,
                                         const MinicC0Program *program,
                                         const MinicFunction *function,
                                         size_t *label_counter) {
+    MinicRiscv64FrameLayout frame_layout;
     size_t frame_size;
     bool success;
 
     if (function == NULL || !function->is_defined || function->name_length == 0U ||
         function->body_block >= program->block_count ||
-        !minic_riscv64_frame_size(function, &frame_size)) {
+        !minic_riscv64_frame_layout(program, function, &frame_layout)) {
         return false;
     }
+    frame_size = frame_layout.frame_size;
 
     success = true;
     if (!function->is_internal) {
@@ -211,9 +231,22 @@ static bool minic_riscv64_emit_function(FILE *file,
         success = minic_riscv64_emit_stack_allocate(file, frame_size);
     }
     if (success) {
-        success = minic_riscv64_emit_sp_store64(file, "ra", frame_size - 8U) &&
-                  minic_riscv64_emit_sp_store64(file, "s0", frame_size - 16U) &&
+        success = minic_riscv64_emit_sp_store64(file, "ra", frame_layout.saved_ra_offset) &&
+                  minic_riscv64_emit_sp_store64(file, "s0", frame_layout.saved_s0_offset) &&
                   fprintf(file, "  mv s0, sp\n") >= 0;
+    }
+    if (success && function->is_variadic) {
+        size_t register_index;
+
+        for (register_index = frame_layout.integer_parameter_count; success && register_index < 8U;
+             ++register_index) {
+            size_t offset;
+
+            offset = frame_layout.varargs_offset +
+                     (register_index - frame_layout.integer_parameter_count) * 8U;
+            success = minic_riscv64_emit_sp_store64(
+                file, minic_riscv64_argument_registers[register_index], offset);
+        }
     }
     if (success && function->parameter_count > 8U) {
         return false;
@@ -275,8 +308,8 @@ static bool minic_riscv64_emit_function(FILE *file,
                           function->name) >= 0;
     }
     if (success) {
-        success = minic_riscv64_emit_sp_load64(file, "ra", frame_size - 8U) &&
-                  minic_riscv64_emit_sp_load64(file, "s0", frame_size - 16U);
+        success = minic_riscv64_emit_sp_load64(file, "ra", frame_layout.saved_ra_offset) &&
+                  minic_riscv64_emit_sp_load64(file, "s0", frame_layout.saved_s0_offset);
     }
     if (success) {
         success = minic_riscv64_emit_stack_release(file, frame_size);

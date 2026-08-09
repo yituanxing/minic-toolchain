@@ -166,6 +166,69 @@ static bool function_designator_type(MinicParser *parser,
     return true;
 }
 
+static bool type_is_function_pointer(MinicType type) {
+    MinicType pointee;
+
+    return minic_type_pointee(type, &pointee) && minic_type_is_function(pointee);
+}
+
+static bool parse_static_scalar(MinicParser *parser, MinicType type, MinicSourceSpan name_span) {
+    MinicGlobalObjectId object_id;
+
+    if (!minic_c0_program_add_global_object(parser->program,
+                                            parser->source + name_span.begin.offset,
+                                            minic_parser_span_length(name_span),
+                                            type,
+                                            true,
+                                            minic_type_is_const(type),
+                                            &object_id) ||
+        !minic_parser_expect(parser, MINIC_TOKEN_EQUAL, "expected '='")) {
+        if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+            minic_parser_error(parser, "cannot begin static scalar initializer");
+        }
+        return false;
+    }
+
+    if (minic_type_is_integer(type)) {
+        int value;
+
+        if (!minic_parser_parse_integer_value(parser, &value) ||
+            !minic_c0_global_object_add_initializer(parser->program, object_id, value)) {
+            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                minic_parser_error(parser, "cannot record static integer initializer");
+            }
+            return false;
+        }
+    } else if (minic_type_is_pointer(type)) {
+        if (type_is_function_pointer(type) && parser->current.kind == MINIC_TOKEN_IDENTIFIER) {
+            MinicFunctionId function_id;
+            MinicType designator_type;
+
+            function_id = minic_parser_find_function(parser, parser->current.span);
+            if (function_id == MINIC_FUNCTION_INVALID ||
+                !function_designator_type(parser, function_id, &designator_type) ||
+                !minic_type_assignment_compatible(type, designator_type)) {
+                minic_parser_error(parser, "static function pointer initializer type mismatch");
+                return false;
+            }
+            if (!minic_parser_advance(parser) ||
+                !minic_c0_global_object_add_function_relocation(
+                    parser->program, object_id, 0U, function_id) ||
+                !minic_c0_global_object_set_zero_initialized(parser->program, object_id)) {
+                minic_parser_error(parser, "cannot record static function pointer initializer");
+                return false;
+            }
+        } else if (!parse_zero_pointer_constant(parser) ||
+                   !minic_c0_global_object_set_zero_initialized(parser->program, object_id)) {
+            return false;
+        }
+    } else {
+        minic_parser_error(parser, "unsupported static scalar type");
+        return false;
+    }
+    return minic_parser_expect(parser, MINIC_TOKEN_SEMICOLON, "expected ';' after global object");
+}
+
 static bool parse_static_record_field_initializer(MinicParser *parser,
                                                   MinicGlobalObjectId object_id,
                                                   size_t field_index,
@@ -287,9 +350,9 @@ bool minic_parser_parse_static_global(MinicParser *parser) {
         !minic_parser_parse_type_name(parser, &element_type)) {
         return false;
     }
-    if ((!minic_type_is_integer(element_type) || !minic_type_is_const(element_type)) &&
+    if (!minic_type_is_integer(element_type) && !minic_type_is_pointer(element_type) &&
         !minic_type_is_record(element_type)) {
-        minic_parser_error(parser, "static global arrays currently require const integer elements");
+        minic_parser_error(parser, "unsupported static global object type");
         return false;
     }
     if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
@@ -308,6 +371,13 @@ bool minic_parser_parse_static_global(MinicParser *parser) {
 
     if (minic_type_is_record(element_type)) {
         return parse_static_record(parser, element_type, name_span);
+    }
+    if (parser->current.kind != MINIC_TOKEN_LBRACKET) {
+        return parse_static_scalar(parser, element_type, name_span);
+    }
+    if (!minic_type_is_integer(element_type) || !minic_type_is_const(element_type)) {
+        minic_parser_error(parser, "static global arrays currently require const integer elements");
+        return false;
     }
 
     while (parser->current.kind == MINIC_TOKEN_LBRACKET) {

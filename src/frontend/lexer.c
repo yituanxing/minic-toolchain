@@ -3,15 +3,6 @@
 #include <stdio.h>
 #include <string.h>
 
-static MinicSourcePosition minic_lexer_position(const MinicLexer *lexer) {
-    MinicSourcePosition position;
-
-    position.offset = lexer->cursor;
-    position.line = lexer->line;
-    position.column = lexer->column;
-    return position;
-}
-
 static char minic_lexer_peek(const MinicLexer *lexer) {
     if (lexer->cursor >= lexer->length) {
         return '\0';
@@ -27,15 +18,15 @@ static char minic_lexer_peek_next(const MinicLexer *lexer) {
 }
 
 static void minic_lexer_advance(MinicLexer *lexer) {
-    char character;
+    char current;
 
     if (lexer->cursor >= lexer->length) {
         return;
     }
 
-    character = lexer->source[lexer->cursor];
+    current = lexer->source[lexer->cursor];
     lexer->cursor += 1U;
-    if (character == '\n') {
+    if (current == '\n') {
         lexer->line += 1U;
         lexer->column = 1U;
     } else {
@@ -43,21 +34,18 @@ static void minic_lexer_advance(MinicLexer *lexer) {
     }
 }
 
+static MinicSourcePosition minic_lexer_position(const MinicLexer *lexer) {
+    MinicSourcePosition position;
+
+    position.offset = lexer->cursor;
+    position.line = lexer->line;
+    position.column = lexer->column;
+    return position;
+}
+
 static bool minic_is_space(char character) {
     return character == ' ' || character == '\t' || character == '\n' || character == '\r' ||
            character == '\f' || character == '\v';
-}
-
-static bool minic_is_ascii_letter(char character) {
-    return (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z');
-}
-
-static bool minic_is_identifier_start(char character) {
-    return minic_is_ascii_letter(character) || character == '_';
-}
-
-static bool minic_is_identifier_continue(char character) {
-    return minic_is_identifier_start(character) || (character >= '0' && character <= '9');
 }
 
 static bool minic_is_decimal_digit(char character) {
@@ -67,6 +55,15 @@ static bool minic_is_decimal_digit(char character) {
 static bool minic_is_hexadecimal_digit(char character) {
     return minic_is_decimal_digit(character) || (character >= 'a' && character <= 'f') ||
            (character >= 'A' && character <= 'F');
+}
+
+static bool minic_is_identifier_start(char character) {
+    return (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') ||
+           character == '_';
+}
+
+static bool minic_is_identifier_continue(char character) {
+    return minic_is_identifier_start(character) || minic_is_decimal_digit(character);
 }
 
 static MinicTokenKind minic_classify_identifier(const char *text, size_t length) {
@@ -88,9 +85,6 @@ static MinicTokenKind minic_classify_identifier(const char *text, size_t length)
     if (length == 6U && memcmp(text, "signed", 6U) == 0) {
         return MINIC_TOKEN_KW_SIGNED;
     }
-    if (length == 6U && memcmp(text, "sizeof", 6U) == 0) {
-        return MINIC_TOKEN_KW_SIZEOF;
-    }
     if (length == 8U && memcmp(text, "unsigned", 8U) == 0) {
         return MINIC_TOKEN_KW_UNSIGNED;
     }
@@ -100,6 +94,12 @@ static MinicTokenKind minic_classify_identifier(const char *text, size_t length)
     if (length == 6U && memcmp(text, "struct", 6U) == 0) {
         return MINIC_TOKEN_KW_STRUCT;
     }
+    if (length == 4U && memcmp(text, "enum", 4U) == 0) {
+        return MINIC_TOKEN_KW_ENUM;
+    }
+    if (length == 5U && memcmp(text, "union", 5U) == 0) {
+        return MINIC_TOKEN_KW_UNION;
+    }
     if (length == 5U && memcmp(text, "const", 5U) == 0) {
         return MINIC_TOKEN_KW_CONST;
     }
@@ -108,6 +108,9 @@ static MinicTokenKind minic_classify_identifier(const char *text, size_t length)
     }
     if (length == 6U && memcmp(text, "static", 6U) == 0) {
         return MINIC_TOKEN_KW_STATIC;
+    }
+    if (length == 6U && memcmp(text, "sizeof", 6U) == 0) {
+        return MINIC_TOKEN_KW_SIZEOF;
     }
     if (length == 6U && memcmp(text, "return", 6U) == 0) {
         return MINIC_TOKEN_KW_RETURN;
@@ -203,6 +206,47 @@ static bool minic_lexer_scan_decimal_exponent(MinicLexer *lexer,
     return true;
 }
 
+static bool minic_lexer_scan_integer_suffix(MinicLexer *lexer,
+                                            MinicDiagnostic *diagnostic,
+                                            MinicSourcePosition begin) {
+    bool saw_long;
+    bool saw_unsigned;
+    size_t suffix_count;
+
+    saw_long = false;
+    saw_unsigned = false;
+    suffix_count = 0U;
+    while (minic_lexer_peek(lexer) == 'l' || minic_lexer_peek(lexer) == 'L' ||
+           minic_lexer_peek(lexer) == 'u' || minic_lexer_peek(lexer) == 'U') {
+        char suffix;
+
+        suffix = minic_lexer_peek(lexer);
+        if (suffix == 'l' || suffix == 'L') {
+            if (saw_long) {
+                minic_lexer_set_message(
+                    lexer, diagnostic, begin, "long long constants are not supported");
+                return false;
+            }
+            saw_long = true;
+        } else {
+            if (saw_unsigned) {
+                minic_lexer_set_message(
+                    lexer, diagnostic, begin, "duplicate unsigned integer suffix");
+                return false;
+            }
+            saw_unsigned = true;
+        }
+        suffix_count += 1U;
+        if (suffix_count > 2U) {
+            minic_lexer_set_message(
+                lexer, diagnostic, begin, "unsupported integer constant suffix");
+            return false;
+        }
+        minic_lexer_advance(lexer);
+    }
+    return true;
+}
+
 static bool minic_lexer_scan_string_literal(MinicLexer *lexer,
                                             MinicToken *token,
                                             MinicDiagnostic *diagnostic,
@@ -286,8 +330,23 @@ static bool minic_lexer_scan_character_constant(MinicLexer *lexer,
                 lexer, diagnostic, minic_lexer_position(lexer), "newline in character constant");
             return false;
         }
+        if (character == 'x') {
+            minic_lexer_advance(lexer);
+            if (!minic_is_hexadecimal_digit(minic_lexer_peek(lexer))) {
+                token->span.end = minic_lexer_position(lexer);
+                minic_lexer_set_message(
+                    lexer, diagnostic, begin, "hexadecimal character escape requires a digit");
+                return false;
+            }
+            do {
+                minic_lexer_advance(lexer);
+            } while (minic_is_hexadecimal_digit(minic_lexer_peek(lexer)));
+        } else {
+            minic_lexer_advance(lexer);
+        }
+    } else {
+        minic_lexer_advance(lexer);
     }
-    minic_lexer_advance(lexer);
     character = minic_lexer_peek(lexer);
     if (character == '\0') {
         token->span.end = minic_lexer_position(lexer);
@@ -388,6 +447,9 @@ bool minic_lexer_next(MinicLexer *lexer, MinicToken *token, MinicDiagnostic *dia
     }
 
     if (minic_is_decimal_digit(character)) {
+        bool is_floating;
+
+        is_floating = false;
         if (character == '0' &&
             (minic_lexer_peek_next(lexer) == 'x' || minic_lexer_peek_next(lexer) == 'X')) {
             minic_lexer_advance(lexer);
@@ -401,11 +463,7 @@ bool minic_lexer_next(MinicLexer *lexer, MinicToken *token, MinicDiagnostic *dia
             do {
                 minic_lexer_advance(lexer);
             } while (minic_is_hexadecimal_digit(minic_lexer_peek(lexer)));
-            token->kind = MINIC_TOKEN_INTEGER_CONSTANT;
         } else {
-            bool is_floating;
-
-            is_floating = false;
             do {
                 minic_lexer_advance(lexer);
             } while (minic_is_decimal_digit(minic_lexer_peek(lexer)));
@@ -423,9 +481,12 @@ bool minic_lexer_next(MinicLexer *lexer, MinicToken *token, MinicDiagnostic *dia
                     return false;
                 }
             }
-            token->kind =
-                is_floating ? MINIC_TOKEN_FLOATING_CONSTANT : MINIC_TOKEN_INTEGER_CONSTANT;
         }
+        if (!is_floating && !minic_lexer_scan_integer_suffix(lexer, diagnostic, begin)) {
+            token->span.end = minic_lexer_position(lexer);
+            return false;
+        }
+        token->kind = is_floating ? MINIC_TOKEN_FLOATING_CONSTANT : MINIC_TOKEN_INTEGER_CONSTANT;
         token->span.end = minic_lexer_position(lexer);
         return true;
     }
@@ -481,6 +542,9 @@ bool minic_lexer_next(MinicLexer *lexer, MinicToken *token, MinicDiagnostic *dia
             minic_lexer_advance(lexer);
         } else if (minic_lexer_peek_next(lexer) == '>') {
             token->kind = MINIC_TOKEN_ARROW;
+            minic_lexer_advance(lexer);
+        } else if (minic_lexer_peek_next(lexer) == '=') {
+            token->kind = MINIC_TOKEN_MINUS_EQUAL;
             minic_lexer_advance(lexer);
         } else {
             token->kind = MINIC_TOKEN_MINUS;
@@ -572,8 +636,6 @@ bool minic_lexer_next(MinicLexer *lexer, MinicToken *token, MinicDiagnostic *dia
         }
         break;
     default:
-        minic_lexer_advance(lexer);
-        token->span.end = minic_lexer_position(lexer);
         minic_lexer_set_diagnostic(lexer, diagnostic, begin, character);
         return false;
     }

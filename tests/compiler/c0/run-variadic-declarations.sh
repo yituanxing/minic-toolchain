@@ -39,6 +39,6 @@ compile_failure() {
 compile_success variadic_declaration
 compile_failure invalid_variadic_without_fixed 'ellipsis requires at least one fixed parameter'
 compile_failure invalid_variadic_conflict 'conflicting function declaration'
-compile_failure invalid_variadic_definition 'variadic function definitions are not supported yet'
+compile_success variadic_definition
 compile_failure invalid_variadic_function_pointer_field \
     'variadic function pointer fields are not supported yet'

@@ -178,11 +178,6 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
         }
         return minic_parser_advance(parser);
     }
-
-    if (is_variadic) {
-        minic_parser_error(parser, "variadic function definitions are not supported yet");
-        return false;
-    }
     if (!minic_type_is_integer(return_type) && !minic_type_is_void(return_type) &&
         !minic_type_is_pointer(return_type) && !minic_type_is_double(return_type)) {
         minic_parser_error(parser, "unsupported function return type");
@@ -249,7 +244,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
             !minic_c0_program_set_function_signature(
                 parser->program, function_id, return_type, parameter_types, parameter_count) ||
             !minic_c0_program_set_function_internal(parser->program, function_id, is_internal) ||
-            !minic_c0_program_set_function_variadic(parser->program, function_id, false)) {
+            !minic_c0_program_set_function_variadic(parser->program, function_id, is_variadic)) {
             minic_parser_error(parser, "out of memory while adding function");
             return false;
         }
@@ -345,12 +340,16 @@ bool minic_parse_c0_program(const char *path,
             } else {
                 success = minic_parser_parse_static_global(&parser);
             }
-        } else if (parser.current.kind == MINIC_TOKEN_KW_STRUCT) {
+        } else if (parser.current.kind == MINIC_TOKEN_KW_STRUCT ||
+                   parser.current.kind == MINIC_TOKEN_KW_UNION) {
             success = minic_parser_parse_record_definition(&parser);
+        } else if (parser.current.kind == MINIC_TOKEN_KW_ENUM) {
+            success = minic_parser_parse_enum_definition(&parser);
         } else {
             success = parse_function(&parser, false);
         }
     }
     minic_parser_destroy_scopes(&parser);
+    minic_parser_destroy_enum_constants(&parser);
     return success;
 }

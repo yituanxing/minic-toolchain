@@ -162,29 +162,44 @@ static bool parse_record_field(MinicParser *parser, MinicRecordId record_id) {
 
 bool minic_parser_parse_record_definition_specifier(MinicParser *parser, MinicType *record_type) {
     MinicRecordId record_id;
+    MinicTokenKind record_keyword;
+    bool is_union;
 
     if (record_type == NULL) {
         minic_parser_error(parser, "internal error: missing record type output");
         return false;
     }
-    if (!minic_parser_expect(parser, MINIC_TOKEN_KW_STRUCT, "expected keyword 'struct'")) {
+    record_keyword = parser->current.kind;
+    if (record_keyword != MINIC_TOKEN_KW_STRUCT && record_keyword != MINIC_TOKEN_KW_UNION) {
+        minic_parser_error(parser, "expected record keyword");
+        return false;
+    }
+    is_union = record_keyword == MINIC_TOKEN_KW_UNION;
+    if (!minic_parser_advance(parser)) {
         return false;
     }
 
     if (parser->current.kind == MINIC_TOKEN_IDENTIFIER) {
         MinicSourceSpan name_span;
+        const MinicRecord *record;
 
         name_span = parser->current.span;
-        if (minic_parser_find_record(parser, name_span) != MINIC_RECORD_INVALID) {
-            minic_parser_error(parser, "duplicate record definition");
-            return false;
-        }
-        if (!minic_c0_program_add_record(parser->program,
-                                         parser->source + name_span.begin.offset,
-                                         minic_parser_span_length(name_span),
-                                         &record_id)) {
-            minic_parser_error(parser, "out of memory while adding record");
-            return false;
+        record_id = minic_parser_find_record(parser, name_span);
+        if (record_id == MINIC_RECORD_INVALID) {
+            if (!minic_c0_program_add_record(parser->program,
+                                             parser->source + name_span.begin.offset,
+                                             minic_parser_span_length(name_span),
+                                             &record_id)) {
+                minic_parser_error(parser, "out of memory while adding record");
+                return false;
+            }
+            parser->program->records[record_id].is_union = is_union;
+        } else {
+            record = minic_c0_program_record(parser->program, record_id);
+            if (record == NULL || record->is_complete || record->is_union != is_union) {
+                minic_parser_error(parser, "duplicate record definition");
+                return false;
+            }
         }
         if (!minic_parser_advance(parser)) {
             return false;
@@ -194,6 +209,7 @@ bool minic_parser_parse_record_definition_specifier(MinicParser *parser, MinicTy
             minic_parser_error(parser, "out of memory while adding anonymous record");
             return false;
         }
+        parser->program->records[record_id].is_union = is_union;
     } else {
         minic_parser_error(parser, "expected record tag or '{' after 'struct'");
         return false;
