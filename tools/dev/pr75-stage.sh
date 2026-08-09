@@ -7,6 +7,7 @@ python3 tools/dev/pr75-incomplete-array-verifier.py
 python3 tools/dev/pr75-volatile-qualifier.py
 python3 tools/dev/pr75-pointer-volatile-qualifier.py
 python3 tools/dev/pr75-array-bound-sizeof.py
+python3 tools/dev/pr75-array-bound-sizeof-string.py
 python3 tools/dev/pr75-array-bound-enum.py
 python3 tools/dev/pr75-array-bound-casts.py
 python3 tools/dev/pr75-comma-operator.py
