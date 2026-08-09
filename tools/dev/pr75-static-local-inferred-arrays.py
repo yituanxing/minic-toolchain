@@ -10,7 +10,11 @@ end = text.find(end_marker, start)
 if start < 0 or end < 0:
     raise SystemExit("cannot locate inferred static-local array helper")
 
-helper = r'''static bool parse_inferred_static_local_array(MinicParser *parser,
+helper = r'''static bool static_record_integer_constant(const MinicC0Program *program,
+                                           MinicExpressionId expression_id,
+                                           int *value);
+
+static bool parse_inferred_static_local_array(MinicParser *parser,
                                               MinicType element_type,
                                               MinicSourceSpan name_span) {
     const MinicArrayType *literal_array;
