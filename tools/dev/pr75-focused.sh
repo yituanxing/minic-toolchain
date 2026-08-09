@@ -12,7 +12,6 @@ for test_script in \
     run-external-pointer-arrays.sh \
     run-extern-parenthesized-functions.sh \
     run-anonymous-record-field-types.sh \
-    run-anonymous-record-members.sh \
     run-typedef-enum-definitions.sh \
     run-enum-constant-expressions.sh \
     run-integer-constant-bitwise.sh \
@@ -23,8 +22,11 @@ for test_script in \
     run-gnu-function-asm-labels.sh \
     run-gnu-function-visibility.sh \
     run-gnu-visible-extern-arrays.sh \
+    run-gnu-aligned-record-fields.sh \
+    run-gnu-zero-length-record-arrays.sh \
     run-record-forward-declarations.sh \
     run-record-multi-declarators.sh \
+    run-record-typedef-array-fields.sh \
     run-volatile-qualifiers.sh \
     run-array-bound-sizeof.sh \
     run-array-bound-integer-casts.sh \
