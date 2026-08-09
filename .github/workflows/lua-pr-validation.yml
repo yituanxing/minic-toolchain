@@ -37,6 +37,15 @@ jobs:
           HOST_CC=cc \
             sh tools/dev/pr75-focused.sh
 
+      - name: Upload nested aggregate diagnostic
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lua-nested-aggregate-diagnostic
+          path: build/lua-focused/tests/compiler-c0-static-nested-record-initializer/static_nested_record_initializer.s
+          if-no-files-found: ignore
+          retention-days: 1
+
       - name: Compile official Lua 5.5.0 translation units
         shell: bash
         run: |
