@@ -45,5 +45,8 @@ fi
 if test -f tools/dev/pr72-floating-unary.py; then
     python3 tools/dev/pr72-floating-unary.py
 fi
+if test -f tools/dev/pr72-record-layout-order.py; then
+    python3 tools/dev/pr72-record-layout-order.py
+fi
 
 printf '%s\n' 'staged Parson discovery semantics'
