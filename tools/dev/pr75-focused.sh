@@ -29,6 +29,7 @@ for test_script in \
     run-mixed-double-arithmetic.sh \
     run-conditional-pointer-qualifiers.sh \
     run-comma-operator.sh \
+    run-top-level-comma-conditions.sh \
     run-cast-type-classification.sh \
     run-stack-fixed-arguments.sh \
     run-static-local-record-initializers.sh \
