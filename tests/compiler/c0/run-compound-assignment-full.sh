@@ -9,19 +9,19 @@ work=${BUILD_DIR:-"$root/build/debug"}/tests/compiler-c0-compound-assignment-ful
 rm -rf "$work"
 mkdir -p "$work"
 
-"$host_cc" -E -P -x c "$root/tests/compiler/c0/compound_assignment_expression.c" \
-    -o "$work/compound_assignment_expression.i"
-"$minic" -S "$work/compound_assignment_expression.i" \
-    -o "$work/compound_assignment_expression.s"
+"$host_cc" -E -P -x c "$root/tests/compiler/c0/compound_assignment_full.c" \
+    -o "$work/compound_assignment_full.i"
+"$minic" -S "$work/compound_assignment_full.i" \
+    -o "$work/compound_assignment_full.s"
 
-test "$(grep -c -F '  call next_slot' "$work/compound_assignment_expression.s")" -eq 1
-grep -F '  slli a0, a0, 2' "$work/compound_assignment_expression.s" >/dev/null
-grep -F '  and a0, t0, a0' "$work/compound_assignment_expression.s" >/dev/null
-grep -F '  or a0, t0, a0' "$work/compound_assignment_expression.s" >/dev/null
-grep -F '  xor a0, t0, a0' "$work/compound_assignment_expression.s" >/dev/null
-grep -F '  srlw a0, t0, a0' "$work/compound_assignment_expression.s" >/dev/null
-grep -F '  mulw a0, t0, a0' "$work/compound_assignment_expression.s" >/dev/null
-grep -F '  subw a0, t0, a0' "$work/compound_assignment_expression.s" >/dev/null
-grep -F '  divu a0, t0, a0' "$work/compound_assignment_expression.s" >/dev/null
-grep -F '  div a0, t0, a0' "$work/compound_assignment_expression.s" >/dev/null
+test "$(grep -c -F '  call next_slot' "$work/compound_assignment_full.s")" -eq 1
+grep -F '  slli a0, a0, 2' "$work/compound_assignment_full.s" >/dev/null
+grep -F '  and a0, t0, a0' "$work/compound_assignment_full.s" >/dev/null
+grep -F '  or a0, t0, a0' "$work/compound_assignment_full.s" >/dev/null
+grep -F '  xor a0, t0, a0' "$work/compound_assignment_full.s" >/dev/null
+grep -F '  srlw a0, t0, a0' "$work/compound_assignment_full.s" >/dev/null
+grep -F '  mulw a0, t0, a0' "$work/compound_assignment_full.s" >/dev/null
+grep -F '  subw a0, t0, a0' "$work/compound_assignment_full.s" >/dev/null
+grep -F '  divu a0, t0, a0' "$work/compound_assignment_full.s" >/dev/null
+grep -F '  div a0, t0, a0' "$work/compound_assignment_full.s" >/dev/null
 printf '%s\n' 'PASS compiler/c0/compound_assignment_full operators=+=,-=,*=,/=,&=,|=,^=,>>= pointer=+,- lvalue-evaluation=once'
