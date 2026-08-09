@@ -11,6 +11,18 @@ def replace_once(path: str, old: str, new: str) -> None:
     target.write_text(text.replace(old, new, 1))
 
 
+def replace_tail_function(path: str, marker: str, new: str) -> None:
+    target = Path(path)
+    text = target.read_text()
+    start = text.find(marker)
+    if start < 0 or text.find(marker, start + 1) >= 0:
+        raise SystemExit(f"{path}: expected one function marker: {marker!r}")
+    # frame_size is the final function in codegen_support.c.  Anchor on the function
+    # boundary instead of its body so earlier discovery edits can safely evolve its
+    # overflow checks without making this staged transform fuzzy.
+    target.write_text(text[:start] + new)
+
+
 replace_once(
     "src/target/riscv64/codegen_internal.h",
     "bool minic_riscv64_frame_size(const MinicFunction *function, size_t *frame_size);\n",
@@ -29,19 +41,9 @@ bool minic_riscv64_frame_layout(const MinicC0Program *program,
 """,
 )
 
-replace_once(
+replace_tail_function(
     "src/target/riscv64/codegen_support.c",
-    """bool minic_riscv64_frame_size(const MinicFunction *function, size_t *frame_size) {
-    size_t required_bytes;
-
-    if (function == NULL || frame_size == NULL || function->local_storage_size > SIZE_MAX - 31U) {
-        return false;
-    }
-    required_bytes = function->local_storage_size + 16U;
-    *frame_size = (required_bytes + 15U) & ~(size_t)15U;
-    return true;
-}
-""",
+    "bool minic_riscv64_frame_size(",
     """bool minic_riscv64_frame_layout(const MinicC0Program *program,
                                 const MinicFunction *function,
                                 MinicRiscv64FrameLayout *layout) {
