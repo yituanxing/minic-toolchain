@@ -1,6 +1,6 @@
 #include <stdint.h>
 
-int minic_verify_va_list(void *arguments) {
+int minic_verify_va_list(char *arguments) {
     const uint64_t *words = (const uint64_t *)arguments;
     union {
         double value;
