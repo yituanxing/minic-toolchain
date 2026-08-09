@@ -23,6 +23,7 @@ for test_script in \
     run-gnu-function-visibility.sh \
     run-gnu-visible-extern-arrays.sh \
     run-gnu-aligned-record-fields.sh \
+    run-gnu-zero-length-record-arrays.sh \
     run-record-forward-declarations.sh \
     run-record-multi-declarators.sh \
     run-record-typedef-array-fields.sh \
