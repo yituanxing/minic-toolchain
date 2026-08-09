@@ -145,6 +145,7 @@ cat >"$include/string.h" <<'EOF'
 #define MINIC_LINENOISE_STRING_H
 #include <stddef.h>
 size_t strlen(const char *string);
+void *memchr(const void *memory, int character, size_t count);
 void *memcpy(void *destination, const void *source, size_t count);
 void *memmove(void *destination, const void *source, size_t count);
 void *memset(void *destination, int value, size_t count);
