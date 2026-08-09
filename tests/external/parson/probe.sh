@@ -118,6 +118,9 @@ set -e
 
 if test "$status" -ne 0; then
     printf '%s\n' "PARSON_BLOCKER minic_status=$status" >&2
+    printf '%s\n' 'Parson preprocessed frontier:' >&2
+    nl -ba "$work/parson.i" | sed -n '1,60p' >&2
+    printf '%s\n' 'MiniC diagnostic:' >&2
     sed -n '1,120p' "$work/minic.stderr" >&2
     exit "$status"
 fi
