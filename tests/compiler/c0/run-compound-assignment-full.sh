@@ -27,4 +27,9 @@ grep -F '  div a0, t0, a0' "$work/compound_assignment_full.s" >/dev/null
 grep -F '  remw a0, t0, a0' "$work/compound_assignment_full.s" >/dev/null
 grep -F '  remu a0, t0, a0' "$work/compound_assignment_full.s" >/dev/null
 grep -F '  rem a0, t0, a0' "$work/compound_assignment_full.s" >/dev/null
-printf '%s\n' 'PASS compiler/c0/compound_assignment_full operators=+=,-=,*=,/=,%=,&=,|=,^=,>>= pointer=+,- lvalue-evaluation=once'
+grep -F '  fadd.d ft0, ft0, ft1' "$work/compound_assignment_full.s" >/dev/null
+grep -F '  fsub.d ft0, ft0, ft1' "$work/compound_assignment_full.s" >/dev/null
+grep -F '  fmul.d ft0, ft0, ft1' "$work/compound_assignment_full.s" >/dev/null
+grep -F '  fdiv.d ft0, ft0, ft1' "$work/compound_assignment_full.s" >/dev/null
+grep -F '  fcvt.d.w ft1, a0' "$work/compound_assignment_full.s" >/dev/null
+printf '%s\n' 'PASS compiler/c0/compound_assignment_full integer=+=,-=,*=,/=,%=,&=,|=,^=,>>= pointer=+,- double=+=,-=,*=,/= mixed-int-rhs=1 lvalue-evaluation=once'
