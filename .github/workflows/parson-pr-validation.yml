@@ -51,6 +51,9 @@ jobs:
           if test -f tools/dev/pr72-post-platform.py; then
             python3 tools/dev/pr72-post-platform.py
           fi
+          if test -f tools/dev/pr72-floating-unary.py; then
+            python3 tools/dev/pr72-floating-unary.py
+          fi
           make -j4 MODE=release BUILD_DIR=build/parson-compiler
           make -j4 MODE=sanitize BUILD_DIR=build/parson-sanitize
 
