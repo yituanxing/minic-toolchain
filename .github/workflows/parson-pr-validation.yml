@@ -11,7 +11,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Stage current compiler semantics and build release MiniC
+      - name: Stage current compiler semantics and build MiniC
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -46,10 +46,29 @@ jobs:
             python3 tools/dev/pr72-update-platform.py
           fi
           make -j4 MODE=release BUILD_DIR=build/parson-compiler
+          make -j4 MODE=sanitize BUILD_DIR=build/parson-sanitize
 
       - name: Compile unchanged Parson 1.5.3
+        shell: bash
         run: |
+          set +e
           MINIC="$GITHUB_WORKSPACE/build/parson-compiler/bin/minic" \
           BUILD_DIR="$GITHUB_WORKSPACE/build/parson-discovery" \
           RISCV_CC=cc \
             sh tests/external/parson/probe.sh
+          status=$?
+          set -e
+
+          if test "$status" -ge 128; then
+            echo "PARSON_SANITIZER_RERUN release_status=$status"
+            set +e
+            ASAN_OPTIONS=detect_leaks=0:abort_on_error=1 \
+            UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 \
+              "$GITHUB_WORKSPACE/build/parson-sanitize/bin/minic" \
+              -S "$GITHUB_WORKSPACE/build/parson-discovery/parson.i" \
+              -o "$GITHUB_WORKSPACE/build/parson-discovery/parson-sanitize.s"
+            sanitize_status=$?
+            set -e
+            echo "PARSON_SANITIZER_STATUS=$sanitize_status"
+          fi
+          exit "$status"
