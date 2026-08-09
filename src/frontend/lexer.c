@@ -121,6 +121,9 @@ static MinicTokenKind minic_classify_identifier(const char *text, size_t length)
     if (length == 5U && memcmp(text, "while", 5U) == 0) {
         return MINIC_TOKEN_KW_WHILE;
     }
+    if (length == 2U && memcmp(text, "do", 2U) == 0) {
+        return MINIC_TOKEN_KW_DO;
+    }
     if (length == 3U && memcmp(text, "for", 3U) == 0) {
         return MINIC_TOKEN_KW_FOR;
     }
@@ -135,6 +138,9 @@ static MinicTokenKind minic_classify_identifier(const char *text, size_t length)
     }
     if (length == 5U && memcmp(text, "break", 5U) == 0) {
         return MINIC_TOKEN_KW_BREAK;
+    }
+    if (length == 8U && memcmp(text, "continue", 8U) == 0) {
+        return MINIC_TOKEN_KW_CONTINUE;
     }
     return MINIC_TOKEN_IDENTIFIER;
 }
@@ -484,7 +490,10 @@ bool minic_lexer_next(MinicLexer *lexer, MinicToken *token, MinicDiagnostic *dia
         token->kind = MINIC_TOKEN_STAR;
         break;
     case '&':
-        if (minic_lexer_peek_next(lexer) == '&') {
+        if (minic_lexer_peek_next(lexer) == '=') {
+            token->kind = MINIC_TOKEN_AMPERSAND_EQUAL;
+            minic_lexer_advance(lexer);
+        } else if (minic_lexer_peek_next(lexer) == '&') {
             token->kind = MINIC_TOKEN_AMPERSAND_AMPERSAND;
             minic_lexer_advance(lexer);
         } else {
@@ -492,7 +501,10 @@ bool minic_lexer_next(MinicLexer *lexer, MinicToken *token, MinicDiagnostic *dia
         }
         break;
     case '|':
-        if (minic_lexer_peek_next(lexer) == '|') {
+        if (minic_lexer_peek_next(lexer) == '=') {
+            token->kind = MINIC_TOKEN_PIPE_EQUAL;
+            minic_lexer_advance(lexer);
+        } else if (minic_lexer_peek_next(lexer) == '|') {
             token->kind = MINIC_TOKEN_PIPE_PIPE;
             minic_lexer_advance(lexer);
         } else {
@@ -529,6 +541,9 @@ bool minic_lexer_next(MinicLexer *lexer, MinicToken *token, MinicDiagnostic *dia
             token->kind = MINIC_TOKEN_BANG;
         }
         break;
+    case '~':
+        token->kind = MINIC_TOKEN_TILDE;
+        break;
     case '<':
         if (minic_lexer_peek_next(lexer) == '<') {
             token->kind = MINIC_TOKEN_LESS_LESS;
@@ -541,7 +556,12 @@ bool minic_lexer_next(MinicLexer *lexer, MinicToken *token, MinicDiagnostic *dia
         }
         break;
     case '>':
-        if (minic_lexer_peek_next(lexer) == '>') {
+        if (minic_lexer_peek_next(lexer) == '>' && lexer->cursor + 2U < lexer->length &&
+            lexer->source[lexer->cursor + 2U] == '=') {
+            token->kind = MINIC_TOKEN_GREATER_GREATER_EQUAL;
+            minic_lexer_advance(lexer);
+            minic_lexer_advance(lexer);
+        } else if (minic_lexer_peek_next(lexer) == '>') {
             token->kind = MINIC_TOKEN_GREATER_GREATER;
             minic_lexer_advance(lexer);
         } else if (minic_lexer_peek_next(lexer) == '=') {

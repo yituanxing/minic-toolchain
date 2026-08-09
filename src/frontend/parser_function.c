@@ -221,6 +221,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
             parameter_local.type = parameter_types[parameter_index];
             parameter_local.element_count = 1U;
             parameter_local.storage_offset = 0U;
+            parameter_local.is_array = false;
             if (minic_parser_find_local_in_current_scope(parser, parameter_local.name_span) !=
                 MINIC_LOCAL_INVALID) {
                 minic_parser_error(parser, "duplicate parameter name");
@@ -327,6 +328,7 @@ bool minic_parse_c0_program(const char *path,
     parser.program = program;
     parser.current_block = MINIC_BLOCK_INVALID;
     parser.current_function = MINIC_FUNCTION_INVALID;
+    parser.continue_target_statement = MINIC_STATEMENT_INVALID;
     minic_lexer_initialize(&parser.lexer, path, source, length);
 
     success = minic_parser_advance(&parser);
@@ -349,11 +351,6 @@ bool minic_parse_c0_program(const char *path,
             success = parse_function(&parser, false);
         }
     }
-    if (success && program->entry_function == MINIC_FUNCTION_INVALID) {
-        minic_parser_error(&parser, "translation unit requires an int main function");
-        success = false;
-    }
-
     minic_parser_destroy_scopes(&parser);
     return success;
 }

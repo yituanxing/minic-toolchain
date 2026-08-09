@@ -35,6 +35,7 @@ typedef struct MinicParser {
     MinicFunctionId current_function;
     size_t local_begin;
     size_t loop_depth;
+    MinicStatementId continue_target_statement;
     size_t switch_depth;
     MinicParserSwitchContext switch_contexts[MINIC_PARSER_MAX_SWITCH_DEPTH];
 

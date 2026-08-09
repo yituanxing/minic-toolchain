@@ -84,7 +84,7 @@ size_t strlen(const char *string);
 void *memcpy(void *destination, const void *source, size_t count);
 void *memset(void *destination, int value, size_t count);
 char *strcpy(char *destination, const char *source);
-int strcmp(const char *left, const char *right);
+int strcmp(const char *left, const char *right); int strncmp(const char *left, const char *right, size_t count);
 #endif
 EOF
 
@@ -153,7 +153,7 @@ verify_preprocessed_line 2 'size_t strlen(const char *string);'
 verify_preprocessed_line 3 'void *memcpy(void *destination, const void *source, size_t count);'
 verify_preprocessed_line 4 'void *memset(void *destination, int value, size_t count);'
 verify_preprocessed_line 5 'char *strcpy(char *destination, const char *source);'
-verify_preprocessed_line 6 'int strcmp(const char *left, const char *right);'
+verify_preprocessed_line 6 'int strcmp(const char *left, const char *right); int strncmp(const char *left, const char *right, size_t count);'
 verify_preprocessed_line 7 'int sprintf(char *buffer, const char *format, ...); int sscanf(const char *buffer, const char *format, ...);'
 verify_preprocessed_line 8 'double fabs(double value);'
 verify_preprocessed_line 9 'void *malloc(size_t size);'

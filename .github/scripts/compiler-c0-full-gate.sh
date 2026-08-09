@@ -4,34 +4,6 @@ set -Eeuo pipefail
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$root"
 
-for discovery_patch in \
-    "$root/tools/dev/pr71-discovery.patch" \
-    "$root/tools/dev/pr71-record-copy.patch" \
-    "$root/tools/dev/pr71-local-array-identity.patch" \
-    "$root/tools/dev/pr71-do-while.patch" \
-    "$root/tools/dev/pr71-assignment-chain.patch" \
-    "$root/tools/dev/pr71-bitwise-platform.patch" \
-    "$root/tools/dev/pr71-float-conversion.patch" \
-    "$root/tools/dev/pr71-conditional-void.patch" \
-    "$root/tools/dev/pr71-fixed-double-abi.patch"; do
-    if [[ -f "$discovery_patch" ]]; then
-        git apply --check --recount "$discovery_patch"
-        git apply --recount "$discovery_patch"
-        mapfile -t discovery_sources < <(
-            sed -n 's#^+++ b/##p' "$discovery_patch" | grep -E '\.(c|h)$' | sort -u
-        )
-        if (( ${#discovery_sources[@]} > 0 )); then
-            clang-format-18 -i "${discovery_sources[@]}"
-        fi
-    fi
-done
-
-platform_update="$root/tools/dev/pr71-update-platform.py"
-if [[ -f "$platform_update" ]]; then
-    python3 "$platform_update"
-    CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
-fi
-
 log_dir="$root/build/ci-logs"
 apt_cache=${APT_CACHE_DIR:-"$HOME/.cache/minic-apt/archives"}
 package_manifest="$root/tools/ci/ubuntu-24.04-packages.txt"

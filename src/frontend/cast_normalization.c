@@ -38,6 +38,7 @@ static bool remap_non_cast_expression(MinicExpression *expression,
     case MINIC_EXPRESSION_DEREFERENCE:
     case MINIC_EXPRESSION_BITCAST:
     case MINIC_EXPRESSION_CONVERSION:
+    case MINIC_EXPRESSION_LVALUE_READ:
     case MINIC_EXPRESSION_UNARY:
         return remap_expression_id(mapping,
                                    old_expression_count,
@@ -160,7 +161,8 @@ static bool append_normalized_cast(MinicC0Program *rewritten,
     operand_expression = &rewritten->expressions[mapped_operand];
 
     if ((minic_type_is_double(cast_expression->type) &&
-         minic_type_is_integer(operand_expression->type)) ||
+         (minic_type_is_integer(operand_expression->type) ||
+          minic_type_is_float(operand_expression->type))) ||
         (minic_type_is_integer(cast_expression->type) &&
          minic_type_is_double(operand_expression->type))) {
         return append_normalized_conversion(

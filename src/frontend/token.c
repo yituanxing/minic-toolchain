@@ -50,6 +50,8 @@ const char *minic_token_kind_name(MinicTokenKind kind) {
         return "else";
     case MINIC_TOKEN_KW_WHILE:
         return "while";
+    case MINIC_TOKEN_KW_DO:
+        return "do";
     case MINIC_TOKEN_KW_FOR:
         return "for";
     case MINIC_TOKEN_KW_SWITCH:
@@ -60,6 +62,8 @@ const char *minic_token_kind_name(MinicTokenKind kind) {
         return "default";
     case MINIC_TOKEN_KW_BREAK:
         return "break";
+    case MINIC_TOKEN_KW_CONTINUE:
+        return "continue";
     case MINIC_TOKEN_LPAREN:
         return "(";
     case MINIC_TOKEN_RPAREN:
@@ -96,10 +100,14 @@ const char *minic_token_kind_name(MinicTokenKind kind) {
         return "*";
     case MINIC_TOKEN_AMPERSAND:
         return "&";
+    case MINIC_TOKEN_AMPERSAND_EQUAL:
+        return "&=";
     case MINIC_TOKEN_AMPERSAND_AMPERSAND:
         return "&&";
     case MINIC_TOKEN_PIPE:
         return "|";
+    case MINIC_TOKEN_PIPE_EQUAL:
+        return "|=";
     case MINIC_TOKEN_PIPE_PIPE:
         return "||";
     case MINIC_TOKEN_CARET:
@@ -118,6 +126,8 @@ const char *minic_token_kind_name(MinicTokenKind kind) {
         return "!";
     case MINIC_TOKEN_BANG_EQUAL:
         return "!=";
+    case MINIC_TOKEN_TILDE:
+        return "~";
     case MINIC_TOKEN_LESS:
         return "<";
     case MINIC_TOKEN_LESS_LESS:
@@ -128,6 +138,8 @@ const char *minic_token_kind_name(MinicTokenKind kind) {
         return ">";
     case MINIC_TOKEN_GREATER_GREATER:
         return ">>";
+    case MINIC_TOKEN_GREATER_GREATER_EQUAL:
+        return ">>=";
     case MINIC_TOKEN_GREATER_EQUAL:
         return ">=";
     case MINIC_TOKEN_LBRACKET:
