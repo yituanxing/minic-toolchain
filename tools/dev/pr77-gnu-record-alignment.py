@@ -34,44 +34,9 @@ def replace_in_function(path: str, signature: str, old: str, new: str, label: st
     target.write_text(text[:start] + body.replace(old, new, 1) + text[end:])
 
 
-# Expose the already shared fixed-array integer-constant-expression engine to other
-# declaration semantics.  This deliberately avoids creating a second sizeof/enum/cast
-# evaluator for GNU attributes.
-replace_once(
-    "src/frontend/parser_internal.h",
-    """bool minic_parser_parse_fixed_array_bound(MinicParser *parser, size_t *element_count);
-""",
-    """bool minic_parser_parse_integer_constant_expression(MinicParser *parser, int64_t *value);
-bool minic_parser_parse_fixed_array_bound(MinicParser *parser, size_t *element_count);
-""",
-    "constant-expression-prototype",
-)
-replace_once(
-    "src/frontend/parser_core.c",
-    """bool minic_parser_parse_fixed_array_bound(MinicParser *parser, size_t *element_count) {
-    int64_t value;
-
-    if (element_count == NULL || !parse_array_bound_additive(parser, &value)) {
-""",
-    """bool minic_parser_parse_integer_constant_expression(MinicParser *parser, int64_t *value) {
-    if (parser == NULL || value == NULL) {
-        return false;
-    }
-    return parse_array_bound_additive(parser, value);
-}
-
-bool minic_parser_parse_fixed_array_bound(MinicParser *parser, size_t *element_count) {
-    int64_t value;
-
-    if (element_count == NULL ||
-        !minic_parser_parse_integer_constant_expression(parser, &value)) {
-""",
-    "constant-expression-wrapper",
-)
-
-# Record alignment is semantic declaration metadata.  It is kept distinct from the
-# computed target layout so a later TargetLayout side table can move the latter without
-# losing the source-level attribute.
+# pr75-enum-constant-expressions.py already promoted the fixed-array evaluator into
+# minic_parser_parse_integer_constant_expression().  Reuse that exact parser here so
+# sizeof/enum/cast/bitwise semantics do not fork for attributes.
 replace_once(
     "src/frontend/ast.h",
     """    size_t storage_size;
@@ -158,9 +123,6 @@ if text.count(old) != 1:
     raise SystemExit(f"record suffix parse anchor: expected one match, found {text.count(old)}")
 path.write_text(text.replace(old, new, 1))
 
-# Final RV64 record layout: explicit aligned(N) raises the aggregate alignment and hence
-# rounds the aggregate size to N.  It can also raise a packed aggregate alignment; field
-# packing remains controlled independently by is_packed/field attributes.
 replace_in_function(
     "src/target/riscv64/layout.c",
     "static bool\nminic_riscv64_layout_one_record(",
@@ -179,7 +141,6 @@ replace_in_function(
     "rv64-record-explicit-alignment",
 )
 
-# The shared constant-expression sizeof/offsetof layout must agree with final RV64 layout.
 replace_in_function(
     "src/frontend/parser_core.c",
     "static bool constant_type_layout(",
