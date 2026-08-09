@@ -149,7 +149,7 @@ replace_once(
     "src/target/riscv64/codegen_expression.c",
     """    case MINIC_EXPRESSION_UNARY:
 """,
-    """    case MINIC_EXPRESSION_COMPOUND_ASSIGNMENT: {
+    r"""    case MINIC_EXPRESSION_COMPOUND_ASSIGNMENT: {
         const MinicExpression *target;
         const MinicExpression *value;
 
