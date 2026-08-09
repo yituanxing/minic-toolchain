@@ -55,4 +55,5 @@ python3 tools/dev/pr75-static-inferred-char-arrays.py
 python3 tools/dev/pr75-prefix-update-expressions.py
 python3 tools/dev/pr75-function-designator-calls.py
 python3 tools/dev/pr75-function-address-expressions.py
+python3 tools/dev/pr75-gnu-function-asm-labels.py
 printf '%s\n' 'staged Lua discovery semantics'
