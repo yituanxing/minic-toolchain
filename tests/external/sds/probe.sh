@@ -101,6 +101,7 @@ cat >"$include/ctype.h" <<'EOF'
 #ifndef MINIC_SDS_CTYPE_H
 #define MINIC_SDS_CTYPE_H
 int isspace(int character);
+int isprint(int character);
 int tolower(int character);
 int toupper(int character);
 #endif
