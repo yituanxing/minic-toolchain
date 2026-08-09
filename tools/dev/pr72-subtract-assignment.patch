@@ -1,0 +1,96 @@
+diff --git a/src/frontend/token.h b/src/frontend/token.h
+--- a/src/frontend/token.h
++++ b/src/frontend/token.h
+@@ -58,6 +58,7 @@ typedef enum MinicTokenKind {
+     MINIC_TOKEN_PLUS_EQUAL,
+     MINIC_TOKEN_MINUS,
+     MINIC_TOKEN_MINUS_MINUS,
++    MINIC_TOKEN_MINUS_EQUAL,
+     MINIC_TOKEN_ARROW,
+     MINIC_TOKEN_STAR,
+     MINIC_TOKEN_AMPERSAND,
+diff --git a/src/frontend/token.c b/src/frontend/token.c
+--- a/src/frontend/token.c
++++ b/src/frontend/token.c
+@@ -96,6 +96,8 @@ const char *minic_token_kind_name(MinicTokenKind kind) {
+         return "-";
+     case MINIC_TOKEN_MINUS_MINUS:
+         return "--";
++    case MINIC_TOKEN_MINUS_EQUAL:
++        return "-=";
+     case MINIC_TOKEN_ARROW:
+         return "->";
+     case MINIC_TOKEN_STAR:
+diff --git a/src/frontend/lexer.c b/src/frontend/lexer.c
+--- a/src/frontend/lexer.c
++++ b/src/frontend/lexer.c
+@@ -468,6 +468,9 @@ bool minic_lexer_next(MinicLexer *lexer, MinicToken *token, MinicDiagnostic *dia
+         } else if (minic_lexer_peek_next(lexer) == '>') {
+             token->kind = MINIC_TOKEN_ARROW;
+             minic_lexer_advance(lexer);
++        } else if (minic_lexer_peek_next(lexer) == '=') {
++            token->kind = MINIC_TOKEN_MINUS_EQUAL;
++            minic_lexer_advance(lexer);
+         } else {
+             token->kind = MINIC_TOKEN_MINUS;
+         }
+diff --git a/src/frontend/parser_statement.c b/src/frontend/parser_statement.c
+--- a/src/frontend/parser_statement.c
++++ b/src/frontend/parser_statement.c
+@@ -399,7 +399,8 @@ static bool parse_expression_or_assignment_statement(MinicParser *parser,
+     assignment_token = parser->current.kind;
+ 
+     if (assignment_token != MINIC_TOKEN_EQUAL && assignment_token != MINIC_TOKEN_CARET_EQUAL &&
+-        assignment_token != MINIC_TOKEN_PLUS_EQUAL) {
++        assignment_token != MINIC_TOKEN_PLUS_EQUAL &&
++        assignment_token != MINIC_TOKEN_MINUS_EQUAL) {
+         if (!allow_expression_statement) {
+             minic_parser_error(parser, "for initializer requires an assignment");
+             return false;
+@@ -426,7 +427,8 @@ static bool parse_expression_or_assignment_statement(MinicParser *parser,
+         return false;
+     }
+-    if (assignment_token == MINIC_TOKEN_PLUS_EQUAL) {
++    if (assignment_token == MINIC_TOKEN_PLUS_EQUAL ||
++        assignment_token == MINIC_TOKEN_MINUS_EQUAL) {
+         const MinicExpression *right_expression;
+-        MinicExpression addition;
++        MinicExpression arithmetic;
+         MinicExpressionId right_id;
+         MinicType common_type;
+ 
+@@ -435,19 +437,22 @@ static bool parse_expression_or_assignment_statement(MinicParser *parser,
+             !minic_type_is_integer(right_expression->type) ||
+             !minic_type_integer_common(first_type, right_expression->type, &common_type)) {
+-            minic_parser_error(parser, "compound addition assignment requires integer operands");
++            minic_parser_error(parser,
++                               assignment_token == MINIC_TOKEN_PLUS_EQUAL
++                                   ? "compound addition assignment requires integer operands"
++                                   : "compound subtraction assignment requires integer operands");
+             return false;
+         }
+-        (void)memset(&addition, 0, sizeof(addition));
+-        addition.kind = MINIC_EXPRESSION_BINARY;
+-        addition.span.begin = statement.span.begin;
+-        addition.span.end = right_expression->span.end;
+-        addition.type = common_type;
+-        addition.value_category = MINIC_VALUE_RVALUE;
+-        addition.value.binary.operator_kind = MINIC_BINARY_ADD;
+-        addition.value.binary.left = statement.target_expression;
+-        addition.value.binary.right = right_id;
+-        if (!minic_parser_add_expression(parser, &addition, &statement.expression)) {
++        (void)memset(&arithmetic, 0, sizeof(arithmetic));
++        arithmetic.kind = MINIC_EXPRESSION_BINARY;
++        arithmetic.span.begin = statement.span.begin;
++        arithmetic.span.end = right_expression->span.end;
++        arithmetic.type = common_type;
++        arithmetic.value_category = MINIC_VALUE_RVALUE;
++        arithmetic.value.binary.operator_kind = assignment_token == MINIC_TOKEN_PLUS_EQUAL
++                                                    ? MINIC_BINARY_ADD
++                                                    : MINIC_BINARY_SUBTRACT;
++        arithmetic.value.binary.left = statement.target_expression;
++        arithmetic.value.binary.right = right_id;
++        if (!minic_parser_add_expression(parser, &arithmetic, &statement.expression)) {
+             return false;
+         }
+     }
