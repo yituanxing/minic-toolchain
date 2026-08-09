@@ -26,6 +26,12 @@ jobs:
       - name: Reproduce upstream test frontier
         shell: bash
         run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/sds-debug/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/sds-debug-frontier" \
+          HOST_CC=cc \
+            sh tests/external/sds/probe.sh
+
           set +e
           MINIC="$GITHUB_WORKSPACE/build/sds-debug/bin/minic" \
           BUILD_DIR="$GITHUB_WORKSPACE/build/sds-debug-frontier" \
