@@ -2,34 +2,46 @@
 from pathlib import Path
 
 
-def replace_once(path: str, old: str, new: str) -> None:
-    target = Path(path)
-    text = target.read_text()
+def replace_once(text: str, old: str, new: str, label: str) -> str:
     count = text.count(old)
     if count != 1:
-        raise SystemExit(f"{path}: expected one replacement, found {count}: {old[:140]!r}")
-    target.write_text(text.replace(old, new, 1))
+        raise SystemExit(f"{label}: expected one replacement, found {count}: {old[:140]!r}")
+    return text.replace(old, new, 1)
 
 
-replace_once(
-    "src/frontend/parser_expression.c",
-    """    if (minimum_precedence == 0U && parser->current.kind == MINIC_TOKEN_PLUS_EQUAL) {
-        const MinicExpression *target_expression;
-""",
-    """    if (minimum_precedence == 0U &&
+def rewrite_region(path: str, start_marker: str, end_marker: str, edits) -> None:
+    target = Path(path)
+    text = target.read_text()
+    start = text.index(start_marker)
+    end = text.index(end_marker, start)
+    region = text[start:end]
+    for old, new, label in edits:
+        region = replace_once(region, old, new, f"{path}:{label}")
+    target.write_text(text[:start] + region + text[end:])
+
+
+# Parser: extend the already-staged += expression block, and only that block.
+path = Path("src/frontend/parser_expression.c")
+text = path.read_text()
+old_start = "    if (minimum_precedence == 0U && parser->current.kind == MINIC_TOKEN_PLUS_EQUAL) {\n"
+new_start = """    if (minimum_precedence == 0U &&
         (parser->current.kind == MINIC_TOKEN_PLUS_EQUAL ||
          parser->current.kind == MINIC_TOKEN_SLASH_EQUAL)) {
-        const MinicExpression *target_expression;
-""",
-)
-replace_once(
+"""
+text = replace_once(text, old_start, new_start, "parser compound start")
+path.write_text(text)
+rewrite_region(
     "src/frontend/parser_expression.c",
-    """        MinicSourceSpan target_span;
+    new_start,
+    "    if (minimum_precedence == 0U && parser->current.kind == MINIC_TOKEN_EQUAL) {\n",
+    [
+        (
+            """        MinicSourceSpan target_span;
         MinicType target_type;
 
         target_expression = minic_c0_program_expression(parser->program, left);
 """,
-    """        MinicSourceSpan target_span;
+            """        MinicSourceSpan target_span;
         MinicType target_type;
         MinicBinaryOperator compound_operator;
 
@@ -37,104 +49,96 @@ replace_once(
                                                                            : MINIC_BINARY_DIVIDE;
         target_expression = minic_c0_program_expression(parser->program, left);
 """,
-)
-replace_once(
-    "src/frontend/parser_expression.c",
-    """        if (minic_type_is_pointer(target_type)) {
-            MinicType pointee_type;
-
-            if (!minic_type_is_integer(value_expression->type) ||
+            "operator capture",
+        ),
+        (
+            """            if (!minic_type_is_integer(value_expression->type) ||
 """,
-    """        if (minic_type_is_pointer(target_type)) {
-            MinicType pointee_type;
-
-            if (compound_operator != MINIC_BINARY_ADD ||
+            """            if (compound_operator != MINIC_BINARY_ADD ||
                 !minic_type_is_integer(value_expression->type) ||
 """,
-)
-replace_once(
-    "src/frontend/parser_expression.c",
-    """        assignment.value.binary.operator_kind = MINIC_BINARY_ADD;
-        assignment.value.binary.left = left;
-""",
-    """        assignment.value.binary.operator_kind = compound_operator;
-        assignment.value.binary.left = left;
-""",
+            "pointer add-only",
+        ),
+        (
+            "        assignment.value.binary.operator_kind = MINIC_BINARY_ADD;\n",
+            "        assignment.value.binary.operator_kind = compound_operator;\n",
+            "AST operator",
+        ),
+    ],
 )
 
-replace_once(
+# Verifier: modify only the COMPOUND_ASSIGNMENT case.
+rewrite_region(
     "src/frontend/ast_verifier.c",
-    """            !minic_type_equal(expression->type, left->type) || minic_type_is_const(left->type) ||
-            expression->value.binary.operator_kind != MINIC_BINARY_ADD) {
+    "    case MINIC_EXPRESSION_COMPOUND_ASSIGNMENT: {\n",
+    "    case MINIC_EXPRESSION_UNARY: {\n",
+    [
+        (
+            """            expression->value.binary.operator_kind != MINIC_BINARY_ADD) {
 """,
-    """            !minic_type_equal(expression->type, left->type) || minic_type_is_const(left->type) ||
-            (expression->value.binary.operator_kind != MINIC_BINARY_ADD &&
+            """            (expression->value.binary.operator_kind != MINIC_BINARY_ADD &&
              expression->value.binary.operator_kind != MINIC_BINARY_DIVIDE)) {
 """,
-)
-replace_once(
-    "src/frontend/ast_verifier.c",
-    """        if (minic_type_is_pointer(left->type)) {
+            "allowed operators",
+        ),
+        (
+            """        if (minic_type_is_pointer(left->type)) {
             return minic_type_is_integer(right->type);
         }
 """,
-    """        if (minic_type_is_pointer(left->type)) {
+            """        if (minic_type_is_pointer(left->type)) {
             return expression->value.binary.operator_kind == MINIC_BINARY_ADD &&
                    minic_type_is_integer(right->type);
         }
 """,
+            "pointer add-only",
+        ),
+    ],
 )
 
-replace_once(
+# Backend: modify only the COMPOUND_ASSIGNMENT lowering.
+rewrite_region(
     "src/target/riscv64/codegen_expression.c",
-    """        if (target == NULL || value == NULL || target->value_category != MINIC_VALUE_LVALUE ||
-            expression->value.binary.operator_kind != MINIC_BINARY_ADD ||
-            !minic_type_equal(expression->type, target->type) ||
+    "    case MINIC_EXPRESSION_COMPOUND_ASSIGNMENT: {\n",
+    "    case MINIC_EXPRESSION_UNARY:\n",
+    [
+        (
+            """            expression->value.binary.operator_kind != MINIC_BINARY_ADD ||
 """,
-    """        if (target == NULL || value == NULL || target->value_category != MINIC_VALUE_LVALUE ||
-            (expression->value.binary.operator_kind != MINIC_BINARY_ADD &&
+            """            (expression->value.binary.operator_kind != MINIC_BINARY_ADD &&
              expression->value.binary.operator_kind != MINIC_BINARY_DIVIDE) ||
-            !minic_type_equal(expression->type, target->type) ||
 """,
-)
-replace_once(
-    "src/target/riscv64/codegen_expression.c",
-    """        if (minic_type_is_pointer(target->type)) {
-            size_t element_size;
-
-            if (!minic_type_is_integer(value->type) ||
+            "allowed operators",
+        ),
+        (
+            """            if (!minic_type_is_integer(value->type) ||
 """,
-    """        if (minic_type_is_pointer(target->type)) {
-            size_t element_size;
-
-            if (expression->value.binary.operator_kind != MINIC_BINARY_ADD ||
+            """            if (expression->value.binary.operator_kind != MINIC_BINARY_ADD ||
                 !minic_type_is_integer(value->type) ||
 """,
-)
-replace_once(
-    "src/target/riscv64/codegen_expression.c",
-    """        } else {
+            "pointer add-only",
+        ),
+        (
+            """        } else {
             MinicType common_type;
 
-            if (!minic_type_is_integer(target->type) || !minic_type_is_integer(value->type) ||
 """,
-    """        } else {
+            """        } else {
             MinicType common_type;
             const char *opcode;
 
-            if (!minic_type_is_integer(target->type) || !minic_type_is_integer(value->type) ||
 """,
-)
-replace_once(
-    "src/target/riscv64/codegen_expression.c",
-    """                !minic_riscv64_emit_normalize_integer(file, common_type, "a0") ||
+            "opcode local",
+        ),
+        (
+            """                !minic_riscv64_emit_normalize_integer(file, common_type, "a0") ||
                 fprintf(file,
                         "  ld t0, 8(sp)\\n"
                         "  %s a0, t0, a0\\n",
                         minic_type_is_long_integer(common_type) ? "add" : "addw") < 0 ||
                 !minic_riscv64_emit_integer_conversion(file, target->type, "a0")) {
 """,
-    """                !minic_riscv64_emit_normalize_integer(file, common_type, "a0")) {
+            """                !minic_riscv64_emit_normalize_integer(file, common_type, "a0")) {
                 return false;
             }
             if (expression->value.binary.operator_kind == MINIC_BINARY_ADD) {
@@ -150,6 +154,9 @@ replace_once(
                         opcode) < 0 ||
                 !minic_riscv64_emit_integer_conversion(file, target->type, "a0")) {
 """,
+            "integer lowering",
+        ),
+    ],
 )
 
 print("staged /= compound assignment expression semantics")
