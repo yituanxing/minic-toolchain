@@ -150,9 +150,17 @@ parse_anchor = """    if (minic_parser_is_integer_type_specifier(parser->current
 parse_replacement = """    {\n        bool parsed_gnu_int128 = false;\n\n        if (!minic_parser_try_gnu_int128(parser, &parsed_type, &parsed_gnu_int128)) {\n            return false;\n        }\n        if (parsed_gnu_int128) {\n            goto parsed_type_specifiers_done;\n        }\n    }\n\n    if (minic_parser_is_integer_type_specifier(parser->current.kind)) {\n        bool saw_char = false;\n"""
 text = replace_once(text, parse_anchor, parse_replacement, "parser-int128-entry")
 
-qualifier_anchor = """    while (parser->current.kind == MINIC_TOKEN_KW_CONST) {\n"""
-qualifier_replacement = """parsed_type_specifiers_done:\n    while (parser->current.kind == MINIC_TOKEN_KW_CONST) {\n"""
-text = replace_once(text, qualifier_anchor, qualifier_replacement, "parser-int128-done-label")
+fn_start = text.find("bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type) {")
+fn_end = text.find("\nbool minic_parser_parse_pointer_declarator", fn_start)
+if fn_start < 0 or fn_end < 0:
+    raise SystemExit("cannot locate parse_type_specifiers for GNU int128 label")
+qualifier_loop = """    while (parser->current.kind == MINIC_TOKEN_KW_CONST ||\n           parser->current.kind == MINIC_TOKEN_KW_VOLATILE) {\n"""
+body = text[fn_start:fn_end]
+label_offset = body.rfind(qualifier_loop)
+if label_offset < 0:
+    raise SystemExit("cannot locate trailing type-qualifier loop for GNU int128")
+body = body[:label_offset] + "parsed_type_specifiers_done:\n" + body[label_offset:]
+text = text[:fn_start] + body + text[fn_end:]
 path.write_text(text)
 
 
