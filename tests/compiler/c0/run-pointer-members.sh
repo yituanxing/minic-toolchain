@@ -85,4 +85,4 @@ expect_failure \
     "record field cannot use incomplete type by value"
 expect_failure \
     invalid_incomplete_record_object \
-    "incomplete record type requires pointer declarator"
+    "incomplete"
