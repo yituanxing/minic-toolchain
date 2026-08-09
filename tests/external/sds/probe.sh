@@ -123,6 +123,7 @@ cat >"$include/limits.h" <<'EOF'
 EOF
 
 "$host_cc" -E -P -nostdinc -std=c99 \
+    -U__GNUC__ -U__GNUC_MINOR__ -U__GNUC_PATCHLEVEL__ \
     -I"$include" -I"$vendor" \
     "$vendor/sds.c" -o "$work/sds.i"
 
