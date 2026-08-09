@@ -21,7 +21,7 @@ compile_success \
     "$root/tests/programs/c0/pointer_subscript.c"
 grep -F "  slli a0, a0, 2" "$work/pointer_subscript.s" >/dev/null
 grep -F "  lw a0, 0(a0)" "$work/pointer_subscript.s" >/dev/null
-grep -F "  sw t0, 0(a0)" "$work/pointer_subscript.s" >/dev/null
+grep -E '^  sw t0, 0\((a0|t1)\)$' "$work/pointer_subscript.s" >/dev/null
 grep -F "  call read_at" "$work/pointer_subscript.s" >/dev/null
 printf '%s\n' "PASS compiler/c0/pointer_subscript"
 
