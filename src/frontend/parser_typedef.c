@@ -195,15 +195,85 @@ static bool typedef_starts_record_definition(MinicParser *parser, bool *is_defin
     return true;
 }
 
+static bool parse_function_pointer_typedef(MinicParser *parser,
+                                           MinicType return_type,
+                                           MinicSourceSpan *name_span,
+                                           MinicType *aliased_type) {
+    MinicType parameter_types[8];
+    MinicType function_type;
+    size_t parameter_count;
+    size_t pointer_depth;
+    bool is_variadic;
+
+    if (parser == NULL || name_span == NULL || aliased_type == NULL) {
+        return false;
+    }
+    parameter_count = 0U;
+    pointer_depth = 0U;
+    is_variadic = false;
+    (void)memset(parameter_types, 0, sizeof(parameter_types));
+
+    if (!minic_parser_expect(
+            parser, MINIC_TOKEN_LPAREN, "expected '(' before function pointer typedef")) {
+        return false;
+    }
+    while (parser->current.kind == MINIC_TOKEN_STAR) {
+        pointer_depth += 1U;
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
+    }
+    if (pointer_depth == 0U) {
+        minic_parser_error(parser, "function pointer typedef requires '*'");
+        return false;
+    }
+    if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
+        minic_parser_error(parser, "expected function pointer typedef name");
+        return false;
+    }
+    *name_span = parser->current.span;
+    if (!minic_parser_advance(parser) ||
+        !minic_parser_expect(
+            parser, MINIC_TOKEN_RPAREN, "expected ')' after function pointer typedef name") ||
+        !minic_parser_expect(
+            parser, MINIC_TOKEN_LPAREN, "expected '(' before function pointer parameters") ||
+        !minic_parser_parse_parameter_list(
+            parser, NULL, parameter_types, &parameter_count, false, &is_variadic) ||
+        !minic_parser_expect(
+            parser, MINIC_TOKEN_RPAREN, "expected ')' after function pointer parameters")) {
+        return false;
+    }
+    if (is_variadic) {
+        minic_parser_error(parser, "variadic function pointer typedefs are not supported yet");
+        return false;
+    }
+    if (!minic_c0_program_add_function_type(
+            parser->program, return_type, parameter_types, parameter_count, &function_type)) {
+        minic_parser_error(parser, "cannot build function pointer typedef type");
+        return false;
+    }
+    while (pointer_depth > 0U) {
+        if (!minic_type_pointer_to(function_type, &function_type)) {
+            minic_parser_error(parser, "function pointer typedef depth is unsupported");
+            return false;
+        }
+        pointer_depth -= 1U;
+    }
+    *aliased_type = function_type;
+    return true;
+}
+
 bool minic_parser_parse_typedef(MinicParser *parser) {
     MinicSourceSpan name_span;
     MinicType aliased_type;
     MinicTypeAliasId alias_id;
     size_t bounds[8];
     size_t bound_count;
+    bool is_function_pointer;
     bool is_record_definition;
 
     bound_count = 0U;
+    is_function_pointer = false;
     if (!minic_parser_expect(parser, MINIC_TOKEN_KW_TYPEDEF, "expected keyword 'typedef'") ||
         !typedef_starts_record_definition(parser, &is_record_definition)) {
         return false;
@@ -219,26 +289,37 @@ bool minic_parser_parse_typedef(MinicParser *parser) {
             !minic_parser_parse_pointer_declarator(parser, base_type, &aliased_type)) {
             return false;
         }
+        if (parser->current.kind == MINIC_TOKEN_LPAREN) {
+            if (!parse_function_pointer_typedef(parser, aliased_type, &name_span, &aliased_type)) {
+                return false;
+            }
+            is_function_pointer = true;
+        }
     }
     if (minic_type_is_void(aliased_type)) {
         minic_parser_error(parser, "typedef cannot name bare void");
         return false;
     }
-    if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
-        minic_parser_error(parser, "expected typedef name");
-        return false;
+    if (!is_function_pointer) {
+        if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
+            minic_parser_error(parser, "expected typedef name");
+            return false;
+        }
+        name_span = parser->current.span;
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
     }
-
-    name_span = parser->current.span;
     if (minic_parser_find_type_alias(parser, name_span) != MINIC_TYPE_ALIAS_INVALID) {
         minic_parser_error(parser, "duplicate typedef name");
         return false;
     }
-    if (!minic_parser_advance(parser)) {
-        return false;
-    }
 
     while (parser->current.kind == MINIC_TOKEN_LBRACKET) {
+        if (is_function_pointer) {
+            minic_parser_error(parser, "function pointer typedef arrays are not supported yet");
+            return false;
+        }
         if (bound_count >= sizeof(bounds) / sizeof(bounds[0])) {
             minic_parser_error(parser, "at most eight array dimensions are supported");
             return false;
