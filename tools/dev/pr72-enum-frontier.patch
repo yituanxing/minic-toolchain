@@ -1,0 +1,82 @@
+diff --git a/src/frontend/lexer.c b/src/frontend/lexer.c
+--- a/src/frontend/lexer.c
++++ b/src/frontend/lexer.c
+@@ -88,6 +88,9 @@ static MinicTokenKind minic_classify_identifier(const char *text, size_t length) {
+     if (length == 6U && memcmp(text, "struct", 6U) == 0) {
+         return MINIC_TOKEN_KW_STRUCT;
+     }
++    if (length == 4U && memcmp(text, "enum", 4U) == 0) {
++        return MINIC_TOKEN_KW_ENUM;
++    }
+     if (length == 5U && memcmp(text, "const", 5U) == 0) {
+         return MINIC_TOKEN_KW_CONST;
+     }
+diff --git a/src/frontend/parser_function.c b/src/frontend/parser_function.c
+--- a/src/frontend/parser_function.c
++++ b/src/frontend/parser_function.c
+@@ -342,6 +342,8 @@ bool minic_parse_c0_program(const char *path,
+             success = minic_parser_parse_typedef(&parser);
+         } else if (parser.current.kind == MINIC_TOKEN_KW_STATIC) {
+             bool is_function;
++
++            
+ 
+             if (!static_declaration_is_function(&parser, &is_function)) {
+                 success = false;
+@@ -351,6 +353,8 @@ bool minic_parse_c0_program(const char *path,
+                 success = minic_parser_parse_static_global(&parser);
+             }
+         } else if (parser.current.kind == MINIC_TOKEN_KW_STRUCT) {
+             success = minic_parser_parse_record_definition(&parser);
++        } else if (parser.current.kind == MINIC_TOKEN_KW_ENUM) {
++            success = minic_parser_parse_enum_definition(&parser);
+         } else {
+             success = parse_function(&parser, false);
+         }
+@@ -360,6 +364,7 @@ bool minic_parse_c0_program(const char *path,
+     }
+ 
+     minic_parser_destroy_scopes(&parser);
++    minic_parser_destroy_enum_constants(&parser);
+     return success;
+ }
+diff --git a/src/frontend/parser_expression.c b/src/frontend/parser_expression.c
+--- a/src/frontend/parser_expression.c
++++ b/src/frontend/parser_expression.c
+@@ -374,6 +374,8 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
+     MinicLocalId local_id;
+     MinicFunctionId function_id;
+     MinicGlobalObjectId global_object_id;
++    int enum_value;
++    bool is_enum_constant;
+ 
+     if (parser->current.kind == MINIC_TOKEN_INTEGER_CONSTANT ||
+         parser->current.kind == MINIC_TOKEN_CHARACTER_CONSTANT) {
+@@ -402,6 +404,7 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
+         local_id = minic_parser_find_local(parser, name_span);
+         function_id = minic_parser_find_function(parser, name_span);
+         global_object_id = minic_parser_find_global_object(parser, name_span);
++        is_enum_constant = minic_parser_find_enum_constant(parser, name_span, &enum_value);
+         if (!minic_parser_advance(parser)) {
+             return false;
+         }
+@@ -463,6 +466,19 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
+             }
+             return finish_value_expression(parser, primary_id, decay_array, expression_id);
+         }
++        if (is_enum_constant) {
++            (void)memset(&expression, 0, sizeof(expression));
++            expression.kind = MINIC_EXPRESSION_INTEGER;
++            expression.span = name_span;
++            expression.type = minic_type_int();
++            expression.value_category = MINIC_VALUE_RVALUE;
++            expression.value.integer_value = enum_value;
++            if (!minic_parser_add_expression(parser, &expression, &primary_id) ||
++                !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
++                return false;
++            }
++            return finish_value_expression(parser, primary_id, decay_array, expression_id);
++        }
+         minic_parser_error(parser, "use of undeclared local");
+         return false;
+     }
