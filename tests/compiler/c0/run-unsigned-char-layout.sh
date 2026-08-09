@@ -14,7 +14,6 @@ mkdir -p "$work"
 "$minic" -S \
     "$work/unsigned_char_layout.i" \
     -o "$work/unsigned_char_layout.s"
-
 grep -F "  .byte 128" "$work/unsigned_char_layout.s" >/dev/null
 grep -F "  .byte 255" "$work/unsigned_char_layout.s" >/dev/null
 grep -F ".size table, 4" "$work/unsigned_char_layout.s" >/dev/null
@@ -77,4 +76,4 @@ expect_failure() {
 
 expect_failure invalid_signed_char "signed char is not supported"
 expect_failure invalid_plain_unsigned_char_pointer_assignment \
-    "assignment type does not match target type"
+    "assignment expression type does not match target type"
