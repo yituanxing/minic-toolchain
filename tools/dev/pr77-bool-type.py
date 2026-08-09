@@ -190,9 +190,8 @@ replace_once(
     "bool-local-declaration",
 )
 
-replace_in_function(
+replace_once(
     "src/frontend/ast_verifier.c",
-    "static bool type_is_valid(",
     """                type.integer_rank == MINIC_INTEGER_RANK_CHAR ||
 """,
     """                type.integer_rank == MINIC_INTEGER_RANK_BOOL ||
