@@ -24,6 +24,10 @@ jobs:
         run: |
           set -Eeuo pipefail
           sh tools/dev/pr75-stage.sh
+          clang-format-18 -i \
+            src/frontend/type.h \
+            src/frontend/type.c \
+            src/frontend/parser_type.c
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
           make -j4 MODE=release BUILD_DIR=build/lua-compiler
           make -j4 MODE=sanitize BUILD_DIR=build/lua-sanitize
