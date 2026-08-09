@@ -85,6 +85,7 @@ replace_once(
         }
         if (operator_kind != MINIC_BINARY_ADD && operator_kind != MINIC_BINARY_SUBTRACT &&
             operator_kind != MINIC_BINARY_MULTIPLY && operator_kind != MINIC_BINARY_DIVIDE &&
+            operator_kind != MINIC_BINARY_REMAINDER &&
             operator_kind != MINIC_BINARY_BITWISE_AND && operator_kind != MINIC_BINARY_BITWISE_OR &&
             operator_kind != MINIC_BINARY_BITWISE_XOR && operator_kind != MINIC_BINARY_SHIFT_RIGHT) {
             return false;
@@ -105,6 +106,7 @@ replace_once(
         }
         if (operator_kind != MINIC_BINARY_ADD && operator_kind != MINIC_BINARY_SUBTRACT &&
             operator_kind != MINIC_BINARY_MULTIPLY && operator_kind != MINIC_BINARY_DIVIDE &&
+            operator_kind != MINIC_BINARY_REMAINDER &&
             operator_kind != MINIC_BINARY_BITWISE_AND && operator_kind != MINIC_BINARY_BITWISE_OR &&
             operator_kind != MINIC_BINARY_BITWISE_XOR && operator_kind != MINIC_BINARY_SHIFT_RIGHT) {
             return false;
