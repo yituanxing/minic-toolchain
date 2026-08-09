@@ -42,7 +42,7 @@ bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type) {
     if (minic_parser_is_integer_type_specifier(parser->current.kind)) {
         bool saw_char = false;
         bool saw_int = false;
-        bool saw_long = false;
+        unsigned int long_count = 0U;
         bool saw_short = false;
         bool saw_signed = false;
         bool saw_unsigned = false;
@@ -64,11 +64,11 @@ bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type) {
                 saw_int = true;
                 break;
             case MINIC_TOKEN_KW_LONG:
-                if (saw_long) {
-                    minic_parser_error(parser, "long long is not supported");
+                long_count += 1U;
+                if (long_count > 2U) {
+                    minic_parser_error(parser, "too many long type specifiers");
                     return false;
                 }
-                saw_long = true;
                 break;
             case MINIC_TOKEN_KW_SHORT:
                 if (saw_short) {
@@ -103,12 +103,12 @@ bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type) {
             minic_parser_error(parser, "conflicting signed and unsigned type specifiers");
             return false;
         }
-        if (saw_short && saw_long) {
+        if (saw_short && long_count != 0U) {
             minic_parser_error(parser, "short cannot be combined with long");
             return false;
         }
         if (saw_char) {
-            if (saw_short || saw_long || saw_int) {
+            if (saw_short || long_count != 0U || saw_int) {
                 minic_parser_error(parser, "char cannot be combined with short, int, or long");
                 return false;
             }
@@ -119,7 +119,9 @@ bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type) {
             parsed_type = saw_unsigned ? minic_type_unsigned_char() : minic_type_char();
         } else if (saw_short) {
             parsed_type = saw_unsigned ? minic_type_unsigned_short() : minic_type_short();
-        } else if (saw_long) {
+        } else if (long_count == 2U) {
+            parsed_type = saw_unsigned ? minic_type_unsigned_long_long() : minic_type_long_long();
+        } else if (long_count == 1U) {
             parsed_type = saw_unsigned ? minic_type_unsigned_long() : minic_type_long();
         } else {
             parsed_type = saw_unsigned ? minic_type_unsigned_int() : minic_type_int();
@@ -179,6 +181,12 @@ bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type) {
         return false;
     }
 
+    while (parser->current.kind == MINIC_TOKEN_KW_CONST) {
+        is_const = true;
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
+    }
     if (is_const && !minic_type_add_const(parsed_type, &parsed_type)) {
         minic_parser_error(parser, "cannot apply const qualifier");
         return false;

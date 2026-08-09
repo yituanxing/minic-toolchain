@@ -361,6 +361,10 @@ static bool parse_local_declarator(MinicParser *parser, MinicType base_type) {
     if (!minic_parser_parse_pointer_declarator(parser, base_type, &declared_type)) {
         return false;
     }
+    if (minic_type_is_void(declared_type)) {
+        minic_parser_error(parser, "local object cannot have void type");
+        return false;
+    }
     if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
         minic_parser_error(parser, "expected local name");
         return false;
@@ -458,10 +462,6 @@ static bool parse_declaration(MinicParser *parser) {
     MinicType base_type;
 
     if (!minic_parser_parse_type_specifiers(parser, &base_type)) {
-        return false;
-    }
-    if (minic_type_is_void(base_type)) {
-        minic_parser_error(parser, "local object cannot have void type");
         return false;
     }
 
@@ -1402,10 +1402,10 @@ static bool parse_switch(MinicParser *parser) {
 
 static bool case_integer_constant_value(const MinicC0Program *program,
                                         MinicExpressionId expression_id,
-                                        int *value) {
+                                        int64_t *value) {
     const MinicExpression *expression;
-    int left;
-    int right;
+    int64_t left;
+    int64_t right;
 
     if (program == NULL || value == NULL) {
         return false;
@@ -1463,13 +1463,13 @@ static bool case_integer_constant_value(const MinicC0Program *program,
             *value = left % right;
             return true;
         case MINIC_BINARY_SHIFT_LEFT:
-            if (right < 0 || right >= 31 || left < 0) {
+            if (right < 0 || right >= 63 || left < 0) {
                 return false;
             }
-            *value = (int)((unsigned int)left << (unsigned int)right);
+            *value = (int64_t)((uint64_t)left << (unsigned int)right);
             return true;
         case MINIC_BINARY_SHIFT_RIGHT:
-            if (right < 0 || right >= 31) {
+            if (right < 0 || right >= 63) {
                 return false;
             }
             *value = left >> (unsigned int)right;
@@ -1522,7 +1522,7 @@ static bool parse_case(MinicParser *parser) {
     MinicExpression folded_constant;
     MinicType constant_type;
     MinicSourceSpan constant_span;
-    int value;
+    int64_t value;
     size_t index;
 
     context = current_switch_context(parser);
@@ -1749,6 +1749,8 @@ static bool parse_for_update(MinicParser *parser, MinicStatementId *statement_id
     return minic_c0_program_add_statement(parser->program, &statement, statement_id);
 }
 
+static bool token_starts_local_declaration(const MinicParser *parser);
+
 static bool parse_for(MinicParser *parser) {
     MinicStatement statement;
     MinicStatementId updates[8];
@@ -1771,8 +1773,15 @@ static bool parse_for(MinicParser *parser) {
         !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '('")) {
         return false;
     }
+    if (!minic_parser_begin_scope(parser)) {
+        return false;
+    }
     if (parser->current.kind == MINIC_TOKEN_SEMICOLON) {
         if (!minic_parser_advance(parser)) {
+            return false;
+        }
+    } else if (token_starts_local_declaration(parser)) {
+        if (!parse_declaration(parser)) {
             return false;
         }
     } else if (!parse_expression_or_assignment_statement(parser, false)) {
@@ -1835,7 +1844,9 @@ static bool parse_for(MinicParser *parser) {
     }
     statement.span.begin = for_span.begin;
     statement.span.end = parser->current.span.begin;
-    return minic_parser_add_statement(parser, &statement);
+    success = minic_parser_add_statement(parser, &statement);
+    minic_parser_end_scope(parser);
+    return success;
 }
 
 static bool ensure_function_label_context(MinicParser *parser) {

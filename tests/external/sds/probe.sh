@@ -3,18 +3,15 @@ set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 work=${BUILD_DIR:-"$root/build/sds-discovery"}
-vendor="$work/upstream"
+vendor="$root/tests/vendor/sds"
 include="$work/include"
 minic=${MINIC:-"$root/build/ci-release/bin/minic"}
 host_cc=${HOST_CC:-${CC:-cc}}
 upstream=5347739b1581fcba74fd5cab1fc21d2aef317d71
 
 rm -rf "$work"
-mkdir -p "$vendor" "$include/sys"
+mkdir -p "$work" "$include/sys"
 
-curl -fsSL "https://raw.githubusercontent.com/antirez/sds/$upstream/sds.c" -o "$vendor/sds.c"
-curl -fsSL "https://raw.githubusercontent.com/antirez/sds/$upstream/sds.h" -o "$vendor/sds.h"
-curl -fsSL "https://raw.githubusercontent.com/antirez/sds/$upstream/sdsalloc.h" -o "$vendor/sdsalloc.h"
 
 test "$(git hash-object "$vendor/sds.c")" = 3a7eae72f7591b3669af73954c42088ebbeccc4f
 test "$(git hash-object "$vendor/sds.h")" = adcc12c0a7646d2c88a796ad5591931017140999

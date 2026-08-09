@@ -22,6 +22,8 @@ const char *minic_token_kind_name(MinicTokenKind kind) {
         return "double";
     case MINIC_TOKEN_KW_FLOAT:
         return "float";
+    case MINIC_TOKEN_KW_INLINE:
+        return "inline";
     case MINIC_TOKEN_KW_INT:
         return "int";
     case MINIC_TOKEN_KW_LONG:
@@ -128,6 +130,8 @@ const char *minic_token_kind_name(MinicTokenKind kind) {
         return "^=";
     case MINIC_TOKEN_SLASH:
         return "/";
+    case MINIC_TOKEN_SLASH_EQUAL:
+        return "/=";
     case MINIC_TOKEN_PERCENT:
         return "%";
     case MINIC_TOKEN_EQUAL:

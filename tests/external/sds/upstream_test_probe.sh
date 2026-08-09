@@ -3,7 +3,7 @@ set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 work=${BUILD_DIR:-"$root/build/sds-discovery"}
-vendor="$work/upstream"
+vendor="$root/tests/vendor/sds"
 include="$work/include"
 minic=${MINIC:-"$root/build/ci-release/bin/minic"}
 host_cc=${HOST_CC:-${CC:-cc}}
@@ -14,7 +14,6 @@ if test ! -f "$vendor/sds.c" || test ! -d "$include"; then
     exit 1
 fi
 
-curl -fsSL "https://raw.githubusercontent.com/antirez/sds/$upstream/testhelp.h" -o "$vendor/testhelp.h"
 test "$(git hash-object "$vendor/testhelp.h")" = 450334046af86a5e0f00126f9790e9a14e170f84
 
 cat >"$include/stdlib.h" <<'EOF'

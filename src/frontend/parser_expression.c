@@ -25,11 +25,11 @@ static bool finish_value_expression(MinicParser *parser,
 }
 
 static MinicType integer_literal_type(const MinicParser *parser, MinicSourceSpan span) {
-    bool saw_long;
+    unsigned int long_count;
     bool saw_unsigned;
     size_t offset;
 
-    saw_long = false;
+    long_count = 0U;
     saw_unsigned = false;
     offset = span.end.offset;
     while (offset > span.begin.offset) {
@@ -37,7 +37,7 @@ static MinicType integer_literal_type(const MinicParser *parser, MinicSourceSpan
 
         character = parser->source[offset - 1U];
         if (character == 'l' || character == 'L') {
-            saw_long = true;
+            long_count += 1U;
         } else if (character == 'u' || character == 'U') {
             saw_unsigned = true;
         } else {
@@ -45,7 +45,10 @@ static MinicType integer_literal_type(const MinicParser *parser, MinicSourceSpan
         }
         offset -= 1U;
     }
-    if (saw_long) {
+    if (long_count >= 2U) {
+        return saw_unsigned ? minic_type_unsigned_long_long() : minic_type_long_long();
+    }
+    if (long_count == 1U) {
         return saw_unsigned ? minic_type_unsigned_long() : minic_type_long();
     }
     return saw_unsigned ? minic_type_unsigned_int() : minic_type_int();
@@ -55,7 +58,7 @@ static bool parse_integer(MinicParser *parser, MinicExpressionId *expression_id)
     MinicExpression expression;
     MinicSourceSpan span;
     MinicType literal_type;
-    int value;
+    int64_t value;
 
     span = parser->current.span;
     literal_type = parser->current.kind == MINIC_TOKEN_CHARACTER_CONSTANT
@@ -66,7 +69,14 @@ static bool parse_integer(MinicParser *parser, MinicExpressionId *expression_id)
     expression.span = span;
     expression.type = literal_type;
     expression.value_category = MINIC_VALUE_RVALUE;
-    if (!minic_parser_parse_integer_value(parser, &value)) {
+    if (parser->current.kind == MINIC_TOKEN_CHARACTER_CONSTANT) {
+        int character_value;
+
+        if (!minic_parser_parse_integer_value(parser, &character_value)) {
+            return false;
+        }
+        value = (int64_t)character_value;
+    } else if (!minic_parser_parse_integer_value64(parser, &value)) {
         return false;
     }
     expression.value.integer_value = value;
@@ -294,7 +304,8 @@ static bool parse_cast(MinicParser *parser, MinicExpressionId *expression_id) {
         return true;
     }
     if (operand == NULL ||
-        (!minic_type_cast_compatible(target_type, operand->type) &&
+        (!minic_type_is_void(target_type) &&
+         !minic_type_cast_compatible(target_type, operand->type) &&
          !(minic_type_is_pointer(target_type) && expression_is_integer_zero(operand)))) {
         minic_parser_error(parser, "unsupported cast between these types");
         return false;
@@ -1173,6 +1184,77 @@ static bool parse_expression_internal(MinicParser *parser,
             return false;
         }
         if (!minic_parser_add_expression(parser, &conditional, &left)) {
+            return false;
+        }
+    }
+    if (minimum_precedence == 0U && (parser->current.kind == MINIC_TOKEN_PLUS_EQUAL ||
+                                     parser->current.kind == MINIC_TOKEN_SLASH_EQUAL)) {
+        const MinicExpression *target_expression;
+        const MinicExpression *value_expression;
+        MinicExpression assignment;
+        MinicExpressionId value_id;
+        MinicSourceSpan target_span;
+        MinicType target_type;
+        MinicBinaryOperator compound_operator;
+
+        compound_operator =
+            parser->current.kind == MINIC_TOKEN_PLUS_EQUAL ? MINIC_BINARY_ADD : MINIC_BINARY_DIVIDE;
+        target_expression = minic_c0_program_expression(parser->program, left);
+        if (target_expression == NULL || target_expression->value_category != MINIC_VALUE_LVALUE ||
+            minic_type_is_const(target_expression->type) ||
+            minic_type_is_array(target_expression->type) ||
+            minic_type_is_function(target_expression->type) ||
+            minic_type_is_record(target_expression->type)) {
+            minic_parser_error(
+                parser, "compound assignment expression requires a modifiable scalar lvalue");
+            return false;
+        }
+        target_span = target_expression->span;
+        target_type = target_expression->type;
+        if (!minic_parser_advance(parser) ||
+            !parse_expression_internal(parser, &value_id, 0U, true)) {
+            return false;
+        }
+        value_expression = minic_c0_program_expression(parser->program, value_id);
+        if (value_expression == NULL) {
+            minic_parser_error(parser, "invalid compound assignment expression value");
+            return false;
+        }
+        if (minic_type_is_pointer(target_type)) {
+            MinicType pointee_type;
+
+            if (compound_operator != MINIC_BINARY_ADD ||
+                !minic_type_is_integer(value_expression->type) ||
+                !minic_type_pointee(target_type, &pointee_type) ||
+                !type_is_complete_object(parser->program, pointee_type)) {
+                minic_parser_error(
+                    parser,
+                    "compound addition assignment requires pointer/integer or integer operands");
+                return false;
+            }
+        } else {
+            MinicType common_type;
+
+            if (!minic_type_is_integer(target_type) ||
+                !minic_type_is_integer(value_expression->type) ||
+                !minic_type_integer_common(target_type, value_expression->type, &common_type)) {
+                minic_parser_error(
+                    parser,
+                    "compound addition assignment requires pointer/integer or integer operands");
+                return false;
+            }
+        }
+
+        (void)memset(&assignment, 0, sizeof(assignment));
+        assignment.kind = MINIC_EXPRESSION_COMPOUND_ASSIGNMENT;
+        assignment.span.begin = target_span.begin;
+        assignment.span.end = value_expression->span.end;
+        assignment.type = target_type;
+        assignment.value_category = MINIC_VALUE_RVALUE;
+        assignment.value.binary.operator_kind = compound_operator;
+        assignment.value.binary.left = left;
+        assignment.value.binary.right = value_id;
+        if (!minic_parser_add_expression(parser, &assignment, &left)) {
             return false;
         }
     }

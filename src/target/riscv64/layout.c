@@ -158,21 +158,25 @@ minic_riscv64_layout_one_record(MinicC0Program *program, MinicRecord *record, bo
         if (element_size > SIZE_MAX / field->element_count) {
             return false;
         }
-        field_size = element_size * field->element_count;
+        field_size = field->is_flexible_array ? 0U : element_size * field->element_count;
         if (record->is_union) {
             field_offset = 0U;
             if (field_size > storage_size) {
                 storage_size = field_size;
             }
         } else {
-            if (!minic_riscv64_align_up(storage_size, field_alignment, &field_offset) ||
-                field_offset > SIZE_MAX - field_size) {
+            if (record->is_packed) {
+                field_offset = storage_size;
+            } else if (!minic_riscv64_align_up(storage_size, field_alignment, &field_offset)) {
+                return false;
+            }
+            if (field_offset > SIZE_MAX - field_size) {
                 return false;
             }
             storage_size = field_offset + field_size;
         }
         field->storage_offset = field_offset;
-        if (field_alignment > record_alignment) {
+        if (!record->is_packed && field_alignment > record_alignment) {
             record_alignment = field_alignment;
         }
     }

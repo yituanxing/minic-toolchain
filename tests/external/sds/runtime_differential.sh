@@ -6,22 +6,19 @@ riscv_cc=${RISCV_CC:-riscv64-linux-gnu-gcc}
 qemu=${QEMU_RISCV64:-qemu-riscv64}
 work=${BUILD_DIR:-"$root/build/sds-runtime"}
 assembly=${SDS_TEST_ASSEMBLY:-"$root/build/sds-discovery/sds-test.s"}
-vendor="$work/upstream"
-archive="$work/sds.tar.gz"
+vendor="$root/tests/vendor/sds"
 minic_binary="$work/sds-tests-minic"
 gcc_binary="$work/sds-tests-gcc"
 upstream=5347739b1581fcba74fd5cab1fc21d2aef317d71
 
 rm -rf "$work"
-mkdir -p "$vendor"
+mkdir -p "$work"
 
 if test ! -f "$assembly"; then
     printf '%s\n' "FAIL external/sds-runtime: missing MiniC test assembly $assembly" >&2
     exit 1
 fi
 
-curl -fsSL "https://github.com/antirez/sds/archive/$upstream.tar.gz" -o "$archive"
-tar -xzf "$archive" --strip-components=1 -C "$vendor"
 test "$(git hash-object "$vendor/sds.c")" = 3a7eae72f7591b3669af73954c42088ebbeccc4f
 test "$(git hash-object "$vendor/sds.h")" = adcc12c0a7646d2c88a796ad5591931017140999
 test "$(git hash-object "$vendor/sdsalloc.h")" = f43023c48438961445f6064ae8d0cc25f2b42f21

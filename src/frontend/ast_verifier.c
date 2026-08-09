@@ -52,7 +52,8 @@ static bool type_is_valid(const MinicC0Program *program, MinicType type) {
                (type.integer_rank == MINIC_INTEGER_RANK_CHAR ||
                 type.integer_rank == MINIC_INTEGER_RANK_SHORT ||
                 type.integer_rank == MINIC_INTEGER_RANK_INT ||
-                type.integer_rank == MINIC_INTEGER_RANK_LONG);
+                type.integer_rank == MINIC_INTEGER_RANK_LONG ||
+                type.integer_rank == MINIC_INTEGER_RANK_LONG_LONG);
     case MINIC_TYPE_BASE_FLOAT:
     case MINIC_TYPE_BASE_DOUBLE:
         return type.record_id == MINIC_RECORD_INVALID &&
@@ -492,7 +493,8 @@ verify_expression(const MinicC0Program *program, size_t expression_index, MinicC
         operand = expression_before(program, expression->value.unary.operand, expression_index);
         return form == MINIC_C0_AST_PARSED && operand != NULL &&
                expression->value_category == MINIC_VALUE_RVALUE &&
-               (minic_type_cast_compatible(expression->type, operand->type) ||
+               (minic_type_is_void(expression->type) ||
+                minic_type_cast_compatible(expression->type, operand->type) ||
                 (minic_type_is_pointer(expression->type) && expression_is_integer_zero(operand)));
     case MINIC_EXPRESSION_BITCAST:
         operand = expression_before(program, expression->value.unary.operand, expression_index);
@@ -509,6 +511,11 @@ verify_expression(const MinicC0Program *program, size_t expression_index, MinicC
                ((minic_type_is_double(expression->type) &&
                  (minic_type_is_integer(operand->type) || minic_type_is_float(operand->type))) ||
                 (minic_type_is_integer(expression->type) && minic_type_is_double(operand->type)));
+    case MINIC_EXPRESSION_DISCARD:
+        operand = expression_before(program, expression->value.unary.operand, expression_index);
+        return form == MINIC_C0_AST_NORMALIZED && operand != NULL &&
+               expression->value_category == MINIC_VALUE_RVALUE &&
+               minic_type_is_void(expression->type);
     case MINIC_EXPRESSION_SUBSCRIPT:
         left = expression_before(program, expression->value.subscript.base, expression_index);
         right = expression_before(program, expression->value.subscript.index, expression_index);
@@ -535,7 +542,7 @@ verify_expression(const MinicC0Program *program, size_t expression_index, MinicC
             !minic_type_add_const(expected_type, &expected_type)) {
             return false;
         }
-        if (field->element_count > 1U) {
+        if (field->is_flexible_array || field->element_count > 1U) {
             return expression->value_category == MINIC_VALUE_RVALUE &&
                    minic_type_pointer_to(expected_type, &expected_type) &&
                    minic_type_equal(expression->type, expected_type);
@@ -559,6 +566,25 @@ verify_expression(const MinicC0Program *program, size_t expression_index, MinicC
                expression->value_category == MINIC_VALUE_RVALUE &&
                minic_type_equal(expression->type, left->type) &&
                minic_c0_assignment_compatible(program, left->type, expression->value.binary.right);
+    case MINIC_EXPRESSION_COMPOUND_ASSIGNMENT: {
+        MinicType common_type;
+
+        left = expression_before(program, expression->value.binary.left, expression_index);
+        right = expression_before(program, expression->value.binary.right, expression_index);
+        if (left == NULL || right == NULL || left->value_category != MINIC_VALUE_LVALUE ||
+            expression->value_category != MINIC_VALUE_RVALUE ||
+            !minic_type_equal(expression->type, left->type) || minic_type_is_const(left->type) ||
+            (expression->value.binary.operator_kind != MINIC_BINARY_ADD &&
+             expression->value.binary.operator_kind != MINIC_BINARY_DIVIDE)) {
+            return false;
+        }
+        if (minic_type_is_pointer(left->type)) {
+            return expression->value.binary.operator_kind == MINIC_BINARY_ADD &&
+                   minic_type_is_integer(right->type);
+        }
+        return minic_type_is_integer(left->type) && minic_type_is_integer(right->type) &&
+               minic_type_integer_common(left->type, right->type, &common_type);
+    }
     case MINIC_EXPRESSION_UNARY: {
         MinicType expected_type;
         MinicType pointee_type;

@@ -81,7 +81,7 @@ static bool parse_pointer_record_member(MinicParser *parser,
     member.value.member.base = pointer_base_id;
     member.value.member.record_id = record_type.record_id;
     member.value.member.field_index = field_index;
-    if (field->element_count > 1U) {
+    if (field->is_flexible_array || field->element_count > 1U) {
         if (!minic_type_pointer_to(member_type, &member.type)) {
             minic_parser_error(parser, "record array member pointer depth is unsupported");
             return false;

@@ -38,10 +38,12 @@ typedef enum MinicExpressionKind {
     MINIC_EXPRESSION_CAST,
     MINIC_EXPRESSION_BITCAST,
     MINIC_EXPRESSION_CONVERSION,
+    MINIC_EXPRESSION_DISCARD,
     MINIC_EXPRESSION_SUBSCRIPT,
     MINIC_EXPRESSION_MEMBER,
     MINIC_EXPRESSION_LVALUE_READ,
     MINIC_EXPRESSION_ASSIGNMENT,
+    MINIC_EXPRESSION_COMPOUND_ASSIGNMENT,
     MINIC_EXPRESSION_UNARY,
     MINIC_EXPRESSION_BINARY,
     MINIC_EXPRESSION_CONDITIONAL,
@@ -85,7 +87,7 @@ typedef struct MinicExpression {
     MinicType type;
     MinicValueCategory value_category;
     union {
-        int integer_value;
+        int64_t integer_value;
         uint64_t floating_bits;
         MinicLocalId local_id;
         MinicGlobalObjectId global_object_id;
@@ -184,6 +186,7 @@ typedef struct MinicRecordField {
     MinicType type;
     size_t element_count;
     size_t storage_offset;
+    bool is_flexible_array;
 } MinicRecordField;
 
 typedef struct MinicRecord {
@@ -195,6 +198,7 @@ typedef struct MinicRecord {
     size_t storage_size;
     size_t alignment;
     bool is_union;
+    bool is_packed;
     bool is_complete;
 } MinicRecord;
 

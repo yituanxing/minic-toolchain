@@ -199,6 +199,28 @@ linenoise_driven_focused() {
     done
 }
 
+sds_driven_focused() {
+    local script
+    for script in \
+        run-packed-record-layout.sh \
+        run-flexible-array-members.sh \
+        run-inline-functions.sh \
+        run-postfix-const.sh \
+        run-long-long-types.sh \
+        run-wide-integer-literals.sh \
+        run-array-bound-constant-expressions.sh \
+        run-for-declaration-initializers.sh \
+        run-void-pointer-locals.sh \
+        run-compound-assignment-expressions.sh \
+        run-void-casts.sh \
+        run-external-scalar-definitions.sh; do
+        MINIC="$root/build/ci-debug/bin/minic" \
+        HOST_CC=cc \
+        BUILD_DIR="$root/build/ci-sds-driven" \
+            sh "$root/tests/compiler/c0/$script"
+    done
+}
+
 rv64_focused() {
     MINIC="$root/build/ci-debug/bin/minic" \
     BUILD_DIR="$root/build/ci-rv64-focused" \
@@ -245,13 +267,14 @@ if ! wait_phase; then
 fi
 
 printf '%s\n' \
-    'Phase 2: focused declaration/static-local/variadic-call/pointer-equality/switch/RV64 suites, differential programs, tiny-AES, and cJSON'
+    'Phase 2: focused declaration/static-local/variadic-call/pointer-equality/switch/linenoise/SDS/RV64 suites, differential programs, tiny-AES, and cJSON'
 start_gate static-local-focused static_local_focused
 start_gate variadic-declarations-focused variadic_declaration_focused
 start_gate variadic-call-focused variadic_call_focused
 start_gate pointer-equality-focused pointer_equality_focused
 start_gate switch-control-flow-focused switch_control_flow_focused
 start_gate linenoise-driven-focused linenoise_driven_focused
+start_gate sds-driven-focused sds_driven_focused
 start_gate rv64-focused rv64_focused
 start_gate rv64-programs rv64_programs
 start_gate external-tiny-aes external_tiny_aes

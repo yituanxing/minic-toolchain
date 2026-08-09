@@ -468,7 +468,7 @@ bool minic_riscv64_emit_expression(FILE *file,
 
     switch (expression->kind) {
     case MINIC_EXPRESSION_INTEGER:
-        return fprintf(file, "  li a0, %d\n", expression->value.integer_value) >= 0 &&
+        return fprintf(file, "  li a0, %" PRId64 "\n", expression->value.integer_value) >= 0 &&
                minic_riscv64_emit_integer_conversion(file, expression->type, "a0");
     case MINIC_EXPRESSION_FLOATING:
         return minic_type_is_double(expression->type) &&
@@ -513,6 +513,10 @@ bool minic_riscv64_emit_expression(FILE *file,
     case MINIC_EXPRESSION_BITCAST:
         return minic_riscv64_emit_expression(
             file, program, function, expression->value.unary.operand);
+    case MINIC_EXPRESSION_DISCARD:
+        return minic_type_is_void(expression->type) &&
+               minic_riscv64_emit_expression(
+                   file, program, function, expression->value.unary.operand);
     case MINIC_EXPRESSION_CONVERSION: {
         const MinicExpression *operand;
         const char *instruction;
@@ -607,6 +611,72 @@ bool minic_riscv64_emit_expression(FILE *file,
                        "  mv t0, a0\n"
                        "  ld t1, 0(sp)\n"
                        "  addi sp, sp, 16\n") >= 0 &&
+               minic_riscv64_emit_scalar_store(file, target->type, "t0", "t1") &&
+               fprintf(file, "  mv a0, t0\n") >= 0;
+    }
+    case MINIC_EXPRESSION_COMPOUND_ASSIGNMENT: {
+        const MinicExpression *target;
+        const MinicExpression *value;
+
+        target = minic_c0_program_expression(program, expression->value.binary.left);
+        value = minic_c0_program_expression(program, expression->value.binary.right);
+        if (target == NULL || value == NULL || target->value_category != MINIC_VALUE_LVALUE ||
+            (expression->value.binary.operator_kind != MINIC_BINARY_ADD &&
+             expression->value.binary.operator_kind != MINIC_BINARY_DIVIDE) ||
+            !minic_type_equal(expression->type, target->type) ||
+            !minic_riscv64_emit_lvalue_address(
+                file, program, function, expression->value.binary.left) ||
+            fprintf(file, "  addi sp, sp, -32\n  sd a0, 0(sp)\n") < 0 ||
+            !minic_riscv64_emit_scalar_load(file, target->type, "a0", "a0")) {
+            return false;
+        }
+        if (minic_type_is_pointer(target->type)) {
+            size_t element_size;
+
+            if (expression->value.binary.operator_kind != MINIC_BINARY_ADD ||
+                !minic_type_is_integer(value->type) ||
+                !minic_riscv64_pointer_element_size(program, target->type, &element_size) ||
+                fprintf(file, "  sd a0, 8(sp)\n") < 0 ||
+                !minic_riscv64_emit_expression(
+                    file, program, function, expression->value.binary.right) ||
+                !minic_riscv64_emit_scale_register(file, "a0", "t0", element_size) ||
+                fprintf(file,
+                        "  ld t0, 8(sp)\n"
+                        "  add a0, t0, a0\n") < 0) {
+                return false;
+            }
+        } else {
+            MinicType common_type;
+            const char *opcode;
+
+            if (!minic_type_is_integer(target->type) || !minic_type_is_integer(value->type) ||
+                !minic_type_integer_common(target->type, value->type, &common_type) ||
+                !minic_riscv64_emit_normalize_integer(file, common_type, "a0") ||
+                fprintf(file, "  sd a0, 8(sp)\n") < 0 ||
+                !minic_riscv64_emit_expression(
+                    file, program, function, expression->value.binary.right) ||
+                !minic_riscv64_emit_normalize_integer(file, common_type, "a0")) {
+                return false;
+            }
+            if (expression->value.binary.operator_kind == MINIC_BINARY_ADD) {
+                opcode = minic_type_is_long_integer(common_type) ? "add" : "addw";
+            } else if (minic_type_is_unsigned_integer(common_type)) {
+                opcode = minic_type_is_long_integer(common_type) ? "divu" : "divuw";
+            } else {
+                opcode = minic_type_is_long_integer(common_type) ? "div" : "divw";
+            }
+            if (fprintf(file,
+                        "  ld t0, 8(sp)\n"
+                        "  %s a0, t0, a0\n",
+                        opcode) < 0 ||
+                !minic_riscv64_emit_integer_conversion(file, target->type, "a0")) {
+                return false;
+            }
+        }
+        return fprintf(file,
+                       "  mv t0, a0\n"
+                       "  ld t1, 0(sp)\n"
+                       "  addi sp, sp, 32\n") >= 0 &&
                minic_riscv64_emit_scalar_store(file, target->type, "t0", "t1") &&
                fprintf(file, "  mv a0, t0\n") >= 0;
     }

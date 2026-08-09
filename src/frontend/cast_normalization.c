@@ -38,6 +38,7 @@ static bool remap_non_cast_expression(MinicExpression *expression,
     case MINIC_EXPRESSION_DEREFERENCE:
     case MINIC_EXPRESSION_BITCAST:
     case MINIC_EXPRESSION_CONVERSION:
+    case MINIC_EXPRESSION_DISCARD:
     case MINIC_EXPRESSION_LVALUE_READ:
     case MINIC_EXPRESSION_UNARY:
         return remap_expression_id(mapping,
@@ -65,6 +66,7 @@ static bool remap_non_cast_expression(MinicExpression *expression,
                                    expression->value.member.base,
                                    &expression->value.member.base);
     case MINIC_EXPRESSION_ASSIGNMENT:
+    case MINIC_EXPRESSION_COMPOUND_ASSIGNMENT:
     case MINIC_EXPRESSION_BINARY:
         return remap_expression_id(mapping,
                                    old_expression_count,
@@ -134,6 +136,21 @@ static bool append_normalized_bitcast(MinicC0Program *rewritten,
     return minic_c0_program_add_expression(rewritten, &normalized_expression, normalized_id);
 }
 
+static bool append_normalized_discard(MinicC0Program *rewritten,
+                                      const MinicExpression *cast_expression,
+                                      MinicExpressionId mapped_operand,
+                                      MinicExpressionId *normalized_id) {
+    MinicExpression discard;
+
+    (void)memset(&discard, 0, sizeof(discard));
+    discard.kind = MINIC_EXPRESSION_DISCARD;
+    discard.span = cast_expression->span;
+    discard.type = minic_type_void();
+    discard.value_category = MINIC_VALUE_RVALUE;
+    discard.value.unary.operand = mapped_operand;
+    return minic_c0_program_add_expression(rewritten, &discard, normalized_id);
+}
+
 static bool append_normalized_conversion(MinicC0Program *rewritten,
                                          const MinicExpression *cast_expression,
                                          MinicExpressionId mapped_operand,
@@ -160,6 +177,10 @@ static bool append_normalized_cast(MinicC0Program *rewritten,
         return false;
     }
     operand_expression = &rewritten->expressions[mapped_operand];
+
+    if (minic_type_is_void(cast_expression->type)) {
+        return append_normalized_discard(rewritten, cast_expression, mapped_operand, normalized_id);
+    }
 
     if ((minic_type_is_double(cast_expression->type) &&
          (minic_type_is_integer(operand_expression->type) ||
