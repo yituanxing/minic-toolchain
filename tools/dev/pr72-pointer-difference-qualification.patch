@@ -1,0 +1,43 @@
+diff --git a/src/frontend/parser_expression.c b/src/frontend/parser_expression.c
+--- a/src/frontend/parser_expression.c
++++ b/src/frontend/parser_expression.c
+@@ -859,6 +859,24 @@ pointer_relational_compatible(const MinicC0Program *program, MinicType left, Mini
+            type_is_complete_object(program, right_pointee);
+ }
+ 
++static bool
++pointer_difference_compatible(const MinicC0Program *program, MinicType left, MinicType right) {
++    MinicType left_pointee;
++    MinicType right_pointee;
++    MinicType left_unqualified;
++    MinicType right_unqualified;
++
++    return minic_type_pointee(left, &left_pointee) &&
++           minic_type_pointee(right, &right_pointee) &&
++           minic_type_unqualified(left_pointee, &left_unqualified) &&
++           minic_type_unqualified(right_pointee, &right_unqualified) &&
++           minic_type_equal(left_unqualified, right_unqualified) &&
++           type_is_complete_object(program, left_unqualified) &&
++           type_is_complete_object(program, right_unqualified);
++}
++
+ static bool conditional_result_type(MinicType when_true, MinicType when_false, MinicType *result) {
+@@ -927,15 +945,9 @@ static bool binary_result_type(const MinicC0Program *program,
+         *result = minic_type_double();
+         return true;
+     }
+-    if (kind == MINIC_TOKEN_MINUS && minic_type_is_pointer(left) && minic_type_is_pointer(right)) {
+-        MinicType left_pointee;
+-        MinicType right_pointee;
+-
+-        if (!minic_type_pointee(left, &left_pointee) ||
+-            !minic_type_pointee(right, &right_pointee) ||
+-            !minic_type_equal(left_pointee, right_pointee) ||
+-            !type_is_complete_object(program, left_pointee)) {
+-            return false;
+-        }
++    if (kind == MINIC_TOKEN_MINUS && minic_type_is_pointer(left) && minic_type_is_pointer(right) &&
++        pointer_difference_compatible(program, left, right)) {
+         *result = minic_type_long();
+         return true;
+     }
