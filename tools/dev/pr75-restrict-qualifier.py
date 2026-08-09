@@ -3,8 +3,14 @@ from pathlib import Path
 
 path = Path("src/frontend/parser_type.c")
 text = path.read_text()
-old = '''        while (parser->current.kind == MINIC_TOKEN_KW_CONST) {
-            if (!minic_type_add_const(parsed_type, &parsed_type)) {
+old = '''        while (parser->current.kind == MINIC_TOKEN_KW_CONST ||
+               parser->current.kind == MINIC_TOKEN_KW_VOLATILE) {
+            if (parser->current.kind == MINIC_TOKEN_KW_VOLATILE) {
+                if (!minic_type_add_volatile(parsed_type, &parsed_type)) {
+                    minic_parser_error(parser, "cannot apply pointer volatile qualifier");
+                    return false;
+                }
+            } else if (!minic_type_add_const(parsed_type, &parsed_type)) {
                 minic_parser_error(parser, "cannot apply pointer const qualifier");
                 return false;
             }
@@ -14,12 +20,19 @@ old = '''        while (parser->current.kind == MINIC_TOKEN_KW_CONST) {
         }
 '''
 new = '''        while (parser->current.kind == MINIC_TOKEN_KW_CONST ||
+               parser->current.kind == MINIC_TOKEN_KW_VOLATILE ||
                minic_parser_identifier_is(parser, "restrict") ||
                minic_parser_identifier_is(parser, "__restrict")) {
-            if (parser->current.kind == MINIC_TOKEN_KW_CONST &&
-                !minic_type_add_const(parsed_type, &parsed_type)) {
-                minic_parser_error(parser, "cannot apply pointer const qualifier");
-                return false;
+            if (parser->current.kind == MINIC_TOKEN_KW_VOLATILE) {
+                if (!minic_type_add_volatile(parsed_type, &parsed_type)) {
+                    minic_parser_error(parser, "cannot apply pointer volatile qualifier");
+                    return false;
+                }
+            } else if (parser->current.kind == MINIC_TOKEN_KW_CONST) {
+                if (!minic_type_add_const(parsed_type, &parsed_type)) {
+                    minic_parser_error(parser, "cannot apply pointer const qualifier");
+                    return false;
+                }
             }
             /* restrict is an aliasing promise, not an ABI/layout qualifier. MiniC does
                not yet perform restrict-based alias optimization, so accepting it here
