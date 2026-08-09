@@ -46,6 +46,7 @@ jobs:
           MINIC="$GITHUB_WORKSPACE/build/lua-compiler/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/lua-focused" HOST_CC=cc sh tests/compiler/c0/run-pointer-compound-subtraction.sh
           MINIC="$GITHUB_WORKSPACE/build/lua-compiler/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/lua-focused" HOST_CC=cc sh tests/compiler/c0/run-builtin-offsetof.sh
           MINIC="$GITHUB_WORKSPACE/build/lua-compiler/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/lua-focused" HOST_CC=cc sh tests/compiler/c0/run-pointer-integer-casts.sh
+          MINIC="$GITHUB_WORKSPACE/build/lua-compiler/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/lua-focused" HOST_CC=cc sh tests/compiler/c0/run-record-assignment-expressions.sh
           MINIC="$GITHUB_WORKSPACE/build/lua-compiler/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/lua-focused" HOST_CC=cc sh tests/compiler/c0/run-comma-operator.sh
           MINIC="$GITHUB_WORKSPACE/build/lua-compiler/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/lua-focused" HOST_CC=cc sh tests/compiler/c0/run-cast-type-classification.sh
 
