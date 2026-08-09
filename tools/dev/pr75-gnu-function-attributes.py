@@ -85,13 +85,17 @@ static bool parse_gnu_function_attributes(MinicParser *parser) {
     return true;
 }
 
+/* Keep the pre-declarator call text distinct so later staging can target suffix attributes
+ * without relying on occurrence order. */
+static bool parse_gnu_predeclarator_function_attributes(MinicParser *parser) {
+    return parse_gnu_function_attributes(parser);
+}
+
 '''
 if text.count(anchor) != 1:
     raise SystemExit(f"function helper anchor: expected 1 match, found {text.count(anchor)}")
 text = text.replace(anchor, helper + anchor, 1)
 
-# GNU attributes are valid both between the declaration specifiers and the declarator name
-# (e.g. `extern void __attribute__((noreturn)) f(void)`) and after the full declarator.
 old = '''    if (!minic_parser_parse_type_name(parser, &return_type)) {
         return false;
     }
@@ -100,7 +104,7 @@ old = '''    if (!minic_parser_parse_type_name(parser, &return_type)) {
 new = '''    if (!minic_parser_parse_type_name(parser, &return_type)) {
         return false;
     }
-    if (!parse_gnu_function_attributes(parser)) {
+    if (!parse_gnu_predeclarator_function_attributes(parser)) {
         return false;
     }
     if (parser->current.kind == MINIC_TOKEN_IDENTIFIER) {
