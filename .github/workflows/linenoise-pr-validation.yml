@@ -19,12 +19,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Build committed MiniC
+      - name: Stage current discovery semantics and build MiniC
         shell: bash
         run: |
           set -Eeuo pipefail
+          sh tools/dev/pr73-stage.sh
+          CLANG_FORMAT=clang-format-18 clang-format-18 -i src/frontend/parser_function.c
           make -j4 MODE=release BUILD_DIR=build/linenoise-compiler
           make -j4 MODE=sanitize BUILD_DIR=build/linenoise-sanitize
+
+      - name: Verify direct function-pointer parameter semantics
+        shell: bash
+        run: |
+          MINIC="$GITHUB_WORKSPACE/build/linenoise-compiler/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/linenoise-focused" \
+          HOST_CC=cc \
+            sh tests/compiler/c0/run-function-pointer-parameters.sh
 
       - name: Compile unchanged linenoise
         shell: bash
