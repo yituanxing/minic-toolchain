@@ -1,0 +1,22 @@
+name: Parson PR Validation
+
+on:
+  pull_request:
+    branches: [frontend/additive-update-pointer-difference]
+
+jobs:
+  parson:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build current validated MiniC
+        run: bash .github/scripts/compiler-c0-full-gate.sh
+
+      - name: Compile unchanged Parson 1.5.3
+        run: |
+          MINIC="$GITHUB_WORKSPACE/build/ci-release/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/parson-discovery" \
+          RISCV_CC=riscv64-linux-gnu-gcc \
+            sh tests/external/parson/probe.sh
