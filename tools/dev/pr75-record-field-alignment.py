@@ -170,10 +170,13 @@ replace_once(
 # parser-time RV64 layout model exactly consistent with the final layout pass.
 core = Path("src/frontend/parser_core.c")
 text = core.read_text()
-needle = "            field_size = field->is_flexible_array ? 0U : element_size * field->element_count;\n"
-if text.count(needle) != 2:
-    raise SystemExit(f"constant field-size anchors: expected 2 matches, found {text.count(needle)}")
-replacement = needle + """            if (field->explicit_alignment != 0U) {
+layout_field_size = "            field_size = field->is_flexible_array ? 0U : element_size * field->element_count;\n"
+member_field_size = "        field_size = field->is_flexible_array ? 0U : element_size * field->element_count;\n"
+if text.count(layout_field_size) != 1:
+    raise SystemExit(f"constant layout field-size anchor: expected 1 match, found {text.count(layout_field_size)}")
+if text.count(member_field_size) != 1:
+    raise SystemExit(f"offsetof field-size anchor: expected 1 match, found {text.count(member_field_size)}")
+alignment_logic_12 = """            if (field->explicit_alignment != 0U) {
                 if ((field->explicit_alignment & (field->explicit_alignment - 1U)) != 0U) {
                     return false;
                 }
@@ -182,7 +185,17 @@ replacement = needle + """            if (field->explicit_alignment != 0U) {
                 }
             }
 """
-text = text.replace(needle, replacement)
+alignment_logic_8 = """        if (field->explicit_alignment != 0U) {
+            if ((field->explicit_alignment & (field->explicit_alignment - 1U)) != 0U) {
+                return false;
+            }
+            if ((uint64_t)field->explicit_alignment > field_alignment) {
+                field_alignment = (uint64_t)field->explicit_alignment;
+            }
+        }
+"""
+text = text.replace(layout_field_size, layout_field_size + alignment_logic_12, 1)
+text = text.replace(member_field_size, member_field_size + alignment_logic_8, 1)
 old = """                if (record->is_packed) {
                     field_offset = storage_size;
                 } else if (!constant_align_up(storage_size, field_alignment, &field_offset)) {
