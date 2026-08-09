@@ -2,6 +2,15 @@
 from pathlib import Path
 
 
+def replace_once(path: str, old: str, new: str, label: str) -> None:
+    target = Path(path)
+    text = target.read_text()
+    count = text.count(old)
+    if count != 1:
+        raise SystemExit(f"{label}: expected one global anchor, found {count}")
+    target.write_text(text.replace(old, new, 1))
+
+
 def replace_in_function(path: str, signature: str, old: str, new: str, label: str) -> None:
     target = Path(path)
     text = target.read_text()
@@ -60,9 +69,10 @@ replace_in_function(
     "int128-array-bound-cast",
 )
 
-replace_in_function(
+# constant_type_layout has a forward declaration earlier in parser_core.c. Patch the
+# unique switch arm globally so we do not mistake that declaration for the definition.
+replace_once(
     "src/frontend/parser_core.c",
-    "static bool constant_type_layout(",
     """        case MINIC_INTEGER_RANK_LONG:
         case MINIC_INTEGER_RANK_LONG_LONG:
             *size = 8U;
