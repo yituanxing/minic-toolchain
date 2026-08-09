@@ -38,7 +38,7 @@ replace_once(
         const MinicArrayType *typedef_array;
 
         typedef_array = minic_c0_program_array_type(parser->program, field_type.array_type_id);
-        if (typedef_array == NULL || typedef_array->is_incomplete || typedef_array->element_count == 0U) {
+        if (typedef_array == NULL || typedef_array->element_count == 0U) {
             minic_parser_error(parser, "record field requires a complete typedef array type");
             return false;
         }
