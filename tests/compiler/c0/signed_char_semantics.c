@@ -1,6 +1,6 @@
 static signed char signed_value = 254;
 static unsigned char unsigned_value = 254;
-static char plain_value = (char)255;
+static char plain_value = 255;
 
 int main(void) {
     signed char local = 0;
