@@ -1,6 +1,6 @@
 #include <stdarg.h>
 
-int minic_verify_va_list(void *arguments);
+int minic_verify_va_list(char *arguments);
 
 static int check_arguments(int fixed, const char *tag, ...) {
     va_list arguments;
