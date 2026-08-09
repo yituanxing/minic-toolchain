@@ -45,7 +45,7 @@ replace_once(
             minic_type_is_function(target_expression->type) ||
             minic_type_is_record(target_expression->type)) {
             minic_parser_error(parser,
-                               \"compound assignment expression requires a modifiable scalar lvalue\");
+                               "compound assignment expression requires a modifiable scalar lvalue");
             return false;
         }
         target_span = target_expression->span;
@@ -56,7 +56,7 @@ replace_once(
         }
         value_expression = minic_c0_program_expression(parser->program, value_id);
         if (value_expression == NULL) {
-            minic_parser_error(parser, \"invalid compound assignment expression value\");
+            minic_parser_error(parser, "invalid compound assignment expression value");
             return false;
         }
         if (minic_type_is_pointer(target_type)) {
@@ -67,7 +67,7 @@ replace_once(
                 !type_is_complete_object(parser->program, pointee_type)) {
                 minic_parser_error(
                     parser,
-                    \"compound addition assignment requires pointer/integer or integer operands\");
+                    "compound addition assignment requires pointer/integer or integer operands");
                 return false;
             }
         } else {
@@ -78,7 +78,7 @@ replace_once(
                 !minic_type_integer_common(target_type, value_expression->type, &common_type)) {
                 minic_parser_error(
                     parser,
-                    \"compound addition assignment requires pointer/integer or integer operands\");
+                    "compound addition assignment requires pointer/integer or integer operands");
                 return false;
             }
         }
@@ -111,28 +111,16 @@ replace_once(
 """,
 )
 
-# Normalized AST contract: target is a modifiable scalar lvalue; += accepts integer/integer
-# or pointer/integer and the expression result has the target type.
+# Use a small stable boundary after the existing assignment verifier instead of replacing
+# the full assignment block. The exact formatting of that older block has evolved during
+# prior freezes, but its semantic boundary before UNARY is stable.
 replace_once(
     "src/frontend/ast_verifier.c",
-    """    case MINIC_EXPRESSION_ASSIGNMENT:
-        left = expression_before(program, expression->value.binary.left, expression_index);
-        right = expression_before(program, expression->value.binary.right, expression_index);
-        return left != NULL && right != NULL && left->value_category == MINIC_VALUE_LVALUE &&
-               expression->value_category == MINIC_VALUE_RVALUE &&
-               minic_type_equal(expression->type, left->type) && !minic_type_is_const(left->type) &&
-               !minic_type_is_array(left->type) && !minic_type_is_function(left->type) &&
-               !minic_type_is_record(left->type) &&
+    """               minic_type_equal(expression->type, left->type) &&
                minic_c0_assignment_compatible(program, left->type, expression->value.binary.right);
+    case MINIC_EXPRESSION_UNARY: {
 """,
-    """    case MINIC_EXPRESSION_ASSIGNMENT:
-        left = expression_before(program, expression->value.binary.left, expression_index);
-        right = expression_before(program, expression->value.binary.right, expression_index);
-        return left != NULL && right != NULL && left->value_category == MINIC_VALUE_LVALUE &&
-               expression->value_category == MINIC_VALUE_RVALUE &&
-               minic_type_equal(expression->type, left->type) && !minic_type_is_const(left->type) &&
-               !minic_type_is_array(left->type) && !minic_type_is_function(left->type) &&
-               !minic_type_is_record(left->type) &&
+    """               minic_type_equal(expression->type, left->type) &&
                minic_c0_assignment_compatible(program, left->type, expression->value.binary.right);
     case MINIC_EXPRESSION_COMPOUND_ASSIGNMENT: {
         MinicType common_type;
@@ -151,6 +139,7 @@ replace_once(
         return minic_type_is_integer(left->type) && minic_type_is_integer(right->type) &&
                minic_type_integer_common(left->type, right->type, &common_type);
     }
+    case MINIC_EXPRESSION_UNARY: {
 """,
 )
 
@@ -171,8 +160,8 @@ replace_once(
             !minic_type_equal(expression->type, target->type) ||
             !minic_riscv64_emit_lvalue_address(
                 file, program, function, expression->value.binary.left) ||
-            fprintf(file, \"  addi sp, sp, -32\\n  sd a0, 0(sp)\\n\") < 0 ||
-            !minic_riscv64_emit_scalar_load(file, target->type, \"a0\", \"a0\")) {
+            fprintf(file, "  addi sp, sp, -32\n  sd a0, 0(sp)\n") < 0 ||
+            !minic_riscv64_emit_scalar_load(file, target->type, "a0", "a0")) {
             return false;
         }
         if (minic_type_is_pointer(target->type)) {
@@ -180,13 +169,13 @@ replace_once(
 
             if (!minic_type_is_integer(value->type) ||
                 !minic_riscv64_pointer_element_size(program, target->type, &element_size) ||
-                fprintf(file, \"  sd a0, 8(sp)\\n\") < 0 ||
+                fprintf(file, "  sd a0, 8(sp)\n") < 0 ||
                 !minic_riscv64_emit_expression(
                     file, program, function, expression->value.binary.right) ||
-                !minic_riscv64_emit_scale_register(file, \"a0\", \"t0\", element_size) ||
+                !minic_riscv64_emit_scale_register(file, "a0", "t0", element_size) ||
                 fprintf(file,
-                        \"  ld t0, 8(sp)\\n\"
-                        \"  add a0, t0, a0\\n\") < 0) {
+                        "  ld t0, 8(sp)\n"
+                        "  add a0, t0, a0\n") < 0) {
                 return false;
             }
         } else {
@@ -194,25 +183,25 @@ replace_once(
 
             if (!minic_type_is_integer(target->type) || !minic_type_is_integer(value->type) ||
                 !minic_type_integer_common(target->type, value->type, &common_type) ||
-                !minic_riscv64_emit_normalize_integer(file, common_type, \"a0\") ||
-                fprintf(file, \"  sd a0, 8(sp)\\n\") < 0 ||
+                !minic_riscv64_emit_normalize_integer(file, common_type, "a0") ||
+                fprintf(file, "  sd a0, 8(sp)\n") < 0 ||
                 !minic_riscv64_emit_expression(
                     file, program, function, expression->value.binary.right) ||
-                !minic_riscv64_emit_normalize_integer(file, common_type, \"a0\") ||
+                !minic_riscv64_emit_normalize_integer(file, common_type, "a0") ||
                 fprintf(file,
-                        \"  ld t0, 8(sp)\\n\"
-                        \"  %s a0, t0, a0\\n\",
-                        minic_type_is_long_integer(common_type) ? \"add\" : \"addw\") < 0 ||
-                !minic_riscv64_emit_integer_conversion(file, target->type, \"a0\")) {
+                        "  ld t0, 8(sp)\n"
+                        "  %s a0, t0, a0\n",
+                        minic_type_is_long_integer(common_type) ? "add" : "addw") < 0 ||
+                !minic_riscv64_emit_integer_conversion(file, target->type, "a0")) {
                 return false;
             }
         }
         return fprintf(file,
-                       \"  mv t0, a0\\n\"
-                       \"  ld t1, 0(sp)\\n\"
-                       \"  addi sp, sp, 32\\n\") >= 0 &&
-               minic_riscv64_emit_scalar_store(file, target->type, \"t0\", \"t1\") &&
-               fprintf(file, \"  mv a0, t0\\n\") >= 0;
+                       "  mv t0, a0\n"
+                       "  ld t1, 0(sp)\n"
+                       "  addi sp, sp, 32\n") >= 0 &&
+               minic_riscv64_emit_scalar_store(file, target->type, "t0", "t1") &&
+               fprintf(file, "  mv a0, t0\n") >= 0;
     }
     case MINIC_EXPRESSION_UNARY:
 """,
