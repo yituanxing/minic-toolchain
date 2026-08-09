@@ -59,4 +59,5 @@ python3 tools/dev/pr75-gnu-function-asm-labels.py
 python3 tools/dev/pr75-gnu-declaration-visibility.py
 python3 tools/dev/pr75-visible-extern-arrays.py
 python3 tools/dev/pr76-preprocessed-line-markers.py
+python3 tools/dev/pr76-anonymous-record-members.py
 printf '%s\n' 'staged Linux/Lua discovery semantics'
