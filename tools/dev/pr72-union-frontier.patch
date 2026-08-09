@@ -1,0 +1,143 @@
+diff --git a/src/frontend/token.h b/src/frontend/token.h
+--- a/src/frontend/token.h
++++ b/src/frontend/token.h
+@@ -22,6 +22,7 @@ typedef enum MinicTokenKind {
+     MINIC_TOKEN_KW_UNSIGNED,
+     MINIC_TOKEN_KW_VOID,
+     MINIC_TOKEN_KW_STRUCT,
++    MINIC_TOKEN_KW_UNION,
+     MINIC_TOKEN_KW_ENUM,
+     MINIC_TOKEN_KW_CONST,
+     MINIC_TOKEN_KW_TYPEDEF,
+diff --git a/src/frontend/token.c b/src/frontend/token.c
+--- a/src/frontend/token.c
++++ b/src/frontend/token.c
+@@ -36,6 +36,8 @@ const char *minic_token_kind_name(MinicTokenKind kind) {
+         return "void";
+     case MINIC_TOKEN_KW_STRUCT:
+         return "struct";
++    case MINIC_TOKEN_KW_UNION:
++        return "union";
+     case MINIC_TOKEN_KW_ENUM:
+         return "enum";
+     case MINIC_TOKEN_KW_CONST:
+diff --git a/src/frontend/lexer.c b/src/frontend/lexer.c
+--- a/src/frontend/lexer.c
++++ b/src/frontend/lexer.c
+@@ -91,6 +91,9 @@ static MinicTokenKind minic_classify_identifier(const char *text, size_t length) {
+     if (length == 4U && memcmp(text, "enum", 4U) == 0) {
+         return MINIC_TOKEN_KW_ENUM;
+     }
++    if (length == 5U && memcmp(text, "union", 5U) == 0) {
++        return MINIC_TOKEN_KW_UNION;
++    }
+     if (length == 5U && memcmp(text, "const", 5U) == 0) {
+         return MINIC_TOKEN_KW_CONST;
+     }
+diff --git a/src/frontend/ast.h b/src/frontend/ast.h
+--- a/src/frontend/ast.h
++++ b/src/frontend/ast.h
+@@ -187,6 +187,7 @@ typedef struct MinicRecord {
+     size_t field_capacity;
+     size_t storage_size;
+     size_t alignment;
++    bool is_union;
+     bool is_complete;
+ } MinicRecord;
+ 
+diff --git a/src/frontend/parser_typedef.c b/src/frontend/parser_typedef.c
+--- a/src/frontend/parser_typedef.c
++++ b/src/frontend/parser_typedef.c
+@@ -177,7 +177,8 @@ static bool typedef_starts_record_definition(MinicParser *parser, bool *is_defin
+         return false;
+     }
+     *is_definition = false;
+-    if (parser->current.kind != MINIC_TOKEN_KW_STRUCT) {
++    if (parser->current.kind != MINIC_TOKEN_KW_STRUCT &&
++        parser->current.kind != MINIC_TOKEN_KW_UNION) {
+         return true;
+     }
+ 
+diff --git a/src/frontend/parser_record.c b/src/frontend/parser_record.c
+--- a/src/frontend/parser_record.c
++++ b/src/frontend/parser_record.c
+@@ -155,13 +155,21 @@ bool minic_parser_parse_record_definition_specifier(MinicParser *parser, MinicTy
+     MinicRecordId record_id;
++    MinicTokenKind record_keyword;
++    bool is_union;
+ 
+     if (record_type == NULL) {
+         minic_parser_error(parser, "internal error: missing record type output");
+         return false;
+     }
+-    if (!minic_parser_expect(parser, MINIC_TOKEN_KW_STRUCT, "expected keyword 'struct'")) {
++    record_keyword = parser->current.kind;
++    if (record_keyword != MINIC_TOKEN_KW_STRUCT && record_keyword != MINIC_TOKEN_KW_UNION) {
++        minic_parser_error(parser, "expected record keyword");
++        return false;
++    }
++    is_union = record_keyword == MINIC_TOKEN_KW_UNION;
++    if (!minic_parser_advance(parser)) {
+         return false;
+     }
+ 
+@@ -177,10 +185,13 @@ bool minic_parser_parse_record_definition_specifier(MinicParser *parser, MinicTy
+                 minic_parser_error(parser, "out of memory while adding record");
+                 return false;
+             }
++            parser->program->records[record_id].is_union = is_union;
+         } else {
+             record = minic_c0_program_record(parser->program, record_id);
+-            if (record == NULL || record->is_complete) {
++            if (record == NULL || record->is_complete || record->is_union != is_union) {
+                 minic_parser_error(parser, "duplicate record definition");
+                 return false;
+             }
+@@ -191,6 +202,7 @@ bool minic_parser_parse_record_definition_specifier(MinicParser *parser, MinicTy
+             minic_parser_error(parser, "out of memory while adding anonymous record");
+             return false;
+         }
++        parser->program->records[record_id].is_union = is_union;
+     } else {
+         minic_parser_error(parser, "expected record tag or '{' after 'struct'");
+         return false;
+diff --git a/src/frontend/parser_function.c b/src/frontend/parser_function.c
+--- a/src/frontend/parser_function.c
++++ b/src/frontend/parser_function.c
+@@ -351,7 +351,8 @@ bool minic_parse_c0_program(const char *path,
+             } else {
+                 success = minic_parser_parse_static_global(&parser);
+             }
+-        } else if (parser.current.kind == MINIC_TOKEN_KW_STRUCT) {
++        } else if (parser.current.kind == MINIC_TOKEN_KW_STRUCT ||
++                   parser.current.kind == MINIC_TOKEN_KW_UNION) {
+             success = minic_parser_parse_record_definition(&parser);
+         } else if (parser.current.kind == MINIC_TOKEN_KW_ENUM) {
+             success = minic_parser_parse_enum_definition(&parser);
+diff --git a/src/target/riscv64/layout.c b/src/target/riscv64/layout.c
+--- a/src/target/riscv64/layout.c
++++ b/src/target/riscv64/layout.c
+@@ -120,13 +120,21 @@ static bool minic_riscv64_layout_records(MinicC0Program *program) {
+                 return false;
+             }
+             field_size = element_size * field->element_count;
+-            if (!minic_riscv64_align_up(storage_size, field_alignment, &field_offset) ||
+-                field_offset > SIZE_MAX - field_size) {
+-                return false;
++            if (record->is_union) {
++                field_offset = 0U;
++                if (field_size > storage_size) {
++                    storage_size = field_size;
++                }
++            } else {
++                if (!minic_riscv64_align_up(storage_size, field_alignment, &field_offset) ||
++                    field_offset > SIZE_MAX - field_size) {
++                    return false;
++                }
++                storage_size = field_offset + field_size;
+             }
+             field->storage_offset = field_offset;
+-            storage_size = field_offset + field_size;
+             if (field_alignment > record_alignment) {
+                 record_alignment = field_alignment;
+             }
