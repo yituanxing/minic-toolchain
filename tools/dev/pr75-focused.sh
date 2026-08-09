@@ -19,6 +19,7 @@ for test_script in \
     run-builtin-va-list.sh \
     run-restrict-qualifiers.sh \
     run-gnu-function-attributes.sh \
+    run-gnu-function-asm-labels.sh \
     run-record-forward-declarations.sh \
     run-record-multi-declarators.sh \
     run-volatile-qualifiers.sh \
