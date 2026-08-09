@@ -50,12 +50,22 @@ static long long remainder_signed(long long value) {
     return value;
 }
 
+static double update_double(void) {
+    double value = 8.0;
+    value += 1;
+    value -= 2;
+    value *= 3;
+    value /= 2;
+    return value;
+}
+
 int main(void) {
     int values[4];
     return update_once() == 14 && adjust_pointer(values) == values + 2 &&
                    update_bits(0x2ffu) == 380u && divide_unsigned(100ULL) == 10ULL &&
                    divide_signed(-100LL) == -10LL && remainder_int(2050) == 2 &&
-                   remainder_unsigned(100ULL) == 1ULL && remainder_signed(-100LL) == -1LL
+                   remainder_unsigned(100ULL) == 1ULL && remainder_signed(-100LL) == -1LL &&
+                   update_double() == 10.5
                ? 0
                : 1;
 }
