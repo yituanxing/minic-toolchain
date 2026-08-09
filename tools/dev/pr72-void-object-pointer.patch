@@ -1,0 +1,34 @@
+diff --git a/src/frontend/type.c b/src/frontend/type.c
+--- a/src/frontend/type.c
++++ b/src/frontend/type.c
+@@ -276,16 +276,18 @@ static bool minic_type_void_object_pointer_compatible(MinicType target, MinicTyp
+     bool target_is_void;
+     bool source_is_void;
+ 
+-    if (target.pointer_depth != 1U || source.pointer_depth != 1U ||
++    if (!minic_type_is_pointer(target) || !minic_type_is_pointer(source) ||
+         !minic_type_pointee(target, &target_pointee) ||
+         !minic_type_pointee(source, &source_pointee)) {
+         return false;
+     }
+-    target_is_void = minic_type_is_void(target_pointee);
+-    source_is_void = minic_type_is_void(source_pointee);
++    target_is_void = target.pointer_depth == 1U && minic_type_is_void(target_pointee);
++    source_is_void = source.pointer_depth == 1U && minic_type_is_void(source_pointee);
+     if (target_is_void == source_is_void) {
+         return false;
+     }
+-    if ((!target_is_void && minic_type_is_function(target_pointee)) ||
+-        (!source_is_void && minic_type_is_function(source_pointee))) {
++    if ((target_is_void && minic_type_is_function(source_pointee)) ||
++        (source_is_void && minic_type_is_function(target_pointee))) {
+         return false;
+     }
++    /* A pointer object is itself an object, so T ** is compatible with void *.
++       Preserve the existing qualifier check for the one-level object case. */
++    if ((target_is_void && source.pointer_depth > 1U) ||
++        (source_is_void && target.pointer_depth > 1U)) {
++        return true;
++    }
+     return (source_pointee.base_qualifiers & ~target_pointee.base_qualifiers) == 0U;
+ }
