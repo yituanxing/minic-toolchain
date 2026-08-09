@@ -1,0 +1,73 @@
+name: Parson Assignment Cleanup
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: parson-assignment-cleanup-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  cleanup:
+    if: github.event.pull_request.number == 72
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout actual PR head
+        uses: actions/checkout@v4
+        with:
+          ref: external/parson-discovery
+          fetch-depth: 0
+
+      - name: Restore implicit-assignment boundary
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/frontend/parser_expression.c')
+          text = path.read_text()
+          old = '''            if (!minic_type_cast_compatible(target_type, value_expression->type)) {
+                      minic_parser_error(parser, "assignment expression type does not match target type");
+                      return false;
+                  }
+          '''
+          new = '''            if (minic_type_is_pointer(target_type) ||
+                      minic_type_is_pointer(value_expression->type) ||
+                      !minic_type_cast_compatible(target_type, value_expression->type)) {
+                      minic_parser_error(parser, "assignment expression type does not match target type");
+                      return false;
+                  }
+          '''
+          if text.count(old) != 1:
+              raise SystemExit('unexpected assignment-expression conversion block')
+          path.write_text(text.replace(old, new, 1))
+
+          path = Path('tests/compiler/c0/run-cast-expressions.sh')
+          text = path.read_text()
+          old = '''expect_failure \\
+              invalid_cast_assignment_target \\
+              "assignment target must be a modifiable lvalue"
+          '''
+          new = '''expect_failure \\
+              invalid_cast_assignment_target \\
+              "assignment expression requires a modifiable scalar lvalue"
+          '''
+          if text.count(old) != 1:
+              raise SystemExit('unexpected invalid_cast_assignment_target expectation')
+          path.write_text(text.replace(old, new, 1))
+          PY
+
+          clang-format-18 -i src/frontend/parser_expression.c
+          git diff --check
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/frontend/parser_expression.c tests/compiler/c0/run-cast-expressions.sh
+          git diff --cached --check
+          git commit -m 'frontend: separate implicit assignment from explicit casts / 前端：区分隐式赋值与显式强转'
+          git push origin HEAD:external/parson-discovery
