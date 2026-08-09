@@ -18,14 +18,8 @@ curl -fsSL "https://raw.githubusercontent.com/antirez/linenoise/$upstream/lineno
 test "$(git hash-object "$vendor/linenoise.c")" = 63f23ddaf0e06dea4d2ac04efa084c3ca275ad8c
 test "$(git hash-object "$vendor/linenoise.h")" = 735629b78ed2302d407fb3b6c8e56c6ac24bd6b7
 
-# Establish a real compiler reference with the normal host libc/POSIX headers.
 "$host_cc" -std=gnu11 -O2 -I"$vendor" -c "$vendor/linenoise.c" -o "$work/linenoise-gcc.o"
 
-# The first discovery run proved that normal glibc preprocessing stops MiniC in
-# libc-internal `unsigned short` typedefs before linenoise itself is reached.
-# Keep the upstream translation unit unchanged, but give the compiler stage the
-# declarations the source actually consumes. This is a compile-discovery ABI
-# surface only; target runtime validation will use the real RV64 libc ABI.
 cat >"$include/stddef.h" <<'EOF'
 #ifndef MINIC_LINENOISE_STDDEF_H
 #define MINIC_LINENOISE_STDDEF_H
@@ -119,7 +113,9 @@ extern FILE *stderr;
 FILE *fopen(const char *path, const char *mode);
 int fclose(FILE *stream);
 int fgetc(FILE *stream);
+int fputc(int character, FILE *stream);
 int fputs(const char *string, FILE *stream);
+int ferror(FILE *stream);
 int fprintf(FILE *stream, const char *format, ...);
 int printf(const char *format, ...);
 int snprintf(char *buffer, size_t size, const char *format, ...);
