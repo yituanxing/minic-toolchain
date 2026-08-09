@@ -86,4 +86,16 @@ replace_once(
 """,
 )
 
+replace_once(
+    "src/target/riscv64/codegen_expression.c",
+    """        if (field->element_count > 1U) {
+            return minic_type_is_pointer(expression->type);
+        }
+""",
+    """        if (field->is_array) {
+            return minic_type_is_pointer(expression->type);
+        }
+""",
+)
+
 print("staged explicit record-field array identity including length-one arrays")
