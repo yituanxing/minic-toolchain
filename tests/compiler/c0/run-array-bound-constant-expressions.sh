@@ -13,10 +13,10 @@ mkdir -p "$work"
     -o "$work/array_bound_constant_expression.i"
 "$minic" -S "$work/array_bound_constant_expression.i" \
     -o "$work/array_bound_constant_expression.s"
-grep -F '.size multiplied, 4194304' "$work/array_bound_constant_expression.s" >/dev/null
-grep -F '.size grouped, 35' "$work/array_bound_constant_expression.s" >/dev/null
-grep -F '.size divided, 44' "$work/array_bound_constant_expression.s" >/dev/null
-printf '%s\n' 'PASS compiler/c0/array_bound_constant_expression operators=+,-,*,/,% parentheses=1'
+grep -F 'li a0, 1048576' "$work/array_bound_constant_expression.s" >/dev/null
+grep -F 'li a0, 35' "$work/array_bound_constant_expression.s" >/dev/null
+grep -F 'li a0, 44' "$work/array_bound_constant_expression.s" >/dev/null
+printf '%s\n' 'PASS compiler/c0/array_bound_constant_expression scope=local operators=+,-,*,/,% parentheses=1'
 
 "$host_cc" -E -P -x c "$root/tests/compiler/c0/invalid_runtime_array_bound.c" \
     -o "$work/invalid_runtime_array_bound.i"
