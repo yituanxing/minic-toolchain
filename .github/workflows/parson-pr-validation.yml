@@ -33,7 +33,8 @@ jobs:
             tools/dev/pr72-assignment-expression.patch \
             tools/dev/pr72-variadic-definition.patch \
             tools/dev/pr72-probe-stdarg.patch \
-            tools/dev/pr72-void-object-pointer.patch; do
+            tools/dev/pr72-void-object-pointer.patch \
+            tools/dev/pr72-expression-arena-safety.patch; do
             if test -f "$patch"; then
               git apply --check --recount "$patch"
               git apply --recount "$patch"
