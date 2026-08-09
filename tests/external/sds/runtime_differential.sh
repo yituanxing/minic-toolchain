@@ -35,9 +35,9 @@ test "$(git hash-object "$vendor/testhelp.h")" = 450334046af86a5e0f00126f9790e9a
     "$vendor/sds.c" -o "$gcc_binary"
 
 set +e
-"$qemu" "$minic_binary" >"$work/minic.stdout" 2>"$work/minic.stderr"
+timeout 60s "$qemu" "$minic_binary" >"$work/minic.stdout" 2>"$work/minic.stderr"
 minic_status=$?
-"$qemu" "$gcc_binary" >"$work/gcc.stdout" 2>"$work/gcc.stderr"
+timeout 60s "$qemu" "$gcc_binary" >"$work/gcc.stdout" 2>"$work/gcc.stderr"
 gcc_status=$?
 set -e
 
