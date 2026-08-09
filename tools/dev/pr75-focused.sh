@@ -25,6 +25,7 @@ for test_script in \
     run-gnu-aligned-record-fields.sh \
     run-record-forward-declarations.sh \
     run-record-multi-declarators.sh \
+    run-record-typedef-array-fields.sh \
     run-volatile-qualifiers.sh \
     run-array-bound-sizeof.sh \
     run-array-bound-integer-casts.sh \
