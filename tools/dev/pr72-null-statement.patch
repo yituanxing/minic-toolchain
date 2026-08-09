@@ -1,0 +1,13 @@
+diff --git a/src/frontend/parser_statement.c b/src/frontend/parser_statement.c
+--- a/src/frontend/parser_statement.c
++++ b/src/frontend/parser_statement.c
+@@ -1269,6 +1269,9 @@ bool minic_parser_parse_statement(MinicParser *parser, bool allow_declaration) {
+     if (!ensure_function_label_context(parser)) {
+         return false;
+     }
++    if (parser->current.kind == MINIC_TOKEN_SEMICOLON) {
++        return minic_parser_advance(parser);
++    }
+     if (parser->current.kind == MINIC_TOKEN_LBRACE) {
+         return parse_compound_statement(parser);
+     }
