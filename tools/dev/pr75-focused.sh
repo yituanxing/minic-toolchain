@@ -21,7 +21,7 @@ for test_script in \
     run-record-multidimensional-arrays.sh \
     run-record-length-one-arrays.sh \
     run-pointer-compound-subtraction.sh \
-    run-builtin-offsetof.sh \
+    run-builtin-offsetoff.sh \
     run-pointer-integer-casts.sh \
     run-record-assignment-expressions.sh \
     run-bitwise-and-assignment-expressions.sh \
@@ -33,6 +33,7 @@ for test_script in \
     run-stack-fixed-arguments.sh \
     run-static-local-record-initializers.sh \
     run-static-local-scalars.sh \
+    run-static-local-inferred-arrays.sh \
     run-static-inferred-char-arrays.sh \
     run-prefix-update-expressions.sh \
     run-function-designator-calls.sh \
