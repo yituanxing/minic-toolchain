@@ -4,4 +4,5 @@ set -eu
 python3 tools/dev/pr75-signed-char.py
 python3 tools/dev/pr75-incomplete-extern-array.py
 python3 tools/dev/pr75-incomplete-array-verifier.py
+python3 tools/dev/pr75-extern-function-declarations.py
 printf '%s\n' 'staged Lua discovery semantics'
