@@ -3,13 +3,15 @@ name: Linux 6.6.143 Discovery
 on:
   push:
     branches: [external/linux-6.6.143-discovery]
+  pull_request:
+    branches: [external/lua-discovery]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: linux-6.6.143-discovery
+  group: linux-6.6.143-discovery-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
