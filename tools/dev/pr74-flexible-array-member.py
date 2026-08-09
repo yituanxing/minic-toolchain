@@ -155,6 +155,22 @@ replace_once(
 )
 
 replace_once(
+    "src/frontend/ast_verifier.c",
+    """        if (field->element_count > 1U) {
+            return expression->value_category == MINIC_VALUE_RVALUE &&
+                   minic_type_pointer_to(expected_type, &expected_type) &&
+                   minic_type_equal(expression->type, expected_type);
+        }
+""",
+    """        if (field->is_flexible_array || field->element_count > 1U) {
+            return expression->value_category == MINIC_VALUE_RVALUE &&
+                   minic_type_pointer_to(expected_type, &expected_type) &&
+                   minic_type_equal(expression->type, expected_type);
+        }
+""",
+)
+
+replace_once(
     "src/target/riscv64/layout.c",
     """        if (element_size > SIZE_MAX / field->element_count) {
             return false;
@@ -168,4 +184,4 @@ replace_once(
 """,
 )
 
-print("staged C99 flexible array member parsing, access, and RV64 layout")
+print("staged C99 flexible array member parsing, verifier contract, access, and RV64 layout")
