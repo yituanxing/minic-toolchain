@@ -16,6 +16,7 @@ mkdir -p "$work"
 
 test -s "$work/gnu_function_attributes.s"
 grep -F 'call_attribute_functions:' "$work/gnu_function_attributes.s" >/dev/null
+grep -F '  call allocate_like' "$work/gnu_function_attributes.s" >/dev/null
 grep -F '  call memory_copy' "$work/gnu_function_attributes.s" >/dev/null
 grep -F '  call memory_compare' "$work/gnu_function_attributes.s" >/dev/null
 
@@ -30,4 +31,4 @@ set -e
 test "$status" -ne 0
 grep -F 'unsupported GNU function attribute' "$work/reject.stderr" >/dev/null
 
-printf '%s\n' 'PASS compiler/c0/gnu_function_attributes metadata=nothrow,leaf,nonnull,access,pure unknown=reject aligned=not-silently-ignored'
+printf '%s\n' 'PASS compiler/c0/gnu_function_attributes metadata=nothrow,leaf,nonnull,access,pure,malloc unknown=reject aligned=not-silently-ignored'
