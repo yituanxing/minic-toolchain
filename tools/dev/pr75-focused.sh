@@ -9,6 +9,7 @@ for test_script in \
     run-signed-char-semantics.sh \
     run-extern-incomplete-arrays.sh \
     run-extern-fixed-integer-arrays.sh \
+    run-external-pointer-arrays.sh \
     run-extern-parenthesized-functions.sh \
     run-anonymous-record-field-types.sh \
     run-typedef-enum-definitions.sh \
