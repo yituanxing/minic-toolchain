@@ -37,7 +37,9 @@ EOF
 cat >"$include/stdint.h" <<'EOF'
 #ifndef MINIC_LINENOISE_STDINT_H
 #define MINIC_LINENOISE_STDINT_H
+#include <stddef.h>
 typedef unsigned int uint32_t;
+#define SIZE_MAX ((size_t)-1)
 #endif
 EOF
 
