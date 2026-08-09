@@ -173,18 +173,24 @@ bool minic_parser_parse_record_definition_specifier(MinicParser *parser, MinicTy
 
     if (parser->current.kind == MINIC_TOKEN_IDENTIFIER) {
         MinicSourceSpan name_span;
+        const MinicRecord *record;
 
         name_span = parser->current.span;
-        if (minic_parser_find_record(parser, name_span) != MINIC_RECORD_INVALID) {
-            minic_parser_error(parser, "duplicate record definition");
-            return false;
-        }
-        if (!minic_c0_program_add_record(parser->program,
-                                         parser->source + name_span.begin.offset,
-                                         minic_parser_span_length(name_span),
-                                         &record_id)) {
-            minic_parser_error(parser, "out of memory while adding record");
-            return false;
+        record_id = minic_parser_find_record(parser, name_span);
+        if (record_id == MINIC_RECORD_INVALID) {
+            if (!minic_c0_program_add_record(parser->program,
+                                             parser->source + name_span.begin.offset,
+                                             minic_parser_span_length(name_span),
+                                             &record_id)) {
+                minic_parser_error(parser, "out of memory while adding record");
+                return false;
+            }
+        } else {
+            record = minic_c0_program_record(parser->program, record_id);
+            if (record == NULL || record->is_complete) {
+                minic_parser_error(parser, "duplicate record definition");
+                return false;
+            }
         }
         if (!minic_parser_advance(parser)) {
             return false;
