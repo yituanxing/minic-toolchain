@@ -8,6 +8,7 @@ python3 tools/dev/pr77-gnu-int128-type.py
 python3 tools/dev/pr77-gnu-int128-contracts.py
 python3 tools/dev/pr77-bool-type.py
 python3 tools/dev/pr77-bool-constant-cast.py
+python3 tools/dev/pr77-typeof-generic.py
 python3 tools/dev/pr77-gnu-typedef-redundant-aligned.py
 python3 tools/dev/pr77-gnu-record-alignment.py
 python3 tools/dev/pr77-gnu-empty-records.py
