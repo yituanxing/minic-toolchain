@@ -10,6 +10,7 @@ python3 tools/dev/pr75-array-bound-sizeof.py
 python3 tools/dev/pr75-array-bound-enum.py
 python3 tools/dev/pr75-array-bound-casts.py
 python3 tools/dev/pr75-comma-operator.py
+python3 tools/dev/pr75-top-level-comma-conditions.py
 python3 tools/dev/pr75-cast-type-classifier.py
 python3 tools/dev/pr75-extern-function-declarations.py
 python3 tools/dev/pr75-anonymous-record-type-specifiers.py
