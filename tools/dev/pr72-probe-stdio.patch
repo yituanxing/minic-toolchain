@@ -1,0 +1,10 @@
+diff --git a/tests/external/parson/probe.sh b/tests/external/parson/probe.sh
+--- a/tests/external/parson/probe.sh
++++ b/tests/external/parson/probe.sh
+@@ -37,6 +37,7 @@ struct minic_parson_FILE { int opaque; };
+ typedef struct minic_parson_FILE FILE;
+ #define SEEK_END 2
++#define EOF (-1)
+ FILE *fopen(const char *path, const char *mode);
+ int fclose(FILE *stream);
+ int fseek(FILE *stream, long offset, int whence);
