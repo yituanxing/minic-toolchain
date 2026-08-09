@@ -19,12 +19,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Stage current discovery semantics and build MiniC
+      - name: Build committed MiniC semantics
         shell: bash
         run: |
           set -Eeuo pipefail
-          sh tools/dev/pr74-stage.sh
-          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
           make -j4 MODE=release BUILD_DIR=build/sds-compiler
           make -j4 MODE=sanitize BUILD_DIR=build/sds-sanitize
 
