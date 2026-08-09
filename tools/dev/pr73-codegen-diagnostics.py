@@ -35,13 +35,43 @@ new = '''            const MinicExpression *failed_expression;
                             (size_t)failed_expression->value.binary.left,
                             (size_t)failed_expression->value.binary.right);
                     break;
-                case MINIC_EXPRESSION_CALL:
+                case MINIC_EXPRESSION_CALL: {
+                    const MinicFunction *failed_callee;
+                    size_t failed_argument_index;
+
+                    failed_callee = failed_expression->value.call.function_id != MINIC_FUNCTION_INVALID
+                                        ? minic_c0_program_function(
+                                              program, failed_expression->value.call.function_id)
+                                        : NULL;
                     fprintf(stderr,
-                            "CODEGEN_FAIL_EXPR call function=%zu callee=%zu argc=%zu\\n",
+                            "CODEGEN_FAIL_EXPR call function=%zu name=%s callee=%zu argc=%zu\\n",
                             (size_t)failed_expression->value.call.function_id,
+                            failed_callee != NULL ? failed_callee->name : "<indirect>",
                             (size_t)failed_expression->value.call.callee,
                             failed_expression->value.call.argument_count);
+                    for (failed_argument_index = 0U;
+                         failed_argument_index < failed_expression->value.call.argument_count;
+                         ++failed_argument_index) {
+                        const MinicExpression *failed_argument;
+                        MinicExpressionId failed_argument_id;
+
+                        failed_argument_id =
+                            failed_expression->value.call.arguments[failed_argument_index];
+                        failed_argument = minic_c0_program_expression(program, failed_argument_id);
+                        fprintf(stderr,
+                                "CODEGEN_FAIL_ARG index=%zu expression=%zu kind=%d "
+                                "pointer=%d integer=%d double=%d lvalue=%d\\n",
+                                failed_argument_index,
+                                (size_t)failed_argument_id,
+                                failed_argument != NULL ? (int)failed_argument->kind : -1,
+                                failed_argument != NULL && minic_type_is_pointer(failed_argument->type),
+                                failed_argument != NULL && minic_type_is_integer(failed_argument->type),
+                                failed_argument != NULL && minic_type_is_double(failed_argument->type),
+                                failed_argument != NULL &&
+                                    failed_argument->value_category == MINIC_VALUE_LVALUE);
+                    }
                     break;
+                }
                 case MINIC_EXPRESSION_BINARY:
                     fprintf(stderr,
                             "CODEGEN_FAIL_EXPR binary op=%d left=%zu right=%zu\\n",
