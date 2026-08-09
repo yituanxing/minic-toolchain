@@ -7,6 +7,7 @@ python3 tools/dev/pr74-inline-function.py
 python3 tools/dev/pr74-postfix-const.py
 python3 tools/dev/pr74-long-long.py
 python3 tools/dev/pr74-wide-integer-literals.py
+python3 tools/dev/pr74-wide-switch-case.py
 python3 tools/dev/pr74-array-bound-constant-expression.py
 python3 tools/dev/pr74-for-declaration-init.py
 python3 tools/dev/pr74-void-pointer-local.py
