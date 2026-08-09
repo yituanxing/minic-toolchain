@@ -51,7 +51,7 @@ text = replace_once(
 text = replace_once(
     text,
     """    /* On the active RV64 data model, signed long and signed long long both\n       represent every value of unsigned int. */\n    if (signed_type.integer_rank >= MINIC_INTEGER_RANK_LONG &&\n        unsigned_type.integer_rank <= MINIC_INTEGER_RANK_INT) {\n        *result = signed_type;\n        return true;\n    }\n\n    *result = minic_type_integer_with_rank(MINIC_INTEGER_SIGN_UNSIGNED, signed_type.integer_rank);\n""",
-    """    /* On the active RV64 data model, signed long and signed long long both\n       represent every value of unsigned int.  Signed __int128 additionally\n       represents every value of the narrower unsigned integer ranks. */\n    if ((signed_type.integer_rank >= MINIC_INTEGER_RANK_LONG &&\n         unsigned_type.integer_rank <= MINIC_INTEGER_RANK_INT) ||\n        (signed_type.integer_rank == MINIC_INTEGER_RANK_INT128 &&\n         unsigned_type.integer_rank <= MINIC_INTEGER_RANK_LONG_LONG)) {\n        *result = signed_type;\n        return true;\n    }\n\n    *result = minic_type_integer_with_rank(MINIC_INTEGER_SIGN_UNSIGNED, signed_type.integer_rank);\n""",
+    """    /* On the active RV64 data model, signed long and signed long long both\n       represent every value of unsigned int. Signed __int128 additionally\n       represents every value of the narrower unsigned integer ranks. */\n    if ((signed_type.integer_rank >= MINIC_INTEGER_RANK_LONG &&\n         unsigned_type.integer_rank <= MINIC_INTEGER_RANK_INT) ||\n        (signed_type.integer_rank == MINIC_INTEGER_RANK_INT128 &&\n         unsigned_type.integer_rank <= MINIC_INTEGER_RANK_LONG_LONG)) {\n        *result = signed_type;\n        return true;\n    }\n\n    *result = minic_type_integer_with_rank(MINIC_INTEGER_SIGN_UNSIGNED, signed_type.integer_rank);\n""",
     "int128-common-type",
 )
 text = replace_once(
@@ -147,15 +147,12 @@ static bool minic_parser_try_gnu_int128(MinicParser *parser,
 text = replace_once(text, include_anchor, helper, "parser-int128-helper")
 
 parse_anchor = """    if (minic_parser_is_integer_type_specifier(parser->current.kind)) {\n        bool saw_char = false;\n"""
-parse_replacement = """    {\n        bool parsed_gnu_int128 = false;\n\n        if (!minic_parser_try_gnu_int128(parser, &parsed_type, &parsed_gnu_int128)) {\n            return false;\n        }\n        if (parsed_gnu_int128) {\n            /* parsed_type already holds the semantic GNU 128-bit integer type. */\n        } else if (minic_parser_is_integer_type_specifier(parser->current.kind)) {\n        bool saw_char = false;\n"""
+parse_replacement = """    {\n        bool parsed_gnu_int128 = false;\n\n        if (!minic_parser_try_gnu_int128(parser, &parsed_type, &parsed_gnu_int128)) {\n            return false;\n        }\n        if (parsed_gnu_int128) {\n            goto parsed_type_specifiers_done;\n        }\n    }\n\n    if (minic_parser_is_integer_type_specifier(parser->current.kind)) {\n        bool saw_char = false;\n"""
 text = replace_once(text, parse_anchor, parse_replacement, "parser-int128-entry")
 
-# Close only the small dispatch scope introduced above.  Match the transition from
-# the generic type-name error to qualifier processing structurally rather than
-# rewriting the surrounding parser branches.
-qualifier_anchor = """        minic_parser_error(parser, \"expected type name\");\n        return false;\n    }\n\n    while (parser->current.kind == MINIC_TOKEN_KW_CONST) {\n"""
-qualifier_replacement = """        minic_parser_error(parser, \"expected type name\");\n        return false;\n        }\n    }\n\n    while (parser->current.kind == MINIC_TOKEN_KW_CONST) {\n"""
-text = replace_once(text, qualifier_anchor, qualifier_replacement, "parser-int128-dispatch-close")
+qualifier_anchor = """    while (parser->current.kind == MINIC_TOKEN_KW_CONST) {\n"""
+qualifier_replacement = """parsed_type_specifiers_done:\n    while (parser->current.kind == MINIC_TOKEN_KW_CONST) {\n"""
+text = replace_once(text, qualifier_anchor, qualifier_replacement, "parser-int128-done-label")
 path.write_text(text)
 
 
