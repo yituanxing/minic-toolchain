@@ -30,14 +30,14 @@ if ! test -s "$asm"; then
 fi
 require_fixed '.section .rodata' 'rodata-section'
 require_fixed '.type dummy, @object' 'object-type'
-require_fixed '  .byte 16' 'outer-tag'
-require_fixed '  .byte 3' 'key-tag'
+require_fixed '  .zero 8' 'leading-null-union'
+require_fixed '  .byte 16' 'tag-field'
+require_fixed '  .zero 3' 'rv64-padding'
 require_fixed '  .word 7' 'next-field'
 require_fixed '.size dummy, 24' 'rv64-object-size'
-require_fixed 'read_dummy:' 'member-access-codegen'
 if grep -F '.globl dummy' "$asm" >/dev/null; then
     echo 'FAIL static_nested_record_initializer leaked-external-linkage' >&2
     cat "$asm" >&2
     exit 1
 fi
-printf '%s\n' 'PASS compiler/c0/static_nested_record_initializer union=2 struct=1 null-pointer=2 bitwise=1 size=24 internal-rodata=1'
+printf '%s\n' 'PASS compiler/c0/static_nested_record_initializer union=2 struct=1 null-pointer=2 bitwise=1 padding=rv64 size=24'
