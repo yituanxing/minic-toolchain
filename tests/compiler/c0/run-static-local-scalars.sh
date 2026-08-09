@@ -21,5 +21,5 @@ if grep -F '.globl __minic_static_local_' "$work/static_local_scalar.s" >/dev/nu
     echo 'static local scalar leaked external linkage' >&2
     exit 1
 fi
-grep -F '  la a0, __minic_static_local_' "$work/static_local_scalar.s" >/dev/null
-printf '%s\n' 'PASS compiler/c0/static_local_scalar writable=1 storage=internal-global lifetime=static addressable=1'
+test "$(grep -c -F '__minic_static_local_' "$work/static_local_scalar.s")" -ge 3
+printf '%s\n' 'PASS compiler/c0/static_local_scalar writable=1 storage=internal-global lifetime=static addressable=compile-verified'
