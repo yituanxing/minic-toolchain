@@ -16,10 +16,10 @@ mkdir -p "$work"
 
 grep -Fx '.data' "$work/static_local_scalar.s" >/dev/null
 grep -F '.type __minic_static_local_' "$work/static_local_scalar.s" >/dev/null
-grep -F '  .dword 0' "$work/static_local_scalar.s" >/dev/null
+grep -F '  .zero 8' "$work/static_local_scalar.s" >/dev/null
 if grep -F '.globl __minic_static_local_' "$work/static_local_scalar.s" >/dev/null; then
     echo 'static local scalar leaked external linkage' >&2
     exit 1
 fi
 test "$(grep -c -F '__minic_static_local_' "$work/static_local_scalar.s")" -ge 3
-printf '%s\n' 'PASS compiler/c0/static_local_scalar writable=1 storage=internal-global lifetime=static addressable=compile-verified'
+printf '%s\n' 'PASS compiler/c0/static_local_scalar writable=1 storage=internal-global lifetime=static zero-width=8 addressable=compile-verified'
