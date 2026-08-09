@@ -1,0 +1,44 @@
+name: Lua PR Validation
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lua-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  lua-compile:
+    name: lua-compile
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build committed MiniC
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+          make -j4 MODE=release BUILD_DIR=build/lua-compiler
+          make -j4 MODE=sanitize BUILD_DIR=build/lua-sanitize
+
+      - name: Compile official Lua 5.5.0 translation units
+        shell: bash
+        run: |
+          set +e
+          MINIC="$GITHUB_WORKSPACE/build/lua-compiler/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/lua-discovery" \
+          HOST_CC=cc \
+            sh tests/external/lua/probe.sh
+          status=$?
+          set -e
+
+          if test "$status" -ge 128; then
+            echo "LUA_SANITIZER_NOTE release_status=$status"
+          fi
+          exit "$status"
