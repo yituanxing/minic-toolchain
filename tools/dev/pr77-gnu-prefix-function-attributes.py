@@ -10,10 +10,11 @@ old = '''           function_identifier_is(parser, "__malloc__") ||
 new = '''           function_identifier_is(parser, "__malloc__") ||
            function_identifier_is(parser, "__unused__") ||
            function_identifier_is(parser, "__no_instrument_function__") ||
+           function_identifier_is(parser, "__always_inline__") ||
            function_identifier_is(parser, "noreturn") ||
 '''
 if text.count(old) != 1:
-    raise SystemExit(f"metadata attribute anchor: expected one match, found {text.count(old)}")
+    raise SystemExit(f"metadata/hint attribute anchor: expected one match, found {text.count(old)}")
 text = text.replace(old, new, 1)
 
 anchor = '''static bool parse_gnu_predeclarator_function_attributes(MinicParser *parser) {
@@ -50,6 +51,10 @@ helper = r'''static bool parse_gnu_prefix_function_attributes(MinicParser *parse
                                    "ABI-affecting attributes must be implemented explicitly");
                 return false;
             }
+            /* __always_inline__ is accepted deliberately as an optimization hint. The
+             * current direct RV64 backend has no inliner, so preserving program semantics
+             * means compiling the callable static-inline body normally. The permanent
+             * AttributeSet/IR PassManager path will consume this hint once inlining exists. */
             if (!minic_parser_advance(parser) || !parse_gnu_attribute_arguments(parser)) {
                 return false;
             }
@@ -92,10 +97,6 @@ if text.count(old) != 1:
     raise SystemExit(f"function prefix call anchor: expected one match, found {text.count(old)}")
 text = text.replace(old, new, 1)
 
-# Static object/function dispatch probes a cloned parser before parse_function() runs.
-# Reuse the exact prefix-attribute parser there as well, otherwise a valid
-# `static inline __attribute__((...)) type fn(...)` is rejected during classification
-# before semantic function parsing gets a chance to consume the attribute.
 old = '''    if (probe.current.kind == MINIC_TOKEN_KW_INLINE && !minic_parser_advance(&probe)) {
         return false;
     }
@@ -116,4 +117,4 @@ new = '''    {
 if text.count(old) != 1:
     raise SystemExit(f"static declaration lookahead anchor: expected one match, found {text.count(old)}")
 path.write_text(text.replace(old, new, 1))
-print("staged GNU prefix function attributes unused,no_instrument and static-inline gnu_inline with dispatch lookahead")
+print("staged GNU prefix attributes unused,no_instrument,always-inline and static-inline gnu_inline with dispatch lookahead")
