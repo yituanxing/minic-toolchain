@@ -22,7 +22,9 @@ static bool gnu_function_attribute_is_metadata(const MinicParser *parser) {
            function_identifier_is(parser, "__nonnull__") ||
            function_identifier_is(parser, "__access__") ||
            function_identifier_is(parser, "__pure__") ||
-           function_identifier_is(parser, "__malloc__");
+           function_identifier_is(parser, "__malloc__") ||
+           function_identifier_is(parser, "noreturn") ||
+           function_identifier_is(parser, "__noreturn__");
 }
 
 static bool parse_gnu_attribute_arguments(MinicParser *parser) {
@@ -88,6 +90,25 @@ if text.count(anchor) != 1:
     raise SystemExit(f"function helper anchor: expected 1 match, found {text.count(anchor)}")
 text = text.replace(anchor, helper + anchor, 1)
 
+# GNU attributes are valid both between the declaration specifiers and the declarator name
+# (e.g. `extern void __attribute__((noreturn)) f(void)`) and after the full declarator.
+old = '''    if (!minic_parser_parse_type_name(parser, &return_type)) {
+        return false;
+    }
+    if (parser->current.kind == MINIC_TOKEN_IDENTIFIER) {
+'''
+new = '''    if (!minic_parser_parse_type_name(parser, &return_type)) {
+        return false;
+    }
+    if (!parse_gnu_function_attributes(parser)) {
+        return false;
+    }
+    if (parser->current.kind == MINIC_TOKEN_IDENTIFIER) {
+'''
+if text.count(old) != 1:
+    raise SystemExit(f"pre-declarator attribute anchor: expected 1 match, found {text.count(old)}")
+text = text.replace(old, new, 1)
+
 old = '''    if (!minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '('") ||
         !minic_parser_parse_parameter_list(
             parser, parameter_name_spans, parameter_types, &parameter_count, false, &is_variadic) ||
@@ -108,4 +129,4 @@ new = '''    if (!minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '('"
 if text.count(old) != 1:
     raise SystemExit(f"function declarator attribute anchor: expected 1 match, found {text.count(old)}")
 path.write_text(text.replace(old, new, 1))
-print("staged non-ABI GNU function attributes: nothrow, leaf, nonnull, access, pure, malloc")
+print("staged non-ABI GNU function attributes: nothrow, leaf, nonnull, access, pure, malloc, noreturn")
