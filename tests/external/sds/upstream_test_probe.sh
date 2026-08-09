@@ -17,7 +17,6 @@ fi
 curl -fsSL "https://raw.githubusercontent.com/antirez/sds/$upstream/testhelp.h" -o "$vendor/testhelp.h"
 test "$(git hash-object "$vendor/testhelp.h")" = 450334046af86a5e0f00126f9790e9a14e170f84
 
-# Extend only the controlled libc surface required by SDS's own embedded test main.
 cat >"$include/stdlib.h" <<'EOF'
 #ifndef MINIC_SDS_STDLIB_H
 #define MINIC_SDS_STDLIB_H
@@ -58,13 +57,14 @@ if test "$status" -ne 0; then
     if test -z "$frontier_line"; then
         frontier_line=1
     fi
-    start_line=$((frontier_line > 32 ? frontier_line - 32 : 1))
-    end_line=$((frontier_line + 32))
+    start_line=$((frontier_line > 12 ? frontier_line - 12 : 1))
+    end_line=$((frontier_line + 12))
     printf '%s\n' "SDS_TEST_BLOCKER minic_status=$status line=$frontier_line" >&2
+    printf '%s\n' "SDS_TEST_DIAGNOSTIC=$(head -n 1 "$work/sds-test.stderr")" >&2
     printf '%s\n' "SDS test frontier lines=$start_line-$end_line:" >&2
     nl -ba "$work/sds-test.i" | sed -n "${start_line},${end_line}p" >&2
-    printf '%s\n' 'MiniC test diagnostic:' >&2
-    sed -n '1,220p' "$work/sds-test.stderr" >&2
+    printf '%s\n' 'MiniC test diagnostic (first 24 lines):' >&2
+    sed -n '1,24p' "$work/sds-test.stderr" >&2
     exit "$status"
 fi
 
