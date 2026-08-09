@@ -48,5 +48,8 @@ fi
 if test -f tools/dev/pr72-record-layout-order.py; then
     python3 tools/dev/pr72-record-layout-order.py
 fi
+if test -f tools/dev/pr72-qualified-conditional.py; then
+    python3 tools/dev/pr72-qualified-conditional.py
+fi
 
 printf '%s\n' 'staged Parson discovery semantics'
