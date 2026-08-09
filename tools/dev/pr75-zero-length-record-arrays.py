@@ -11,26 +11,6 @@ def replace_once(path: str, old: str, new: str) -> None:
     target.write_text(text.replace(old, new, 1))
 
 
-def replace_in_function(path: str, signature: str, old: str, new: str) -> None:
-    target = Path(path)
-    text = target.read_text()
-    start = text.find(signature)
-    if start < 0:
-        raise SystemExit(f"{path}: missing function {signature}")
-    next_start = text.find("\nbool ", start + len(signature))
-    next_static = text.find("\nstatic ", start + len(signature))
-    candidates = [value for value in (next_start, next_static) if value >= 0]
-    end = min(candidates) if candidates else len(text)
-    body = text[start:end]
-    count = body.count(old)
-    if count != 1:
-        raise SystemExit(
-            f"{path}:{signature}: expected one replacement, found {count}: {old[:120]!r}"
-        )
-    body = body.replace(old, new, 1)
-    target.write_text(text[:start] + body + text[end:])
-
-
 # Keep zero-length arrays distinct from incomplete/flexible arrays. element_count remains one
 # internally so existing array/field invariants stay valid; layout alone gives this GNU member
 # zero storage while retaining the element type's natural alignment.
@@ -58,23 +38,8 @@ bool minic_parser_parse_record_array_bound(MinicParser *parser,
 """,
 )
 
-# Earlier Lua stages have already generalized the constant-expression parser. Patch only the
-# stable fixed-bound validation/assignment inside this function, then add a record-only sibling.
-replace_in_function(
-    "src/frontend/parser_core.c",
-    "bool minic_parser_parse_fixed_array_bound(",
-    """    if (value <= 0) {
-        minic_parser_error(parser, "array bound must be greater than zero");
-        return false;
-    }
-""",
-    """    if (value <= 0) {
-        minic_parser_error(parser, "array bound must be greater than zero");
-        return false;
-    }
-""",
-)
-# Insert the GNU record-member entry point immediately after the ordinary fixed-bound function.
+# Earlier stages already expose the shared integer constant-expression parser. Add a
+# record-member entry point that differs only in allowing GNU bound zero.
 core_path = Path("src/frontend/parser_core.c")
 text = core_path.read_text()
 signature = "bool minic_parser_parse_fixed_array_bound(MinicParser *parser, size_t *element_count) {"
@@ -114,8 +79,9 @@ bool minic_parser_parse_record_array_bound(MinicParser *parser,
 text = text[:end] + helper + text[end:]
 core_path.write_text(text)
 
-# parser_record.c has already been expanded by earlier Lua staging into the shared declarator
-# helper. Add one flag and use the record-only bound parser on the direct member dimension.
+# parser_record.c has already been expanded to support multidimensional fields. Only the
+# outermost explicit dimension may carry GNU zero length; inner dimensions stay ordinary
+# positive array types. A zero outer dimension is represented by element_count=1 plus a flag.
 replace_once(
     "src/frontend/parser_record.c",
     """    bool is_array;
@@ -136,19 +102,24 @@ replace_once(
     is_zero_length_array = false;
 """,
 )
-record_path = Path("src/frontend/parser_record.c")
-text = record_path.read_text()
-old = "minic_parser_parse_fixed_array_bound(parser, &element_count)"
-count = text.count(old)
-if count < 1:
-    raise SystemExit("parser_record.c: no fixed record array bound call found")
-text = text.replace(
-    old,
-    "minic_parser_parse_record_array_bound(parser, &element_count, &is_zero_length_array)",
-    1,
+replace_once(
+    "src/frontend/parser_record.c",
+    """            if (!minic_parser_parse_fixed_array_bound(parser, &bounds[bound_count])) {
+                return false;
+            }
+            bound_count += 1U;
+""",
+    """            if (bound_count == 0U) {
+                if (!minic_parser_parse_record_array_bound(
+                        parser, &bounds[bound_count], &is_zero_length_array)) {
+                    return false;
+                }
+            } else if (!minic_parser_parse_fixed_array_bound(parser, &bounds[bound_count])) {
+                return false;
+            }
+            bound_count += 1U;
+""",
 )
-record_path.write_text(text)
-
 replace_once(
     "src/frontend/parser_record.c",
     """    mutable_record->fields[mutable_record->field_count - 1U].is_array = is_array;
