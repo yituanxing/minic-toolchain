@@ -40,6 +40,7 @@ cat >"$include/stdio.h" <<'EOF'
 #define MINIC_PARSON_STDIO_H
 #include <stddef.h>
 #include <stdarg.h>
+struct minic_parson_FILE { int opaque; };
 typedef struct minic_parson_FILE FILE;
 #define SEEK_END 2
 FILE *fopen(const char *path, const char *mode);
