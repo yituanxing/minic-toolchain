@@ -32,6 +32,7 @@ for test_script in \
     run-cast-type-classification.sh \
     run-stack-fixed-arguments.sh \
     run-static-local-record-initializers.sh \
+    run-static-local-scalars.sh \
     run-static-inferred-char-arrays.sh \
     run-prefix-update-expressions.sh \
     run-function-designator-calls.sh \
