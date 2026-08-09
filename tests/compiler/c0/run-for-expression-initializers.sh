@@ -15,6 +15,7 @@ mkdir -p "$work"
     -o "$work/for_expression_initializer.s"
 
 grep -F 'for_compound_initializer:' "$work/for_expression_initializer.s" >/dev/null
+grep -F 'for_comma_initializer:' "$work/for_expression_initializer.s" >/dev/null
 grep -E '^[[:space:]]+subw[[:space:]]+a0,' "$work/for_expression_initializer.s" >/dev/null
 grep -F '  beqz a0, .Lwhile_end_' "$work/for_expression_initializer.s" >/dev/null
-printf '%s\n' 'PASS compiler/c0/for_expression_initializer compound=-= expression-init=general update=post--'
+printf '%s\n' 'PASS compiler/c0/for_expression_initializer compound=-= expression-init=general comma-init=2 update=post--'
