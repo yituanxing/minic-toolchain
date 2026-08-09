@@ -45,6 +45,15 @@ printf '%s\n' "PASS compiler/c0/self_referential_record"
 grep -F ".globl main" "$work/function_pointer_record_fields.s" >/dev/null
 printf '%s\n' "PASS compiler/c0/function_pointer_record_fields"
 
+"$host_cc" -E -P -x c \
+    "$root/tests/compiler/c0/incomplete_record_pointer.c" \
+    -o "$work/incomplete_record_pointer.i"
+"$minic" -S \
+    "$work/incomplete_record_pointer.i" \
+    -o "$work/incomplete_record_pointer.s"
+grep -F ".globl main" "$work/incomplete_record_pointer.s" >/dev/null
+printf '%s\n' "PASS compiler/c0/incomplete_record_pointer"
+
 expect_failure() {
     name=$1
     diagnostic=$2
@@ -75,5 +84,5 @@ expect_failure \
     invalid_self_record_by_value \
     "record field cannot use incomplete type by value"
 expect_failure \
-    invalid_unknown_record_pointer \
-    "use of undeclared record tag"
+    invalid_incomplete_record_object \
+    "incomplete record type requires pointer declarator"
