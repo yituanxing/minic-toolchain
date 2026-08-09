@@ -37,14 +37,14 @@ compile_success \
     const_local \
     "$root/tests/programs/c0/const_local.c"
 grep -F ".type preserve_value, @function" "$work/const_local.s" >/dev/null
-grep -F "  sw t0, 0(a0)" "$work/const_local.s" >/dev/null
+grep -E '^  sw t0, 0\((a0|t1)\)$' "$work/const_local.s" >/dev/null
 grep -F "  lw a0, " "$work/const_local.s" >/dev/null
 grep -F "  call preserve_value" "$work/const_local.s" >/dev/null
 printf '%s\n' "PASS compiler/c0/const_local"
 
 expect_failure \
     invalid_const_local_assignment \
-    "assignment target must be a modifiable lvalue"
+    "assignment expression requires a modifiable scalar lvalue"
 expect_failure \
     invalid_const_local_increment \
     "prefix update requires a modifiable integer or pointer lvalue"

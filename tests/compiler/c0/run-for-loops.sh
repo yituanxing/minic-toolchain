@@ -50,7 +50,7 @@ expect_failure() {
 
 expect_failure \
     invalid_for_update \
-    "assignment target must be a modifiable lvalue"
+    "assignment expression requires a modifiable scalar lvalue"
 expect_failure \
     invalid_for_increment_target \
     "prefix update requires a modifiable integer or pointer lvalue"

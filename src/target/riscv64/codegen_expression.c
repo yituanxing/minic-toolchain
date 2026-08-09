@@ -2,6 +2,7 @@
 #include "target/riscv64/layout.h"
 
 #include <inttypes.h>
+#include <string.h>
 
 static bool minic_riscv64_pointer_element_size(const MinicC0Program *program,
                                                MinicType pointer_type,
@@ -190,7 +191,15 @@ static bool minic_riscv64_emit_double_comparison(FILE *file,
 static bool minic_riscv64_emit_conditional_result_conversion(FILE *file,
                                                              MinicType source_type,
                                                              MinicType result_type) {
+    MinicType unqualified_source;
+    MinicType unqualified_result;
+
     if (minic_type_equal(source_type, result_type)) {
+        return true;
+    }
+    if (minic_type_unqualified(source_type, &unqualified_source) &&
+        minic_type_unqualified(result_type, &unqualified_result) &&
+        minic_type_equal(unqualified_source, unqualified_result)) {
         return true;
     }
     if (minic_type_is_pointer(source_type) && minic_type_is_pointer(result_type)) {
@@ -463,8 +472,17 @@ bool minic_riscv64_emit_expression(FILE *file,
                fprintf(file, "  li a0, 0x%016" PRIx64 "\n", expression->value.floating_bits) >= 0;
     case MINIC_EXPRESSION_LOCAL:
         return minic_riscv64_emit_object_load(file, program, function, expression->value.local_id);
-    case MINIC_EXPRESSION_GLOBAL_OBJECT:
-        return false;
+    case MINIC_EXPRESSION_GLOBAL_OBJECT: {
+        const MinicGlobalObject *object;
+
+        object = minic_c0_program_global_object(program, expression->value.global_object_id);
+        if (object == NULL || object->name_length == 0U || minic_type_is_array(object->type) ||
+            minic_type_is_record(object->type) ||
+            fprintf(file, "  la a0, %s\n", object->name) < 0) {
+            return false;
+        }
+        return minic_riscv64_emit_scalar_load(file, object->type, "a0", "a0");
+    }
     case MINIC_EXPRESSION_FUNCTION: {
         const MinicFunction *designator;
         MinicType function_type;
@@ -561,6 +579,34 @@ bool minic_riscv64_emit_expression(FILE *file,
         return minic_riscv64_emit_lvalue_address(
                    file, program, function, expression->value.unary.operand) &&
                minic_riscv64_emit_scalar_load(file, expression->type, "a0", "a0");
+    case MINIC_EXPRESSION_ASSIGNMENT: {
+        const MinicExpression *target;
+        const MinicExpression *value;
+
+        target = minic_c0_program_expression(program, expression->value.binary.left);
+        value = minic_c0_program_expression(program, expression->value.binary.right);
+        if (target == NULL || value == NULL || target->value_category != MINIC_VALUE_LVALUE ||
+            !minic_type_equal(expression->type, target->type) ||
+            !minic_c0_assignment_compatible(
+                program, target->type, expression->value.binary.right) ||
+            !minic_riscv64_emit_lvalue_address(
+                file, program, function, expression->value.binary.left) ||
+            fprintf(file, "  addi sp, sp, -16\n  sd a0, 0(sp)\n") < 0 ||
+            !minic_riscv64_emit_expression(
+                file, program, function, expression->value.binary.right)) {
+            return false;
+        }
+        if (minic_type_is_integer(target->type) &&
+            !minic_riscv64_emit_integer_conversion(file, target->type, "a0")) {
+            return false;
+        }
+        return fprintf(file,
+                       "  mv t0, a0\n"
+                       "  ld t1, 0(sp)\n"
+                       "  addi sp, sp, 16\n") >= 0 &&
+               minic_riscv64_emit_scalar_store(file, target->type, "t0", "t1") &&
+               fprintf(file, "  mv a0, t0\n") >= 0;
+    }
     case MINIC_EXPRESSION_UNARY:
         if (expression->value.unary.operator_kind == MINIC_UNARY_POST_INCREMENT ||
             expression->value.unary.operator_kind == MINIC_UNARY_POST_DECREMENT) {
@@ -572,8 +618,17 @@ bool minic_riscv64_emit_expression(FILE *file,
         }
         switch (expression->value.unary.operator_kind) {
         case MINIC_UNARY_PLUS:
+            if (minic_type_is_double(expression->type)) {
+                return true;
+            }
             return minic_riscv64_emit_normalize_integer(file, expression->type, "a0");
         case MINIC_UNARY_NEGATE:
+            if (minic_type_is_double(expression->type)) {
+                return fprintf(file,
+                               "  fmv.d.x ft0, a0\n"
+                               "  fneg.d ft0, ft0\n"
+                               "  fmv.x.d a0, ft0\n") >= 0;
+            }
             return fprintf(file,
                            minic_type_is_long_integer(expression->type) ? "  neg a0, a0\n"
                                                                         : "  negw a0, a0\n") >= 0 &&
@@ -877,6 +932,24 @@ bool minic_riscv64_emit_expression(FILE *file,
                 (!is_variadic && argument_count != parameter_count)) {
                 return false;
             }
+        }
+
+        if (!is_indirect && direct_callee != NULL && direct_callee->name_length == 16U &&
+            strcmp(direct_callee->name, "__minic_va_start") == 0) {
+            MinicRiscv64FrameLayout frame_layout;
+
+            if (argument_count != 0U || !function->is_variadic ||
+                !minic_type_is_pointer(expression->type) ||
+                !minic_riscv64_frame_layout(program, function, &frame_layout)) {
+                return false;
+            }
+            if (frame_layout.varargs_offset <= 2047U) {
+                return fprintf(file, "  addi a0, s0, %zu\n", frame_layout.varargs_offset) >= 0;
+            }
+            return fprintf(file,
+                           "  li t0, %zu\n"
+                           "  add a0, s0, t0\n",
+                           frame_layout.varargs_offset) >= 0;
         }
 
         for (argument_index = 0U; argument_index < argument_count; ++argument_index) {

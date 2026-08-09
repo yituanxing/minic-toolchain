@@ -285,13 +285,57 @@ bool minic_riscv64_emit_object_store(FILE *file,
     return minic_riscv64_emit_object_store_register(file, program, function, local_id, "a0");
 }
 
-bool minic_riscv64_frame_size(const MinicFunction *function, size_t *frame_size) {
+bool minic_riscv64_frame_layout(const MinicC0Program *program,
+                                const MinicFunction *function,
+                                MinicRiscv64FrameLayout *layout) {
+    size_t integer_parameter_count;
+    size_t parameter_index;
     size_t required_bytes;
+    size_t varargs_size;
 
-    if (function == NULL || frame_size == NULL || function->local_storage_size > SIZE_MAX - 31U) {
+    if (program == NULL || function == NULL || layout == NULL || function->parameter_count > 8U) {
         return false;
     }
-    required_bytes = function->local_storage_size + 16U;
-    *frame_size = (required_bytes + 15U) & ~(size_t)15U;
+
+    integer_parameter_count = 0U;
+    for (parameter_index = 0U; parameter_index < function->parameter_count; ++parameter_index) {
+        const MinicLocal *parameter;
+
+        parameter = minic_c0_program_local(program, function->local_begin + parameter_index);
+        if (parameter == NULL) {
+            return false;
+        }
+        if (minic_type_is_double(parameter->type) || minic_type_is_float(parameter->type)) {
+            continue;
+        }
+        if (!minic_type_is_integer(parameter->type) && !minic_type_is_pointer(parameter->type)) {
+            return false;
+        }
+        integer_parameter_count += 1U;
+    }
+    if (integer_parameter_count > 8U) {
+        return false;
+    }
+
+    varargs_size = function->is_variadic ? (8U - integer_parameter_count) * 8U : 0U;
+    if (function->local_storage_size > SIZE_MAX - 16U ||
+        function->local_storage_size + 16U > SIZE_MAX - varargs_size) {
+        return false;
+    }
+    required_bytes = function->local_storage_size + 16U + varargs_size;
+    if (required_bytes > SIZE_MAX - 15U) {
+        return false;
+    }
+
+    layout->frame_size = (required_bytes + 15U) & ~(size_t)15U;
+    layout->varargs_size = varargs_size;
+    layout->varargs_offset = layout->frame_size - varargs_size;
+    if (layout->varargs_offset < 16U ||
+        function->local_storage_size > layout->varargs_offset - 16U) {
+        return false;
+    }
+    layout->saved_ra_offset = layout->varargs_offset - 8U;
+    layout->saved_s0_offset = layout->varargs_offset - 16U;
+    layout->integer_parameter_count = integer_parameter_count;
     return true;
 }

@@ -18,6 +18,11 @@ typedef struct MinicParserLocalBinding {
     MinicGlobalObjectId global_object_id;
 } MinicParserLocalBinding;
 
+typedef struct MinicParserEnumConstant {
+    MinicSourceSpan name_span;
+    int value;
+} MinicParserEnumConstant;
+
 typedef struct MinicParserSwitchContext {
     int case_values[MINIC_PARSER_MAX_SWITCH_CASES];
     size_t case_count;
@@ -50,6 +55,10 @@ typedef struct MinicParser {
     size_t *scope_binding_begins;
     size_t scope_count;
     size_t scope_capacity;
+
+    MinicParserEnumConstant *enum_constants;
+    size_t enum_constant_count;
+    size_t enum_constant_capacity;
 } MinicParser;
 
 void minic_parser_error(MinicParser *parser, const char *format, ...);
@@ -90,6 +99,11 @@ bool minic_parser_name_bound_in_current_scope(const MinicParser *parser, MinicSo
 MinicLocalId minic_parser_find_local_in_current_scope(const MinicParser *parser,
                                                       MinicSourceSpan name_span);
 void minic_parser_destroy_scopes(MinicParser *parser);
+bool minic_parser_bind_enum_constant(MinicParser *parser, MinicSourceSpan name_span, int value);
+bool minic_parser_find_enum_constant(const MinicParser *parser,
+                                     MinicSourceSpan name_span,
+                                     int *value);
+void minic_parser_destroy_enum_constants(MinicParser *parser);
 
 MinicLocalId minic_parser_find_local(const MinicParser *parser, MinicSourceSpan name_span);
 MinicGlobalObjectId minic_parser_find_static_local(const MinicParser *parser,
@@ -103,6 +117,7 @@ MinicTypeAliasId minic_parser_find_type_alias(const MinicParser *parser, MinicSo
 
 bool minic_parser_parse_record_definition_specifier(MinicParser *parser, MinicType *record_type);
 bool minic_parser_parse_record_definition(MinicParser *parser);
+bool minic_parser_parse_enum_definition(MinicParser *parser);
 bool minic_parser_parse_typedef(MinicParser *parser);
 bool minic_parser_parse_static_global(MinicParser *parser);
 bool minic_parser_parse_pointer_member(MinicParser *parser,

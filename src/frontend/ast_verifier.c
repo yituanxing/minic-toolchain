@@ -318,14 +318,8 @@ static bool verify_binary_type(const MinicC0Program *program,
 
     if (expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT &&
         minic_type_is_pointer(left->type) && minic_type_is_pointer(right->type)) {
-        MinicType left_pointee;
-        MinicType right_pointee;
-
         return minic_type_equal(expression->type, minic_type_long()) &&
-               minic_type_pointee(left->type, &left_pointee) &&
-               minic_type_pointee(right->type, &right_pointee) &&
-               minic_type_equal(left_pointee, right_pointee) &&
-               type_is_complete_object(program, left_pointee);
+               pointer_relational_compatible(program, left->type, right->type);
     }
 
     if (expression->value.binary.operator_kind == MINIC_BINARY_ADD) {
@@ -555,6 +549,15 @@ verify_expression(const MinicC0Program *program, size_t expression_index, MinicC
                minic_type_equal(expression->type, operand->type) &&
                (minic_type_is_integer(expression->type) ||
                 minic_type_is_pointer(expression->type) || minic_type_is_double(expression->type));
+    case MINIC_EXPRESSION_ASSIGNMENT:
+        left = expression_before(program, expression->value.binary.left, expression_index);
+        right = expression_before(program, expression->value.binary.right, expression_index);
+        return left != NULL && right != NULL && left->value_category == MINIC_VALUE_LVALUE &&
+               !minic_type_is_const(left->type) && !minic_type_is_array(left->type) &&
+               !minic_type_is_function(left->type) && !minic_type_is_record(left->type) &&
+               expression->value_category == MINIC_VALUE_RVALUE &&
+               minic_type_equal(expression->type, left->type) &&
+               minic_c0_assignment_compatible(program, left->type, expression->value.binary.right);
     case MINIC_EXPRESSION_UNARY: {
         MinicType expected_type;
         MinicType pointee_type;
@@ -581,6 +584,11 @@ verify_expression(const MinicC0Program *program, size_t expression_index, MinicC
         if (expression->value.unary.operator_kind == MINIC_UNARY_LOGICAL_NOT) {
             return type_is_condition_scalar(operand->type) &&
                    minic_type_equal(expression->type, minic_type_int());
+        }
+        if ((expression->value.unary.operator_kind == MINIC_UNARY_PLUS ||
+             expression->value.unary.operator_kind == MINIC_UNARY_NEGATE) &&
+            minic_type_is_double(operand->type)) {
+            return minic_type_equal(expression->type, operand->type);
         }
         if (!minic_type_is_integer(operand->type) ||
             !minic_type_integer_promotion(operand->type, &expected_type)) {

@@ -24,14 +24,47 @@ static bool finish_value_expression(MinicParser *parser,
     return minic_parser_apply_array_decay(parser, input_id, expression_id);
 }
 
+static MinicType integer_literal_type(const MinicParser *parser, MinicSourceSpan span) {
+    bool saw_long;
+    bool saw_unsigned;
+    size_t offset;
+
+    saw_long = false;
+    saw_unsigned = false;
+    offset = span.end.offset;
+    while (offset > span.begin.offset) {
+        char character;
+
+        character = parser->source[offset - 1U];
+        if (character == 'l' || character == 'L') {
+            saw_long = true;
+        } else if (character == 'u' || character == 'U') {
+            saw_unsigned = true;
+        } else {
+            break;
+        }
+        offset -= 1U;
+    }
+    if (saw_long) {
+        return saw_unsigned ? minic_type_unsigned_long() : minic_type_long();
+    }
+    return saw_unsigned ? minic_type_unsigned_int() : minic_type_int();
+}
+
 static bool parse_integer(MinicParser *parser, MinicExpressionId *expression_id) {
     MinicExpression expression;
+    MinicSourceSpan span;
+    MinicType literal_type;
     int value;
 
+    span = parser->current.span;
+    literal_type = parser->current.kind == MINIC_TOKEN_CHARACTER_CONSTANT
+                       ? minic_type_int()
+                       : integer_literal_type(parser, span);
     (void)memset(&expression, 0, sizeof(expression));
     expression.kind = MINIC_EXPRESSION_INTEGER;
-    expression.span = parser->current.span;
-    expression.type = minic_type_int();
+    expression.span = span;
+    expression.type = literal_type;
     expression.value_category = MINIC_VALUE_RVALUE;
     if (!minic_parser_parse_integer_value(parser, &value)) {
         return false;
@@ -135,9 +168,6 @@ static bool parse_global_reference(MinicParser *parser,
             minic_parser_error(parser, "global record object requires member access");
             return false;
         }
-    } else if (!array_object) {
-        minic_parser_error(parser, "invalid global object reference");
-        return false;
     }
 
     (void)memset(&base_expression, 0, sizeof(base_expression));
@@ -420,6 +450,8 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
     MinicLocalId local_id;
     MinicFunctionId function_id;
     MinicGlobalObjectId global_object_id;
+    int enum_value;
+    bool is_enum_constant;
 
     if (parser->current.kind == MINIC_TOKEN_INTEGER_CONSTANT ||
         parser->current.kind == MINIC_TOKEN_CHARACTER_CONSTANT) {
@@ -448,26 +480,15 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
         local_id = minic_parser_find_local(parser, name_span);
         function_id = minic_parser_find_function(parser, name_span);
         global_object_id = minic_parser_find_global_object(parser, name_span);
+        is_enum_constant = minic_parser_find_enum_constant(parser, name_span, &enum_value);
         if (!minic_parser_advance(parser)) {
             return false;
         }
 
-        if (parser->current.kind == MINIC_TOKEN_LPAREN) {
+        if (parser->current.kind == MINIC_TOKEN_LPAREN && function_id != MINIC_FUNCTION_INVALID) {
             MinicSourcePosition call_end;
             const MinicFunction *callee;
 
-            if (local_id != MINIC_LOCAL_INVALID) {
-                minic_parser_error(parser, "called object is a local variable");
-                return false;
-            }
-            if (global_object_id != MINIC_GLOBAL_OBJECT_INVALID) {
-                minic_parser_error(parser, "called object is a global object");
-                return false;
-            }
-            if (function_id == MINIC_FUNCTION_INVALID) {
-                minic_parser_error(parser, "call to function not yet declared");
-                return false;
-            }
             callee = minic_c0_program_function(parser->program, function_id);
             if (callee == NULL || callee->parameter_count > 8U || !minic_parser_advance(parser)) {
                 minic_parser_error(parser, "unsupported function call signature");
@@ -509,6 +530,19 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
         }
         if (function_id != MINIC_FUNCTION_INVALID) {
             if (!parse_function_reference(parser, name_span, function_id, &primary_id)) {
+                return false;
+            }
+            return finish_value_expression(parser, primary_id, decay_array, expression_id);
+        }
+        if (is_enum_constant) {
+            (void)memset(&expression, 0, sizeof(expression));
+            expression.kind = MINIC_EXPRESSION_INTEGER;
+            expression.span = name_span;
+            expression.type = minic_type_int();
+            expression.value_category = MINIC_VALUE_RVALUE;
+            expression.value.integer_value = enum_value;
+            if (!minic_parser_add_expression(parser, &expression, &primary_id) ||
+                !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
                 return false;
             }
             return finish_value_expression(parser, primary_id, decay_array, expression_id);
@@ -687,8 +721,18 @@ static bool parse_unary(MinicParser *parser, MinicExpressionId *expression_id, b
         expression.type = minic_type_int();
         return minic_parser_add_expression(parser, &expression, expression_id);
     }
+    if (minic_type_is_double(operand_expression->type)) {
+        if (operator_token.kind != MINIC_TOKEN_PLUS && operator_token.kind != MINIC_TOKEN_MINUS) {
+            minic_parser_error(parser, "floating unary arithmetic requires '+' or '-'");
+            return false;
+        }
+        expression.value.unary.operator_kind =
+            operator_token.kind == MINIC_TOKEN_PLUS ? MINIC_UNARY_PLUS : MINIC_UNARY_NEGATE;
+        expression.type = operand_expression->type;
+        return minic_parser_add_expression(parser, &expression, expression_id);
+    }
     if (!minic_type_is_integer(operand_expression->type)) {
-        minic_parser_error(parser, "unary arithmetic requires an integer operand");
+        minic_parser_error(parser, "unary arithmetic requires an integer or double operand");
         return false;
     }
     if (operator_token.kind == MINIC_TOKEN_TILDE) {
@@ -880,6 +924,21 @@ pointer_relational_compatible(const MinicC0Program *program, MinicType left, Min
            type_is_complete_object(program, right_pointee);
 }
 
+static bool
+pointer_difference_compatible(const MinicC0Program *program, MinicType left, MinicType right) {
+    MinicType left_pointee;
+    MinicType right_pointee;
+    MinicType left_unqualified;
+    MinicType right_unqualified;
+
+    return minic_type_pointee(left, &left_pointee) && minic_type_pointee(right, &right_pointee) &&
+           minic_type_unqualified(left_pointee, &left_unqualified) &&
+           minic_type_unqualified(right_pointee, &right_unqualified) &&
+           minic_type_equal(left_unqualified, right_unqualified) &&
+           type_is_complete_object(program, left_unqualified) &&
+           type_is_complete_object(program, right_unqualified);
+}
+
 static bool conditional_result_type(MinicType when_true, MinicType when_false, MinicType *result) {
     MinicType unqualified_true;
     MinicType unqualified_false;
@@ -977,16 +1036,8 @@ static bool binary_result_type(const MinicC0Program *program,
         *result = minic_type_double();
         return true;
     }
-    if (kind == MINIC_TOKEN_MINUS && minic_type_is_pointer(left) && minic_type_is_pointer(right)) {
-        MinicType left_pointee;
-        MinicType right_pointee;
-
-        if (!minic_type_pointee(left, &left_pointee) ||
-            !minic_type_pointee(right, &right_pointee) ||
-            !minic_type_equal(left_pointee, right_pointee) ||
-            !type_is_complete_object(program, left_pointee)) {
-            return false;
-        }
+    if (kind == MINIC_TOKEN_MINUS && minic_type_is_pointer(left) && minic_type_is_pointer(right) &&
+        pointer_difference_compatible(program, left, right)) {
         *result = minic_type_long();
         return true;
     }
@@ -1080,6 +1131,7 @@ static bool parse_expression_internal(MinicParser *parser,
         const MinicExpression *true_expression;
         const MinicExpression *false_expression;
         MinicExpression conditional;
+        MinicSourceSpan condition_span;
         MinicExpressionId when_true;
         MinicExpressionId when_false;
 
@@ -1092,6 +1144,7 @@ static bool parse_expression_internal(MinicParser *parser,
                                "conditional expression requires an integer or pointer condition");
             return false;
         }
+        condition_span = condition_expression->span;
         if (!minic_parser_advance(parser) ||
             !parse_expression_internal(parser, &when_true, 0U, true) ||
             !minic_parser_expect(
@@ -1108,7 +1161,7 @@ static bool parse_expression_internal(MinicParser *parser,
 
         (void)memset(&conditional, 0, sizeof(conditional));
         conditional.kind = MINIC_EXPRESSION_CONDITIONAL;
-        conditional.span.begin = condition_expression->span.begin;
+        conditional.span.begin = condition_span.begin;
         conditional.span.end = false_expression->span.end;
         conditional.value_category = MINIC_VALUE_RVALUE;
         conditional.value.conditional.condition = left;
@@ -1120,6 +1173,79 @@ static bool parse_expression_internal(MinicParser *parser,
             return false;
         }
         if (!minic_parser_add_expression(parser, &conditional, &left)) {
+            return false;
+        }
+    }
+    if (minimum_precedence == 0U && parser->current.kind == MINIC_TOKEN_EQUAL) {
+        const MinicExpression *target_expression;
+        const MinicExpression *value_expression;
+        MinicExpression assignment;
+        MinicExpressionId value_id;
+        MinicSourceSpan target_span;
+        MinicType target_type;
+
+        target_expression = minic_c0_program_expression(parser->program, left);
+        if (target_expression != NULL && minic_type_is_record(target_expression->type)) {
+            /* Record assignment already has statement-level recursive copy lowering.
+               Leave '=' unconsumed so that path can handle standalone record copies. */
+            *expression_id = left;
+            return true;
+        }
+        if (target_expression == NULL || target_expression->value_category != MINIC_VALUE_LVALUE ||
+            minic_type_is_const(target_expression->type) ||
+            minic_type_is_array(target_expression->type) ||
+            minic_type_is_function(target_expression->type) ||
+            minic_type_is_record(target_expression->type)) {
+            minic_parser_error(parser, "assignment expression requires a modifiable scalar lvalue");
+            return false;
+        }
+        target_span = target_expression->span;
+        target_type = target_expression->type;
+
+        if (!minic_parser_advance(parser) ||
+            !parse_expression_internal(parser, &value_id, 0U, true)) {
+            return false;
+        }
+        value_expression = minic_c0_program_expression(parser->program, value_id);
+        if (value_expression == NULL) {
+            minic_parser_error(parser, "invalid assignment expression value");
+            return false;
+        }
+        if (!minic_c0_assignment_compatible(parser->program, target_type, value_id)) {
+            MinicExpression cast_expression;
+
+            if (minic_type_is_pointer(target_type) ||
+                minic_type_is_pointer(value_expression->type) ||
+                !minic_type_cast_compatible(target_type, value_expression->type)) {
+                minic_parser_error(parser, "assignment expression type does not match target type");
+                return false;
+            }
+            (void)memset(&cast_expression, 0, sizeof(cast_expression));
+            cast_expression.kind = MINIC_EXPRESSION_CAST;
+            cast_expression.span = value_expression->span;
+            cast_expression.type = target_type;
+            cast_expression.value_category = MINIC_VALUE_RVALUE;
+            cast_expression.value.unary.operand = value_id;
+            if (!minic_parser_add_expression(parser, &cast_expression, &value_id)) {
+                return false;
+            }
+        }
+        value_expression = minic_c0_program_expression(parser->program, value_id);
+        if (value_expression == NULL ||
+            !minic_c0_assignment_compatible(parser->program, target_type, value_id)) {
+            minic_parser_error(parser, "assignment expression conversion failed");
+            return false;
+        }
+
+        (void)memset(&assignment, 0, sizeof(assignment));
+        assignment.kind = MINIC_EXPRESSION_ASSIGNMENT;
+        assignment.span.begin = target_span.begin;
+        assignment.span.end = value_expression->span.end;
+        assignment.type = target_type;
+        assignment.value_category = MINIC_VALUE_RVALUE;
+        assignment.value.binary.left = left;
+        assignment.value.binary.right = value_id;
+        if (!minic_parser_add_expression(parser, &assignment, &left)) {
             return false;
         }
     }

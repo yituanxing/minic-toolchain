@@ -47,7 +47,7 @@ printf '%s\n' "PASS compiler/c0/global_array_read"
 
 expect_failure \
     invalid_global_array_assignment \
-    "assignment target must be a modifiable lvalue"
+    "assignment expression requires a modifiable scalar lvalue"
 expect_failure \
     invalid_bare_global_array \
     "return expression does not match function return type"

@@ -52,6 +52,33 @@ fi
 printf '%s\n' \
     "PASS compiler/c0/$name exit=$status abi=rv64-varargs actual=6 fixed=1 extras=int,char,long,pointer,double"
 
+
+name=variadic_callee_save
+"$riscv_cc" -E -P -x c "$root/tests/compiler/c0/$name.c" -o "$work/$name.i"
+"$minic" -S "$work/$name.i" -o "$work/$name.s"
+"$riscv_cc" -static \
+    "$work/$name.s" \
+    "$root/tests/compiler/c0/${name}_helper.c" \
+    -o "$work/$name-minic.elf"
+"$riscv_cc" -static \
+    "$root/tests/compiler/c0/${name}_gcc.c" \
+    "$root/tests/compiler/c0/${name}_helper.c" \
+    -o "$work/$name-gcc.elf"
+
+set +e
+"$qemu" "$work/$name-minic.elf"
+minic_status=$?
+"$qemu" "$work/$name-gcc.elf"
+gcc_status=$?
+set -e
+
+if test "$gcc_status" -ne 0 || test "$minic_status" -ne "$gcc_status"; then
+    printf '%s\n' "FAIL compiler/c0/$name: minic=$minic_status gcc=$gcc_status" >&2
+    exit 1
+fi
+printf '%s\n' \
+    "PASS compiler/c0/$name exit=$minic_status differential=gcc rv64=variadic-callee-save-area"
+
 compile_failure invalid_variadic_too_many_arguments 'variadic call supports at most 8 arguments'
 compile_failure invalid_variadic_missing_fixed_argument \
     'call argument count does not match declaration'

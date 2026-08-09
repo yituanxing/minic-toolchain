@@ -37,7 +37,7 @@ expect_failure() {
 
 expect_failure \
     invalid_call_assignment_target \
-    "assignment target must be a modifiable lvalue"
+    "assignment expression requires a modifiable scalar lvalue"
 expect_failure \
     invalid_expression_statement_semicolon \
     "expected ';' after expression"

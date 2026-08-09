@@ -16,7 +16,7 @@ mkdir -p "$work"
     -o "$work/pointer_object_const.s"
 grep -F ".globl main" "$work/pointer_object_const.s" >/dev/null
 grep -F "  call read_value" "$work/pointer_object_const.s" >/dev/null
-grep -F "  sw t0, 0(a0)" "$work/pointer_object_const.s" >/dev/null
+grep -E '^  sw t0, 0\((a0|t1)\)$' "$work/pointer_object_const.s" >/dev/null
 printf '%s\n' "PASS compiler/c0/pointer_object_const"
 
 expect_failure() {
@@ -38,7 +38,7 @@ expect_failure() {
 
 expect_failure \
     invalid_const_pointer_reassignment \
-    "assignment target must be a modifiable lvalue"
+    "assignment expression requires a modifiable scalar lvalue"
 expect_failure \
     invalid_const_pointer_parameter_reassignment \
-    "assignment target must be a modifiable lvalue"
+    "assignment expression requires a modifiable scalar lvalue"

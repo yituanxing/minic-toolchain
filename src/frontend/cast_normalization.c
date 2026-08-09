@@ -64,6 +64,7 @@ static bool remap_non_cast_expression(MinicExpression *expression,
                                    current_old_index,
                                    expression->value.member.base,
                                    &expression->value.member.base);
+    case MINIC_EXPRESSION_ASSIGNMENT:
     case MINIC_EXPRESSION_BINARY:
         return remap_expression_id(mapping,
                                    old_expression_count,

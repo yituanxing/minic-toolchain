@@ -42,7 +42,18 @@ bool minic_riscv64_emit_object_store_register(FILE *file,
                                               const MinicFunction *function,
                                               MinicLocalId local_id,
                                               const char *register_name);
-bool minic_riscv64_frame_size(const MinicFunction *function, size_t *frame_size);
+typedef struct MinicRiscv64FrameLayout {
+    size_t frame_size;
+    size_t saved_ra_offset;
+    size_t saved_s0_offset;
+    size_t varargs_offset;
+    size_t varargs_size;
+    size_t integer_parameter_count;
+} MinicRiscv64FrameLayout;
+
+bool minic_riscv64_frame_layout(const MinicC0Program *program,
+                                const MinicFunction *function,
+                                MinicRiscv64FrameLayout *layout);
 
 bool minic_riscv64_emit_lvalue_address(FILE *file,
                                        const MinicC0Program *program,
