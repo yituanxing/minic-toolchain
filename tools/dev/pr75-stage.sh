@@ -10,5 +10,6 @@ python3 tools/dev/pr75-union-local-declaration.py
 python3 tools/dev/pr75-enum-typedef.py
 python3 tools/dev/pr75-record-forward-declarations.py
 python3 tools/dev/pr75-record-top-level-dispatch.py
+python3 tools/dev/pr75-record-multi-declarators.py
 python3 tools/dev/pr75-lua-shim-simplify.py
 printf '%s\n' 'staged Lua discovery semantics'
