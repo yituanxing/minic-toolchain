@@ -79,8 +79,25 @@ static bool parse_character_value(MinicParser *parser, int *value) {
     return minic_parser_advance(parser);
 }
 
+static size_t integer_digit_end(const MinicParser *parser, MinicSourceSpan span) {
+    size_t end;
+
+    end = span.end.offset;
+    while (end > span.begin.offset) {
+        char character;
+
+        character = parser->source[end - 1U];
+        if (character != 'l' && character != 'L' && character != 'u' && character != 'U') {
+            break;
+        }
+        end -= 1U;
+    }
+    return end;
+}
+
 bool minic_parser_parse_integer_value(MinicParser *parser, int *value) {
     MinicSourceSpan span;
+    size_t digit_end;
     size_t offset;
     unsigned long parsed;
     unsigned long base;
@@ -97,16 +114,17 @@ bool minic_parser_parse_integer_value(MinicParser *parser, int *value) {
     }
 
     span = parser->current.span;
+    digit_end = integer_digit_end(parser, span);
     offset = span.begin.offset;
     base = 10UL;
-    if (span.end.offset - span.begin.offset >= 2U && parser->source[offset] == '0' &&
+    if (digit_end - span.begin.offset >= 2U && parser->source[offset] == '0' &&
         (parser->source[offset + 1U] == 'x' || parser->source[offset + 1U] == 'X')) {
         base = 16UL;
         offset += 2U;
     }
 
     parsed = 0UL;
-    for (; offset < span.end.offset; ++offset) {
+    for (; offset < digit_end; ++offset) {
         int digit_value;
         unsigned long digit;
 
@@ -117,7 +135,7 @@ bool minic_parser_parse_integer_value(MinicParser *parser, int *value) {
         }
         digit = (unsigned long)digit_value;
         if (parsed > ((unsigned long)INT_MAX - digit) / base) {
-            minic_parser_error(parser, "integer constant exceeds C0 int range");
+            minic_parser_error(parser, "integer constant exceeds current literal range");
             return false;
         }
         parsed = parsed * base + digit;
