@@ -47,14 +47,20 @@ replacement = r'''    if (bound_count == 0U) {
             !minic_parser_expect(parser, MINIC_TOKEN_EQUAL, "expected '=' after static scalar") ||
             !minic_parser_parse_expression(parser, &scalar_initializer_id, 0U) ||
             !static_record_integer_constant(
-                parser->program, scalar_initializer_id, &scalar_value) ||
-            !minic_c0_global_object_add_initializer(
-                parser->program, scalar_object_id, scalar_value) ||
-            !minic_parser_bind_static_local(parser, name_span, scalar_object_id)) {
+                parser->program, scalar_initializer_id, &scalar_value)) {
             if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
                 minic_parser_error(parser,
                                    "static local integer requires a supported constant initializer");
             }
+            return false;
+        }
+        if ((scalar_value == 0 &&
+             !minic_c0_global_object_set_zero_initialized(parser->program, scalar_object_id)) ||
+            (scalar_value != 0 &&
+             !minic_c0_global_object_add_initializer(
+                 parser->program, scalar_object_id, scalar_value)) ||
+            !minic_parser_bind_static_local(parser, name_span, scalar_object_id)) {
+            minic_parser_error(parser, "cannot finalize static local integer storage");
             return false;
         }
         return true;
