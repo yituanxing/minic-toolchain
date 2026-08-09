@@ -70,8 +70,13 @@ bool minic_parser_parse_typedef(MinicParser *parser) {
         if (!minic_parser_parse_record_definition_specifier(parser, &aliased_type)) {
             return false;
         }
-    } else if (!minic_parser_parse_type_name(parser, &aliased_type)) {
-        return false;
+    } else {
+        MinicType base_type;
+
+        if (!minic_parser_parse_type_specifiers(parser, &base_type) ||
+            !minic_parser_parse_pointer_declarator(parser, base_type, &aliased_type)) {
+            return false;
+        }
     }
     if (minic_type_is_void(aliased_type)) {
         minic_parser_error(parser, "typedef cannot name bare void");
