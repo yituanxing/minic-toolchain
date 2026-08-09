@@ -192,9 +192,9 @@ replace_once(
 
 replace_once(
     "src/frontend/ast_verifier.c",
-    """                type.integer_rank == MINIC_INTEGER_RANK_CHAR ||
+    """               (type.integer_rank == MINIC_INTEGER_RANK_CHAR ||
 """,
-    """                type.integer_rank == MINIC_INTEGER_RANK_BOOL ||
+    """               (type.integer_rank == MINIC_INTEGER_RANK_BOOL ||
                 type.integer_rank == MINIC_INTEGER_RANK_CHAR ||
 """,
     "bool-verifier",
