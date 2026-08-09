@@ -5,4 +5,5 @@ sh tools/dev/pr75-stage.sh
 python3 tools/dev/pr76-preprocessed-line-markers.py
 python3 tools/dev/pr77-stabilize-ast-anchors.py
 python3 tools/dev/pr76-anonymous-record-members.py
+python3 tools/dev/pr77-fix-generated-nul.py
 printf '%s\n' 'staged Linux discovery semantics'
