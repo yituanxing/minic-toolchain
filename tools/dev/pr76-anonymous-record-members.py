@@ -12,15 +12,18 @@ def replace_once(path: str, old: str, new: str) -> None:
 
 
 # An anonymous struct/union member occupies normal record storage but contributes its nested
-# member names to the containing record's member namespace.
+# member names to the containing record's member namespace. Keep this patch anchored to the
+# current staged MinicRecordField shape, including explicit_alignment from Lua discovery.
 replace_once(
     "src/frontend/ast.h",
     """    size_t storage_offset;
+    size_t explicit_alignment;
     bool is_array;
     bool is_flexible_array;
 } MinicRecordField;
 """,
     """    size_t storage_offset;
+    size_t explicit_alignment;
     bool is_array;
     bool is_flexible_array;
     bool is_anonymous_member;
