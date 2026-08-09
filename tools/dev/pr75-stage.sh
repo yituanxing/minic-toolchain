@@ -34,6 +34,7 @@ python3 tools/dev/pr75-builtin-offsetof.py
 python3 tools/dev/pr75-offsetof-constant-expression.py
 python3 tools/dev/pr75-record-field-alignment-v2.py
 python3 tools/dev/pr75-array-bound-sizeof-unified-layout.py
+python3 tools/dev/pr75-zero-length-record-arrays.py
 python3 tools/dev/pr75-pointer-integer-casts.py
 python3 tools/dev/pr75-record-assignment-expression.py
 python3 tools/dev/pr75-compound-assignment-expressions.py
