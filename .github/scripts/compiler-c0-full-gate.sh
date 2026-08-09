@@ -174,6 +174,31 @@ switch_control_flow_focused() {
         sh tests/compiler/c0/run-switch-control-flow.sh
 }
 
+linenoise_driven_focused() {
+    local script
+    for script in \
+        run-short-integers.sh \
+        run-function-pointer-parameters.sh \
+        run-extern-objects.sh \
+        run-function-type-typedefs.sh \
+        run-unnamed-prototype-parameters.sh \
+        run-static-pointer-arrays.sh \
+        run-static-zero-definitions.sh \
+        run-record-copy-array-members.sh \
+        run-zero-aggregate-null.sh \
+        run-record-local-initializers.sh \
+        run-multiply-assignment.sh \
+        run-static-local-string-arrays.sh \
+        run-external-pointer-definitions.sh \
+        run-adjacent-string-literals.sh \
+        run-global-pointer-subscripts.sh; do
+        MINIC="$root/build/ci-debug/bin/minic" \
+        HOST_CC=cc \
+        BUILD_DIR="$root/build/ci-linenoise-driven" \
+            sh "$root/tests/compiler/c0/$script"
+    done
+}
+
 rv64_focused() {
     MINIC="$root/build/ci-debug/bin/minic" \
     BUILD_DIR="$root/build/ci-rv64-focused" \
@@ -226,6 +251,7 @@ start_gate variadic-declarations-focused variadic_declaration_focused
 start_gate variadic-call-focused variadic_call_focused
 start_gate pointer-equality-focused pointer_equality_focused
 start_gate switch-control-flow-focused switch_control_flow_focused
+start_gate linenoise-driven-focused linenoise_driven_focused
 start_gate rv64-focused rv64_focused
 start_gate rv64-programs rv64_programs
 start_gate external-tiny-aes external_tiny_aes

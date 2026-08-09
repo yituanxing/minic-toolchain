@@ -142,6 +142,49 @@ bool minic_c0_global_object_add_function_relocation(MinicC0Program *program,
     return true;
 }
 
+bool minic_c0_global_object_set_extern(MinicC0Program *program,
+                                       MinicGlobalObjectId global_object_id) {
+    MinicGlobalObject *object;
+
+    if (program == NULL || global_object_id >= program->global_object_count) {
+        return false;
+    }
+    object = &program->global_objects[global_object_id];
+    if (object->initializer_count != 0U || object->function_relocation_count != 0U ||
+        object->object_relocation_count != 0U || object->is_zero_initialized ||
+        object->is_internal) {
+        return false;
+    }
+    object->is_extern = true;
+    return true;
+}
+
+bool minic_c0_global_object_add_object_relocation(MinicC0Program *program,
+                                                  MinicGlobalObjectId global_object_id,
+                                                  size_t element_index,
+                                                  MinicGlobalObjectId target_object_id) {
+    MinicGlobalObject *object;
+    MinicGlobalObjectRelocation *relocation;
+
+    if (program == NULL || global_object_id >= program->global_object_count ||
+        target_object_id >= program->global_object_count || global_object_id == target_object_id) {
+        return false;
+    }
+    object = &program->global_objects[global_object_id];
+    if (object->initializer_count != 0U || object->function_relocation_count != 0U ||
+        !grow_array((void **)&object->object_relocations,
+                    &object->object_relocation_capacity,
+                    object->object_relocation_count,
+                    sizeof(*object->object_relocations))) {
+        return false;
+    }
+    relocation = &object->object_relocations[object->object_relocation_count];
+    relocation->element_index = element_index;
+    relocation->target_object_id = target_object_id;
+    object->object_relocation_count += 1U;
+    return true;
+}
+
 bool minic_c0_global_object_set_zero_initialized(MinicC0Program *program,
                                                  MinicGlobalObjectId global_object_id) {
     MinicGlobalObject *object;

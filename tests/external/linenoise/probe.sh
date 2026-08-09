@@ -3,17 +3,14 @@ set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 work=${BUILD_DIR:-"$root/build/linenoise-discovery"}
-vendor="$work/upstream"
+vendor="$root/tests/vendor/linenoise"
 include="$work/include"
 minic=${MINIC:-"$root/build/ci-release/bin/minic"}
 host_cc=${HOST_CC:-${CC:-cc}}
 upstream=a473823d74b93eab2ba83480df16ed37617493f2
 
 rm -rf "$work"
-mkdir -p "$vendor" "$include/sys"
-
-curl -fsSL "https://raw.githubusercontent.com/antirez/linenoise/$upstream/linenoise.c" -o "$vendor/linenoise.c"
-curl -fsSL "https://raw.githubusercontent.com/antirez/linenoise/$upstream/linenoise.h" -o "$vendor/linenoise.h"
+mkdir -p "$work" "$include/sys"
 
 test "$(git hash-object "$vendor/linenoise.c")" = 63f23ddaf0e06dea4d2ac04efa084c3ca275ad8c
 test "$(git hash-object "$vendor/linenoise.h")" = 735629b78ed2302d407fb3b6c8e56c6ac24bd6b7

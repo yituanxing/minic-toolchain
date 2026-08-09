@@ -133,6 +133,7 @@ typedef struct MinicLocal {
 
 typedef enum MinicStatementKind {
     MINIC_STATEMENT_ASSIGN = 0,
+    MINIC_STATEMENT_RECORD_COPY,
     MINIC_STATEMENT_XOR_ASSIGN,
     MINIC_STATEMENT_EXPRESSION,
     MINIC_STATEMENT_RETURN,
@@ -219,6 +220,11 @@ typedef struct MinicGlobalFunctionRelocation {
     MinicFunctionId function_id;
 } MinicGlobalFunctionRelocation;
 
+typedef struct MinicGlobalObjectRelocation {
+    size_t element_index;
+    MinicGlobalObjectId target_object_id;
+} MinicGlobalObjectRelocation;
+
 typedef struct MinicGlobalObject {
     char *name;
     size_t name_length;
@@ -228,11 +234,15 @@ typedef struct MinicGlobalObject {
     size_t initializer_capacity;
     MinicGlobalFunctionRelocation function_relocations[8];
     size_t function_relocation_count;
+    MinicGlobalObjectRelocation *object_relocations;
+    size_t object_relocation_count;
+    size_t object_relocation_capacity;
     size_t storage_size;
     size_t alignment;
     bool is_internal;
     bool is_read_only;
     bool is_zero_initialized;
+    bool is_extern;
 } MinicGlobalObject;
 
 typedef struct MinicC0Program {
@@ -365,8 +375,14 @@ bool minic_c0_global_object_add_function_relocation(MinicC0Program *program,
                                                     MinicGlobalObjectId global_object_id,
                                                     size_t field_index,
                                                     MinicFunctionId function_id);
+bool minic_c0_global_object_add_object_relocation(MinicC0Program *program,
+                                                  MinicGlobalObjectId global_object_id,
+                                                  size_t element_index,
+                                                  MinicGlobalObjectId target_object_id);
 bool minic_c0_global_object_set_zero_initialized(MinicC0Program *program,
                                                  MinicGlobalObjectId global_object_id);
+bool minic_c0_global_object_set_extern(MinicC0Program *program,
+                                       MinicGlobalObjectId global_object_id);
 
 const MinicExpression *minic_c0_program_expression(const MinicC0Program *program,
                                                    MinicExpressionId expression_id);

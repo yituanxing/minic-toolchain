@@ -18,7 +18,10 @@ static bool minic_riscv64_scalar_width(MinicType type, size_t *width) {
     if (!minic_type_is_integer(type)) {
         return false;
     }
-    *width = minic_type_is_char_integer(type) ? 1U : minic_type_is_long_integer(type) ? 8U : 4U;
+    *width = minic_type_is_char_integer(type)    ? 1U
+             : minic_type_is_short_integer(type) ? 2U
+             : minic_type_is_long_integer(type)  ? 8U
+                                                 : 4U;
     return true;
 }
 
@@ -34,6 +37,9 @@ static const char *minic_riscv64_load_instruction(MinicType type) {
     }
     if (minic_type_is_char_integer(type)) {
         return minic_type_is_unsigned_integer(type) ? "lbu" : "lb";
+    }
+    if (minic_type_is_short_integer(type)) {
+        return minic_type_is_unsigned_integer(type) ? "lhu" : "lh";
     }
     if (minic_type_is_long_integer(type)) {
         return "ld";
@@ -51,7 +57,10 @@ static const char *minic_riscv64_store_instruction(MinicType type) {
     if (!minic_type_is_integer(type)) {
         return NULL;
     }
-    return minic_type_is_char_integer(type) ? "sb" : minic_type_is_long_integer(type) ? "sd" : "sw";
+    return minic_type_is_char_integer(type)    ? "sb"
+           : minic_type_is_short_integer(type) ? "sh"
+           : minic_type_is_long_integer(type)  ? "sd"
+                                               : "sw";
 }
 
 static bool minic_riscv64_local_object(const MinicC0Program *program,
@@ -185,6 +194,16 @@ bool minic_riscv64_emit_integer_conversion(FILE *file, MinicType type, const cha
                        "  srai %s, %s, 56\n",
                        register_name,
                        register_name,
+                       register_name,
+                       register_name) >= 0;
+    }
+    if (minic_type_is_short_integer(type)) {
+        return fprintf(file,
+                       "  slli %s, %s, 48\n"
+                       "  %s %s, %s, 48\n",
+                       register_name,
+                       register_name,
+                       minic_type_is_unsigned_integer(type) ? "srli" : "srai",
                        register_name,
                        register_name) >= 0;
     }

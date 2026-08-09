@@ -25,6 +25,84 @@ static bool function_signature_matches(const MinicFunction *function,
     return true;
 }
 
+static bool parse_function_pointer_parameter_declarator(MinicParser *parser,
+                                                        MinicType return_type,
+                                                        MinicSourceSpan *name_span,
+                                                        bool *has_name,
+                                                        MinicType *parameter_type,
+                                                        bool require_name) {
+    MinicType nested_parameter_types[8];
+    MinicType function_type;
+    size_t nested_parameter_count;
+    size_t pointer_depth;
+    bool is_variadic;
+
+    if (parser == NULL || name_span == NULL || has_name == NULL || parameter_type == NULL) {
+        return false;
+    }
+    *has_name = false;
+    nested_parameter_count = 0U;
+    pointer_depth = 0U;
+    is_variadic = false;
+    (void)memset(nested_parameter_types, 0, sizeof(nested_parameter_types));
+
+    if (!minic_parser_expect(
+            parser, MINIC_TOKEN_LPAREN, "expected '(' before function pointer parameter")) {
+        return false;
+    }
+    while (parser->current.kind == MINIC_TOKEN_STAR) {
+        pointer_depth += 1U;
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
+    }
+    if (pointer_depth == 0U) {
+        minic_parser_error(parser, "function pointer parameter requires '*'");
+        return false;
+    }
+    if (parser->current.kind == MINIC_TOKEN_IDENTIFIER) {
+        *name_span = parser->current.span;
+        *has_name = true;
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
+    } else if (require_name) {
+        minic_parser_error(parser, "expected function pointer parameter name");
+        return false;
+    }
+    if (!minic_parser_expect(
+            parser, MINIC_TOKEN_RPAREN, "expected ')' after function pointer parameter") ||
+        !minic_parser_expect(
+            parser, MINIC_TOKEN_LPAREN, "expected '(' before function pointer parameter list") ||
+        !minic_parser_parse_parameter_list(
+            parser, NULL, nested_parameter_types, &nested_parameter_count, false, &is_variadic) ||
+        !minic_parser_expect(
+            parser, MINIC_TOKEN_RPAREN, "expected ')' after function pointer parameter list")) {
+        return false;
+    }
+    if (is_variadic) {
+        minic_parser_error(parser, "variadic function pointer parameters are not supported yet");
+        return false;
+    }
+    if (!minic_c0_program_add_function_type(parser->program,
+                                            return_type,
+                                            nested_parameter_types,
+                                            nested_parameter_count,
+                                            &function_type)) {
+        minic_parser_error(parser, "cannot build function pointer parameter type");
+        return false;
+    }
+    while (pointer_depth > 0U) {
+        if (!minic_type_pointer_to(function_type, &function_type)) {
+            minic_parser_error(parser, "function pointer parameter depth is unsupported");
+            return false;
+        }
+        pointer_depth -= 1U;
+    }
+    *parameter_type = function_type;
+    return true;
+}
+
 bool minic_parser_parse_parameter_list(MinicParser *parser,
                                        MinicSourceSpan *parameter_name_spans,
                                        MinicType *parameter_types,
@@ -45,7 +123,10 @@ bool minic_parser_parse_parameter_list(MinicParser *parser,
     }
 
     for (;;) {
+        MinicSourceSpan declarator_name_span;
         MinicType parameter_type;
+        bool declarator_has_name;
+        bool is_function_pointer_parameter;
 
         if (*parameter_count >= 8U) {
             minic_parser_error(parser, "at most eight parameters are supported");
@@ -54,7 +135,19 @@ bool minic_parser_parse_parameter_list(MinicParser *parser,
         if (!minic_parser_parse_type_name(parser, &parameter_type)) {
             return false;
         }
-        if (minic_type_is_void(parameter_type)) {
+        (void)memset(&declarator_name_span, 0, sizeof(declarator_name_span));
+        declarator_has_name = false;
+        is_function_pointer_parameter = parser->current.kind == MINIC_TOKEN_LPAREN;
+        if (is_function_pointer_parameter &&
+            !parse_function_pointer_parameter_declarator(parser,
+                                                         parameter_type,
+                                                         &declarator_name_span,
+                                                         &declarator_has_name,
+                                                         &parameter_type,
+                                                         require_names)) {
+            return false;
+        }
+        if (!is_function_pointer_parameter && minic_type_is_void(parameter_type)) {
             if (*parameter_count == 0U && parser->current.kind == MINIC_TOKEN_RPAREN) {
                 return true;
             }
@@ -62,7 +155,11 @@ bool minic_parser_parse_parameter_list(MinicParser *parser,
             return false;
         }
 
-        if (parser->current.kind == MINIC_TOKEN_IDENTIFIER) {
+        if (is_function_pointer_parameter) {
+            if (declarator_has_name && parameter_name_spans != NULL) {
+                parameter_name_spans[*parameter_count] = declarator_name_span;
+            }
+        } else if (parser->current.kind == MINIC_TOKEN_IDENTIFIER) {
             if (parameter_name_spans != NULL) {
                 parameter_name_spans[*parameter_count] = parser->current.span;
             }
@@ -87,6 +184,69 @@ bool minic_parser_parse_parameter_list(MinicParser *parser,
             return minic_parser_advance(parser);
         }
     }
+}
+
+static bool parse_external_pointer_definition(MinicParser *parser,
+                                              MinicType object_type,
+                                              MinicSourceSpan name_span) {
+    MinicGlobalObjectId object_id;
+    MinicGlobalObjectId target_id;
+    MinicSourceSpan literal_span;
+    MinicType literal_type;
+    MinicType literal_pointer_type;
+    const MinicArrayType *literal_array;
+    MinicGlobalObject *object;
+
+    if (parser == NULL || !minic_type_is_pointer(object_type) ||
+        parser->current.kind != MINIC_TOKEN_EQUAL) {
+        minic_parser_error(parser, "unsupported external object definition");
+        return false;
+    }
+
+    object_id = minic_parser_find_global_object(parser, name_span);
+    if (object_id == MINIC_GLOBAL_OBJECT_INVALID) {
+        if (!minic_c0_program_add_global_object(parser->program,
+                                                parser->source + name_span.begin.offset,
+                                                minic_parser_span_length(name_span),
+                                                object_type,
+                                                false,
+                                                minic_type_is_const(object_type),
+                                                &object_id)) {
+            minic_parser_error(parser, "cannot create external object definition");
+            return false;
+        }
+    } else {
+        object = &parser->program->global_objects[object_id];
+        if (!object->is_extern || !minic_type_equal(object->type, object_type) ||
+            object->initializer_count != 0U || object->function_relocation_count != 0U ||
+            object->object_relocation_count != 0U || object->is_zero_initialized) {
+            minic_parser_error(parser, "conflicting external object definition");
+            return false;
+        }
+        object->is_extern = false;
+    }
+
+    if (!minic_parser_advance(parser) || parser->current.kind != MINIC_TOKEN_STRING_LITERAL ||
+        !minic_parser_create_string_literal_object(
+            parser, &target_id, &literal_type, &literal_span)) {
+        if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+            minic_parser_error(parser,
+                               "external pointer definition requires a string literal initializer");
+        }
+        return false;
+    }
+    literal_array = minic_c0_program_array_type(parser->program, literal_type.array_type_id);
+    if (literal_array == NULL || !minic_type_is_array(literal_type) ||
+        !minic_type_pointer_to(literal_array->element_type, &literal_pointer_type) ||
+        !minic_type_assignment_compatible(object_type, literal_pointer_type) ||
+        !minic_c0_global_object_set_zero_initialized(parser->program, object_id) ||
+        !minic_c0_global_object_add_object_relocation(parser->program, object_id, 0U, target_id)) {
+        minic_parser_error(parser, "external pointer initializer type mismatch");
+        return false;
+    }
+    (void)literal_span;
+    return minic_parser_expect(
+        parser, MINIC_TOKEN_SEMICOLON, "expected ';' after external object definition");
 }
 
 static bool parse_function(MinicParser *parser, bool is_internal) {
@@ -135,10 +295,15 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
         return false;
     }
 
-    if (!minic_parser_advance(parser) ||
-        !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '('") ||
+    if (!minic_parser_advance(parser)) {
+        return false;
+    }
+    if (!is_internal && parser->current.kind != MINIC_TOKEN_LPAREN) {
+        return parse_external_pointer_definition(parser, return_type, name_span);
+    }
+    if (!minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '('") ||
         !minic_parser_parse_parameter_list(
-            parser, parameter_name_spans, parameter_types, &parameter_count, true, &is_variadic) ||
+            parser, parameter_name_spans, parameter_types, &parameter_count, false, &is_variadic) ||
         !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')'")) {
         return false;
     }
@@ -186,6 +351,16 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     if (parser->current.kind != MINIC_TOKEN_LBRACE) {
         minic_parser_error(parser, "expected ';' or '{' after function declarator");
         return false;
+    }
+    {
+        size_t parameter_index;
+
+        for (parameter_index = 0U; parameter_index < parameter_count; ++parameter_index) {
+            if (minic_parser_span_length(parameter_name_spans[parameter_index]) == 0U) {
+                minic_parser_error(parser, "function definition requires parameter names");
+                return false;
+            }
+        }
     }
     if (function_id != MINIC_FUNCTION_INVALID) {
         existing_function = minic_c0_program_function(parser->program, function_id);
@@ -330,6 +505,8 @@ bool minic_parse_c0_program(const char *path,
     while (success && parser.current.kind != MINIC_TOKEN_EOF) {
         if (parser.current.kind == MINIC_TOKEN_KW_TYPEDEF) {
             success = minic_parser_parse_typedef(&parser);
+        } else if (parser.current.kind == MINIC_TOKEN_KW_EXTERN) {
+            success = minic_parser_parse_extern_global(&parser);
         } else if (parser.current.kind == MINIC_TOKEN_KW_STATIC) {
             bool is_function;
 

@@ -6,8 +6,7 @@ riscv_cc=${RISCV_CC:-riscv64-linux-gnu-gcc}
 qemu=${QEMU_RISCV64:-qemu-riscv64}
 work=${BUILD_DIR:-"$root/build/linenoise-runtime"}
 assembly=${LINENOISE_ASSEMBLY:-"$root/build/linenoise-discovery/linenoise.s"}
-vendor="$work/upstream"
-archive="$work/linenoise.tar.gz"
+vendor="$root/tests/vendor/linenoise"
 minic_binary="$work/linenoise-minic"
 gcc_binary="$work/linenoise-gcc"
 minic_tty_binary="$work/linenoise-tty-minic"
@@ -15,15 +14,13 @@ gcc_tty_binary="$work/linenoise-tty-gcc"
 upstream=a473823d74b93eab2ba83480df16ed37617493f2
 
 rm -rf "$work"
-mkdir -p "$vendor"
+mkdir -p "$work"
 
 if test ! -f "$assembly"; then
     printf '%s\n' "FAIL external/linenoise-runtime: missing MiniC assembly $assembly" >&2
     exit 1
 fi
 
-curl -fsSL "https://github.com/antirez/linenoise/archive/$upstream.tar.gz" -o "$archive"
-tar -xzf "$archive" --strip-components=1 -C "$vendor"
 test "$(git hash-object "$vendor/linenoise.c")" = 63f23ddaf0e06dea4d2ac04efa084c3ca275ad8c
 test "$(git hash-object "$vendor/linenoise.h")" = 735629b78ed2302d407fb3b6c8e56c6ac24bd6b7
 
