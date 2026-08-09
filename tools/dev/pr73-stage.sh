@@ -7,4 +7,5 @@ python3 tools/dev/pr73-function-type-typedef.py
 python3 tools/dev/pr73-unnamed-prototype-parameters.py
 python3 tools/dev/pr73-static-pointer-array.py
 python3 tools/dev/pr73-static-zero-definition.py
+python3 tools/dev/pr73-record-copy-array-members.py
 printf '%s\n' 'staged linenoise discovery semantics'
