@@ -41,7 +41,7 @@ jobs:
           MINIC="$GITHUB_WORKSPACE/build/sds-compiler/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/sds-focused" HOST_CC=cc sh tests/compiler/c0/run-compound-assignment-expressions.sh
           MINIC="$GITHUB_WORKSPACE/build/sds-compiler/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/sds-focused" HOST_CC=cc sh tests/compiler/c0/run-void-casts.sh
 
-      - name: Compile unchanged SDS
+      - name: Compile unchanged SDS library
         shell: bash
         run: |
           set +e
@@ -63,5 +63,30 @@ jobs:
             sanitize_status=$?
             set -e
             echo "SDS_SANITIZER_STATUS=$sanitize_status"
+          fi
+          exit "$status"
+
+      - name: Compile unchanged SDS upstream tests
+        shell: bash
+        run: |
+          set +e
+          MINIC="$GITHUB_WORKSPACE/build/sds-compiler/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/sds-discovery" \
+          HOST_CC=cc \
+            sh tests/external/sds/upstream_test_probe.sh
+          status=$?
+          set -e
+
+          if test "$status" -ge 128 && test -f "$GITHUB_WORKSPACE/build/sds-discovery/sds-test.i"; then
+            echo "SDS_TEST_SANITIZER_RERUN release_status=$status"
+            set +e
+            ASAN_OPTIONS=detect_leaks=0:abort_on_error=1 \
+            UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 \
+              "$GITHUB_WORKSPACE/build/sds-sanitize/bin/minic" \
+              -S "$GITHUB_WORKSPACE/build/sds-discovery/sds-test.i" \
+              -o "$GITHUB_WORKSPACE/build/sds-discovery/sds-test-sanitize.s"
+            sanitize_status=$?
+            set -e
+            echo "SDS_TEST_SANITIZER_STATUS=$sanitize_status"
           fi
           exit "$status"
