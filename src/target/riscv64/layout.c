@@ -106,7 +106,12 @@ static bool minic_riscv64_layout_records(MinicC0Program *program) {
         size_t record_alignment;
 
         record = &program->records[record_index];
-        if (!record->is_complete || record->field_count == 0U) {
+        if (!record->is_complete) {
+            record->storage_size = 0U;
+            record->alignment = 0U;
+            continue;
+        }
+        if (record->field_count == 0U) {
             return false;
         }
         storage_size = 0U;
