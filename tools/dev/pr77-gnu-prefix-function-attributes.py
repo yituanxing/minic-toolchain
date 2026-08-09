@@ -34,9 +34,9 @@ helper = r'''static bool parse_gnu_prefix_function_attributes(MinicParser *parse
             bool is_gnu_inline = function_identifier_is(parser, "__gnu_inline__");
 
             if (is_gnu_inline) {
-                /* GNU inline changes external-inline linkage semantics.  Linux's first
+                /* GNU inline changes external-inline linkage semantics. Linux's first
                  * real use here is static inline, where the attribute does not alter
-                 * externally visible linkage.  Keep other placements rejected until
+                 * externally visible linkage. Keep other placements rejected until
                  * inline semantics are represented explicitly. */
                 if (!is_internal || !is_inline) {
                     minic_parser_error(
@@ -90,5 +90,30 @@ new = '''    if (!parse_gnu_prefix_function_attributes(parser, is_internal, is_i
 '''
 if text.count(old) != 1:
     raise SystemExit(f"function prefix call anchor: expected one match, found {text.count(old)}")
+text = text.replace(old, new, 1)
+
+# Static object/function dispatch probes a cloned parser before parse_function() runs.
+# Reuse the exact prefix-attribute parser there as well, otherwise a valid
+# `static inline __attribute__((...)) type fn(...)` is rejected during classification
+# before semantic function parsing gets a chance to consume the attribute.
+old = '''    if (probe.current.kind == MINIC_TOKEN_KW_INLINE && !minic_parser_advance(&probe)) {
+        return false;
+    }
+    if (!minic_parser_parse_type_name(&probe, &declared_type)) {
+'''
+new = '''    {
+        bool probe_is_inline = probe.current.kind == MINIC_TOKEN_KW_INLINE;
+
+        if (probe_is_inline && !minic_parser_advance(&probe)) {
+            return false;
+        }
+        if (!parse_gnu_prefix_function_attributes(&probe, true, probe_is_inline)) {
+            return false;
+        }
+    }
+    if (!minic_parser_parse_type_name(&probe, &declared_type)) {
+'''
+if text.count(old) != 1:
+    raise SystemExit(f"static declaration lookahead anchor: expected one match, found {text.count(old)}")
 path.write_text(text.replace(old, new, 1))
-print("staged GNU prefix function attributes unused,no_instrument and static-inline gnu_inline")
+print("staged GNU prefix function attributes unused,no_instrument and static-inline gnu_inline with dispatch lookahead")
