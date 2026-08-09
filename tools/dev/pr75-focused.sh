@@ -27,6 +27,7 @@ for test_script in \
     run-bitwise-and-assignment-expressions.sh \
     run-compound-assignment-full.sh \
     run-mixed-double-arithmetic.sh \
+    run-conditional-pointer-qualifiers.sh \
     run-comma-operator.sh \
     run-cast-type-classification.sh \
     run-stack-fixed-arguments.sh \
