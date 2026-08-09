@@ -53,21 +53,24 @@ struct termios {
     unsigned int c_oflag;
     unsigned int c_cflag;
     unsigned int c_lflag;
+    unsigned char c_line;
     unsigned char c_cc[32];
+    unsigned int c_ispeed;
+    unsigned int c_ospeed;
 };
-#define BRKINT 1
-#define ICRNL 2
-#define INPCK 4
-#define ISTRIP 8
-#define IXON 16
-#define OPOST 32
-#define CS8 64
-#define ECHO 128
-#define ICANON 256
-#define IEXTEN 512
-#define ISIG 1024
-#define VMIN 0
-#define VTIME 1
+#define BRKINT 2
+#define ICRNL 256
+#define INPCK 16
+#define ISTRIP 32
+#define IXON 1024
+#define OPOST 1
+#define CS8 48
+#define ECHO 8
+#define ICANON 2
+#define IEXTEN 32768
+#define ISIG 1
+#define VMIN 6
+#define VTIME 5
 #define TCSAFLUSH 2
 int tcgetattr(int fd, struct termios *termios_p);
 int tcsetattr(int fd, int optional_actions, const struct termios *termios_p);
@@ -180,8 +183,10 @@ cat >"$include/sys/ioctl.h" <<'EOF'
 #ifndef MINIC_LINENOISE_SYS_IOCTL_H
 #define MINIC_LINENOISE_SYS_IOCTL_H
 struct winsize {
-    unsigned int ws_row;
-    unsigned int ws_col;
+    unsigned short ws_row;
+    unsigned short ws_col;
+    unsigned short ws_xpixel;
+    unsigned short ws_ypixel;
 };
 #define TIOCGWINSZ 21523
 int ioctl(int fd, unsigned long request, void *argument);
