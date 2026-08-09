@@ -35,6 +35,7 @@ python3 tools/dev/pr75-for-expression-initializers.py
 python3 tools/dev/pr75-for-comma-initializers.py
 python3 tools/dev/pr75-remainder-assignment.py
 python3 tools/dev/pr75-mixed-double-arithmetic.py
+python3 tools/dev/pr75-floating-compound-assignments.py
 python3 tools/dev/pr75-conditional-pointer-qualifiers.py
 python3 tools/dev/pr75-stack-arguments.py
 python3 tools/dev/pr75-static-local-record-initializers.py
