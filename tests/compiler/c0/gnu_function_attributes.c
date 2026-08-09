@@ -8,6 +8,8 @@ extern void *memory_copy(void *__restrict destination,
 extern void *allocate_like(unsigned long count)
     __attribute__((__nothrow__, __malloc__));
 
+extern void __attribute__((noreturn)) fatal_error(void);
+
 extern int memory_compare(const void *left, const void *right, unsigned long count)
     __attribute__((__nothrow__, __pure__))
     __attribute__((__nonnull__(1, 2)));
