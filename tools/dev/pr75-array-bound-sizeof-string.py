@@ -81,7 +81,7 @@ old = '''static bool parse_array_bound_sizeof(MinicParser *parser, int64_t *valu
         return false;
     }
 '''
-new = '''static bool parse_array_bound_sizeof(MinicParser *parser, int64_t *value) {
+new = r'''static bool parse_array_bound_sizeof(MinicParser *parser, int64_t *value) {
     MinicType measured_type;
     uint64_t measured_size;
 
