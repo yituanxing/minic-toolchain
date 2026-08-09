@@ -35,6 +35,7 @@ jobs:
           MINIC="$GITHUB_WORKSPACE/build/sds-compiler/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/sds-focused" HOST_CC=cc sh tests/compiler/c0/run-flexible-array-members.sh
           MINIC="$GITHUB_WORKSPACE/build/sds-compiler/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/sds-focused" HOST_CC=cc sh tests/compiler/c0/run-inline-functions.sh
           MINIC="$GITHUB_WORKSPACE/build/sds-compiler/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/sds-focused" HOST_CC=cc sh tests/compiler/c0/run-postfix-const.sh
+          MINIC="$GITHUB_WORKSPACE/build/sds-compiler/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/sds-focused" HOST_CC=cc sh tests/compiler/c0/run-long-long-types.sh
 
       - name: Compile unchanged SDS
         shell: bash
