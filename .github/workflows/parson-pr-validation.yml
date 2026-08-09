@@ -26,7 +26,8 @@ jobs:
             tools/dev/pr71-conditional-void.patch \
             tools/dev/pr71-fixed-double-abi.patch \
             tools/dev/pr72-enum-frontier.patch \
-            tools/dev/pr72-union-frontier.patch; do
+            tools/dev/pr72-union-frontier.patch \
+            tools/dev/pr72-static-scalar.patch; do
             if test -f "$patch"; then
               git apply --check --recount "$patch"
               git apply --recount "$patch"
