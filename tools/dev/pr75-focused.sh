@@ -40,6 +40,7 @@ for test_script in \
     run-static-nested-record-initializers.sh \
     run-static-local-scalars.sh \
     run-static-local-inferred-arrays.sh \
+    run-static-local-pointer-arrays.sh \
     run-static-local-fixed-arrays.sh \
     run-static-inferred-char-arrays.sh \
     run-prefix-update-expressions.sh \
