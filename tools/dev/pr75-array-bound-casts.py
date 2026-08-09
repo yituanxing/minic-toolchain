@@ -49,7 +49,7 @@ static bool array_bound_apply_integer_cast(MinicParser *parser,
                                            MinicType type,
                                            int64_t operand,
                                            int64_t *value) {
-    unsigned int bits;
+    unsigned int bits = 0U;
     uint64_t raw;
     uint64_t mask;
     bool is_unsigned;
