@@ -18,6 +18,7 @@ old = '''    case MINIC_TOKEN_KW_CONST:
 new = '''    case MINIC_TOKEN_KW_CONST:
     case MINIC_TOKEN_KW_VOLATILE:
     case MINIC_TOKEN_KW_CHAR:
+    case MINIC_TOKEN_KW_SHORT:
     case MINIC_TOKEN_KW_INT:
     case MINIC_TOKEN_KW_LONG:
     case MINIC_TOKEN_KW_SIGNED:
@@ -32,4 +33,4 @@ new = '''    case MINIC_TOKEN_KW_CONST:
 if text.count(old) != 1:
     raise SystemExit(f"unexpected cast-type classifier count={text.count(old)}")
 path.write_text(text.replace(old, new, 1))
-print("staged union/volatile cast type classification")
+print("staged short/union/volatile cast type classification")
