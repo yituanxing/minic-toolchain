@@ -27,5 +27,6 @@ python3 tools/dev/pr75-pointer-integer-casts.py
 python3 tools/dev/pr75-record-assignment-expression.py
 python3 tools/dev/pr75-compound-assignment-expressions.py
 python3 tools/dev/pr75-mixed-double-arithmetic.py
+python3 tools/dev/pr75-stack-arguments.py
 python3 tools/dev/pr75-lua-shim-simplify.py
 printf '%s\n' 'staged Lua discovery semantics'
