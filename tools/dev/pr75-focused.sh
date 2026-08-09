@@ -12,6 +12,7 @@ for test_script in \
     run-external-pointer-arrays.sh \
     run-extern-parenthesized-functions.sh \
     run-anonymous-record-field-types.sh \
+    run-anonymous-record-members.sh \
     run-typedef-enum-definitions.sh \
     run-enum-constant-expressions.sh \
     run-integer-constant-bitwise.sh \
