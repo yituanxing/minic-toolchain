@@ -101,15 +101,15 @@ emit_fn_relocs(FILE *file, const MinicC0Program *program, const MinicGlobalObjec
         const MinicGlobalFunctionRelocation *relocation;
         const MinicRecordField *field;
         const MinicFunction *function;
-        MinicType pointee;
+        MinicType field_pointee;
         size_t field_offset;
 
         relocation = &object->function_relocations[relocation_index];
         field = minic_c0_record_field(record, relocation->field_index);
         function = minic_c0_program_function(program, relocation->function_id);
         if (field == NULL || function == NULL || function->name_length == 0U ||
-            field->element_count != 1U || !minic_type_pointee(field->type, &pointee) ||
-            !minic_type_is_function(pointee)) {
+            field->element_count != 1U || !minic_type_pointee(field->type, &field_pointee) ||
+            !minic_type_is_function(field_pointee)) {
             return false;
         }
         field_offset = field->storage_offset;
