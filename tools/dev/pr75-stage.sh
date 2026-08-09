@@ -41,6 +41,7 @@ python3 tools/dev/pr75-static-nested-record-initializers.py
 python3 tools/dev/pr75-static-record-compat.py
 python3 tools/dev/pr75-static-local-scalars.py
 python3 tools/dev/pr75-static-local-inferred-arrays.py
+python3 tools/dev/pr75-static-local-pointer-arrays.py
 python3 tools/dev/pr75-static-local-fixed-array-initializers.py
 python3 tools/dev/pr75-external-integer-array-initializers.py
 python3 tools/dev/pr75-external-pointer-array-initializers.py
