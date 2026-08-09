@@ -41,3 +41,22 @@ diff --git a/src/frontend/parser_expression.c b/src/frontend/parser_expression.c
          *result = minic_type_long();
          return true;
      }
+diff --git a/src/frontend/ast_verifier.c b/src/frontend/ast_verifier.c
+--- a/src/frontend/ast_verifier.c
++++ b/src/frontend/ast_verifier.c
+@@ -301,15 +301,9 @@ static bool verify_binary_type(const MinicC0Program *program,
+ 
+     if (expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT &&
+         minic_type_is_pointer(left->type) && minic_type_is_pointer(right->type)) {
+-        MinicType left_pointee;
+-        MinicType right_pointee;
+-
+         return minic_type_equal(expression->type, minic_type_long()) &&
+-               minic_type_pointee(left->type, &left_pointee) &&
+-               minic_type_pointee(right->type, &right_pointee) &&
+-               minic_type_equal(left_pointee, right_pointee) &&
+-               type_is_complete_object(program, left_pointee);
++               pointer_relational_compatible(program, left->type, right->type);
+     }
+ 
+     if (expression->value.binary.operator_kind == MINIC_BINARY_ADD) {
