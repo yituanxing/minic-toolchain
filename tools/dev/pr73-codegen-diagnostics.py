@@ -31,10 +31,9 @@ new = '''            const MinicExpression *failed_expression;
                 switch (failed_expression->kind) {
                 case MINIC_EXPRESSION_ASSIGNMENT:
                     fprintf(stderr,
-                            "CODEGEN_FAIL_EXPR assignment left=%zu right=%zu type_kind=%d\\n",
+                            "CODEGEN_FAIL_EXPR assignment left=%zu right=%zu\\n",
                             (size_t)failed_expression->value.binary.left,
-                            (size_t)failed_expression->value.binary.right,
-                            (int)failed_expression->type.kind);
+                            (size_t)failed_expression->value.binary.right);
                     break;
                 case MINIC_EXPRESSION_CALL:
                     fprintf(stderr,
