@@ -40,11 +40,11 @@ replace_once(
 """,
 )
 
-marker = "static bool parse_primary(MinicParser *parser,\n"
+marker = "static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id, bool decay_array) {\n"
 parser_path = Path("src/frontend/parser_expression.c")
 text = parser_path.read_text()
 if text.count(marker) != 1:
-    raise SystemExit("unexpected parse_primary marker")
+    raise SystemExit(f"unexpected parse_primary marker count={text.count(marker)}")
 helper = r'''static bool current_is_builtin_offsetof(const MinicParser *parser) {
     static const char name[] = "__builtin_offsetof";
     size_t length;
