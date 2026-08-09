@@ -24,7 +24,9 @@ static bool gnu_function_attribute_is_metadata(const MinicParser *parser) {
            function_identifier_is(parser, "__pure__") ||
            function_identifier_is(parser, "__malloc__") ||
            function_identifier_is(parser, "noreturn") ||
-           function_identifier_is(parser, "__noreturn__");
+           function_identifier_is(parser, "__noreturn__") ||
+           function_identifier_is(parser, "deprecated") ||
+           function_identifier_is(parser, "__deprecated__");
 }
 
 static bool parse_gnu_attribute_arguments(MinicParser *parser) {
@@ -133,4 +135,4 @@ new = '''    if (!minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '('"
 if text.count(old) != 1:
     raise SystemExit(f"function declarator attribute anchor: expected 1 match, found {text.count(old)}")
 path.write_text(text.replace(old, new, 1))
-print("staged non-ABI GNU function attributes: nothrow, leaf, nonnull, access, pure, malloc, noreturn")
+print("staged non-ABI GNU function attributes: nothrow, leaf, nonnull, access, pure, malloc, noreturn, deprecated")
