@@ -13,6 +13,7 @@ for test_script in \
     run-anonymous-record-field-types.sh \
     run-typedef-enum-definitions.sh \
     run-enum-constant-expressions.sh \
+    run-integer-constant-bitwise.sh \
     run-record-forward-declarations.sh \
     run-record-multi-declarators.sh \
     run-volatile-qualifiers.sh \
