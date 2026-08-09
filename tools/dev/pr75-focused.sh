@@ -21,6 +21,7 @@ for test_script in \
     run-gnu-function-attributes.sh \
     run-gnu-function-asm-labels.sh \
     run-gnu-function-visibility.sh \
+    run-gnu-visible-extern-arrays.sh \
     run-record-forward-declarations.sh \
     run-record-multi-declarators.sh \
     run-volatile-qualifiers.sh \
