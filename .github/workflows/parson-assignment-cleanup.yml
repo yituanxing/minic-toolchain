@@ -31,32 +31,19 @@ jobs:
 
           path = Path('src/frontend/parser_expression.c')
           text = path.read_text()
-          old = '''            if (!minic_type_cast_compatible(target_type, value_expression->type)) {
-                      minic_parser_error(parser, "assignment expression type does not match target type");
-                      return false;
-                  }
-          '''
+          old = '            if (!minic_type_cast_compatible(target_type, value_expression->type)) {\n'
           new = '''            if (minic_type_is_pointer(target_type) ||
-                      minic_type_is_pointer(value_expression->type) ||
-                      !minic_type_cast_compatible(target_type, value_expression->type)) {
-                      minic_parser_error(parser, "assignment expression type does not match target type");
-                      return false;
-                  }
+                minic_type_is_pointer(value_expression->type) ||
+                !minic_type_cast_compatible(target_type, value_expression->type)) {
           '''
           if text.count(old) != 1:
-              raise SystemExit('unexpected assignment-expression conversion block')
+              raise SystemExit('unexpected assignment-expression conversion condition')
           path.write_text(text.replace(old, new, 1))
 
           path = Path('tests/compiler/c0/run-cast-expressions.sh')
           text = path.read_text()
-          old = '''expect_failure \\
-              invalid_cast_assignment_target \\
-              "assignment target must be a modifiable lvalue"
-          '''
-          new = '''expect_failure \\
-              invalid_cast_assignment_target \\
-              "assignment expression requires a modifiable scalar lvalue"
-          '''
+          old = '    "assignment target must be a modifiable lvalue"\n'
+          new = '    "assignment expression requires a modifiable scalar lvalue"\n'
           if text.count(old) != 1:
               raise SystemExit('unexpected invalid_cast_assignment_target expectation')
           path.write_text(text.replace(old, new, 1))
