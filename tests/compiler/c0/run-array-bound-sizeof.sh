@@ -16,4 +16,4 @@ mkdir -p "$work"
 
 test -s "$work/array_bound_sizeof.s"
 grep -F 'read_sizes:' "$work/array_bound_sizeof.s" >/dev/null
-printf '%s\n' 'PASS compiler/c0/array_bound_sizeof pointer=8 arithmetic=12 parentheses=1'
+printf '%s\n' 'PASS compiler/c0/array_bound_constant_expr pointer=8 arithmetic=12 enum=6 parentheses=1'
