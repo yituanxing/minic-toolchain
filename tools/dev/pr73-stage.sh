@@ -10,4 +10,5 @@ python3 tools/dev/pr73-static-zero-definition.py
 python3 tools/dev/pr73-record-copy-array-members.py
 python3 tools/dev/pr73-zero-aggregate-null.py
 python3 tools/dev/pr73-record-local-initializer.py
+python3 tools/dev/pr73-multiply-assignment.py
 printf '%s\n' 'staged linenoise discovery semantics'
