@@ -112,6 +112,7 @@ struct minic_linenoise_FILE { int opaque; };
 typedef struct minic_linenoise_FILE FILE;
 extern FILE *stdin;
 extern FILE *stdout;
+extern FILE *stderr;
 #define EOF (-1)
 FILE *fopen(const char *path, const char *mode);
 int fclose(FILE *stream);
