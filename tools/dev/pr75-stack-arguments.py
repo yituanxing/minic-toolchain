@@ -60,7 +60,8 @@ text = replace_exact(
     text,
     "for (parameter_index = 0U; parameter_index < 8U; ++parameter_index)",
     f"for (parameter_index = 0U; parameter_index < {MAX}; ++parameter_index)",
-    "signature reset loop",
+    "signature/function-type reset loops",
+    expected=2,
 )
 path.write_text(text)
 
