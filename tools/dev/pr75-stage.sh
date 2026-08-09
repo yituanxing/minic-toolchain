@@ -18,6 +18,7 @@ python3 tools/dev/pr75-union-local-declaration.py
 python3 tools/dev/pr75-enum-typedef.py
 python3 tools/dev/pr75-enum-constant-expressions.py
 python3 tools/dev/pr75-integer-constant-bitwise.py
+python3 tools/dev/pr75-unsigned-64-literals.py
 python3 tools/dev/pr75-record-forward-declarations.py
 python3 tools/dev/pr75-record-top-level-dispatch.py
 python3 tools/dev/pr75-record-multi-declarators.py
