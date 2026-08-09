@@ -1,8 +1,14 @@
+enum {
+    SIZE_WIDTH = 5,
+    SIZE_TOTAL = SIZE_WIDTH + 1
+};
+
 struct Sizes {
     unsigned char pointer_bytes[(sizeof(void *))];
     int arithmetic[sizeof(long) + 2 * sizeof(short)];
+    int enum_bound[SIZE_TOTAL];
 };
 
 int read_sizes(struct Sizes *sizes) {
-    return sizes->pointer_bytes[7] + sizes->arithmetic[11];
+    return sizes->pointer_bytes[7] + sizes->arithmetic[11] + sizes->enum_bound[5];
 }
