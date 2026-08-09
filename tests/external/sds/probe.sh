@@ -20,14 +20,9 @@ test "$(git hash-object "$vendor/sds.c")" = 3a7eae72f7591b3669af73954c42088ebbec
 test "$(git hash-object "$vendor/sds.h")" = adcc12c0a7646d2c88a796ad5591931017140999
 test "$(git hash-object "$vendor/sdsalloc.h")" = f43023c48438961445f6064ae8d0cc25f2b42f21
 
-# Real reference first, with the host's normal C99 libc headers and unchanged source.
 "$host_cc" -std=c99 -pedantic -O2 -Wall -I"$vendor" \
     -c "$vendor/sds.c" -o "$work/sds-gcc.o"
 
-# The compiler-facing headers expose only APIs/types actually consumed by SDS.
-# They intentionally preserve SDS's own __attribute__((packed)), flexible arrays,
-# inline functions, integer widths, and all source-level constructs so the first
-# failure comes from real SDS semantics rather than glibc implementation headers.
 cat >"$include/stddef.h" <<'EOF'
 #ifndef MINIC_SDS_STDDEF_H
 #define MINIC_SDS_STDDEF_H
@@ -81,6 +76,7 @@ cat >"$include/stdio.h" <<'EOF'
 #ifndef MINIC_SDS_STDIO_H
 #define MINIC_SDS_STDIO_H
 #include <stddef.h>
+#include <stdarg.h>
 int printf(const char *format, ...);
 int snprintf(char *buffer, size_t size, const char *format, ...);
 int vsnprintf(char *buffer, size_t size, const char *format, va_list arguments);
