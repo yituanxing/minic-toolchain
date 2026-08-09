@@ -1,7 +1,6 @@
 name: Freeze Parson Discovery
 
 on:
-  workflow_dispatch:
   push:
     branches: [external/parson-discovery]
     paths:
@@ -15,7 +14,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  materialize:
+  diagnose-stage:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout Parson discovery branch
@@ -24,310 +23,36 @@ jobs:
           ref: external/parson-discovery
           fetch-depth: 0
 
-      - name: Materialize validated Parson semantics
+      - name: Reproduce staged compiler tree
+        id: stage
         shell: bash
         run: |
-          set -Eeuo pipefail
-
-          # Reproduce exactly the staged compiler tree that passed Parson 1.5.3
-          # upstream 349/349 in PR Validation #82.
-          sh tools/dev/pr72-stage.sh
-
-          # Freeze the newly supported variadic-definition capability as a normal
-          # positive declaration test instead of keeping the old capability boundary.
-          cat > tests/compiler/c0/variadic_definition.c <<'EOF'
-          static int keep_fixed(int value, ...)
-          {
-              return value;
-          }
-
-          int main(void)
-          {
-              return keep_fixed(0, 1, 2);
-          }
-          EOF
-
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path('tests/compiler/c0/run-variadic-declarations.sh')
-          text = path.read_text()
-          old = "compile_failure invalid_variadic_definition 'variadic function definitions are not supported yet'"
-          if text.count(old) != 1:
-              raise SystemExit('unexpected variadic declaration gate shape')
-          path.write_text(text.replace(old, 'compile_success variadic_definition', 1))
-          PY
-
-          # Permanent focused RV64 psABI regression: two fixed integer-register
-          # arguments leave a2 as the first unnamed argument register.  MiniC's
-          # va_start must point at a contiguous save area containing a2/a3..., and
-          # the double variadic argument must retain its integer-register bit pattern.
-          cat > tests/compiler/c0/variadic_callee_save.c <<'EOF'
-          typedef void *va_list;
-
-          void *__minic_va_start(void);
-          int minic_verify_va_list(void *arguments);
-
-          #define va_start(ap, last) ((ap) = __minic_va_start())
-          #define va_end(ap) 0
-
-          static int check_arguments(int fixed, const char *tag, ...)
-          {
-              va_list arguments;
-              int result;
-
-              va_start(arguments, tag);
-              result = minic_verify_va_list(arguments);
-              va_end(arguments);
-              return fixed == 11 ? result : 40;
-          }
-
-          int main(void)
-          {
-              return check_arguments(11, "x", 22, 3.5);
-          }
-          EOF
-
-          cat > tests/compiler/c0/variadic_callee_save_gcc.c <<'EOF'
-          #include <stdarg.h>
-
-          int minic_verify_va_list(void *arguments);
-
-          static int check_arguments(int fixed, const char *tag, ...)
-          {
-              va_list arguments;
-              int result;
-
-              (void)tag;
-              va_start(arguments, tag);
-              result = minic_verify_va_list(arguments);
-              va_end(arguments);
-              return fixed == 11 ? result : 40;
-          }
-
-          int main(void)
-          {
-              return check_arguments(11, "x", 22, 3.5);
-          }
-          EOF
-
-          cat > tests/compiler/c0/variadic_callee_save_helper.c <<'EOF'
-          #include <stdint.h>
-
-          int minic_verify_va_list(void *arguments)
-          {
-              const uint64_t *words = (const uint64_t *)arguments;
-              union {
-                  double value;
-                  uint64_t bits;
-              } expected;
-
-              expected.value = 3.5;
-              if ((int64_t)words[0] != 22) {
-                  return 41;
-              }
-              if (words[1] != expected.bits) {
-                  return 42;
-              }
-              return 0;
-          }
-          EOF
-
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path('tests/compiler/c0/run-variadic-direct-calls.sh')
-          text = path.read_text()
-          anchor = "compile_failure invalid_variadic_too_many_arguments 'variadic call supports at most 8 arguments'"
-          if text.count(anchor) != 1:
-              raise SystemExit('unexpected variadic direct-call gate shape')
-          block = r'''
-          name=variadic_callee_save
-          "$riscv_cc" -E -P -x c "$root/tests/compiler/c0/$name.c" -o "$work/$name.i"
-          "$minic" -S "$work/$name.i" -o "$work/$name.s"
-          "$riscv_cc" -static \
-              "$work/$name.s" \
-              "$root/tests/compiler/c0/${name}_helper.c" \
-              -o "$work/$name-minic.elf"
-          "$riscv_cc" -static \
-              "$root/tests/compiler/c0/${name}_gcc.c" \
-              "$root/tests/compiler/c0/${name}_helper.c" \
-              -o "$work/$name-gcc.elf"
-
           set +e
-          "$qemu" "$work/$name-minic.elf"
-          minic_status=$?
-          "$qemu" "$work/$name-gcc.elf"
-          gcc_status=$?
+          sh tools/dev/pr72-stage.sh > "$RUNNER_TEMP/pr72-stage.log" 2>&1
+          status=$?
           set -e
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          git reset --hard HEAD
 
-          if test "$gcc_status" -ne 0 || test "$minic_status" -ne "$gcc_status"; then
-              printf '%s\n' \
-                  "FAIL compiler/c0/$name: minic=$minic_status gcc=$gcc_status" >&2
-              exit 1
-          fi
-          printf '%s\n' \
-              "PASS compiler/c0/$name exit=$minic_status differential=gcc rv64=variadic-callee-save-area"
+          mkdir -p docs/dev
+          {
+            printf 'stage_status=%s\n' "$status"
+            printf 'head=%s\n' "$(git rev-parse HEAD)"
+            printf '%s\n' '--- stage log ---'
+            cat "$RUNNER_TEMP/pr72-stage.log"
+          } > docs/dev/pr72-freeze-stage.log
 
-          '''
-          path.write_text(text.replace(anchor, block + anchor, 1))
-          PY
-
-          # Vendor the exact Parson input once at freeze time.  Future compile/runtime
-          # gates use the repository copy rather than downloading source on every run.
-          upstream=ba29f4eda9ea7703a9f6a9cf2b0532a2605723c3
-          vendor_tmp=$(mktemp -d)
-          trap 'rm -rf "$vendor_tmp"' EXIT
-          curl -fsSL "https://github.com/kgabis/parson/archive/$upstream.tar.gz" -o "$vendor_tmp/parson.tar.gz"
-          mkdir -p "$vendor_tmp/src"
-          tar -xzf "$vendor_tmp/parson.tar.gz" --strip-components=1 -C "$vendor_tmp/src"
-          test "$(git hash-object "$vendor_tmp/src/parson.c")" = 526aab437b418fa909517361cf39dc3dca47a8d6
-          test "$(git hash-object "$vendor_tmp/src/parson.h")" = 40be490bfd631970aad31c814de8ff5f83fe7c59
-          test "$(git hash-object "$vendor_tmp/src/tests.c")" = 3cf97b5d096ccedb7de50d358bd896d4a1ea3e6f
-
-          rm -rf tests/vendor/parson
-          mkdir -p tests/vendor/parson
-          cp "$vendor_tmp/src/parson.c" "$vendor_tmp/src/parson.h" "$vendor_tmp/src/tests.c" tests/vendor/parson/
-          cp -R "$vendor_tmp/src/tests" tests/vendor/parson/tests
-          if test -f "$vendor_tmp/src/LICENSE"; then
-            cp "$vendor_tmp/src/LICENSE" tests/vendor/parson/LICENSE
-          fi
-          cat > tests/vendor/parson/UPSTREAM <<EOF
-          version=1.5.3
-          commit=$upstream
-          parson.c=526aab437b418fa909517361cf39dc3dca47a8d6
-          parson.h=40be490bfd631970aad31c814de8ff5f83fe7c59
-          tests.c=3cf97b5d096ccedb7de50d358bd896d4a1ea3e6f
-          EOF
-
-          python3 - <<'PY'
-          from pathlib import Path
-
-          probe = Path('tests/external/parson/probe.sh')
-          text = probe.read_text()
-          old = '''vendor="$work/upstream"
-          include="$work/include"
-          minic=${MINIC:-"$root/build/ci-release/bin/minic"}
-          riscv_cc=${RISCV_CC:-riscv64-linux-gnu-gcc}
-          upstream=ba29f4eda9ea7703a9f6a9cf2b0532a2605723c3
-
-          rm -rf "$work"
-          mkdir -p "$vendor" "$include"
-
-          curl -fsSL "https://raw.githubusercontent.com/kgabis/parson/$upstream/parson.c" -o "$vendor/parson.c"
-          curl -fsSL "https://raw.githubusercontent.com/kgabis/parson/$upstream/parson.h" -o "$vendor/parson.h"
-
-          test "$(git hash-object "$vendor/parson.c")" = 526aab437b418fa909517361cf39dc3dca47a8d6
-          test "$(git hash-object "$vendor/parson.h")" = 40be490bfd631970aad31c814de8ff5f83fe7c59
-          '''
-          new = '''vendor="$root/tests/vendor/parson"
-          include="$work/include"
-          minic=${MINIC:-"$root/build/ci-release/bin/minic"}
-          riscv_cc=${RISCV_CC:-riscv64-linux-gnu-gcc}
-
-          rm -rf "$work"
-          mkdir -p "$work" "$include"
-
-          test "$(git hash-object "$vendor/parson.c")" = 526aab437b418fa909517361cf39dc3dca47a8d6
-          test "$(git hash-object "$vendor/parson.h")" = 40be490bfd631970aad31c814de8ff5f83fe7c59
-          '''
-          if text.count(old) != 1:
-              raise SystemExit('unexpected Parson probe source-fetch block')
-          probe.write_text(text.replace(old, new, 1))
-
-          runtime = Path('tests/external/parson/runtime_differential.sh')
-          text = runtime.read_text()
-          old = '''vendor="$work/upstream"
-          archive="$work/parson.tar.gz"
-          minic_binary="$work/parson-upstream-tests-minic"
-          gcc_binary="$work/parson-upstream-tests-gcc"
-          upstream=ba29f4eda9ea7703a9f6a9cf2b0532a2605723c3
-
-          rm -rf "$vendor"
-          mkdir -p "$vendor"
-
-          if test ! -f "$assembly"; then
-              printf '%s\\n' "FAIL external/parson-runtime: missing MiniC assembly $assembly" >&2
-              exit 1
-          fi
-
-          curl -fsSL "https://github.com/kgabis/parson/archive/$upstream.tar.gz" -o "$archive"
-          tar -xzf "$archive" --strip-components=1 -C "$vendor"
-
-          test "$(git hash-object "$vendor/parson.c")" = 526aab437b418fa909517361cf39dc3dca47a8d6
-          test "$(git hash-object "$vendor/parson.h")" = 40be490bfd631970aad31c814de8ff5f83fe7c59
-          test "$(git hash-object "$vendor/tests.c")" = 3cf97b5d096ccedb7de50d358bd896d4a1ea3e6f
-          '''
-          new = '''vendor="$root/tests/vendor/parson"
-          minic_binary="$work/parson-upstream-tests-minic"
-          gcc_binary="$work/parson-upstream-tests-gcc"
-
-          rm -rf "$work"
-          mkdir -p "$work"
-
-          if test ! -f "$assembly"; then
-              printf '%s\\n' "FAIL external/parson-runtime: missing MiniC assembly $assembly" >&2
-              exit 1
-          fi
-
-          test "$(git hash-object "$vendor/parson.c")" = 526aab437b418fa909517361cf39dc3dca47a8d6
-          test "$(git hash-object "$vendor/parson.h")" = 40be490bfd631970aad31c814de8ff5f83fe7c59
-          test "$(git hash-object "$vendor/tests.c")" = 3cf97b5d096ccedb7de50d358bd896d4a1ea3e6f
-          '''
-          if text.count(old) != 1:
-              raise SystemExit('unexpected Parson runtime source-fetch block')
-          runtime.write_text(text.replace(old, new, 1))
-
-          workflow = Path('.github/workflows/parson-pr-validation.yml')
-          text = workflow.read_text()
-          text = text.replace(
-              'branches: [frontend/additive-update-pointer-difference]',
-              'branches: [main]',
-              1,
-          )
-          old = '''      - name: Stage current compiler semantics and build MiniC
-                  shell: bash
-                  run: |
-                    set -Eeuo pipefail
-                    sh tools/dev/pr72-stage.sh
-                    make -j4 MODE=release BUILD_DIR=build/parson-compiler
-                    make -j4 MODE=sanitize BUILD_DIR=build/parson-sanitize
-          '''
-          new = '''      - name: Build committed MiniC semantics
-                  shell: bash
-                  run: |
-                    set -Eeuo pipefail
-                    make -j4 MODE=release BUILD_DIR=build/parson-compiler
-                    make -j4 MODE=sanitize BUILD_DIR=build/parson-sanitize
-          '''
-          if text.count(old) != 1:
-              raise SystemExit('unexpected Parson workflow staging block')
-          workflow.write_text(text.replace(old, new, 1))
-          PY
-
-          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
-          clang-format-18 -i \
-            tests/compiler/c0/variadic_definition.c \
-            tests/compiler/c0/variadic_callee_save.c \
-            tests/compiler/c0/variadic_callee_save_gcc.c \
-            tests/compiler/c0/variadic_callee_save_helper.c
-
-          # Discovery mechanisms have served their purpose; keep them in Git history,
-          # not as an active dependency of the frozen compiler baseline.
-          rm -f tools/dev/pr71-*.patch tools/dev/pr71-update-platform.py
-          rm -f tools/dev/pr72-*.patch tools/dev/pr72-*.py tools/dev/pr72-stage.sh
-          rm -f .github/workflows/parson-discovery.yml .github/workflows/pr72-freeze.yml
-
-          git diff --check
-          git status --short
-
-      - name: Commit clean Parson baseline
+      - name: Commit diagnostic evidence
         shell: bash
         run: |
           set -Eeuo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A
-          git diff --cached --check
-          git commit -m 'compiler: freeze Parson-driven semantics / 编译器：冻结 Parson 驱动语义'
+          git add docs/dev/pr72-freeze-stage.log
+          git commit -m 'ci: record Parson freeze staging diagnostic / CI：记录 Parson 冻结暂存诊断'
           git push origin HEAD:external/parson-discovery
+
+      - name: Fail if staging failed
+        if: steps.stage.outputs.status != '0'
+        shell: bash
+        run: exit 1
