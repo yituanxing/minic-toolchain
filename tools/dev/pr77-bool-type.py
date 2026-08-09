@@ -180,14 +180,11 @@ replace_once(
 """,
     "bool-type-parser",
 )
-replace_in_function(
+replace_once(
     "src/frontend/parser_statement.c",
-    "static bool token_starts_local_declaration(",
-    """    case MINIC_TOKEN_KW_CONST:
-    case MINIC_TOKEN_KW_CHAR:
+    """    case MINIC_TOKEN_KW_CHAR:
 """,
-    """    case MINIC_TOKEN_KW_CONST:
-    case MINIC_TOKEN_KW_BOOL:
+    """    case MINIC_TOKEN_KW_BOOL:
     case MINIC_TOKEN_KW_CHAR:
 """,
     "bool-local-declaration",
