@@ -1,0 +1,23 @@
+name: cJSON Final Validation
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  cjson-final:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run complete compiler gate
+        run: bash .github/scripts/compiler-c0-full-gate.sh
+
+      - name: Compare MiniC cJSON against GCC with upstream test.c
+        run: |
+          chmod +x tests/external/cjson/final_differential.sh
+          BUILD_DIR="$GITHUB_WORKSPACE/build/ci-external" \
+          RISCV_CC=riscv64-linux-gnu-gcc \
+          QEMU_RISCV64=qemu-riscv64 \
+            tests/external/cjson/final_differential.sh
