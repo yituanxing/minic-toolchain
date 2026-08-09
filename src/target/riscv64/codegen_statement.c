@@ -1,5 +1,6 @@
 #include "target/riscv64/codegen_internal.h"
 
+#include <inttypes.h>
 #include <string.h>
 
 typedef enum MinicBreakTargetKind {
@@ -286,7 +287,7 @@ static bool minic_riscv64_emit_switch(FILE *file,
         case_expression = minic_c0_program_expression(program, case_statement->expression);
         if (case_expression == NULL || case_expression->kind != MINIC_EXPRESSION_INTEGER ||
             fprintf(file,
-                    "  li t1, %d\n"
+                    "  li t1, %" PRId64 "\n"
                     "  beq t0, t1, .Lswitch_case_%zu\n",
                     case_expression->value.integer_value,
                     (size_t)case_id) < 0) {

@@ -186,9 +186,9 @@ bool minic_parser_parse_parameter_list(MinicParser *parser,
     }
 }
 
-static bool parse_external_pointer_definition(MinicParser *parser,
-                                              MinicType object_type,
-                                              MinicSourceSpan name_span) {
+static bool parse_external_object_definition(MinicParser *parser,
+                                             MinicType object_type,
+                                             MinicSourceSpan name_span) {
     MinicGlobalObjectId object_id;
     MinicGlobalObjectId target_id;
     MinicSourceSpan literal_span;
@@ -197,8 +197,8 @@ static bool parse_external_pointer_definition(MinicParser *parser,
     const MinicArrayType *literal_array;
     MinicGlobalObject *object;
 
-    if (parser == NULL || !minic_type_is_pointer(object_type) ||
-        parser->current.kind != MINIC_TOKEN_EQUAL) {
+    if (parser == NULL || parser->current.kind != MINIC_TOKEN_EQUAL ||
+        (!minic_type_is_integer(object_type) && !minic_type_is_pointer(object_type))) {
         minic_parser_error(parser, "unsupported external object definition");
         return false;
     }
@@ -226,7 +226,24 @@ static bool parse_external_pointer_definition(MinicParser *parser,
         object->is_extern = false;
     }
 
-    if (!minic_parser_advance(parser) || parser->current.kind != MINIC_TOKEN_STRING_LITERAL ||
+    if (!minic_parser_advance(parser)) {
+        return false;
+    }
+    if (minic_type_is_integer(object_type)) {
+        int value;
+
+        if (!minic_parser_parse_integer_value(parser, &value) ||
+            !minic_c0_global_object_add_initializer(parser->program, object_id, value)) {
+            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                minic_parser_error(parser, "cannot record external integer initializer");
+            }
+            return false;
+        }
+        return minic_parser_expect(
+            parser, MINIC_TOKEN_SEMICOLON, "expected ';' after external object definition");
+    }
+
+    if (parser->current.kind != MINIC_TOKEN_STRING_LITERAL ||
         !minic_parser_create_string_literal_object(
             parser, &target_id, &literal_type, &literal_span)) {
         if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
@@ -262,17 +279,31 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     size_t parameter_count;
     size_t local_begin;
     size_t local_count;
+    bool is_inline;
     bool is_main;
     bool is_variadic;
 
     body_block = MINIC_BLOCK_INVALID;
     parameter_count = 0U;
+    is_inline = false;
     is_variadic = false;
     (void)memset(parameter_name_spans, 0, sizeof(parameter_name_spans));
     (void)memset(parameter_types, 0, sizeof(parameter_types));
     if (is_internal &&
         !minic_parser_expect(parser, MINIC_TOKEN_KW_STATIC, "expected keyword 'static'")) {
         return false;
+    }
+    if (parser->current.kind == MINIC_TOKEN_KW_INLINE) {
+        is_inline = true;
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
+    }
+    if (!is_internal && parser->current.kind == MINIC_TOKEN_KW_STATIC) {
+        is_internal = true;
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
     }
     if (!minic_parser_parse_type_name(parser, &return_type)) {
         return false;
@@ -299,7 +330,11 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
         return false;
     }
     if (!is_internal && parser->current.kind != MINIC_TOKEN_LPAREN) {
-        return parse_external_pointer_definition(parser, return_type, name_span);
+        if (is_inline) {
+            minic_parser_error(parser, "inline specifier requires a function declarator");
+            return false;
+        }
+        return parse_external_object_definition(parser, return_type, name_span);
     }
     if (!minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '('") ||
         !minic_parser_parse_parameter_list(
@@ -468,7 +503,13 @@ static bool static_declaration_is_function(MinicParser *parser, bool *is_functio
         return false;
     }
     probe = *parser;
-    if (!minic_parser_advance(&probe) || !minic_parser_parse_type_name(&probe, &declared_type)) {
+    if (!minic_parser_advance(&probe)) {
+        return false;
+    }
+    if (probe.current.kind == MINIC_TOKEN_KW_INLINE && !minic_parser_advance(&probe)) {
+        return false;
+    }
+    if (!minic_parser_parse_type_name(&probe, &declared_type)) {
         return false;
     }
     (void)declared_type;
@@ -507,6 +548,8 @@ bool minic_parse_c0_program(const char *path,
             success = minic_parser_parse_typedef(&parser);
         } else if (parser.current.kind == MINIC_TOKEN_KW_EXTERN) {
             success = minic_parser_parse_extern_global(&parser);
+        } else if (parser.current.kind == MINIC_TOKEN_KW_INLINE) {
+            success = parse_function(&parser, false);
         } else if (parser.current.kind == MINIC_TOKEN_KW_STATIC) {
             bool is_function;
 

@@ -7,6 +7,7 @@
 #include "minic/compiler.h"
 
 #include <stdbool.h>
+#include <stdint.h>
 #include <stddef.h>
 
 #define MINIC_PARSER_MAX_SWITCH_DEPTH 16U
@@ -24,7 +25,7 @@ typedef struct MinicParserEnumConstant {
 } MinicParserEnumConstant;
 
 typedef struct MinicParserSwitchContext {
-    int case_values[MINIC_PARSER_MAX_SWITCH_CASES];
+    int64_t case_values[MINIC_PARSER_MAX_SWITCH_CASES];
     size_t case_count;
     bool has_default;
 } MinicParserSwitchContext;
@@ -65,6 +66,7 @@ void minic_parser_error(MinicParser *parser, const char *format, ...);
 bool minic_parser_advance(MinicParser *parser);
 bool minic_parser_expect(MinicParser *parser, MinicTokenKind kind, const char *message);
 bool minic_parser_parse_integer_value(MinicParser *parser, int *value);
+bool minic_parser_parse_integer_value64(MinicParser *parser, int64_t *value);
 bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type);
 bool minic_parser_parse_pointer_declarator(MinicParser *parser,
                                            MinicType base_type,

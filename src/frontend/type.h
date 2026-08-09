@@ -33,7 +33,8 @@ typedef enum MinicIntegerRank {
     MINIC_INTEGER_RANK_CHAR,
     MINIC_INTEGER_RANK_SHORT,
     MINIC_INTEGER_RANK_INT,
-    MINIC_INTEGER_RANK_LONG
+    MINIC_INTEGER_RANK_LONG,
+    MINIC_INTEGER_RANK_LONG_LONG
 } MinicIntegerRank;
 
 typedef enum MinicTypeQualifier {
@@ -63,6 +64,8 @@ MinicType minic_type_int(void);
 MinicType minic_type_unsigned_int(void);
 MinicType minic_type_long(void);
 MinicType minic_type_unsigned_long(void);
+MinicType minic_type_long_long(void);
+MinicType minic_type_unsigned_long_long(void);
 MinicType minic_type_float(void);
 MinicType minic_type_double(void);
 MinicType minic_type_function(MinicFunctionTypeId function_type_id);

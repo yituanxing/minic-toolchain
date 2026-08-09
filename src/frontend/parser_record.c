@@ -85,13 +85,59 @@ static bool parse_function_pointer_field_declarator(MinicParser *parser,
     return true;
 }
 
+static bool token_text_equals(const MinicParser *parser, MinicToken token, const char *text) {
+    size_t length;
+
+    if (parser == NULL || text == NULL || token.kind != MINIC_TOKEN_IDENTIFIER) {
+        return false;
+    }
+    length = minic_parser_span_length(token.span);
+    return strlen(text) == length &&
+           memcmp(parser->source + token.span.begin.offset, text, length) == 0;
+}
+
+static bool parse_packed_record_attribute(MinicParser *parser, bool *is_packed) {
+    if (parser == NULL || is_packed == NULL) {
+        return false;
+    }
+    *is_packed = false;
+    if (!token_text_equals(parser, parser->current, "__attribute__")) {
+        return true;
+    }
+    if (!minic_parser_advance(parser) ||
+        !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '(' after __attribute__") ||
+        !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '(' in __attribute__")) {
+        return false;
+    }
+    if (!token_text_equals(parser, parser->current, "__packed__") &&
+        !token_text_equals(parser, parser->current, "packed")) {
+        minic_parser_error(parser, "only packed record attribute is supported here");
+        return false;
+    }
+    *is_packed = true;
+    return minic_parser_advance(parser) &&
+           minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')' after packed attribute") &&
+           minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')' after __attribute__");
+}
+
 static bool parse_record_field(MinicParser *parser, MinicRecordId record_id) {
     MinicSourceSpan name_span;
     MinicType base_type;
     MinicType field_type;
     size_t element_count;
+    MinicRecord *mutable_record;
     const MinicRecord *record;
+    bool is_flexible_array;
 
+    record = minic_c0_program_record(parser->program, record_id);
+    if (record == NULL) {
+        minic_parser_error(parser, "invalid record while adding field");
+        return false;
+    }
+    if (record->field_count > 0U && record->fields[record->field_count - 1U].is_flexible_array) {
+        minic_parser_error(parser, "flexible array member must be the last record field");
+        return false;
+    }
     if (!minic_parser_parse_type_specifiers(parser, &base_type) ||
         !minic_parser_parse_pointer_declarator(parser, base_type, &field_type)) {
         return false;
@@ -124,24 +170,36 @@ static bool parse_record_field(MinicParser *parser, MinicRecordId record_id) {
         return false;
     }
 
-    record = minic_c0_program_record(parser->program, record_id);
-    if (record == NULL) {
-        minic_parser_error(parser, "invalid record while adding field");
-        return false;
-    }
     if (record_has_field(parser, record, name_span)) {
         minic_parser_error(parser, "duplicate record field");
         return false;
     }
 
     element_count = 1U;
+    is_flexible_array = false;
     if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
         if (minic_type_is_pointer(field_type) && field_type.base_kind == MINIC_TYPE_BASE_FUNCTION) {
             minic_parser_error(parser, "function pointer field arrays are unsupported");
             return false;
         }
-        if (!minic_parser_advance(parser) ||
-            !minic_parser_parse_fixed_array_bound(parser, &element_count)) {
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
+        if (parser->current.kind == MINIC_TOKEN_RBRACKET) {
+            if (record->is_union) {
+                minic_parser_error(parser, "flexible array member is not allowed in union");
+                return false;
+            }
+            if (record->field_count == 0U) {
+                minic_parser_error(parser,
+                                   "flexible array member requires a preceding named field");
+                return false;
+            }
+            is_flexible_array = true;
+            if (!minic_parser_advance(parser)) {
+                return false;
+            }
+        } else if (!minic_parser_parse_fixed_array_bound(parser, &element_count)) {
             return false;
         }
     }
@@ -157,12 +215,17 @@ static bool parse_record_field(MinicParser *parser, MinicRecordId record_id) {
         minic_parser_error(parser, "out of memory while adding record field");
         return false;
     }
+    if (is_flexible_array) {
+        mutable_record = &parser->program->records[record_id];
+        mutable_record->fields[mutable_record->field_count - 1U].is_flexible_array = true;
+    }
     return true;
 }
 
 bool minic_parser_parse_record_definition_specifier(MinicParser *parser, MinicType *record_type) {
     MinicRecordId record_id;
     MinicTokenKind record_keyword;
+    bool is_packed;
     bool is_union;
 
     if (record_type == NULL) {
@@ -175,7 +238,7 @@ bool minic_parser_parse_record_definition_specifier(MinicParser *parser, MinicTy
         return false;
     }
     is_union = record_keyword == MINIC_TOKEN_KW_UNION;
-    if (!minic_parser_advance(parser)) {
+    if (!minic_parser_advance(parser) || !parse_packed_record_attribute(parser, &is_packed)) {
         return false;
     }
 
@@ -194,9 +257,11 @@ bool minic_parser_parse_record_definition_specifier(MinicParser *parser, MinicTy
                 return false;
             }
             parser->program->records[record_id].is_union = is_union;
+            parser->program->records[record_id].is_packed = is_packed;
         } else {
             record = minic_c0_program_record(parser->program, record_id);
-            if (record == NULL || record->is_complete || record->is_union != is_union) {
+            if (record == NULL || record->is_complete || record->is_union != is_union ||
+                (is_packed && record->is_packed != is_packed)) {
                 minic_parser_error(parser, "duplicate record definition");
                 return false;
             }
@@ -210,6 +275,7 @@ bool minic_parser_parse_record_definition_specifier(MinicParser *parser, MinicTy
             return false;
         }
         parser->program->records[record_id].is_union = is_union;
+        parser->program->records[record_id].is_packed = is_packed;
     } else {
         minic_parser_error(parser, "expected record tag or '{' after 'struct'");
         return false;

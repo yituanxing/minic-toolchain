@@ -1,0 +1,155 @@
+name: SDS PR Validation
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sds-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  sds-compile:
+    name: sds-compile
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build committed MiniC semantics
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+          make -j4 MODE=release BUILD_DIR=build/sds-compiler
+          make -j4 MODE=sanitize BUILD_DIR=build/sds-sanitize
+
+      - name: Verify focused discovery semantics
+        shell: bash
+        run: |
+          MINIC="$GITHUB_WORKSPACE/build/sds-compiler/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/sds-focused" HOST_CC=cc sh tests/compiler/c0/run-packed-record-layout.sh
+          MINIC="$GITHUB_WORKSPACE/build/sds-compiler/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/sds-focused" HOST_CC=cc sh tests/compiler/c0/run-flexible-array-members.sh
+          MINIC="$GITHUB_WORKSPACE/build/sds-compiler/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/sds-focused" HOST_CC=cc sh tests/compiler/c0/run-inline-functions.sh
+          MINIC="$GITHUB_WORKSPACE/build/sds-compiler/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/sds-focused" HOST_CC=cc sh tests/compiler/c0/run-postfix-const.sh
+          MINIC="$GITHUB_WORKSPACE/build/sds-compiler/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/sds-focused" HOST_CC=cc sh tests/compiler/c0/run-long-long-types.sh
+          MINIC="$GITHUB_WORKSPACE/build/sds-compiler/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/sds-focused" HOST_CC=cc sh tests/compiler/c0/run-wide-integer-literals.sh
+          MINIC="$GITHUB_WORKSPACE/build/sds-compiler/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/sds-focused" HOST_CC=cc sh tests/compiler/c0/run-array-bound-constant-expressions.sh
+          MINIC="$GITHUB_WORKSPACE/build/sds-compiler/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/sds-focused" HOST_CC=cc sh tests/compiler/c0/run-for-declaration-initializers.sh
+          MINIC="$GITHUB_WORKSPACE/build/sds-compiler/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/sds-focused" HOST_CC=cc sh tests/compiler/c0/run-void-pointer-locals.sh
+          MINIC="$GITHUB_WORKSPACE/build/sds-compiler/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/sds-focused" HOST_CC=cc sh tests/compiler/c0/run-compound-assignment-expressions.sh
+          MINIC="$GITHUB_WORKSPACE/build/sds-compiler/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/sds-focused" HOST_CC=cc sh tests/compiler/c0/run-void-casts.sh
+          MINIC="$GITHUB_WORKSPACE/build/sds-compiler/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/sds-focused" HOST_CC=cc sh tests/compiler/c0/run-external-scalar-definitions.sh
+
+      - name: Compile unchanged SDS library
+        shell: bash
+        run: |
+          set +e
+          MINIC="$GITHUB_WORKSPACE/build/sds-compiler/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/sds-discovery" \
+          HOST_CC=cc \
+            sh tests/external/sds/probe.sh
+          status=$?
+          set -e
+
+          if test "$status" -ge 128 && test -f "$GITHUB_WORKSPACE/build/sds-discovery/sds.i"; then
+            echo "SDS_SANITIZER_RERUN release_status=$status"
+            set +e
+            ASAN_OPTIONS=detect_leaks=0:abort_on_error=1 \
+            UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 \
+              "$GITHUB_WORKSPACE/build/sds-sanitize/bin/minic" \
+              -S "$GITHUB_WORKSPACE/build/sds-discovery/sds.i" \
+              -o "$GITHUB_WORKSPACE/build/sds-discovery/sds-sanitize.s"
+            sanitize_status=$?
+            set -e
+            echo "SDS_SANITIZER_STATUS=$sanitize_status"
+          fi
+          exit "$status"
+
+      - name: Compile unchanged SDS upstream tests
+        id: upstream_tests
+        shell: bash
+        run: |
+          set +e
+          MINIC="$GITHUB_WORKSPACE/build/sds-compiler/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/sds-discovery" \
+          HOST_CC=cc \
+            sh tests/external/sds/upstream_test_probe.sh
+          status=$?
+          set -e
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit "$status"
+
+      - name: Upload compact SDS test frontier evidence
+        if: failure() && steps.upstream_tests.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: sds-test-frontier
+          path: |
+            build/sds-discovery/sds-test.stderr
+            build/sds-discovery/sds-test.i
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Upload MiniC SDS upstream-test assembly
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sds-rv64-test-assembly
+          path: build/sds-discovery/sds-test.s
+          if-no-files-found: error
+          retention-days: 3
+
+  sds-runtime:
+    name: sds-runtime
+    needs: sds-compile
+    runs-on: ubuntu-24.04
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Restore RISC-V package archives
+        id: rv64-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/minic-apt/archives
+          key: rv64-apt-${{ runner.os }}-${{ runner.arch }}-noble-${{ hashFiles('tools/ci/ubuntu-24.04-packages.txt') }}
+
+      - name: Install RISC-V runtime tools
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          apt_cache="$HOME/.cache/minic-apt/archives"
+          mkdir -p "$apt_cache/partial"
+          mapfile -t packages < <(grep -Ev '^[[:space:]]*(#|$)' tools/ci/ubuntu-24.04-packages.txt)
+          mapfile -d '' -t cached < <(find "$apt_cache" -maxdepth 1 -type f -name '*.deb' -print0 | sort -z)
+          if (( ${#cached[@]} > 0 )); then
+            sudo apt-get install -y --no-install-recommends "${cached[@]}"
+          else
+            sudo apt-get update
+            sudo apt-get \
+              -o Dir::Cache::archives="$apt_cache" \
+              -o APT::Keep-Downloaded-Packages=true \
+              install -y --no-install-recommends "${packages[@]}"
+          fi
+          sudo chown -R "$USER:$USER" "$(dirname "$apt_cache")"
+          sh tools/ci/verify-validation-tools.sh
+
+      - name: Download MiniC SDS upstream-test assembly
+        uses: actions/download-artifact@v4
+        with:
+          name: sds-rv64-test-assembly
+          path: build/sds-discovery
+
+      - name: Run SDS upstream GCC differential
+        shell: bash
+        run: |
+          RISCV_CC=riscv64-linux-gnu-gcc \
+          QEMU_RISCV64=qemu-riscv64 \
+          SDS_TEST_ASSEMBLY="$GITHUB_WORKSPACE/build/sds-discovery/sds-test.s" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/sds-runtime" \
+            sh tests/external/sds/runtime_differential.sh

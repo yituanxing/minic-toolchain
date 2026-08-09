@@ -76,6 +76,9 @@ static MinicTokenKind minic_classify_identifier(const char *text, size_t length)
     if (length == 5U && memcmp(text, "float", 5U) == 0) {
         return MINIC_TOKEN_KW_FLOAT;
     }
+    if (length == 6U && memcmp(text, "inline", 6U) == 0) {
+        return MINIC_TOKEN_KW_INLINE;
+    }
     if (length == 3U && memcmp(text, "int", 3U) == 0) {
         return MINIC_TOKEN_KW_INT;
     }
@@ -215,11 +218,11 @@ static bool minic_lexer_scan_decimal_exponent(MinicLexer *lexer,
 static bool minic_lexer_scan_integer_suffix(MinicLexer *lexer,
                                             MinicDiagnostic *diagnostic,
                                             MinicSourcePosition begin) {
-    bool saw_long;
+    unsigned int long_count;
     bool saw_unsigned;
     size_t suffix_count;
 
-    saw_long = false;
+    long_count = 0U;
     saw_unsigned = false;
     suffix_count = 0U;
     while (minic_lexer_peek(lexer) == 'l' || minic_lexer_peek(lexer) == 'L' ||
@@ -228,12 +231,11 @@ static bool minic_lexer_scan_integer_suffix(MinicLexer *lexer,
 
         suffix = minic_lexer_peek(lexer);
         if (suffix == 'l' || suffix == 'L') {
-            if (saw_long) {
-                minic_lexer_set_message(
-                    lexer, diagnostic, begin, "long long constants are not supported");
+            long_count += 1U;
+            if (long_count > 2U) {
+                minic_lexer_set_message(lexer, diagnostic, begin, "too many long integer suffixes");
                 return false;
             }
-            saw_long = true;
         } else {
             if (saw_unsigned) {
                 minic_lexer_set_message(
@@ -243,7 +245,7 @@ static bool minic_lexer_scan_integer_suffix(MinicLexer *lexer,
             saw_unsigned = true;
         }
         suffix_count += 1U;
-        if (suffix_count > 2U) {
+        if (suffix_count > 3U) {
             minic_lexer_set_message(
                 lexer, diagnostic, begin, "unsupported integer constant suffix");
             return false;
@@ -595,7 +597,12 @@ bool minic_lexer_next(MinicLexer *lexer, MinicToken *token, MinicDiagnostic *dia
         }
         break;
     case '/':
-        token->kind = MINIC_TOKEN_SLASH;
+        if (minic_lexer_peek_next(lexer) == '=') {
+            token->kind = MINIC_TOKEN_SLASH_EQUAL;
+            minic_lexer_advance(lexer);
+        } else {
+            token->kind = MINIC_TOKEN_SLASH;
+        }
         break;
     case '%':
         token->kind = MINIC_TOKEN_PERCENT;

@@ -123,6 +123,14 @@ MinicType minic_type_unsigned_long(void) {
     return minic_type_integer(MINIC_INTEGER_SIGN_UNSIGNED, MINIC_INTEGER_RANK_LONG);
 }
 
+MinicType minic_type_long_long(void) {
+    return minic_type_integer(MINIC_INTEGER_SIGN_SIGNED, MINIC_INTEGER_RANK_LONG_LONG);
+}
+
+MinicType minic_type_unsigned_long_long(void) {
+    return minic_type_integer(MINIC_INTEGER_SIGN_UNSIGNED, MINIC_INTEGER_RANK_LONG_LONG);
+}
+
 MinicType minic_type_float(void) {
     return minic_type_scalar(MINIC_TYPE_BASE_FLOAT);
 }
@@ -231,6 +239,11 @@ bool minic_type_integer_promotion(MinicType type, MinicType *result) {
             minic_type_is_unsigned_integer(type) ? minic_type_unsigned_long() : minic_type_long();
         return true;
     }
+    if (type.integer_rank == MINIC_INTEGER_RANK_LONG_LONG) {
+        *result = minic_type_is_unsigned_integer(type) ? minic_type_unsigned_long_long()
+                                                       : minic_type_long_long();
+        return true;
+    }
     return false;
 }
 
@@ -266,9 +279,10 @@ bool minic_type_integer_common(MinicType left, MinicType right, MinicType *resul
         return true;
     }
 
-    /* On the active RV64 data model, signed long represents every unsigned int value. */
-    if (signed_type.integer_rank == MINIC_INTEGER_RANK_LONG &&
-        unsigned_type.integer_rank == MINIC_INTEGER_RANK_INT) {
+    /* On the active RV64 data model, signed long and signed long long both
+       represent every value of unsigned int. */
+    if (signed_type.integer_rank >= MINIC_INTEGER_RANK_LONG &&
+        unsigned_type.integer_rank <= MINIC_INTEGER_RANK_INT) {
         *result = signed_type;
         return true;
     }
@@ -370,7 +384,8 @@ bool minic_type_is_integer(MinicType type) {
            (type.integer_rank == MINIC_INTEGER_RANK_CHAR ||
             type.integer_rank == MINIC_INTEGER_RANK_SHORT ||
             type.integer_rank == MINIC_INTEGER_RANK_INT ||
-            type.integer_rank == MINIC_INTEGER_RANK_LONG) &&
+            type.integer_rank == MINIC_INTEGER_RANK_LONG ||
+            type.integer_rank == MINIC_INTEGER_RANK_LONG_LONG) &&
            minic_type_plain_char_identity_is_valid(type) &&
            type.pointer_qualifiers == MINIC_TYPE_QUALIFIER_NONE && type.pointer_depth == 0U;
 }
@@ -388,7 +403,8 @@ bool minic_type_is_short_integer(MinicType type) {
 }
 
 bool minic_type_is_long_integer(MinicType type) {
-    return minic_type_is_integer(type) && type.integer_rank == MINIC_INTEGER_RANK_LONG;
+    return minic_type_is_integer(type) && (type.integer_rank == MINIC_INTEGER_RANK_LONG ||
+                                           type.integer_rank == MINIC_INTEGER_RANK_LONG_LONG);
 }
 
 bool minic_type_is_signed_integer(MinicType type) {
