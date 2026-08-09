@@ -35,6 +35,7 @@ for test_script in \
     run-stack-fixed-arguments.sh \
     run-static-local-record-initializers.sh \
     run-static-record-arrays.sh \
+    run-static-nested-record-initializers.sh \
     run-static-local-scalars.sh \
     run-static-local-inferred-arrays.sh \
     run-static-local-fixed-arrays.sh \
