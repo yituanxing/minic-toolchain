@@ -1,0 +1,9 @@
+diff --git a/tests/external/parson/probe.sh b/tests/external/parson/probe.sh
+--- a/tests/external/parson/probe.sh
++++ b/tests/external/parson/probe.sh
+@@ -95,6 +95,7 @@ cat >"$include/math.h" <<'EOF'
+ #ifndef MINIC_PARSON_MATH_H
+ #define MINIC_PARSON_MATH_H
++#define HUGE_VAL (1.0 / 0.0)
+ #endif
+ EOF
