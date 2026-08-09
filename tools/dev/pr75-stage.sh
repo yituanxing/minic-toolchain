@@ -31,5 +31,6 @@ python3 tools/dev/pr75-mixed-double-arithmetic.py
 python3 tools/dev/pr75-stack-arguments.py
 python3 tools/dev/pr75-static-local-record-initializers.py
 python3 tools/dev/pr75-external-integer-array-initializers.py
+python3 tools/dev/pr75-static-inferred-char-arrays.py
 python3 tools/dev/pr75-lua-shim-simplify.py
 printf '%s\n' 'staged Lua discovery semantics'
