@@ -117,9 +117,15 @@ status=$?
 set -e
 
 if test "$status" -ne 0; then
-    printf '%s\n' "PARSON_BLOCKER minic_status=$status" >&2
-    printf '%s\n' 'Parson preprocessed frontier:' >&2
-    nl -ba "$work/parson.i" | sed -n '1,60p' >&2
+    frontier_line=$(sed -n 's/.*parson\.i:\([0-9][0-9]*\):.*/\1/p' "$work/minic.stderr" | head -n 1)
+    if test -z "$frontier_line"; then
+        frontier_line=1
+    fi
+    start_line=$((frontier_line > 20 ? frontier_line - 20 : 1))
+    end_line=$((frontier_line + 20))
+    printf '%s\n' "PARSON_BLOCKER minic_status=$status line=$frontier_line" >&2
+    printf '%s\n' "Parson preprocessed frontier lines=$start_line-$end_line:" >&2
+    nl -ba "$work/parson.i" | sed -n "${start_line},${end_line}p" >&2
     printf '%s\n' 'MiniC diagnostic:' >&2
     sed -n '1,120p' "$work/minic.stderr" >&2
     exit "$status"
