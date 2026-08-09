@@ -9,6 +9,5 @@ static int use_typedef_const(text const value) {
 }
 
 int main(void) {
-    char value[] = "x";
-    return same_first(value, value) && use_typedef_const(value) == 'x' ? 0 : 1;
+    return same_first("x", "x") && use_typedef_const("x") == 'x' ? 0 : 1;
 }
