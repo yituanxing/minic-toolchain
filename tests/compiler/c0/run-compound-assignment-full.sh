@@ -24,4 +24,7 @@ grep -F '  mulw a0, t0, a0' "$work/compound_assignment_full.s" >/dev/null
 grep -F '  subw a0, t0, a0' "$work/compound_assignment_full.s" >/dev/null
 grep -F '  divu a0, t0, a0' "$work/compound_assignment_full.s" >/dev/null
 grep -F '  div a0, t0, a0' "$work/compound_assignment_full.s" >/dev/null
-printf '%s\n' 'PASS compiler/c0/compound_assignment_full operators=+=,-=,*=,/=,&=,|=,^=,>>= pointer=+,- lvalue-evaluation=once'
+grep -F '  remw a0, t0, a0' "$work/compound_assignment_full.s" >/dev/null
+grep -F '  remu a0, t0, a0' "$work/compound_assignment_full.s" >/dev/null
+grep -F '  rem a0, t0, a0' "$work/compound_assignment_full.s" >/dev/null
+printf '%s\n' 'PASS compiler/c0/compound_assignment_full operators=+=,-=,*=,/=,%=,&=,|=,^=,>>= pointer=+,- lvalue-evaluation=once'
