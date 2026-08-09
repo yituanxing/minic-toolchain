@@ -1,6 +1,6 @@
 typedef unsigned char MiniByte;
 
-static const struct MiniPriority {
+static const struct {
     MiniByte left;
     MiniByte right;
 } priority[] = {
