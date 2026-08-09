@@ -1,0 +1,26 @@
+name: SDS Freeze Materialization PR
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sds-freeze-materialize
+  cancel-in-progress: true
+
+jobs:
+  freeze:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout discovery branch
+        uses: actions/checkout@v4
+        with:
+          ref: external/sds-discovery
+          fetch-depth: 0
+
+      - name: Materialize and self-check frozen SDS semantics
+        shell: bash
+        run: bash tools/dev/pr74-freeze.sh
