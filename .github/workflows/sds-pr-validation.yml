@@ -40,6 +40,7 @@ jobs:
           MINIC="$GITHUB_WORKSPACE/build/sds-compiler/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/sds-focused" HOST_CC=cc sh tests/compiler/c0/run-void-pointer-locals.sh
           MINIC="$GITHUB_WORKSPACE/build/sds-compiler/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/sds-focused" HOST_CC=cc sh tests/compiler/c0/run-compound-assignment-expressions.sh
           MINIC="$GITHUB_WORKSPACE/build/sds-compiler/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/sds-focused" HOST_CC=cc sh tests/compiler/c0/run-void-casts.sh
+          MINIC="$GITHUB_WORKSPACE/build/sds-compiler/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/sds-focused" HOST_CC=cc sh tests/compiler/c0/run-external-scalar-definitions.sh
 
       - name: Compile unchanged SDS library
         shell: bash
