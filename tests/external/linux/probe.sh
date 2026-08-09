@@ -1,6 +1,9 @@
 #!/bin/sh
 set -eu
 
+export LC_ALL=C
+export LANG=C
+
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 work=${BUILD_DIR:-"$root/build/linux-discovery"}
 minic=${MINIC:-"$root/build/linux-compiler/bin/minic"}
