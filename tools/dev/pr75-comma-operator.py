@@ -166,4 +166,19 @@ replace_once(
 ''',
 )
 
+replace_once(
+    "src/target/riscv64/codegen_expression.c",
+    '''        case MINIC_BINARY_LOGICAL_AND:
+        case MINIC_BINARY_LOGICAL_OR:
+            return false;
+        }
+''',
+    '''        case MINIC_BINARY_LOGICAL_AND:
+        case MINIC_BINARY_LOGICAL_OR:
+        case MINIC_BINARY_COMMA:
+            return false;
+        }
+''',
+)
+
 print("staged parenthesized comma operator sequencing")
