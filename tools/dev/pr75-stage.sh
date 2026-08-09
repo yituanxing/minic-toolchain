@@ -28,9 +28,13 @@ python3 tools/dev/pr75-record-top-level-dispatch.py
 python3 tools/dev/pr75-record-multi-declarators.py
 python3 tools/dev/pr75-record-multidimensional-arrays.py
 python3 tools/dev/pr75-record-array-identity.py
+python3 tools/dev/pr75-record-typedef-array-fields.py
 python3 tools/dev/pr75-pointer-compound-subtraction.py
 python3 tools/dev/pr75-builtin-offsetof.py
 python3 tools/dev/pr75-offsetof-constant-expression.py
+python3 tools/dev/pr75-record-field-alignment-v2.py
+python3 tools/dev/pr75-array-bound-sizeof-unified-layout.py
+python3 tools/dev/pr75-zero-length-record-arrays.py
 python3 tools/dev/pr75-pointer-integer-casts.py
 python3 tools/dev/pr75-record-assignment-expression.py
 python3 tools/dev/pr75-compound-assignment-expressions.py
@@ -58,6 +62,4 @@ python3 tools/dev/pr75-function-address-expressions.py
 python3 tools/dev/pr75-gnu-function-asm-labels.py
 python3 tools/dev/pr75-gnu-declaration-visibility.py
 python3 tools/dev/pr75-visible-extern-arrays.py
-python3 tools/dev/pr76-preprocessed-line-markers.py
-python3 tools/dev/pr76-anonymous-record-members.py
-printf '%s\n' 'staged Linux/Lua discovery semantics'
+printf '%s\n' 'staged Lua discovery semantics'
