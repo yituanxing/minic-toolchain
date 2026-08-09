@@ -25,7 +25,8 @@ for patch in \
     tools/dev/pr72-expression-arena-safety.patch \
     tools/dev/pr72-null-statement.patch \
     tools/dev/pr72-pointer-difference-qualification.patch \
-    tools/dev/pr72-hex-character-escape.patch; do
+    tools/dev/pr72-hex-character-escape.patch \
+    tools/dev/pr72-subtract-assignment.patch; do
     if test -f "$patch"; then
         git apply --check --recount "$patch"
         git apply --recount "$patch"
