@@ -23,7 +23,7 @@ python3 tools/dev/pr75-record-multi-declarators.py
 python3 tools/dev/pr75-record-multidimensional-arrays.py
 python3 tools/dev/pr75-record-array-identity.py
 python3 tools/dev/pr75-pointer-compound-subtraction.py
-python3 tools/dev/pr75-builtin-offsetof.py
+python3 tools/dev/pr75-builtin-offsetoff.py
 python3 tools/dev/pr75-pointer-integer-casts.py
 python3 tools/dev/pr75-record-assignment-expression.py
 python3 tools/dev/pr75-compound-assignment-expressions.py
@@ -41,5 +41,6 @@ python3 tools/dev/pr75-prefix-update-expressions.py
 python3 tools/dev/pr75-function-designator-calls.py
 python3 tools/dev/pr75-function-address-expressions.py
 python3 tools/dev/pr75-lua-posix-setjmp.py
+python3 tools/dev/pr75-lua-string-surface.py
 python3 tools/dev/pr75-lua-shim-simplify.py
 printf '%s\n' 'staged Lua discovery semantics'
