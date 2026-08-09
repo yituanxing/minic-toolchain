@@ -20,5 +20,6 @@ python3 tools/dev/pr75-record-multi-declarators.py
 python3 tools/dev/pr75-record-multidimensional-arrays.py
 python3 tools/dev/pr75-record-array-identity.py
 python3 tools/dev/pr75-pointer-compound-subtraction.py
+python3 tools/dev/pr75-builtin-offsetof.py
 python3 tools/dev/pr75-lua-shim-simplify.py
 printf '%s\n' 'staged Lua discovery semantics'
