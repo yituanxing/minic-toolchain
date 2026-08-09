@@ -34,6 +34,7 @@ jobs:
         run: |
           MINIC="$GITHUB_WORKSPACE/build/lua-compiler/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/lua-focused" HOST_CC=cc sh tests/compiler/c0/run-signed-char-semantics.sh
           MINIC="$GITHUB_WORKSPACE/build/lua-compiler/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/lua-focused" HOST_CC=cc sh tests/compiler/c0/run-extern-incomplete-arrays.sh
+          MINIC="$GITHUB_WORKSPACE/build/lua-compiler/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/lua-focused" HOST_CC=cc sh tests/compiler/c0/run-extern-fixed-integer-arrays.sh
           MINIC="$GITHUB_WORKSPACE/build/lua-compiler/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/lua-focused" HOST_CC=cc sh tests/compiler/c0/run-extern-parenthesized-functions.sh
           MINIC="$GITHUB_WORKSPACE/build/lua-compiler/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/lua-focused" HOST_CC=cc sh tests/compiler/c0/run-anonymous-record-field-types.sh
           MINIC="$GITHUB_WORKSPACE/build/lua-compiler/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/lua-focused" HOST_CC=cc sh tests/compiler/c0/run-typedef-enum-definitions.sh
