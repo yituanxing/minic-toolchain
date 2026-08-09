@@ -35,7 +35,6 @@ def replace_in_function(path: str, signature: str, old: str, new: str, label: st
     target.write_text(text[:start] + body.replace(old, new, 1) + text[end:])
 
 
-# Token identity is explicit because _Bool is a C keyword, not a typedef alias.
 replace_once(
     "src/frontend/token.h",
     """    MINIC_TOKEN_STRING_LITERAL,
@@ -77,7 +76,6 @@ replace_once(
     "bool-lexer-keyword",
 )
 
-# _Bool is a distinct standard integer type with rank below char.
 replace_once(
     "src/frontend/type.h",
     """typedef enum MinicIntegerRank {
@@ -145,12 +143,11 @@ replace_in_function(
 """,
     "bool-promotion",
 )
-replace_in_function(
+replace_once(
     "src/frontend/type.c",
-    "bool minic_type_is_integer(",
-    """            type.integer_rank == MINIC_INTEGER_RANK_CHAR ||
+    """           (type.integer_rank == MINIC_INTEGER_RANK_CHAR ||
 """,
-    """            type.integer_rank == MINIC_INTEGER_RANK_BOOL ||
+    """           (type.integer_rank == MINIC_INTEGER_RANK_BOOL ||
             type.integer_rank == MINIC_INTEGER_RANK_CHAR ||
 """,
     "bool-valid-integer",
@@ -168,8 +165,6 @@ bool minic_type_is_char_integer(MinicType type) {
     "bool-query",
 )
 
-# Parser: _Bool cannot combine with signed/unsigned/short/long, so parse it as its own
-# type-specifier arm instead of forcing it into the combinatorial integer-spelling loop.
 replace_once(
     "src/frontend/parser_type.c",
     """    if (minic_parser_is_integer_type_specifier(parser->current.kind)) {
@@ -198,7 +193,6 @@ replace_in_function(
     "bool-local-declaration",
 )
 
-# Verification and constant/layout queries must know the new rank explicitly.
 replace_in_function(
     "src/frontend/ast_verifier.c",
     "static bool type_is_valid(",
@@ -234,8 +228,6 @@ replace_in_function(
     "bool-target-layout",
 )
 
-# RV64 scalar access and conversion.  Conversion to _Bool is semantic booleanization,
-# not truncation: every nonzero scalar integer becomes exactly 1.
 replace_in_function(
     "src/target/riscv64/codegen_support.c",
     "static bool minic_riscv64_scalar_width(",
@@ -282,11 +274,6 @@ replace_in_function(
 """,
     "bool-conversion",
 )
-
-# Ordinary integer assignment previously relied on store-width truncation only.  Normalize
-# to the target integer type before every scalar store; for _Bool this is required 0/1
-# canonicalization and for narrower integer types it also makes the existing C conversion
-# rule explicit rather than accidental.
 replace_in_function(
     "src/target/riscv64/codegen_statement.c",
     "static bool minic_riscv64_emit_assignment(",
