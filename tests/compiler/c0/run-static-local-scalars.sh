@@ -14,7 +14,7 @@ mkdir -p "$work"
 "$minic" -S "$work/static_local_scalar.i" \
     -o "$work/static_local_scalar.s"
 
-grep -F '.section .data' "$work/static_local_scalar.s" >/dev/null
+grep -Fx '.data' "$work/static_local_scalar.s" >/dev/null
 grep -F '.type __minic_static_local_' "$work/static_local_scalar.s" >/dev/null
 grep -F '  .dword 0' "$work/static_local_scalar.s" >/dev/null
 if grep -F '.globl __minic_static_local_' "$work/static_local_scalar.s" >/dev/null; then
