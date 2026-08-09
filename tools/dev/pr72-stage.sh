@@ -20,6 +20,7 @@ for patch in \
     tools/dev/pr72-variadic-definition.patch \
     tools/dev/pr72-probe-stdarg.patch \
     tools/dev/pr72-probe-math.patch \
+    tools/dev/pr72-probe-stdio.patch \
     tools/dev/pr72-void-object-pointer.patch \
     tools/dev/pr72-expression-arena-safety.patch \
     tools/dev/pr72-null-statement.patch \
