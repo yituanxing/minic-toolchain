@@ -1,0 +1,53 @@
+diff --git a/src/frontend/parser_expression.c b/src/frontend/parser_expression.c
+--- a/src/frontend/parser_expression.c
++++ b/src/frontend/parser_expression.c
+@@ -24,14 +24,47 @@ static bool finish_value_expression(MinicParser *parser,
+     return minic_parser_apply_array_decay(parser, input_id, expression_id);
+ }
+ 
++static MinicType integer_literal_type(const MinicParser *parser, MinicSourceSpan span) {
++    bool saw_long;
++    bool saw_unsigned;
++    size_t offset;
++
++    saw_long = false;
++    saw_unsigned = false;
++    offset = span.end.offset;
++    while (offset > span.begin.offset) {
++        char character;
++
++        character = parser->source[offset - 1U];
++        if (character == 'l' || character == 'L') {
++            saw_long = true;
++        } else if (character == 'u' || character == 'U') {
++            saw_unsigned = true;
++        } else {
++            break;
++        }
++        offset -= 1U;
++    }
++    if (saw_long) {
++        return saw_unsigned ? minic_type_unsigned_long() : minic_type_long();
++    }
++    return saw_unsigned ? minic_type_unsigned_int() : minic_type_int();
++}
++
+ static bool parse_integer(MinicParser *parser, MinicExpressionId *expression_id) {
+     MinicExpression expression;
++    MinicSourceSpan span;
++    MinicType literal_type;
+     int value;
+ 
++    span = parser->current.span;
++    literal_type = parser->current.kind == MINIC_TOKEN_CHARACTER_CONSTANT
++                       ? minic_type_int()
++                       : integer_literal_type(parser, span);
+     (void)memset(&expression, 0, sizeof(expression));
+     expression.kind = MINIC_EXPRESSION_INTEGER;
+-    expression.span = parser->current.span;
+-    expression.type = minic_type_int();
++    expression.span = span;
++    expression.type = literal_type;
+     expression.value_category = MINIC_VALUE_RVALUE;
+     if (!minic_parser_parse_integer_value(parser, &value)) {
+         return false;
