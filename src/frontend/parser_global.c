@@ -1258,9 +1258,9 @@ static bool parse_static_inferred_char_array(MinicParser *parser,
         parser, MINIC_TOKEN_SEMICOLON, "expected ';' after static character array");
 }
 
-bool minic_parser_parse_static_global(MinicParser *parser) {
-    MinicSourceSpan name_span;
-    MinicType element_type;
+bool minic_parser_parse_static_global_after_head(MinicParser *parser,
+                                                 MinicType element_type,
+                                                 MinicSourceSpan name_span) {
     MinicType object_type;
     MinicGlobalObjectId object_id;
     size_t bounds[8];
@@ -1270,26 +1270,16 @@ bool minic_parser_parse_static_global(MinicParser *parser) {
 
     bound_count = 0U;
     expected_count = 1U;
-    if (!minic_parser_expect(parser, MINIC_TOKEN_KW_STATIC, "expected keyword 'static'") ||
-        !minic_parser_parse_type_name(parser, &element_type)) {
+    if (parser == NULL ||
+        (!minic_type_is_integer(element_type) && !minic_type_is_pointer(element_type) &&
+         !minic_type_is_record(element_type))) {
+        if (parser != NULL) {
+            minic_parser_error(parser, "unsupported static global object type");
+        }
         return false;
     }
-    if (!minic_type_is_integer(element_type) && !minic_type_is_pointer(element_type) &&
-        !minic_type_is_record(element_type)) {
-        minic_parser_error(parser, "unsupported static global object type");
-        return false;
-    }
-    if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
-        minic_parser_error(parser, "expected global object name");
-        return false;
-    }
-
-    name_span = parser->current.span;
     if (minic_parser_find_global_object(parser, name_span) != MINIC_GLOBAL_OBJECT_INVALID) {
         minic_parser_error(parser, "duplicate global object");
-        return false;
-    }
-    if (!minic_parser_advance(parser)) {
         return false;
     }
 
@@ -1410,4 +1400,24 @@ bool minic_parser_parse_static_global(MinicParser *parser) {
         }
     }
     return minic_parser_expect(parser, MINIC_TOKEN_SEMICOLON, "expected ';' after global object");
+}
+
+bool minic_parser_parse_static_global(MinicParser *parser) {
+    MinicSourceSpan name_span;
+    MinicType object_type;
+
+    if (parser == NULL ||
+        !minic_parser_expect(parser, MINIC_TOKEN_KW_STATIC, "expected keyword 'static'") ||
+        !minic_parser_parse_type_name(parser, &object_type)) {
+        return false;
+    }
+    if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
+        minic_parser_error(parser, "expected global object name");
+        return false;
+    }
+    name_span = parser->current.span;
+    if (!minic_parser_advance(parser)) {
+        return false;
+    }
+    return minic_parser_parse_static_global_after_head(parser, object_type, name_span);
 }

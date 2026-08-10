@@ -108,8 +108,8 @@ static bool apply_function_attribute_list(MinicParser *parser,
     return true;
 }
 
-static bool validate_external_object_attribute_list(MinicParser *parser,
-                                                    const MinicParsedAttributeList *attributes) {
+static bool validate_object_attribute_list(MinicParser *parser,
+                                           const MinicParsedAttributeList *attributes) {
     size_t index;
 
     if (parser == NULL || attributes == NULL) {
@@ -122,7 +122,7 @@ static bool validate_external_object_attribute_list(MinicParser *parser,
             !minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_OBJECT) ||
             !function_attribute_class_is_parse_only(descriptor->semantic_class)) {
             minic_parser_error(parser,
-                               "unsupported GNU external-object prefix attribute; symbol/layout "
+                               "unsupported GNU object prefix attribute; symbol/layout "
                                "attributes require "
                                "explicit object semantics");
             return false;
@@ -984,6 +984,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     bool is_extern_declaration;
     bool is_function_pointer_object;
     bool is_inline;
+    bool is_static_declaration;
     bool is_main;
     bool is_variadic;
     char assembler_name[256];
@@ -1000,6 +1001,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     is_extern_declaration = false;
     is_function_pointer_object = false;
     is_inline = false;
+    is_static_declaration = is_internal;
     (void)memset(&deferred_attributes, 0, sizeof(deferred_attributes));
     is_variadic = false;
     assembler_name_length = 0U;
@@ -1033,6 +1035,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     }
     if (!is_internal && parser->current.kind == MINIC_TOKEN_KW_STATIC) {
         is_internal = true;
+        is_static_declaration = true;
         if (!minic_parser_advance(parser)) {
             return false;
         }
@@ -1097,13 +1100,28 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
         return false;
     }
 
+    if (is_static_declaration && parser->current.kind != MINIC_TOKEN_LPAREN) {
+        if (is_inline) {
+            minic_parser_error(parser, "inline specifier requires a function declarator");
+            return false;
+        }
+        if (!validate_object_attribute_list(parser, &deferred_attributes)) {
+            return false;
+        }
+        if (has_section || has_visibility) {
+            minic_parser_error(parser,
+                               "static object symbol attributes require explicit object semantics");
+            return false;
+        }
+        return minic_parser_parse_static_global_after_head(parser, return_type, name_span);
+    }
     if (!is_internal &&
         (is_function_pointer_object || parser->current.kind != MINIC_TOKEN_LPAREN)) {
         if (is_inline) {
             minic_parser_error(parser, "inline specifier requires a function declarator");
             return false;
         }
-        if (!validate_external_object_attribute_list(parser, &deferred_attributes)) {
+        if (!validate_object_attribute_list(parser, &deferred_attributes)) {
             return false;
         }
         if (is_extern_declaration) {
@@ -1377,42 +1395,6 @@ static bool skip_top_level_gnu_extension_markers(MinicParser *parser) {
     return true;
 }
 
-static bool static_declaration_is_function(MinicParser *parser, bool *is_function) {
-    MinicParser probe;
-    MinicType declared_type;
-
-    if (parser == NULL || is_function == NULL) {
-        return false;
-    }
-    probe = *parser;
-    if (!minic_parser_advance(&probe)) {
-        return false;
-    }
-    {
-        bool probe_is_inline = probe.current.kind == MINIC_TOKEN_KW_INLINE;
-
-        if (probe_is_inline && !minic_parser_advance(&probe)) {
-            return false;
-        }
-        if (!minic_parser_parse_gnu_prefix_function_attributes(&probe, true, probe_is_inline)) {
-            return false;
-        }
-    }
-    if (!minic_parser_parse_type_name(&probe, &declared_type)) {
-        return false;
-    }
-    (void)declared_type;
-    if (probe.current.kind != MINIC_TOKEN_IDENTIFIER) {
-        minic_parser_error(parser, "expected static declaration name");
-        return false;
-    }
-    if (!minic_parser_advance(&probe)) {
-        return false;
-    }
-    *is_function = probe.current.kind == MINIC_TOKEN_LPAREN;
-    return true;
-}
-
 static bool enum_keyword_starts_definition(MinicParser *parser, bool *is_definition) {
     MinicParser probe;
 
@@ -1507,15 +1489,7 @@ bool minic_parse_c0_program(const char *path,
         } else if (parser.current.kind == MINIC_TOKEN_KW_INLINE) {
             success = parse_function(&parser, false);
         } else if (parser.current.kind == MINIC_TOKEN_KW_STATIC) {
-            bool is_function;
-
-            if (!static_declaration_is_function(&parser, &is_function)) {
-                success = false;
-            } else if (is_function) {
-                success = parse_function(&parser, true);
-            } else {
-                success = minic_parser_parse_static_global(&parser);
-            }
+            success = parse_function(&parser, true);
         } else if (parser.current.kind == MINIC_TOKEN_KW_STRUCT ||
                    parser.current.kind == MINIC_TOKEN_KW_UNION) {
             bool is_standalone;
