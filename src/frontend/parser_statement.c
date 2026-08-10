@@ -449,6 +449,36 @@ static bool parse_local_designated_record_initializer(MinicParser *parser,
     }
 }
 
+static bool consume_local_object_attribute(MinicParser *parser,
+                                           const MinicParsedAttribute *attribute,
+                                           void *context) {
+    const MinicAttributeDescriptor *descriptor;
+
+    (void)context;
+    if (parser == NULL || attribute == NULL) {
+        return false;
+    }
+    descriptor = attribute->descriptor;
+    if (descriptor == NULL) {
+        minic_parser_error(parser, "unsupported GNU attribute on local object");
+        return false;
+    }
+    if (!minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_OBJECT)) {
+        minic_parser_error(parser, "GNU attribute is not valid on a local object");
+        return false;
+    }
+    if (attribute->has_arguments ||
+        descriptor->semantic_class != MINIC_ATTRIBUTE_CLASS_INFORMATIONAL) {
+        minic_parser_error(parser, "local object attribute semantics are not supported yet");
+        return false;
+    }
+    return true;
+}
+
+static bool parse_local_object_attributes(MinicParser *parser) {
+    return minic_parser_parse_gnu_attribute_lists(parser, consume_local_object_attribute, NULL);
+}
+
 static bool
 parse_local_declarator(MinicParser *parser, MinicType base_type, bool is_register_storage) {
     MinicLocal local;
@@ -486,6 +516,9 @@ parse_local_declarator(MinicParser *parser, MinicType base_type, bool is_registe
             return false;
         }
         local.is_array = true;
+    }
+    if (!parse_local_object_attributes(parser)) {
+        return false;
     }
     if (!minic_c0_program_add_local(parser->program, &local, &local_id)) {
         minic_parser_error(parser, "out of memory while adding local");

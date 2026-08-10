@@ -14,8 +14,9 @@ static int copy_packet(struct Packet *source) {
 }
 
 static int initialize_guard(void) {
-    struct Guard guard = { .lock = (void *)1, .flags = 7 };
-    return (unsigned long)guard.lock == 1 && guard.flags == 7;
+    struct Guard guard = { .lock = (void *)1, .flags = 7 },
+                 *guard_ptr __attribute__((__unused__)) = &guard;
+    return (unsigned long)guard.lock == 1 && guard.flags == 7 && guard_ptr == &guard;
 }
 
 int main(void) {

@@ -20,4 +20,4 @@ grep -F '.type copy_packet, @function' "$work/record_local_initializer.s" >/dev/
 grep -F '.type initialize_guard, @function' "$work/record_local_initializer.s" >/dev/null
 grep -F '  lbu t0, 0(t2)' "$work/record_local_initializer.s" >/dev/null
 grep -F '  sb t0, 0(t3)' "$work/record_local_initializer.s" >/dev/null
-printf '%s\n' 'PASS compiler/c0/record_local_initializer source=dereference whole-record-copy=yes designated=pointer+integer zero-fill=unspecified member-selector=shared'
+printf '%s\n' 'PASS compiler/c0/record_local_initializer source=dereference whole-record-copy=yes designated=pointer+integer zero-fill=unspecified member-selector=shared multi-declarator=1 suffix-object-attribute=unused'
