@@ -9,7 +9,7 @@ on:
       - main
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: foundation-refactor-${{ github.ref }}
@@ -20,36 +20,17 @@ jobs:
     if: github.event_name == 'push' || github.head_ref == 'refactor/foundation-v1'
     runs-on: ubuntu-24.04
     steps:
-      - name: Checkout refactor branch
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          ref: refactor/foundation-v1
 
-      - name: Apply void statement-expression candidate
+      - name: Verify committed source is canonical
         shell: bash
         run: |
           set -Eeuo pipefail
-          python3 tools/dev/foundation-void-statement-expression-once.py
-          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+          git diff --exit-code -- include src tools/minic
 
-      - name: Enforce candidate scope
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          allowed='^(src/frontend/parser_statement\.c|src/frontend/ast_verifier\.c|src/frontend/cast_normalization\.c|src/target/riscv64/codegen_expression\.c|tests/compiler/c0/gnu_statement_expression\.c|tests/compiler/c0/run-gnu-statement-expression\.sh)$'
-          changed=$(git status --porcelain=v1 | sed -E 's/^.. //')
-          printf '%s\n' "$changed"
-          bad=$(printf '%s\n' "$changed" | grep -Ev "$allowed" || true)
-          if test -n "$bad"; then
-            printf '%s\n' 'unexpected candidate paths:' "$bad" >&2
-            exit 1
-          fi
-          test -n "$changed"
-          grep -q 'result == NULL ? minic_type_void()' src/frontend/parser_statement.c
-          grep -q 'statement_expression.result == MINIC_EXPRESSION_INVALID' src/frontend/ast_verifier.c
-          grep -q 'void-final=non-expression' tests/compiler/c0/run-gnu-statement-expression.sh
-
-      - name: Build compiler candidate
+      - name: Build committed compiler
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -70,19 +51,9 @@ jobs:
           HOST_CC=cc \
             sh tools/dev/pr76-focused.sh
 
-      - name: Commit validated candidate
+      - name: Recheck source-of-truth invariant
         shell: bash
         run: |
           set -Eeuo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add \
-            src/frontend/parser_statement.c \
-            src/frontend/ast_verifier.c \
-            src/frontend/cast_normalization.c \
-            src/target/riscv64/codegen_expression.c \
-            tests/compiler/c0/gnu_statement_expression.c \
-            tests/compiler/c0/run-gnu-statement-expression.sh
-          git commit -m 'frontend: support void GNU statement expressions' \
-                     -m '前端：支持 void GNU statement expression'
-          git push origin HEAD:refactor/foundation-v1
+          git diff --exit-code -- include src tools/minic
+          printf '%s\n' 'PASS foundation/source-of-truth committed-source-only=1'
