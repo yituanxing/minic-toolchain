@@ -61,8 +61,7 @@ static bool minic_riscv64_layout_records(MinicC0Program *program) {
             continue;
         }
         record_type = minic_type_record(record_index);
-        if (!minic_data_layout_type(
-            layout, program, record_type, &storage_size, &alignment)) {
+        if (!minic_data_layout_type(layout, program, record_type, &storage_size, &alignment)) {
             return false;
         }
         for (field_index = 0U; field_index < record->field_count; ++field_index) {
@@ -70,8 +69,11 @@ static bool minic_riscv64_layout_records(MinicC0Program *program) {
             size_t field_offset;
 
             field = &record->fields[field_index];
-            if (!minic_data_layout_record_field_offset(
-                layout, program, record, field_index, &field_offset)) {
+            if (!minic_data_layout_record_field_offset(layout,
+                                                       program,
+                                                       record,
+                                                       field_index,
+                                                       &field_offset)) {
                 return false;
             }
             field->storage_offset = field_offset;
