@@ -26,3 +26,4 @@ sh tests/compiler/c0/run-gnu-overflow-builtins.sh
 sh tests/compiler/c0/run-gnu-register-inline-asm-output.sh
 sh tests/compiler/c0/run-function-linkage-inheritance.sh
 sh tests/compiler/c0/run-extern-incomplete-record-object.sh
+sh tests/compiler/c0/run-extern-function-pointer-object.sh
