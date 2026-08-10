@@ -4,6 +4,15 @@ from pathlib import Path
 path = Path("src/frontend/parser_function.c")
 text = path.read_text()
 
+# TEMPORARY discovery diagnostic: remove once the real attribute token/path is
+# identified. The focused gate runs against the fully staged compiler, so this
+# tells us exactly what that parser instance sees instead of guessing from the
+# committed pre-stage source.
+include_anchor = "#include <string.h>\n"
+if text.count(include_anchor) != 1:
+    raise SystemExit(f"attribute debug include: expected one string.h include, found {text.count(include_anchor)}")
+text = text.replace(include_anchor, "#include <stdio.h>\n#include <string.h>\n", 1)
+
 # GNU attribute names occupy their own syntactic namespace. Compare token
 # spelling rather than requiring MINIC_TOKEN_IDENTIFIER.
 anchor = '''static bool gnu_function_attribute_is_metadata(const MinicParser *parser) {
@@ -24,7 +33,6 @@ if text.count(anchor) != 1:
     raise SystemExit(f"attribute-name matcher: expected one metadata helper anchor, found {text.count(anchor)}")
 text = text.replace(anchor, helper + anchor, 1)
 
-# Keep the general classifiers complete for suffix uses and future consumers.
 old = '''           function_identifier_is(parser, "__always_inline__") ||
            function_identifier_is(parser, "noreturn") ||
 '''
@@ -49,9 +57,6 @@ if text.count(old) != 1:
     raise SystemExit(f"format diagnostic classification: expected one anchor, found {text.count(old)}")
 text = text.replace(old, new, 1)
 
-# Prefix parsing gets an explicit known non-ABI branch. This avoids relying on
-# classifier routing for the Linux declaration form while retaining hard errors
-# for unknown/ABI-changing attributes.
 old = '''        while (parser->current.kind != MINIC_TOKEN_RPAREN) {
             bool is_gnu_inline = function_identifier_is(parser, "__gnu_inline__");
 
@@ -78,6 +83,14 @@ old = '''            } else if (!gnu_function_attribute_is_metadata(parser)) {
 new = '''            } else if (!is_known_nonabi_prefix &&
                        !gnu_function_attribute_is_metadata(parser) &&
                        !gnu_function_attribute_is_diagnostic(parser)) {
+                size_t attribute_length = minic_parser_span_length(parser->current.span);
+
+                fprintf(stderr,
+                        "ATTR_DEBUG kind=%d len=%zu spelling=%.*s\\n",
+                        (int)parser->current.kind,
+                        attribute_length,
+                        (int)attribute_length,
+                        parser->source + parser->current.span.begin.offset);
                 minic_parser_error(parser,
                                    "unsupported GNU prefix function attribute; semantic and "
                                    "ABI-affecting attributes must be implemented explicitly");
@@ -85,4 +98,4 @@ new = '''            } else if (!is_known_nonabi_prefix &&
 if text.count(old) != 1:
     raise SystemExit(f"prefix diagnostic routing: expected one classifier condition, found {text.count(old)}")
 path.write_text(text.replace(old, new, 1))
-print("staged explicit GNU format/cold prefix recognition with token-spelling attribute names")
+print("staged temporary prefix-attribute token diagnostic with explicit format/cold recognition")
