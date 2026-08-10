@@ -33,19 +33,37 @@ jobs:
             src/target/riscv64/codegen_inline_asm.c
           git diff --check -- src/frontend/parser_function.c src/target/riscv64/codegen_inline_asm.c
 
-      - name: Build and run focused semantics
+      - name: Build generated compiler
         shell: bash
         run: |
           set -Eeuo pipefail
           make -j4 MODE=release BUILD_DIR=build/prefix-section-generated
+
+      - name: Run deferred prefix-section gate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
           MINIC="$GITHUB_WORKSPACE/build/prefix-section-generated/bin/minic" \
           BUILD_DIR="$GITHUB_WORKSPACE/build/prefix-section-focused" \
           HOST_CC=cc \
-            sh tests/compiler/c0/run-gnu-section-symbol-attribute.sh
+            sh -x tests/compiler/c0/run-gnu-section-symbol-attribute.sh || {
+              cat "$GITHUB_WORKSPACE/build/prefix-section-focused/tests/compiler-c0-gnu-section-symbol-attribute/gnu_section_symbol_attribute.s" 2>/dev/null || true
+              exit 1
+            }
+
+      - name: Run asm-goto safety gate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
           MINIC="$GITHUB_WORKSPACE/build/prefix-section-generated/bin/minic" \
           BUILD_DIR="$GITHUB_WORKSPACE/build/asm-goto-safety-focused" \
           HOST_CC=cc \
-            sh tests/compiler/c0/run-gnu-inline-asm-goto.sh
+            sh -x tests/compiler/c0/run-gnu-inline-asm-goto.sh
+
+      - name: Run fast compiler contracts
+        shell: bash
+        run: |
+          set -Eeuo pipefail
           make -j4 MODE=release BUILD_DIR=build/prefix-section-generated check-fast
 
       - name: Publish generated source commit
