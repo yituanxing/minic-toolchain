@@ -131,15 +131,14 @@ text = text[:start] + counting + text[end:]
 
 # Populate argument registers/outgoing stack from the temporary slots. Record
 # chunks are loaded in little-endian XLEN order, matching the same a-register
-# sequence consumed by the callee prologue. Locate this block structurally: the
-# exact formatting of the following indirect-call code is owned by earlier
-# stack-argument staging and clang-format, so it is not a stable textual anchor.
+# sequence consumed by the callee prologue. This declaration block is unique, so
+# search globally rather than carrying a stale byte offset across prior rewrites.
 start_marker = '''        {
             size_t integer_register_index;
             size_t floating_register_index;
             size_t stack_argument_index;
 '''
-start = text.find(start_marker, end + len(counting))
+start = text.find(start_marker)
 if start < 0:
     raise SystemExit("aggregate-call: cannot locate argument register materialization start")
 end = text.find("\n        if (is_indirect) {", start)
