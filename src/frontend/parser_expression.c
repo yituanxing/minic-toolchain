@@ -342,13 +342,36 @@ static bool variadic_argument_type_supported(MinicType type) {
     return minic_type_is_integer(type) || minic_type_is_pointer(type) || minic_type_is_double(type);
 }
 
-static bool apply_fixed_call_argument_conversion(MinicParser *parser,
-                                                 MinicType target_type,
-                                                 MinicExpressionId *argument_id) {
+static bool pointer_sign_call_conversion_compatible(MinicType target, MinicType source) {
+    MinicType target_pointee;
+    MinicType source_pointee;
+
+    if (target.pointer_depth != 1U || source.pointer_depth != 1U ||
+        !minic_type_pointee(target, &target_pointee) ||
+        !minic_type_pointee(source, &source_pointee) || !minic_type_is_integer(target_pointee) ||
+        !minic_type_is_integer(source_pointee) ||
+        target_pointee.integer_rank != source_pointee.integer_rank ||
+        target_pointee.integer_sign == source_pointee.integer_sign ||
+        target_pointee.is_plain_char != source_pointee.is_plain_char) {
+        return false;
+    }
+    if (minic_type_is_const(source_pointee) && !minic_type_is_const(target_pointee)) {
+        return false;
+    }
+    if (minic_type_is_volatile(source_pointee) && !minic_type_is_volatile(target_pointee)) {
+        return false;
+    }
+    return true;
+}
+
+bool minic_parser_apply_fixed_call_argument_conversion(MinicParser *parser,
+                                                       MinicType target_type,
+                                                       MinicExpressionId *argument_id) {
     const MinicExpression *source;
     MinicExpression conversion;
     MinicExpressionId source_id;
     MinicSourceSpan source_span;
+    bool needs_explicit_conversion;
 
     if (parser == NULL || argument_id == NULL) {
         return false;
@@ -362,7 +385,10 @@ static bool apply_fixed_call_argument_conversion(MinicParser *parser,
     if (minic_c0_assignment_compatible(parser->program, target_type, source_id)) {
         return true;
     }
-    if (!minic_type_is_double(target_type) || !minic_type_is_integer(source->type)) {
+    needs_explicit_conversion =
+        (minic_type_is_double(target_type) && minic_type_is_integer(source->type)) ||
+        pointer_sign_call_conversion_compatible(target_type, source->type);
+    if (!needs_explicit_conversion) {
         return true;
     }
     source_span = source->span;
@@ -395,7 +421,7 @@ static bool parse_call_argument(MinicParser *parser,
         return false;
     }
     if (argument_index < callee->parameter_count) {
-        if (!apply_fixed_call_argument_conversion(
+        if (!minic_parser_apply_fixed_call_argument_conversion(
                 parser, callee->parameter_types[argument_index], &argument_id)) {
             return false;
         }

@@ -254,6 +254,9 @@ bool minic_parser_parse_pointer_member(MinicParser *parser,
 bool minic_parser_parse_direct_member(MinicParser *parser,
                                       MinicExpressionId base_id,
                                       MinicExpressionId *expression_id);
+bool minic_parser_apply_fixed_call_argument_conversion(MinicParser *parser,
+                                                       MinicType target_type,
+                                                       MinicExpressionId *argument_id);
 bool minic_parser_apply_array_decay(MinicParser *parser,
                                     MinicExpressionId input_id,
                                     MinicExpressionId *expression_id);
