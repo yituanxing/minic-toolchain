@@ -193,14 +193,14 @@ bool minic_c0_program_add_inline_asm_output(MinicC0Program *program,
                                             const char *constraint_text,
                                             size_t constraint_length,
                                             MinicExpressionId expression,
-                                            MinicInlineAsmOutputAccess output_access) {
+                                            MinicInlineAsmOperandAccess access) {
     MinicInlineAsm *inline_asm;
     MinicInlineAsmOperand operand;
 
     if (program == NULL || inline_asm_id >= program->inline_asm_count || constraint_text == NULL ||
         constraint_length == 0U || expression >= program->expression_count ||
-        (output_access != MINIC_INLINE_ASM_OUTPUT_WRITE_ONLY &&
-         output_access != MINIC_INLINE_ASM_OUTPUT_READ_WRITE)) {
+        (access != MINIC_INLINE_ASM_OPERAND_WRITE_ONLY &&
+         access != MINIC_INLINE_ASM_OPERAND_READ_WRITE)) {
         return false;
     }
     inline_asm = &program->inline_asms[inline_asm_id];
@@ -217,9 +217,41 @@ bool minic_c0_program_add_inline_asm_output(MinicC0Program *program,
     }
     operand.constraint_length = constraint_length;
     operand.expression = expression;
-    operand.output_access = output_access;
+    operand.access = access;
     inline_asm->outputs[inline_asm->output_count] = operand;
     inline_asm->output_count += 1U;
+    return true;
+}
+
+bool minic_c0_program_add_inline_asm_input(MinicC0Program *program,
+                                           MinicInlineAsmId inline_asm_id,
+                                           const char *constraint_text,
+                                           size_t constraint_length,
+                                           MinicExpressionId expression) {
+    MinicInlineAsm *inline_asm;
+    MinicInlineAsmOperand operand;
+
+    if (program == NULL || inline_asm_id >= program->inline_asm_count || constraint_text == NULL ||
+        constraint_length == 0U || expression >= program->expression_count) {
+        return false;
+    }
+    inline_asm = &program->inline_asms[inline_asm_id];
+    if (!minic_grow_array((void **)&inline_asm->inputs,
+                          &inline_asm->input_capacity,
+                          inline_asm->input_count,
+                          sizeof(*inline_asm->inputs))) {
+        return false;
+    }
+    (void)memset(&operand, 0, sizeof(operand));
+    operand.constraint_text = minic_copy_name(constraint_text, constraint_length);
+    if (operand.constraint_text == NULL) {
+        return false;
+    }
+    operand.constraint_length = constraint_length;
+    operand.expression = expression;
+    operand.access = MINIC_INLINE_ASM_OPERAND_READ_ONLY;
+    inline_asm->inputs[inline_asm->input_count] = operand;
+    inline_asm->input_count += 1U;
     return true;
 }
 

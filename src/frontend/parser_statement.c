@@ -2843,7 +2843,7 @@ static bool current_is_gnu_volatile(const MinicParser *parser) {
 static bool parse_gnu_inline_asm_output(MinicParser *parser, MinicInlineAsmId inline_asm_id) {
     const MinicExpression *operand_expression;
     MinicExpressionId operand_id;
-    MinicInlineAsmOutputAccess access;
+    MinicInlineAsmOperandAccess access;
     MinicSourceSpan constraint_span;
     char *constraint;
     size_t constraint_length;
@@ -2860,8 +2860,8 @@ static bool parse_gnu_inline_asm_output(MinicParser *parser, MinicInlineAsmId in
         minic_parser_error(parser, "GNU asm output constraint must begin with '+' or '='");
         return false;
     }
-    access = constraint[0] == '+' ? MINIC_INLINE_ASM_OUTPUT_READ_WRITE
-                                  : MINIC_INLINE_ASM_OUTPUT_WRITE_ONLY;
+    access = constraint[0] == '+' ? MINIC_INLINE_ASM_OPERAND_READ_WRITE
+                                  : MINIC_INLINE_ASM_OPERAND_WRITE_ONLY;
     if (!minic_parser_expect(
             parser, MINIC_TOKEN_LPAREN, "expected '(' before GNU asm output expression") ||
         !minic_parser_parse_expression_no_decay(parser, &operand_id) ||
@@ -2880,6 +2880,51 @@ static bool parse_gnu_inline_asm_output(MinicParser *parser, MinicInlineAsmId in
             parser->program, inline_asm_id, constraint, constraint_length, operand_id, access)) {
         free(constraint);
         minic_parser_error(parser, "cannot store GNU asm output operand");
+        return false;
+    }
+    free(constraint);
+    return true;
+}
+
+static bool parse_gnu_inline_asm_input(MinicParser *parser, MinicInlineAsmId inline_asm_id) {
+    const MinicExpression *operand_expression;
+    MinicExpressionId operand_id;
+    MinicSourceSpan constraint_span;
+    char *constraint;
+    size_t constraint_length;
+
+    constraint = NULL;
+    constraint_length = 0U;
+    if (!minic_parser_parse_string_text(
+            parser, &constraint, &constraint_length, &constraint_span)) {
+        free(constraint);
+        return false;
+    }
+    if (constraint_length == 0U || constraint[0] == '+' || constraint[0] == '=') {
+        free(constraint);
+        minic_parser_error(parser, "GNU asm input constraint must describe a read-only operand");
+        return false;
+    }
+    if (!minic_parser_expect(
+            parser, MINIC_TOKEN_LPAREN, "expected '(' before GNU asm input expression") ||
+        !minic_parser_parse_expression(parser, &operand_id, 0U) ||
+        !minic_parser_expect(
+            parser, MINIC_TOKEN_RPAREN, "expected ')' after GNU asm input expression")) {
+        free(constraint);
+        return false;
+    }
+    operand_expression = minic_c0_program_expression(parser->program, operand_id);
+    if (operand_expression == NULL || (!minic_type_is_integer(operand_expression->type) &&
+                                       !minic_type_is_pointer(operand_expression->type))) {
+        free(constraint);
+        minic_parser_error(parser,
+                           "GNU asm input operand currently requires an integer or pointer");
+        return false;
+    }
+    if (!minic_c0_program_add_inline_asm_input(
+            parser->program, inline_asm_id, constraint, constraint_length, operand_id)) {
+        free(constraint);
+        minic_parser_error(parser, "cannot store GNU asm input operand");
         return false;
     }
     free(constraint);
@@ -2948,10 +2993,17 @@ static bool parse_gnu_inline_asm_statement(MinicParser *parser) {
             if (!minic_parser_advance(parser)) {
                 return false;
             }
-            if (parser->current.kind != MINIC_TOKEN_COLON &&
-                parser->current.kind != MINIC_TOKEN_RPAREN) {
-                minic_parser_error(parser, "GNU asm input operands are not supported yet");
-                return false;
+            while (parser->current.kind != MINIC_TOKEN_COLON &&
+                   parser->current.kind != MINIC_TOKEN_RPAREN) {
+                if (!parse_gnu_inline_asm_input(parser, inline_asm_id)) {
+                    return false;
+                }
+                if (parser->current.kind != MINIC_TOKEN_COMMA) {
+                    break;
+                }
+                if (!minic_parser_advance(parser)) {
+                    return false;
+                }
             }
             if (parser->current.kind == MINIC_TOKEN_COLON) {
                 if (!minic_parser_advance(parser)) {

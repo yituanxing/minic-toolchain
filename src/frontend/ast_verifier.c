@@ -804,7 +804,7 @@ static bool verify_statement(const MinicC0Program *program, const MinicStatement
             inline_asm->input_count > inline_asm->input_capacity ||
             (inline_asm->output_count != 0U && inline_asm->outputs == NULL) ||
             (inline_asm->input_count != 0U && inline_asm->inputs == NULL) ||
-            inline_asm->input_count != 0U || inline_asm->clobber_count > 1U ||
+            inline_asm->clobber_count > 1U ||
             inline_asm->clobber_count != (inline_asm->has_memory_clobber ? 1U : 0U) ||
             statement->target_expression != MINIC_EXPRESSION_INVALID ||
             statement->expression != MINIC_EXPRESSION_INVALID ||
@@ -822,8 +822,20 @@ static bool verify_statement(const MinicC0Program *program, const MinicStatement
             if (operand->constraint_text == NULL || operand->constraint_length == 0U ||
                 operand_expression == NULL ||
                 operand_expression->value_category != MINIC_VALUE_LVALUE ||
-                (operand->output_access != MINIC_INLINE_ASM_OUTPUT_WRITE_ONLY &&
-                 operand->output_access != MINIC_INLINE_ASM_OUTPUT_READ_WRITE)) {
+                (operand->access != MINIC_INLINE_ASM_OPERAND_WRITE_ONLY &&
+                 operand->access != MINIC_INLINE_ASM_OPERAND_READ_WRITE)) {
+                return false;
+            }
+        }
+        for (operand_index = 0U; operand_index < inline_asm->input_count; ++operand_index) {
+            const MinicInlineAsmOperand *operand;
+            const MinicExpression *operand_expression;
+
+            operand = &inline_asm->inputs[operand_index];
+            operand_expression = minic_c0_program_expression(program, operand->expression);
+            if (operand->constraint_text == NULL || operand->constraint_length == 0U ||
+                operand_expression == NULL ||
+                operand->access != MINIC_INLINE_ASM_OPERAND_READ_ONLY) {
                 return false;
             }
         }

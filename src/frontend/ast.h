@@ -191,16 +191,17 @@ typedef struct MinicStatement {
     MinicBlockId else_block;
 } MinicStatement;
 
-typedef enum MinicInlineAsmOutputAccess {
-    MINIC_INLINE_ASM_OUTPUT_WRITE_ONLY = 0,
-    MINIC_INLINE_ASM_OUTPUT_READ_WRITE
-} MinicInlineAsmOutputAccess;
+typedef enum MinicInlineAsmOperandAccess {
+    MINIC_INLINE_ASM_OPERAND_READ_ONLY = 0,
+    MINIC_INLINE_ASM_OPERAND_WRITE_ONLY,
+    MINIC_INLINE_ASM_OPERAND_READ_WRITE
+} MinicInlineAsmOperandAccess;
 
 typedef struct MinicInlineAsmOperand {
     char *constraint_text;
     size_t constraint_length;
     MinicExpressionId expression;
-    MinicInlineAsmOutputAccess output_access;
+    MinicInlineAsmOperandAccess access;
 } MinicInlineAsmOperand;
 
 typedef struct MinicInlineAsm {
@@ -404,7 +405,12 @@ bool minic_c0_program_add_inline_asm_output(MinicC0Program *program,
                                             const char *constraint_text,
                                             size_t constraint_length,
                                             MinicExpressionId expression,
-                                            MinicInlineAsmOutputAccess output_access);
+                                            MinicInlineAsmOperandAccess access);
+bool minic_c0_program_add_inline_asm_input(MinicC0Program *program,
+                                           MinicInlineAsmId inline_asm_id,
+                                           const char *constraint_text,
+                                           size_t constraint_length,
+                                           MinicExpressionId expression);
 bool minic_c0_program_set_inline_asm_memory_clobber(MinicC0Program *program,
                                                     MinicInlineAsmId inline_asm_id,
                                                     bool has_memory_clobber);

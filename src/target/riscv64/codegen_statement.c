@@ -362,74 +362,8 @@ static bool minic_riscv64_emit_statement(FILE *file,
         return statement->expression != MINIC_EXPRESSION_INVALID &&
                minic_riscv64_emit_expression(file, program, function, statement->expression);
 
-    case MINIC_STATEMENT_INLINE_ASM: {
-        const MinicInlineAsm *inline_asm;
-
-        inline_asm = minic_c0_program_inline_asm(program, statement->inline_asm_id);
-        if (inline_asm == NULL || inline_asm->template_text == NULL ||
-            inline_asm->input_count != 0U) {
-            return false;
-        }
-        if (inline_asm->output_count == 0U) {
-            return fprintf(file, "  %s\n", inline_asm->template_text) >= 0;
-        }
-        if (inline_asm->output_count == 1U) {
-            const MinicInlineAsmOperand *operand;
-            const MinicExpression *operand_expression;
-
-            operand = &inline_asm->outputs[0];
-            operand_expression = minic_c0_program_expression(program, operand->expression);
-            if (operand_expression == NULL || operand_expression->kind != MINIC_EXPRESSION_LOCAL ||
-                operand_expression->value_category != MINIC_VALUE_LVALUE) {
-                return false;
-            }
-            if (operand->output_access == MINIC_INLINE_ASM_OUTPUT_READ_WRITE &&
-                operand->constraint_length == 3U &&
-                memcmp(operand->constraint_text, "+rm", 3U) == 0) {
-                return inline_asm->template_length == 0U;
-            }
-            if (operand->output_access == MINIC_INLINE_ASM_OUTPUT_WRITE_ONLY &&
-                operand->constraint_length == 2U &&
-                memcmp(operand->constraint_text, "=r", 2U) == 0) {
-                size_t index;
-
-                if (fprintf(file, "  ") < 0) {
-                    return false;
-                }
-                for (index = 0U; index < inline_asm->template_length; ++index) {
-                    unsigned char ch;
-
-                    ch = (unsigned char)inline_asm->template_text[index];
-                    if (ch != '%') {
-                        if (fputc((int)ch, file) == EOF) {
-                            return false;
-                        }
-                        continue;
-                    }
-                    if (index + 1U >= inline_asm->template_length) {
-                        return false;
-                    }
-                    index += 1U;
-                    ch = (unsigned char)inline_asm->template_text[index];
-                    if (ch == '0') {
-                        if (fputs("t0", file) == EOF) {
-                            return false;
-                        }
-                    } else if (ch == '%') {
-                        if (fputc('%', file) == EOF) {
-                            return false;
-                        }
-                    } else {
-                        return false;
-                    }
-                }
-                return fputc('\n', file) != EOF &&
-                       minic_riscv64_emit_object_store_register(
-                           file, program, function, operand_expression->value.local_id, "t0");
-            }
-        }
-        return false;
-    }
+    case MINIC_STATEMENT_INLINE_ASM:
+        return minic_riscv64_emit_inline_asm(file, program, function, statement);
 
     case MINIC_STATEMENT_RETURN:
         return minic_riscv64_emit_return(file, program, function, statement);

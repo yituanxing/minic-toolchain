@@ -74,6 +74,10 @@ bool minic_riscv64_emit_expression(FILE *file,
                                    const MinicC0Program *program,
                                    const MinicFunction *function,
                                    MinicExpressionId expression_id);
+bool minic_riscv64_emit_inline_asm(FILE *file,
+                                   const MinicC0Program *program,
+                                   const MinicFunction *function,
+                                   const MinicStatement *statement);
 bool minic_riscv64_emit_block(FILE *file,
                               const MinicC0Program *program,
                               const MinicFunction *function,

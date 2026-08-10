@@ -69,6 +69,7 @@ MINIC_SOURCES := \
 	src/target/riscv64/layout.c \
 	src/target/riscv64/codegen_support.c \
 	src/target/riscv64/codegen_expression.c \
+	src/target/riscv64/codegen_inline_asm.c \
 	src/target/riscv64/codegen_statement.c \
 	src/target/riscv64/codegen_function.c \
 	tools/minic/main.c
