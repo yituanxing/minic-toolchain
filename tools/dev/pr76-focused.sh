@@ -12,6 +12,7 @@ sh tests/compiler/c0/run-gnu-record-alignment.sh
 sh tests/compiler/c0/run-gnu-empty-records.sh
 sh tests/compiler/c0/run-gnu-extension-prefix-declarations.sh
 sh tests/compiler/c0/run-gnu-prefix-function-attributes.sh
+sh tests/compiler/c0/run-gnu-format-cold-attributes.sh
 sh tests/compiler/c0/run-anonymous-record-members.sh
 sh tests/compiler/c0/run-block-scope-extern-function-attributes.sh
 sh tests/compiler/c0/run-gnu-void-pointer-arithmetic.sh
