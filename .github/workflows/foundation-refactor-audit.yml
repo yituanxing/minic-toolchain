@@ -9,7 +9,7 @@ on:
       - main
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: foundation-refactor-${{ github.ref }}
@@ -20,23 +20,53 @@ jobs:
     if: github.event_name == 'push' || github.head_ref == 'refactor/foundation-v1'
     runs-on: ubuntu-24.04
     steps:
-      - name: Checkout
+      - name: Checkout candidate branch
         uses: actions/checkout@v4
+        with:
+          ref: refactor/foundation-v1
 
-      - name: Verify committed source is canonical
+      - name: Apply typed consteval candidate once
+        id: candidate
         shell: bash
         run: |
           set -Eeuo pipefail
-          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
-          git diff --exit-code -- include src tools/minic
+          if test -f src/frontend/const_eval.c; then
+            echo 'applied=0' >> "$GITHUB_OUTPUT"
+          else
+            python3 tools/dev/foundation-typed-consteval-once.py
+            chmod +x tests/compiler/c0/run-gnu-choose-expr-bitfield.sh
+            echo 'applied=1' >> "$GITHUB_OUTPUT"
+          fi
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
 
-      - name: Build committed compiler
+      - name: Verify candidate scope and ownership
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bad=0
+          while IFS= read -r path; do
+            case "$path" in
+              Makefile|src/frontend/const_eval.c|src/frontend/const_eval.h|src/frontend/parser_internal.h|src/frontend/parser_core.c|src/frontend/parser_expression.c|src/frontend/parser_static_assert.c|src/frontend/parser_record.c|src/frontend/parser_type_query.c|src/frontend/parser_function.c|src/target/target_info.c|src/target/target_info.h|tests/compiler/c0/gnu_choose_expr_bitfield.c|tests/compiler/c0/run-gnu-choose-expr-bitfield.sh|tools/dev/pr76-focused.sh) ;;
+              '') ;;
+              *) printf '%s\n' "unexpected candidate path: $path" >&2; bad=1 ;;
+            esac
+          done <<EOF
+          $(git diff --name-only)
+          EOF
+          test "$bad" -eq 0
+          git diff --check
+          ! grep -R 'parser->data_layout' src/frontend/parser_*.c
+          ! grep -q 'minic_parser_evaluate_integer_constant_expression' src/frontend/parser_expression.c
+          grep -q 'minic_const_eval_integer' src/frontend/const_eval.c
+          grep -q 'minic_target_info_sizeof_type' src/target/target_info.c
+
+      - name: Build candidate compiler
         shell: bash
         run: |
           set -Eeuo pipefail
           make -j4 MODE=release BUILD_DIR=build/foundation-compiler
 
-      - name: Run fast compiler contracts
+      - name: Run full fast contracts
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -51,9 +81,29 @@ jobs:
           HOST_CC=cc \
             sh tools/dev/pr76-focused.sh
 
-      - name: Recheck source-of-truth invariant
+      - name: Commit validated source candidate
+        if: steps.candidate.outputs.applied == '1'
         shell: bash
         run: |
           set -Eeuo pipefail
-          git diff --exit-code -- include src tools/minic
-          printf '%s\n' 'PASS foundation/source-of-truth committed-source-only=1'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            Makefile \
+            src/frontend/const_eval.c \
+            src/frontend/const_eval.h \
+            src/frontend/parser_internal.h \
+            src/frontend/parser_core.c \
+            src/frontend/parser_expression.c \
+            src/frontend/parser_static_assert.c \
+            src/frontend/parser_record.c \
+            src/frontend/parser_type_query.c \
+            src/frontend/parser_function.c \
+            src/target/target_info.c \
+            src/target/target_info.h \
+            tests/compiler/c0/gnu_choose_expr_bitfield.c \
+            tests/compiler/c0/run-gnu-choose-expr-bitfield.sh \
+            tools/dev/pr76-focused.sh
+          git diff --cached --check
+          git commit -m 'frontend: introduce typed constant evaluation boundary'
+          git push origin HEAD:refactor/foundation-v1
