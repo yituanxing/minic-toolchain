@@ -79,6 +79,10 @@ jobs:
           work="$GITHUB_WORKSPACE/build/linux-discovery"
           summary="$work/frontier-summary.txt"
           : > "$summary"
+          if test -s "$work/kbuild/init/main.i"; then
+            printf '%s\n' "total_lines=$(wc -l < "$work/kbuild/init/main.i" | tr -d ' ')" >> "$summary"
+            printf '%s\n' "total_bytes=$(wc -c < "$work/kbuild/init/main.i" | tr -d ' ')" >> "$summary"
+          fi
           if test -s "$work/minic.stderr"; then
             frontier_line=$(sed -n 's/.*init\/main\.i:\([0-9][0-9]*\):.*/\1/p' "$work/minic.stderr" | head -n 1)
             printf '%s\n' "frontier_line=${frontier_line:-unknown}" >> "$summary"
@@ -93,14 +97,21 @@ jobs:
           else
             printf '%s\n' 'No MiniC diagnostic; Linux probe may have passed or failed before MiniC.' >> "$summary"
           fi
+          if test -s "$work/main-i-inventory.txt"; then
+            printf '\n%s\n' 'Full-TU feature inventory:' >> "$summary"
+            cat "$work/main-i-inventory.txt" >> "$summary"
+          fi
           cat "$summary"
 
-      - name: Upload compact Linux frontier diagnostics
+      - name: Upload Linux frontier and full translation unit
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: linux-frontier-${{ github.run_id }}
-          path: build/linux-discovery/frontier-summary.txt
+          path: |
+            build/linux-discovery/frontier-summary.txt
+            build/linux-discovery/main-i-inventory.txt
+            build/linux-discovery/kbuild/init/main.i
           if-no-files-found: ignore
           retention-days: 7
 
