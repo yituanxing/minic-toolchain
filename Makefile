@@ -53,6 +53,7 @@ MINIC_SOURCES := \
 	src/frontend/parser_constant.c \
 	src/frontend/parser_attribute.c \
 	src/frontend/parser_declarator.c \
+	src/frontend/parser_enum.c \
 	src/frontend/parser_core.c \
 	src/frontend/parser_expression.c \
 	src/frontend/parser_function.c \

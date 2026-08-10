@@ -186,6 +186,7 @@ bool minic_parser_find_enum_constant(const MinicParser *parser,
                                      int *value);
 bool minic_parser_bind_enum_tag(MinicParser *parser, MinicSourceSpan name_span);
 bool minic_parser_find_enum_tag(const MinicParser *parser, MinicSourceSpan name_span);
+bool minic_parser_parse_enum_specifier(MinicParser *parser, MinicType *enum_type);
 void minic_parser_destroy_enum_constants(MinicParser *parser);
 
 MinicLocalId minic_parser_find_local(const MinicParser *parser, MinicSourceSpan name_span);

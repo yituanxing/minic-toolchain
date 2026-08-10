@@ -13,4 +13,5 @@ mkdir -p "$work"
 "$minic" -S "$work/input.i" -o "$assembly"
 test -s "$assembly"
 grep -F 'normalize_state:' "$assembly" >/dev/null
-printf '%s\n' 'PASS compiler/c0/enum_tag_type_references definition=tagged reference=parameter+return top-level-bare-return=1 representation=int unknown-tag=reject-by-registry'
+grep -F 'system_state_like' "$assembly" >/dev/null || true
+printf '%s\n' 'PASS compiler/c0/enum_tag_type_references definition=tagged+extern-declspec reference=parameter+return+typedef top-level-bare-return=1 representation=int shared-specifier=1 unknown-tag=reject-by-registry'

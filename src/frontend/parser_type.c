@@ -400,19 +400,7 @@ bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type) {
             return false;
         }
     } else if (parser->current.kind == MINIC_TOKEN_KW_ENUM) {
-        MinicSourceSpan tag_span;
-
-        if (!minic_parser_advance(parser) || parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
-            minic_parser_error(parser, "expected enum tag after 'enum'");
-            return false;
-        }
-        tag_span = parser->current.span;
-        if (!minic_parser_find_enum_tag(parser, tag_span)) {
-            minic_parser_error(parser, "unknown enum tag");
-            return false;
-        }
-        parsed_type = minic_type_int();
-        if (!minic_parser_advance(parser)) {
+        if (!minic_parser_parse_enum_specifier(parser, &parsed_type)) {
             return false;
         }
     } else if (parser->current.kind == MINIC_TOKEN_KW_STRUCT ||
