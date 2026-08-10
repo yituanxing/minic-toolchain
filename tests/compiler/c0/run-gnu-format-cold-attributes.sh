@@ -13,4 +13,6 @@ mkdir -p "$work"
 "$minic" -S "$work/input.i" -o "$assembly"
 test -s "$assembly"
 grep -F 'main:' "$assembly" >/dev/null
-printf '%s\n' 'PASS compiler/c0/gnu_format_cold_attributes prefix=format suffix=noreturn,cold classification=diagnostic+optimization ABI=unchanged'
+grep -F 'ftrace_vprintk_like:' "$assembly" >/dev/null
+grep -F 'reordered_static_inline:' "$assembly" >/dev/null
+printf '%s\n' 'PASS compiler/c0/gnu_format_cold_attributes prefix=format suffix=noreturn,cold interleaved=static-attr-inline-attr+inline-static classification=diagnostic+optimization ABI=unchanged'

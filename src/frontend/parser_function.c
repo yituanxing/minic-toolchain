@@ -966,6 +966,82 @@ static bool parse_visible_external_array(MinicParser *parser,
     return true;
 }
 
+typedef struct MinicParsedDeclarationPrefix {
+    MinicParsedAttributeList attributes;
+    bool is_extern;
+    bool is_static;
+    bool is_inline;
+} MinicParsedDeclarationPrefix;
+
+static bool parse_declaration_prefix(MinicParser *parser,
+                                     bool require_initial_static,
+                                     MinicParsedDeclarationPrefix *prefix) {
+    bool saw_storage_class;
+
+    if (parser == NULL || prefix == NULL) {
+        return false;
+    }
+    (void)memset(prefix, 0, sizeof(*prefix));
+    saw_storage_class = false;
+
+    for (;;) {
+        if (parser->current.kind == MINIC_TOKEN_KW_STATIC) {
+            if (saw_storage_class) {
+                minic_parser_error(parser, "conflicting or duplicate declaration storage class");
+                return false;
+            }
+            prefix->is_static = true;
+            saw_storage_class = true;
+            if (!minic_parser_advance(parser)) {
+                return false;
+            }
+            continue;
+        }
+        if (parser->current.kind == MINIC_TOKEN_KW_EXTERN) {
+            if (saw_storage_class) {
+                minic_parser_error(parser, "conflicting or duplicate declaration storage class");
+                return false;
+            }
+            prefix->is_extern = true;
+            saw_storage_class = true;
+            if (!minic_parser_advance(parser)) {
+                return false;
+            }
+            continue;
+        }
+        if (parser->current.kind == MINIC_TOKEN_KW_INLINE) {
+            if (prefix->is_inline) {
+                minic_parser_error(parser, "duplicate inline declaration specifier");
+                return false;
+            }
+            prefix->is_inline = true;
+            if (!minic_parser_advance(parser)) {
+                return false;
+            }
+            continue;
+        }
+        if (function_identifier_is(parser, "__attribute__")) {
+            size_t old_offset = parser->current.span.begin.offset;
+
+            if (!minic_parser_collect_gnu_attribute_lists(parser, &prefix->attributes)) {
+                return false;
+            }
+            if (parser->current.span.begin.offset == old_offset) {
+                minic_parser_error(parser, "internal error: GNU attribute prefix made no progress");
+                return false;
+            }
+            continue;
+        }
+        break;
+    }
+
+    if (require_initial_static && !prefix->is_static) {
+        minic_parser_error(parser, "expected keyword 'static'");
+        return false;
+    }
+    return true;
+}
+
 static bool parse_function(MinicParser *parser, bool is_internal) {
     MinicSourceSpan name_span;
     MinicSourceSpan parameter_name_spans[MINIC_MAX_FUNCTION_PARAMETERS];
@@ -973,6 +1049,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     MinicType base_type;
     MinicType return_type;
     MinicParsedAttributeList deferred_attributes;
+    MinicParsedDeclarationPrefix declaration_prefix;
     MinicBlockId body_block;
     MinicFunctionId function_id;
     const MinicFunction *existing_function;
@@ -1001,8 +1078,9 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     is_extern_declaration = false;
     is_function_pointer_object = false;
     is_inline = false;
-    is_static_declaration = is_internal;
+    is_static_declaration = false;
     (void)memset(&deferred_attributes, 0, sizeof(deferred_attributes));
+    (void)memset(&declaration_prefix, 0, sizeof(declaration_prefix));
     is_variadic = false;
     assembler_name_length = 0U;
     has_assembler_name = false;
@@ -1014,34 +1092,16 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     (void)memset(section_name, 0, sizeof(section_name));
     (void)memset(parameter_name_spans, 0, sizeof(parameter_name_spans));
     (void)memset(parameter_types, 0, sizeof(parameter_types));
-    if (!parse_gnu_prefix_function_visibility(parser, &visibility, &has_visibility)) {
+    if (!parse_gnu_prefix_function_visibility(parser, &visibility, &has_visibility) ||
+        !parse_declaration_prefix(parser, is_internal, &declaration_prefix)) {
         return false;
     }
-    if (is_internal &&
-        !minic_parser_expect(parser, MINIC_TOKEN_KW_STATIC, "expected keyword 'static'")) {
-        return false;
-    }
-    if (!is_internal && parser->current.kind == MINIC_TOKEN_KW_EXTERN) {
-        is_extern_declaration = true;
-        if (!minic_parser_advance(parser)) {
-            return false;
-        }
-    }
-    if (parser->current.kind == MINIC_TOKEN_KW_INLINE) {
-        is_inline = true;
-        if (!minic_parser_advance(parser)) {
-            return false;
-        }
-    }
-    if (!is_internal && parser->current.kind == MINIC_TOKEN_KW_STATIC) {
-        is_internal = true;
-        is_static_declaration = true;
-        if (!minic_parser_advance(parser)) {
-            return false;
-        }
-    }
-    if (!minic_parser_collect_gnu_attribute_lists(parser, &deferred_attributes) ||
-        !minic_parser_parse_type_specifiers(parser, &base_type) ||
+    is_extern_declaration = declaration_prefix.is_extern;
+    is_static_declaration = declaration_prefix.is_static;
+    is_internal = declaration_prefix.is_static;
+    is_inline = declaration_prefix.is_inline;
+    deferred_attributes = declaration_prefix.attributes;
+    if (!minic_parser_parse_type_specifiers(parser, &base_type) ||
         !minic_parser_parse_gnu_section_attribute(
             parser, section_name, sizeof(section_name), &section_name_length, &has_section) ||
         !minic_parser_parse_pointer_declarator(parser, base_type, &return_type) ||
