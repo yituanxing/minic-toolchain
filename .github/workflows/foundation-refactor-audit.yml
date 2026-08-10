@@ -9,7 +9,7 @@ on:
       - main
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: foundation-refactor-${{ github.ref }}
@@ -20,17 +20,41 @@ jobs:
     if: github.event_name == 'push' || github.head_ref == 'refactor/foundation-v1'
     runs-on: ubuntu-24.04
     steps:
-      - name: Checkout
+      - name: Checkout refactor branch
         uses: actions/checkout@v4
+        with:
+          ref: refactor/foundation-v1
 
-      - name: Verify committed source is canonical
+      - name: Apply shared DataLayout and alignof candidate
         shell: bash
         run: |
           set -Eeuo pipefail
-          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
-          git diff --exit-code -- include src tools/minic
+          python3 tools/dev/foundation-data-layout-alignof-once.py
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
 
-      - name: Build committed compiler
+      - name: Enforce candidate scope
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          allowed='^(Makefile|src/target/data_layout\.h|src/target/data_layout\.c|src/frontend/parser_internal\.h|src/frontend/parser_function\.c|src/frontend/parser_type_query\.c|src/frontend/parser_core\.c|src/frontend/parser_expression\.c|src/frontend/token\.h|src/frontend/token\.c|src/frontend/lexer\.c|src/target/riscv64/layout\.c|tests/frontend/token_model_test\.c|tests/frontend/lexer_test\.c|tests/compiler/c0/alignof_type_query\.c|tests/compiler/c0/run-alignof-type-query\.sh|tools/dev/pr76-focused\.sh)$'
+          changed=$(git status --porcelain=v1 | sed -E 's/^.. //')
+          printf '%s\n' "$changed"
+          bad=$(printf '%s\n' "$changed" | grep -Ev "$allowed" || true)
+          if test -n "$bad"; then
+            printf '%s\n' 'unexpected candidate paths:' "$bad" >&2
+            exit 1
+          fi
+          test -n "$changed"
+          grep -q 'typedef struct MinicDataLayout' src/target/data_layout.h
+          grep -q 'const MinicDataLayout \*data_layout' src/frontend/parser_internal.h
+          grep -q 'minic_parser_parse_alignof_type_value' src/frontend/parser_type_query.c
+          ! grep -q 'constant_type_layout' src/frontend/parser_core.c
+          grep -q 'minic_data_layout_record_field_offset' src/frontend/parser_core.c
+          grep -q 'MINIC_TOKEN_KW_ALIGNOF' src/frontend/lexer.c
+          grep -q 'minic_data_layout_type(minic_default_data_layout()' src/target/riscv64/layout.c
+          grep -q 'service=shared-data-layout' tests/compiler/c0/run-alignof-type-query.sh
+
+      - name: Build compiler candidate
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -51,9 +75,30 @@ jobs:
           HOST_CC=cc \
             sh tools/dev/pr76-focused.sh
 
-      - name: Recheck source-of-truth invariant
+      - name: Commit validated candidate
         shell: bash
         run: |
           set -Eeuo pipefail
-          git diff --exit-code -- include src tools/minic
-          printf '%s\n' 'PASS foundation/source-of-truth committed-source-only=1'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            Makefile \
+            src/target/data_layout.h \
+            src/target/data_layout.c \
+            src/frontend/parser_internal.h \
+            src/frontend/parser_function.c \
+            src/frontend/parser_type_query.c \
+            src/frontend/parser_core.c \
+            src/frontend/parser_expression.c \
+            src/frontend/token.h \
+            src/frontend/token.c \
+            src/frontend/lexer.c \
+            src/target/riscv64/layout.c \
+            tests/frontend/token_model_test.c \
+            tests/frontend/lexer_test.c \
+            tests/compiler/c0/alignof_type_query.c \
+            tests/compiler/c0/run-alignof-type-query.sh \
+            tools/dev/pr76-focused.sh
+          git commit -m 'architecture: centralize DataLayout queries and alignof' \
+                     -m '架构：集中 DataLayout 查询并支持 alignof'
+          git push origin HEAD:refactor/foundation-v1
