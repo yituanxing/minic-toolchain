@@ -31,4 +31,7 @@ python3 tools/dev/pr77-rv64-integer-aggregate-return.py
 python3 tools/dev/pr77-rv64-integer-aggregate-return-escape-fix.py
 python3 tools/dev/pr77-rv64-integer-aggregate-call.py
 python3 tools/dev/pr77-unnamed-bit-fields.py
+python3 tools/dev/pr77-gnu-warn-unused-result.py
+python3 tools/dev/pr77-gnu-overflow-builtins.py
+python3 tools/dev/pr77-gnu-overflow-builtins-span-fix.py
 printf '%s\n' 'staged Linux discovery semantics'
