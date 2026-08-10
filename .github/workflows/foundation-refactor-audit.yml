@@ -9,7 +9,7 @@ on:
       - main
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: foundation-refactor-${{ github.ref }}
@@ -20,39 +20,17 @@ jobs:
     if: github.event_name == 'push' || github.head_ref == 'refactor/foundation-v1'
     runs-on: ubuntu-24.04
     steps:
-      - name: Checkout refactor branch
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          ref: refactor/foundation-v1
 
-      - name: Apply shift compound-assignment candidate
+      - name: Verify committed source is canonical
         shell: bash
         run: |
           set -Eeuo pipefail
-          python3 tools/dev/foundation-shift-compound-assignment-once.py
-          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+          git diff --exit-code -- include src tools/minic
 
-      - name: Enforce candidate scope
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          allowed='^(src/frontend/token\.h|src/frontend/token\.c|src/frontend/lexer\.c|src/frontend/parser_expression\.c|src/frontend/ast_verifier\.c|src/target/riscv64/codegen_expression\.c|tests/frontend/token_model_test\.c|tests/frontend/lexer_test\.c|tests/compiler/c0/compound_assignment_full\.c|tests/compiler/c0/run-compound-assignment-full\.sh)$'
-          changed=$(git status --porcelain=v1 | sed -E 's/^.. //')
-          printf '%s\n' "$changed"
-          bad=$(printf '%s\n' "$changed" | grep -Ev "$allowed" || true)
-          if test -n "$bad"; then
-            printf '%s\n' 'unexpected candidate paths:' "$bad" >&2
-            exit 1
-          fi
-          test -n "$changed"
-          grep -q 'MINIC_TOKEN_LESS_LESS_EQUAL' src/frontend/token.h
-          grep -q 'MINIC_TOKEN_LESS_LESS_EQUAL' src/frontend/lexer.c
-          grep -q 'MINIC_TOKEN_LESS_LESS_EQUAL' src/frontend/parser_expression.c
-          grep -q 'MINIC_BINARY_SHIFT_LEFT' src/frontend/ast_verifier.c
-          grep -q 'MINIC_BINARY_SHIFT_LEFT' src/target/riscv64/codegen_expression.c
-          grep -q 'shift-right=signed+unsigned' tests/compiler/c0/run-compound-assignment-full.sh
-
-      - name: Build compiler candidate
+      - name: Build committed compiler
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -73,23 +51,9 @@ jobs:
           HOST_CC=cc \
             sh tools/dev/pr76-focused.sh
 
-      - name: Commit validated candidate
+      - name: Recheck source-of-truth invariant
         shell: bash
         run: |
           set -Eeuo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add \
-            src/frontend/token.h \
-            src/frontend/token.c \
-            src/frontend/lexer.c \
-            src/frontend/parser_expression.c \
-            src/frontend/ast_verifier.c \
-            src/target/riscv64/codegen_expression.c \
-            tests/frontend/token_model_test.c \
-            tests/frontend/lexer_test.c \
-            tests/compiler/c0/compound_assignment_full.c \
-            tests/compiler/c0/run-compound-assignment-full.sh
-          git commit -m 'frontend: complete shift compound assignments' \
-                     -m '前端：补齐移位复合赋值'
-          git push origin HEAD:refactor/foundation-v1
+          git diff --exit-code -- include src tools/minic
+          printf '%s\n' 'PASS foundation/source-of-truth committed-source-only=1'
