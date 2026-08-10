@@ -47,6 +47,58 @@ jobs:
           path.write_text(text.replace(old_cli, new_cli, 1))
           PY
           python3 tools/dev/foundation-extern-declaration-head-once.py
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(text, old, new, label):
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected one match, found {count}')
+              return text.replace(old, new, 1)
+
+          path = Path('src/frontend/parser_function.c')
+          text = path.read_text()
+          text = replace_once(
+              text,
+              '    bool is_function_pointer_object;\n    bool is_inline;\n',
+              '    bool is_extern_declaration;\n    bool is_function_pointer_object;\n    bool is_inline;\n',
+              'extern-head-state',
+          )
+          text = replace_once(
+              text,
+              '    is_function_pointer_object = false;\n    is_inline = false;\n',
+              '    is_extern_declaration = false;\n    is_function_pointer_object = false;\n    is_inline = false;\n',
+              'extern-head-init',
+          )
+          text = replace_once(
+              text,
+              '    if (!is_internal && parser->current.kind == MINIC_TOKEN_KW_EXTERN &&\n'
+              '        !minic_parser_advance(parser)) {\n'
+              '        return false;\n'
+              '    }\n',
+              '    if (!is_internal && parser->current.kind == MINIC_TOKEN_KW_EXTERN) {\n'
+              '        is_extern_declaration = true;\n'
+              '        if (!minic_parser_advance(parser)) {\n'
+              '            return false;\n'
+              '        }\n'
+              '    }\n',
+              'extern-storage-parse',
+          )
+          text = replace_once(
+              text,
+              '        if (name_probe.current.kind == MINIC_TOKEN_STAR) {\n',
+              '        if (is_extern_declaration && name_probe.current.kind == MINIC_TOKEN_STAR) {\n',
+              'extern-function-pointer-object-only',
+          )
+          text = replace_once(
+              text,
+              '        if (is_function_pointer_object || parser->current.kind == MINIC_TOKEN_SEMICOLON ||\n'
+              '            parser->current.kind == MINIC_TOKEN_COMMA) {\n',
+              '        if (is_extern_declaration) {\n',
+              'extern-object-tail-dispatch',
+          )
+          path.write_text(text)
+          PY
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
 
       - name: Enforce candidate scope
@@ -64,6 +116,7 @@ jobs:
           test -n "$changed"
           ! grep -q 'extern_declaration_is_function' src/frontend/parser_function.c
           grep -q 'static_declaration_is_function' src/frontend/parser_function.c
+          grep -q 'is_extern_declaration' src/frontend/parser_function.c
 
       - name: Build compiler candidate
         shell: bash
