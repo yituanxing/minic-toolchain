@@ -33,6 +33,26 @@ jobs:
           if test -f src/frontend/const_eval.c; then
             echo 'applied=0' >> "$GITHUB_OUTPUT"
           else
+            python3 - <<'PY'
+          from pathlib import Path
+          path = Path('Makefile')
+          text = path.read_text()
+          old = '\tsrc/target/data_layout.c \\\n\tsrc/target/riscv64/layout.c \\\n'
+          new = '\tsrc/target/data_layout.c \\\n\tsrc/target/target_info.c \\\n\tsrc/target/riscv64/layout.c \\\n'
+          positions = []
+          start = 0
+          while True:
+              found = text.find(old, start)
+              if found < 0:
+                  break
+              positions.append(found)
+              start = found + len(old)
+          if len(positions) != 2:
+              raise SystemExit(f'expected two data-layout source-list anchors, found {len(positions)}')
+          second = positions[1]
+          text = text[:second] + new + text[second + len(old):]
+          path.write_text(text)
+          PY
             python3 tools/dev/foundation-typed-consteval-once.py
             chmod +x tests/compiler/c0/run-gnu-choose-expr-bitfield.sh
             echo 'applied=1' >> "$GITHUB_OUTPUT"
