@@ -32,13 +32,25 @@ source=$(printf '%s\n' "$blocker" | sed -n 's/.*source=\([^ ]*\).*/\1/p')
 passed=$(printf '%s\n' "$blocker" | sed -n 's/.*passed=\([0-9][0-9]*\).*/\1/p')
 line=$(printf '%s\n' "$blocker" | sed -n 's/.*line=\([0-9][0-9]*\).*/\1/p')
 
-case "$passed:$line" in
-    ''*|*':')
+case "$passed" in
+    ''|*[!0-9]*)
         printf '%s\n' \
-            "FAIL external/lua-frontier: malformed structured blocker: $blocker" >&2
+            "FAIL external/lua-frontier: malformed passed count: $blocker" >&2
         exit 1
         ;;
 esac
+case "$line" in
+    ''|*[!0-9]*)
+        printf '%s\n' \
+            "FAIL external/lua-frontier: malformed line number: $blocker" >&2
+        exit 1
+        ;;
+esac
+if test -z "$source"; then
+    printf '%s\n' \
+        "FAIL external/lua-frontier: malformed source name: $blocker" >&2
+    exit 1
+fi
 
 if test "$passed" -gt "$min_passed"; then
     printf '%s\n' \
