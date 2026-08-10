@@ -4,7 +4,8 @@ set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 minic=${MINIC:-"$root/build/debug/bin/minic"}
 host_cc=${HOST_CC:-${CC:-cc}}
-work=${BUILD_DIR:-"$root/build/debug"}/tests/compiler-c0-static-local-arrays
+build_dir=${BUILD_DIR:-"$root/build/debug"}
+work="$build_dir/tests/compiler-c0-static-local-arrays"
 
 mkdir -p "$work"
 
@@ -22,6 +23,16 @@ if grep -F ".globl __minic_static_local_" "$work/static_local_array.s" >/dev/nul
 fi
 printf '%s\n' "PASS compiler/c0/static_local_array"
 
+MINIC="$minic" \
+HOST_CC="$host_cc" \
+BUILD_DIR="$build_dir" \
+sh "$root/tests/compiler/c0/run-static-local-scalars.sh"
+
+MINIC="$minic" \
+HOST_CC="$host_cc" \
+BUILD_DIR="$build_dir" \
+sh "$root/tests/compiler/c0/run-static-local-fixed-arrays.sh"
+
 expect_failure() {
     name=$1
     message=$2
@@ -35,16 +46,17 @@ expect_failure() {
             "FAIL compiler/c0/$name: compilation unexpectedly succeeded" >&2
         exit 1
     fi
-    grep -F "$message" "$work/$name.stderr" >/dev/null
+    if ! grep -F "$message" "$work/$name.stderr" >/dev/null; then
+        printf '%s\n' "FAIL compiler/c0/$name: diagnostic mismatch" >&2
+        cat "$work/$name.stderr" >&2
+        exit 1
+    fi
     printf '%s\n' "PASS compiler/c0/$name"
 }
 
 expect_failure \
     invalid_static_local_scalar \
-    "static local object currently requires a fixed array declarator"
-expect_failure \
-    invalid_static_local_initializer \
-    "static local initializers are not supported yet"
+    "static local object currently requires an initializer or fixed array declarator"
 expect_failure \
     invalid_static_local_duplicate \
     "duplicate local declaration"
