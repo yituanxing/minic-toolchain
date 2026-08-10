@@ -23,4 +23,5 @@ python3 tools/dev/pr77-gnu-void-pointer-arithmetic.py
 python3 tools/dev/pr77-gnu-statement-expressions-v2.py
 python3 tools/dev/pr77-gnu-statement-expression-comma-compat.py
 python3 tools/dev/pr77-gnu-inline-asm.py
+python3 tools/dev/pr77-gnu-inline-asm-escape-fix.py
 printf '%s\n' 'staged Linux discovery semantics'
