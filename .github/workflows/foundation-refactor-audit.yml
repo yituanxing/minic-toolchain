@@ -27,6 +27,16 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('tools/dev/agent_typedef_alignment_patch.py')
+          text = path.read_text()
+          old = '''    if count != 1:\n        raise SystemExit(f"{label}: expected one anchor, found {count}")\n    p.write_text(text.replace(old, new, 1))\n'''
+          new = '''    if count < 1:\n        raise SystemExit(f"{label}: expected an anchor, found {count}")\n    p.write_text(text.replace(old, new, 1))\n'''
+          if text.count(old) != 1:
+              raise SystemExit('generator replace helper anchor mismatch')
+          path.write_text(text.replace(old, new, 1))
+          PY
           python3 tools/dev/agent_typedef_alignment_patch.py
           clang-format-18 -i \
             src/frontend/type.h \
