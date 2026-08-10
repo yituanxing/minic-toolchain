@@ -2,6 +2,7 @@
 
 #include <limits.h>
 #include <stdlib.h>
+#include <string.h>
 
 bool minic_parser_find_enum_tag(const MinicParser *parser, MinicSourceSpan name_span) {
     size_t index;
