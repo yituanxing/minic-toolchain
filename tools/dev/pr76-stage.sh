@@ -34,4 +34,6 @@ python3 tools/dev/pr77-unnamed-bit-fields.py
 python3 tools/dev/pr77-gnu-warn-unused-result.py
 python3 tools/dev/pr77-gnu-overflow-builtins.py
 python3 tools/dev/pr77-gnu-overflow-builtins-span-fix.py
+python3 tools/dev/pr77-register-storage-class.py
+python3 tools/dev/pr77-rv64-inline-asm-register-output.py
 printf '%s\n' 'staged Linux discovery semantics'
