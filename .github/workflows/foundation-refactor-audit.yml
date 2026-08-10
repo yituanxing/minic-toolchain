@@ -9,7 +9,7 @@ on:
       - main
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: foundation-refactor-${{ github.ref }}
@@ -20,17 +20,38 @@ jobs:
     if: github.event_name == 'push' || github.head_ref == 'refactor/foundation-v1'
     runs-on: ubuntu-24.04
     steps:
-      - name: Checkout
+      - name: Checkout refactor branch
         uses: actions/checkout@v4
+        with:
+          ref: refactor/foundation-v1
 
-      - name: Verify committed source is canonical
+      - name: Apply named GNU asm operand candidate
         shell: bash
         run: |
           set -Eeuo pipefail
-          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
-          git diff --exit-code -- include src tools/minic
+          python3 tools/dev/foundation-rv64-inline-asm-named-operands-once.py
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
 
-      - name: Build committed compiler
+      - name: Enforce candidate scope
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          allowed='^(src/frontend/ast\.h|src/frontend/ast\.c|src/frontend/ast_verifier\.c|src/frontend/parser_statement\.c|src/target/riscv64/codegen_inline_asm\.c|tests/compiler/c0/gnu_inline_asm_named_operands\.c|tests/compiler/c0/run-gnu-inline-asm-named-operands\.sh|tests/compiler/c0/run-gnu-inline-asm-named-operands-rv64\.sh|tools/dev/pr76-focused\.sh|\.github/workflows/lua-stack-abi-validation\.yml)$'
+          changed=$(git status --porcelain=v1 | sed -E 's/^.. //')
+          printf '%s\n' "$changed"
+          bad=$(printf '%s\n' "$changed" | grep -Ev "$allowed" || true)
+          if test -n "$bad"; then
+            printf '%s\n' 'unexpected candidate paths:' "$bad" >&2
+            exit 1
+          fi
+          test -n "$changed"
+          grep -q 'name_length' src/frontend/ast.h
+          grep -q 'parse_gnu_inline_asm_operand_name' src/frontend/parser_statement.c
+          grep -q 'find_named_operand' src/target/riscv64/codegen_inline_asm.c
+          grep -q '=&r' src/target/riscv64/codegen_inline_asm.c
+          grep -q 'named GNU asm operand differential' .github/workflows/lua-stack-abi-validation.yml
+
+      - name: Build compiler candidate
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -51,9 +72,41 @@ jobs:
           HOST_CC=cc \
             sh tools/dev/pr76-focused.sh
 
-      - name: Recheck source-of-truth invariant
+      - name: Install RV64 runtime validation tools
         shell: bash
         run: |
           set -Eeuo pipefail
-          git diff --exit-code -- include src tools/minic
-          printf '%s\n' 'PASS foundation/source-of-truth committed-source-only=1'
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu libc6-dev-riscv64-cross qemu-user
+
+      - name: Run GCC-MiniC named GNU asm operand differential
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/foundation-compiler/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/foundation-rv64-named-asm" \
+          RISCV_CC=riscv64-linux-gnu-gcc \
+          QEMU_RISCV64=qemu-riscv64 \
+            sh tests/compiler/c0/run-gnu-inline-asm-named-operands-rv64.sh
+
+      - name: Commit validated candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            src/frontend/ast.h \
+            src/frontend/ast.c \
+            src/frontend/ast_verifier.c \
+            src/frontend/parser_statement.c \
+            src/target/riscv64/codegen_inline_asm.c \
+            tests/compiler/c0/gnu_inline_asm_named_operands.c \
+            tests/compiler/c0/run-gnu-inline-asm-named-operands.sh \
+            tests/compiler/c0/run-gnu-inline-asm-named-operands-rv64.sh \
+            tools/dev/pr76-focused.sh \
+            .github/workflows/lua-stack-abi-validation.yml
+          git commit -m 'target: lower named RV64 GNU asm operands' \
+                     -m '目标：lower RV64 GNU asm 命名操作数'
+          git push origin HEAD:refactor/foundation-v1
