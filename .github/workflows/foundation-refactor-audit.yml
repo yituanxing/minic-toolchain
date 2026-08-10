@@ -207,16 +207,18 @@ jobs:
               return finish_value_expression(parser, primary_id, decay_array, expression_id);
           }
           '''
+          # Match the real C indentation rather than Python block indentation.
+          dispatch = dispatch.replace("\n              ", "\n        ").replace("\n                  ", "\n            ")
           if text.count(dispatch) != 1:
               raise SystemExit("object-size dispatch anchor mismatch")
           replacement = dispatch + '''    if (generic_token_text_equals(parser, "__builtin_object_size")) {
-              if (!parse_builtin_object_size(parser, &primary_id) ||
-                  !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
-                  return false;
-              }
-              return finish_value_expression(parser, primary_id, decay_array, expression_id);
-          }
-          '''
+        if (!parse_builtin_object_size(parser, &primary_id) ||
+            !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
+            return false;
+        }
+        return finish_value_expression(parser, primary_id, decay_array, expression_id);
+    }
+'''
           path.write_text(text.replace(dispatch, replacement, 1))
           PY
           clang-format-18 -i src/frontend/parser_expression.c
