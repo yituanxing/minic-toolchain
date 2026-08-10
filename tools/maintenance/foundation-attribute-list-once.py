@@ -4,15 +4,6 @@
 from pathlib import Path
 
 
-def replace_one(path: str, old: str, new: str, label: str) -> None:
-    file = Path(path)
-    text = file.read_text()
-    count = text.count(old)
-    if count != 1:
-        raise SystemExit(f"{label}: expected one anchor, found {count}")
-    file.write_text(text.replace(old, new, 1))
-
-
 def update_makefile() -> None:
     path = Path("Makefile")
     text = path.read_text()
@@ -25,17 +16,25 @@ def update_makefile() -> None:
     path.write_text(text.replace(anchor, anchor + source, 1))
 
 
+def replace_unique_range(text: str,
+                         start_marker: str,
+                         end_marker: str,
+                         replacement: str,
+                         label: str) -> str:
+    start = text.find(start_marker)
+    end = text.find(end_marker, start + 1)
+    if start < 0 or end < 0:
+        raise SystemExit(f"{label}: migration markers missing")
+    if text.find(start_marker, start + 1) >= 0:
+        raise SystemExit(f"{label}: start marker is not unique")
+    return text[:start] + replacement + text[end:]
+
+
 def migrate_function_attributes() -> None:
     path = Path("src/frontend/parser_function.c")
     text = path.read_text()
-    start_marker = "static bool gnu_function_attribute_is_metadata(const MinicParser *parser) {"
-    end_marker = "static bool parse_gnu_function_asm_label("
-    start = text.find(start_marker)
-    end = text.find(end_marker, start + 1)
-    if start < 0 or end < 0 or text.find(start_marker, start + 1) >= 0:
-        raise SystemExit("function attribute migration markers are not unique")
 
-    replacement = r'''typedef struct MinicFunctionAttributeContext {
+    shared_helpers = r'''typedef struct MinicFunctionAttributeContext {
     bool allow_gnu_inline;
     bool is_internal;
     bool is_inline;
@@ -103,7 +102,17 @@ static bool parse_function_attribute_lists(MinicParser *parser,
     return minic_parser_parse_gnu_attribute_lists(parser, consume_function_attribute, &context);
 }
 
-bool minic_parser_parse_gnu_function_attributes(MinicParser *parser) {
+'''
+
+    text = replace_unique_range(
+        text,
+        "static bool gnu_function_attribute_is_metadata(const MinicParser *parser) {",
+        "static bool section_attribute_token_is(const MinicParser *parser, const char *name) {",
+        shared_helpers,
+        "function attribute helpers",
+    )
+
+    shared_entry_points = r'''bool minic_parser_parse_gnu_function_attributes(MinicParser *parser) {
     return parse_function_attribute_lists(
         parser,
         false,
@@ -130,7 +139,15 @@ bool minic_parser_parse_gnu_prefix_function_attributes(MinicParser *parser,
 }
 
 '''
-    path.write_text(text[:start] + replacement + text[end:])
+
+    text = replace_unique_range(
+        text,
+        "bool minic_parser_parse_gnu_function_attributes(MinicParser *parser) {",
+        "static bool parse_gnu_function_asm_label(",
+        shared_entry_points,
+        "function attribute entry points",
+    )
+    path.write_text(text)
 
 
 def extend_attribute_gate() -> None:
