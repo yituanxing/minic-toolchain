@@ -4,12 +4,6 @@
 
 #define MINIC_ATTRIBUTE_ENTRY(name_value, kind_value, class_value, targets_value)                  \
     { name_value, sizeof(name_value) - 1U, kind_value, class_value, targets_value, 0U, 0U, false }
-#define MINIC_ATTRIBUTE_ENTRY_ARGUMENTS(                                                            \
-    name_value, kind_value, class_value, targets_value, minimum_value, maximum_value)              \
-    {                                                                                                \
-        name_value, sizeof(name_value) - 1U, kind_value, class_value, targets_value, minimum_value, \
-            maximum_value, true                                                                      \
-    }
 
 static const MinicAttributeDescriptor minic_attribute_descriptors[] = {
     MINIC_ATTRIBUTE_ENTRY("__nothrow__",
@@ -48,18 +42,26 @@ static const MinicAttributeDescriptor minic_attribute_descriptors[] = {
                           MINIC_ATTRIBUTE_MALLOC,
                           MINIC_ATTRIBUTE_CLASS_OPTIMIZATION,
                           MINIC_ATTRIBUTE_TARGET_FUNCTION),
-    MINIC_ATTRIBUTE_ENTRY_ARGUMENTS("alloc_size",
-                                    MINIC_ATTRIBUTE_ALLOC_SIZE,
-                                    MINIC_ATTRIBUTE_CLASS_OPTIMIZATION,
-                                    MINIC_ATTRIBUTE_TARGET_FUNCTION,
-                                    1U,
-                                    2U),
-    MINIC_ATTRIBUTE_ENTRY_ARGUMENTS("__alloc_size__",
-                                    MINIC_ATTRIBUTE_ALLOC_SIZE,
-                                    MINIC_ATTRIBUTE_CLASS_OPTIMIZATION,
-                                    MINIC_ATTRIBUTE_TARGET_FUNCTION,
-                                    1U,
-                                    2U),
+    {
+        "alloc_size",
+        sizeof("alloc_size") - 1U,
+        MINIC_ATTRIBUTE_ALLOC_SIZE,
+        MINIC_ATTRIBUTE_CLASS_OPTIMIZATION,
+        MINIC_ATTRIBUTE_TARGET_FUNCTION,
+        1U,
+        2U,
+        true,
+    },
+    {
+        "__alloc_size__",
+        sizeof("__alloc_size__") - 1U,
+        MINIC_ATTRIBUTE_ALLOC_SIZE,
+        MINIC_ATTRIBUTE_CLASS_OPTIMIZATION,
+        MINIC_ATTRIBUTE_TARGET_FUNCTION,
+        1U,
+        2U,
+        true,
+    },
     MINIC_ATTRIBUTE_ENTRY("__unused__",
                           MINIC_ATTRIBUTE_UNUSED,
                           MINIC_ATTRIBUTE_CLASS_INFORMATIONAL,
