@@ -19,6 +19,48 @@ static bool constraint_is(const MinicInlineAsmOperand *operand, const char *text
            memcmp(operand->constraint_text, text, length) == 0;
 }
 
+static const MinicInlineAsmOperand *operand_at(const MinicInlineAsm *inline_asm,
+                                               size_t operand_index) {
+    if (inline_asm == NULL) {
+        return NULL;
+    }
+    if (operand_index < inline_asm->output_count) {
+        return &inline_asm->outputs[operand_index];
+    }
+    operand_index -= inline_asm->output_count;
+    if (operand_index >= inline_asm->input_count) {
+        return NULL;
+    }
+    return &inline_asm->inputs[operand_index];
+}
+
+static bool
+operand_name_matches(const MinicInlineAsmOperand *operand, const char *name, size_t name_length) {
+    return operand != NULL && operand->name != NULL && name != NULL &&
+           operand->name_length == name_length && memcmp(operand->name, name, name_length) == 0;
+}
+
+static bool find_named_operand(const MinicInlineAsm *inline_asm,
+                               const char *name,
+                               size_t name_length,
+                               size_t *operand_index) {
+    size_t index;
+    size_t operand_count;
+
+    if (inline_asm == NULL || name == NULL || name_length == 0U || operand_index == NULL ||
+        inline_asm->output_count > SIZE_MAX - inline_asm->input_count) {
+        return false;
+    }
+    operand_count = inline_asm->output_count + inline_asm->input_count;
+    for (index = 0U; index < operand_count; ++index) {
+        if (operand_name_matches(operand_at(inline_asm, index), name, name_length)) {
+            *operand_index = index;
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool validate_output(const MinicC0Program *program, const MinicInlineAsmOperand *operand) {
     const MinicExpression *expression;
 
@@ -32,7 +74,7 @@ static bool validate_output(const MinicC0Program *program, const MinicInlineAsmO
     if (constraint_is(operand, "+A")) {
         return operand->access == MINIC_INLINE_ASM_OPERAND_READ_WRITE;
     }
-    if (constraint_is(operand, "=r")) {
+    if (constraint_is(operand, "=r") || constraint_is(operand, "=&r")) {
         return operand->access == MINIC_INLINE_ASM_OPERAND_WRITE_ONLY &&
                expression->kind == MINIC_EXPRESSION_LOCAL &&
                (minic_type_is_integer(expression->type) || minic_type_is_pointer(expression->type));
@@ -52,6 +94,59 @@ static bool validate_input(const MinicC0Program *program, const MinicInlineAsmOp
            (minic_type_is_integer(expression->type) || minic_type_is_pointer(expression->type));
 }
 
+static bool resolve_template_reference(const MinicInlineAsm *inline_asm,
+                                       size_t operand_count,
+                                       size_t *template_index,
+                                       size_t *operand_index,
+                                       bool *literal_percent) {
+    size_t index;
+    unsigned char ch;
+
+    if (inline_asm == NULL || template_index == NULL || operand_index == NULL ||
+        literal_percent == NULL || *template_index >= inline_asm->template_length ||
+        inline_asm->template_text[*template_index] != '%') {
+        return false;
+    }
+    index = *template_index + 1U;
+    if (index >= inline_asm->template_length) {
+        return false;
+    }
+    ch = (unsigned char)inline_asm->template_text[index];
+    if (ch == '%') {
+        *template_index = index;
+        *literal_percent = true;
+        *operand_index = 0U;
+        return true;
+    }
+    *literal_percent = false;
+    if (ch >= '0' && ch <= '9') {
+        *operand_index = (size_t)(ch - '0');
+        *template_index = index;
+        return *operand_index < operand_count;
+    }
+    if (ch == '[') {
+        size_t name_begin;
+        size_t name_end;
+
+        name_begin = index + 1U;
+        name_end = name_begin;
+        while (name_end < inline_asm->template_length &&
+               inline_asm->template_text[name_end] != ']') {
+            name_end += 1U;
+        }
+        if (name_end == name_begin || name_end >= inline_asm->template_length ||
+            !find_named_operand(inline_asm,
+                                inline_asm->template_text + name_begin,
+                                name_end - name_begin,
+                                operand_index)) {
+            return false;
+        }
+        *template_index = name_end;
+        return true;
+    }
+    return false;
+}
+
 static bool template_operands_are_valid(const MinicInlineAsm *inline_asm, size_t operand_count) {
     size_t index;
 
@@ -59,23 +154,18 @@ static bool template_operands_are_valid(const MinicInlineAsm *inline_asm, size_t
         return false;
     }
     for (index = 0U; index < inline_asm->template_length; ++index) {
-        unsigned char ch;
+        size_t operand_index;
+        bool literal_percent;
 
-        ch = (unsigned char)inline_asm->template_text[index];
-        if (ch != '%') {
+        if (inline_asm->template_text[index] != '%') {
             continue;
         }
-        if (index + 1U >= inline_asm->template_length) {
+        if (!resolve_template_reference(
+                inline_asm, operand_count, &index, &operand_index, &literal_percent)) {
             return false;
         }
-        index += 1U;
-        ch = (unsigned char)inline_asm->template_text[index];
-        if (ch == '%') {
-            continue;
-        }
-        if (ch < '0' || ch > '9' || (size_t)(ch - '0') >= operand_count) {
-            return false;
-        }
+        (void)operand_index;
+        (void)literal_percent;
     }
     return true;
 }
@@ -89,40 +179,39 @@ static bool emit_template(FILE *file, const MinicInlineAsm *inline_asm) {
         return false;
     }
     for (index = 0U; index < inline_asm->template_length; ++index) {
-        unsigned char ch;
+        size_t operand_index;
+        bool literal_percent;
 
-        ch = (unsigned char)inline_asm->template_text[index];
-        if (ch != '%') {
-            if (fputc((int)ch, file) == EOF) {
+        if (inline_asm->template_text[index] != '%') {
+            if (fputc((unsigned char)inline_asm->template_text[index], file) == EOF) {
                 return false;
             }
             continue;
         }
-        index += 1U;
-        ch = (unsigned char)inline_asm->template_text[index];
-        if (ch == '%') {
+        if (!resolve_template_reference(
+                inline_asm, operand_count, &index, &operand_index, &literal_percent)) {
+            return false;
+        }
+        if (literal_percent) {
             if (fputc('%', file) == EOF) {
                 return false;
             }
             continue;
         }
         {
-            size_t operand_index;
             const MinicInlineAsmOperand *operand;
             const char *register_name;
 
-            operand_index = (size_t)(ch - '0');
+            operand = operand_at(inline_asm, operand_index);
             register_name = minic_riscv64_inline_asm_registers[operand_index];
-            if (operand_index < inline_asm->output_count) {
-                operand = &inline_asm->outputs[operand_index];
-                if (constraint_is(operand, "+A")) {
-                    if (fprintf(file, "(%s)", register_name) < 0) {
-                        return false;
-                    }
-                    continue;
-                }
+            if (operand == NULL) {
+                return false;
             }
-            if (fputs(register_name, file) == EOF) {
+            if (constraint_is(operand, "+A")) {
+                if (fprintf(file, "(%s)", register_name) < 0) {
+                    return false;
+                }
+            } else if (fputs(register_name, file) == EOF) {
                 return false;
             }
         }
@@ -230,7 +319,7 @@ bool minic_riscv64_emit_inline_asm(FILE *file,
         const MinicExpression *expression;
 
         operand = &inline_asm->outputs[index];
-        if (!constraint_is(operand, "=r")) {
+        if (!constraint_is(operand, "=r") && !constraint_is(operand, "=&r")) {
             continue;
         }
         expression = minic_c0_program_expression(program, operand->expression);

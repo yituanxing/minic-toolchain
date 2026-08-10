@@ -820,6 +820,7 @@ static bool verify_statement(const MinicC0Program *program, const MinicStatement
             operand = &inline_asm->outputs[operand_index];
             operand_expression = minic_c0_program_expression(program, operand->expression);
             if (operand->constraint_text == NULL || operand->constraint_length == 0U ||
+                ((operand->name == NULL) != (operand->name_length == 0U)) ||
                 operand_expression == NULL ||
                 operand_expression->value_category != MINIC_VALUE_LVALUE ||
                 (operand->access != MINIC_INLINE_ASM_OPERAND_WRITE_ONLY &&
@@ -834,6 +835,7 @@ static bool verify_statement(const MinicC0Program *program, const MinicStatement
             operand = &inline_asm->inputs[operand_index];
             operand_expression = minic_c0_program_expression(program, operand->expression);
             if (operand->constraint_text == NULL || operand->constraint_length == 0U ||
+                ((operand->name == NULL) != (operand->name_length == 0U)) ||
                 operand_expression == NULL ||
                 operand->access != MINIC_INLINE_ASM_OPERAND_READ_ONLY) {
                 return false;

@@ -2840,17 +2840,46 @@ static bool current_is_gnu_volatile(const MinicParser *parser) {
            inline_asm_identifier_is(parser, "__volatile__");
 }
 
+static bool
+parse_gnu_inline_asm_operand_name(MinicParser *parser, const char **name, size_t *name_length) {
+    if (parser == NULL || name == NULL || name_length == NULL) {
+        return false;
+    }
+    *name = NULL;
+    *name_length = 0U;
+    if (parser->current.kind != MINIC_TOKEN_LBRACKET) {
+        return true;
+    }
+    if (!minic_parser_advance(parser) || parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
+        minic_parser_error(parser, "expected GNU asm operand name after '['");
+        return false;
+    }
+    *name = parser->source + parser->current.span.begin.offset;
+    *name_length = minic_parser_span_length(parser->current.span);
+    if (!minic_parser_advance(parser) ||
+        !minic_parser_expect(
+            parser, MINIC_TOKEN_RBRACKET, "expected ']' after GNU asm operand name")) {
+        return false;
+    }
+    return true;
+}
+
 static bool parse_gnu_inline_asm_output(MinicParser *parser, MinicInlineAsmId inline_asm_id) {
     const MinicExpression *operand_expression;
     MinicExpressionId operand_id;
     MinicInlineAsmOperandAccess access;
     MinicSourceSpan constraint_span;
+    const char *name;
     char *constraint;
     size_t constraint_length;
+    size_t name_length;
 
     constraint = NULL;
     constraint_length = 0U;
-    if (!minic_parser_parse_string_text(
+    name = NULL;
+    name_length = 0U;
+    if (!parse_gnu_inline_asm_operand_name(parser, &name, &name_length) ||
+        !minic_parser_parse_string_text(
             parser, &constraint, &constraint_length, &constraint_span)) {
         free(constraint);
         return false;
@@ -2876,8 +2905,14 @@ static bool parse_gnu_inline_asm_output(MinicParser *parser, MinicInlineAsmId in
         minic_parser_error(parser, "GNU asm output operand requires an lvalue");
         return false;
     }
-    if (!minic_c0_program_add_inline_asm_output(
-            parser->program, inline_asm_id, constraint, constraint_length, operand_id, access)) {
+    if (!minic_c0_program_add_inline_asm_output(parser->program,
+                                                inline_asm_id,
+                                                name,
+                                                name_length,
+                                                constraint,
+                                                constraint_length,
+                                                operand_id,
+                                                access)) {
         free(constraint);
         minic_parser_error(parser, "cannot store GNU asm output operand");
         return false;
@@ -2890,12 +2925,17 @@ static bool parse_gnu_inline_asm_input(MinicParser *parser, MinicInlineAsmId inl
     const MinicExpression *operand_expression;
     MinicExpressionId operand_id;
     MinicSourceSpan constraint_span;
+    const char *name;
     char *constraint;
     size_t constraint_length;
+    size_t name_length;
 
     constraint = NULL;
     constraint_length = 0U;
-    if (!minic_parser_parse_string_text(
+    name = NULL;
+    name_length = 0U;
+    if (!parse_gnu_inline_asm_operand_name(parser, &name, &name_length) ||
+        !minic_parser_parse_string_text(
             parser, &constraint, &constraint_length, &constraint_span)) {
         free(constraint);
         return false;
@@ -2921,8 +2961,13 @@ static bool parse_gnu_inline_asm_input(MinicParser *parser, MinicInlineAsmId inl
                            "GNU asm input operand currently requires an integer or pointer");
         return false;
     }
-    if (!minic_c0_program_add_inline_asm_input(
-            parser->program, inline_asm_id, constraint, constraint_length, operand_id)) {
+    if (!minic_c0_program_add_inline_asm_input(parser->program,
+                                               inline_asm_id,
+                                               name,
+                                               name_length,
+                                               constraint,
+                                               constraint_length,
+                                               operand_id)) {
         free(constraint);
         minic_parser_error(parser, "cannot store GNU asm input operand");
         return false;

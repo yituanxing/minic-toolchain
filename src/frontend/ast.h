@@ -198,6 +198,8 @@ typedef enum MinicInlineAsmOperandAccess {
 } MinicInlineAsmOperandAccess;
 
 typedef struct MinicInlineAsmOperand {
+    char *name;
+    size_t name_length;
     char *constraint_text;
     size_t constraint_length;
     MinicExpressionId expression;
@@ -402,12 +404,16 @@ bool minic_c0_program_add_inline_asm(MinicC0Program *program,
                                      MinicInlineAsmId *inline_asm_id);
 bool minic_c0_program_add_inline_asm_output(MinicC0Program *program,
                                             MinicInlineAsmId inline_asm_id,
+                                            const char *name,
+                                            size_t name_length,
                                             const char *constraint_text,
                                             size_t constraint_length,
                                             MinicExpressionId expression,
                                             MinicInlineAsmOperandAccess access);
 bool minic_c0_program_add_inline_asm_input(MinicC0Program *program,
                                            MinicInlineAsmId inline_asm_id,
+                                           const char *name,
+                                           size_t name_length,
                                            const char *constraint_text,
                                            size_t constraint_length,
                                            MinicExpressionId expression);
