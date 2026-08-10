@@ -9,7 +9,7 @@ on:
       - main
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: foundation-refactor-${{ github.ref }}
@@ -20,37 +20,17 @@ jobs:
     if: github.event_name == 'push' || github.head_ref == 'refactor/foundation-v1'
     runs-on: ubuntu-24.04
     steps:
-      - name: Checkout refactor branch
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          ref: refactor/foundation-v1
 
-      - name: Apply shared function declarator migration
+      - name: Verify committed source is canonical
         shell: bash
         run: |
           set -Eeuo pipefail
-          python3 tools/maintenance/foundation-function-declarator-once.py
-
-      - name: Format candidate
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+          git diff --exit-code -- include src tools/minic
 
-      - name: Verify candidate diff scope
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          git diff --name-only
-          bad=$(git diff --name-only | grep -Ev '^(Makefile|src/frontend/parser_declarator\.c|src/frontend/parser_internal\.h|src/frontend/parser_function\.c|src/frontend/parser_record\.c|src/frontend/parser_typedef\.c|src/frontend/parser_global\.c|tests/compiler/c0/shared_function_declarator\.c|tools/dev/pr76-focused\.sh)$' || true)
-          if test -n "$bad"; then
-            printf '%s\n' "unexpected function declarator migration paths:" >&2
-            printf '%s\n' "$bad" >&2
-            exit 1
-          fi
-
-      - name: Build compiler candidate
+      - name: Build committed compiler
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -62,7 +42,7 @@ jobs:
           set -Eeuo pipefail
           make -j4 MODE=release BUILD_DIR=build/foundation-compiler check-fast
 
-      - name: Run focused declarator and frozen Lua/Linux semantics
+      - name: Run frozen Lua and Linux focused semantics
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -71,19 +51,9 @@ jobs:
           HOST_CC=cc \
             sh tools/dev/pr76-focused.sh
 
-      - name: Commit validated function declarator migration
+      - name: Recheck source-of-truth invariant
         shell: bash
         run: |
           set -Eeuo pipefail
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add Makefile src/frontend/parser_declarator.c src/frontend/parser_internal.h \
-            src/frontend/parser_function.c src/frontend/parser_record.c \
-            src/frontend/parser_typedef.c src/frontend/parser_global.c \
-            tests/compiler/c0/shared_function_declarator.c tools/dev/pr76-focused.sh
-          if git diff --cached --quiet; then
-            echo 'no function declarator candidate changes to commit'
-            exit 0
-          fi
-          git commit -m 'refactor: share parenthesized function declarators'
-          git push origin HEAD:refactor/foundation-v1
+          git diff --exit-code -- include src tools/minic
+          printf '%s\n' 'PASS foundation/source-of-truth committed-source-only=1'
