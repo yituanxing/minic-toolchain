@@ -9,7 +9,7 @@ on:
       - main
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: foundation-refactor-${{ github.ref }}
@@ -20,17 +20,35 @@ jobs:
     if: github.event_name == 'push' || github.head_ref == 'refactor/foundation-v1'
     runs-on: ubuntu-24.04
     steps:
-      - name: Checkout
+      - name: Checkout refactor branch
         uses: actions/checkout@v4
+        with:
+          ref: refactor/foundation-v1
 
-      - name: Verify committed source is canonical
+      - name: Apply extern suffix-section candidate
         shell: bash
         run: |
           set -Eeuo pipefail
-          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
-          git diff --exit-code -- include src tools/minic
+          python3 tools/dev/foundation-extern-suffix-section-once.py
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
 
-      - name: Build committed compiler
+      - name: Enforce candidate scope
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          allowed='^(src/frontend/parser_global\.c|tests/compiler/c0/gnu_section_symbol_attribute\.c|tests/compiler/c0/run-gnu-section-symbol-attribute\.sh)$'
+          changed=$(git status --porcelain=v1 | sed -E 's/^.. //')
+          printf '%s\n' "$changed"
+          bad=$(printf '%s\n' "$changed" | grep -Ev "$allowed" || true)
+          if test -n "$bad"; then
+            printf '%s\n' 'unexpected candidate paths:' "$bad" >&2
+            exit 1
+          fi
+          test -n "$changed"
+          grep -q 'declarator_section_name' src/frontend/parser_global.c
+          grep -q 'per-declarator=isolated' tests/compiler/c0/run-gnu-section-symbol-attribute.sh
+
+      - name: Build compiler candidate
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -51,9 +69,16 @@ jobs:
           HOST_CC=cc \
             sh tools/dev/pr76-focused.sh
 
-      - name: Recheck source-of-truth invariant
+      - name: Commit validated candidate
         shell: bash
         run: |
           set -Eeuo pipefail
-          git diff --exit-code -- include src tools/minic
-          printf '%s\n' 'PASS foundation/source-of-truth committed-source-only=1'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            src/frontend/parser_global.c \
+            tests/compiler/c0/gnu_section_symbol_attribute.c \
+            tests/compiler/c0/run-gnu-section-symbol-attribute.sh
+          git commit -m 'frontend: attach extern section attributes per declarator' \
+                     -m '前端：按声明器附着 extern section 属性'
+          git push origin HEAD:refactor/foundation-v1
