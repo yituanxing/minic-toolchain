@@ -1461,6 +1461,42 @@ static bool parse_sizeof(MinicParser *parser, MinicExpressionId *expression_id) 
     return minic_parser_add_expression(parser, &expression, expression_id);
 }
 
+static bool parse_label_address(MinicParser *parser, MinicExpressionId *expression_id) {
+    MinicExpression expression;
+    MinicSourcePosition begin;
+    MinicSourceSpan name_span;
+    MinicStatementId statement_id;
+
+    if (parser == NULL || expression_id == NULL ||
+        parser->current.kind != MINIC_TOKEN_AMPERSAND_AMPERSAND) {
+        return false;
+    }
+    begin = parser->current.span.begin;
+    if (!minic_parser_advance(parser) || parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
+        minic_parser_error(parser, "expected label name after '&&'");
+        return false;
+    }
+    name_span = parser->current.span;
+    statement_id = minic_parser_find_label_statement(parser, name_span);
+    if (statement_id == MINIC_STATEMENT_INVALID) {
+        minic_parser_error(parser, "address of unknown label");
+        return false;
+    }
+
+    (void)memset(&expression, 0, sizeof(expression));
+    expression.kind = MINIC_EXPRESSION_LABEL_ADDRESS;
+    expression.span.begin = begin;
+    expression.span.end = name_span.end;
+    expression.value_category = MINIC_VALUE_RVALUE;
+    expression.value.label_statement_id = statement_id;
+    if (!minic_type_pointer_to(minic_type_void(), &expression.type)) {
+        minic_parser_error(parser, "cannot form GNU label-address type");
+        return false;
+    }
+    return minic_parser_advance(parser) &&
+           minic_parser_add_expression(parser, &expression, expression_id);
+}
+
 static bool parse_unary(MinicParser *parser, MinicExpressionId *expression_id, bool decay_array) {
     MinicToken operator_token;
     MinicExpression expression;
@@ -1473,6 +1509,9 @@ static bool parse_unary(MinicParser *parser, MinicExpressionId *expression_id, b
     }
     if (current_is_alignof(parser)) {
         return parse_alignof(parser, expression_id);
+    }
+    if (parser->current.kind == MINIC_TOKEN_AMPERSAND_AMPERSAND) {
+        return parse_label_address(parser, expression_id);
     }
     if (parenthesis_starts_cast(parser)) {
         return parse_cast(parser, expression_id);

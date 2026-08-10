@@ -38,6 +38,7 @@ typedef enum MinicExpressionKind {
     MINIC_EXPRESSION_GLOBAL_OBJECT,
     MINIC_EXPRESSION_FIXED_REGISTER,
     MINIC_EXPRESSION_FUNCTION,
+    MINIC_EXPRESSION_LABEL_ADDRESS,
     MINIC_EXPRESSION_SIZEOF,
     MINIC_EXPRESSION_OFFSETOF,
     MINIC_EXPRESSION_ADDRESS_OF,
@@ -114,6 +115,7 @@ typedef struct MinicExpression {
         MinicGlobalObjectId global_object_id;
         MinicFixedRegisterBindingId fixed_register_binding_id;
         MinicFunctionId function_id;
+        MinicStatementId label_statement_id;
         MinicType sizeof_type;
         struct {
             MinicRecordId record_id;

@@ -2532,11 +2532,63 @@ static MinicStatementId find_function_label(MinicParser *parser, MinicSourceSpan
 
         statement = minic_c0_program_statement(parser->program, statement_index);
         if (statement != NULL && statement->kind == MINIC_STATEMENT_LABEL &&
+            !minic_parser_statement_is_local_label(parser, statement_index) &&
             minic_parser_span_equals(parser, statement->span, name_span)) {
             return statement_index;
         }
     }
     return MINIC_STATEMENT_INVALID;
+}
+
+MinicStatementId minic_parser_find_label_statement(MinicParser *parser, MinicSourceSpan name_span) {
+    MinicStatementId local_label;
+
+    local_label = minic_parser_find_local_label(parser, name_span);
+    return local_label != MINIC_STATEMENT_INVALID ? local_label
+                                                  : find_function_label(parser, name_span);
+}
+
+static bool current_identifier_is_local_label_keyword(const MinicParser *parser) {
+    return parser->current.kind == MINIC_TOKEN_IDENTIFIER &&
+           identifier_equals(parser, parser->current.span, "__label__", 9U);
+}
+
+static bool parse_gnu_local_label_declaration(MinicParser *parser) {
+    if (!current_identifier_is_local_label_keyword(parser) || !minic_parser_advance(parser)) {
+        return false;
+    }
+    for (;;) {
+        MinicStatement label;
+        MinicStatementId statement_id;
+        MinicSourceSpan name_span;
+
+        if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
+            minic_parser_error(parser, "expected label name after __label__");
+            return false;
+        }
+        name_span = parser->current.span;
+        (void)memset(&label, 0, sizeof(label));
+        label.kind = MINIC_STATEMENT_LABEL;
+        label.span = name_span;
+        label.target_expression = MINIC_EXPRESSION_INVALID;
+        label.expression = MINIC_EXPRESSION_INVALID;
+        label.target_statement = MINIC_STATEMENT_INVALID;
+        label.then_block = MINIC_BLOCK_INVALID;
+        label.else_block = MINIC_BLOCK_INVALID;
+        if (!minic_c0_program_add_statement(parser->program, &label, &statement_id) ||
+            !minic_parser_declare_local_label(parser, name_span, statement_id) ||
+            !minic_parser_advance(parser)) {
+            return false;
+        }
+        if (parser->current.kind != MINIC_TOKEN_COMMA) {
+            break;
+        }
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
+    }
+    return minic_parser_expect(
+        parser, MINIC_TOKEN_SEMICOLON, "expected ';' after GNU local label declaration");
 }
 
 static bool parse_goto(MinicParser *parser) {
@@ -2557,7 +2609,7 @@ static bool parse_goto(MinicParser *parser) {
     }
     name_span = parser->current.span;
     statement.span = name_span;
-    statement.target_statement = find_function_label(parser, name_span);
+    statement.target_statement = minic_parser_find_label_statement(parser, name_span);
     if (!minic_parser_advance(parser) ||
         !minic_parser_expect(parser, MINIC_TOKEN_SEMICOLON, "expected ';' after goto")) {
         return false;
@@ -2582,41 +2634,64 @@ static bool parse_label(MinicParser *parser, bool allow_declaration) {
     MinicStatement statement;
     MinicSourceSpan name_span;
     MinicStatementId label_statement_id;
+    MinicStatementId local_label_id;
     size_t statement_index;
+    bool is_local_label;
 
     name_span = parser->current.span;
-    if (find_function_label(parser, name_span) != MINIC_STATEMENT_INVALID) {
+    local_label_id = minic_parser_find_local_label(parser, name_span);
+    is_local_label = local_label_id != MINIC_STATEMENT_INVALID;
+    if (!is_local_label && find_function_label(parser, name_span) != MINIC_STATEMENT_INVALID) {
         minic_parser_error(parser, "duplicate label definition");
         return false;
     }
 
-    (void)memset(&statement, 0, sizeof(statement));
-    statement.kind = MINIC_STATEMENT_LABEL;
-    statement.span = name_span;
-    statement.target_expression = MINIC_EXPRESSION_INVALID;
-    statement.expression = MINIC_EXPRESSION_INVALID;
-    statement.target_statement = MINIC_STATEMENT_INVALID;
-    statement.then_block = MINIC_BLOCK_INVALID;
-    statement.else_block = MINIC_BLOCK_INVALID;
+    if (is_local_label) {
+        MinicStatement *local_label;
+
+        if (!minic_parser_define_local_label(parser, name_span, &label_statement_id)) {
+            return false;
+        }
+        local_label = &parser->program->statements[label_statement_id];
+        local_label->span = name_span;
+    } else {
+        (void)memset(&statement, 0, sizeof(statement));
+        statement.kind = MINIC_STATEMENT_LABEL;
+        statement.span = name_span;
+        statement.target_expression = MINIC_EXPRESSION_INVALID;
+        statement.expression = MINIC_EXPRESSION_INVALID;
+        statement.target_statement = MINIC_STATEMENT_INVALID;
+        statement.then_block = MINIC_BLOCK_INVALID;
+        statement.else_block = MINIC_BLOCK_INVALID;
+        label_statement_id = parser->program->statement_count;
+    }
 
     if (!minic_parser_advance(parser) ||
         !minic_parser_expect(parser, MINIC_TOKEN_COLON, "expected ':' after label")) {
         return false;
     }
-    label_statement_id = parser->program->statement_count;
-    if (!minic_parser_add_statement(parser, &statement)) {
+    if (is_local_label) {
+        if (!minic_c0_block_add_statement(
+                parser->program, parser->current_block, label_statement_id)) {
+            minic_parser_error(parser, "cannot materialize GNU local label definition");
+            return false;
+        }
+    } else if (!minic_parser_add_statement(parser, &statement)) {
         return false;
     }
 
-    for (statement_index = parser->function_statement_begin; statement_index < label_statement_id;
-         ++statement_index) {
-        MinicStatement *pending;
+    if (!is_local_label) {
+        for (statement_index = parser->function_statement_begin;
+             statement_index < label_statement_id;
+             ++statement_index) {
+            MinicStatement *pending;
 
-        pending = &parser->program->statements[statement_index];
-        if (pending->kind == MINIC_STATEMENT_GOTO &&
-            pending->target_statement == MINIC_STATEMENT_INVALID &&
-            minic_parser_span_equals(parser, pending->span, name_span)) {
-            pending->target_statement = label_statement_id;
+            pending = &parser->program->statements[statement_index];
+            if (pending->kind == MINIC_STATEMENT_GOTO &&
+                pending->target_statement == MINIC_STATEMENT_INVALID &&
+                minic_parser_span_equals(parser, pending->span, name_span)) {
+                pending->target_statement = label_statement_id;
+            }
         }
     }
 
@@ -3075,7 +3150,8 @@ static bool token_starts_local_declaration(const MinicParser *parser) {
 static bool token_starts_expression(MinicTokenKind kind) {
     return kind == MINIC_TOKEN_IDENTIFIER || kind == MINIC_TOKEN_INTEGER_CONSTANT ||
            kind == MINIC_TOKEN_LPAREN || kind == MINIC_TOKEN_PLUS || kind == MINIC_TOKEN_MINUS ||
-           kind == MINIC_TOKEN_BANG || kind == MINIC_TOKEN_AMPERSAND || kind == MINIC_TOKEN_STAR;
+           kind == MINIC_TOKEN_BANG || kind == MINIC_TOKEN_AMPERSAND ||
+           kind == MINIC_TOKEN_AMPERSAND_AMPERSAND || kind == MINIC_TOKEN_STAR;
 }
 
 bool minic_parser_parse_statement(MinicParser *parser, bool allow_declaration) {
@@ -3124,6 +3200,13 @@ bool minic_parser_parse_statement(MinicParser *parser, bool allow_declaration) {
     }
     if (current_is_gnu_asm(parser)) {
         return parse_gnu_inline_asm_statement(parser);
+    }
+    if (current_identifier_is_local_label_keyword(parser)) {
+        if (!allow_declaration) {
+            minic_parser_error(parser, "GNU local label requires a compound statement scope");
+            return false;
+        }
+        return parse_gnu_local_label_declaration(parser);
     }
     if (current_identifier_is_goto(parser)) {
         return parse_goto(parser);

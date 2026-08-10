@@ -644,11 +644,121 @@ bool minic_parser_begin_scope(MinicParser *parser) {
 }
 
 void minic_parser_end_scope(MinicParser *parser) {
+    size_t label_index;
+
     if (parser->scope_count == 0U) {
         return;
     }
+    for (label_index = parser->local_label_count; label_index > 0U; --label_index) {
+        MinicParserLocalLabel *label;
+
+        label = &parser->local_labels[label_index - 1U];
+        if (label->is_active && label->scope_depth == parser->scope_count) {
+            label->is_active = false;
+        }
+    }
     parser->scope_count -= 1U;
     parser->local_binding_count = parser->scope_binding_begins[parser->scope_count];
+}
+
+bool minic_parser_declare_local_label(MinicParser *parser,
+                                      MinicSourceSpan name_span,
+                                      MinicStatementId statement_id) {
+    MinicParserLocalLabel *label;
+    size_t index;
+
+    if (parser == NULL || parser->scope_count == 0U ||
+        parser->current_function == MINIC_FUNCTION_INVALID ||
+        statement_id == MINIC_STATEMENT_INVALID) {
+        if (parser != NULL) {
+            minic_parser_error(parser, "GNU local label requires an active function scope");
+        }
+        return false;
+    }
+    for (index = parser->local_label_count; index > 0U; --index) {
+        const MinicParserLocalLabel *existing;
+
+        existing = &parser->local_labels[index - 1U];
+        if (existing->is_active && existing->scope_depth == parser->scope_count &&
+            minic_parser_span_equals(parser, existing->name_span, name_span)) {
+            minic_parser_error(parser, "duplicate GNU local label declaration");
+            return false;
+        }
+    }
+    if (parser->local_label_count == parser->local_label_capacity &&
+        !minic_parser_grow_array((void **)&parser->local_labels,
+                                 &parser->local_label_capacity,
+                                 sizeof(*parser->local_labels))) {
+        minic_parser_error(parser, "out of memory while declaring GNU local label");
+        return false;
+    }
+    label = &parser->local_labels[parser->local_label_count];
+    label->name_span = name_span;
+    label->statement_id = statement_id;
+    label->scope_depth = parser->scope_count;
+    label->is_active = true;
+    label->is_defined = false;
+    parser->local_label_count += 1U;
+    return true;
+}
+
+MinicStatementId minic_parser_find_local_label(const MinicParser *parser,
+                                               MinicSourceSpan name_span) {
+    size_t index;
+
+    if (parser == NULL) {
+        return MINIC_STATEMENT_INVALID;
+    }
+    for (index = parser->local_label_count; index > 0U; --index) {
+        const MinicParserLocalLabel *label;
+
+        label = &parser->local_labels[index - 1U];
+        if (label->is_active && minic_parser_span_equals(parser, label->name_span, name_span)) {
+            return label->statement_id;
+        }
+    }
+    return MINIC_STATEMENT_INVALID;
+}
+
+bool minic_parser_define_local_label(MinicParser *parser,
+                                     MinicSourceSpan name_span,
+                                     MinicStatementId *statement_id) {
+    size_t index;
+
+    if (parser == NULL || statement_id == NULL) {
+        return false;
+    }
+    for (index = parser->local_label_count; index > 0U; --index) {
+        MinicParserLocalLabel *label;
+
+        label = &parser->local_labels[index - 1U];
+        if (!label->is_active || !minic_parser_span_equals(parser, label->name_span, name_span)) {
+            continue;
+        }
+        if (label->is_defined) {
+            minic_parser_error(parser, "duplicate GNU local label definition");
+            return false;
+        }
+        label->is_defined = true;
+        *statement_id = label->statement_id;
+        return true;
+    }
+    return false;
+}
+
+bool minic_parser_statement_is_local_label(const MinicParser *parser,
+                                           MinicStatementId statement_id) {
+    size_t index;
+
+    if (parser == NULL || statement_id == MINIC_STATEMENT_INVALID) {
+        return false;
+    }
+    for (index = 0U; index < parser->local_label_count; ++index) {
+        if (parser->local_labels[index].statement_id == statement_id) {
+            return true;
+        }
+    }
+    return false;
 }
 
 static bool minic_parser_bind_scoped_object(MinicParser *parser,
@@ -733,6 +843,10 @@ MinicLocalId minic_parser_find_local_in_current_scope(const MinicParser *parser,
 }
 
 void minic_parser_destroy_scopes(MinicParser *parser) {
+    free(parser->local_labels);
+    parser->local_labels = NULL;
+    parser->local_label_count = 0U;
+    parser->local_label_capacity = 0U;
     free(parser->local_bindings);
     free(parser->scope_binding_begins);
     parser->local_bindings = NULL;

@@ -783,6 +783,17 @@ bool minic_riscv64_emit_expression(FILE *file,
                minic_type_is_function(function_type) &&
                fprintf(file, "  la a0, %s\n", minic_c0_function_symbol_name(designator)) >= 0;
     }
+    case MINIC_EXPRESSION_LABEL_ADDRESS: {
+        const MinicStatement *label;
+        MinicType pointee;
+
+        label = minic_c0_program_statement(program, expression->value.label_statement_id);
+        return label != NULL && label->kind == MINIC_STATEMENT_LABEL &&
+               minic_type_pointee(expression->type, &pointee) && minic_type_is_void(pointee) &&
+               fprintf(file,
+                       "  la a0, .Luser_%zu\n",
+                       (size_t)expression->value.label_statement_id) >= 0;
+    }
     case MINIC_EXPRESSION_SIZEOF: {
         MinicType measured_type;
         size_t alignment;

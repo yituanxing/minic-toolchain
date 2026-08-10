@@ -23,6 +23,14 @@ typedef struct MinicParserLocalBinding {
     MinicGlobalObjectId global_object_id;
 } MinicParserLocalBinding;
 
+typedef struct MinicParserLocalLabel {
+    MinicSourceSpan name_span;
+    MinicStatementId statement_id;
+    size_t scope_depth;
+    bool is_active;
+    bool is_defined;
+} MinicParserLocalLabel;
+
 typedef struct MinicParserEnumConstant {
     MinicSourceSpan name_span;
     int value;
@@ -57,6 +65,10 @@ typedef struct MinicParser {
     bool label_context_initialized;
     MinicFunctionId label_context_function;
     size_t function_statement_begin;
+
+    MinicParserLocalLabel *local_labels;
+    size_t local_label_count;
+    size_t local_label_capacity;
 
     MinicParserLocalBinding *local_bindings;
     size_t local_binding_count;
@@ -178,6 +190,17 @@ bool minic_parser_add_statement(MinicParser *parser, const MinicStatement *state
 
 bool minic_parser_begin_scope(MinicParser *parser);
 void minic_parser_end_scope(MinicParser *parser);
+bool minic_parser_declare_local_label(MinicParser *parser,
+                                      MinicSourceSpan name_span,
+                                      MinicStatementId statement_id);
+MinicStatementId minic_parser_find_local_label(const MinicParser *parser,
+                                               MinicSourceSpan name_span);
+bool minic_parser_define_local_label(MinicParser *parser,
+                                     MinicSourceSpan name_span,
+                                     MinicStatementId *statement_id);
+bool minic_parser_statement_is_local_label(const MinicParser *parser,
+                                           MinicStatementId statement_id);
+MinicStatementId minic_parser_find_label_statement(MinicParser *parser, MinicSourceSpan name_span);
 bool minic_parser_bind_local(MinicParser *parser, MinicSourceSpan name_span, MinicLocalId local_id);
 bool minic_parser_bind_static_local(MinicParser *parser,
                                     MinicSourceSpan name_span,

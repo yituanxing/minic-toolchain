@@ -475,6 +475,15 @@ static bool verify_expression(const MinicC0Program *program,
         }
         return true;
     }
+    case MINIC_EXPRESSION_LABEL_ADDRESS: {
+        const MinicStatement *label;
+        MinicType pointee;
+
+        label = minic_c0_program_statement(program, expression->value.label_statement_id);
+        return label != NULL && label->kind == MINIC_STATEMENT_LABEL &&
+               expression->value_category == MINIC_VALUE_RVALUE &&
+               minic_type_pointee(expression->type, &pointee) && minic_type_is_void(pointee);
+    }
     case MINIC_EXPRESSION_SIZEOF: {
         size_t measured_size;
 
