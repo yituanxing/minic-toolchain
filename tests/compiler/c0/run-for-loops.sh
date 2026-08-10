@@ -57,4 +57,4 @@ expect_failure \
     "assignment expression requires a modifiable object lvalue"
 expect_failure \
     invalid_for_increment_target \
-    "prefix update requires a modifiable scalar lvalue"
+    "prefix update requires a modifiable integer or pointer lvalue"
