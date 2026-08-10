@@ -2,15 +2,6 @@
 from pathlib import Path
 
 
-def replace_once(path: str, old: str, new: str) -> None:
-    target = Path(path)
-    text = target.read_text()
-    count = text.count(old)
-    if count != 1:
-        raise SystemExit(f"{path}: expected one replacement, found {count}: {old[:120]!r}")
-    target.write_text(text.replace(old, new, 1))
-
-
 # GNU C defines arithmetic on void* and function pointers with byte stride 1.
 # Keep ordinary incomplete object pointers rejected. LanguageOptions will own
 # this GNU-vs-ISO policy after discovery semantics are materialized.
@@ -61,6 +52,38 @@ if text.count(old) != 1:
     raise SystemExit(f"pointer diagnostic anchor: expected one match, found {text.count(old)}")
 path.write_text(text.replace(old, new, 1))
 
+# Keep the AST verifier on the same language invariant. A parser-only exception
+# would create an invalid AST and hide a frontend contract mismatch.
+path = Path("src/frontend/ast_verifier.c")
+text = path.read_text()
+anchor = '''static bool verify_binary_type(const MinicC0Program *program,
+                               const MinicExpression *expression,
+                               const MinicExpression *left,
+                               const MinicExpression *right,
+                               MinicC0AstForm form) {
+'''
+helper = r'''static bool verifier_pointer_arithmetic_pointee_allowed(const MinicC0Program *program,
+                                                         MinicType pointee_type) {
+    return minic_type_is_void(pointee_type) || minic_type_is_function(pointee_type) ||
+           type_is_complete_object(program, pointee_type);
+}
+
+'''
+if text.count(anchor) != 1:
+    raise SystemExit(f"AST verifier helper anchor: expected one match, found {text.count(anchor)}")
+text = text.replace(anchor, helper + anchor, 1)
+old = '''    return minic_type_equal(expression->type, pointer_type) &&
+           minic_type_pointee(pointer_type, &pointee_type) &&
+           type_is_complete_object(program, pointee_type);
+'''
+new = '''    return minic_type_equal(expression->type, pointer_type) &&
+           minic_type_pointee(pointer_type, &pointee_type) &&
+           verifier_pointer_arithmetic_pointee_allowed(program, pointee_type);
+'''
+if text.count(old) != 1:
+    raise SystemExit(f"AST verifier pointer arithmetic anchor: expected one match, found {text.count(old)}")
+path.write_text(text.replace(old, new, 1))
+
 # The target-side element-size query is the single lowering choke point used by
 # binary pointer +/- and pointer difference. Teach it the same GNU byte-stride
 # rule so the frontend acceptance cannot diverge from generated code.
@@ -82,4 +105,4 @@ if text.count(old) != 1:
     raise SystemExit(f"RV64 pointer element-size anchor: expected one match, found {text.count(old)}")
 path.write_text(text.replace(old, new, 1))
 
-print("staged GNU void/function pointer arithmetic with byte stride 1")
+print("staged GNU void/function pointer arithmetic with parser/verifier/lowering byte stride 1")
