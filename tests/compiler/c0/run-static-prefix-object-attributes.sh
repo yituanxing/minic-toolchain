@@ -15,9 +15,11 @@ mkdir -p "$work"
 
 test -s "$assembly"
 grep -F 'class_irq_is_conditional:' "$assembly" >/dev/null
+grep -F '  .byte 0' "$assembly" >/dev/null
+grep -F '.size class_irq_is_conditional, 1' "$assembly" >/dev/null
 grep -F 'class_irq_add:' "$assembly" >/dev/null
 if grep -q 'static_declaration_is_function' src/frontend/parser_function.c; then
     printf '%s\n' 'static semantic declaration probe still present' >&2
     exit 1
 fi
-printf '%s\n' 'PASS compiler/c0/static_prefix_object_attributes prefix=unused object=static-const function=static-inline single-pass-head=1 semantic-probe=none'
+printf '%s\n' 'PASS compiler/c0/static_prefix_object_attributes prefix=unused object=static-const-bool initializer=shared-ice-enum-false width=1-byte function=static-inline single-pass-head=1 semantic-probe=none'

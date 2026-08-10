@@ -27,6 +27,6 @@ if "$minic" -S "$work/invalid_runtime_array_bound.i" \
     printf '%s\n' 'FAIL compiler/c0/invalid_runtime_array_bound: compilation unexpectedly succeeded' >&2
     exit 1
 fi
-grep -F 'expected integer constant expression in array bound' \
+grep -F 'expected integer constant expression' \
     "$work/invalid_runtime_array_bound.stderr" >/dev/null
 printf '%s\n' 'PASS compiler/c0/invalid_runtime_array_bound'

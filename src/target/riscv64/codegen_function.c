@@ -28,6 +28,29 @@ static bool minic_riscv64_alignment_power(size_t alignment, unsigned int *power)
     return true;
 }
 
+static bool
+minic_riscv64_integer_storage_width(const MinicC0Program *program, MinicType type, size_t *width) {
+    size_t alignment;
+    size_t size;
+
+    if (program == NULL || width == NULL || !minic_type_is_integer(type) ||
+        !minic_riscv64_type_layout(program, type, &size, &alignment) ||
+        (size != 1U && size != 2U && size != 4U && size != 8U)) {
+        return false;
+    }
+    (void)alignment;
+    *width = size;
+    return true;
+}
+
+static const char *minic_riscv64_integer_data_directive(size_t width) {
+    return width == 1U   ? ".byte"
+           : width == 2U ? ".half"
+           : width == 4U ? ".word"
+           : width == 8U ? ".dword"
+                         : NULL;
+}
+
 static bool minic_riscv64_global_scalar_type(const MinicC0Program *program,
                                              MinicType object_type,
                                              MinicType *scalar_type,
@@ -47,14 +70,10 @@ static bool minic_riscv64_global_scalar_type(const MinicC0Program *program,
         }
         type = array_type->element_type;
     }
-    if (!minic_type_is_integer(type)) {
+    if (!minic_riscv64_integer_storage_width(program, type, scalar_width)) {
         return false;
     }
     *scalar_type = type;
-    *scalar_width = minic_type_is_char_integer(type)    ? 1U
-                    : minic_type_is_short_integer(type) ? 2U
-                    : minic_type_is_long_integer(type)  ? 8U
-                                                        : 4U;
     return true;
 }
 
@@ -213,11 +232,11 @@ static bool minic_riscv64_emit_direct_record_values(FILE *file,
         if (minic_type_is_integer(field->type)) {
             const char *directive;
 
-            directive = minic_type_is_char_integer(field->type)    ? ".byte"
-                        : minic_type_is_short_integer(field->type) ? ".half"
-                        : minic_type_is_long_integer(field->type)  ? ".dword"
-                                                                   : ".word";
-            if (minic_type_is_char_integer(field->type)) {
+            directive = minic_riscv64_integer_data_directive(field_size);
+            if (directive == NULL) {
+                return false;
+            }
+            if (field_size == 1U) {
                 unsigned int byte_value;
 
                 byte_value = (unsigned int)value & 0xffU;
@@ -264,11 +283,11 @@ static bool minic_riscv64_emit_constant_value(FILE *file,
         }
         value = object->initializer_values[*initializer_index];
         *initializer_index += 1U;
-        directive = minic_type_is_char_integer(type)    ? ".byte"
-                    : minic_type_is_short_integer(type) ? ".half"
-                    : minic_type_is_long_integer(type)  ? ".dword"
-                                                        : ".word";
-        if (minic_type_is_char_integer(type)) {
+        directive = minic_riscv64_integer_data_directive(type_size);
+        if (directive == NULL) {
+            return false;
+        }
+        if (type_size == 1U) {
             unsigned int byte_value;
 
             byte_value = (unsigned int)value & 0xffU;
@@ -486,11 +505,11 @@ static bool minic_riscv64_emit_record_array_values(FILE *file,
             }
 
             value = object->initializer_values[initializer_index++];
-            directive = minic_type_is_char_integer(field->type)    ? ".byte"
-                        : minic_type_is_short_integer(field->type) ? ".half"
-                        : minic_type_is_long_integer(field->type)  ? ".dword"
-                                                                   : ".word";
-            if (minic_type_is_char_integer(field->type)) {
+            directive = minic_riscv64_integer_data_directive(field_size);
+            if (directive == NULL) {
+                return false;
+            }
+            if (field_size == 1U) {
                 unsigned int byte_value;
 
                 byte_value = (unsigned int)value & 0xffU;
@@ -557,10 +576,10 @@ static bool minic_riscv64_emit_global_object(FILE *file,
             scalar_width == 0U || object->initializer_count > object->storage_size / scalar_width) {
             return false;
         }
-        directive = minic_type_is_char_integer(scalar_type)    ? ".byte"
-                    : minic_type_is_short_integer(scalar_type) ? ".half"
-                    : minic_type_is_long_integer(scalar_type)  ? ".dword"
-                                                               : ".word";
+        directive = minic_riscv64_integer_data_directive(scalar_width);
+        if (directive == NULL) {
+            return false;
+        }
     }
 
     if (object->section_name != NULL) {
@@ -620,7 +639,7 @@ static bool minic_riscv64_emit_global_object(FILE *file,
     } else {
         for (initializer_index = 0U; initializer_index < object->initializer_count;
              ++initializer_index) {
-            if (minic_type_is_char_integer(scalar_type)) {
+            if (scalar_width == 1U) {
                 unsigned int value;
 
                 value = (unsigned int)object->initializer_values[initializer_index] & 0xffU;

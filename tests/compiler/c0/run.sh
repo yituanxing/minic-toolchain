@@ -289,5 +289,5 @@ grep -F "  .word 7" "$work/static_scalar_global.s" >/dev/null
 
 expect_compile_failure \
     invalid_braced_scalar_static_global \
-    "expected integer or character constant"
+    "expected integer constant expression"
 expect_compile_failure invalid_return "expected expression"

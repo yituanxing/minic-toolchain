@@ -505,7 +505,7 @@ static bool parse_array_bound_primary(MinicParser *parser, int64_t *value) {
         }
         return true;
     }
-    minic_parser_error(parser, "expected integer constant expression in array bound");
+    minic_parser_error(parser, "expected integer constant expression");
     return false;
 }
 
@@ -561,17 +561,17 @@ static bool parse_array_bound_multiplicative(MinicParser *parser, int64_t *value
                  (left > 0 && right < 0 && right < INT64_MIN / left) ||
                  (left < 0 && right > 0 && left < INT64_MIN / right) ||
                  (left < 0 && right < 0 && left < INT64_MAX / right))) {
-                minic_parser_error(parser, "array bound constant expression overflow");
+                minic_parser_error(parser, "integer constant expression overflow");
                 return false;
             }
             left *= right;
         } else {
             if (right == 0) {
-                minic_parser_error(parser, "division by zero in array bound constant expression");
+                minic_parser_error(parser, "division by zero in integer constant expression");
                 return false;
             }
             if (left == INT64_MIN && right == -1) {
-                minic_parser_error(parser, "array bound constant expression overflow");
+                minic_parser_error(parser, "integer constant expression overflow");
                 return false;
             }
             left = operator_kind == MINIC_TOKEN_SLASH ? left / right : left % right;
@@ -598,14 +598,14 @@ static bool parse_array_bound_additive(MinicParser *parser, int64_t *value) {
         if (operator_kind == MINIC_TOKEN_PLUS) {
             if ((right > 0 && left > INT64_MAX - right) ||
                 (right < 0 && left < INT64_MIN - right)) {
-                minic_parser_error(parser, "array bound constant expression overflow");
+                minic_parser_error(parser, "integer constant expression overflow");
                 return false;
             }
             left += right;
         } else {
             if ((right < 0 && left > INT64_MAX + right) ||
                 (right > 0 && left < INT64_MIN + right)) {
-                minic_parser_error(parser, "array bound constant expression overflow");
+                minic_parser_error(parser, "integer constant expression overflow");
                 return false;
             }
             left -= right;
