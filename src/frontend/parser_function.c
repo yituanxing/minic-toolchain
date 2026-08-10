@@ -16,47 +16,72 @@ static bool function_identifier_is(const MinicParser *parser, const char *name) 
            memcmp(parser->source + parser->current.span.begin.offset, name, name_length) == 0;
 }
 
-static bool gnu_function_attribute_is_metadata(const MinicParser *parser) {
+typedef struct MinicFunctionAttributeContext {
+    bool allow_gnu_inline;
+    bool is_internal;
+    bool is_inline;
+    const char *unsupported_message;
+} MinicFunctionAttributeContext;
+
+static bool function_attribute_class_is_parse_only(MinicAttributeClass semantic_class) {
+    return semantic_class == MINIC_ATTRIBUTE_CLASS_INFORMATIONAL ||
+           semantic_class == MINIC_ATTRIBUTE_CLASS_DIAGNOSTIC ||
+           semantic_class == MINIC_ATTRIBUTE_CLASS_OPTIMIZATION ||
+           semantic_class == MINIC_ATTRIBUTE_CLASS_CONTROL_FLOW;
+}
+
+static bool consume_function_attribute(MinicParser *parser,
+                                       const MinicParsedAttribute *attribute,
+                                       void *opaque_context) {
+    const MinicFunctionAttributeContext *context;
     const MinicAttributeDescriptor *descriptor;
 
-    descriptor = minic_parser_current_attribute(parser);
-    if (!minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_FUNCTION)) {
+    if (parser == NULL || attribute == NULL || opaque_context == NULL) {
         return false;
     }
-    return descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_INFORMATIONAL ||
-           descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_OPTIMIZATION ||
-           descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_CONTROL_FLOW;
-}
+    context = (const MinicFunctionAttributeContext *)opaque_context;
+    descriptor = attribute->descriptor;
+    if (descriptor == NULL ||
+        !minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_FUNCTION)) {
+        minic_parser_error(parser, "%s", context->unsupported_message);
+        return false;
+    }
 
-static bool gnu_function_attribute_is_diagnostic(const MinicParser *parser) {
-    const MinicAttributeDescriptor *descriptor;
-
-    descriptor = minic_parser_current_attribute(parser);
-    return minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_FUNCTION) &&
-           descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_DIAGNOSTIC;
-}
-
-static bool parse_gnu_attribute_arguments(MinicParser *parser) {
-    size_t depth;
-
-    if (parser->current.kind != MINIC_TOKEN_LPAREN) {
+    if (descriptor->kind == MINIC_ATTRIBUTE_GNU_INLINE) {
+        if (!context->allow_gnu_inline) {
+            minic_parser_error(parser, "%s", context->unsupported_message);
+            return false;
+        }
+        /* GNU inline changes external-inline linkage semantics. Linux's current
+         * accepted placement is static inline, where this parse-only attribute
+         * does not change externally visible linkage. */
+        if (!context->is_internal || !context->is_inline) {
+            minic_parser_error(parser,
+                               "GNU gnu_inline requires explicit non-static inline semantics");
+            return false;
+        }
         return true;
     }
-    depth = 0U;
-    do {
-        if (parser->current.kind == MINIC_TOKEN_LPAREN) {
-            depth += 1U;
-        } else if (parser->current.kind == MINIC_TOKEN_RPAREN) {
-            depth -= 1U;
-        } else if (parser->current.kind == MINIC_TOKEN_EOF) {
-            minic_parser_error(parser, "unterminated GNU attribute arguments");
-            return false;
-        }
-        if (!minic_parser_advance(parser)) {
-            return false;
-        }
-    } while (depth != 0U);
+
+    if (!function_attribute_class_is_parse_only(descriptor->semantic_class)) {
+        minic_parser_error(parser, "%s", context->unsupported_message);
+        return false;
+    }
     return true;
+}
+
+static bool parse_function_attribute_lists(MinicParser *parser,
+                                           bool allow_gnu_inline,
+                                           bool is_internal,
+                                           bool is_inline,
+                                           const char *unsupported_message) {
+    MinicFunctionAttributeContext context;
+
+    context.allow_gnu_inline = allow_gnu_inline;
+    context.is_internal = is_internal;
+    context.is_inline = is_inline;
+    context.unsupported_message = unsupported_message;
+    return minic_parser_parse_gnu_attribute_lists(parser, consume_function_attribute, &context);
 }
 
 static bool section_attribute_token_is(const MinicParser *parser, const char *name) {
@@ -159,44 +184,15 @@ bool minic_parser_parse_gnu_section_attribute(
 }
 
 bool minic_parser_parse_gnu_function_attributes(MinicParser *parser) {
-    while (function_identifier_is(parser, "__attribute__")) {
-        if (!minic_parser_advance(parser) ||
-            !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '(' after __attribute__") ||
-            !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '((' after __attribute__")) {
-            return false;
-        }
-
-        while (parser->current.kind != MINIC_TOKEN_RPAREN) {
-            if (!gnu_function_attribute_is_metadata(parser) &&
-                !gnu_function_attribute_is_diagnostic(parser)) {
-                minic_parser_error(parser,
-                                   "unsupported GNU function attribute; ABI/layout-affecting and "
-                                   "unknown attributes must be implemented explicitly");
-                return false;
-            }
-            if (!minic_parser_advance(parser) || !parse_gnu_attribute_arguments(parser)) {
-                return false;
-            }
-            if (parser->current.kind == MINIC_TOKEN_COMMA) {
-                if (!minic_parser_advance(parser)) {
-                    return false;
-                }
-            } else if (parser->current.kind != MINIC_TOKEN_RPAREN) {
-                minic_parser_error(parser, "expected ',' or ')' in GNU attribute list");
-                return false;
-            }
-        }
-        if (!minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')' in GNU attribute") ||
-            !minic_parser_expect(
-                parser, MINIC_TOKEN_RPAREN, "expected second ')' in GNU attribute")) {
-            return false;
-        }
-    }
-    return true;
+    return parse_function_attribute_lists(
+        parser,
+        false,
+        false,
+        false,
+        "unsupported GNU function attribute; ABI/layout-affecting and unknown attributes must be "
+        "implemented explicitly");
 }
 
-/* Keep the pre-declarator call text distinct so later staging can target suffix attributes
- * without relying on occurrence order. */
 static bool parse_gnu_predeclarator_function_attributes(MinicParser *parser) {
     return minic_parser_parse_gnu_function_attributes(parser);
 }
@@ -204,55 +200,13 @@ static bool parse_gnu_predeclarator_function_attributes(MinicParser *parser) {
 bool minic_parser_parse_gnu_prefix_function_attributes(MinicParser *parser,
                                                        bool is_internal,
                                                        bool is_inline) {
-    while (function_identifier_is(parser, "__attribute__")) {
-        if (!minic_parser_advance(parser) ||
-            !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '(' after __attribute__") ||
-            !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '((' after __attribute__")) {
-            return false;
-        }
-        while (parser->current.kind != MINIC_TOKEN_RPAREN) {
-            bool is_gnu_inline = function_identifier_is(parser, "__gnu_inline__");
-
-            if (is_gnu_inline) {
-                /* GNU inline changes external-inline linkage semantics. Linux's first
-                 * real use here is static inline, where the attribute does not alter
-                 * externally visible linkage. Keep other placements rejected until
-                 * inline semantics are represented explicitly. */
-                if (!is_internal || !is_inline) {
-                    minic_parser_error(
-                        parser, "GNU gnu_inline requires explicit non-static inline semantics");
-                    return false;
-                }
-            } else if (!gnu_function_attribute_is_metadata(parser) &&
-                       !gnu_function_attribute_is_diagnostic(parser)) {
-                minic_parser_error(parser,
-                                   "unsupported GNU prefix function attribute; semantic and "
-                                   "ABI-affecting attributes must be implemented explicitly");
-                return false;
-            }
-            /* __always_inline__ is accepted deliberately as an optimization hint. The
-             * current direct RV64 backend has no inliner, so preserving program semantics
-             * means compiling the callable static-inline body normally. The permanent
-             * AttributeSet/IR PassManager path will consume this hint once inlining exists. */
-            if (!minic_parser_advance(parser) || !parse_gnu_attribute_arguments(parser)) {
-                return false;
-            }
-            if (parser->current.kind == MINIC_TOKEN_COMMA) {
-                if (!minic_parser_advance(parser)) {
-                    return false;
-                }
-            } else if (parser->current.kind != MINIC_TOKEN_RPAREN) {
-                minic_parser_error(parser, "expected ',' or ')' in GNU prefix attribute list");
-                return false;
-            }
-        }
-        if (!minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')' in GNU attribute") ||
-            !minic_parser_expect(
-                parser, MINIC_TOKEN_RPAREN, "expected second ')' in GNU attribute")) {
-            return false;
-        }
-    }
-    return true;
+    return parse_function_attribute_lists(
+        parser,
+        true,
+        is_internal,
+        is_inline,
+        "unsupported GNU prefix function attribute; semantic and ABI-affecting attributes must be "
+        "implemented explicitly");
 }
 
 static bool parse_gnu_function_asm_label(

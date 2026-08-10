@@ -19,6 +19,7 @@ grep -F 'call_attribute_functions:' "$work/gnu_function_attributes.s" >/dev/null
 grep -F '  call allocate_like' "$work/gnu_function_attributes.s" >/dev/null
 grep -F '  call memory_copy' "$work/gnu_function_attributes.s" >/dev/null
 grep -F '  call memory_compare' "$work/gnu_function_attributes.s" >/dev/null
+grep -F '  call stable_transform' "$work/gnu_function_attributes.s" >/dev/null
 
 "$host_cc" -E -P -x c "$root/tests/compiler/c0/gnu_function_attribute_reject.c" \
     -o "$work/gnu_function_attribute_reject.i"
@@ -31,4 +32,4 @@ set -e
 test "$status" -ne 0
 grep -F 'unsupported GNU function attribute' "$work/reject.stderr" >/dev/null
 
-printf '%s\n' 'PASS compiler/c0/gnu_function_attributes metadata=nothrow,leaf,nonnull,access,pure,malloc,noreturn,deprecated placement=pre-declarator,suffix unknown=reject aligned=not-silently-ignored'
+printf '%s\n' 'PASS compiler/c0/gnu_function_attributes metadata=nothrow,leaf,nonnull,access,pure,malloc,noreturn,deprecated,const-keyword placement=pre-declarator,suffix unknown=reject aligned=not-silently-ignored'

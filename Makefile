@@ -51,6 +51,7 @@ MINIC_SOURCES := \
 	src/frontend/ast_global.c \
 	src/frontend/lexer.c \
 	src/frontend/parser_constant.c \
+	src/frontend/parser_attribute.c \
 	src/frontend/parser_core.c \
 	src/frontend/parser_expression.c \
 	src/frontend/parser_function.c \

@@ -84,8 +84,7 @@ bool minic_parser_parse_gnu_attribute_lists(MinicParser *parser,
             (void)memset(&attribute, 0, sizeof(attribute));
             attribute.name_span = parser->current.span;
             attribute.descriptor = attribute_descriptor_for_token(parser, parser->current);
-            if (!minic_parser_advance(parser) ||
-                !parse_attribute_arguments(parser, &attribute) ||
+            if (!minic_parser_advance(parser) || !parse_attribute_arguments(parser, &attribute) ||
                 !consumer(parser, &attribute, context)) {
                 return false;
             }
