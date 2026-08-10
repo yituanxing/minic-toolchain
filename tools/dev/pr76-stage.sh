@@ -20,4 +20,5 @@ python3 tools/dev/pr76-anonymous-record-members.py
 python3 tools/dev/pr77-fix-generated-nul.py
 python3 tools/dev/pr77-block-scope-extern-functions.py
 python3 tools/dev/pr77-gnu-void-pointer-arithmetic.py
+python3 tools/dev/pr77-gnu-statement-expressions.py
 printf '%s\n' 'staged Linux discovery semantics'
