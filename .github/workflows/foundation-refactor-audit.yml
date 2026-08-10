@@ -1,0 +1,67 @@
+name: Foundation Refactor Audit
+
+on:
+  push:
+    branches:
+      - refactor/foundation-v1
+    paths:
+      - .github/workflows/foundation-refactor-audit.yml
+
+permissions:
+  contents: read
+
+jobs:
+  capture-effective-source:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Materialize discovery semantics in worktree
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sh tools/dev/pr76-stage.sh
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+
+      - name: Build effective compiler
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release BUILD_DIR=build/foundation-compiler
+
+      - name: Run Linux focused semantic gates
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/foundation-compiler/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/foundation-focused" \
+          HOST_CC=cc \
+            sh tools/dev/pr76-focused.sh
+
+      - name: Capture effective source and structural inventory
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p build/foundation-audit
+          git status --short > build/foundation-audit/git-status.txt
+          git diff --stat > build/foundation-audit/diff-stat.txt
+          git diff --numstat > build/foundation-audit/diff-numstat.txt
+          git diff -- include src tools/minic > build/foundation-audit/effective-source.patch
+          find include src tools/minic -type f \( -name '*.c' -o -name '*.h' \) -print0 \
+            | sort -z \
+            | xargs -0 wc -l > build/foundation-audit/source-lines.txt
+          find include src tools/minic -type f \( -name '*.c' -o -name '*.h' \) -print0 \
+            | sort -z \
+            | xargs -0 sha256sum > build/foundation-audit/source-sha256.txt
+          tar -czf build/foundation-audit/effective-source.tar.gz include src tools/minic
+
+      - name: Upload audit snapshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: foundation-effective-source-${{ github.run_id }}
+          path: build/foundation-audit/
+          retention-days: 7
