@@ -54,8 +54,25 @@ void minic_c0_program_destroy(MinicC0Program *program) {
     for (index = 0U; index < program->block_count; ++index) {
         free(program->blocks[index].statements);
     }
+    for (index = 0U; index < program->inline_asm_count; ++index) {
+        size_t operand_index;
+
+        free(program->inline_asms[index].template_text);
+        for (operand_index = 0U; operand_index < program->inline_asms[index].output_count;
+             ++operand_index) {
+            free(program->inline_asms[index].outputs[operand_index].constraint_text);
+        }
+        for (operand_index = 0U; operand_index < program->inline_asms[index].input_count;
+             ++operand_index) {
+            free(program->inline_asms[index].inputs[operand_index].constraint_text);
+        }
+        free(program->inline_asms[index].outputs);
+        free(program->inline_asms[index].inputs);
+    }
     for (index = 0U; index < program->function_count; ++index) {
         free(program->functions[index].name);
+        free(program->functions[index].assembler_name);
+        free(program->functions[index].section_name);
     }
     for (index = 0U; index < program->record_count; ++index) {
         MinicRecord *record;
@@ -73,12 +90,14 @@ void minic_c0_program_destroy(MinicC0Program *program) {
     }
     for (index = 0U; index < program->global_object_count; ++index) {
         free(program->global_objects[index].name);
+        free(program->global_objects[index].section_name);
         free(program->global_objects[index].initializer_values);
         free(program->global_objects[index].object_relocations);
     }
     free(program->expressions);
     free(program->locals);
     free(program->statements);
+    free(program->inline_asms);
     free(program->blocks);
     free(program->functions);
     free(program->records);
@@ -134,6 +153,87 @@ bool minic_c0_program_add_statement(MinicC0Program *program,
     *statement_id = program->statement_count;
     program->statements[program->statement_count] = *statement;
     program->statement_count += 1U;
+    return true;
+}
+
+bool minic_c0_program_add_inline_asm(MinicC0Program *program,
+                                     const char *template_text,
+                                     size_t template_length,
+                                     bool is_volatile,
+                                     bool has_memory_clobber,
+                                     MinicInlineAsmId *inline_asm_id) {
+    MinicInlineAsm inline_asm;
+
+    if (program == NULL || template_text == NULL || inline_asm_id == NULL) {
+        return false;
+    }
+    if (!minic_grow_array((void **)&program->inline_asms,
+                          &program->inline_asm_capacity,
+                          program->inline_asm_count,
+                          sizeof(*program->inline_asms))) {
+        return false;
+    }
+    (void)memset(&inline_asm, 0, sizeof(inline_asm));
+    inline_asm.template_text = minic_copy_name(template_text, template_length);
+    if (inline_asm.template_text == NULL) {
+        return false;
+    }
+    inline_asm.template_length = template_length;
+    inline_asm.is_volatile = is_volatile;
+    inline_asm.has_memory_clobber = has_memory_clobber;
+    inline_asm.clobber_count = has_memory_clobber ? 1U : 0U;
+    *inline_asm_id = program->inline_asm_count;
+    program->inline_asms[program->inline_asm_count] = inline_asm;
+    program->inline_asm_count += 1U;
+    return true;
+}
+
+bool minic_c0_program_add_inline_asm_output(MinicC0Program *program,
+                                            MinicInlineAsmId inline_asm_id,
+                                            const char *constraint_text,
+                                            size_t constraint_length,
+                                            MinicExpressionId expression,
+                                            MinicInlineAsmOutputAccess output_access) {
+    MinicInlineAsm *inline_asm;
+    MinicInlineAsmOperand operand;
+
+    if (program == NULL || inline_asm_id >= program->inline_asm_count || constraint_text == NULL ||
+        constraint_length == 0U || expression >= program->expression_count ||
+        (output_access != MINIC_INLINE_ASM_OUTPUT_WRITE_ONLY &&
+         output_access != MINIC_INLINE_ASM_OUTPUT_READ_WRITE)) {
+        return false;
+    }
+    inline_asm = &program->inline_asms[inline_asm_id];
+    if (!minic_grow_array((void **)&inline_asm->outputs,
+                          &inline_asm->output_capacity,
+                          inline_asm->output_count,
+                          sizeof(*inline_asm->outputs))) {
+        return false;
+    }
+    (void)memset(&operand, 0, sizeof(operand));
+    operand.constraint_text = minic_copy_name(constraint_text, constraint_length);
+    if (operand.constraint_text == NULL) {
+        return false;
+    }
+    operand.constraint_length = constraint_length;
+    operand.expression = expression;
+    operand.output_access = output_access;
+    inline_asm->outputs[inline_asm->output_count] = operand;
+    inline_asm->output_count += 1U;
+    return true;
+}
+
+bool minic_c0_program_set_inline_asm_memory_clobber(MinicC0Program *program,
+                                                    MinicInlineAsmId inline_asm_id,
+                                                    bool has_memory_clobber) {
+    MinicInlineAsm *inline_asm;
+
+    if (program == NULL || inline_asm_id >= program->inline_asm_count) {
+        return false;
+    }
+    inline_asm = &program->inline_asms[inline_asm_id];
+    inline_asm->has_memory_clobber = has_memory_clobber;
+    inline_asm->clobber_count = has_memory_clobber ? 1U : 0U;
     return true;
 }
 
@@ -229,10 +329,11 @@ bool minic_c0_program_set_function_signature(MinicC0Program *program,
                                              const MinicType *parameter_types,
                                              size_t parameter_count) {
     MinicFunction *function;
-    MinicType normalized_parameter_types[8];
+    MinicType normalized_parameter_types[MINIC_MAX_FUNCTION_PARAMETERS];
     size_t parameter_index;
 
-    if (program == NULL || function_id >= program->function_count || parameter_count > 8U ||
+    if (program == NULL || function_id >= program->function_count ||
+        parameter_count > MINIC_MAX_FUNCTION_PARAMETERS ||
         (parameter_count != 0U && parameter_types == NULL)) {
         return false;
     }
@@ -251,7 +352,7 @@ bool minic_c0_program_set_function_signature(MinicC0Program *program,
     }
     function->return_type = return_type;
     function->parameter_count = parameter_count;
-    for (parameter_index = 0U; parameter_index < 8U; ++parameter_index) {
+    for (parameter_index = 0U; parameter_index < MINIC_MAX_FUNCTION_PARAMETERS; ++parameter_index) {
         if (parameter_index < parameter_count) {
             function->parameter_types[parameter_index] =
                 normalized_parameter_types[parameter_index];
@@ -265,10 +366,10 @@ bool minic_c0_program_set_function_signature(MinicC0Program *program,
 bool minic_c0_program_set_function_parameter_count(MinicC0Program *program,
                                                    MinicFunctionId function_id,
                                                    size_t parameter_count) {
-    MinicType parameter_types[8];
+    MinicType parameter_types[MINIC_MAX_FUNCTION_PARAMETERS];
     size_t parameter_index;
 
-    if (parameter_count > 8U) {
+    if (parameter_count > MINIC_MAX_FUNCTION_PARAMETERS) {
         return false;
     }
     for (parameter_index = 0U; parameter_index < parameter_count; ++parameter_index) {
@@ -333,7 +434,7 @@ bool minic_c0_program_add_record(MinicC0Program *program,
         const MinicRecord *existing;
 
         existing = &program->records[index];
-        if (existing->name_length == name_length &&
+        if (name_length == existing->name_length &&
             memcmp(existing->name, name, name_length) == 0) {
             return false;
         }
@@ -403,7 +504,7 @@ bool minic_c0_record_add_field(MinicC0Program *program,
         const MinicRecordField *existing;
 
         existing = &record->fields[index];
-        if (existing->name_length == name_length &&
+        if (name_length != 0U && existing->name_length == name_length &&
             memcmp(existing->name, name, name_length) == 0) {
             return false;
         }
@@ -428,6 +529,25 @@ bool minic_c0_record_add_field(MinicC0Program *program,
     return true;
 }
 
+bool minic_c0_record_add_unnamed_bit_field(MinicC0Program *program,
+                                           MinicRecordId record_id,
+                                           MinicType type,
+                                           size_t bit_width) {
+    MinicRecord *record;
+    MinicRecordField *field;
+
+    if (program == NULL || record_id >= program->record_count || !minic_type_is_integer(type) ||
+        !minic_c0_record_add_field(program, record_id, "", 0U, type, 1U)) {
+        return false;
+    }
+    record = &program->records[record_id];
+    field = &record->fields[record->field_count - 1U];
+    field->is_bit_field = true;
+    field->bit_width = bit_width;
+    field->bit_offset = 0U;
+    return true;
+}
+
 bool minic_c0_program_finish_record(MinicC0Program *program, MinicRecordId record_id) {
     MinicRecord *record;
 
@@ -435,22 +555,22 @@ bool minic_c0_program_finish_record(MinicC0Program *program, MinicRecordId recor
         return false;
     }
     record = &program->records[record_id];
-    if (record->is_complete || record->field_count == 0U) {
+    if (record->is_complete) {
         return false;
     }
     record->is_complete = true;
     return true;
 }
 
-bool minic_c0_program_add_array_type(MinicC0Program *program,
-                                     MinicType element_type,
-                                     size_t element_count,
-                                     MinicType *array_type) {
+static bool minic_c0_program_add_array_descriptor(MinicC0Program *program,
+                                                  MinicType element_type,
+                                                  size_t element_count,
+                                                  MinicType *array_type) {
     MinicArrayType descriptor;
     MinicArrayTypeId array_type_id;
 
-    if (program == NULL || array_type == NULL || element_count == 0U ||
-        minic_type_is_void(element_type) || minic_type_is_function(element_type)) {
+    if (program == NULL || array_type == NULL || minic_type_is_void(element_type) ||
+        minic_type_is_function(element_type)) {
         return false;
     }
     if (!minic_grow_array((void **)&program->array_types,
@@ -466,6 +586,37 @@ bool minic_c0_program_add_array_type(MinicC0Program *program,
     program->array_types[program->array_type_count] = descriptor;
     program->array_type_count += 1U;
     *array_type = minic_type_array(array_type_id);
+    return true;
+}
+
+bool minic_c0_program_add_array_type(MinicC0Program *program,
+                                     MinicType element_type,
+                                     size_t element_count,
+                                     MinicType *array_type) {
+    return element_count != 0U &&
+           minic_c0_program_add_array_descriptor(program, element_type, element_count, array_type);
+}
+
+bool minic_c0_program_add_incomplete_array_type(MinicC0Program *program,
+                                                MinicType element_type,
+                                                MinicType *array_type) {
+    return minic_c0_program_add_array_descriptor(program, element_type, 0U, array_type);
+}
+
+bool minic_c0_program_complete_array_type(MinicC0Program *program,
+                                          MinicType array_type,
+                                          size_t element_count) {
+    MinicArrayType *descriptor;
+
+    if (program == NULL || !minic_type_is_array(array_type) || element_count == 0U ||
+        array_type.array_type_id >= program->array_type_count) {
+        return false;
+    }
+    descriptor = &program->array_types[array_type.array_type_id];
+    if (descriptor->element_count != 0U) {
+        return descriptor->element_count == element_count;
+    }
+    descriptor->element_count = element_count;
     return true;
 }
 
@@ -494,11 +645,12 @@ bool minic_c0_program_add_function_type(MinicC0Program *program,
                                         size_t parameter_count,
                                         MinicType *function_type) {
     MinicFunctionType descriptor;
-    MinicType normalized_parameter_types[8];
+    MinicType normalized_parameter_types[MINIC_MAX_FUNCTION_PARAMETERS];
     size_t function_type_index;
     size_t parameter_index;
 
-    if (program == NULL || function_type == NULL || parameter_count > 8U ||
+    if (program == NULL || function_type == NULL ||
+        parameter_count > MINIC_MAX_FUNCTION_PARAMETERS ||
         (parameter_count != 0U && parameter_types == NULL) || minic_type_is_array(return_type) ||
         minic_type_is_function(return_type)) {
         return false;
@@ -531,7 +683,7 @@ bool minic_c0_program_add_function_type(MinicC0Program *program,
     (void)memset(&descriptor, 0, sizeof(descriptor));
     descriptor.return_type = return_type;
     descriptor.parameter_count = parameter_count;
-    for (parameter_index = 0U; parameter_index < 8U; ++parameter_index) {
+    for (parameter_index = 0U; parameter_index < MINIC_MAX_FUNCTION_PARAMETERS; ++parameter_index) {
         if (parameter_index < parameter_count) {
             descriptor.parameter_types[parameter_index] =
                 normalized_parameter_types[parameter_index];
@@ -561,7 +713,7 @@ bool minic_c0_program_add_type_alias(MinicC0Program *program,
         const MinicTypeAlias *existing;
 
         existing = &program->type_aliases[index];
-        if (existing->name_length == name_length &&
+        if (name_length == existing->name_length &&
             memcmp(existing->name, name, name_length) == 0) {
             return false;
         }
@@ -731,4 +883,12 @@ const MinicTypeAlias *minic_c0_program_type_alias(const MinicC0Program *program,
         return NULL;
     }
     return &program->type_aliases[alias_id];
+}
+
+const MinicInlineAsm *minic_c0_program_inline_asm(const MinicC0Program *program,
+                                                  MinicInlineAsmId inline_asm_id) {
+    if (program == NULL || inline_asm_id >= program->inline_asm_count) {
+        return NULL;
+    }
+    return &program->inline_asms[inline_asm_id];
 }

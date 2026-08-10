@@ -30,16 +30,19 @@ typedef enum MinicIntegerSign {
 
 typedef enum MinicIntegerRank {
     MINIC_INTEGER_RANK_NONE = 0,
+    MINIC_INTEGER_RANK_BOOL,
     MINIC_INTEGER_RANK_CHAR,
     MINIC_INTEGER_RANK_SHORT,
     MINIC_INTEGER_RANK_INT,
     MINIC_INTEGER_RANK_LONG,
-    MINIC_INTEGER_RANK_LONG_LONG
+    MINIC_INTEGER_RANK_LONG_LONG,
+    MINIC_INTEGER_RANK_INT128
 } MinicIntegerRank;
 
 typedef enum MinicTypeQualifier {
     MINIC_TYPE_QUALIFIER_NONE = 0,
-    MINIC_TYPE_QUALIFIER_CONST = 1U << 0
+    MINIC_TYPE_QUALIFIER_CONST = 1U << 0,
+    MINIC_TYPE_QUALIFIER_VOLATILE = 1U << 1
 } MinicTypeQualifier;
 
 typedef struct MinicType {
@@ -52,11 +55,14 @@ typedef struct MinicType {
     bool is_plain_char;
     unsigned int base_qualifiers;
     unsigned int pointer_qualifiers;
+    unsigned int pointer_volatile_qualifiers;
     unsigned int pointer_depth;
 } MinicType;
 
 MinicType minic_type_void(void);
+MinicType minic_type_bool(void);
 MinicType minic_type_char(void);
+MinicType minic_type_signed_char(void);
 MinicType minic_type_unsigned_char(void);
 MinicType minic_type_short(void);
 MinicType minic_type_unsigned_short(void);
@@ -66,12 +72,15 @@ MinicType minic_type_long(void);
 MinicType minic_type_unsigned_long(void);
 MinicType minic_type_long_long(void);
 MinicType minic_type_unsigned_long_long(void);
+MinicType minic_type_int128(void);
+MinicType minic_type_unsigned_int128(void);
 MinicType minic_type_float(void);
 MinicType minic_type_double(void);
 MinicType minic_type_function(MinicFunctionTypeId function_type_id);
 MinicType minic_type_record(MinicRecordId record_id);
 MinicType minic_type_array(MinicArrayTypeId array_type_id);
 bool minic_type_add_const(MinicType type, MinicType *result);
+bool minic_type_add_volatile(MinicType type, MinicType *result);
 bool minic_type_unqualified(MinicType type, MinicType *result);
 bool minic_type_pointer_to(MinicType pointee, MinicType *result);
 bool minic_type_pointee(MinicType pointer, MinicType *result);
@@ -79,15 +88,19 @@ bool minic_type_equal(MinicType left, MinicType right);
 bool minic_type_integer_promotion(MinicType type, MinicType *result);
 bool minic_type_integer_common(MinicType left, MinicType right, MinicType *result);
 bool minic_type_assignment_compatible(MinicType target, MinicType source);
+bool minic_type_conditional_pointer_common(MinicType left, MinicType right, MinicType *result);
 bool minic_type_pointer_equality_compatible(MinicType left, MinicType right);
 bool minic_type_cast_compatible(MinicType target, MinicType source);
 bool minic_type_is_const(MinicType type);
+bool minic_type_is_volatile(MinicType type);
 bool minic_type_is_void(MinicType type);
 bool minic_type_is_integer(MinicType type);
+bool minic_type_is_bool_integer(MinicType type);
 bool minic_type_is_char_integer(MinicType type);
 bool minic_type_is_plain_char(MinicType type);
 bool minic_type_is_short_integer(MinicType type);
 bool minic_type_is_long_integer(MinicType type);
+bool minic_type_is_int128_integer(MinicType type);
 bool minic_type_is_signed_integer(MinicType type);
 bool minic_type_is_unsigned_integer(MinicType type);
 bool minic_type_is_float(MinicType type);

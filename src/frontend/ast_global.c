@@ -207,3 +207,48 @@ const MinicGlobalObject *minic_c0_program_global_object(const MinicC0Program *pr
     }
     return &program->global_objects[global_object_id];
 }
+
+bool minic_c0_global_object_set_visibility(MinicC0Program *program,
+                                           MinicGlobalObjectId global_object_id,
+                                           MinicSymbolVisibility visibility) {
+    MinicGlobalObject *object;
+
+    if (program == NULL || global_object_id >= program->global_object_count ||
+        visibility < MINIC_SYMBOL_VISIBILITY_DEFAULT ||
+        visibility > MINIC_SYMBOL_VISIBILITY_PROTECTED) {
+        return false;
+    }
+    object = &program->global_objects[global_object_id];
+    if (object->visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT && object->visibility != visibility) {
+        return false;
+    }
+    object->visibility = visibility;
+    return true;
+}
+
+bool minic_c0_global_object_set_section(MinicC0Program *program,
+                                        MinicGlobalObjectId global_object_id,
+                                        const char *name,
+                                        size_t name_length) {
+    MinicGlobalObject *object;
+    char *copy;
+
+    if (program == NULL || global_object_id >= program->global_object_count || name == NULL ||
+        name_length == 0U || name_length == SIZE_MAX) {
+        return false;
+    }
+    object = &program->global_objects[global_object_id];
+    if (object->section_name != NULL) {
+        return object->section_name_length == name_length &&
+               memcmp(object->section_name, name, name_length) == 0;
+    }
+    copy = (char *)malloc(name_length + 1U);
+    if (copy == NULL) {
+        return false;
+    }
+    (void)memcpy(copy, name, name_length);
+    copy[name_length] = '\0';
+    object->section_name = copy;
+    object->section_name_length = name_length;
+    return true;
+}

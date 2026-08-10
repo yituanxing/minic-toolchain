@@ -33,6 +33,7 @@ static bool remap_non_cast_expression(MinicExpression *expression,
     case MINIC_EXPRESSION_GLOBAL_OBJECT:
     case MINIC_EXPRESSION_FUNCTION:
     case MINIC_EXPRESSION_SIZEOF:
+    case MINIC_EXPRESSION_OFFSETOF:
         return true;
     case MINIC_EXPRESSION_ADDRESS_OF:
     case MINIC_EXPRESSION_DEREFERENCE:
@@ -94,8 +95,30 @@ static bool remap_non_cast_expression(MinicExpression *expression,
                                    current_old_index,
                                    expression->value.conditional.when_false,
                                    &expression->value.conditional.when_false);
+    case MINIC_EXPRESSION_BUILTIN_OVERFLOW:
+        return remap_expression_id(mapping,
+                                   old_expression_count,
+                                   current_old_index,
+                                   expression->value.overflow.left,
+                                   &expression->value.overflow.left) &&
+               remap_expression_id(mapping,
+                                   old_expression_count,
+                                   current_old_index,
+                                   expression->value.overflow.right,
+                                   &expression->value.overflow.right) &&
+               remap_expression_id(mapping,
+                                   old_expression_count,
+                                   current_old_index,
+                                   expression->value.overflow.result_pointer,
+                                   &expression->value.overflow.result_pointer);
+    case MINIC_EXPRESSION_STATEMENT:
+        return remap_expression_id(mapping,
+                                   old_expression_count,
+                                   current_old_index,
+                                   expression->value.statement_expression.result,
+                                   &expression->value.statement_expression.result);
     case MINIC_EXPRESSION_CALL:
-        if (expression->value.call.argument_count > 8U) {
+        if (expression->value.call.argument_count > MINIC_MAX_FUNCTION_PARAMETERS) {
             return false;
         }
         if (expression->value.call.function_id == MINIC_FUNCTION_INVALID &&
@@ -198,8 +221,11 @@ static bool append_normalized_cast(MinicC0Program *rewritten,
         return append_normalized_bitcast(rewritten, cast_expression, mapped_operand, normalized_id);
     }
 
-    if (minic_type_is_pointer(cast_expression->type) &&
-        minic_type_is_pointer(operand_expression->type)) {
+    if ((minic_type_is_pointer(cast_expression->type) &&
+         (minic_type_is_pointer(operand_expression->type) ||
+          minic_type_is_integer(operand_expression->type))) ||
+        (minic_type_is_integer(cast_expression->type) &&
+         minic_type_is_pointer(operand_expression->type))) {
         return append_normalized_bitcast(rewritten, cast_expression, mapped_operand, normalized_id);
     }
 
@@ -258,6 +284,7 @@ bool minic_c0_program_normalize_casts(MinicC0Program *program) {
     size_t old_expression_count;
     size_t expression_index;
     size_t statement_index;
+    size_t inline_asm_index;
     bool success;
 
     if (program == NULL || (program->expression_count != 0U && program->expressions == NULL) ||
@@ -337,8 +364,46 @@ bool minic_c0_program_normalize_casts(MinicC0Program *program) {
         success =
             remap_program_expression_id(mapping, old_expression_count, &remapped_return_expression);
     }
+    for (inline_asm_index = 0U; success && inline_asm_index < program->inline_asm_count;
+         ++inline_asm_index) {
+        const MinicInlineAsm *inline_asm;
+        size_t operand_index;
+
+        inline_asm = &program->inline_asms[inline_asm_index];
+        for (operand_index = 0U; success && operand_index < inline_asm->output_count;
+             ++operand_index) {
+            MinicExpressionId old_id;
+
+            old_id = inline_asm->outputs[operand_index].expression;
+            success = old_id < old_expression_count && mapping != NULL &&
+                      mapping[old_id] != MINIC_EXPRESSION_INVALID;
+        }
+        for (operand_index = 0U; success && operand_index < inline_asm->input_count;
+             ++operand_index) {
+            MinicExpressionId old_id;
+
+            old_id = inline_asm->inputs[operand_index].expression;
+            success = old_id < old_expression_count && mapping != NULL &&
+                      mapping[old_id] != MINIC_EXPRESSION_INVALID;
+        }
+    }
 
     if (success) {
+        for (inline_asm_index = 0U; inline_asm_index < program->inline_asm_count;
+             ++inline_asm_index) {
+            MinicInlineAsm *inline_asm;
+            size_t operand_index;
+
+            inline_asm = &program->inline_asms[inline_asm_index];
+            for (operand_index = 0U; operand_index < inline_asm->output_count; ++operand_index) {
+                inline_asm->outputs[operand_index].expression =
+                    mapping[inline_asm->outputs[operand_index].expression];
+            }
+            for (operand_index = 0U; operand_index < inline_asm->input_count; ++operand_index) {
+                inline_asm->inputs[operand_index].expression =
+                    mapping[inline_asm->inputs[operand_index].expression];
+            }
+        }
         free(program->expressions);
         program->expressions = rewritten.expressions;
         program->expression_count = rewritten.expression_count;

@@ -17,7 +17,8 @@ static bool minic_type_pointer_qualifiers_are_valid(MinicType type) {
     if (type.pointer_depth == capacity) {
         return true;
     }
-    return (type.pointer_qualifiers >> type.pointer_depth) == 0U;
+    return (type.pointer_qualifiers >> type.pointer_depth) == 0U &&
+           (type.pointer_volatile_qualifiers >> type.pointer_depth) == 0U;
 }
 
 static MinicType minic_type_integer(MinicIntegerSign sign, MinicIntegerRank rank) {
@@ -32,6 +33,7 @@ static MinicType minic_type_integer(MinicIntegerSign sign, MinicIntegerRank rank
     type.is_plain_char = false;
     type.base_qualifiers = MINIC_TYPE_QUALIFIER_NONE;
     type.pointer_qualifiers = MINIC_TYPE_QUALIFIER_NONE;
+    type.pointer_volatile_qualifiers = MINIC_TYPE_QUALIFIER_NONE;
     type.pointer_depth = 0U;
     return type;
 }
@@ -48,6 +50,7 @@ static MinicType minic_type_scalar(MinicTypeBaseKind base_kind) {
     type.is_plain_char = false;
     type.base_qualifiers = MINIC_TYPE_QUALIFIER_NONE;
     type.pointer_qualifiers = MINIC_TYPE_QUALIFIER_NONE;
+    type.pointer_volatile_qualifiers = MINIC_TYPE_QUALIFIER_NONE;
     type.pointer_depth = 0U;
     return type;
 }
@@ -87,12 +90,20 @@ MinicType minic_type_void(void) {
     return minic_type_scalar(MINIC_TYPE_BASE_VOID);
 }
 
+MinicType minic_type_bool(void) {
+    return minic_type_integer(MINIC_INTEGER_SIGN_UNSIGNED, MINIC_INTEGER_RANK_BOOL);
+}
+
 MinicType minic_type_char(void) {
     MinicType type;
 
     type = minic_type_integer(MINIC_INTEGER_SIGN_UNSIGNED, MINIC_INTEGER_RANK_CHAR);
     type.is_plain_char = true;
     return type;
+}
+
+MinicType minic_type_signed_char(void) {
+    return minic_type_integer(MINIC_INTEGER_SIGN_SIGNED, MINIC_INTEGER_RANK_CHAR);
 }
 
 MinicType minic_type_unsigned_char(void) {
@@ -129,6 +140,14 @@ MinicType minic_type_long_long(void) {
 
 MinicType minic_type_unsigned_long_long(void) {
     return minic_type_integer(MINIC_INTEGER_SIGN_UNSIGNED, MINIC_INTEGER_RANK_LONG_LONG);
+}
+
+MinicType minic_type_int128(void) {
+    return minic_type_integer(MINIC_INTEGER_SIGN_SIGNED, MINIC_INTEGER_RANK_INT128);
+}
+
+MinicType minic_type_unsigned_int128(void) {
+    return minic_type_integer(MINIC_INTEGER_SIGN_UNSIGNED, MINIC_INTEGER_RANK_INT128);
 }
 
 MinicType minic_type_float(void) {
@@ -177,6 +196,20 @@ bool minic_type_add_const(MinicType type, MinicType *result) {
     return true;
 }
 
+bool minic_type_add_volatile(MinicType type, MinicType *result) {
+    if (result == NULL || !minic_type_pointer_qualifiers_are_valid(type) ||
+        minic_type_is_function(type)) {
+        return false;
+    }
+    *result = type;
+    if (type.pointer_depth == 0U) {
+        result->base_qualifiers |= MINIC_TYPE_QUALIFIER_VOLATILE;
+    } else {
+        result->pointer_volatile_qualifiers |= 1U << (type.pointer_depth - 1U);
+    }
+    return true;
+}
+
 bool minic_type_unqualified(MinicType type, MinicType *result) {
     if (result == NULL || !minic_type_pointer_qualifiers_are_valid(type)) {
         return false;
@@ -186,6 +219,7 @@ bool minic_type_unqualified(MinicType type, MinicType *result) {
         result->base_qualifiers = MINIC_TYPE_QUALIFIER_NONE;
     } else {
         result->pointer_qualifiers &= ~(1U << (type.pointer_depth - 1U));
+        result->pointer_volatile_qualifiers &= ~(1U << (type.pointer_depth - 1U));
     }
     return true;
 }
@@ -210,6 +244,7 @@ bool minic_type_pointee(MinicType pointer, MinicType *result) {
     *result = pointer;
     removed_level = pointer.pointer_depth - 1U;
     result->pointer_qualifiers &= ~(1U << removed_level);
+    result->pointer_volatile_qualifiers &= ~(1U << removed_level);
     result->pointer_depth -= 1U;
     return true;
 }
@@ -217,14 +252,16 @@ bool minic_type_pointee(MinicType pointer, MinicType *result) {
 bool minic_type_equal(MinicType left, MinicType right) {
     return minic_type_same_unqualified_identity(left, right) &&
            left.base_qualifiers == right.base_qualifiers &&
-           left.pointer_qualifiers == right.pointer_qualifiers;
+           left.pointer_qualifiers == right.pointer_qualifiers &&
+           left.pointer_volatile_qualifiers == right.pointer_volatile_qualifiers;
 }
 
 bool minic_type_integer_promotion(MinicType type, MinicType *result) {
     if (result == NULL || !minic_type_is_integer(type)) {
         return false;
     }
-    if (type.integer_rank == MINIC_INTEGER_RANK_CHAR ||
+    if (type.integer_rank == MINIC_INTEGER_RANK_BOOL ||
+        type.integer_rank == MINIC_INTEGER_RANK_CHAR ||
         type.integer_rank == MINIC_INTEGER_RANK_SHORT) {
         *result = minic_type_int();
         return true;
@@ -242,6 +279,11 @@ bool minic_type_integer_promotion(MinicType type, MinicType *result) {
     if (type.integer_rank == MINIC_INTEGER_RANK_LONG_LONG) {
         *result = minic_type_is_unsigned_integer(type) ? minic_type_unsigned_long_long()
                                                        : minic_type_long_long();
+        return true;
+    }
+    if (type.integer_rank == MINIC_INTEGER_RANK_INT128) {
+        *result = minic_type_is_unsigned_integer(type) ? minic_type_unsigned_int128()
+                                                       : minic_type_int128();
         return true;
     }
     return false;
@@ -280,9 +322,12 @@ bool minic_type_integer_common(MinicType left, MinicType right, MinicType *resul
     }
 
     /* On the active RV64 data model, signed long and signed long long both
-       represent every value of unsigned int. */
-    if (signed_type.integer_rank >= MINIC_INTEGER_RANK_LONG &&
-        unsigned_type.integer_rank <= MINIC_INTEGER_RANK_INT) {
+       represent every value of unsigned int. Signed __int128 additionally
+       represents every value of the narrower unsigned integer ranks. */
+    if ((signed_type.integer_rank >= MINIC_INTEGER_RANK_LONG &&
+         unsigned_type.integer_rank <= MINIC_INTEGER_RANK_INT) ||
+        (signed_type.integer_rank == MINIC_INTEGER_RANK_INT128 &&
+         unsigned_type.integer_rank <= MINIC_INTEGER_RANK_LONG_LONG)) {
         *result = signed_type;
         return true;
     }
@@ -338,6 +383,49 @@ bool minic_type_assignment_compatible(MinicType target, MinicType source) {
            minic_type_void_object_pointer_compatible(unqualified_target, unqualified_source);
 }
 
+bool minic_type_conditional_pointer_common(MinicType left, MinicType right, MinicType *result) {
+    MinicType left_pointer;
+    MinicType right_pointer;
+    MinicType left_pointee;
+    MinicType right_pointee;
+    MinicType left_unqualified;
+    MinicType right_unqualified;
+    MinicType composite_pointee;
+    bool merge_const;
+    bool merge_volatile;
+
+    if (result == NULL || !minic_type_is_pointer(left) || !minic_type_is_pointer(right) ||
+        !minic_type_unqualified(left, &left_pointer) ||
+        !minic_type_unqualified(right, &right_pointer) ||
+        !minic_type_pointee(left_pointer, &left_pointee) ||
+        !minic_type_pointee(right_pointer, &right_pointee) ||
+        !minic_type_unqualified(left_pointee, &left_unqualified) ||
+        !minic_type_unqualified(right_pointee, &right_unqualified)) {
+        return false;
+    }
+
+    merge_const = minic_type_is_const(left_pointee) || minic_type_is_const(right_pointee);
+    merge_volatile = minic_type_is_volatile(left_pointee) || minic_type_is_volatile(right_pointee);
+
+    if (minic_type_equal(left_unqualified, right_unqualified)) {
+        composite_pointee = left_unqualified;
+    } else if (minic_type_is_void(left_unqualified) && !minic_type_is_function(right_unqualified)) {
+        composite_pointee = minic_type_void();
+    } else if (minic_type_is_void(right_unqualified) && !minic_type_is_function(left_unqualified)) {
+        composite_pointee = minic_type_void();
+    } else {
+        return false;
+    }
+
+    if (merge_const && !minic_type_add_const(composite_pointee, &composite_pointee)) {
+        return false;
+    }
+    if (merge_volatile && !minic_type_add_volatile(composite_pointee, &composite_pointee)) {
+        return false;
+    }
+    return minic_type_pointer_to(composite_pointee, result);
+}
+
 bool minic_type_pointer_equality_compatible(MinicType left, MinicType right) {
     return minic_type_is_pointer(left) && minic_type_is_pointer(right) &&
            (minic_type_assignment_compatible(left, right) ||
@@ -353,6 +441,10 @@ bool minic_type_cast_compatible(MinicType target, MinicType source) {
         (minic_type_is_integer(source) || minic_type_is_float(source))) {
         return true;
     }
+    if ((minic_type_is_pointer(target) && minic_type_is_integer(source)) ||
+        (minic_type_is_integer(target) && minic_type_is_pointer(source))) {
+        return true;
+    }
     return minic_type_is_pointer(target) && minic_type_is_pointer(source);
 }
 
@@ -364,6 +456,16 @@ bool minic_type_is_const(MinicType type) {
         return (type.base_qualifiers & MINIC_TYPE_QUALIFIER_CONST) != 0U;
     }
     return (type.pointer_qualifiers & (1U << (type.pointer_depth - 1U))) != 0U;
+}
+
+bool minic_type_is_volatile(MinicType type) {
+    if (!minic_type_pointer_qualifiers_are_valid(type)) {
+        return false;
+    }
+    if (type.pointer_depth == 0U) {
+        return (type.base_qualifiers & MINIC_TYPE_QUALIFIER_VOLATILE) != 0U;
+    }
+    return (type.pointer_volatile_qualifiers & (1U << (type.pointer_depth - 1U))) != 0U;
 }
 
 bool minic_type_is_void(MinicType type) {
@@ -381,13 +483,19 @@ bool minic_type_is_integer(MinicType type) {
            type.function_type_id == MINIC_FUNCTION_TYPE_INVALID &&
            (type.integer_sign == MINIC_INTEGER_SIGN_SIGNED ||
             type.integer_sign == MINIC_INTEGER_SIGN_UNSIGNED) &&
-           (type.integer_rank == MINIC_INTEGER_RANK_CHAR ||
+           (type.integer_rank == MINIC_INTEGER_RANK_BOOL ||
+            type.integer_rank == MINIC_INTEGER_RANK_CHAR ||
             type.integer_rank == MINIC_INTEGER_RANK_SHORT ||
             type.integer_rank == MINIC_INTEGER_RANK_INT ||
             type.integer_rank == MINIC_INTEGER_RANK_LONG ||
-            type.integer_rank == MINIC_INTEGER_RANK_LONG_LONG) &&
+            type.integer_rank == MINIC_INTEGER_RANK_LONG_LONG ||
+            type.integer_rank == MINIC_INTEGER_RANK_INT128) &&
            minic_type_plain_char_identity_is_valid(type) &&
            type.pointer_qualifiers == MINIC_TYPE_QUALIFIER_NONE && type.pointer_depth == 0U;
+}
+
+bool minic_type_is_bool_integer(MinicType type) {
+    return minic_type_is_integer(type) && type.integer_rank == MINIC_INTEGER_RANK_BOOL;
 }
 
 bool minic_type_is_char_integer(MinicType type) {
@@ -405,6 +513,10 @@ bool minic_type_is_short_integer(MinicType type) {
 bool minic_type_is_long_integer(MinicType type) {
     return minic_type_is_integer(type) && (type.integer_rank == MINIC_INTEGER_RANK_LONG ||
                                            type.integer_rank == MINIC_INTEGER_RANK_LONG_LONG);
+}
+
+bool minic_type_is_int128_integer(MinicType type) {
+    return minic_type_is_integer(type) && type.integer_rank == MINIC_INTEGER_RANK_INT128;
 }
 
 bool minic_type_is_signed_integer(MinicType type) {

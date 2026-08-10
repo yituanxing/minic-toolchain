@@ -1,13 +1,411 @@
 #include "frontend/parser.h"
 #include "frontend/parser_internal.h"
 
+#include <limits.h>
 #include <string.h>
 
-static bool function_signature_matches(const MinicFunction *function,
-                                       MinicType return_type,
-                                       const MinicType *parameter_types,
-                                       size_t parameter_count,
-                                       bool is_variadic) {
+static bool function_identifier_is(const MinicParser *parser, const char *name) {
+    size_t name_length;
+
+    if (parser == NULL || name == NULL || parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
+        return false;
+    }
+    name_length = strlen(name);
+    return minic_parser_span_length(parser->current.span) == name_length &&
+           memcmp(parser->source + parser->current.span.begin.offset, name, name_length) == 0;
+}
+
+static bool function_attribute_name_is(const MinicParser *parser, const char *name) {
+    size_t name_length;
+
+    if (parser == NULL || name == NULL || parser->current.kind == MINIC_TOKEN_EOF) {
+        return false;
+    }
+    name_length = strlen(name);
+    return minic_parser_span_length(parser->current.span) == name_length &&
+           memcmp(parser->source + parser->current.span.begin.offset, name, name_length) == 0;
+}
+
+static bool gnu_function_attribute_is_metadata(const MinicParser *parser) {
+    return function_identifier_is(parser, "__nothrow__") ||
+           function_identifier_is(parser, "__leaf__") ||
+           function_identifier_is(parser, "__nonnull__") ||
+           function_identifier_is(parser, "__access__") ||
+           function_identifier_is(parser, "__pure__") ||
+           function_attribute_name_is(parser, "const") ||
+           function_attribute_name_is(parser, "__const__") ||
+           function_identifier_is(parser, "__malloc__") ||
+           function_identifier_is(parser, "__unused__") ||
+           function_identifier_is(parser, "__no_instrument_function__") ||
+           function_identifier_is(parser, "__always_inline__") ||
+           function_attribute_name_is(parser, "__cold__") ||
+           function_attribute_name_is(parser, "cold") ||
+           function_identifier_is(parser, "noreturn") ||
+           function_identifier_is(parser, "__noreturn__") ||
+           function_identifier_is(parser, "deprecated") ||
+           function_identifier_is(parser, "__deprecated__");
+}
+
+static bool gnu_function_attribute_is_diagnostic(const MinicParser *parser) {
+    return function_identifier_is(parser, "error") || function_identifier_is(parser, "__error__") ||
+           function_identifier_is(parser, "warning") ||
+           function_identifier_is(parser, "__warning__") ||
+           function_attribute_name_is(parser, "format") ||
+           function_attribute_name_is(parser, "__format__") ||
+           function_identifier_is(parser, "warn_unused_result") ||
+           function_identifier_is(parser, "__warn_unused_result__");
+}
+
+static bool parse_gnu_attribute_arguments(MinicParser *parser) {
+    size_t depth;
+
+    if (parser->current.kind != MINIC_TOKEN_LPAREN) {
+        return true;
+    }
+    depth = 0U;
+    do {
+        if (parser->current.kind == MINIC_TOKEN_LPAREN) {
+            depth += 1U;
+        } else if (parser->current.kind == MINIC_TOKEN_RPAREN) {
+            depth -= 1U;
+        } else if (parser->current.kind == MINIC_TOKEN_EOF) {
+            minic_parser_error(parser, "unterminated GNU attribute arguments");
+            return false;
+        }
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
+    } while (depth != 0U);
+    return true;
+}
+
+static bool section_attribute_token_is(const MinicParser *parser, const char *name) {
+    size_t name_length;
+
+    if (parser == NULL || name == NULL || parser->current.kind == MINIC_TOKEN_EOF) {
+        return false;
+    }
+    name_length = strlen(name);
+    return minic_parser_span_length(parser->current.span) == name_length &&
+           memcmp(parser->source + parser->current.span.begin.offset, name, name_length) == 0;
+}
+
+bool minic_parser_parse_gnu_section_attribute(
+    MinicParser *parser, char *buffer, size_t capacity, size_t *length, bool *has_section) {
+    for (;;) {
+        MinicParser probe;
+        char parsed[256];
+        size_t parsed_length;
+
+        if (parser == NULL || buffer == NULL || length == NULL || has_section == NULL ||
+            capacity == 0U) {
+            return false;
+        }
+        if (!section_attribute_token_is(parser, "__attribute__")) {
+            return true;
+        }
+
+        probe = *parser;
+        if (!minic_parser_advance(&probe) || probe.current.kind != MINIC_TOKEN_LPAREN ||
+            !minic_parser_advance(&probe) || probe.current.kind != MINIC_TOKEN_LPAREN ||
+            !minic_parser_advance(&probe)) {
+            return false;
+        }
+        if (!section_attribute_token_is(&probe, "section") &&
+            !section_attribute_token_is(&probe, "__section__")) {
+            return true;
+        }
+
+        if (!minic_parser_advance(parser) ||
+            !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '(' after __attribute__") ||
+            !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '((' after __attribute__") ||
+            (!section_attribute_token_is(parser, "section") &&
+             !section_attribute_token_is(parser, "__section__")) ||
+            !minic_parser_advance(parser) ||
+            !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '(' after section")) {
+            return false;
+        }
+
+        parsed_length = 0U;
+        if (parser->current.kind != MINIC_TOKEN_STRING_LITERAL) {
+            minic_parser_error(parser, "GNU section attribute requires a string literal");
+            return false;
+        }
+        while (parser->current.kind == MINIC_TOKEN_STRING_LITERAL) {
+            size_t cursor;
+            size_t end;
+
+            if (parser->current.span.end.offset <= parser->current.span.begin.offset + 1U) {
+                minic_parser_error(parser, "invalid GNU section string");
+                return false;
+            }
+            cursor = parser->current.span.begin.offset + 1U;
+            end = parser->current.span.end.offset - 1U;
+            while (cursor < end) {
+                if (parser->source[cursor] == '\\') {
+                    minic_parser_error(parser, "escaped GNU section names are not supported yet");
+                    return false;
+                }
+                if (parsed_length + 1U >= sizeof(parsed)) {
+                    minic_parser_error(parser, "GNU section name is too long");
+                    return false;
+                }
+                parsed[parsed_length++] = parser->source[cursor++];
+            }
+            if (!minic_parser_advance(parser)) {
+                return false;
+            }
+        }
+        if (parsed_length == 0U || parsed_length + 1U > capacity ||
+            !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')' after section name") ||
+            !minic_parser_expect(
+                parser, MINIC_TOKEN_RPAREN, "expected ')' in GNU section attribute") ||
+            !minic_parser_expect(
+                parser, MINIC_TOKEN_RPAREN, "expected second ')' in GNU section attribute")) {
+            return false;
+        }
+        parsed[parsed_length] = '\0';
+        if (*has_section) {
+            if (*length != parsed_length || memcmp(buffer, parsed, parsed_length) != 0) {
+                minic_parser_error(parser, "conflicting GNU section attributes");
+                return false;
+            }
+        } else {
+            (void)memcpy(buffer, parsed, parsed_length + 1U);
+            *length = parsed_length;
+            *has_section = true;
+        }
+    }
+}
+
+bool minic_parser_parse_gnu_function_attributes(MinicParser *parser) {
+    while (function_identifier_is(parser, "__attribute__")) {
+        if (!minic_parser_advance(parser) ||
+            !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '(' after __attribute__") ||
+            !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '((' after __attribute__")) {
+            return false;
+        }
+
+        while (parser->current.kind != MINIC_TOKEN_RPAREN) {
+            if (!gnu_function_attribute_is_metadata(parser) &&
+                !gnu_function_attribute_is_diagnostic(parser)) {
+                minic_parser_error(parser,
+                                   "unsupported GNU function attribute; ABI/layout-affecting and "
+                                   "unknown attributes must be implemented explicitly");
+                return false;
+            }
+            if (!minic_parser_advance(parser) || !parse_gnu_attribute_arguments(parser)) {
+                return false;
+            }
+            if (parser->current.kind == MINIC_TOKEN_COMMA) {
+                if (!minic_parser_advance(parser)) {
+                    return false;
+                }
+            } else if (parser->current.kind != MINIC_TOKEN_RPAREN) {
+                minic_parser_error(parser, "expected ',' or ')' in GNU attribute list");
+                return false;
+            }
+        }
+        if (!minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')' in GNU attribute") ||
+            !minic_parser_expect(
+                parser, MINIC_TOKEN_RPAREN, "expected second ')' in GNU attribute")) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Keep the pre-declarator call text distinct so later staging can target suffix attributes
+ * without relying on occurrence order. */
+static bool parse_gnu_predeclarator_function_attributes(MinicParser *parser) {
+    return minic_parser_parse_gnu_function_attributes(parser);
+}
+
+bool minic_parser_parse_gnu_prefix_function_attributes(MinicParser *parser,
+                                                       bool is_internal,
+                                                       bool is_inline) {
+    while (function_identifier_is(parser, "__attribute__")) {
+        if (!minic_parser_advance(parser) ||
+            !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '(' after __attribute__") ||
+            !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '((' after __attribute__")) {
+            return false;
+        }
+        while (parser->current.kind != MINIC_TOKEN_RPAREN) {
+            bool is_gnu_inline = function_identifier_is(parser, "__gnu_inline__");
+
+            if (is_gnu_inline) {
+                /* GNU inline changes external-inline linkage semantics. Linux's first
+                 * real use here is static inline, where the attribute does not alter
+                 * externally visible linkage. Keep other placements rejected until
+                 * inline semantics are represented explicitly. */
+                if (!is_internal || !is_inline) {
+                    minic_parser_error(
+                        parser, "GNU gnu_inline requires explicit non-static inline semantics");
+                    return false;
+                }
+            } else if (!gnu_function_attribute_is_metadata(parser) &&
+                       !gnu_function_attribute_is_diagnostic(parser)) {
+                minic_parser_error(parser,
+                                   "unsupported GNU prefix function attribute; semantic and "
+                                   "ABI-affecting attributes must be implemented explicitly");
+                return false;
+            }
+            /* __always_inline__ is accepted deliberately as an optimization hint. The
+             * current direct RV64 backend has no inliner, so preserving program semantics
+             * means compiling the callable static-inline body normally. The permanent
+             * AttributeSet/IR PassManager path will consume this hint once inlining exists. */
+            if (!minic_parser_advance(parser) || !parse_gnu_attribute_arguments(parser)) {
+                return false;
+            }
+            if (parser->current.kind == MINIC_TOKEN_COMMA) {
+                if (!minic_parser_advance(parser)) {
+                    return false;
+                }
+            } else if (parser->current.kind != MINIC_TOKEN_RPAREN) {
+                minic_parser_error(parser, "expected ',' or ')' in GNU prefix attribute list");
+                return false;
+            }
+        }
+        if (!minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')' in GNU attribute") ||
+            !minic_parser_expect(
+                parser, MINIC_TOKEN_RPAREN, "expected second ')' in GNU attribute")) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool parse_gnu_function_asm_label(
+    MinicParser *parser, char *buffer, size_t capacity, size_t *length, bool *has_label) {
+    if (parser == NULL || buffer == NULL || length == NULL || has_label == NULL) {
+        return false;
+    }
+    *length = 0U;
+    *has_label = false;
+    if (!function_identifier_is(parser, "__asm__") && !function_identifier_is(parser, "__asm")) {
+        return true;
+    }
+    if (!minic_parser_advance(parser) ||
+        !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '(' after __asm__")) {
+        return false;
+    }
+    if (parser->current.kind != MINIC_TOKEN_STRING_LITERAL) {
+        minic_parser_error(parser, "GNU function asm label requires a string literal");
+        return false;
+    }
+    while (parser->current.kind == MINIC_TOKEN_STRING_LITERAL) {
+        size_t cursor;
+        size_t end;
+
+        if (parser->current.span.end.offset <= parser->current.span.begin.offset + 1U) {
+            minic_parser_error(parser, "invalid GNU function asm label string");
+            return false;
+        }
+        cursor = parser->current.span.begin.offset + 1U;
+        end = parser->current.span.end.offset - 1U;
+        while (cursor < end) {
+            if (parser->source[cursor] == '\\') {
+                minic_parser_error(parser, "escaped GNU function asm labels are not supported yet");
+                return false;
+            }
+            if (*length + 1U >= capacity) {
+                minic_parser_error(parser, "GNU function asm label is too long");
+                return false;
+            }
+            buffer[*length] = parser->source[cursor];
+            *length += 1U;
+            cursor += 1U;
+        }
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
+    }
+    if (*length == 0U) {
+        minic_parser_error(parser, "GNU function asm label cannot be empty");
+        return false;
+    }
+    buffer[*length] = '\0';
+    *has_label = true;
+    return minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')' after GNU asm label");
+}
+
+static bool parse_gnu_visibility_name(MinicParser *parser, MinicSymbolVisibility *visibility) {
+    MinicSourceSpan span;
+    const char *value;
+    size_t length;
+
+    if (parser == NULL || visibility == NULL ||
+        parser->current.kind != MINIC_TOKEN_STRING_LITERAL) {
+        return false;
+    }
+    span = parser->current.span;
+    if (span.end.offset <= span.begin.offset + 1U) {
+        minic_parser_error(parser, "invalid GNU visibility string");
+        return false;
+    }
+    value = parser->source + span.begin.offset + 1U;
+    length = span.end.offset - span.begin.offset - 2U;
+    if (length == 8U && memcmp(value, "internal", 8U) == 0) {
+        *visibility = MINIC_SYMBOL_VISIBILITY_INTERNAL;
+    } else if (length == 6U && memcmp(value, "hidden", 6U) == 0) {
+        *visibility = MINIC_SYMBOL_VISIBILITY_HIDDEN;
+    } else if (length == 9U && memcmp(value, "protected", 9U) == 0) {
+        *visibility = MINIC_SYMBOL_VISIBILITY_PROTECTED;
+    } else if (length == 7U && memcmp(value, "default", 7U) == 0) {
+        *visibility = MINIC_SYMBOL_VISIBILITY_DEFAULT;
+    } else {
+        minic_parser_error(parser, "unsupported GNU visibility value");
+        return false;
+    }
+    return minic_parser_advance(parser);
+}
+
+static bool parse_gnu_prefix_function_visibility(MinicParser *parser,
+                                                 MinicSymbolVisibility *visibility,
+                                                 bool *has_visibility) {
+    if (parser == NULL || visibility == NULL || has_visibility == NULL) {
+        return false;
+    }
+    *visibility = MINIC_SYMBOL_VISIBILITY_DEFAULT;
+    *has_visibility = false;
+    while (function_identifier_is(parser, "__attribute__")) {
+        MinicParser probe = *parser;
+
+        if (!minic_parser_advance(&probe) || probe.current.kind != MINIC_TOKEN_LPAREN ||
+            !minic_parser_advance(&probe) || probe.current.kind != MINIC_TOKEN_LPAREN ||
+            !minic_parser_advance(&probe)) {
+            return false;
+        }
+        if (!function_identifier_is(&probe, "visibility")) {
+            break;
+        }
+        if (!minic_parser_advance(parser) ||
+            !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '(' after __attribute__") ||
+            !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '((' after __attribute__")) {
+            return false;
+        }
+        if (!function_identifier_is(parser, "visibility")) {
+            return false;
+        }
+        if (!minic_parser_advance(parser) ||
+            !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '(' after visibility") ||
+            !parse_gnu_visibility_name(parser, visibility) ||
+            !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')' after visibility") ||
+            !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')' in GNU attribute") ||
+            !minic_parser_expect(
+                parser, MINIC_TOKEN_RPAREN, "expected second ')' in GNU attribute")) {
+            return false;
+        }
+        *has_visibility = true;
+    }
+    return true;
+}
+
+bool minic_parser_function_signature_matches(const MinicFunction *function,
+                                             MinicType return_type,
+                                             const MinicType *parameter_types,
+                                             size_t parameter_count,
+                                             bool is_variadic) {
     size_t parameter_index;
 
     if (function == NULL || !minic_type_equal(function->return_type, return_type) ||
@@ -31,7 +429,7 @@ static bool parse_function_pointer_parameter_declarator(MinicParser *parser,
                                                         bool *has_name,
                                                         MinicType *parameter_type,
                                                         bool require_name) {
-    MinicType nested_parameter_types[8];
+    MinicType nested_parameter_types[MINIC_MAX_FUNCTION_PARAMETERS];
     MinicType function_type;
     size_t nested_parameter_count;
     size_t pointer_depth;
@@ -128,7 +526,7 @@ bool minic_parser_parse_parameter_list(MinicParser *parser,
         bool declarator_has_name;
         bool is_function_pointer_parameter;
 
-        if (*parameter_count >= 8U) {
+        if (*parameter_count >= MINIC_MAX_FUNCTION_PARAMETERS) {
             minic_parser_error(parser, "at most eight parameters are supported");
             return false;
         }
@@ -184,6 +582,297 @@ bool minic_parser_parse_parameter_list(MinicParser *parser,
             return minic_parser_advance(parser);
         }
     }
+}
+
+static bool parse_external_integer_array_definition(MinicParser *parser,
+                                                    MinicType element_type,
+                                                    MinicSourceSpan name_span) {
+    MinicGlobalObjectId object_id;
+    MinicGlobalObject *object;
+    const MinicArrayType *array_type;
+    MinicType declared_array_type;
+    size_t element_count;
+    size_t initializer_count;
+    bool inferred_bound;
+    bool definition_omits_bound;
+
+    if (parser == NULL ||
+        (!minic_type_is_integer(element_type) && !minic_type_is_pointer(element_type)) ||
+        parser->current.kind != MINIC_TOKEN_LBRACKET) {
+        minic_parser_error(parser,
+                           "external array definition requires an integer or pointer element type");
+        return false;
+    }
+
+    element_count = 0U;
+    inferred_bound = false;
+    definition_omits_bound = false;
+    if (!minic_parser_advance(parser)) {
+        return false;
+    }
+    if (parser->current.kind == MINIC_TOKEN_RBRACKET) {
+        inferred_bound = true;
+        definition_omits_bound = true;
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
+    } else if (!minic_parser_parse_fixed_array_bound(parser, &element_count)) {
+        return false;
+    }
+    if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
+        minic_parser_error(parser,
+                           "multi-dimensional external integer arrays are not supported yet");
+        return false;
+    }
+
+    object_id = minic_parser_find_global_object(parser, name_span);
+    if (object_id == MINIC_GLOBAL_OBJECT_INVALID) {
+        if ((inferred_bound && !minic_c0_program_add_incomplete_array_type(
+                                   parser->program, element_type, &declared_array_type)) ||
+            (!inferred_bound &&
+             !minic_c0_program_add_array_type(
+                 parser->program, element_type, element_count, &declared_array_type)) ||
+            !minic_c0_program_add_global_object(parser->program,
+                                                parser->source + name_span.begin.offset,
+                                                minic_parser_span_length(name_span),
+                                                declared_array_type,
+                                                false,
+                                                minic_type_is_const(element_type),
+                                                &object_id)) {
+            minic_parser_error(parser, "cannot create external integer array definition");
+            return false;
+        }
+    } else {
+        object = &parser->program->global_objects[object_id];
+        if (!object->is_extern || !minic_type_is_array(object->type)) {
+            minic_parser_error(parser, "conflicting external integer array definition");
+            return false;
+        }
+        array_type = minic_c0_program_array_type(parser->program, object->type.array_type_id);
+        if (array_type == NULL || !minic_type_equal(array_type->element_type, element_type)) {
+            minic_parser_error(parser, "external integer array definition type mismatch");
+            return false;
+        }
+        if (array_type->element_count != 0U) {
+            if (!inferred_bound && array_type->element_count != element_count) {
+                minic_parser_error(parser, "external integer array bound mismatch");
+                return false;
+            }
+            element_count = array_type->element_count;
+            inferred_bound = false;
+        } else if (!inferred_bound && !minic_c0_program_complete_array_type(
+                                          parser->program, object->type, element_count)) {
+            minic_parser_error(parser, "cannot complete external integer array bound");
+            return false;
+        }
+    }
+
+    object = &parser->program->global_objects[object_id];
+    if (!minic_parser_expect(parser, MINIC_TOKEN_EQUAL, "expected '=' after external array")) {
+        return false;
+    }
+
+    if (minic_type_is_pointer(element_type)) {
+        if (!minic_parser_expect(
+                parser, MINIC_TOKEN_LBRACE, "expected '{' in external pointer array initializer") ||
+            !minic_c0_global_object_set_zero_initialized(parser->program, object_id)) {
+            return false;
+        }
+        initializer_count = 0U;
+        while (parser->current.kind != MINIC_TOKEN_RBRACE) {
+            MinicGlobalObjectId target_id;
+            bool has_relocation;
+
+            if (!inferred_bound && initializer_count >= element_count) {
+                minic_parser_error(parser, "too many external pointer array initializers");
+                return false;
+            }
+            target_id = MINIC_GLOBAL_OBJECT_INVALID;
+            has_relocation = false;
+            if (parser->current.kind == MINIC_TOKEN_STRING_LITERAL) {
+                MinicSourceSpan literal_span;
+                MinicType literal_type;
+                MinicType literal_pointer_type;
+                const MinicArrayType *literal_array;
+
+                if (!minic_parser_create_string_literal_object(
+                        parser, &target_id, &literal_type, &literal_span)) {
+                    return false;
+                }
+                literal_array =
+                    minic_c0_program_array_type(parser->program, literal_type.array_type_id);
+                if (literal_array == NULL || !minic_type_is_array(literal_type) ||
+                    !minic_type_pointer_to(literal_array->element_type, &literal_pointer_type) ||
+                    !minic_type_assignment_compatible(element_type, literal_pointer_type)) {
+                    minic_parser_error(parser,
+                                       "external pointer array string initializer type mismatch");
+                    return false;
+                }
+                (void)literal_span;
+                has_relocation = true;
+            } else if (parser->current.kind == MINIC_TOKEN_IDENTIFIER) {
+                MinicType source_pointer_type;
+                const MinicGlobalObject *target;
+
+                target_id = minic_parser_find_global_object(parser, parser->current.span);
+                target = target_id == MINIC_GLOBAL_OBJECT_INVALID
+                             ? NULL
+                             : minic_c0_program_global_object(parser->program, target_id);
+                if (target == NULL) {
+                    minic_parser_error(
+                        parser, "external pointer array initializer requires a known object");
+                    return false;
+                }
+                if (minic_type_is_array(target->type)) {
+                    const MinicArrayType *target_array;
+
+                    target_array =
+                        minic_c0_program_array_type(parser->program, target->type.array_type_id);
+                    if (target_array == NULL ||
+                        !minic_type_pointer_to(target_array->element_type, &source_pointer_type)) {
+                        minic_parser_error(parser, "cannot decay pointer array initializer object");
+                        return false;
+                    }
+                } else if (!minic_type_pointer_to(target->type, &source_pointer_type)) {
+                    minic_parser_error(parser,
+                                       "cannot take address of pointer array initializer object");
+                    return false;
+                }
+                if (!minic_type_assignment_compatible(element_type, source_pointer_type) ||
+                    !minic_parser_advance(parser)) {
+                    if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                        minic_parser_error(
+                            parser, "external pointer array object initializer type mismatch");
+                    }
+                    return false;
+                }
+                has_relocation = true;
+            } else {
+                int64_t parsed;
+
+                if (!minic_parser_parse_integer_constant_expression(parser, &parsed) ||
+                    parsed != 0) {
+                    if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                        minic_parser_error(
+                            parser, "external pointer array scalar initializer must be null");
+                    }
+                    return false;
+                }
+            }
+            if (has_relocation && !minic_c0_global_object_add_object_relocation(
+                                      parser->program, object_id, initializer_count, target_id)) {
+                minic_parser_error(parser, "cannot record external pointer array relocation");
+                return false;
+            }
+            initializer_count += 1U;
+
+            if (parser->current.kind == MINIC_TOKEN_COMMA) {
+                if (!minic_parser_advance(parser)) {
+                    return false;
+                }
+                if (parser->current.kind == MINIC_TOKEN_RBRACE) {
+                    break;
+                }
+            } else if (parser->current.kind != MINIC_TOKEN_RBRACE) {
+                minic_parser_error(parser,
+                                   "expected ',' or '}' in external pointer array initializer");
+                return false;
+            }
+        }
+        if (!minic_parser_expect(parser,
+                                 MINIC_TOKEN_RBRACE,
+                                 "expected '}' after external pointer array initializer")) {
+            return false;
+        }
+        if (initializer_count == 0U) {
+            minic_parser_error(parser, "external pointer array requires at least one initializer");
+            return false;
+        }
+        if (inferred_bound) {
+            element_count = initializer_count;
+            if (!minic_c0_program_complete_array_type(
+                    parser->program, object->type, element_count)) {
+                minic_parser_error(parser, "cannot infer external pointer array bound");
+                return false;
+            }
+        }
+        object->is_extern = false;
+        return minic_parser_expect(
+            parser, MINIC_TOKEN_SEMICOLON, "expected ';' after external pointer array definition");
+    }
+
+    if (parser->current.kind == MINIC_TOKEN_STRING_LITERAL) {
+        size_t string_count;
+
+        if (!definition_omits_bound || !minic_type_is_char_integer(element_type) ||
+            !inferred_bound ||
+            !minic_parser_add_string_literal_initializer(parser, object_id, &string_count) ||
+            !minic_c0_program_complete_array_type(parser->program, object->type, string_count)) {
+            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                minic_parser_error(parser, "unsupported external string array definition");
+            }
+            return false;
+        }
+    } else {
+        if (!minic_parser_expect(
+                parser, MINIC_TOKEN_LBRACE, "expected '{' in external array initializer")) {
+            return false;
+        }
+        initializer_count = 0U;
+        while (parser->current.kind != MINIC_TOKEN_RBRACE) {
+            int64_t parsed;
+
+            if (!minic_parser_parse_integer_constant_expression(parser, &parsed)) {
+                return false;
+            }
+            if (parsed < INT_MIN || parsed > INT_MAX) {
+                minic_parser_error(parser,
+                                   "external integer array initializer is out of supported range");
+                return false;
+            }
+            if (!inferred_bound && initializer_count >= element_count) {
+                minic_parser_error(parser, "too many external integer array initializers");
+                return false;
+            }
+            if (!minic_c0_global_object_add_initializer(parser->program, object_id, (int)parsed)) {
+                minic_parser_error(parser, "cannot record external integer array initializer");
+                return false;
+            }
+            initializer_count += 1U;
+
+            if (parser->current.kind == MINIC_TOKEN_COMMA) {
+                if (!minic_parser_advance(parser)) {
+                    return false;
+                }
+                if (parser->current.kind == MINIC_TOKEN_RBRACE) {
+                    break;
+                }
+            } else if (parser->current.kind != MINIC_TOKEN_RBRACE) {
+                minic_parser_error(parser, "expected ',' or '}' in external array initializer");
+                return false;
+            }
+        }
+        if (!minic_parser_expect(
+                parser, MINIC_TOKEN_RBRACE, "expected '}' after external array initializer")) {
+            return false;
+        }
+        if (initializer_count == 0U) {
+            minic_parser_error(parser, "external integer array requires at least one initializer");
+            return false;
+        }
+        if (inferred_bound) {
+            element_count = initializer_count;
+            if (!minic_c0_program_complete_array_type(
+                    parser->program, object->type, element_count)) {
+                minic_parser_error(parser, "cannot infer external integer array bound");
+                return false;
+            }
+        }
+    }
+
+    object->is_extern = false;
+    return minic_parser_expect(
+        parser, MINIC_TOKEN_SEMICOLON, "expected ';' after external array definition");
 }
 
 static bool parse_external_object_definition(MinicParser *parser,
@@ -266,10 +955,95 @@ static bool parse_external_object_definition(MinicParser *parser,
         parser, MINIC_TOKEN_SEMICOLON, "expected ';' after external object definition");
 }
 
+static bool parse_visible_external_array(MinicParser *parser,
+                                         MinicType element_type,
+                                         MinicSourceSpan name_span,
+                                         MinicSymbolVisibility visibility,
+                                         bool has_visibility) {
+    MinicParser probe;
+    bool is_declaration;
+
+    if (parser == NULL || parser->current.kind != MINIC_TOKEN_LBRACKET) {
+        return false;
+    }
+
+    probe = *parser;
+    if (!minic_parser_advance(&probe)) {
+        return false;
+    }
+    while (probe.current.kind != MINIC_TOKEN_RBRACKET && probe.current.kind != MINIC_TOKEN_EOF) {
+        if (!minic_parser_advance(&probe)) {
+            return false;
+        }
+    }
+    if (probe.current.kind != MINIC_TOKEN_RBRACKET || !minic_parser_advance(&probe)) {
+        return false;
+    }
+    is_declaration = probe.current.kind == MINIC_TOKEN_SEMICOLON;
+
+    if (is_declaration) {
+        MinicGlobalObjectId object_id;
+        MinicType array_type;
+        size_t element_count;
+        bool incomplete;
+
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
+        incomplete = parser->current.kind == MINIC_TOKEN_RBRACKET;
+        if (incomplete) {
+            if (!minic_c0_program_add_incomplete_array_type(
+                    parser->program, element_type, &array_type) ||
+                !minic_parser_advance(parser)) {
+                minic_parser_error(parser, "cannot declare visible incomplete extern array");
+                return false;
+            }
+        } else if (!minic_parser_parse_fixed_array_bound(parser, &element_count) ||
+                   !minic_c0_program_add_array_type(
+                       parser->program, element_type, element_count, &array_type)) {
+            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                minic_parser_error(parser, "cannot declare visible fixed extern array");
+            }
+            return false;
+        }
+        if (minic_parser_find_global_object(parser, name_span) != MINIC_GLOBAL_OBJECT_INVALID ||
+            !minic_c0_program_add_global_object(parser->program,
+                                                parser->source + name_span.begin.offset,
+                                                minic_parser_span_length(name_span),
+                                                array_type,
+                                                false,
+                                                minic_type_is_const(element_type),
+                                                &object_id) ||
+            !minic_c0_global_object_set_extern(parser->program, object_id) ||
+            (has_visibility &&
+             !minic_c0_global_object_set_visibility(parser->program, object_id, visibility))) {
+            minic_parser_error(parser, "cannot record visible extern array declaration");
+            return false;
+        }
+        return minic_parser_expect(
+            parser, MINIC_TOKEN_SEMICOLON, "expected ';' after visible extern array declaration");
+    }
+
+    if (!parse_external_integer_array_definition(parser, element_type, name_span)) {
+        return false;
+    }
+    if (has_visibility) {
+        MinicGlobalObjectId object_id;
+
+        object_id = minic_parser_find_global_object(parser, name_span);
+        if (object_id == MINIC_GLOBAL_OBJECT_INVALID ||
+            !minic_c0_global_object_set_visibility(parser->program, object_id, visibility)) {
+            minic_parser_error(parser, "cannot record visible external array definition");
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool parse_function(MinicParser *parser, bool is_internal) {
     MinicSourceSpan name_span;
-    MinicSourceSpan parameter_name_spans[8];
-    MinicType parameter_types[8];
+    MinicSourceSpan parameter_name_spans[MINIC_MAX_FUNCTION_PARAMETERS];
+    MinicType parameter_types[MINIC_MAX_FUNCTION_PARAMETERS];
     MinicType return_type;
     MinicBlockId body_block;
     MinicFunctionId function_id;
@@ -282,15 +1056,38 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     bool is_inline;
     bool is_main;
     bool is_variadic;
+    char assembler_name[256];
+    size_t assembler_name_length;
+    bool has_assembler_name;
+    char section_name[256];
+    size_t section_name_length;
+    bool has_section;
+    MinicSymbolVisibility visibility;
+    bool has_visibility;
 
     body_block = MINIC_BLOCK_INVALID;
     parameter_count = 0U;
     is_inline = false;
     is_variadic = false;
+    assembler_name_length = 0U;
+    has_assembler_name = false;
+    section_name_length = 0U;
+    has_section = false;
+    visibility = MINIC_SYMBOL_VISIBILITY_DEFAULT;
+    has_visibility = false;
+    (void)memset(assembler_name, 0, sizeof(assembler_name));
+    (void)memset(section_name, 0, sizeof(section_name));
     (void)memset(parameter_name_spans, 0, sizeof(parameter_name_spans));
     (void)memset(parameter_types, 0, sizeof(parameter_types));
+    if (!parse_gnu_prefix_function_visibility(parser, &visibility, &has_visibility)) {
+        return false;
+    }
     if (is_internal &&
         !minic_parser_expect(parser, MINIC_TOKEN_KW_STATIC, "expected keyword 'static'")) {
+        return false;
+    }
+    if (!is_internal && parser->current.kind == MINIC_TOKEN_KW_EXTERN &&
+        !minic_parser_advance(parser)) {
         return false;
     }
     if (parser->current.kind == MINIC_TOKEN_KW_INLINE) {
@@ -305,15 +1102,41 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
             return false;
         }
     }
+    if (!minic_parser_parse_gnu_prefix_function_attributes(parser, is_internal, is_inline)) {
+        return false;
+    }
     if (!minic_parser_parse_type_name(parser, &return_type)) {
         return false;
     }
-    if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
+    if (!minic_parser_parse_gnu_section_attribute(
+            parser, section_name, sizeof(section_name), &section_name_length, &has_section) ||
+        !parse_gnu_predeclarator_function_attributes(parser)) {
+        return false;
+    }
+    if (parser->current.kind == MINIC_TOKEN_IDENTIFIER) {
+        name_span = parser->current.span;
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
+    } else if (parser->current.kind == MINIC_TOKEN_LPAREN) {
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
+        if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
+            minic_parser_error(parser, "expected function name in parenthesized declarator");
+            return false;
+        }
+        name_span = parser->current.span;
+        if (!minic_parser_advance(parser) ||
+            !minic_parser_expect(
+                parser, MINIC_TOKEN_RPAREN, "expected ')' after parenthesized function name")) {
+            return false;
+        }
+    } else {
         minic_parser_error(parser, "expected function name");
         return false;
     }
 
-    name_span = parser->current.span;
     function_id = minic_parser_find_function(parser, name_span);
     is_main = minic_parser_span_length(name_span) == 4U &&
               memcmp(parser->source + name_span.begin.offset, "main", 4U) == 0;
@@ -326,13 +1149,14 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
         return false;
     }
 
-    if (!minic_parser_advance(parser)) {
-        return false;
-    }
     if (!is_internal && parser->current.kind != MINIC_TOKEN_LPAREN) {
         if (is_inline) {
             minic_parser_error(parser, "inline specifier requires a function declarator");
             return false;
+        }
+        if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
+            return parse_visible_external_array(
+                parser, return_type, name_span, visibility, has_visibility);
         }
         return parse_external_object_definition(parser, return_type, name_span);
     }
@@ -342,6 +1166,14 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
         !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')'")) {
         return false;
     }
+    if (!parse_gnu_function_asm_label(parser,
+                                      assembler_name,
+                                      sizeof(assembler_name),
+                                      &assembler_name_length,
+                                      &has_assembler_name) ||
+        !minic_parser_parse_gnu_function_attributes(parser)) {
+        return false;
+    }
     if (is_main && (parameter_count != 0U || is_variadic)) {
         minic_parser_error(parser, "main parameters are not supported yet");
         return false;
@@ -349,11 +1181,14 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
 
     if (function_id != MINIC_FUNCTION_INVALID) {
         existing_function = minic_c0_program_function(parser->program, function_id);
-        if (!function_signature_matches(
+        if (!minic_parser_function_signature_matches(
                 existing_function, return_type, parameter_types, parameter_count, is_variadic) ||
-            existing_function->is_internal != is_internal) {
+            (!existing_function->is_internal && is_internal)) {
             minic_parser_error(parser, "conflicting function declaration");
             return false;
+        }
+        if (existing_function->is_internal) {
+            is_internal = true;
         }
     }
 
@@ -376,11 +1211,33 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                 return false;
             }
         }
+        if (has_assembler_name &&
+            !minic_c0_program_set_function_assembler_name(
+                parser->program, function_id, assembler_name, assembler_name_length)) {
+            minic_parser_error(parser, "conflicting or invalid GNU function asm label");
+            return false;
+        }
+        if (has_visibility &&
+            !minic_c0_program_set_function_visibility(parser->program, function_id, visibility)) {
+            minic_parser_error(parser, "conflicting GNU function visibility");
+            return false;
+        }
+        if (has_section && !minic_c0_program_set_function_section(
+                               parser->program, function_id, section_name, section_name_length)) {
+            minic_parser_error(parser, "conflicting or invalid GNU function section");
+            return false;
+        }
         return minic_parser_advance(parser);
     }
     if (!minic_type_is_integer(return_type) && !minic_type_is_void(return_type) &&
-        !minic_type_is_pointer(return_type) && !minic_type_is_double(return_type)) {
+        !minic_type_is_pointer(return_type) && !minic_type_is_double(return_type) &&
+        !minic_type_is_record(return_type)) {
         minic_parser_error(parser, "unsupported function return type");
+        return false;
+    }
+    if (minic_type_is_record(return_type) &&
+        !minic_parser_require_complete_object_type(
+            parser, return_type, "function definition requires a complete record return type")) {
         return false;
     }
     if (parser->current.kind != MINIC_TOKEN_LBRACE) {
@@ -463,6 +1320,22 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
         minic_parser_error(parser, "cannot define previously declared function");
         return false;
     }
+    if (has_assembler_name &&
+        !minic_c0_program_set_function_assembler_name(
+            parser->program, function_id, assembler_name, assembler_name_length)) {
+        minic_parser_error(parser, "conflicting or invalid GNU function asm label");
+        return false;
+    }
+    if (has_visibility &&
+        !minic_c0_program_set_function_visibility(parser->program, function_id, visibility)) {
+        minic_parser_error(parser, "conflicting GNU function visibility");
+        return false;
+    }
+    if (has_section && !minic_c0_program_set_function_section(
+                           parser->program, function_id, section_name, section_name_length)) {
+        minic_parser_error(parser, "conflicting or invalid GNU function section");
+        return false;
+    }
     parser->current_function = function_id;
     if (is_main) {
         parser->program->entry_function = function_id;
@@ -480,7 +1353,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
         }
     }
     if ((!minic_type_is_pointer(return_type) && !minic_type_is_double(return_type) &&
-         !minic_parser_add_default_return(parser)) ||
+         !minic_type_is_record(return_type) && !minic_parser_add_default_return(parser)) ||
         !minic_parser_expect(parser, MINIC_TOKEN_RBRACE, "expected '}'")) {
         return false;
     }
@@ -495,6 +1368,27 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     return true;
 }
 
+static bool top_level_is_gnu_extension_marker(const MinicParser *parser) {
+    static const char marker[] = "__extension__";
+    size_t length;
+
+    if (parser == NULL || parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
+        return false;
+    }
+    length = minic_parser_span_length(parser->current.span);
+    return length == sizeof(marker) - 1U &&
+           memcmp(parser->source + parser->current.span.begin.offset, marker, length) == 0;
+}
+
+static bool skip_top_level_gnu_extension_markers(MinicParser *parser) {
+    while (top_level_is_gnu_extension_marker(parser)) {
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool static_declaration_is_function(MinicParser *parser, bool *is_function) {
     MinicParser probe;
     MinicType declared_type;
@@ -506,8 +1400,15 @@ static bool static_declaration_is_function(MinicParser *parser, bool *is_functio
     if (!minic_parser_advance(&probe)) {
         return false;
     }
-    if (probe.current.kind == MINIC_TOKEN_KW_INLINE && !minic_parser_advance(&probe)) {
-        return false;
+    {
+        bool probe_is_inline = probe.current.kind == MINIC_TOKEN_KW_INLINE;
+
+        if (probe_is_inline && !minic_parser_advance(&probe)) {
+            return false;
+        }
+        if (!minic_parser_parse_gnu_prefix_function_attributes(&probe, true, probe_is_inline)) {
+            return false;
+        }
     }
     if (!minic_parser_parse_type_name(&probe, &declared_type)) {
         return false;
@@ -521,6 +1422,95 @@ static bool static_declaration_is_function(MinicParser *parser, bool *is_functio
         return false;
     }
     *is_function = probe.current.kind == MINIC_TOKEN_LPAREN;
+    return true;
+}
+
+static bool extern_declaration_is_function(MinicParser *parser, bool *is_function) {
+    MinicParser probe;
+    MinicType base_type;
+    MinicType declared_type;
+    char section_name[256];
+    size_t section_name_length;
+    bool has_section;
+
+    if (parser == NULL || is_function == NULL || parser->current.kind != MINIC_TOKEN_KW_EXTERN) {
+        return false;
+    }
+    probe = *parser;
+    section_name_length = 0U;
+    has_section = false;
+    (void)memset(section_name, 0, sizeof(section_name));
+    if (!minic_parser_advance(&probe) || !minic_parser_parse_type_specifiers(&probe, &base_type) ||
+        !minic_parser_parse_pointer_declarator(&probe, base_type, &declared_type) ||
+        !minic_parser_parse_gnu_section_attribute(
+            &probe, section_name, sizeof(section_name), &section_name_length, &has_section)) {
+        return false;
+    }
+    (void)declared_type;
+
+    if (probe.current.kind == MINIC_TOKEN_IDENTIFIER) {
+        if (!minic_parser_advance(&probe)) {
+            return false;
+        }
+        *is_function = probe.current.kind == MINIC_TOKEN_LPAREN;
+        return true;
+    }
+    if (probe.current.kind == MINIC_TOKEN_LPAREN) {
+        if (!minic_parser_advance(&probe)) {
+            return false;
+        }
+        if (probe.current.kind != MINIC_TOKEN_IDENTIFIER) {
+            *is_function = false;
+            return true;
+        }
+        if (!minic_parser_advance(&probe) ||
+            !minic_parser_expect(
+                &probe, MINIC_TOKEN_RPAREN, "expected ')' in extern declarator probe")) {
+            return false;
+        }
+        *is_function = probe.current.kind == MINIC_TOKEN_LPAREN;
+        return true;
+    }
+
+    minic_parser_error(parser, "expected extern declaration name");
+    return false;
+}
+
+static bool record_keyword_starts_standalone_declaration(MinicParser *parser, bool *is_standalone) {
+    MinicParser probe;
+    size_t token_length;
+
+    if (parser == NULL || is_standalone == NULL ||
+        (parser->current.kind != MINIC_TOKEN_KW_STRUCT &&
+         parser->current.kind != MINIC_TOKEN_KW_UNION)) {
+        return false;
+    }
+
+    probe = *parser;
+    if (!minic_parser_advance(&probe)) {
+        return false;
+    }
+    if (probe.current.kind == MINIC_TOKEN_LBRACE) {
+        *is_standalone = true;
+        return true;
+    }
+    if (probe.current.kind != MINIC_TOKEN_IDENTIFIER) {
+        minic_parser_error(parser, "expected record tag or definition after record keyword");
+        return false;
+    }
+
+    token_length = minic_parser_span_length(probe.current.span);
+    if (token_length == 13U &&
+        memcmp(parser->source + probe.current.span.begin.offset, "__attribute__", 13U) == 0) {
+        *is_standalone = true;
+        return true;
+    }
+
+    if (!minic_parser_advance(&probe)) {
+        return false;
+    }
+    *is_standalone =
+        probe.current.kind == MINIC_TOKEN_SEMICOLON || probe.current.kind == MINIC_TOKEN_LBRACE;
     return true;
 }
 
@@ -544,10 +1534,22 @@ bool minic_parse_c0_program(const char *path,
 
     success = minic_parser_advance(&parser);
     while (success && parser.current.kind != MINIC_TOKEN_EOF) {
+        success = skip_top_level_gnu_extension_markers(&parser);
+        if (!success || parser.current.kind == MINIC_TOKEN_EOF) {
+            break;
+        }
         if (parser.current.kind == MINIC_TOKEN_KW_TYPEDEF) {
             success = minic_parser_parse_typedef(&parser);
         } else if (parser.current.kind == MINIC_TOKEN_KW_EXTERN) {
-            success = minic_parser_parse_extern_global(&parser);
+            bool is_function;
+
+            if (!extern_declaration_is_function(&parser, &is_function)) {
+                success = false;
+            } else if (is_function) {
+                success = parse_function(&parser, false);
+            } else {
+                success = minic_parser_parse_extern_global(&parser);
+            }
         } else if (parser.current.kind == MINIC_TOKEN_KW_INLINE) {
             success = parse_function(&parser, false);
         } else if (parser.current.kind == MINIC_TOKEN_KW_STATIC) {
@@ -562,7 +1564,15 @@ bool minic_parse_c0_program(const char *path,
             }
         } else if (parser.current.kind == MINIC_TOKEN_KW_STRUCT ||
                    parser.current.kind == MINIC_TOKEN_KW_UNION) {
-            success = minic_parser_parse_record_definition(&parser);
+            bool is_standalone;
+
+            if (!record_keyword_starts_standalone_declaration(&parser, &is_standalone)) {
+                success = false;
+            } else if (is_standalone) {
+                success = minic_parser_parse_record_definition(&parser);
+            } else {
+                success = parse_function(&parser, false);
+            }
         } else if (parser.current.kind == MINIC_TOKEN_KW_ENUM) {
             success = minic_parser_parse_enum_definition(&parser);
         } else {

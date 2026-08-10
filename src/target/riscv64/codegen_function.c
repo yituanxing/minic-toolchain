@@ -83,7 +83,7 @@ emit_fn_relocs(FILE *file, const MinicC0Program *program, const MinicGlobalObjec
         relocation = &object->function_relocations[0];
         function = minic_c0_program_function(program, relocation->function_id);
         if (function == NULL || function->name_length == 0U ||
-            fprintf(file, "  .dword %s\n", function->name) < 0) {
+            fprintf(file, "  .dword %s\n", minic_c0_function_symbol_name(function)) < 0) {
             return false;
         }
         return minic_riscv64_emit_zero_bytes(file, object->storage_size - 8U);
@@ -117,7 +117,7 @@ emit_fn_relocs(FILE *file, const MinicC0Program *program, const MinicGlobalObjec
         if (field_offset < cursor || field_offset > object->storage_size ||
             object->storage_size - field_offset < 8U ||
             !minic_riscv64_emit_zero_bytes(file, field_offset - cursor) ||
-            fprintf(file, "  .dword %s\n", function->name) < 0) {
+            fprintf(file, "  .dword %s\n", minic_c0_function_symbol_name(function)) < 0) {
             return false;
         }
         cursor = field_offset + 8U;
@@ -177,6 +177,340 @@ emit_object_relocs(FILE *file, const MinicC0Program *program, const MinicGlobalO
            minic_riscv64_emit_zero_bytes(file, (element_count - cursor_element) * 8U);
 }
 
+static bool minic_riscv64_emit_direct_record_values(FILE *file,
+                                                    const MinicC0Program *program,
+                                                    const MinicGlobalObject *object,
+                                                    const MinicRecord *record) {
+    size_t cursor;
+    size_t field_index;
+
+    if (file == NULL || program == NULL || object == NULL || record == NULL ||
+        !record->is_complete || record->is_union ||
+        object->initializer_count != record->field_count) {
+        return false;
+    }
+    cursor = 0U;
+    for (field_index = 0U; field_index < record->field_count; ++field_index) {
+        const MinicRecordField *field;
+        size_t field_size;
+        size_t field_alignment;
+        size_t field_offset;
+        int value;
+
+        field = minic_c0_record_field(record, field_index);
+        if (field == NULL || field->element_count != 1U || field->is_flexible_array ||
+            !minic_riscv64_type_layout(program, field->type, &field_size, &field_alignment)) {
+            return false;
+        }
+        (void)field_alignment;
+        field_offset = field->storage_offset;
+        if (field_offset < cursor || field_offset > object->storage_size ||
+            field_size > object->storage_size - field_offset ||
+            !minic_riscv64_emit_zero_bytes(file, field_offset - cursor)) {
+            return false;
+        }
+        value = object->initializer_values[field_index];
+        if (minic_type_is_integer(field->type)) {
+            const char *directive;
+
+            directive = minic_type_is_char_integer(field->type)    ? ".byte"
+                        : minic_type_is_short_integer(field->type) ? ".half"
+                        : minic_type_is_long_integer(field->type)  ? ".dword"
+                                                                   : ".word";
+            if (minic_type_is_char_integer(field->type)) {
+                unsigned int byte_value;
+
+                byte_value = (unsigned int)value & 0xffU;
+                if (fprintf(file, "  %s %u\n", directive, byte_value) < 0) {
+                    return false;
+                }
+            } else if (fprintf(file, "  %s %d\n", directive, value) < 0) {
+                return false;
+            }
+        } else {
+            if (value != 0 ||
+                (!minic_type_is_record(field->type) && !minic_type_is_pointer(field->type)) ||
+                !minic_riscv64_emit_zero_bytes(file, field_size)) {
+                return false;
+            }
+        }
+        cursor = field_offset + field_size;
+    }
+    return cursor <= object->storage_size &&
+           minic_riscv64_emit_zero_bytes(file, object->storage_size - cursor);
+}
+
+static bool minic_riscv64_emit_constant_value(FILE *file,
+                                              const MinicC0Program *program,
+                                              const MinicGlobalObject *object,
+                                              MinicType type,
+                                              size_t *initializer_index,
+                                              size_t *emitted_size) {
+    size_t type_size;
+    size_t type_alignment;
+
+    if (file == NULL || program == NULL || object == NULL || initializer_index == NULL ||
+        emitted_size == NULL ||
+        !minic_riscv64_type_layout(program, type, &type_size, &type_alignment)) {
+        return false;
+    }
+    (void)type_alignment;
+    if (minic_type_is_integer(type)) {
+        const char *directive;
+        int value;
+
+        if (*initializer_index >= object->initializer_count) {
+            return false;
+        }
+        value = object->initializer_values[*initializer_index];
+        *initializer_index += 1U;
+        directive = minic_type_is_char_integer(type)    ? ".byte"
+                    : minic_type_is_short_integer(type) ? ".half"
+                    : minic_type_is_long_integer(type)  ? ".dword"
+                                                        : ".word";
+        if (minic_type_is_char_integer(type)) {
+            unsigned int byte_value;
+
+            byte_value = (unsigned int)value & 0xffU;
+            if (fprintf(file, "  %s %u\n", directive, byte_value) < 0) {
+                return false;
+            }
+        } else if (fprintf(file, "  %s %d\n", directive, value) < 0) {
+            return false;
+        }
+        *emitted_size = type_size;
+        return true;
+    }
+    if (minic_type_is_pointer(type)) {
+        int value;
+
+        if (*initializer_index >= object->initializer_count) {
+            return false;
+        }
+        value = object->initializer_values[*initializer_index];
+        *initializer_index += 1U;
+        if (value != 0 || !minic_riscv64_emit_zero_bytes(file, type_size)) {
+            return false;
+        }
+        *emitted_size = type_size;
+        return true;
+    }
+    if (minic_type_is_array(type)) {
+        const MinicArrayType *array_type;
+        size_t cursor;
+        size_t element_index;
+
+        array_type = minic_c0_program_array_type(program, type.array_type_id);
+        if (array_type == NULL || array_type->element_count == 0U) {
+            return false;
+        }
+        cursor = 0U;
+        for (element_index = 0U; element_index < array_type->element_count; ++element_index) {
+            size_t element_emitted;
+
+            if (!minic_riscv64_emit_constant_value(file,
+                                                   program,
+                                                   object,
+                                                   array_type->element_type,
+                                                   initializer_index,
+                                                   &element_emitted) ||
+                cursor > type_size - element_emitted) {
+                return false;
+            }
+            cursor += element_emitted;
+        }
+        if (cursor > type_size || !minic_riscv64_emit_zero_bytes(file, type_size - cursor)) {
+            return false;
+        }
+        *emitted_size = type_size;
+        return true;
+    }
+    if (minic_type_is_record(type)) {
+        const MinicRecord *record;
+        size_t cursor;
+        size_t field_index;
+        size_t field_limit;
+
+        record = minic_c0_program_record(program, type.record_id);
+        if (record == NULL || !record->is_complete || record->field_count == 0U) {
+            return false;
+        }
+        cursor = 0U;
+        field_limit = record->is_union ? 1U : record->field_count;
+        for (field_index = 0U; field_index < field_limit; ++field_index) {
+            const MinicRecordField *field;
+            size_t element_index;
+            size_t field_offset;
+
+            field = minic_c0_record_field(record, field_index);
+            if (field == NULL || field->element_count == 0U || field->is_flexible_array) {
+                return false;
+            }
+            field_offset = record->is_union ? 0U : field->storage_offset;
+            if (field_offset < cursor || field_offset > type_size ||
+                !minic_riscv64_emit_zero_bytes(file, field_offset - cursor)) {
+                return false;
+            }
+            cursor = field_offset;
+            for (element_index = 0U; element_index < field->element_count; ++element_index) {
+                size_t element_emitted;
+
+                if (!minic_riscv64_emit_constant_value(
+                        file, program, object, field->type, initializer_index, &element_emitted) ||
+                    cursor > type_size - element_emitted) {
+                    return false;
+                }
+                cursor += element_emitted;
+            }
+            if (record->is_union) {
+                break;
+            }
+        }
+        if (cursor > type_size || !minic_riscv64_emit_zero_bytes(file, type_size - cursor)) {
+            return false;
+        }
+        *emitted_size = type_size;
+        return true;
+    }
+    return false;
+}
+
+static bool minic_riscv64_emit_record_values(FILE *file,
+                                             const MinicC0Program *program,
+                                             const MinicGlobalObject *object) {
+    const MinicRecord *record;
+    size_t emitted_size;
+    size_t initializer_index;
+
+    if (file == NULL || program == NULL || object == NULL || !minic_type_is_record(object->type) ||
+        object->is_zero_initialized || object->function_relocation_count != 0U ||
+        object->object_relocation_count != 0U) {
+        return false;
+    }
+    record = minic_c0_program_record(program, object->type.record_id);
+    if (record == NULL || !record->is_complete) {
+        return false;
+    }
+    if (!record->is_union && object->initializer_count == record->field_count) {
+        return minic_riscv64_emit_direct_record_values(file, program, object, record);
+    }
+    initializer_index = 0U;
+    emitted_size = 0U;
+    return minic_riscv64_emit_constant_value(
+               file, program, object, object->type, &initializer_index, &emitted_size) &&
+           initializer_index == object->initializer_count && emitted_size == object->storage_size;
+}
+
+static bool minic_riscv64_record_array_info(const MinicC0Program *program,
+                                            MinicType type,
+                                            const MinicArrayType **array_type_out,
+                                            const MinicRecord **record_out) {
+    const MinicArrayType *array_type;
+    const MinicRecord *record;
+
+    if (program == NULL || !minic_type_is_array(type)) {
+        return false;
+    }
+    array_type = minic_c0_program_array_type(program, type.array_type_id);
+    if (array_type == NULL || !minic_type_is_record(array_type->element_type)) {
+        return false;
+    }
+    record = minic_c0_program_record(program, array_type->element_type.record_id);
+    if (record == NULL || !record->is_complete || record->is_union) {
+        return false;
+    }
+    if (array_type_out != NULL) {
+        *array_type_out = array_type;
+    }
+    if (record_out != NULL) {
+        *record_out = record;
+    }
+    return true;
+}
+
+static bool minic_riscv64_emit_record_array_values(FILE *file,
+                                                   const MinicC0Program *program,
+                                                   const MinicGlobalObject *object) {
+    const MinicArrayType *array_type;
+    const MinicRecord *record;
+    size_t element_size;
+    size_t element_alignment;
+    size_t cursor;
+    size_t element_index;
+    size_t initializer_index;
+
+    if (file == NULL || program == NULL || object == NULL || object->is_zero_initialized ||
+        object->function_relocation_count != 0U || object->object_relocation_count != 0U ||
+        !minic_riscv64_record_array_info(program, object->type, &array_type, &record) ||
+        record->field_count == 0U || array_type->element_count > SIZE_MAX / record->field_count ||
+        object->initializer_count != array_type->element_count * record->field_count ||
+        !minic_riscv64_type_layout(
+            program, array_type->element_type, &element_size, &element_alignment) ||
+        element_size == 0U || array_type->element_count > SIZE_MAX / element_size ||
+        object->storage_size != array_type->element_count * element_size) {
+        return false;
+    }
+    (void)element_alignment;
+
+    cursor = 0U;
+    initializer_index = 0U;
+    for (element_index = 0U; element_index < array_type->element_count; ++element_index) {
+        size_t field_index;
+        size_t element_base;
+
+        element_base = element_index * element_size;
+        for (field_index = 0U; field_index < record->field_count; ++field_index) {
+            const MinicRecordField *field;
+            const char *directive;
+            size_t field_size;
+            size_t field_alignment;
+            size_t field_offset;
+            int value;
+
+            field = minic_c0_record_field(record, field_index);
+            if (field == NULL || field->element_count != 1U || field->is_flexible_array ||
+                !minic_type_is_integer(field->type) ||
+                !minic_riscv64_type_layout(program, field->type, &field_size, &field_alignment)) {
+                return false;
+            }
+            (void)field_alignment;
+            if (field->storage_offset > element_size ||
+                field_size > element_size - field->storage_offset) {
+                return false;
+            }
+            field_offset = element_base + field->storage_offset;
+            if (field_offset < cursor || field_offset > object->storage_size ||
+                field_size > object->storage_size - field_offset ||
+                !minic_riscv64_emit_zero_bytes(file, field_offset - cursor)) {
+                return false;
+            }
+
+            value = object->initializer_values[initializer_index++];
+            directive = minic_type_is_char_integer(field->type)    ? ".byte"
+                        : minic_type_is_short_integer(field->type) ? ".half"
+                        : minic_type_is_long_integer(field->type)  ? ".dword"
+                                                                   : ".word";
+            if (minic_type_is_char_integer(field->type)) {
+                unsigned int byte_value;
+
+                byte_value = (unsigned int)value & 0xffU;
+                if (fprintf(file, "  %s %u\n", directive, byte_value) < 0) {
+                    return false;
+                }
+            } else if (fprintf(file, "  %s %d\n", directive, value) < 0) {
+                return false;
+            }
+            cursor = field_offset + field_size;
+        }
+        if (cursor > element_base + element_size ||
+            !minic_riscv64_emit_zero_bytes(file, element_base + element_size - cursor)) {
+            return false;
+        }
+        cursor = element_base + element_size;
+    }
+    return initializer_index == object->initializer_count && cursor == object->storage_size;
+}
+
 static bool minic_riscv64_emit_global_object(FILE *file,
                                              const MinicC0Program *program,
                                              const MinicGlobalObject *object) {
@@ -198,6 +532,25 @@ static bool minic_riscv64_emit_global_object(FILE *file,
         if (object->initializer_count != 0U) {
             return false;
         }
+    } else if (minic_type_is_record(object->type)) {
+        const MinicRecord *record;
+
+        record = minic_c0_program_record(program, object->type.record_id);
+        if (record == NULL || !record->is_complete || object->function_relocation_count != 0U ||
+            object->object_relocation_count != 0U || object->initializer_count == 0U) {
+            return false;
+        }
+    } else if (minic_riscv64_record_array_info(program, object->type, NULL, NULL)) {
+        const MinicArrayType *array_type;
+        const MinicRecord *record;
+
+        if (!minic_riscv64_record_array_info(program, object->type, &array_type, &record) ||
+            record->field_count == 0U ||
+            array_type->element_count > SIZE_MAX / record->field_count ||
+            object->function_relocation_count != 0U || object->object_relocation_count != 0U ||
+            object->initializer_count != array_type->element_count * record->field_count) {
+            return false;
+        }
     } else {
         if (object->function_relocation_count != 0U ||
             !minic_riscv64_global_scalar_type(program, object->type, &scalar_type, &scalar_width) ||
@@ -210,11 +563,30 @@ static bool minic_riscv64_emit_global_object(FILE *file,
                                                                : ".word";
     }
 
-    if (fprintf(file, "%s\n", object->is_read_only ? ".section .rodata" : ".data") < 0) {
+    if (object->section_name != NULL) {
+        if (fprintf(file, ".section %s\n", object->section_name) < 0) {
+            return false;
+        }
+    } else if (fprintf(file, "%s\n", object->is_read_only ? ".section .rodata" : ".data") < 0) {
         return false;
     }
-    if (!object->is_internal && fprintf(file, ".globl %s\n", object->name) < 0) {
-        return false;
+    if (!object->is_internal) {
+        if (fprintf(file, ".globl %s\n", object->name) < 0) {
+            return false;
+        }
+        if (object->visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT) {
+            const char *visibility_directive;
+
+            visibility_directive =
+                object->visibility == MINIC_SYMBOL_VISIBILITY_HIDDEN      ? ".hidden"
+                : object->visibility == MINIC_SYMBOL_VISIBILITY_INTERNAL  ? ".internal"
+                : object->visibility == MINIC_SYMBOL_VISIBILITY_PROTECTED ? ".protected"
+                                                                          : NULL;
+            if (visibility_directive == NULL ||
+                fprintf(file, "%s %s\n", visibility_directive, object->name) < 0) {
+                return false;
+            }
+        }
     }
     if (fprintf(file,
                 ".type %s, @object\n"
@@ -237,6 +609,14 @@ static bool minic_riscv64_emit_global_object(FILE *file,
         if (!minic_riscv64_emit_zero_bytes(file, object->storage_size)) {
             return false;
         }
+    } else if (minic_type_is_record(object->type)) {
+        if (!minic_riscv64_emit_record_values(file, program, object)) {
+            return false;
+        }
+    } else if (minic_riscv64_record_array_info(program, object->type, NULL, NULL)) {
+        if (!minic_riscv64_emit_record_array_values(file, program, object)) {
+            return false;
+        }
     } else {
         for (initializer_index = 0U; initializer_index < object->initializer_count;
              ++initializer_index) {
@@ -254,6 +634,10 @@ static bool minic_riscv64_emit_global_object(FILE *file,
                 return false;
             }
         }
+        if (!minic_riscv64_emit_zero_bytes(
+                file, object->storage_size - object->initializer_count * scalar_width)) {
+            return false;
+        }
     }
     return fprintf(file, ".size %s, %zu\n", object->name, object->storage_size) >= 0;
 }
@@ -265,6 +649,7 @@ static bool minic_riscv64_emit_function(FILE *file,
     MinicRiscv64FrameLayout frame_layout;
     size_t frame_size;
     bool success;
+    const char *symbol_name;
 
     if (function == NULL || !function->is_defined || function->name_length == 0U ||
         function->body_block >= program->block_count ||
@@ -272,17 +657,32 @@ static bool minic_riscv64_emit_function(FILE *file,
         return false;
     }
     frame_size = frame_layout.frame_size;
+    symbol_name = minic_c0_function_symbol_name(function);
+    if (symbol_name == NULL || symbol_name[0] == '\0') {
+        return false;
+    }
 
-    success = true;
-    if (!function->is_internal) {
-        success = fprintf(file, ".globl %s\n", function->name) >= 0;
+    success = function->section_name != NULL
+                  ? fprintf(file, ".section %s\n", function->section_name) >= 0
+                  : fprintf(file, ".text\n") >= 0;
+    if (success && !function->is_internal) {
+        success = fprintf(file, ".globl %s\n", symbol_name) >= 0;
+        if (success && function->visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT) {
+            const char *directive;
+
+            directive = function->visibility == MINIC_SYMBOL_VISIBILITY_HIDDEN      ? ".hidden"
+                        : function->visibility == MINIC_SYMBOL_VISIBILITY_INTERNAL  ? ".internal"
+                        : function->visibility == MINIC_SYMBOL_VISIBILITY_PROTECTED ? ".protected"
+                                                                                    : NULL;
+            success = directive != NULL && fprintf(file, "%s %s\n", directive, symbol_name) >= 0;
+        }
     }
     if (success) {
         success = fprintf(file,
                           ".type %s, @function\n"
                           "%s:\n",
-                          function->name,
-                          function->name) >= 0;
+                          symbol_name,
+                          symbol_name) >= 0;
     }
     if (success) {
         success = minic_riscv64_emit_stack_allocate(file, frame_size);
@@ -305,16 +705,15 @@ static bool minic_riscv64_emit_function(FILE *file,
                 file, minic_riscv64_argument_registers[register_index], offset);
         }
     }
-    if (success && function->parameter_count > 8U) {
-        return false;
-    }
     if (success) {
         size_t parameter_index;
         size_t integer_register_index;
         size_t floating_register_index;
+        size_t stack_parameter_index;
 
         integer_register_index = 0U;
         floating_register_index = 0U;
+        stack_parameter_index = 0U;
 
         for (parameter_index = 0U; success && parameter_index < function->parameter_count;
              ++parameter_index) {
@@ -339,11 +738,45 @@ static bool minic_riscv64_emit_function(FILE *file,
                           minic_riscv64_emit_object_store_register(
                               file, program, function, local_id, "t0");
                 floating_register_index += 1U;
-            } else {
-                if (integer_register_index >= 8U) {
+                continue;
+            }
+            if (minic_type_is_record(parameter->type)) {
+                size_t aggregate_size;
+                size_t aggregate_chunks;
+                size_t chunk_index;
+
+                if (!minic_riscv64_integer_aggregate_abi(
+                        program, parameter->type, &aggregate_size, &aggregate_chunks)) {
                     success = false;
                     break;
                 }
+                (void)aggregate_size;
+                for (chunk_index = 0U; success && chunk_index < aggregate_chunks; ++chunk_index) {
+                    const char *source_register;
+
+                    source_register = "t0";
+                    if (integer_register_index < 8U) {
+                        source_register = minic_riscv64_argument_registers[integer_register_index];
+                        integer_register_index += 1U;
+                    } else {
+                        size_t incoming_offset;
+
+                        if (stack_parameter_index > (SIZE_MAX - frame_size) / 8U) {
+                            success = false;
+                            break;
+                        }
+                        incoming_offset = frame_size + stack_parameter_index * 8U;
+                        success = minic_riscv64_emit_sp_load64(file, "t0", incoming_offset);
+                        stack_parameter_index += 1U;
+                    }
+                    if (success) {
+                        success = minic_riscv64_emit_integer_aggregate_local_chunk(
+                            file, program, function, local_id, chunk_index, source_register);
+                    }
+                }
+                continue;
+            }
+            if (integer_register_index < 8U) {
                 success = minic_riscv64_emit_object_store_register(
                     file,
                     program,
@@ -351,6 +784,18 @@ static bool minic_riscv64_emit_function(FILE *file,
                     local_id,
                     minic_riscv64_argument_registers[integer_register_index]);
                 integer_register_index += 1U;
+            } else {
+                size_t incoming_offset;
+
+                if (stack_parameter_index > (SIZE_MAX - frame_size) / 8U) {
+                    success = false;
+                    break;
+                }
+                incoming_offset = frame_size + stack_parameter_index * 8U;
+                success = minic_riscv64_emit_sp_load64(file, "t0", incoming_offset) &&
+                          minic_riscv64_emit_object_store_register(
+                              file, program, function, local_id, "t0");
+                stack_parameter_index += 1U;
             }
         }
     }
@@ -375,8 +820,8 @@ static bool minic_riscv64_emit_function(FILE *file,
         success = fprintf(file,
                           "  ret\n"
                           ".size %s, .-%s\n",
-                          function->name,
-                          function->name) >= 0;
+                          symbol_name,
+                          symbol_name) >= 0;
     }
     return success;
 }

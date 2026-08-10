@@ -48,6 +48,34 @@ static bool minic_is_space(char character) {
            character == '\f' || character == '\v';
 }
 
+static bool minic_lexer_skip_gcc_line_marker(MinicLexer *lexer) {
+    size_t probe;
+
+    if (lexer == NULL || minic_lexer_peek(lexer) != '#' || lexer->column != 1U) {
+        return false;
+    }
+
+    probe = lexer->cursor + 1U;
+    while (probe < lexer->length && (lexer->source[probe] == ' ' || lexer->source[probe] == '\t')) {
+        probe += 1U;
+    }
+    if (probe >= lexer->length || lexer->source[probe] < '0' || lexer->source[probe] > '9') {
+        return false;
+    }
+
+    /* GCC -E emits numeric line-control markers in preprocessed .i files, e.g.
+     * `# 1 "header.h" 1 3 4`. They are preprocessing metadata, not C tokens.
+     * Only numeric markers at the beginning of a physical line are consumed;
+     * arbitrary preprocessor directives remain errors instead of being hidden. */
+    while (minic_lexer_peek(lexer) != '\0' && minic_lexer_peek(lexer) != '\n') {
+        minic_lexer_advance(lexer);
+    }
+    if (minic_lexer_peek(lexer) == '\n') {
+        minic_lexer_advance(lexer);
+    }
+    return true;
+}
+
 static bool minic_is_decimal_digit(char character) {
     return character >= '0' && character <= '9';
 }
@@ -67,6 +95,9 @@ static bool minic_is_identifier_continue(char character) {
 }
 
 static MinicTokenKind minic_classify_identifier(const char *text, size_t length) {
+    if (length == 5U && memcmp(text, "_Bool", 5U) == 0) {
+        return MINIC_TOKEN_KW_BOOL;
+    }
     if (length == 4U && memcmp(text, "char", 4U) == 0) {
         return MINIC_TOKEN_KW_CHAR;
     }
@@ -88,7 +119,9 @@ static MinicTokenKind minic_classify_identifier(const char *text, size_t length)
     if (length == 5U && memcmp(text, "short", 5U) == 0) {
         return MINIC_TOKEN_KW_SHORT;
     }
-    if (length == 6U && memcmp(text, "signed", 6U) == 0) {
+    if ((length == 6U && memcmp(text, "signed", 6U) == 0) ||
+        (length == 8U && memcmp(text, "__signed", 8U) == 0) ||
+        (length == 10U && memcmp(text, "__signed__", 10U) == 0)) {
         return MINIC_TOKEN_KW_SIGNED;
     }
     if (length == 8U && memcmp(text, "unsigned", 8U) == 0) {
@@ -108,6 +141,9 @@ static MinicTokenKind minic_classify_identifier(const char *text, size_t length)
     }
     if (length == 5U && memcmp(text, "const", 5U) == 0) {
         return MINIC_TOKEN_KW_CONST;
+    }
+    if (length == 8U && memcmp(text, "volatile", 8U) == 0) {
+        return MINIC_TOKEN_KW_VOLATILE;
     }
     if (length == 7U && memcmp(text, "typedef", 7U) == 0) {
         return MINIC_TOKEN_KW_TYPEDEF;
@@ -349,6 +385,15 @@ static bool minic_lexer_scan_character_constant(MinicLexer *lexer,
             do {
                 minic_lexer_advance(lexer);
             } while (minic_is_hexadecimal_digit(minic_lexer_peek(lexer)));
+        } else if (character >= '0' && character <= '7') {
+            unsigned int digit_count;
+
+            digit_count = 0U;
+            do {
+                minic_lexer_advance(lexer);
+                digit_count += 1U;
+            } while (digit_count < 3U && minic_lexer_peek(lexer) >= '0' &&
+                     minic_lexer_peek(lexer) <= '7');
         } else {
             minic_lexer_advance(lexer);
         }
@@ -396,8 +441,13 @@ bool minic_lexer_next(MinicLexer *lexer, MinicToken *token, MinicDiagnostic *dia
     MinicSourcePosition begin;
     char character;
 
-    while (minic_is_space(minic_lexer_peek(lexer))) {
-        minic_lexer_advance(lexer);
+    for (;;) {
+        while (minic_is_space(minic_lexer_peek(lexer))) {
+            minic_lexer_advance(lexer);
+        }
+        if (!minic_lexer_skip_gcc_line_marker(lexer)) {
+            break;
+        }
     }
 
     begin = minic_lexer_position(lexer);
@@ -605,7 +655,12 @@ bool minic_lexer_next(MinicLexer *lexer, MinicToken *token, MinicDiagnostic *dia
         }
         break;
     case '%':
-        token->kind = MINIC_TOKEN_PERCENT;
+        if (minic_lexer_peek_next(lexer) == '=') {
+            token->kind = MINIC_TOKEN_PERCENT_EQUAL;
+            minic_lexer_advance(lexer);
+        } else {
+            token->kind = MINIC_TOKEN_PERCENT;
+        }
         break;
     case '=':
         if (minic_lexer_peek_next(lexer) == '=') {

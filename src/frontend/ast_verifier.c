@@ -17,12 +17,14 @@ static bool pointer_qualifiers_are_valid(MinicType type) {
     if (type.pointer_depth == capacity) {
         return true;
     }
-    return (type.pointer_qualifiers >> type.pointer_depth) == 0U;
+    return (type.pointer_qualifiers >> type.pointer_depth) == 0U &&
+           (type.pointer_volatile_qualifiers >> type.pointer_depth) == 0U;
 }
 
 static bool type_is_valid(const MinicC0Program *program, MinicType type) {
     if (program == NULL ||
-        (type.base_qualifiers & ~((unsigned int)MINIC_TYPE_QUALIFIER_CONST)) != 0U ||
+        (type.base_qualifiers & ~((unsigned int)MINIC_TYPE_QUALIFIER_CONST |
+                                  (unsigned int)MINIC_TYPE_QUALIFIER_VOLATILE)) != 0U ||
         !pointer_qualifiers_are_valid(type)) {
         return false;
     }
@@ -49,11 +51,13 @@ static bool type_is_valid(const MinicC0Program *program, MinicType type) {
                type.function_type_id == MINIC_FUNCTION_TYPE_INVALID &&
                (type.integer_sign == MINIC_INTEGER_SIGN_SIGNED ||
                 type.integer_sign == MINIC_INTEGER_SIGN_UNSIGNED) &&
-               (type.integer_rank == MINIC_INTEGER_RANK_CHAR ||
+               (type.integer_rank == MINIC_INTEGER_RANK_BOOL ||
+                type.integer_rank == MINIC_INTEGER_RANK_CHAR ||
                 type.integer_rank == MINIC_INTEGER_RANK_SHORT ||
                 type.integer_rank == MINIC_INTEGER_RANK_INT ||
                 type.integer_rank == MINIC_INTEGER_RANK_LONG ||
-                type.integer_rank == MINIC_INTEGER_RANK_LONG_LONG);
+                type.integer_rank == MINIC_INTEGER_RANK_LONG_LONG ||
+                type.integer_rank == MINIC_INTEGER_RANK_INT128);
     case MINIC_TYPE_BASE_FLOAT:
     case MINIC_TYPE_BASE_DOUBLE:
         return type.record_id == MINIC_RECORD_INVALID &&
@@ -165,11 +169,11 @@ static bool binary_is_logical(MinicBinaryOperator operator_kind) {
 }
 
 static bool binary_operator_is_valid(MinicBinaryOperator operator_kind) {
-    return operator_kind >= MINIC_BINARY_ADD && operator_kind <= MINIC_BINARY_LOGICAL_OR;
+    return operator_kind >= MINIC_BINARY_ADD && operator_kind <= MINIC_BINARY_COMMA;
 }
 
 static bool unary_operator_is_valid(MinicUnaryOperator operator_kind) {
-    return operator_kind >= MINIC_UNARY_PLUS && operator_kind <= MINIC_UNARY_POST_DECREMENT;
+    return operator_kind >= MINIC_UNARY_PLUS && operator_kind <= MINIC_UNARY_PRE_DECREMENT;
 }
 
 static bool expression_is_integer_zero(const MinicExpression *expression) {
@@ -197,8 +201,6 @@ pointer_relational_compatible(const MinicC0Program *program, MinicType left, Min
 }
 
 static bool conditional_result_type(MinicType when_true, MinicType when_false, MinicType *result) {
-    MinicType unqualified_true;
-    MinicType unqualified_false;
     bool has_double_operand;
     bool has_numeric_operands;
 
@@ -209,29 +211,8 @@ static bool conditional_result_type(MinicType when_true, MinicType when_false, M
         *result = when_true;
         return true;
     }
-    if (minic_type_is_pointer(when_true) && minic_type_is_pointer(when_false) &&
-        minic_type_unqualified(when_true, &unqualified_true) &&
-        minic_type_unqualified(when_false, &unqualified_false)) {
-        MinicType true_pointee;
-        MinicType false_pointee;
-
-        if (minic_type_equal(unqualified_true, unqualified_false)) {
-            *result = unqualified_true;
-            return true;
-        }
-        if (minic_type_pointee(unqualified_true, &true_pointee) &&
-            minic_type_pointee(unqualified_false, &false_pointee) &&
-            (minic_type_assignment_compatible(unqualified_true, unqualified_false) ||
-             minic_type_assignment_compatible(unqualified_false, unqualified_true))) {
-            if (minic_type_is_void(true_pointee) && !minic_type_is_function(false_pointee)) {
-                *result = unqualified_true;
-                return true;
-            }
-            if (minic_type_is_void(false_pointee) && !minic_type_is_function(true_pointee)) {
-                *result = unqualified_false;
-                return true;
-            }
-        }
+    if (minic_type_conditional_pointer_common(when_true, when_false, result)) {
+        return true;
     }
     if (minic_type_is_integer(when_true) && minic_type_is_integer(when_false)) {
         return minic_type_integer_common(when_true, when_false, result);
@@ -258,6 +239,12 @@ static bool is_normalized_integer_cast_add(const MinicExpression *expression,
            minic_type_cast_compatible(expression->type, left->type);
 }
 
+static bool verifier_pointer_arithmetic_pointee_allowed(const MinicC0Program *program,
+                                                        MinicType pointee_type) {
+    return minic_type_is_void(pointee_type) || minic_type_is_function(pointee_type) ||
+           type_is_complete_object(program, pointee_type);
+}
+
 static bool verify_binary_type(const MinicC0Program *program,
                                const MinicExpression *expression,
                                const MinicExpression *left,
@@ -269,6 +256,10 @@ static bool verify_binary_type(const MinicC0Program *program,
 
     if (!binary_operator_is_valid(expression->value.binary.operator_kind)) {
         return false;
+    }
+
+    if (expression->value.binary.operator_kind == MINIC_BINARY_COMMA) {
+        return minic_type_equal(expression->type, right->type);
     }
 
     if (binary_is_logical(expression->value.binary.operator_kind)) {
@@ -313,7 +304,9 @@ static bool verify_binary_type(const MinicC0Program *program,
         return minic_type_equal(expression->type, minic_type_int());
     }
 
-    if (minic_type_is_double(left->type) && minic_type_is_double(right->type) &&
+    if ((minic_type_is_double(left->type) || minic_type_is_integer(left->type)) &&
+        (minic_type_is_double(right->type) || minic_type_is_integer(right->type)) &&
+        (minic_type_is_double(left->type) || minic_type_is_double(right->type)) &&
         binary_is_double_arithmetic(expression->value.binary.operator_kind)) {
         return minic_type_is_double(expression->type);
     }
@@ -341,7 +334,7 @@ static bool verify_binary_type(const MinicC0Program *program,
 
     return minic_type_equal(expression->type, pointer_type) &&
            minic_type_pointee(pointer_type, &pointee_type) &&
-           type_is_complete_object(program, pointee_type);
+           verifier_pointer_arithmetic_pointee_allowed(program, pointee_type);
 }
 
 static bool verify_subscript_type(const MinicC0Program *program,
@@ -377,9 +370,9 @@ static bool verify_call_arguments(const MinicC0Program *program,
                                   bool is_variadic) {
     size_t argument_index;
 
-    if (expression == NULL || parameter_count > 8U ||
+    if (expression == NULL || parameter_count > MINIC_MAX_FUNCTION_PARAMETERS ||
         expression->value.call.argument_count < parameter_count ||
-        expression->value.call.argument_count > 8U ||
+        expression->value.call.argument_count > MINIC_MAX_FUNCTION_PARAMETERS ||
         (!is_variadic && expression->value.call.argument_count != parameter_count)) {
         return false;
     }
@@ -472,12 +465,33 @@ verify_expression(const MinicC0Program *program, size_t expression_index, MinicC
                minic_type_equal(expression->type, minic_type_unsigned_long()) &&
                type_is_valid(program, expression->value.sizeof_type) &&
                type_is_complete_object(program, expression->value.sizeof_type);
+    case MINIC_EXPRESSION_OFFSETOF: {
+        const MinicRecord *record;
+
+        record = minic_c0_program_record(program, expression->value.offsetof_value.record_id);
+        return record != NULL && record->is_complete &&
+               expression->value.offsetof_value.field_index < record->field_count &&
+               expression->value_category == MINIC_VALUE_RVALUE &&
+               minic_type_equal(expression->type, minic_type_unsigned_long());
+    }
     case MINIC_EXPRESSION_ADDRESS_OF: {
         MinicType pointee_type;
+        MinicType function_type;
 
         operand = expression_before(program, expression->value.unary.operand, expression_index);
-        return operand != NULL && operand->value_category == MINIC_VALUE_LVALUE &&
-               expression->value_category == MINIC_VALUE_RVALUE &&
+        if (operand == NULL || expression->value_category != MINIC_VALUE_RVALUE) {
+            return false;
+        }
+        if (operand->kind == MINIC_EXPRESSION_FUNCTION) {
+            return minic_type_equal(expression->type, operand->type) &&
+                   minic_type_pointee(operand->type, &function_type) &&
+                   minic_type_is_function(function_type);
+        }
+        if (minic_type_is_function(operand->type)) {
+            return minic_type_pointee(expression->type, &pointee_type) &&
+                   minic_type_equal(pointee_type, operand->type);
+        }
+        return operand->value_category == MINIC_VALUE_LVALUE &&
                minic_type_pointee(expression->type, &pointee_type) &&
                minic_type_equal(pointee_type, operand->type);
     }
@@ -500,10 +514,10 @@ verify_expression(const MinicC0Program *program, size_t expression_index, MinicC
         operand = expression_before(program, expression->value.unary.operand, expression_index);
         return form == MINIC_C0_AST_NORMALIZED && operand != NULL &&
                expression->value_category == MINIC_VALUE_RVALUE &&
-               minic_type_is_pointer(expression->type) &&
-               ((minic_type_is_pointer(operand->type) &&
-                 minic_type_cast_compatible(expression->type, operand->type)) ||
-                expression_is_integer_zero(operand));
+               minic_type_cast_compatible(expression->type, operand->type) &&
+               ((minic_type_is_pointer(expression->type) &&
+                 (minic_type_is_pointer(operand->type) || minic_type_is_integer(operand->type))) ||
+                (minic_type_is_integer(expression->type) && minic_type_is_pointer(operand->type)));
     case MINIC_EXPRESSION_CONVERSION:
         operand = expression_before(program, expression->value.unary.operand, expression_index);
         return form == MINIC_C0_AST_NORMALIZED && operand != NULL &&
@@ -542,7 +556,7 @@ verify_expression(const MinicC0Program *program, size_t expression_index, MinicC
             !minic_type_add_const(expected_type, &expected_type)) {
             return false;
         }
-        if (field->is_flexible_array || field->element_count > 1U) {
+        if (field->is_array) {
             return expression->value_category == MINIC_VALUE_RVALUE &&
                    minic_type_pointer_to(expected_type, &expected_type) &&
                    minic_type_equal(expression->type, expected_type);
@@ -560,27 +574,50 @@ verify_expression(const MinicC0Program *program, size_t expression_index, MinicC
     case MINIC_EXPRESSION_ASSIGNMENT:
         left = expression_before(program, expression->value.binary.left, expression_index);
         right = expression_before(program, expression->value.binary.right, expression_index);
-        return left != NULL && right != NULL && left->value_category == MINIC_VALUE_LVALUE &&
-               !minic_type_is_const(left->type) && !minic_type_is_array(left->type) &&
-               !minic_type_is_function(left->type) && !minic_type_is_record(left->type) &&
-               expression->value_category == MINIC_VALUE_RVALUE &&
-               minic_type_equal(expression->type, left->type) &&
-               minic_c0_assignment_compatible(program, left->type, expression->value.binary.right);
+        if (left == NULL || right == NULL || left->value_category != MINIC_VALUE_LVALUE ||
+            minic_type_is_const(left->type) || minic_type_is_array(left->type) ||
+            minic_type_is_function(left->type) ||
+            expression->value_category != MINIC_VALUE_RVALUE ||
+            !minic_type_equal(expression->type, left->type)) {
+            return false;
+        }
+        if (minic_type_is_record(left->type)) {
+            return right->value_category == MINIC_VALUE_LVALUE &&
+                   minic_type_is_record(right->type) &&
+                   left->type.record_id == right->type.record_id;
+        }
+        return minic_c0_assignment_compatible(program, left->type, expression->value.binary.right);
     case MINIC_EXPRESSION_COMPOUND_ASSIGNMENT: {
         MinicType common_type;
+        MinicType pointee_type;
+        MinicBinaryOperator operator_kind;
 
         left = expression_before(program, expression->value.binary.left, expression_index);
         right = expression_before(program, expression->value.binary.right, expression_index);
+        operator_kind = expression->value.binary.operator_kind;
         if (left == NULL || right == NULL || left->value_category != MINIC_VALUE_LVALUE ||
             expression->value_category != MINIC_VALUE_RVALUE ||
-            !minic_type_equal(expression->type, left->type) || minic_type_is_const(left->type) ||
-            (expression->value.binary.operator_kind != MINIC_BINARY_ADD &&
-             expression->value.binary.operator_kind != MINIC_BINARY_DIVIDE)) {
+            !minic_type_equal(expression->type, left->type) || minic_type_is_const(left->type)) {
             return false;
         }
         if (minic_type_is_pointer(left->type)) {
-            return expression->value.binary.operator_kind == MINIC_BINARY_ADD &&
-                   minic_type_is_integer(right->type);
+            return (operator_kind == MINIC_BINARY_ADD || operator_kind == MINIC_BINARY_SUBTRACT) &&
+                   minic_type_is_integer(right->type) &&
+                   minic_type_pointee(left->type, &pointee_type) &&
+                   type_is_complete_object(program, pointee_type);
+        }
+        if (minic_type_is_double(left->type)) {
+            return (operator_kind == MINIC_BINARY_ADD || operator_kind == MINIC_BINARY_SUBTRACT ||
+                    operator_kind == MINIC_BINARY_MULTIPLY ||
+                    operator_kind == MINIC_BINARY_DIVIDE) &&
+                   (minic_type_is_double(right->type) || minic_type_is_integer(right->type));
+        }
+        if (operator_kind != MINIC_BINARY_ADD && operator_kind != MINIC_BINARY_SUBTRACT &&
+            operator_kind != MINIC_BINARY_MULTIPLY && operator_kind != MINIC_BINARY_DIVIDE &&
+            operator_kind != MINIC_BINARY_REMAINDER && operator_kind != MINIC_BINARY_BITWISE_AND &&
+            operator_kind != MINIC_BINARY_BITWISE_OR && operator_kind != MINIC_BINARY_BITWISE_XOR &&
+            operator_kind != MINIC_BINARY_SHIFT_RIGHT) {
+            return false;
         }
         return minic_type_is_integer(left->type) && minic_type_is_integer(right->type) &&
                minic_type_integer_common(left->type, right->type, &common_type);
@@ -595,7 +632,9 @@ verify_expression(const MinicC0Program *program, size_t expression_index, MinicC
             return false;
         }
         if (expression->value.unary.operator_kind == MINIC_UNARY_POST_INCREMENT ||
-            expression->value.unary.operator_kind == MINIC_UNARY_POST_DECREMENT) {
+            expression->value.unary.operator_kind == MINIC_UNARY_POST_DECREMENT ||
+            expression->value.unary.operator_kind == MINIC_UNARY_PRE_INCREMENT ||
+            expression->value.unary.operator_kind == MINIC_UNARY_PRE_DECREMENT) {
             if (operand->value_category != MINIC_VALUE_LVALUE ||
                 minic_type_is_const(operand->type) ||
                 !minic_type_equal(expression->type, operand->type)) {
@@ -646,6 +685,37 @@ verify_expression(const MinicC0Program *program, size_t expression_index, MinicC
                conditional_result_type(when_true->type, when_false->type, &expected_type) &&
                minic_type_equal(expression->type, expected_type);
     }
+    case MINIC_EXPRESSION_BUILTIN_OVERFLOW: {
+        const MinicExpression *left;
+        const MinicExpression *right;
+        const MinicExpression *result_pointer;
+        MinicType result_type;
+
+        left = expression_before(program, expression->value.overflow.left, expression_index);
+        right = expression_before(program, expression->value.overflow.right, expression_index);
+        result_pointer =
+            expression_before(program, expression->value.overflow.result_pointer, expression_index);
+        return left != NULL && right != NULL && result_pointer != NULL &&
+               expression->value_category == MINIC_VALUE_RVALUE &&
+               minic_type_equal(expression->type, minic_type_bool()) &&
+               expression->value.overflow.operator_kind >= MINIC_OVERFLOW_ADD &&
+               expression->value.overflow.operator_kind <= MINIC_OVERFLOW_MULTIPLY &&
+               minic_type_pointee(result_pointer->type, &result_type) &&
+               minic_type_is_integer(result_type) && !minic_type_is_bool_integer(result_type) &&
+               minic_type_equal(left->type, result_type) &&
+               minic_type_equal(right->type, result_type);
+    }
+    case MINIC_EXPRESSION_STATEMENT: {
+        const MinicBlock *block;
+        const MinicExpression *result;
+
+        block = minic_c0_program_block(program, expression->value.statement_expression.block);
+        result = expression_before(
+            program, expression->value.statement_expression.result, expression_index);
+        return block != NULL && result != NULL &&
+               expression->value_category == MINIC_VALUE_RVALUE &&
+               minic_type_equal(expression->type, result->type);
+    }
     case MINIC_EXPRESSION_CALL:
         if (expression->value_category != MINIC_VALUE_RVALUE) {
             return false;
@@ -664,14 +734,19 @@ verify_expression(const MinicC0Program *program, size_t expression_index, MinicC
         } else {
             const MinicExpression *callee;
             const MinicFunctionType *function_type;
-            MinicType pointee;
+            MinicType callee_type;
 
             callee = expression_before(program, expression->value.call.callee, expression_index);
-            if (callee == NULL || !minic_type_pointee(callee->type, &pointee) ||
-                !minic_type_is_function(pointee)) {
+            if (callee == NULL) {
                 return false;
             }
-            function_type = minic_c0_program_function_type(program, pointee.function_type_id);
+            callee_type = callee->type;
+            if (!minic_type_is_function(callee_type) &&
+                (!minic_type_pointee(callee->type, &callee_type) ||
+                 !minic_type_is_function(callee_type))) {
+                return false;
+            }
+            function_type = minic_c0_program_function_type(program, callee_type.function_type_id);
             return function_type != NULL &&
                    minic_type_equal(expression->type, function_type->return_type) &&
                    verify_call_arguments(program,
@@ -717,6 +792,42 @@ static bool verify_statement(const MinicC0Program *program, const MinicStatement
     }
     case MINIC_STATEMENT_EXPRESSION:
         return expression != NULL;
+    case MINIC_STATEMENT_INLINE_ASM: {
+        const MinicInlineAsm *inline_asm;
+        size_t operand_index;
+
+        inline_asm = minic_c0_program_inline_asm(program, statement->inline_asm_id);
+        if (inline_asm == NULL || inline_asm->template_text == NULL ||
+            inline_asm->output_count > inline_asm->output_capacity ||
+            inline_asm->input_count > inline_asm->input_capacity ||
+            (inline_asm->output_count != 0U && inline_asm->outputs == NULL) ||
+            (inline_asm->input_count != 0U && inline_asm->inputs == NULL) ||
+            inline_asm->input_count != 0U || inline_asm->clobber_count > 1U ||
+            inline_asm->clobber_count != (inline_asm->has_memory_clobber ? 1U : 0U) ||
+            statement->target_expression != MINIC_EXPRESSION_INVALID ||
+            statement->expression != MINIC_EXPRESSION_INVALID ||
+            statement->target_statement != MINIC_STATEMENT_INVALID ||
+            statement->then_block != MINIC_BLOCK_INVALID ||
+            statement->else_block != MINIC_BLOCK_INVALID) {
+            return false;
+        }
+        for (operand_index = 0U; operand_index < inline_asm->output_count; ++operand_index) {
+            const MinicInlineAsmOperand *operand;
+            const MinicExpression *operand_expression;
+
+            operand = &inline_asm->outputs[operand_index];
+            operand_expression = minic_c0_program_expression(program, operand->expression);
+            if (operand->constraint_text == NULL || operand->constraint_length == 0U ||
+                operand_expression == NULL ||
+                operand_expression->value_category != MINIC_VALUE_LVALUE ||
+                (operand->output_access != MINIC_INLINE_ASM_OUTPUT_WRITE_ONLY &&
+                 operand->output_access != MINIC_INLINE_ASM_OUTPUT_READ_WRITE)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     case MINIC_STATEMENT_RETURN:
         return statement->expression == MINIC_EXPRESSION_INVALID || expression != NULL;
     case MINIC_STATEMENT_BREAK:
@@ -774,6 +885,8 @@ static bool verify_program_storage(const MinicC0Program *program) {
            storage_is_valid(program->locals, program->local_count, program->local_capacity) &&
            storage_is_valid(
                program->statements, program->statement_count, program->statement_capacity) &&
+           storage_is_valid(
+               program->inline_asms, program->inline_asm_count, program->inline_asm_capacity) &&
            storage_is_valid(program->blocks, program->block_count, program->block_capacity) &&
            storage_is_valid(
                program->functions, program->function_count, program->function_capacity) &&
@@ -790,6 +903,25 @@ static bool verify_program_storage(const MinicC0Program *program) {
                             program->global_object_capacity);
 }
 
+static bool incomplete_array_is_extern_object_type(const MinicC0Program *program,
+                                                   MinicArrayTypeId array_type_id) {
+    size_t object_index;
+
+    if (program == NULL) {
+        return false;
+    }
+    for (object_index = 0U; object_index < program->global_object_count; ++object_index) {
+        const MinicGlobalObject *object;
+
+        object = &program->global_objects[object_index];
+        if (object->is_extern && minic_type_is_array(object->type) &&
+            object->type.array_type_id == array_type_id) {
+            return true;
+        }
+    }
+    return false;
+}
+
 bool minic_c0_program_verify(const MinicC0Program *program, MinicC0AstForm form) {
     size_t index;
 
@@ -802,7 +934,9 @@ bool minic_c0_program_verify(const MinicC0Program *program, MinicC0AstForm form)
         const MinicArrayType *array_type;
 
         array_type = &program->array_types[index];
-        if (array_type->element_count == 0U || !type_is_valid(program, array_type->element_type) ||
+        if ((array_type->element_count == 0U &&
+             !incomplete_array_is_extern_object_type(program, index)) ||
+            !type_is_valid(program, array_type->element_type) ||
             minic_type_is_function(array_type->element_type)) {
             return false;
         }
@@ -812,7 +946,7 @@ bool minic_c0_program_verify(const MinicC0Program *program, MinicC0AstForm form)
         size_t parameter_index;
 
         function_type = &program->function_types[index];
-        if (function_type->parameter_count > 8U ||
+        if (function_type->parameter_count > MINIC_MAX_FUNCTION_PARAMETERS ||
             !type_is_valid(program, function_type->return_type) ||
             minic_type_is_array(function_type->return_type) ||
             minic_type_is_function(function_type->return_type)) {
@@ -859,7 +993,7 @@ bool minic_c0_program_verify(const MinicC0Program *program, MinicC0AstForm form)
         size_t parameter_index;
 
         function = &program->functions[index];
-        if (function->name == NULL || function->parameter_count > 8U ||
+        if (function->name == NULL || function->parameter_count > MINIC_MAX_FUNCTION_PARAMETERS ||
             !type_is_valid(program, function->return_type) ||
             minic_type_is_function(function->return_type) ||
             minic_type_is_array(function->return_type) ||

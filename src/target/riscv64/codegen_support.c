@@ -18,10 +18,10 @@ static bool minic_riscv64_scalar_width(MinicType type, size_t *width) {
     if (!minic_type_is_integer(type)) {
         return false;
     }
-    *width = minic_type_is_char_integer(type)    ? 1U
-             : minic_type_is_short_integer(type) ? 2U
-             : minic_type_is_long_integer(type)  ? 8U
-                                                 : 4U;
+    *width = (minic_type_is_bool_integer(type) || minic_type_is_char_integer(type)) ? 1U
+             : minic_type_is_short_integer(type)                                    ? 2U
+             : minic_type_is_long_integer(type)                                     ? 8U
+                                                                                    : 4U;
     return true;
 }
 
@@ -34,6 +34,9 @@ static const char *minic_riscv64_load_instruction(MinicType type) {
     }
     if (!minic_type_is_integer(type)) {
         return NULL;
+    }
+    if (minic_type_is_bool_integer(type)) {
+        return "lbu";
     }
     if (minic_type_is_char_integer(type)) {
         return minic_type_is_unsigned_integer(type) ? "lbu" : "lb";
@@ -57,10 +60,64 @@ static const char *minic_riscv64_store_instruction(MinicType type) {
     if (!minic_type_is_integer(type)) {
         return NULL;
     }
-    return minic_type_is_char_integer(type)    ? "sb"
-           : minic_type_is_short_integer(type) ? "sh"
-           : minic_type_is_long_integer(type)  ? "sd"
-                                               : "sw";
+    return (minic_type_is_bool_integer(type) || minic_type_is_char_integer(type)) ? "sb"
+           : minic_type_is_short_integer(type)                                    ? "sh"
+           : minic_type_is_long_integer(type)                                     ? "sd"
+                                                                                  : "sw";
+}
+
+static bool minic_riscv64_integer_aggregate_member_type(const MinicC0Program *program,
+                                                        MinicType type) {
+    if (minic_type_is_integer(type) || minic_type_is_pointer(type)) {
+        return true;
+    }
+    if (minic_type_is_array(type)) {
+        const MinicArrayType *array_type;
+
+        array_type = minic_c0_program_array_type(program, type.array_type_id);
+        return array_type != NULL &&
+               minic_riscv64_integer_aggregate_member_type(program, array_type->element_type);
+    }
+    if (minic_type_is_record(type)) {
+        const MinicRecord *record;
+        size_t field_index;
+
+        record = minic_c0_program_record(program, type.record_id);
+        if (record == NULL || !record->is_complete) {
+            return false;
+        }
+        for (field_index = 0U; field_index < record->field_count; ++field_index) {
+            const MinicRecordField *field;
+
+            field = minic_c0_record_field(record, field_index);
+            if (field == NULL ||
+                !minic_riscv64_integer_aggregate_member_type(program, field->type)) {
+                return false;
+            }
+        }
+        return true;
+    }
+    return false;
+}
+
+bool minic_riscv64_integer_aggregate_abi(const MinicC0Program *program,
+                                         MinicType type,
+                                         size_t *storage_size,
+                                         size_t *register_chunks) {
+    size_t alignment;
+    size_t size;
+
+    if (program == NULL || storage_size == NULL || register_chunks == NULL ||
+        !minic_type_is_record(type) ||
+        !minic_riscv64_integer_aggregate_member_type(program, type) ||
+        !minic_riscv64_type_layout(program, type, &size, &alignment) ||
+        (size != 8U && size != 16U)) {
+        return false;
+    }
+    (void)alignment;
+    *storage_size = size;
+    *register_chunks = size / 8U;
+    return true;
 }
 
 static bool minic_riscv64_local_object(const MinicC0Program *program,
@@ -185,6 +242,9 @@ bool minic_riscv64_emit_integer_conversion(FILE *file, MinicType type, const cha
     if (register_name == NULL || !minic_type_is_integer(type)) {
         return false;
     }
+    if (minic_type_is_bool_integer(type)) {
+        return fprintf(file, "  snez %s, %s\n", register_name, register_name) >= 0;
+    }
     if (minic_type_is_char_integer(type)) {
         if (minic_type_is_unsigned_integer(type)) {
             return fprintf(file, "  andi %s, %s, 255\n", register_name, register_name) >= 0;
@@ -297,6 +357,30 @@ bool minic_riscv64_emit_object_store_register(FILE *file,
     return minic_riscv64_emit_s0_access(file, instruction, register_name, local->storage_offset);
 }
 
+bool minic_riscv64_emit_integer_aggregate_local_chunk(FILE *file,
+                                                      const MinicC0Program *program,
+                                                      const MinicFunction *function,
+                                                      MinicLocalId local_id,
+                                                      size_t chunk_index,
+                                                      const char *register_name) {
+    const MinicLocal *local;
+    size_t chunks;
+    size_t storage_size;
+    size_t chunk_offset;
+
+    if (register_name == NULL || !minic_riscv64_local_object(program, function, local_id, &local) ||
+        !minic_riscv64_integer_aggregate_abi(program, local->type, &storage_size, &chunks) ||
+        chunk_index >= chunks || chunk_index > (SIZE_MAX - local->storage_offset) / 8U) {
+        return false;
+    }
+    chunk_offset = local->storage_offset + chunk_index * 8U;
+    if (chunk_offset > function->local_storage_size ||
+        function->local_storage_size - chunk_offset < 8U) {
+        return false;
+    }
+    return minic_riscv64_emit_s0_access(file, "sd", register_name, chunk_offset);
+}
+
 bool minic_riscv64_emit_object_store(FILE *file,
                                      const MinicC0Program *program,
                                      const MinicFunction *function,
@@ -312,7 +396,8 @@ bool minic_riscv64_frame_layout(const MinicC0Program *program,
     size_t required_bytes;
     size_t varargs_size;
 
-    if (program == NULL || function == NULL || layout == NULL || function->parameter_count > 8U) {
+    if (program == NULL || function == NULL || layout == NULL ||
+        function->parameter_count > MINIC_MAX_FUNCTION_PARAMETERS) {
         return false;
     }
 
@@ -327,12 +412,25 @@ bool minic_riscv64_frame_layout(const MinicC0Program *program,
         if (minic_type_is_double(parameter->type) || minic_type_is_float(parameter->type)) {
             continue;
         }
+        if (minic_type_is_record(parameter->type)) {
+            size_t aggregate_size;
+            size_t aggregate_chunks;
+
+            if (!minic_riscv64_integer_aggregate_abi(
+                    program, parameter->type, &aggregate_size, &aggregate_chunks) ||
+                integer_parameter_count > SIZE_MAX - aggregate_chunks) {
+                return false;
+            }
+            (void)aggregate_size;
+            integer_parameter_count += aggregate_chunks;
+            continue;
+        }
         if (!minic_type_is_integer(parameter->type) && !minic_type_is_pointer(parameter->type)) {
             return false;
         }
         integer_parameter_count += 1U;
     }
-    if (integer_parameter_count > 8U) {
+    if (function->is_variadic && integer_parameter_count > 8U) {
         return false;
     }
 

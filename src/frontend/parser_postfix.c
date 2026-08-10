@@ -176,8 +176,13 @@ static const MinicFunctionType *indirect_callee_type(const MinicParser *parser,
     MinicType function_type;
 
     callee = minic_c0_program_expression(parser->program, callee_id);
-    if (callee == NULL || !minic_type_pointee(callee->type, &function_type) ||
-        !minic_type_is_function(function_type)) {
+    if (callee == NULL) {
+        return NULL;
+    }
+    function_type = callee->type;
+    if (!minic_type_is_function(function_type) &&
+        (!minic_type_pointee(callee->type, &function_type) ||
+         !minic_type_is_function(function_type))) {
         return NULL;
     }
     return minic_c0_program_function_type(parser->program, function_type.function_type_id);
@@ -192,7 +197,7 @@ static bool parse_indirect_arguments(MinicParser *parser,
                                      const MinicFunctionType *function_type) {
     size_t argument_index;
 
-    if (function_type == NULL || function_type->parameter_count > 8U ||
+    if (function_type == NULL || function_type->parameter_count > MINIC_MAX_FUNCTION_PARAMETERS ||
         !minic_parser_advance(parser)) {
         return false;
     }

@@ -16,6 +16,8 @@ const char *minic_token_kind_name(MinicTokenKind kind) {
         return "floating constant";
     case MINIC_TOKEN_STRING_LITERAL:
         return "string literal";
+    case MINIC_TOKEN_KW_BOOL:
+        return "_Bool";
     case MINIC_TOKEN_KW_CHAR:
         return "char";
     case MINIC_TOKEN_KW_DOUBLE:
@@ -44,6 +46,8 @@ const char *minic_token_kind_name(MinicTokenKind kind) {
         return "enum";
     case MINIC_TOKEN_KW_CONST:
         return "const";
+    case MINIC_TOKEN_KW_VOLATILE:
+        return "volatile";
     case MINIC_TOKEN_KW_TYPEDEF:
         return "typedef";
     case MINIC_TOKEN_KW_EXTERN:
@@ -134,6 +138,8 @@ const char *minic_token_kind_name(MinicTokenKind kind) {
         return "/=";
     case MINIC_TOKEN_PERCENT:
         return "%";
+    case MINIC_TOKEN_PERCENT_EQUAL:
+        return "%=";
     case MINIC_TOKEN_EQUAL:
         return "=";
     case MINIC_TOKEN_EQUAL_EQUAL:

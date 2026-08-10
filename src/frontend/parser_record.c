@@ -24,7 +24,7 @@ static bool parse_function_pointer_field_declarator(MinicParser *parser,
                                                     MinicType return_type,
                                                     MinicSourceSpan *name_span,
                                                     MinicType *field_type) {
-    MinicType parameter_types[8];
+    MinicType parameter_types[MINIC_MAX_FUNCTION_PARAMETERS];
     MinicType function_type;
     size_t parameter_count;
     size_t pointer_depth;
@@ -120,26 +120,63 @@ static bool parse_packed_record_attribute(MinicParser *parser, bool *is_packed) 
            minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')' after __attribute__");
 }
 
-static bool parse_record_field(MinicParser *parser, MinicRecordId record_id) {
+static bool parse_record_field_alignment_attribute(MinicParser *parser, size_t *alignment) {
+    int64_t value;
+
+    if (parser == NULL || alignment == NULL) {
+        return false;
+    }
+    *alignment = 0U;
+    if (!token_text_equals(parser, parser->current, "__attribute__")) {
+        return true;
+    }
+    if (!minic_parser_advance(parser) ||
+        !minic_parser_expect(
+            parser, MINIC_TOKEN_LPAREN, "expected '(' after field __attribute__") ||
+        !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '((' in field __attribute__")) {
+        return false;
+    }
+    if (!token_text_equals(parser, parser->current, "__aligned__") &&
+        !token_text_equals(parser, parser->current, "aligned")) {
+        minic_parser_error(parser, "unsupported GNU record field attribute");
+        return false;
+    }
+    if (!minic_parser_advance(parser) ||
+        !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '(' after aligned") ||
+        !minic_parser_parse_integer_value64(parser, &value) || value <= 0 ||
+        (uint64_t)value > (uint64_t)SIZE_MAX ||
+        (((uint64_t)value & ((uint64_t)value - 1U)) != 0U) ||
+        !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')' after aligned value") ||
+        !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')' in field attribute") ||
+        !minic_parser_expect(
+            parser, MINIC_TOKEN_RPAREN, "expected second ')' in field attribute")) {
+        if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+            minic_parser_error(parser, "record field alignment must be a positive power of two");
+        }
+        return false;
+    }
+    *alignment = (size_t)value;
+    return true;
+}
+
+static bool
+parse_record_field_declarator(MinicParser *parser, MinicRecordId record_id, MinicType base_type) {
     MinicSourceSpan name_span;
-    MinicType base_type;
     MinicType field_type;
     size_t element_count;
+    size_t explicit_alignment;
     MinicRecord *mutable_record;
     const MinicRecord *record;
+    bool is_array;
     bool is_flexible_array;
+    bool is_zero_length_array;
 
     record = minic_c0_program_record(parser->program, record_id);
     if (record == NULL) {
         minic_parser_error(parser, "invalid record while adding field");
         return false;
     }
-    if (record->field_count > 0U && record->fields[record->field_count - 1U].is_flexible_array) {
-        minic_parser_error(parser, "flexible array member must be the last record field");
-        return false;
-    }
-    if (!minic_parser_parse_type_specifiers(parser, &base_type) ||
-        !minic_parser_parse_pointer_declarator(parser, base_type, &field_type)) {
+    if (!minic_parser_parse_pointer_declarator(parser, base_type, &field_type)) {
         return false;
     }
     if (parser->current.kind == MINIC_TOKEN_LPAREN) {
@@ -161,51 +198,107 @@ static bool parse_record_field(MinicParser *parser, MinicRecordId record_id) {
         minic_parser_error(parser, "record field cannot have void type");
         return false;
     }
-    if (minic_type_is_array(field_type)) {
-        minic_parser_error(parser, "record field typedef array is unsupported");
-        return false;
-    }
     if (!minic_parser_require_complete_object_type(
             parser, field_type, "record field cannot use incomplete type by value")) {
         return false;
     }
-
     if (record_has_field(parser, record, name_span)) {
         minic_parser_error(parser, "duplicate record field");
         return false;
     }
 
     element_count = 1U;
+    explicit_alignment = 0U;
+    is_array = false;
     is_flexible_array = false;
+    is_zero_length_array = false;
+    if (parser->current.kind != MINIC_TOKEN_LBRACKET && minic_type_is_array(field_type)) {
+        const MinicArrayType *typedef_array;
+
+        typedef_array = minic_c0_program_array_type(parser->program, field_type.array_type_id);
+        if (typedef_array == NULL || typedef_array->element_count == 0U) {
+            minic_parser_error(parser, "record field requires a complete typedef array type");
+            return false;
+        }
+        field_type = typedef_array->element_type;
+        element_count = typedef_array->element_count;
+        is_array = true;
+    }
     if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
+        is_array = true;
+        size_t bounds[8];
+        size_t bound_count;
+
         if (minic_type_is_pointer(field_type) && field_type.base_kind == MINIC_TYPE_BASE_FUNCTION) {
             minic_parser_error(parser, "function pointer field arrays are unsupported");
             return false;
         }
-        if (!minic_parser_advance(parser)) {
-            return false;
-        }
-        if (parser->current.kind == MINIC_TOKEN_RBRACKET) {
-            if (record->is_union) {
-                minic_parser_error(parser, "flexible array member is not allowed in union");
+        bound_count = 0U;
+        while (parser->current.kind == MINIC_TOKEN_LBRACKET) {
+            if (bound_count >= sizeof(bounds) / sizeof(bounds[0])) {
+                minic_parser_error(parser, "record field supports at most eight array dimensions");
                 return false;
             }
-            if (record->field_count == 0U) {
-                minic_parser_error(parser,
-                                   "flexible array member requires a preceding named field");
-                return false;
-            }
-            is_flexible_array = true;
             if (!minic_parser_advance(parser)) {
                 return false;
             }
-        } else if (!minic_parser_parse_fixed_array_bound(parser, &element_count)) {
-            return false;
+            if (parser->current.kind == MINIC_TOKEN_RBRACKET) {
+                if (bound_count != 0U) {
+                    minic_parser_error(parser,
+                                       "only the outermost record array dimension may be flexible");
+                    return false;
+                }
+                if (record->is_union) {
+                    minic_parser_error(parser, "flexible array member is not allowed in union");
+                    return false;
+                }
+                if (record->field_count == 0U) {
+                    minic_parser_error(parser,
+                                       "flexible array member requires a preceding named field");
+                    return false;
+                }
+                is_flexible_array = true;
+                if (!minic_parser_advance(parser)) {
+                    return false;
+                }
+                if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
+                    minic_parser_error(parser,
+                                       "multidimensional flexible record arrays are unsupported");
+                    return false;
+                }
+                break;
+            }
+            if (bound_count == 0U) {
+                if (!minic_parser_parse_record_array_bound(
+                        parser, &bounds[bound_count], &is_zero_length_array)) {
+                    return false;
+                }
+            } else if (!minic_parser_parse_fixed_array_bound(parser, &bounds[bound_count])) {
+                return false;
+            }
+            bound_count += 1U;
+        }
+
+        if (!is_flexible_array && bound_count != 0U) {
+            size_t dimension;
+
+            element_count = bounds[0];
+            dimension = bound_count;
+            while (dimension > 1U) {
+                dimension -= 1U;
+                if (!minic_c0_program_add_array_type(
+                        parser->program, field_type, bounds[dimension], &field_type)) {
+                    minic_parser_error(parser, "cannot build multidimensional record array type");
+                    return false;
+                }
+            }
         }
     }
-    if (!minic_parser_expect(parser, MINIC_TOKEN_SEMICOLON, "expected ';' after record field")) {
+
+    if (!parse_record_field_alignment_attribute(parser, &explicit_alignment)) {
         return false;
     }
+
     if (!minic_c0_record_add_field(parser->program,
                                    record_id,
                                    parser->source + name_span.begin.offset,
@@ -215,11 +308,137 @@ static bool parse_record_field(MinicParser *parser, MinicRecordId record_id) {
         minic_parser_error(parser, "out of memory while adding record field");
         return false;
     }
-    if (is_flexible_array) {
-        mutable_record = &parser->program->records[record_id];
-        mutable_record->fields[mutable_record->field_count - 1U].is_flexible_array = true;
-    }
+    mutable_record = &parser->program->records[record_id];
+    mutable_record->fields[mutable_record->field_count - 1U].explicit_alignment =
+        explicit_alignment;
+    mutable_record->fields[mutable_record->field_count - 1U].is_array = is_array;
+    mutable_record->fields[mutable_record->field_count - 1U].is_flexible_array = is_flexible_array;
+    mutable_record->fields[mutable_record->field_count - 1U].is_zero_length_array =
+        is_zero_length_array;
     return true;
+}
+
+static bool parse_record_suffix_alignment(MinicParser *parser, size_t *alignment) {
+    int64_t value;
+
+    if (parser == NULL || alignment == NULL) {
+        return false;
+    }
+    *alignment = 0U;
+    if (!token_text_equals(parser, parser->current, "__attribute__") &&
+        !token_text_equals(parser, parser->current, "__attribute")) {
+        return true;
+    }
+    if (!minic_parser_advance(parser) ||
+        !minic_parser_expect(
+            parser, MINIC_TOKEN_LPAREN, "expected '(' after record __attribute__") ||
+        !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '((' in record __attribute__")) {
+        return false;
+    }
+    if (!token_text_equals(parser, parser->current, "aligned") &&
+        !token_text_equals(parser, parser->current, "__aligned__")) {
+        minic_parser_error(parser, "unsupported GNU record suffix attribute");
+        return false;
+    }
+    if (!minic_parser_advance(parser) ||
+        !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '(' after record aligned") ||
+        !minic_parser_parse_integer_constant_expression(parser, &value)) {
+        return false;
+    }
+    if (value <= 0 || (uint64_t)value > (uint64_t)SIZE_MAX ||
+        (((uint64_t)value & ((uint64_t)value - UINT64_C(1))) != 0U)) {
+        minic_parser_error(parser, "record alignment must be a positive power of two");
+        return false;
+    }
+    if (!minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')' after record alignment") ||
+        !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')' in record attribute") ||
+        !minic_parser_expect(
+            parser, MINIC_TOKEN_RPAREN, "expected second ')' in record attribute")) {
+        return false;
+    }
+    *alignment = (size_t)value;
+    return true;
+}
+
+static bool parse_record_field(MinicParser *parser, MinicRecordId record_id) {
+    MinicType base_type;
+    const MinicRecord *record;
+
+    record = minic_c0_program_record(parser->program, record_id);
+    if (record == NULL) {
+        minic_parser_error(parser, "invalid record while adding field");
+        return false;
+    }
+    if (record->field_count > 0U && record->fields[record->field_count - 1U].is_flexible_array) {
+        minic_parser_error(parser, "flexible array member must be the last record field");
+        return false;
+    }
+    if (!minic_parser_parse_type_specifiers(parser, &base_type)) {
+        return false;
+    }
+    if (minic_type_is_record(base_type) && parser->current.kind == MINIC_TOKEN_SEMICOLON) {
+        MinicRecord *mutable_record;
+
+        if (!minic_parser_require_complete_object_type(
+                parser, base_type, "anonymous record member requires a complete type") ||
+            !minic_c0_record_add_field(parser->program, record_id, "", 0U, base_type, 1U)) {
+            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                minic_parser_error(parser, "cannot add anonymous record member");
+            }
+            return false;
+        }
+        mutable_record = &parser->program->records[record_id];
+        mutable_record->fields[mutable_record->field_count - 1U].is_anonymous_member = true;
+        return minic_parser_advance(parser);
+    }
+
+    if (parser->current.kind == MINIC_TOKEN_COLON) {
+        int64_t bit_width;
+
+        if (!minic_type_is_integer(base_type)) {
+            minic_parser_error(parser, "unnamed bit-field requires an integer type");
+            return false;
+        }
+        if (!minic_parser_advance(parser) ||
+            !minic_parser_parse_integer_constant_expression_value(parser, &bit_width)) {
+            return false;
+        }
+        if (bit_width < 0 || (uint64_t)bit_width > (uint64_t)SIZE_MAX) {
+            minic_parser_error(parser, "bit-field width is outside the target object range");
+            return false;
+        }
+        if (!minic_parser_expect(parser, MINIC_TOKEN_SEMICOLON, "expected ';' after bit-field") ||
+            !minic_c0_record_add_unnamed_bit_field(
+                parser->program, record_id, base_type, (size_t)bit_width)) {
+            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                minic_parser_error(parser, "cannot add unnamed bit-field");
+            }
+            return false;
+        }
+        return true;
+    }
+
+    for (;;) {
+        if (!parse_record_field_declarator(parser, record_id, base_type)) {
+            return false;
+        }
+        record = minic_c0_program_record(parser->program, record_id);
+        if (record == NULL || record->field_count == 0U) {
+            minic_parser_error(parser, "invalid record after adding field");
+            return false;
+        }
+        if (parser->current.kind != MINIC_TOKEN_COMMA) {
+            return minic_parser_expect(
+                parser, MINIC_TOKEN_SEMICOLON, "expected ';' after record field");
+        }
+        if (record->fields[record->field_count - 1U].is_flexible_array) {
+            minic_parser_error(parser, "flexible array member must be the last record field");
+            return false;
+        }
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
+    }
 }
 
 bool minic_parser_parse_record_definition_specifier(MinicParser *parser, MinicType *record_type) {
@@ -296,6 +515,16 @@ bool minic_parser_parse_record_definition_specifier(MinicParser *parser, MinicTy
     if (!minic_parser_expect(parser, MINIC_TOKEN_RBRACE, "expected '}' after record fields")) {
         return false;
     }
+    {
+        size_t explicit_alignment;
+
+        if (!parse_record_suffix_alignment(parser, &explicit_alignment)) {
+            return false;
+        }
+        if (explicit_alignment != 0U) {
+            parser->program->records[record_id].explicit_alignment = explicit_alignment;
+        }
+    }
     if (!minic_c0_program_finish_record(parser->program, record_id)) {
         minic_parser_error(parser, "record definition requires at least one field");
         return false;
@@ -305,7 +534,27 @@ bool minic_parser_parse_record_definition_specifier(MinicParser *parser, MinicTy
 }
 
 bool minic_parser_parse_record_definition(MinicParser *parser) {
+    MinicParser probe;
     MinicType record_type;
+    bool is_forward_declaration;
+
+    if (parser == NULL) {
+        return false;
+    }
+
+    probe = *parser;
+    is_forward_declaration = false;
+    if (minic_parser_advance(&probe) && probe.current.kind == MINIC_TOKEN_IDENTIFIER &&
+        minic_parser_advance(&probe) && probe.current.kind == MINIC_TOKEN_SEMICOLON) {
+        is_forward_declaration = true;
+    }
+
+    if (is_forward_declaration) {
+        return minic_parser_parse_type_specifiers(parser, &record_type) &&
+               minic_type_is_record(record_type) &&
+               minic_parser_expect(
+                   parser, MINIC_TOKEN_SEMICOLON, "expected ';' after record declaration");
+    }
 
     return minic_parser_parse_record_definition_specifier(parser, &record_type) &&
            minic_parser_expect(

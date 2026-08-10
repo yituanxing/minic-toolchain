@@ -1,6 +1,7 @@
 #include "frontend/parser_internal.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static bool decode_simple_escape(char character, int *value) {
@@ -126,6 +127,35 @@ static bool decoded_string_length(MinicParser *parser, MinicSourceSpan span, siz
     return true;
 }
 
+bool minic_parser_parse_string_literal_size(MinicParser *parser, uint64_t *size) {
+    size_t decoded_length;
+    size_t total_length;
+
+    if (parser == NULL || size == NULL || parser->current.kind != MINIC_TOKEN_STRING_LITERAL) {
+        return false;
+    }
+    total_length = 0U;
+    while (parser->current.kind == MINIC_TOKEN_STRING_LITERAL) {
+        if (!decoded_string_length(parser, parser->current.span, &decoded_length) ||
+            total_length > SIZE_MAX - decoded_length) {
+            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                minic_parser_error(parser, "concatenated string literal is too long");
+            }
+            return false;
+        }
+        total_length += decoded_length;
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
+    }
+    if (total_length == SIZE_MAX) {
+        minic_parser_error(parser, "string literal sizeof result is too large");
+        return false;
+    }
+    *size = (uint64_t)(total_length + 1U);
+    return true;
+}
+
 static bool
 add_string_payload(MinicParser *parser, MinicSourceSpan span, MinicGlobalObjectId object_id) {
     size_t cursor;
@@ -151,6 +181,46 @@ add_string_payload(MinicParser *parser, MinicSourceSpan span, MinicGlobalObjectI
             return false;
         }
     }
+    return true;
+}
+
+bool minic_parser_add_string_literal_initializer(MinicParser *parser,
+                                                 MinicGlobalObjectId object_id,
+                                                 size_t *element_count) {
+    MinicParser probe;
+    size_t decoded_length;
+    size_t total_length;
+
+    if (parser == NULL || element_count == NULL ||
+        parser->current.kind != MINIC_TOKEN_STRING_LITERAL) {
+        return false;
+    }
+    probe = *parser;
+    total_length = 0U;
+    while (probe.current.kind == MINIC_TOKEN_STRING_LITERAL) {
+        if (!decoded_string_length(&probe, probe.current.span, &decoded_length) ||
+            total_length > SIZE_MAX - decoded_length || !minic_parser_advance(&probe)) {
+            return false;
+        }
+        total_length += decoded_length;
+    }
+    if (total_length == SIZE_MAX) {
+        minic_parser_error(parser, "concatenated string literal is too long");
+        return false;
+    }
+    while (parser->current.kind == MINIC_TOKEN_STRING_LITERAL) {
+        MinicSourceSpan literal_span;
+
+        literal_span = parser->current.span;
+        if (!add_string_payload(parser, literal_span, object_id) || !minic_parser_advance(parser)) {
+            return false;
+        }
+    }
+    if (!minic_c0_global_object_add_initializer(parser->program, object_id, 0)) {
+        minic_parser_error(parser, "out of memory while terminating string initializer");
+        return false;
+    }
+    *element_count = total_length + 1U;
     return true;
 }
 
@@ -223,6 +293,87 @@ bool minic_parser_create_string_literal_object(MinicParser *parser,
         minic_parser_error(parser, "out of memory while terminating string literal");
         return false;
     }
+    *span = combined_span;
+    return true;
+}
+
+bool minic_parser_parse_string_text(MinicParser *parser,
+                                    char **text,
+                                    size_t *length,
+                                    MinicSourceSpan *span) {
+    MinicParser probe;
+    MinicSourceSpan combined_span;
+    char *buffer;
+    size_t total_length;
+    size_t decoded_length;
+    size_t output;
+
+    if (parser == NULL || text == NULL || length == NULL || span == NULL ||
+        parser->current.kind != MINIC_TOKEN_STRING_LITERAL) {
+        return false;
+    }
+    probe = *parser;
+    combined_span = probe.current.span;
+    total_length = 0U;
+    while (probe.current.kind == MINIC_TOKEN_STRING_LITERAL) {
+        if (!decoded_string_length(&probe, probe.current.span, &decoded_length) ||
+            total_length > SIZE_MAX - decoded_length) {
+            minic_parser_error(parser, "inline assembly string is too long");
+            return false;
+        }
+        total_length += decoded_length;
+        combined_span.end = probe.current.span.end;
+        if (!minic_parser_advance(&probe)) {
+            return false;
+        }
+    }
+    if (total_length == SIZE_MAX) {
+        minic_parser_error(parser, "inline assembly string is too long");
+        return false;
+    }
+    buffer = (char *)malloc(total_length + 1U);
+    if (buffer == NULL) {
+        minic_parser_error(parser, "out of memory while decoding inline assembly string");
+        return false;
+    }
+
+    output = 0U;
+    while (parser->current.kind == MINIC_TOKEN_STRING_LITERAL) {
+        size_t cursor;
+        size_t end;
+
+        cursor = parser->current.span.begin.offset + 1U;
+        end = parser->current.span.end.offset - 1U;
+        while (cursor < end) {
+            int value;
+
+            if (parser->source[cursor] == '\\') {
+                cursor += 1U;
+                if (!decode_string_escape(parser->source, &cursor, end, &value)) {
+                    free(buffer);
+                    minic_parser_error(parser, "unsupported inline assembly string escape");
+                    return false;
+                }
+            } else {
+                value = (int)(unsigned char)parser->source[cursor];
+                cursor += 1U;
+            }
+            if (value == 0) {
+                free(buffer);
+                minic_parser_error(parser, "inline assembly template cannot contain NUL");
+                return false;
+            }
+            buffer[output] = (char)value;
+            output += 1U;
+        }
+        if (!minic_parser_advance(parser)) {
+            free(buffer);
+            return false;
+        }
+    }
+    buffer[output] = '\0';
+    *text = buffer;
+    *length = output;
     *span = combined_span;
     return true;
 }

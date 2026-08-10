@@ -52,6 +52,8 @@ static bool minic_riscv64_emit_assignment(FILE *file,
            minic_riscv64_emit_lvalue_address(
                file, program, function, statement->target_expression) &&
            fprintf(file, "  ld t0, 0(sp)\n  addi sp, sp, 16\n") >= 0 &&
+           (!minic_type_is_integer(target->type) ||
+            minic_riscv64_emit_integer_conversion(file, target->type, "t0")) &&
            minic_riscv64_emit_scalar_store(file, target->type, "t0", "a0");
 }
 
@@ -159,8 +161,33 @@ static bool minic_riscv64_emit_return(FILE *file,
         value = minic_c0_program_expression(program, statement->expression);
         if (minic_type_is_void(function->return_type) || value == NULL ||
             !minic_c0_assignment_compatible(
-                program, function->return_type, statement->expression) ||
-            !minic_riscv64_emit_expression(file, program, function, statement->expression)) {
+                program, function->return_type, statement->expression)) {
+            return false;
+        }
+        if (minic_type_is_record(function->return_type)) {
+            size_t aggregate_size;
+            size_t aggregate_chunks;
+
+            if (!minic_type_is_record(value->type) ||
+                value->type.record_id != function->return_type.record_id ||
+                !minic_riscv64_integer_aggregate_abi(
+                    program, function->return_type, &aggregate_size, &aggregate_chunks)) {
+                return false;
+            }
+            (void)aggregate_size;
+            if (value->value_category == MINIC_VALUE_LVALUE) {
+                if (!minic_riscv64_emit_lvalue_address(
+                        file, program, function, statement->expression) ||
+                    fprintf(file, "  mv t0, a0\n  ld a0, 0(t0)\n") < 0 ||
+                    (aggregate_chunks == 2U && fprintf(file, "  ld a1, 8(t0)\n") < 0)) {
+                    return false;
+                }
+            } else if (value->kind != MINIC_EXPRESSION_CALL ||
+                       !minic_riscv64_emit_expression(
+                           file, program, function, statement->expression)) {
+                return false;
+            }
+        } else if (!minic_riscv64_emit_expression(file, program, function, statement->expression)) {
             return false;
         }
         if (minic_type_is_integer(function->return_type) &&
@@ -226,6 +253,7 @@ static bool minic_riscv64_collect_switch_labels(const MinicC0Program *program,
         case MINIC_STATEMENT_RECORD_COPY:
         case MINIC_STATEMENT_XOR_ASSIGN:
         case MINIC_STATEMENT_EXPRESSION:
+        case MINIC_STATEMENT_INLINE_ASM:
         case MINIC_STATEMENT_RETURN:
         case MINIC_STATEMENT_BREAK:
         case MINIC_STATEMENT_GOTO:
@@ -333,6 +361,75 @@ static bool minic_riscv64_emit_statement(FILE *file,
     case MINIC_STATEMENT_EXPRESSION:
         return statement->expression != MINIC_EXPRESSION_INVALID &&
                minic_riscv64_emit_expression(file, program, function, statement->expression);
+
+    case MINIC_STATEMENT_INLINE_ASM: {
+        const MinicInlineAsm *inline_asm;
+
+        inline_asm = minic_c0_program_inline_asm(program, statement->inline_asm_id);
+        if (inline_asm == NULL || inline_asm->template_text == NULL ||
+            inline_asm->input_count != 0U) {
+            return false;
+        }
+        if (inline_asm->output_count == 0U) {
+            return fprintf(file, "  %s\n", inline_asm->template_text) >= 0;
+        }
+        if (inline_asm->output_count == 1U) {
+            const MinicInlineAsmOperand *operand;
+            const MinicExpression *operand_expression;
+
+            operand = &inline_asm->outputs[0];
+            operand_expression = minic_c0_program_expression(program, operand->expression);
+            if (operand_expression == NULL || operand_expression->kind != MINIC_EXPRESSION_LOCAL ||
+                operand_expression->value_category != MINIC_VALUE_LVALUE) {
+                return false;
+            }
+            if (operand->output_access == MINIC_INLINE_ASM_OUTPUT_READ_WRITE &&
+                operand->constraint_length == 3U &&
+                memcmp(operand->constraint_text, "+rm", 3U) == 0) {
+                return inline_asm->template_length == 0U;
+            }
+            if (operand->output_access == MINIC_INLINE_ASM_OUTPUT_WRITE_ONLY &&
+                operand->constraint_length == 2U &&
+                memcmp(operand->constraint_text, "=r", 2U) == 0) {
+                size_t index;
+
+                if (fprintf(file, "  ") < 0) {
+                    return false;
+                }
+                for (index = 0U; index < inline_asm->template_length; ++index) {
+                    unsigned char ch;
+
+                    ch = (unsigned char)inline_asm->template_text[index];
+                    if (ch != '%') {
+                        if (fputc((int)ch, file) == EOF) {
+                            return false;
+                        }
+                        continue;
+                    }
+                    if (index + 1U >= inline_asm->template_length) {
+                        return false;
+                    }
+                    index += 1U;
+                    ch = (unsigned char)inline_asm->template_text[index];
+                    if (ch == '0') {
+                        if (fputs("t0", file) == EOF) {
+                            return false;
+                        }
+                    } else if (ch == '%') {
+                        if (fputc('%', file) == EOF) {
+                            return false;
+                        }
+                    } else {
+                        return false;
+                    }
+                }
+                return fputc('\n', file) != EOF &&
+                       minic_riscv64_emit_object_store_register(
+                           file, program, function, operand_expression->value.local_id, "t0");
+            }
+        }
+        return false;
+    }
 
     case MINIC_STATEMENT_RETURN:
         return minic_riscv64_emit_return(file, program, function, statement);

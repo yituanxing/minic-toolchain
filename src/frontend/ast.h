@@ -15,6 +15,7 @@ typedef size_t MinicBlockId;
 typedef size_t MinicFunctionId;
 typedef size_t MinicTypeAliasId;
 typedef size_t MinicGlobalObjectId;
+typedef size_t MinicInlineAsmId;
 
 #define MINIC_EXPRESSION_INVALID ((MinicExpressionId) - 1)
 #define MINIC_LOCAL_INVALID ((MinicLocalId) - 1)
@@ -23,6 +24,8 @@ typedef size_t MinicGlobalObjectId;
 #define MINIC_FUNCTION_INVALID ((MinicFunctionId) - 1)
 #define MINIC_TYPE_ALIAS_INVALID ((MinicTypeAliasId) - 1)
 #define MINIC_GLOBAL_OBJECT_INVALID ((MinicGlobalObjectId) - 1)
+#define MINIC_INLINE_ASM_INVALID ((MinicInlineAsmId) - 1)
+#define MINIC_MAX_FUNCTION_PARAMETERS 16U
 
 typedef enum MinicValueCategory { MINIC_VALUE_RVALUE = 0, MINIC_VALUE_LVALUE } MinicValueCategory;
 
@@ -33,6 +36,7 @@ typedef enum MinicExpressionKind {
     MINIC_EXPRESSION_GLOBAL_OBJECT,
     MINIC_EXPRESSION_FUNCTION,
     MINIC_EXPRESSION_SIZEOF,
+    MINIC_EXPRESSION_OFFSETOF,
     MINIC_EXPRESSION_ADDRESS_OF,
     MINIC_EXPRESSION_DEREFERENCE,
     MINIC_EXPRESSION_CAST,
@@ -47,7 +51,9 @@ typedef enum MinicExpressionKind {
     MINIC_EXPRESSION_UNARY,
     MINIC_EXPRESSION_BINARY,
     MINIC_EXPRESSION_CONDITIONAL,
-    MINIC_EXPRESSION_CALL
+    MINIC_EXPRESSION_CALL,
+    MINIC_EXPRESSION_STATEMENT,
+    MINIC_EXPRESSION_BUILTIN_OVERFLOW
 } MinicExpressionKind;
 
 typedef enum MinicUnaryOperator {
@@ -59,6 +65,8 @@ typedef enum MinicUnaryOperator {
 
 #define MINIC_UNARY_POST_INCREMENT ((MinicUnaryOperator)4)
 #define MINIC_UNARY_POST_DECREMENT ((MinicUnaryOperator)5)
+#define MINIC_UNARY_PRE_INCREMENT ((MinicUnaryOperator)6)
+#define MINIC_UNARY_PRE_DECREMENT ((MinicUnaryOperator)7)
 
 typedef enum MinicBinaryOperator {
     MINIC_BINARY_ADD = 0,
@@ -78,8 +86,15 @@ typedef enum MinicBinaryOperator {
     MINIC_BINARY_GREATER,
     MINIC_BINARY_GREATER_EQUAL,
     MINIC_BINARY_LOGICAL_AND,
-    MINIC_BINARY_LOGICAL_OR
+    MINIC_BINARY_LOGICAL_OR,
+    MINIC_BINARY_COMMA
 } MinicBinaryOperator;
+
+typedef enum MinicOverflowOperator {
+    MINIC_OVERFLOW_ADD = 0,
+    MINIC_OVERFLOW_SUBTRACT,
+    MINIC_OVERFLOW_MULTIPLY
+} MinicOverflowOperator;
 
 typedef struct MinicExpression {
     MinicExpressionKind kind;
@@ -94,10 +109,14 @@ typedef struct MinicExpression {
         MinicFunctionId function_id;
         MinicType sizeof_type;
         struct {
+            MinicRecordId record_id;
+            size_t field_index;
+        } offsetof_value;
+        struct {
             MinicFunctionId function_id;
             MinicExpressionId callee;
             size_t argument_count;
-            MinicExpressionId arguments[8];
+            MinicExpressionId arguments[MINIC_MAX_FUNCTION_PARAMETERS];
         } call;
         struct {
             MinicUnaryOperator operator_kind;
@@ -122,6 +141,16 @@ typedef struct MinicExpression {
             MinicExpressionId when_true;
             MinicExpressionId when_false;
         } conditional;
+        struct {
+            MinicBlockId block;
+            MinicExpressionId result;
+        } statement_expression;
+        struct {
+            MinicOverflowOperator operator_kind;
+            MinicExpressionId left;
+            MinicExpressionId right;
+            MinicExpressionId result_pointer;
+        } overflow;
     } value;
 } MinicExpression;
 
@@ -131,6 +160,7 @@ typedef struct MinicLocal {
     size_t element_count;
     size_t storage_offset;
     bool is_array;
+    bool is_register_storage;
 } MinicLocal;
 
 typedef enum MinicStatementKind {
@@ -138,6 +168,7 @@ typedef enum MinicStatementKind {
     MINIC_STATEMENT_RECORD_COPY,
     MINIC_STATEMENT_XOR_ASSIGN,
     MINIC_STATEMENT_EXPRESSION,
+    MINIC_STATEMENT_INLINE_ASM,
     MINIC_STATEMENT_RETURN,
     MINIC_STATEMENT_BREAK,
     MINIC_STATEMENT_GOTO,
@@ -155,9 +186,36 @@ typedef struct MinicStatement {
     MinicExpressionId target_expression;
     MinicExpressionId expression;
     MinicStatementId target_statement;
+    MinicInlineAsmId inline_asm_id;
     MinicBlockId then_block;
     MinicBlockId else_block;
 } MinicStatement;
+
+typedef enum MinicInlineAsmOutputAccess {
+    MINIC_INLINE_ASM_OUTPUT_WRITE_ONLY = 0,
+    MINIC_INLINE_ASM_OUTPUT_READ_WRITE
+} MinicInlineAsmOutputAccess;
+
+typedef struct MinicInlineAsmOperand {
+    char *constraint_text;
+    size_t constraint_length;
+    MinicExpressionId expression;
+    MinicInlineAsmOutputAccess output_access;
+} MinicInlineAsmOperand;
+
+typedef struct MinicInlineAsm {
+    char *template_text;
+    size_t template_length;
+    MinicInlineAsmOperand *outputs;
+    size_t output_count;
+    size_t output_capacity;
+    MinicInlineAsmOperand *inputs;
+    size_t input_count;
+    size_t input_capacity;
+    size_t clobber_count;
+    bool is_volatile;
+    bool has_memory_clobber;
+} MinicInlineAsm;
 
 typedef struct MinicBlock {
     MinicStatementId *statements;
@@ -165,11 +223,23 @@ typedef struct MinicBlock {
     size_t statement_capacity;
 } MinicBlock;
 
+typedef enum MinicSymbolVisibility {
+    MINIC_SYMBOL_VISIBILITY_DEFAULT = 0,
+    MINIC_SYMBOL_VISIBILITY_HIDDEN,
+    MINIC_SYMBOL_VISIBILITY_INTERNAL,
+    MINIC_SYMBOL_VISIBILITY_PROTECTED
+} MinicSymbolVisibility;
+
 typedef struct MinicFunction {
     char *name;
     size_t name_length;
+    char *assembler_name;
+    size_t assembler_name_length;
+    char *section_name;
+    size_t section_name_length;
+    MinicSymbolVisibility visibility;
     MinicType return_type;
-    MinicType parameter_types[8];
+    MinicType parameter_types[MINIC_MAX_FUNCTION_PARAMETERS];
     size_t parameter_count;
     size_t local_begin;
     size_t local_count;
@@ -186,7 +256,14 @@ typedef struct MinicRecordField {
     MinicType type;
     size_t element_count;
     size_t storage_offset;
+    size_t bit_width;
+    size_t bit_offset;
+    size_t explicit_alignment;
+    bool is_array;
+    bool is_bit_field;
     bool is_flexible_array;
+    bool is_zero_length_array;
+    bool is_anonymous_member;
 } MinicRecordField;
 
 typedef struct MinicRecord {
@@ -197,6 +274,7 @@ typedef struct MinicRecord {
     size_t field_capacity;
     size_t storage_size;
     size_t alignment;
+    size_t explicit_alignment;
     bool is_union;
     bool is_packed;
     bool is_complete;
@@ -209,7 +287,7 @@ typedef struct MinicArrayType {
 
 typedef struct MinicFunctionType {
     MinicType return_type;
-    MinicType parameter_types[8];
+    MinicType parameter_types[MINIC_MAX_FUNCTION_PARAMETERS];
     size_t parameter_count;
 } MinicFunctionType;
 
@@ -232,6 +310,8 @@ typedef struct MinicGlobalObjectRelocation {
 typedef struct MinicGlobalObject {
     char *name;
     size_t name_length;
+    char *section_name;
+    size_t section_name_length;
     MinicType type;
     int *initializer_values;
     size_t initializer_count;
@@ -243,6 +323,7 @@ typedef struct MinicGlobalObject {
     size_t object_relocation_capacity;
     size_t storage_size;
     size_t alignment;
+    MinicSymbolVisibility visibility;
     bool is_internal;
     bool is_read_only;
     bool is_zero_initialized;
@@ -261,6 +342,10 @@ typedef struct MinicC0Program {
     MinicStatement *statements;
     size_t statement_count;
     size_t statement_capacity;
+
+    MinicInlineAsm *inline_asms;
+    size_t inline_asm_count;
+    size_t inline_asm_capacity;
 
     MinicBlock *blocks;
     size_t block_count;
@@ -308,6 +393,21 @@ bool minic_c0_program_add_statement(MinicC0Program *program,
                                     const MinicStatement *statement,
                                     MinicStatementId *statement_id);
 bool minic_c0_program_add_block(MinicC0Program *program, MinicBlockId *block_id);
+bool minic_c0_program_add_inline_asm(MinicC0Program *program,
+                                     const char *template_text,
+                                     size_t template_length,
+                                     bool is_volatile,
+                                     bool has_memory_clobber,
+                                     MinicInlineAsmId *inline_asm_id);
+bool minic_c0_program_add_inline_asm_output(MinicC0Program *program,
+                                            MinicInlineAsmId inline_asm_id,
+                                            const char *constraint_text,
+                                            size_t constraint_length,
+                                            MinicExpressionId expression,
+                                            MinicInlineAsmOutputAccess output_access);
+bool minic_c0_program_set_inline_asm_memory_clobber(MinicC0Program *program,
+                                                    MinicInlineAsmId inline_asm_id,
+                                                    bool has_memory_clobber);
 bool minic_c0_block_add_statement(MinicC0Program *program,
                                   MinicBlockId block_id,
                                   MinicStatementId statement_id);
@@ -329,6 +429,18 @@ bool minic_c0_program_set_function_parameter_count(MinicC0Program *program,
 bool minic_c0_program_set_function_internal(MinicC0Program *program,
                                             MinicFunctionId function_id,
                                             bool is_internal);
+bool minic_c0_program_set_function_assembler_name(MinicC0Program *program,
+                                                  MinicFunctionId function_id,
+                                                  const char *name,
+                                                  size_t name_length);
+const char *minic_c0_function_symbol_name(const MinicFunction *function);
+bool minic_c0_program_set_function_visibility(MinicC0Program *program,
+                                              MinicFunctionId function_id,
+                                              MinicSymbolVisibility visibility);
+bool minic_c0_program_set_function_section(MinicC0Program *program,
+                                           MinicFunctionId function_id,
+                                           const char *name,
+                                           size_t name_length);
 bool minic_c0_program_set_function_variadic(MinicC0Program *program,
                                             MinicFunctionId function_id,
                                             bool is_variadic);
@@ -350,11 +462,21 @@ bool minic_c0_record_add_field(MinicC0Program *program,
                                size_t name_length,
                                MinicType type,
                                size_t element_count);
+bool minic_c0_record_add_unnamed_bit_field(MinicC0Program *program,
+                                           MinicRecordId record_id,
+                                           MinicType type,
+                                           size_t bit_width);
 bool minic_c0_program_finish_record(MinicC0Program *program, MinicRecordId record_id);
 bool minic_c0_program_add_array_type(MinicC0Program *program,
                                      MinicType element_type,
                                      size_t element_count,
                                      MinicType *array_type);
+bool minic_c0_program_add_incomplete_array_type(MinicC0Program *program,
+                                                MinicType element_type,
+                                                MinicType *array_type);
+bool minic_c0_program_complete_array_type(MinicC0Program *program,
+                                          MinicType array_type,
+                                          size_t element_count);
 bool minic_c0_program_add_function_type(MinicC0Program *program,
                                         MinicType return_type,
                                         const MinicType *parameter_types,
@@ -387,6 +509,13 @@ bool minic_c0_global_object_set_zero_initialized(MinicC0Program *program,
                                                  MinicGlobalObjectId global_object_id);
 bool minic_c0_global_object_set_extern(MinicC0Program *program,
                                        MinicGlobalObjectId global_object_id);
+bool minic_c0_global_object_set_visibility(MinicC0Program *program,
+                                           MinicGlobalObjectId global_object_id,
+                                           MinicSymbolVisibility visibility);
+bool minic_c0_global_object_set_section(MinicC0Program *program,
+                                        MinicGlobalObjectId global_object_id,
+                                        const char *name,
+                                        size_t name_length);
 
 const MinicExpression *minic_c0_program_expression(const MinicC0Program *program,
                                                    MinicExpressionId expression_id);
@@ -400,6 +529,8 @@ const MinicLocal *minic_c0_program_local(const MinicC0Program *program, MinicLoc
 const MinicStatement *minic_c0_program_statement(const MinicC0Program *program,
                                                  MinicStatementId statement_id);
 const MinicBlock *minic_c0_program_block(const MinicC0Program *program, MinicBlockId block_id);
+const MinicInlineAsm *minic_c0_program_inline_asm(const MinicC0Program *program,
+                                                  MinicInlineAsmId inline_asm_id);
 const MinicFunction *minic_c0_program_function(const MinicC0Program *program,
                                                MinicFunctionId function_id);
 const MinicRecord *minic_c0_program_record(const MinicC0Program *program, MinicRecordId record_id);
