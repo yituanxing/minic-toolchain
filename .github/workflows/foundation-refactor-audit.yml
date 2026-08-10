@@ -36,7 +36,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          allowed='^(src/frontend/parser_global\.c|tests/compiler/c0/static_prefix_object_attributes\.c|tests/compiler/c0/run-static-prefix-object-attributes\.sh)$'
+          allowed='^(src/frontend/parser_global\.c|src/frontend/parser_core\.c|tests/compiler/c0/static_prefix_object_attributes\.c|tests/compiler/c0/run-static-prefix-object-attributes\.sh|tests/compiler/c0/run-array-bound-constant-expressions\.sh|tests/compiler/c0/run\.sh)$'
           changed=$(git status --porcelain=v1 | sed -E 's/^.. //')
           printf '%s\n' "$changed"
           bad=$(printf '%s\n' "$changed" | grep -Ev "$allowed" || true)
@@ -47,6 +47,8 @@ jobs:
           test -n "$changed"
           grep -q 'minic_parser_parse_integer_constant_expression' src/frontend/parser_global.c
           grep -q 'shared-ice-enum-false' tests/compiler/c0/run-static-prefix-object-attributes.sh
+          ! grep -q 'array bound constant expression' src/frontend/parser_core.c
+          grep -q 'expected integer constant expression' tests/compiler/c0/run-array-bound-constant-expressions.sh
 
       - name: Build compiler candidate
         shell: bash
@@ -77,8 +79,11 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add \
             src/frontend/parser_global.c \
+            src/frontend/parser_core.c \
             tests/compiler/c0/static_prefix_object_attributes.c \
-            tests/compiler/c0/run-static-prefix-object-attributes.sh
+            tests/compiler/c0/run-static-prefix-object-attributes.sh \
+            tests/compiler/c0/run-array-bound-constant-expressions.sh \
+            tests/compiler/c0/run.sh
           git commit -m 'frontend: share static-global integer constant parsing' \
                      -m '前端：共享 static global 整数常量解析'
           git push origin HEAD:refactor/foundation-v1
