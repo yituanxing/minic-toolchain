@@ -1870,6 +1870,7 @@ static bool parse_expression_internal(MinicParser *parser,
                                      parser->current.kind == MINIC_TOKEN_AMPERSAND_EQUAL ||
                                      parser->current.kind == MINIC_TOKEN_PIPE_EQUAL ||
                                      parser->current.kind == MINIC_TOKEN_CARET_EQUAL ||
+                                     parser->current.kind == MINIC_TOKEN_LESS_LESS_EQUAL ||
                                      parser->current.kind == MINIC_TOKEN_GREATER_GREATER_EQUAL)) {
         const MinicExpression *target_expression;
         const MinicExpression *value_expression;
@@ -1905,6 +1906,9 @@ static bool parse_expression_internal(MinicParser *parser,
             break;
         case MINIC_TOKEN_CARET_EQUAL:
             compound_operator = MINIC_BINARY_BITWISE_XOR;
+            break;
+        case MINIC_TOKEN_LESS_LESS_EQUAL:
+            compound_operator = MINIC_BINARY_SHIFT_LEFT;
             break;
         case MINIC_TOKEN_GREATER_GREATER_EQUAL:
             compound_operator = MINIC_BINARY_SHIFT_RIGHT;

@@ -124,7 +124,7 @@ static int test_operator_sequence(void)
 
 static int test_comparison_operators(void)
 {
-    static const char source[] = "= == ! != < << <= > >> >=";
+    static const char source[] = "= == ! != < << <<= <= > >> >>= >=";
     static const struct {
         MinicTokenKind kind;
         size_t column;
@@ -135,11 +135,13 @@ static int test_comparison_operators(void)
         {MINIC_TOKEN_BANG_EQUAL, 8U},
         {MINIC_TOKEN_LESS, 11U},
         {MINIC_TOKEN_LESS_LESS, 13U},
-        {MINIC_TOKEN_LESS_EQUAL, 16U},
-        {MINIC_TOKEN_GREATER, 19U},
-        {MINIC_TOKEN_GREATER_GREATER, 21U},
-        {MINIC_TOKEN_GREATER_EQUAL, 24U},
-        {MINIC_TOKEN_EOF, 26U}
+        {MINIC_TOKEN_LESS_LESS_EQUAL, 16U},
+        {MINIC_TOKEN_LESS_EQUAL, 20U},
+        {MINIC_TOKEN_GREATER, 23U},
+        {MINIC_TOKEN_GREATER_GREATER, 25U},
+        {MINIC_TOKEN_GREATER_GREATER_EQUAL, 28U},
+        {MINIC_TOKEN_GREATER_EQUAL, 32U},
+        {MINIC_TOKEN_EOF, 34U}
     };
     MinicLexer lexer;
     size_t index;

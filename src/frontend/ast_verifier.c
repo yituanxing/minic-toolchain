@@ -616,7 +616,7 @@ verify_expression(const MinicC0Program *program, size_t expression_index, MinicC
             operator_kind != MINIC_BINARY_MULTIPLY && operator_kind != MINIC_BINARY_DIVIDE &&
             operator_kind != MINIC_BINARY_REMAINDER && operator_kind != MINIC_BINARY_BITWISE_AND &&
             operator_kind != MINIC_BINARY_BITWISE_OR && operator_kind != MINIC_BINARY_BITWISE_XOR &&
-            operator_kind != MINIC_BINARY_SHIFT_RIGHT) {
+            operator_kind != MINIC_BINARY_SHIFT_LEFT && operator_kind != MINIC_BINARY_SHIFT_RIGHT) {
             return false;
         }
         return minic_type_is_integer(left->type) && minic_type_is_integer(right->type) &&

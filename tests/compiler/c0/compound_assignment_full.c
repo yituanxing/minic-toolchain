@@ -25,6 +25,16 @@ static unsigned int update_bits(unsigned int value) {
     return value;
 }
 
+static unsigned int shift_left_unsigned(unsigned int value) {
+    value <<= 3;
+    return value;
+}
+
+static int shift_right_signed(int value) {
+    value >>= 2;
+    return value;
+}
+
 static unsigned long long divide_unsigned(unsigned long long value) {
     value /= 10;
     return value;
@@ -62,7 +72,8 @@ static double update_double(void) {
 int main(void) {
     int values[4];
     return update_once() == 14 && adjust_pointer(values) == values + 2 &&
-                   update_bits(0x2ffu) == 380u && divide_unsigned(100ULL) == 10ULL &&
+                   update_bits(0x2ffu) == 380u && shift_left_unsigned(3u) == 24u &&
+                   shift_right_signed(-16) == -4 && divide_unsigned(100ULL) == 10ULL &&
                    divide_signed(-100LL) == -10LL && remainder_int(2050) == 2 &&
                    remainder_unsigned(100ULL) == 1ULL && remainder_signed(-100LL) == -1LL &&
                    update_double() == 10.5

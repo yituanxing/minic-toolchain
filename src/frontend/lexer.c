@@ -682,7 +682,12 @@ bool minic_lexer_next(MinicLexer *lexer, MinicToken *token, MinicDiagnostic *dia
         token->kind = MINIC_TOKEN_TILDE;
         break;
     case '<':
-        if (minic_lexer_peek_next(lexer) == '<') {
+        if (minic_lexer_peek_next(lexer) == '<' && lexer->cursor + 2U < lexer->length &&
+            lexer->source[lexer->cursor + 2U] == '=') {
+            token->kind = MINIC_TOKEN_LESS_LESS_EQUAL;
+            minic_lexer_advance(lexer);
+            minic_lexer_advance(lexer);
+        } else if (minic_lexer_peek_next(lexer) == '<') {
             token->kind = MINIC_TOKEN_LESS_LESS;
             minic_lexer_advance(lexer);
         } else if (minic_lexer_peek_next(lexer) == '=') {

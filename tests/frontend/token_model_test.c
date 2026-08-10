@@ -60,7 +60,9 @@ int main(void)
         expect_name(MINIC_TOKEN_CARET, "^") != 0 ||
         expect_name(MINIC_TOKEN_CARET_EQUAL, "^=") != 0 ||
         expect_name(MINIC_TOKEN_LESS_LESS, "<<") != 0 ||
+        expect_name(MINIC_TOKEN_LESS_LESS_EQUAL, "<<=") != 0 ||
         expect_name(MINIC_TOKEN_GREATER_GREATER, ">>") != 0 ||
+        expect_name(MINIC_TOKEN_GREATER_GREATER_EQUAL, ">>=") != 0 ||
         expect_name(MINIC_TOKEN_COLON, ":") != 0 ||
         expect_name(MINIC_TOKEN_SEMICOLON, ";") != 0 ||
         expect_name((MinicTokenKind)MINIC_TOKEN_KIND_COUNT, "unknown token") != 0) {

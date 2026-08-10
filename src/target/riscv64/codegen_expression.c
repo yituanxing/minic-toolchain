@@ -944,6 +944,9 @@ bool minic_riscv64_emit_expression(FILE *file,
             case MINIC_BINARY_BITWISE_XOR:
                 opcode = "xor";
                 break;
+            case MINIC_BINARY_SHIFT_LEFT:
+                opcode = minic_type_is_long_integer(common_type) ? "sll" : "sllw";
+                break;
             case MINIC_BINARY_SHIFT_RIGHT:
                 if (minic_type_is_unsigned_integer(common_type)) {
                     opcode = minic_type_is_long_integer(common_type) ? "srl" : "srlw";
