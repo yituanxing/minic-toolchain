@@ -5,6 +5,8 @@ enum lockdep_like {
 
 extern void add_taint_like(unsigned flag, enum lockdep_like state);
 
+enum lockdep_like report_bug_like(unsigned long address, enum lockdep_like state);
+
 static enum lockdep_like normalize_state(enum lockdep_like state) {
     return state;
 }
