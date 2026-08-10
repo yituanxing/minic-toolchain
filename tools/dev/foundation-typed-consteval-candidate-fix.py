@@ -146,3 +146,29 @@ text = text.replace(
     "minic_c0_program_verify_target(&program, MINIC_C0_AST_NORMALIZED, target_info)",
 )
 path.write_text(text)
+
+path = root / "Makefile"
+text = path.read_text()
+text = replace_once(
+    text,
+    '''AST_CONTRACT_TEST_SOURCES := \\
+\tsrc/frontend/ast.c \\
+\tsrc/frontend/ast_global.c \\
+\tsrc/frontend/ast_verifier.c \\
+\tsrc/frontend/cast_normalization.c \\
+\tsrc/frontend/type.c \\
+\ttests/frontend/ast_contract_test.c
+''',
+    '''AST_CONTRACT_TEST_SOURCES := \\
+\tsrc/frontend/ast.c \\
+\tsrc/frontend/ast_global.c \\
+\tsrc/frontend/ast_verifier.c \\
+\tsrc/frontend/cast_normalization.c \\
+\tsrc/frontend/type.c \\
+\tsrc/target/data_layout.c \\
+\tsrc/target/target_info.c \\
+\ttests/frontend/ast_contract_test.c
+''',
+    "ast-contract-target-info-sources",
+)
+path.write_text(text)
