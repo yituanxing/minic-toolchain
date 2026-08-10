@@ -25,4 +25,5 @@ python3 tools/dev/pr77-gnu-statement-expression-comma-compat.py
 python3 tools/dev/pr77-gnu-inline-asm.py
 python3 tools/dev/pr77-gnu-inline-asm-escape-fix.py
 python3 tools/dev/pr77-shared-local-declaration-lookahead.py
+python3 tools/dev/pr77-gnu-inline-asm-readwrite-output.py
 printf '%s\n' 'staged Linux discovery semantics'
