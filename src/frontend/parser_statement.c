@@ -2353,140 +2353,31 @@ static bool parse_default(MinicParser *parser) {
     return minic_parser_add_statement(parser, &statement);
 }
 
-static bool add_general_prefix_for_update(MinicParser *parser,
-                                          MinicSourcePosition begin,
-                                          MinicExpressionId target_id,
-                                          MinicTokenKind update_kind,
-                                          MinicStatementId *statement_id) {
-    const MinicExpression *target;
-    MinicExpression update;
-    MinicExpressionId update_id;
-    MinicStatement statement;
-    MinicType pointee_type;
-
-    target = minic_c0_program_expression(parser->program, target_id);
-    if (!expression_is_modifiable_lvalue(target) ||
-        (!minic_type_is_integer(target->type) && !minic_type_is_pointer(target->type))) {
-        minic_parser_error(parser, "prefix update requires a modifiable integer or pointer lvalue");
-        return false;
-    }
-    if (minic_type_is_pointer(target->type) &&
-        (!minic_type_pointee(target->type, &pointee_type) ||
-         !minic_parser_require_complete_object_type(
-             parser, pointee_type, "pointer update requires a complete object type"))) {
-        return false;
-    }
-
-    (void)memset(&update, 0, sizeof(update));
-    update.kind = MINIC_EXPRESSION_UNARY;
-    update.span.begin = begin;
-    update.span.end = target->span.end;
-    update.type = target->type;
-    update.value_category = MINIC_VALUE_RVALUE;
-    update.value.unary.operator_kind = update_kind == MINIC_TOKEN_PLUS_PLUS
-                                           ? MINIC_UNARY_POST_INCREMENT
-                                           : MINIC_UNARY_POST_DECREMENT;
-    update.value.unary.operand = target_id;
-    if (!minic_parser_add_expression(parser, &update, &update_id)) {
-        return false;
-    }
-
-    (void)memset(&statement, 0, sizeof(statement));
-    statement.kind = MINIC_STATEMENT_EXPRESSION;
-    statement.span = update.span;
-    statement.target_expression = MINIC_EXPRESSION_INVALID;
-    statement.expression = update_id;
-    statement.target_statement = MINIC_STATEMENT_INVALID;
-    statement.then_block = MINIC_BLOCK_INVALID;
-    statement.else_block = MINIC_BLOCK_INVALID;
-    return minic_c0_program_add_statement(parser->program, &statement, statement_id);
-}
-
 static bool parse_for_update(MinicParser *parser, MinicStatementId *statement_id) {
-    MinicSourcePosition begin;
-    MinicExpressionId first_id;
-    const MinicExpression *first;
+    const MinicExpression *expression;
     MinicStatement statement;
-    MinicTokenKind assignment_token;
 
     if (parser == NULL || statement_id == NULL) {
         return false;
     }
-    begin = parser->current.span.begin;
-    if (parser->current.kind == MINIC_TOKEN_LPAREN) {
-        if (!minic_parser_advance(parser) || parser->current.kind != MINIC_TOKEN_KW_VOID ||
-            !minic_parser_advance(parser) ||
-            !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')' after void cast")) {
-            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
-                minic_parser_error(parser, "for update only supports a discarded void cast here");
-            }
-            return false;
-        }
-    }
-
-    if (parser->current.kind == MINIC_TOKEN_PLUS_PLUS ||
-        parser->current.kind == MINIC_TOKEN_MINUS_MINUS) {
-        MinicTokenKind update_kind;
-        MinicExpressionId target_id;
-
-        update_kind = parser->current.kind;
-        if (!minic_parser_advance(parser) ||
-            !minic_parser_parse_expression(parser, &target_id, 0U)) {
-            return false;
-        }
-        return add_general_prefix_for_update(parser, begin, target_id, update_kind, statement_id);
-    }
-
-    if (!minic_parser_parse_expression(parser, &first_id, 0U)) {
-        return false;
-    }
-    first = minic_c0_program_expression(parser->program, first_id);
-    if (first == NULL) {
-        minic_parser_error(parser, "invalid for update expression");
-        return false;
-    }
-    assignment_token = parser->current.kind;
 
     (void)memset(&statement, 0, sizeof(statement));
-    statement.span.begin = begin;
+    statement.kind = MINIC_STATEMENT_EXPRESSION;
     statement.target_expression = MINIC_EXPRESSION_INVALID;
-    statement.expression = first_id;
+    statement.expression = MINIC_EXPRESSION_INVALID;
     statement.target_statement = MINIC_STATEMENT_INVALID;
     statement.then_block = MINIC_BLOCK_INVALID;
     statement.else_block = MINIC_BLOCK_INVALID;
 
-    if (assignment_token == MINIC_TOKEN_EQUAL) {
-        MinicType target_type;
-        MinicSourceSpan target_span;
-        const MinicExpression *assigned;
-
-        if (!expression_is_modifiable_lvalue(first)) {
-            minic_parser_error(parser, "assignment target must be a modifiable lvalue");
-            return false;
-        }
-        target_type = first->type;
-        target_span = first->span;
-        statement.kind = MINIC_STATEMENT_ASSIGN;
-        statement.target_expression = first_id;
-        statement.expression = MINIC_EXPRESSION_INVALID;
-        if (!minic_parser_advance(parser) ||
-            !minic_parser_parse_expression(parser, &statement.expression, 0U) ||
-            !apply_assignment_conversion(parser, target_type, &statement.expression)) {
-            return false;
-        }
-        assigned = minic_c0_program_expression(parser->program, statement.expression);
-        if (assigned == NULL ||
-            !minic_c0_assignment_compatible(parser->program, target_type, statement.expression)) {
-            minic_parser_error(parser, "assignment type does not match target type");
-            return false;
-        }
-        statement.span.begin = target_span.begin;
-        statement.span.end = assigned->span.end;
-        return minic_c0_program_add_statement(parser->program, &statement, statement_id);
+    if (!minic_parser_parse_full_expression(parser, &statement.expression)) {
+        return false;
     }
-
-    statement.kind = MINIC_STATEMENT_EXPRESSION;
-    statement.span.end = first->span.end;
+    expression = minic_c0_program_expression(parser->program, statement.expression);
+    if (expression == NULL) {
+        minic_parser_error(parser, "invalid for update expression");
+        return false;
+    }
+    statement.span = expression->span;
     return minic_c0_program_add_statement(parser->program, &statement, statement_id);
 }
 
@@ -2524,11 +2415,10 @@ static bool parse_for_initializer_expression(MinicParser *parser) {
 
 static bool parse_for(MinicParser *parser) {
     MinicStatement statement;
-    MinicStatementId updates[8];
+    MinicStatementId update_statement;
     MinicStatementId continue_label;
     MinicStatementId previous_continue_target;
-    size_t update_count;
-    size_t update_index;
+    bool has_update;
     MinicSourceSpan for_span;
     bool success;
 
@@ -2569,26 +2459,13 @@ static bool parse_for(MinicParser *parser) {
         return false;
     }
 
-    update_count = 0U;
-    while (parser->current.kind != MINIC_TOKEN_RPAREN) {
-        if (update_count >= sizeof(updates) / sizeof(updates[0])) {
-            minic_parser_error(parser, "for update supports at most eight comma-separated items");
+    has_update = false;
+    update_statement = MINIC_STATEMENT_INVALID;
+    if (parser->current.kind != MINIC_TOKEN_RPAREN) {
+        if (!parse_for_update(parser, &update_statement)) {
             return false;
         }
-        if (!parse_for_update(parser, &updates[update_count])) {
-            return false;
-        }
-        update_count += 1U;
-        if (parser->current.kind == MINIC_TOKEN_COMMA) {
-            if (!minic_parser_advance(parser)) {
-                return false;
-            }
-            continue;
-        }
-        if (parser->current.kind != MINIC_TOKEN_RPAREN) {
-            minic_parser_error(parser, "expected ',' or ')' after for update");
-            return false;
-        }
+        has_update = true;
     }
 
     if (!minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')'") ||
@@ -2606,12 +2483,10 @@ static bool parse_for(MinicParser *parser) {
         }
         return false;
     }
-    for (update_index = 0U; update_index < update_count; ++update_index) {
-        if (!minic_c0_block_add_statement(
-                parser->program, statement.then_block, updates[update_index])) {
-            minic_parser_error(parser, "cannot append for-loop update");
-            return false;
-        }
+    if (has_update &&
+        !minic_c0_block_add_statement(parser->program, statement.then_block, update_statement)) {
+        minic_parser_error(parser, "cannot append for-loop update");
+        return false;
     }
     statement.span.begin = for_span.begin;
     statement.span.end = parser->current.span.begin;
