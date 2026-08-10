@@ -22,5 +22,8 @@ bool minic_target_info_integer_width(const MinicTargetInfo *target,
                                      const MinicC0Program *program,
                                      MinicType type,
                                      unsigned int *bits);
+bool minic_target_info_fixed_register_supported(const MinicTargetInfo *target,
+                                                const char *name,
+                                                size_t name_length);
 
 #endif

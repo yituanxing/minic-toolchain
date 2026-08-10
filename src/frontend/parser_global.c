@@ -29,6 +29,27 @@ MinicGlobalObjectId minic_parser_find_global_object(const MinicParser *parser,
     return MINIC_GLOBAL_OBJECT_INVALID;
 }
 
+MinicFixedRegisterBindingId minic_parser_find_fixed_register_binding(const MinicParser *parser,
+                                                                     MinicSourceSpan name_span) {
+    size_t name_length;
+    size_t index;
+
+    if (parser == NULL || parser->program == NULL) {
+        return MINIC_FIXED_REGISTER_BINDING_INVALID;
+    }
+    name_length = minic_parser_span_length(name_span);
+    for (index = 0U; index < parser->program->fixed_register_binding_count; ++index) {
+        const MinicFixedRegisterBinding *binding;
+
+        binding = minic_c0_program_fixed_register_binding(parser->program, index);
+        if (binding != NULL && binding->name_length == name_length &&
+            memcmp(binding->name, parser->source + name_span.begin.offset, name_length) == 0) {
+            return index;
+        }
+    }
+    return MINIC_FIXED_REGISTER_BINDING_INVALID;
+}
+
 static bool token_starts_type_name(MinicTokenKind kind) {
     return kind == MINIC_TOKEN_KW_CONST || kind == MINIC_TOKEN_KW_CHAR ||
            kind == MINIC_TOKEN_KW_FLOAT || kind == MINIC_TOKEN_KW_DOUBLE ||

@@ -42,6 +42,14 @@ static char *copy_name(const char *name, size_t name_length) {
 static bool name_conflicts(const MinicC0Program *program, const char *name, size_t name_length) {
     size_t index;
 
+    for (index = 0U; index < program->fixed_register_binding_count; ++index) {
+        const MinicFixedRegisterBinding *binding;
+
+        binding = &program->fixed_register_bindings[index];
+        if (binding->name_length == name_length && memcmp(binding->name, name, name_length) == 0) {
+            return true;
+        }
+    }
     for (index = 0U; index < program->global_object_count; ++index) {
         const MinicGlobalObject *object;
 
@@ -60,6 +68,42 @@ static bool name_conflicts(const MinicC0Program *program, const char *name, size
         }
     }
     return false;
+}
+
+bool minic_c0_program_add_fixed_register_binding(MinicC0Program *program,
+                                                 const char *name,
+                                                 size_t name_length,
+                                                 MinicType type,
+                                                 const char *register_name,
+                                                 size_t register_name_length,
+                                                 MinicFixedRegisterBindingId *binding_id) {
+    MinicFixedRegisterBinding binding;
+
+    if (program == NULL || name == NULL || register_name == NULL || binding_id == NULL ||
+        register_name_length == 0U ||
+        (!minic_type_is_integer(type) && !minic_type_is_pointer(type)) ||
+        name_conflicts(program, name, name_length) ||
+        !grow_array((void **)&program->fixed_register_bindings,
+                    &program->fixed_register_binding_capacity,
+                    program->fixed_register_binding_count,
+                    sizeof(*program->fixed_register_bindings))) {
+        return false;
+    }
+    (void)memset(&binding, 0, sizeof(binding));
+    binding.name = copy_name(name, name_length);
+    binding.register_name = copy_name(register_name, register_name_length);
+    if (binding.name == NULL || binding.register_name == NULL) {
+        free(binding.name);
+        free(binding.register_name);
+        return false;
+    }
+    binding.name_length = name_length;
+    binding.register_name_length = register_name_length;
+    binding.type = type;
+    *binding_id = program->fixed_register_binding_count;
+    program->fixed_register_bindings[program->fixed_register_binding_count] = binding;
+    program->fixed_register_binding_count += 1U;
+    return true;
 }
 
 bool minic_c0_program_add_global_object(MinicC0Program *program,
@@ -206,6 +250,15 @@ const MinicGlobalObject *minic_c0_program_global_object(const MinicC0Program *pr
         return NULL;
     }
     return &program->global_objects[global_object_id];
+}
+
+const MinicFixedRegisterBinding *
+minic_c0_program_fixed_register_binding(const MinicC0Program *program,
+                                        MinicFixedRegisterBindingId binding_id) {
+    if (program == NULL || binding_id >= program->fixed_register_binding_count) {
+        return NULL;
+    }
+    return &program->fixed_register_bindings[binding_id];
 }
 
 bool minic_c0_global_object_set_visibility(MinicC0Program *program,

@@ -202,6 +202,8 @@ bool minic_parser_name_bound(const MinicParser *parser, MinicSourceSpan name_spa
 MinicFunctionId minic_parser_find_function(const MinicParser *parser, MinicSourceSpan name_span);
 MinicGlobalObjectId minic_parser_find_global_object(const MinicParser *parser,
                                                     MinicSourceSpan name_span);
+MinicFixedRegisterBindingId minic_parser_find_fixed_register_binding(const MinicParser *parser,
+                                                                     MinicSourceSpan name_span);
 MinicRecordId minic_parser_find_record(const MinicParser *parser, MinicSourceSpan name_span);
 MinicTypeAliasId minic_parser_find_type_alias(const MinicParser *parser, MinicSourceSpan name_span);
 

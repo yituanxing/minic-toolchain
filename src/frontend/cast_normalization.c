@@ -31,6 +31,7 @@ static bool remap_non_cast_expression(MinicExpression *expression,
     case MINIC_EXPRESSION_FLOATING:
     case MINIC_EXPRESSION_LOCAL:
     case MINIC_EXPRESSION_GLOBAL_OBJECT:
+    case MINIC_EXPRESSION_FIXED_REGISTER:
     case MINIC_EXPRESSION_FUNCTION:
     case MINIC_EXPRESSION_SIZEOF:
     case MINIC_EXPRESSION_OFFSETOF:

@@ -90,6 +90,10 @@ void minic_c0_program_destroy(MinicC0Program *program) {
     for (index = 0U; index < program->type_alias_count; ++index) {
         free(program->type_aliases[index].name);
     }
+    for (index = 0U; index < program->fixed_register_binding_count; ++index) {
+        free(program->fixed_register_bindings[index].name);
+        free(program->fixed_register_bindings[index].register_name);
+    }
     for (index = 0U; index < program->global_object_count; ++index) {
         free(program->global_objects[index].name);
         free(program->global_objects[index].section_name);
@@ -107,6 +111,7 @@ void minic_c0_program_destroy(MinicC0Program *program) {
     free(program->function_types);
     free(program->type_aliases);
     free(program->global_objects);
+    free(program->fixed_register_bindings);
     minic_c0_program_initialize(program);
 }
 

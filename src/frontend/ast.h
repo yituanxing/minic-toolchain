@@ -15,6 +15,7 @@ typedef size_t MinicBlockId;
 typedef size_t MinicFunctionId;
 typedef size_t MinicTypeAliasId;
 typedef size_t MinicGlobalObjectId;
+typedef size_t MinicFixedRegisterBindingId;
 typedef size_t MinicInlineAsmId;
 
 #define MINIC_EXPRESSION_INVALID ((MinicExpressionId) - 1)
@@ -24,6 +25,7 @@ typedef size_t MinicInlineAsmId;
 #define MINIC_FUNCTION_INVALID ((MinicFunctionId) - 1)
 #define MINIC_TYPE_ALIAS_INVALID ((MinicTypeAliasId) - 1)
 #define MINIC_GLOBAL_OBJECT_INVALID ((MinicGlobalObjectId) - 1)
+#define MINIC_FIXED_REGISTER_BINDING_INVALID ((MinicFixedRegisterBindingId) - 1)
 #define MINIC_INLINE_ASM_INVALID ((MinicInlineAsmId) - 1)
 #define MINIC_MAX_FUNCTION_PARAMETERS 16U
 
@@ -34,6 +36,7 @@ typedef enum MinicExpressionKind {
     MINIC_EXPRESSION_FLOATING,
     MINIC_EXPRESSION_LOCAL,
     MINIC_EXPRESSION_GLOBAL_OBJECT,
+    MINIC_EXPRESSION_FIXED_REGISTER,
     MINIC_EXPRESSION_FUNCTION,
     MINIC_EXPRESSION_SIZEOF,
     MINIC_EXPRESSION_OFFSETOF,
@@ -109,6 +112,7 @@ typedef struct MinicExpression {
         uint64_t floating_bits;
         MinicLocalId local_id;
         MinicGlobalObjectId global_object_id;
+        MinicFixedRegisterBindingId fixed_register_binding_id;
         MinicFunctionId function_id;
         MinicType sizeof_type;
         struct {
@@ -307,6 +311,14 @@ typedef struct MinicTypeAlias {
     MinicType type;
 } MinicTypeAlias;
 
+typedef struct MinicFixedRegisterBinding {
+    char *name;
+    size_t name_length;
+    char *register_name;
+    size_t register_name_length;
+    MinicType type;
+} MinicFixedRegisterBinding;
+
 typedef struct MinicGlobalFunctionRelocation {
     size_t field_index;
     MinicFunctionId function_id;
@@ -386,6 +398,10 @@ typedef struct MinicC0Program {
     MinicGlobalObject *global_objects;
     size_t global_object_count;
     size_t global_object_capacity;
+
+    MinicFixedRegisterBinding *fixed_register_bindings;
+    size_t fixed_register_binding_count;
+    size_t fixed_register_binding_capacity;
 
     MinicExpressionId return_expression;
 } MinicC0Program;
@@ -506,6 +522,13 @@ bool minic_c0_program_add_type_alias(MinicC0Program *program,
                                      size_t name_length,
                                      MinicType type,
                                      MinicTypeAliasId *alias_id);
+bool minic_c0_program_add_fixed_register_binding(MinicC0Program *program,
+                                                 const char *name,
+                                                 size_t name_length,
+                                                 MinicType type,
+                                                 const char *register_name,
+                                                 size_t register_name_length,
+                                                 MinicFixedRegisterBindingId *binding_id);
 bool minic_c0_program_add_global_object(MinicC0Program *program,
                                         const char *name,
                                         size_t name_length,
@@ -562,5 +585,8 @@ const MinicTypeAlias *minic_c0_program_type_alias(const MinicC0Program *program,
                                                   MinicTypeAliasId alias_id);
 const MinicGlobalObject *minic_c0_program_global_object(const MinicC0Program *program,
                                                         MinicGlobalObjectId global_object_id);
+const MinicFixedRegisterBinding *
+minic_c0_program_fixed_register_binding(const MinicC0Program *program,
+                                        MinicFixedRegisterBindingId binding_id);
 
 #endif

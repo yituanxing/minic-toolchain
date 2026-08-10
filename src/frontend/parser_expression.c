@@ -201,6 +201,31 @@ static bool parse_global_reference(MinicParser *parser,
     return minic_parser_parse_postfix(parser, base_id, expression_id);
 }
 
+static bool parse_fixed_register_reference(MinicParser *parser,
+                                           MinicSourceSpan name_span,
+                                           MinicFixedRegisterBindingId binding_id,
+                                           MinicExpressionId *expression_id) {
+    const MinicFixedRegisterBinding *binding;
+    MinicExpression expression;
+    MinicExpressionId base_id;
+
+    binding = minic_c0_program_fixed_register_binding(parser->program, binding_id);
+    if (binding == NULL) {
+        minic_parser_error(parser, "invalid fixed register reference");
+        return false;
+    }
+    (void)memset(&expression, 0, sizeof(expression));
+    expression.kind = MINIC_EXPRESSION_FIXED_REGISTER;
+    expression.span = name_span;
+    expression.type = binding->type;
+    expression.value_category = MINIC_VALUE_RVALUE;
+    expression.value.fixed_register_binding_id = binding_id;
+    if (!minic_parser_add_expression(parser, &expression, &base_id)) {
+        return false;
+    }
+    return minic_parser_parse_postfix(parser, base_id, expression_id);
+}
+
 static bool parse_function_reference(MinicParser *parser,
                                      MinicSourceSpan name_span,
                                      MinicFunctionId function_id,
@@ -933,6 +958,7 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
     MinicLocalId local_id;
     MinicFunctionId function_id;
     MinicGlobalObjectId global_object_id;
+    MinicFixedRegisterBindingId fixed_register_binding_id;
     int enum_value;
     bool is_enum_constant;
 
@@ -1030,6 +1056,7 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
         local_id = minic_parser_find_local(parser, name_span);
         function_id = minic_parser_find_function(parser, name_span);
         global_object_id = minic_parser_find_global_object(parser, name_span);
+        fixed_register_binding_id = minic_parser_find_fixed_register_binding(parser, name_span);
         is_enum_constant = minic_parser_find_enum_constant(parser, name_span, &enum_value);
         if (!minic_parser_advance(parser)) {
             return false;
@@ -1075,6 +1102,13 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
         }
         if (global_object_id != MINIC_GLOBAL_OBJECT_INVALID) {
             if (!parse_global_reference(parser, name_span, global_object_id, true, &primary_id)) {
+                return false;
+            }
+            return finish_value_expression(parser, primary_id, decay_array, expression_id);
+        }
+        if (fixed_register_binding_id != MINIC_FIXED_REGISTER_BINDING_INVALID) {
+            if (!parse_fixed_register_reference(
+                    parser, name_span, fixed_register_binding_id, &primary_id)) {
                 return false;
             }
             return finish_value_expression(parser, primary_id, decay_array, expression_id);

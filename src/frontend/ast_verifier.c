@@ -437,6 +437,19 @@ static bool verify_expression(const MinicC0Program *program,
         return object != NULL && expression->value_category == MINIC_VALUE_LVALUE &&
                minic_type_equal(expression->type, object->type);
     }
+    case MINIC_EXPRESSION_FIXED_REGISTER: {
+        const MinicFixedRegisterBinding *binding;
+
+        binding = minic_c0_program_fixed_register_binding(
+            program, expression->value.fixed_register_binding_id);
+        return target != NULL && binding != NULL &&
+               expression->value_category == MINIC_VALUE_RVALUE &&
+               minic_type_equal(expression->type, binding->type) &&
+               (minic_type_is_integer(expression->type) ||
+                minic_type_is_pointer(expression->type)) &&
+               minic_target_info_fixed_register_supported(
+                   target, binding->register_name, binding->register_name_length);
+    }
     case MINIC_EXPRESSION_FUNCTION: {
         const MinicFunction *function;
         const MinicFunctionType *function_type;

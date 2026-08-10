@@ -1,6 +1,7 @@
 #include "target/target_info.h"
 
 #include <limits.h>
+#include <string.h>
 
 const MinicTargetInfo *minic_default_target_info(void) {
     static MinicTargetInfo target;
@@ -58,4 +59,17 @@ bool minic_target_info_integer_width(const MinicTargetInfo *target,
     (void)alignment;
     *bits = (unsigned int)(size * CHAR_BIT);
     return true;
+}
+
+bool minic_target_info_fixed_register_supported(const MinicTargetInfo *target,
+                                                const char *name,
+                                                size_t name_length) {
+    if (target == NULL || name == NULL) {
+        return false;
+    }
+    /* The current RV64 backend uses most caller/scratch registers internally.
+     * Only the architectural stack/thread registers observed in unchanged Linux
+     * are safe fixed bindings until register allocation becomes target-aware. */
+    return (name_length == 2U && memcmp(name, "tp", 2U) == 0) ||
+           (name_length == 2U && memcmp(name, "sp", 2U) == 0);
 }

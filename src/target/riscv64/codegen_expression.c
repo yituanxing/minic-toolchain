@@ -760,6 +760,19 @@ bool minic_riscv64_emit_expression(FILE *file,
         }
         return minic_riscv64_emit_scalar_load(file, object->type, "a0", "a0");
     }
+    case MINIC_EXPRESSION_FIXED_REGISTER: {
+        const MinicFixedRegisterBinding *binding;
+
+        binding = minic_c0_program_fixed_register_binding(
+            program, expression->value.fixed_register_binding_id);
+        if (binding == NULL || binding->register_name_length == 0U ||
+            (!minic_type_is_integer(binding->type) && !minic_type_is_pointer(binding->type)) ||
+            fprintf(file, "  mv a0, %s\n", binding->register_name) < 0) {
+            return false;
+        }
+        return minic_type_is_pointer(binding->type) ||
+               minic_riscv64_emit_integer_conversion(file, binding->type, "a0");
+    }
     case MINIC_EXPRESSION_FUNCTION: {
         const MinicFunction *designator;
         MinicType function_type;

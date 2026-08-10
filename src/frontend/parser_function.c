@@ -970,6 +970,7 @@ typedef struct MinicParsedDeclarationPrefix {
     MinicParsedAttributeList attributes;
     bool is_extern;
     bool is_static;
+    bool is_register;
     bool is_inline;
 } MinicParsedDeclarationPrefix;
 
@@ -985,6 +986,18 @@ static bool parse_declaration_prefix(MinicParser *parser,
     saw_storage_class = false;
 
     for (;;) {
+        if (function_identifier_is(parser, "register")) {
+            if (saw_storage_class) {
+                minic_parser_error(parser, "conflicting or duplicate declaration storage class");
+                return false;
+            }
+            prefix->is_register = true;
+            saw_storage_class = true;
+            if (!minic_parser_advance(parser)) {
+                return false;
+            }
+            continue;
+        }
         if (parser->current.kind == MINIC_TOKEN_KW_STATIC) {
             if (saw_storage_class) {
                 minic_parser_error(parser, "conflicting or duplicate declaration storage class");
@@ -1061,6 +1074,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     bool is_extern_declaration;
     bool is_function_pointer_object;
     bool is_inline;
+    bool is_register_declaration;
     bool is_static_declaration;
     bool is_main;
     bool is_variadic;
@@ -1078,6 +1092,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     is_extern_declaration = false;
     is_function_pointer_object = false;
     is_inline = false;
+    is_register_declaration = false;
     is_static_declaration = false;
     (void)memset(&deferred_attributes, 0, sizeof(deferred_attributes));
     (void)memset(&declaration_prefix, 0, sizeof(declaration_prefix));
@@ -1098,6 +1113,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     }
     is_extern_declaration = declaration_prefix.is_extern;
     is_static_declaration = declaration_prefix.is_static;
+    is_register_declaration = declaration_prefix.is_register;
     is_internal = declaration_prefix.is_static;
     is_inline = declaration_prefix.is_inline;
     deferred_attributes = declaration_prefix.attributes;
@@ -1160,6 +1176,45 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
         return false;
     }
 
+    if (is_register_declaration) {
+        MinicFixedRegisterBindingId binding_id;
+
+        if (is_inline || deferred_attributes.count != 0U || has_section || has_visibility ||
+            is_function_pointer_object || parser->current.kind == MINIC_TOKEN_LPAREN ||
+            (!minic_type_is_integer(return_type) && !minic_type_is_pointer(return_type))) {
+            minic_parser_error(parser, "unsupported file-scope register declaration shape");
+            return false;
+        }
+        if (!parse_gnu_function_asm_label(parser,
+                                          assembler_name,
+                                          sizeof(assembler_name),
+                                          &assembler_name_length,
+                                          &has_assembler_name) ||
+            !has_assembler_name) {
+            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                minic_parser_error(parser, "file-scope register declaration requires GNU asm name");
+            }
+            return false;
+        }
+        if (!minic_target_info_fixed_register_supported(
+                parser->target_info, assembler_name, assembler_name_length)) {
+            minic_parser_error(parser, "fixed register binding is not supported by this target");
+            return false;
+        }
+        if (!minic_c0_program_add_fixed_register_binding(parser->program,
+                                                         parser->source + name_span.begin.offset,
+                                                         minic_parser_span_length(name_span),
+                                                         return_type,
+                                                         assembler_name,
+                                                         assembler_name_length,
+                                                         &binding_id)) {
+            minic_parser_error(parser, "cannot record fixed register binding");
+            return false;
+        }
+        (void)binding_id;
+        return minic_parser_expect(
+            parser, MINIC_TOKEN_SEMICOLON, "expected ';' after fixed register binding");
+    }
     if (is_static_declaration && parser->current.kind != MINIC_TOKEN_LPAREN) {
         if (is_inline) {
             minic_parser_error(parser, "inline specifier requires a function declarator");
