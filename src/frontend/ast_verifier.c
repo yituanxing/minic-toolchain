@@ -685,6 +685,17 @@ verify_expression(const MinicC0Program *program, size_t expression_index, MinicC
                conditional_result_type(when_true->type, when_false->type, &expected_type) &&
                minic_type_equal(expression->type, expected_type);
     }
+    case MINIC_EXPRESSION_BUILTIN_UNARY: {
+        const MinicExpression *builtin_operand;
+
+        builtin_operand =
+            expression_before(program, expression->value.builtin_unary.operand, expression_index);
+        return expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_CLZLL &&
+               builtin_operand != NULL &&
+               minic_type_equal(builtin_operand->type, minic_type_unsigned_long_long()) &&
+               expression->value_category == MINIC_VALUE_RVALUE &&
+               minic_type_equal(expression->type, minic_type_int());
+    }
     case MINIC_EXPRESSION_BUILTIN_OVERFLOW: {
         const MinicExpression *overflow_left;
         const MinicExpression *overflow_right;

@@ -53,6 +53,7 @@ typedef enum MinicExpressionKind {
     MINIC_EXPRESSION_CONDITIONAL,
     MINIC_EXPRESSION_CALL,
     MINIC_EXPRESSION_STATEMENT,
+    MINIC_EXPRESSION_BUILTIN_UNARY,
     MINIC_EXPRESSION_BUILTIN_OVERFLOW
 } MinicExpressionKind;
 
@@ -89,6 +90,8 @@ typedef enum MinicBinaryOperator {
     MINIC_BINARY_LOGICAL_OR,
     MINIC_BINARY_COMMA
 } MinicBinaryOperator;
+
+typedef enum MinicBuiltinUnaryOperator { MINIC_BUILTIN_UNARY_CLZLL = 0 } MinicBuiltinUnaryOperator;
 
 typedef enum MinicOverflowOperator {
     MINIC_OVERFLOW_ADD = 0,
@@ -145,6 +148,10 @@ typedef struct MinicExpression {
             MinicBlockId block;
             MinicExpressionId result;
         } statement_expression;
+        struct {
+            MinicBuiltinUnaryOperator operator_kind;
+            MinicExpressionId operand;
+        } builtin_unary;
         struct {
             MinicOverflowOperator operator_kind;
             MinicExpressionId left;

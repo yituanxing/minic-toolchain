@@ -948,6 +948,70 @@ static bool parse_builtin_constant_p(MinicParser *parser, MinicExpressionId *exp
     return minic_parser_add_expression(parser, &result, expression_id);
 }
 
+static bool parse_builtin_unary(MinicParser *parser,
+                                MinicBuiltinUnaryOperator operator_kind,
+                                const char *spelling,
+                                MinicExpressionId *expression_id) {
+    MinicExpression conversion;
+    MinicExpression expression;
+    const MinicExpression *operand;
+    MinicExpressionId converted_id;
+    MinicExpressionId operand_id;
+    MinicSourcePosition begin;
+    MinicType argument_type;
+
+    if (parser == NULL || spelling == NULL || expression_id == NULL ||
+        !generic_token_text_equals(parser, spelling)) {
+        return false;
+    }
+    switch (operator_kind) {
+    case MINIC_BUILTIN_UNARY_CLZLL:
+        argument_type = minic_type_unsigned_long_long();
+        break;
+    default:
+        return false;
+    }
+
+    begin = parser->current.span.begin;
+    if (!minic_parser_advance(parser) ||
+        !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '(' after unary builtin") ||
+        !parse_expression_internal(parser, &operand_id, 0U, true)) {
+        return false;
+    }
+    operand = minic_c0_program_expression(parser->program, operand_id);
+    if (operand == NULL || !minic_type_is_integer(operand->type)) {
+        minic_parser_error(parser, "unary builtin requires an integer operand");
+        return false;
+    }
+    if (!minic_type_equal(operand->type, argument_type)) {
+        (void)memset(&conversion, 0, sizeof(conversion));
+        conversion.kind = MINIC_EXPRESSION_CAST;
+        conversion.span = operand->span;
+        conversion.type = argument_type;
+        conversion.value_category = MINIC_VALUE_RVALUE;
+        conversion.value.unary.operand = operand_id;
+        if (!minic_parser_add_expression(parser, &conversion, &converted_id)) {
+            return false;
+        }
+        operand_id = converted_id;
+    }
+    if (parser->current.kind != MINIC_TOKEN_RPAREN) {
+        minic_parser_error(parser, "expected ')' after unary builtin operand");
+        return false;
+    }
+
+    (void)memset(&expression, 0, sizeof(expression));
+    expression.kind = MINIC_EXPRESSION_BUILTIN_UNARY;
+    expression.span.begin = begin;
+    expression.span.end = parser->current.span.end;
+    expression.type = minic_type_int();
+    expression.value_category = MINIC_VALUE_RVALUE;
+    expression.value.builtin_unary.operator_kind = operator_kind;
+    expression.value.builtin_unary.operand = operand_id;
+    return minic_parser_advance(parser) &&
+           minic_parser_add_expression(parser, &expression, expression_id);
+}
+
 static bool parse_builtin_overflow(MinicParser *parser,
                                    MinicOverflowOperator operator_kind,
                                    MinicExpressionId *expression_id) {
@@ -1013,6 +1077,14 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
     int enum_value;
     bool is_enum_constant;
 
+    if (generic_token_text_equals(parser, "__builtin_clzll")) {
+        if (!parse_builtin_unary(
+                parser, MINIC_BUILTIN_UNARY_CLZLL, "__builtin_clzll", &primary_id) ||
+            !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
+            return false;
+        }
+        return finish_value_expression(parser, primary_id, decay_array, expression_id);
+    }
     if (generic_token_text_equals(parser, "__builtin_constant_p")) {
         if (!parse_builtin_constant_p(parser, &primary_id) ||
             !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {

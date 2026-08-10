@@ -95,6 +95,12 @@ static bool remap_non_cast_expression(MinicExpression *expression,
                                    current_old_index,
                                    expression->value.conditional.when_false,
                                    &expression->value.conditional.when_false);
+    case MINIC_EXPRESSION_BUILTIN_UNARY:
+        return remap_expression_id(mapping,
+                                   old_expression_count,
+                                   current_old_index,
+                                   expression->value.builtin_unary.operand,
+                                   &expression->value.builtin_unary.operand);
     case MINIC_EXPRESSION_BUILTIN_OVERFLOW:
         return remap_expression_id(mapping,
                                    old_expression_count,
