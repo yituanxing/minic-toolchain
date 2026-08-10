@@ -60,18 +60,17 @@ grep -F "  li a0, 0" "$work/null_pointer_constant.s" >/dev/null
 grep -F "  j .Lmake_null_return" "$work/null_pointer_constant.s" >/dev/null
 printf '%s\n' "PASS compiler/c0/null_pointer_constant"
 
-expect_failure \
-    invalid_cast_pointer_to_integer \
-    "unsupported cast between these types"
-expect_failure \
-    invalid_cast_integer_to_pointer \
-    "unsupported cast between these types"
+MINIC="$minic" \
+HOST_CC="$host_cc" \
+BUILD_DIR="$build_dir" \
+sh "$root/tests/compiler/c0/run-pointer-integer-casts.sh"
+
 expect_failure \
     invalid_cast_integer_to_float \
     "unsupported cast between these types"
 expect_failure \
     invalid_cast_assignment_target \
-    "assignment expression requires a modifiable scalar lvalue"
+    "assignment expression requires a modifiable object lvalue"
 
 MINIC="$minic" \
 HOST_CC="$host_cc" \
