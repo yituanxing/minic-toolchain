@@ -29,7 +29,24 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('tools/dev/foundation-data-layout-alignof-once.py')
+          text = path.read_text()
+          old = "'''        !constant_record_member_offset(parser->program,\\n"
+          new = "'''    if (!constant_record_member_offset(parser->program,\\n"
+          if text.count(old) != 1:
+              raise SystemExit(f'candidate helper anchor expected once, found {text.count(old)}')
+          text = text.replace(old, new, 1)
+          old = "'''        !constant_record_member_offset(parser,\\n"
+          new = "'''    if (!constant_record_member_offset(parser,\\n"
+          if text.count(old) != 1:
+              raise SystemExit(f'candidate helper replacement expected once, found {text.count(old)}')
+          text = text.replace(old, new, 1)
+          path.write_text(text)
+          PY
           python3 tools/dev/foundation-data-layout-alignof-once.py
+          git checkout -- tools/dev/foundation-data-layout-alignof-once.py
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
 
       - name: Enforce candidate scope
