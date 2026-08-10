@@ -58,6 +58,8 @@ const char *minic_token_kind_name(MinicTokenKind kind) {
         return "static";
     case MINIC_TOKEN_KW_SIZEOF:
         return "sizeof";
+    case MINIC_TOKEN_KW_ALIGNOF:
+        return "alignof";
     case MINIC_TOKEN_KW_RETURN:
         return "return";
     case MINIC_TOKEN_KW_IF:

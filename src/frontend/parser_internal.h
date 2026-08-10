@@ -6,6 +6,7 @@
 #include "frontend/lexer.h"
 #include "frontend/token.h"
 #include "minic/compiler.h"
+#include "target/data_layout.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -43,6 +44,7 @@ typedef struct MinicParser {
     MinicToken current;
     MinicDiagnostic *diagnostic;
     MinicC0Program *program;
+    const MinicDataLayout *data_layout;
     MinicBlockId current_block;
     MinicFunctionId current_function;
     size_t local_begin;
@@ -105,6 +107,9 @@ bool minic_parser_parse_integer_value64(MinicParser *parser, int64_t *value);
 bool minic_parser_parse_zero_pointer_constant(MinicParser *parser);
 bool minic_parser_parse_unsigned_integer_value64(MinicParser *parser, uint64_t *value);
 bool minic_parser_parse_integer_constant_expression(MinicParser *parser, int64_t *value);
+bool minic_parser_parse_alignof_type_value(MinicParser *parser,
+                                           int64_t *value,
+                                           MinicSourceSpan *span);
 bool minic_parser_token_starts_type_name(const MinicParser *parser, MinicToken token);
 bool minic_parser_token_starts_declaration_specifiers(const MinicParser *parser, MinicToken token);
 bool minic_parser_parse_local_storage_class(MinicParser *parser, bool *is_register_storage);

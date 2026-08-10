@@ -1,5 +1,7 @@
 #include "target/riscv64/layout.h"
 
+#include "target/data_layout.h"
+
 #include <stdint.h>
 #include <stdio.h>
 
@@ -18,71 +20,7 @@ bool minic_riscv64_type_layout(const MinicC0Program *program,
                                MinicType type,
                                size_t *size,
                                size_t *alignment) {
-    if (program == NULL || size == NULL || alignment == NULL) {
-        return false;
-    }
-    if (minic_type_is_pointer(type)) {
-        *size = 8U;
-        *alignment = 8U;
-        return true;
-    }
-    if (minic_type_is_integer(type)) {
-        if (minic_type_is_bool_integer(type) || minic_type_is_char_integer(type)) {
-            *size = 1U;
-            *alignment = 1U;
-        } else if (minic_type_is_short_integer(type)) {
-            *size = 2U;
-            *alignment = 2U;
-        } else if (minic_type_is_int128_integer(type)) {
-            *size = 16U;
-            *alignment = 16U;
-        } else if (minic_type_is_long_integer(type)) {
-            *size = 8U;
-            *alignment = 8U;
-        } else {
-            *size = 4U;
-            *alignment = 4U;
-        }
-        return true;
-    }
-    if (minic_type_is_float(type)) {
-        *size = 4U;
-        *alignment = 4U;
-        return true;
-    }
-    if (minic_type_is_double(type)) {
-        *size = 8U;
-        *alignment = 8U;
-        return true;
-    }
-    if (minic_type_is_record(type)) {
-        const MinicRecord *record;
-
-        record = minic_c0_program_record(program, type.record_id);
-        if (record == NULL || !record->is_complete || record->alignment == 0U) {
-            return false;
-        }
-        *size = record->storage_size;
-        *alignment = record->alignment;
-        return true;
-    }
-    if (minic_type_is_array(type)) {
-        const MinicArrayType *array_type;
-        size_t element_size;
-        size_t element_alignment;
-
-        array_type = minic_c0_program_array_type(program, type.array_type_id);
-        if (array_type == NULL || array_type->element_count == 0U ||
-            !minic_riscv64_type_layout(
-                program, array_type->element_type, &element_size, &element_alignment) ||
-            element_size > SIZE_MAX / array_type->element_count) {
-            return false;
-        }
-        *size = element_size * array_type->element_count;
-        *alignment = element_alignment;
-        return true;
-    }
-    return false;
+    return minic_data_layout_type(minic_default_data_layout(), program, type, size, alignment);
 }
 
 static bool minic_riscv64_align_up(size_t value, size_t alignment, size_t *result) {

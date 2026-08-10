@@ -64,9 +64,11 @@ MINIC_SOURCES := \
 	src/frontend/parser_statement.c \
 	src/frontend/parser_string.c \
 	src/frontend/parser_type.c \
+	src/frontend/parser_type_query.c \
 	src/frontend/parser_typedef.c \
 	src/frontend/token.c \
 	src/frontend/type.c \
+	src/target/data_layout.c \
 	src/target/riscv64/layout.c \
 	src/target/riscv64/codegen_support.c \
 	src/target/riscv64/codegen_expression.c \
@@ -123,6 +125,7 @@ AST_CONTRACT_TEST_BINARY  := $(BUILD_DIR)/tests/frontend/ast-contract-test
 LAYOUT_TEST_SOURCES := \
 	src/frontend/ast.c \
 	src/frontend/type.c \
+	src/target/data_layout.c \
 	src/target/riscv64/layout.c \
 	tests/target/riscv64/layout_test.c
 LAYOUT_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(LAYOUT_TEST_SOURCES))

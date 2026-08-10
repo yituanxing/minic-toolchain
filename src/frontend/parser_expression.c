@@ -1244,6 +1244,27 @@ static bool current_is_sizeof(const MinicParser *parser) {
     return parser->current.kind == MINIC_TOKEN_KW_SIZEOF;
 }
 
+static bool current_is_alignof(const MinicParser *parser) {
+    return parser->current.kind == MINIC_TOKEN_KW_ALIGNOF;
+}
+
+static bool parse_alignof(MinicParser *parser, MinicExpressionId *expression_id) {
+    MinicExpression expression;
+    MinicSourceSpan span;
+    int64_t alignment;
+
+    if (!minic_parser_parse_alignof_type_value(parser, &alignment, &span)) {
+        return false;
+    }
+    (void)memset(&expression, 0, sizeof(expression));
+    expression.kind = MINIC_EXPRESSION_INTEGER;
+    expression.span = span;
+    expression.type = minic_type_unsigned_long();
+    expression.value_category = MINIC_VALUE_RVALUE;
+    expression.value.integer_value = alignment;
+    return minic_parser_add_expression(parser, &expression, expression_id);
+}
+
 static bool parse_sizeof(MinicParser *parser, MinicExpressionId *expression_id) {
     MinicExpression expression;
     MinicSourcePosition begin;
@@ -1319,6 +1340,9 @@ static bool parse_unary(MinicParser *parser, MinicExpressionId *expression_id, b
 
     if (current_is_sizeof(parser)) {
         return parse_sizeof(parser, expression_id);
+    }
+    if (current_is_alignof(parser)) {
+        return parse_alignof(parser, expression_id);
     }
     if (parenthesis_starts_cast(parser)) {
         return parse_cast(parser, expression_id);

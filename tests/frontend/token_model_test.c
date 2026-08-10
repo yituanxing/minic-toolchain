@@ -42,6 +42,7 @@ int main(void)
         expect_name(MINIC_TOKEN_FLOATING_CONSTANT, "floating constant") != 0 ||
         expect_name(MINIC_TOKEN_STRING_LITERAL, "string literal") != 0 ||
         expect_name(MINIC_TOKEN_KW_STATIC_ASSERT, "_Static_assert") != 0 ||
+        expect_name(MINIC_TOKEN_KW_ALIGNOF, "alignof") != 0 ||
         expect_name(MINIC_TOKEN_KW_CHAR, "char") != 0 ||
         expect_name(MINIC_TOKEN_KW_DOUBLE, "double") != 0 ||
         expect_name(MINIC_TOKEN_KW_FLOAT, "float") != 0 ||

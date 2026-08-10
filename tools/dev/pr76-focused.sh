@@ -25,6 +25,7 @@ sh tests/compiler/c0/run-gnu-inline-asm-named-operands.sh
 sh tests/compiler/c0/run-gnu-compiletime-selection-builtins.sh
 sh tests/compiler/c0/run-gnu-builtin-constant-p.sh
 sh tests/compiler/c0/run-static-assert-declaration.sh
+sh tests/compiler/c0/run-alignof-type-query.sh
 sh tests/compiler/c0/run-rv64-integer-aggregate-return.sh
 sh tests/compiler/c0/run-unnamed-bit-fields.sh
 sh tests/compiler/c0/run-gnu-overflow-builtins.sh

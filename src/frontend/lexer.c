@@ -160,6 +160,11 @@ static MinicTokenKind minic_classify_identifier(const char *text, size_t length)
     if (length == 6U && memcmp(text, "sizeof", 6U) == 0) {
         return MINIC_TOKEN_KW_SIZEOF;
     }
+    if ((length == 8U && memcmp(text, "_Alignof", 8U) == 0) ||
+        (length == 9U && memcmp(text, "__alignof", 9U) == 0) ||
+        (length == 11U && memcmp(text, "__alignof__", 11U) == 0)) {
+        return MINIC_TOKEN_KW_ALIGNOF;
+    }
     if (length == 6U && memcmp(text, "return", 6U) == 0) {
         return MINIC_TOKEN_KW_RETURN;
     }
