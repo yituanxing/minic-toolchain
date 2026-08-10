@@ -2630,6 +2630,42 @@ static bool identifier_starts_label(MinicParser *parser) {
     return minic_lexer_next(&lookahead, &token, &diagnostic) && token.kind == MINIC_TOKEN_COLON;
 }
 
+static void resolve_pending_inline_asm_labels(MinicParser *parser,
+                                              MinicSourceSpan name_span,
+                                              MinicStatementId label_statement_id) {
+    size_t statement_index;
+    size_t name_length;
+    const char *name;
+
+    if (parser == NULL || label_statement_id == MINIC_STATEMENT_INVALID) {
+        return;
+    }
+    name = parser->source + name_span.begin.offset;
+    name_length = minic_parser_span_length(name_span);
+    for (statement_index = parser->function_statement_begin; statement_index < label_statement_id;
+         ++statement_index) {
+        const MinicStatement *statement;
+        MinicInlineAsm *inline_asm;
+        size_t label_index;
+
+        statement = minic_c0_program_statement(parser->program, statement_index);
+        if (statement == NULL || statement->kind != MINIC_STATEMENT_INLINE_ASM ||
+            statement->inline_asm_id >= parser->program->inline_asm_count) {
+            continue;
+        }
+        inline_asm = &parser->program->inline_asms[statement->inline_asm_id];
+        for (label_index = 0U; label_index < inline_asm->label_count; ++label_index) {
+            MinicInlineAsmLabel *label;
+
+            label = &inline_asm->labels[label_index];
+            if (label->target_statement == MINIC_STATEMENT_INVALID &&
+                label->name_length == name_length && memcmp(label->name, name, name_length) == 0) {
+                label->target_statement = label_statement_id;
+            }
+        }
+    }
+}
+
 static bool parse_label(MinicParser *parser, bool allow_declaration) {
     MinicStatement statement;
     MinicSourceSpan name_span;
@@ -2693,6 +2729,7 @@ static bool parse_label(MinicParser *parser, bool allow_declaration) {
                 pending->target_statement = label_statement_id;
             }
         }
+        resolve_pending_inline_asm_labels(parser, name_span, label_statement_id);
     }
 
     if (parser->current.kind == MINIC_TOKEN_RBRACE || parser->current.kind == MINIC_TOKEN_EOF) {
@@ -2868,6 +2905,10 @@ static bool current_is_gnu_asm(const MinicParser *parser) {
            inline_asm_identifier_is(parser, "__asm__");
 }
 
+static bool current_is_gnu_goto(const MinicParser *parser) {
+    return inline_asm_identifier_is(parser, "goto");
+}
+
 static bool current_is_gnu_volatile(const MinicParser *parser) {
     return parser->current.kind == MINIC_TOKEN_KW_VOLATILE ||
            inline_asm_identifier_is(parser, "__volatile") ||
@@ -3010,6 +3051,27 @@ static bool parse_gnu_inline_asm_input(MinicParser *parser, MinicInlineAsmId inl
     return true;
 }
 
+static bool parse_gnu_inline_asm_label(MinicParser *parser, MinicInlineAsmId inline_asm_id) {
+    MinicSourceSpan name_span;
+    MinicStatementId target_statement;
+    const char *name;
+    size_t name_length;
+
+    if (parser == NULL || parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
+        if (parser != NULL) {
+            minic_parser_error(parser, "expected GNU asm goto label name");
+        }
+        return false;
+    }
+    name_span = parser->current.span;
+    name = parser->source + name_span.begin.offset;
+    name_length = minic_parser_span_length(name_span);
+    target_statement = minic_parser_find_label_statement(parser, name_span);
+    return minic_c0_program_add_inline_asm_label(
+               parser->program, inline_asm_id, name, name_length, target_statement) &&
+           minic_parser_advance(parser);
+}
+
 static bool parse_gnu_inline_asm_statement(MinicParser *parser) {
     MinicStatement statement;
     MinicInlineAsmId inline_asm_id;
@@ -3018,6 +3080,7 @@ static bool parse_gnu_inline_asm_statement(MinicParser *parser) {
     char *template_text;
     size_t template_length;
     bool is_volatile;
+    bool is_goto;
     bool has_memory_clobber;
 
     if (!current_is_gnu_asm(parser)) {
@@ -3027,16 +3090,36 @@ static bool parse_gnu_inline_asm_statement(MinicParser *parser) {
     template_text = NULL;
     template_length = 0U;
     is_volatile = false;
+    is_goto = false;
     has_memory_clobber = false;
 
     if (!minic_parser_advance(parser)) {
         return false;
     }
-    if (current_is_gnu_volatile(parser)) {
-        is_volatile = true;
-        if (!minic_parser_advance(parser)) {
-            return false;
+    for (;;) {
+        if (current_is_gnu_volatile(parser)) {
+            if (is_volatile) {
+                minic_parser_error(parser, "duplicate volatile qualifier on GNU asm");
+                return false;
+            }
+            is_volatile = true;
+            if (!minic_parser_advance(parser)) {
+                return false;
+            }
+            continue;
         }
+        if (current_is_gnu_goto(parser)) {
+            if (is_goto) {
+                minic_parser_error(parser, "duplicate goto qualifier on GNU asm");
+                return false;
+            }
+            is_goto = true;
+            if (!minic_parser_advance(parser)) {
+                return false;
+            }
+            continue;
+        }
+        break;
     }
     if (!minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '(' after GNU asm") ||
         !minic_parser_parse_string_text(parser, &template_text, &template_length, &template_span)) {
@@ -3044,7 +3127,8 @@ static bool parse_gnu_inline_asm_statement(MinicParser *parser) {
         return false;
     }
     if (!minic_c0_program_add_inline_asm(
-            parser->program, template_text, template_length, is_volatile, false, &inline_asm_id)) {
+            parser->program, template_text, template_length, is_volatile, false, &inline_asm_id) ||
+        !minic_c0_program_set_inline_asm_goto(parser->program, inline_asm_id, is_goto)) {
         free(template_text);
         minic_parser_error(parser, "cannot store GNU inline assembly");
         return false;
@@ -3067,56 +3151,85 @@ static bool parse_gnu_inline_asm_statement(MinicParser *parser) {
                 return false;
             }
         }
-
-        if (parser->current.kind == MINIC_TOKEN_COLON) {
+    }
+    if (parser->current.kind == MINIC_TOKEN_COLON) {
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
+        while (parser->current.kind != MINIC_TOKEN_COLON &&
+               parser->current.kind != MINIC_TOKEN_RPAREN) {
+            if (!parse_gnu_inline_asm_input(parser, inline_asm_id)) {
+                return false;
+            }
+            if (parser->current.kind != MINIC_TOKEN_COMMA) {
+                break;
+            }
             if (!minic_parser_advance(parser)) {
                 return false;
             }
-            while (parser->current.kind != MINIC_TOKEN_COLON &&
-                   parser->current.kind != MINIC_TOKEN_RPAREN) {
-                if (!parse_gnu_inline_asm_input(parser, inline_asm_id)) {
-                    return false;
-                }
-                if (parser->current.kind != MINIC_TOKEN_COMMA) {
-                    break;
-                }
-                if (!minic_parser_advance(parser)) {
-                    return false;
-                }
-            }
-            if (parser->current.kind == MINIC_TOKEN_COLON) {
-                if (!minic_parser_advance(parser)) {
-                    return false;
-                }
-                while (parser->current.kind != MINIC_TOKEN_RPAREN) {
-                    char *clobber;
-                    size_t clobber_length;
-                    MinicSourceSpan clobber_span;
+        }
+    }
+    if (parser->current.kind == MINIC_TOKEN_COLON) {
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
+        while (parser->current.kind != MINIC_TOKEN_COLON &&
+               parser->current.kind != MINIC_TOKEN_RPAREN) {
+            char *clobber;
+            size_t clobber_length;
+            MinicSourceSpan clobber_span;
 
-                    clobber = NULL;
-                    clobber_length = 0U;
-                    if (!minic_parser_parse_string_text(
-                            parser, &clobber, &clobber_length, &clobber_span)) {
-                        free(clobber);
-                        return false;
-                    }
-                    if (clobber_length == 6U && memcmp(clobber, "memory", 6U) == 0) {
-                        has_memory_clobber = true;
-                    } else {
-                        free(clobber);
-                        minic_parser_error(
-                            parser, "GNU asm register clobbers require TargetConstraint support");
-                        return false;
-                    }
-                    free(clobber);
-                    if (parser->current.kind != MINIC_TOKEN_COMMA) {
-                        break;
-                    }
-                    if (!minic_parser_advance(parser)) {
-                        return false;
-                    }
-                }
+            clobber = NULL;
+            clobber_length = 0U;
+            if (!minic_parser_parse_string_text(parser, &clobber, &clobber_length, &clobber_span)) {
+                free(clobber);
+                return false;
             }
+            if (clobber_length == 6U && memcmp(clobber, "memory", 6U) == 0) {
+                has_memory_clobber = true;
+            } else {
+                free(clobber);
+                minic_parser_error(parser,
+                                   "GNU asm register clobbers require TargetConstraint support");
+                return false;
+            }
+            free(clobber);
+            if (parser->current.kind != MINIC_TOKEN_COMMA) {
+                break;
+            }
+            if (!minic_parser_advance(parser)) {
+                return false;
+            }
+        }
+    }
+    if (parser->current.kind == MINIC_TOKEN_COLON) {
+        if (!is_goto) {
+            minic_parser_error(parser, "GNU asm label operands require asm goto");
+            return false;
+        }
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
+        while (parser->current.kind != MINIC_TOKEN_RPAREN) {
+            if (!parse_gnu_inline_asm_label(parser, inline_asm_id)) {
+                return false;
+            }
+            if (parser->current.kind != MINIC_TOKEN_COMMA) {
+                break;
+            }
+            if (!minic_parser_advance(parser)) {
+                return false;
+            }
+        }
+    }
+    if (is_goto) {
+        const MinicInlineAsm *inline_asm;
+
+        inline_asm = minic_c0_program_inline_asm(parser->program, inline_asm_id);
+        if (inline_asm == NULL || inline_asm->output_count != 0U || inline_asm->label_count == 0U) {
+            minic_parser_error(parser,
+                               "GNU asm goto currently requires no outputs and at least one label");
+            return false;
         }
     }
     if (!minic_c0_program_set_inline_asm_memory_clobber(

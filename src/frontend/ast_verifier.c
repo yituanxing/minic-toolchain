@@ -845,9 +845,13 @@ static bool verify_statement(const MinicC0Program *program, const MinicStatement
         if (inline_asm == NULL || inline_asm->template_text == NULL ||
             inline_asm->output_count > inline_asm->output_capacity ||
             inline_asm->input_count > inline_asm->input_capacity ||
+            inline_asm->label_count > inline_asm->label_capacity ||
             (inline_asm->output_count != 0U && inline_asm->outputs == NULL) ||
             (inline_asm->input_count != 0U && inline_asm->inputs == NULL) ||
+            (inline_asm->label_count != 0U && inline_asm->labels == NULL) ||
             inline_asm->clobber_count > 1U ||
+            (inline_asm->is_goto ? (inline_asm->label_count == 0U || inline_asm->output_count != 0U)
+                                 : inline_asm->label_count != 0U) ||
             inline_asm->clobber_count != (inline_asm->has_memory_clobber ? 1U : 0U) ||
             statement->target_expression != MINIC_EXPRESSION_INVALID ||
             statement->expression != MINIC_EXPRESSION_INVALID ||
@@ -881,6 +885,17 @@ static bool verify_statement(const MinicC0Program *program, const MinicStatement
                 ((operand->name == NULL) != (operand->name_length == 0U)) ||
                 operand_expression == NULL ||
                 operand->access != MINIC_INLINE_ASM_OPERAND_READ_ONLY) {
+                return false;
+            }
+        }
+        for (operand_index = 0U; operand_index < inline_asm->label_count; ++operand_index) {
+            const MinicInlineAsmLabel *label;
+            const MinicStatement *target_statement;
+
+            label = &inline_asm->labels[operand_index];
+            target_statement = minic_c0_program_statement(program, label->target_statement);
+            if (label->name == NULL || label->name_length == 0U || target_statement == NULL ||
+                target_statement->kind != MINIC_STATEMENT_LABEL) {
                 return false;
             }
         }

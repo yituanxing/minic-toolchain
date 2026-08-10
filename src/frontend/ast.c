@@ -68,8 +68,13 @@ void minic_c0_program_destroy(MinicC0Program *program) {
             free(program->inline_asms[index].inputs[operand_index].name);
             free(program->inline_asms[index].inputs[operand_index].constraint_text);
         }
+        for (operand_index = 0U; operand_index < program->inline_asms[index].label_count;
+             ++operand_index) {
+            free(program->inline_asms[index].labels[operand_index].name);
+        }
         free(program->inline_asms[index].outputs);
         free(program->inline_asms[index].inputs);
+        free(program->inline_asms[index].labels);
     }
     for (index = 0U; index < program->function_count; ++index) {
         free(program->functions[index].name);
@@ -335,6 +340,56 @@ bool minic_c0_program_set_inline_asm_memory_clobber(MinicC0Program *program,
     inline_asm = &program->inline_asms[inline_asm_id];
     inline_asm->has_memory_clobber = has_memory_clobber;
     inline_asm->clobber_count = has_memory_clobber ? 1U : 0U;
+    return true;
+}
+
+bool minic_c0_program_set_inline_asm_goto(MinicC0Program *program,
+                                          MinicInlineAsmId inline_asm_id,
+                                          bool is_goto) {
+    if (program == NULL || inline_asm_id >= program->inline_asm_count) {
+        return false;
+    }
+    program->inline_asms[inline_asm_id].is_goto = is_goto;
+    return true;
+}
+
+bool minic_c0_program_add_inline_asm_label(MinicC0Program *program,
+                                           MinicInlineAsmId inline_asm_id,
+                                           const char *name,
+                                           size_t name_length,
+                                           MinicStatementId target_statement) {
+    MinicInlineAsm *inline_asm;
+    MinicInlineAsmLabel label;
+    size_t index;
+
+    if (program == NULL || inline_asm_id >= program->inline_asm_count || name == NULL ||
+        name_length == 0U ||
+        (target_statement != MINIC_STATEMENT_INVALID &&
+         target_statement >= program->statement_count)) {
+        return false;
+    }
+    inline_asm = &program->inline_asms[inline_asm_id];
+    for (index = 0U; index < inline_asm->label_count; ++index) {
+        if (inline_asm->labels[index].name_length == name_length &&
+            memcmp(inline_asm->labels[index].name, name, name_length) == 0) {
+            return false;
+        }
+    }
+    if (!minic_grow_array((void **)&inline_asm->labels,
+                          &inline_asm->label_capacity,
+                          inline_asm->label_count,
+                          sizeof(*inline_asm->labels))) {
+        return false;
+    }
+    (void)memset(&label, 0, sizeof(label));
+    label.name = minic_copy_name(name, name_length);
+    if (label.name == NULL) {
+        return false;
+    }
+    label.name_length = name_length;
+    label.target_statement = target_statement;
+    inline_asm->labels[inline_asm->label_count] = label;
+    inline_asm->label_count += 1U;
     return true;
 }
 

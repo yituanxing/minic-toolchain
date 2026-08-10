@@ -1,5 +1,6 @@
 #include "target/riscv64/codegen_internal.h"
 
+#include <inttypes.h>
 #include <stdint.h>
 #include <string.h>
 
@@ -61,6 +62,25 @@ static bool find_named_operand(const MinicInlineAsm *inline_asm,
     return false;
 }
 
+static const MinicInlineAsmLabel *
+find_named_label(const MinicInlineAsm *inline_asm, const char *name, size_t name_length) {
+    size_t index;
+
+    if (inline_asm == NULL || name == NULL || name_length == 0U) {
+        return NULL;
+    }
+    for (index = 0U; index < inline_asm->label_count; ++index) {
+        const MinicInlineAsmLabel *label;
+
+        label = &inline_asm->labels[index];
+        if (label->name != NULL && label->name_length == name_length &&
+            memcmp(label->name, name, name_length) == 0) {
+            return label;
+        }
+    }
+    return NULL;
+}
+
 static bool validate_output(const MinicC0Program *program, const MinicInlineAsmOperand *operand) {
     const MinicExpression *expression;
 
@@ -82,11 +102,14 @@ static bool validate_output(const MinicC0Program *program, const MinicInlineAsmO
     return false;
 }
 
-static bool validate_input(const MinicC0Program *program, const MinicInlineAsmOperand *operand) {
+static bool validate_input(const MinicInlineAsm *inline_asm,
+                           const MinicC0Program *program,
+                           const MinicInlineAsmOperand *operand) {
     const MinicExpression *expression;
 
-    if (program == NULL || operand == NULL ||
-        operand->access != MINIC_INLINE_ASM_OPERAND_READ_ONLY || !constraint_is(operand, "r")) {
+    if (inline_asm == NULL || program == NULL || operand == NULL ||
+        operand->access != MINIC_INLINE_ASM_OPERAND_READ_ONLY ||
+        (!constraint_is(operand, "r") && !(inline_asm->is_goto && constraint_is(operand, "i")))) {
         return false;
     }
     expression = minic_c0_program_expression(program, operand->expression);
@@ -147,6 +170,40 @@ static bool resolve_template_reference(const MinicInlineAsm *inline_asm,
     return false;
 }
 
+static bool resolve_label_reference(const MinicInlineAsm *inline_asm,
+                                    size_t *template_index,
+                                    MinicStatementId *target_statement) {
+    size_t index;
+    size_t name_begin;
+    size_t name_end;
+    const MinicInlineAsmLabel *label;
+
+    if (inline_asm == NULL || template_index == NULL || target_statement == NULL ||
+        *template_index + 3U >= inline_asm->template_length ||
+        inline_asm->template_text[*template_index] != '%' ||
+        inline_asm->template_text[*template_index + 1U] != 'l' ||
+        inline_asm->template_text[*template_index + 2U] != '[') {
+        return false;
+    }
+    index = *template_index + 3U;
+    name_begin = index;
+    while (index < inline_asm->template_length && inline_asm->template_text[index] != ']') {
+        index += 1U;
+    }
+    name_end = index;
+    if (name_end == name_begin || name_end >= inline_asm->template_length) {
+        return false;
+    }
+    label =
+        find_named_label(inline_asm, inline_asm->template_text + name_begin, name_end - name_begin);
+    if (label == NULL || label->target_statement == MINIC_STATEMENT_INVALID) {
+        return false;
+    }
+    *target_statement = label->target_statement;
+    *template_index = name_end;
+    return true;
+}
+
 static bool template_operands_are_valid(const MinicInlineAsm *inline_asm, size_t operand_count) {
     size_t index;
 
@@ -160,6 +217,17 @@ static bool template_operands_are_valid(const MinicInlineAsm *inline_asm, size_t
         if (inline_asm->template_text[index] != '%') {
             continue;
         }
+        if (index + 2U < inline_asm->template_length &&
+            inline_asm->template_text[index + 1U] == 'l' &&
+            inline_asm->template_text[index + 2U] == '[') {
+            MinicStatementId target_statement;
+
+            if (!resolve_label_reference(inline_asm, &index, &target_statement)) {
+                return false;
+            }
+            (void)target_statement;
+            continue;
+        }
         if (!resolve_template_reference(
                 inline_asm, operand_count, &index, &operand_index, &literal_percent)) {
             return false;
@@ -170,7 +238,33 @@ static bool template_operands_are_valid(const MinicInlineAsm *inline_asm, size_t
     return true;
 }
 
-static bool emit_template(FILE *file, const MinicInlineAsm *inline_asm) {
+static bool emit_immediate_operand(FILE *file,
+                                   const MinicC0Program *program,
+                                   const MinicInlineAsmOperand *operand,
+                                   MinicInlineAsmId inline_asm_id,
+                                   size_t operand_index) {
+    const MinicExpression *expression;
+
+    if (file == NULL || program == NULL || operand == NULL) {
+        return false;
+    }
+    expression = minic_c0_program_expression(program, operand->expression);
+    if (expression == NULL) {
+        return false;
+    }
+    if (expression->kind == MINIC_EXPRESSION_INTEGER && minic_type_is_integer(expression->type)) {
+        return fprintf(file, "%" PRId64, expression->value.integer_value) >= 0;
+    }
+    return fprintf(file,
+                   "__minic_deferred_asm_immediate_%zu_%zu",
+                   (size_t)inline_asm_id,
+                   operand_index) >= 0;
+}
+
+static bool emit_template(FILE *file,
+                          const MinicC0Program *program,
+                          const MinicInlineAsm *inline_asm,
+                          MinicInlineAsmId inline_asm_id) {
     size_t operand_count;
     size_t index;
 
@@ -184,6 +278,17 @@ static bool emit_template(FILE *file, const MinicInlineAsm *inline_asm) {
 
         if (inline_asm->template_text[index] != '%') {
             if (fputc((unsigned char)inline_asm->template_text[index], file) == EOF) {
+                return false;
+            }
+            continue;
+        }
+        if (index + 2U < inline_asm->template_length &&
+            inline_asm->template_text[index + 1U] == 'l' &&
+            inline_asm->template_text[index + 2U] == '[') {
+            MinicStatementId target_statement;
+
+            if (!resolve_label_reference(inline_asm, &index, &target_statement) ||
+                fprintf(file, ".Luser_%zu", (size_t)target_statement) < 0) {
                 return false;
             }
             continue;
@@ -207,7 +312,11 @@ static bool emit_template(FILE *file, const MinicInlineAsm *inline_asm) {
             if (operand == NULL) {
                 return false;
             }
-            if (constraint_is(operand, "+A")) {
+            if (constraint_is(operand, "i")) {
+                if (!emit_immediate_operand(file, program, operand, inline_asm_id, operand_index)) {
+                    return false;
+                }
+            } else if (constraint_is(operand, "+A")) {
                 if (fprintf(file, "(%s)", register_name) < 0) {
                     return false;
                 }
@@ -235,7 +344,8 @@ bool minic_riscv64_emit_inline_asm(FILE *file,
     if (inline_asm == NULL || inline_asm->template_text == NULL) {
         return false;
     }
-    if (inline_asm->output_count == 0U && inline_asm->input_count == 0U) {
+    if (inline_asm->output_count == 0U && inline_asm->input_count == 0U &&
+        inline_asm->label_count == 0U) {
         return fprintf(file, "  %s\n", inline_asm->template_text) >= 0;
     }
     if (inline_asm->output_count == 1U && inline_asm->input_count == 0U &&
@@ -248,7 +358,7 @@ bool minic_riscv64_emit_inline_asm(FILE *file,
         return false;
     }
     operand_count = inline_asm->output_count + inline_asm->input_count;
-    if (operand_count == 0U || operand_count > MINIC_RISCV64_INLINE_ASM_MAX_OPERANDS ||
+    if (operand_count > MINIC_RISCV64_INLINE_ASM_MAX_OPERANDS ||
         !template_operands_are_valid(inline_asm, operand_count)) {
         return false;
     }
@@ -258,7 +368,31 @@ bool minic_riscv64_emit_inline_asm(FILE *file,
         }
     }
     for (index = 0U; index < inline_asm->input_count; ++index) {
-        if (!validate_input(program, &inline_asm->inputs[index])) {
+        if (!validate_input(inline_asm, program, &inline_asm->inputs[index])) {
+            return false;
+        }
+    }
+
+    for (index = 0U; index < inline_asm->input_count; ++index) {
+        const MinicInlineAsmOperand *operand;
+        const MinicExpression *expression;
+        size_t operand_index;
+
+        operand = &inline_asm->inputs[index];
+        if (!constraint_is(operand, "i")) {
+            continue;
+        }
+        expression = minic_c0_program_expression(program, operand->expression);
+        operand_index = inline_asm->output_count + index;
+        if (expression == NULL) {
+            return false;
+        }
+        if (expression->kind != MINIC_EXPRESSION_INTEGER &&
+            fprintf(file,
+                    "  # MINIC_DEFERRED_ASM_IMMEDIATE requires inline specialization\n"
+                    "  .extern __minic_deferred_asm_immediate_%zu_%zu\n",
+                    (size_t)statement->inline_asm_id,
+                    operand_index) < 0) {
             return false;
         }
     }
@@ -288,6 +422,9 @@ bool minic_riscv64_emit_inline_asm(FILE *file,
 
         operand = &inline_asm->inputs[index];
         operand_index = inline_asm->output_count + index;
+        if (constraint_is(operand, "i")) {
+            continue;
+        }
         if (!minic_riscv64_emit_expression(file, program, function, operand->expression) ||
             !minic_riscv64_emit_sp_store64(file, "a0", operand_index * 8U)) {
             return false;
@@ -305,12 +442,15 @@ bool minic_riscv64_emit_inline_asm(FILE *file,
         size_t operand_index;
 
         operand_index = inline_asm->output_count + index;
+        if (constraint_is(&inline_asm->inputs[index], "i")) {
+            continue;
+        }
         if (!minic_riscv64_emit_sp_load64(
                 file, minic_riscv64_inline_asm_registers[operand_index], operand_index * 8U)) {
             return false;
         }
     }
-    if (!emit_template(file, inline_asm)) {
+    if (!emit_template(file, program, inline_asm, statement->inline_asm_id)) {
         return false;
     }
 
