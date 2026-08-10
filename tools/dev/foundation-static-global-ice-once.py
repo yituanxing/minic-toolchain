@@ -9,6 +9,13 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
     return text.replace(old, new, 1)
 
 
+def replace_first(text: str, old: str, new: str, label: str) -> str:
+    count = text.count(old)
+    if count == 0:
+        raise SystemExit(f"{label}: expected at least one anchor")
+    return text.replace(old, new, 1)
+
+
 def replace_all(text: str, old: str, new: str, label: str) -> str:
     count = text.count(old)
     if count == 0:
@@ -61,7 +68,7 @@ text = replace_once(
     '''    if (!minic_riscv64_integer_storage_width(program, type, scalar_width)) {\n        return false;\n    }\n    *scalar_type = type;\n    return true;\n''',
     "rv64-global-scalar-width",
 )
-text = replace_once(
+text = replace_first(
     text,
     '''            directive = minic_type_is_char_integer(field->type)    ? ".byte"\n                        : minic_type_is_short_integer(field->type) ? ".half"\n                        : minic_type_is_long_integer(field->type)  ? ".dword"\n                                                                   : ".word";\n            if (minic_type_is_char_integer(field->type)) {\n''',
     '''            directive = minic_riscv64_integer_data_directive(field_size);\n            if (directive == NULL) {\n                return false;\n            }\n            if (field_size == 1U) {\n''',
