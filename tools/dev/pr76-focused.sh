@@ -17,3 +17,4 @@ sh tests/compiler/c0/run-block-scope-extern-function-attributes.sh
 sh tests/compiler/c0/run-gnu-void-pointer-arithmetic.sh
 sh tests/compiler/c0/run-gnu-statement-expression.sh
 sh tests/compiler/c0/run-gnu-inline-asm-fence.sh
+sh tests/compiler/c0/run-gnu-typeof-local-declaration.sh
