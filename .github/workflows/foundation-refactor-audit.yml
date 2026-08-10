@@ -9,7 +9,7 @@ on:
       - main
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: foundation-refactor-${{ github.ref }}
@@ -20,77 +20,23 @@ jobs:
     if: github.event_name == 'push' || github.head_ref == 'refactor/foundation-v1'
     runs-on: ubuntu-24.04
     steps:
-      - name: Checkout candidate branch
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          ref: refactor/foundation-v1
 
-      - name: Apply typed consteval candidate once
-        id: candidate
+      - name: Verify committed source is canonical
         shell: bash
         run: |
           set -Eeuo pipefail
-          if test -f src/frontend/const_eval.c; then
-            echo 'applied=0' >> "$GITHUB_OUTPUT"
-          else
-            python3 - <<'PY'
-          from pathlib import Path
-          path = Path('Makefile')
-          text = path.read_text()
-          old = '\tsrc/target/data_layout.c \\\n\tsrc/target/riscv64/layout.c \\\n'
-          new = '\tsrc/target/data_layout.c \\\n\tsrc/target/target_info.c \\\n\tsrc/target/riscv64/layout.c \\\n'
-          positions = []
-          start = 0
-          while True:
-              found = text.find(old, start)
-              if found < 0:
-                  break
-              positions.append(found)
-              start = found + len(old)
-          if len(positions) != 2:
-              raise SystemExit(f'expected two data-layout source-list anchors, found {len(positions)}')
-          second = positions[1]
-          text = text[:second] + new + text[second + len(old):]
-          path.write_text(text)
-          PY
-            python3 tools/dev/foundation-typed-consteval-once.py
-            python3 tools/dev/foundation-typed-consteval-candidate-fix.py
-            chmod +x tests/compiler/c0/run-gnu-choose-expr-bitfield.sh
-            echo 'applied=1' >> "$GITHUB_OUTPUT"
-          fi
-          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+          git diff --exit-code -- include src tools/minic
 
-      - name: Verify candidate scope and ownership
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          bad=0
-          while IFS= read -r path; do
-            case "$path" in
-              Makefile|src/compiler/compiler.c|src/frontend/ast_verifier.c|src/frontend/ast_verifier.h|src/frontend/const_eval.c|src/frontend/const_eval.h|src/frontend/parser_internal.h|src/frontend/parser_core.c|src/frontend/parser_expression.c|src/frontend/parser_static_assert.c|src/frontend/parser_record.c|src/frontend/parser_type_query.c|src/frontend/parser_function.c|src/target/target_info.c|src/target/target_info.h|tests/compiler/c0/gnu_choose_expr_bitfield.c|tests/compiler/c0/run-gnu-choose-expr-bitfield.sh|tools/dev/pr76-focused.sh) ;;
-              '') ;;
-              *) printf '%s\n' "unexpected candidate path: $path" >&2; bad=1 ;;
-            esac
-          done <<EOF
-          $(git diff --name-only)
-          EOF
-          test "$bad" -eq 0
-          git diff --check
-          ! grep -R 'parser->data_layout' src/frontend/parser_*.c
-          ! grep -q 'minic_parser_evaluate_integer_constant_expression' src/frontend/parser_expression.c
-          grep -q 'minic_const_eval_integer' src/frontend/const_eval.c
-          grep -q 'minic_target_info_sizeof_type' src/target/target_info.c
-          grep -q 'minic_c0_program_verify_target' src/frontend/ast_verifier.c
-          grep -q 'minic_c0_program_verify_target' src/compiler/compiler.c
-          ! grep -P -n '\x00' src/frontend/parser_record.c
-
-      - name: Build candidate compiler
+      - name: Build committed compiler
         shell: bash
         run: |
           set -Eeuo pipefail
           make -j4 MODE=release BUILD_DIR=build/foundation-compiler
 
-      - name: Run full fast contracts
+      - name: Run fast compiler contracts
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -105,32 +51,9 @@ jobs:
           HOST_CC=cc \
             sh tools/dev/pr76-focused.sh
 
-      - name: Commit validated source candidate
-        if: steps.candidate.outputs.applied == '1'
+      - name: Recheck source-of-truth invariant
         shell: bash
         run: |
           set -Eeuo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add \
-            Makefile \
-            src/compiler/compiler.c \
-            src/frontend/ast_verifier.c \
-            src/frontend/ast_verifier.h \
-            src/frontend/const_eval.c \
-            src/frontend/const_eval.h \
-            src/frontend/parser_internal.h \
-            src/frontend/parser_core.c \
-            src/frontend/parser_expression.c \
-            src/frontend/parser_static_assert.c \
-            src/frontend/parser_record.c \
-            src/frontend/parser_type_query.c \
-            src/frontend/parser_function.c \
-            src/target/target_info.c \
-            src/target/target_info.h \
-            tests/compiler/c0/gnu_choose_expr_bitfield.c \
-            tests/compiler/c0/run-gnu-choose-expr-bitfield.sh \
-            tools/dev/pr76-focused.sh
-          git diff --cached --check
-          git commit -m 'frontend: introduce typed constant evaluation boundary'
-          git push origin HEAD:refactor/foundation-v1
+          git diff --exit-code -- include src tools/minic
+          printf '%s\n' 'PASS foundation/source-of-truth committed-source-only=1'
