@@ -33,36 +33,42 @@ jobs:
           from pathlib import Path
           path = Path('tools/dev/foundation-data-layout-alignof-once.py')
           text = path.read_text()
+
           old = "'''        !constant_record_member_offset(parser->program,\\n"
           new = "'''    if (!constant_record_member_offset(parser->program,\\n"
           if text.count(old) != 1:
               raise SystemExit(f'candidate helper anchor expected once, found {text.count(old)}')
           text = text.replace(old, new, 1)
+
           old = "'''        !constant_record_member_offset(parser,\\n"
           new = "'''    if (!constant_record_member_offset(parser,\\n"
           if text.count(old) != 1:
               raise SystemExit(f'candidate helper replacement expected once, found {text.count(old)}')
           text = text.replace(old, new, 1)
+
           old = "    if count != 1:\n        raise SystemExit(f\"{label}: expected one anchor, found {count}\")\n"
           new = "    if count != 1 and not (label == 'makefile-data-layout' and count == 2):\n        raise SystemExit(f\"{label}: expected one anchor, found {count}\")\n"
           if text.count(old) != 1:
               raise SystemExit(f'replace_once guard expected once, found {text.count(old)}')
           text = text.replace(old, new, 1)
-          old = '''text = replace_once(
-              text,
-              '''        expect_name(MINIC_TOKEN_KW_SIZEOF, "sizeof") != 0 ||\n''',
-              '''        expect_name(MINIC_TOKEN_KW_SIZEOF, "sizeof") != 0 ||\n        expect_name(MINIC_TOKEN_KW_ALIGNOF, "alignof") != 0 ||\n''',
-              "token-model-alignof",
-          )'''
-          new = '''text = replace_once(
-              text,
-              '''        expect_name(MINIC_TOKEN_KW_STATIC_ASSERT, "_Static_assert") != 0 ||\n''',
-              '''        expect_name(MINIC_TOKEN_KW_STATIC_ASSERT, "_Static_assert") != 0 ||\n        expect_name(MINIC_TOKEN_KW_ALIGNOF, "alignof") != 0 ||\n''',
-              "token-model-alignof",
-          )'''
-          if text.count(old) != 1:
-              raise SystemExit(f'token-model helper block expected once, found {text.count(old)}')
-          text = text.replace(old, new, 1)
+
+          label = '"token-model-alignof"'
+          label_index = text.find(label)
+          if label_index < 0:
+              raise SystemExit('token-model-alignof helper label not found')
+          block_start = text.rfind('text = replace_once(', 0, label_index)
+          block_end = text.find('\n)', label_index)
+          if block_start < 0 or block_end < 0:
+              raise SystemExit('token-model-alignof helper block not found')
+          block_end += 2
+          block = text[block_start:block_end]
+          old_token = 'MINIC_TOKEN_KW_SIZEOF, "sizeof"'
+          new_token = 'MINIC_TOKEN_KW_STATIC_ASSERT, "_Static_assert"'
+          if block.count(old_token) != 2:
+              raise SystemExit(f'token-model helper expected two sizeof anchors, found {block.count(old_token)}')
+          block = block.replace(old_token, new_token)
+          text = text[:block_start] + block + text[block_end:]
+
           path.write_text(text)
           PY
           python3 tools/dev/foundation-data-layout-alignof-once.py
