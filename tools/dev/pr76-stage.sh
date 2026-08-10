@@ -40,4 +40,5 @@ python3 tools/dev/pr77-function-linkage-inheritance.py
 python3 tools/dev/pr77-extern-incomplete-record-object.py
 python3 tools/dev/pr77-extern-function-pointer-object.py
 python3 tools/dev/pr77-gnu-format-cold-function-attributes.py
+python3 tools/dev/pr77-enum-tag-type-references.py
 printf '%s\n' 'staged Linux discovery semantics'
