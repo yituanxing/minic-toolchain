@@ -21,7 +21,7 @@ grep -F 'suffix_second:' "$assembly" >/dev/null
 grep -F '.section .probe.suffix.array' "$assembly" >/dev/null
 grep -F 'suffix_array:' "$assembly" >/dev/null
 grep -F '.section .probe.prefix.concat' "$assembly" >/dev/null
-grep -F 'prefix_section_record:' "$assembly" >/dev/null
+grep -F 'prefix_section_scalar:' "$assembly" >/dev/null
 grep -F '.section .probe.text' "$assembly" >/dev/null
 grep -F 'placed_function:' "$assembly" >/dev/null
-printf '%s\n' 'PASS compiler/c0/gnu_section_symbol_attribute extern-object=prefix+suffix deferred-prefix=section concatenated-string=1 typeof-record=1 per-declarator=isolated array-suffix=1 function-declaration=preserved definition-inherits=1 rv64-section-emission=1'
+printf '%s\n' 'PASS compiler/c0/gnu_section_symbol_attribute extern-object=prefix+suffix deferred-prefix=section concatenated-string=1 typeof-record-declaration=1 per-declarator=isolated array-suffix=1 function-declaration=preserved definition-inherits=1 rv64-section-emission=1'
