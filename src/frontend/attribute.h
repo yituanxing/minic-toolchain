@@ -13,6 +13,7 @@ typedef enum MinicAttributeKind {
     MINIC_ATTRIBUTE_PURE,
     MINIC_ATTRIBUTE_CONST,
     MINIC_ATTRIBUTE_MALLOC,
+    MINIC_ATTRIBUTE_ALLOC_SIZE,
     MINIC_ATTRIBUTE_UNUSED,
     MINIC_ATTRIBUTE_NO_INSTRUMENT_FUNCTION,
     MINIC_ATTRIBUTE_ALWAYS_INLINE,
@@ -55,10 +56,15 @@ typedef struct MinicAttributeDescriptor {
     MinicAttributeKind kind;
     MinicAttributeClass semantic_class;
     unsigned int allowed_targets;
+    size_t minimum_argument_count;
+    size_t maximum_argument_count;
+    bool validates_argument_count;
 } MinicAttributeDescriptor;
 
 const MinicAttributeDescriptor *minic_attribute_lookup(const char *name, size_t name_length);
 bool minic_attribute_allowed_on(const MinicAttributeDescriptor *descriptor,
                                 MinicAttributeTarget target);
+bool minic_attribute_argument_count_allowed(const MinicAttributeDescriptor *descriptor,
+                                            size_t argument_count);
 
 #endif
