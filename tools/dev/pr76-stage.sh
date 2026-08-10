@@ -27,4 +27,5 @@ python3 tools/dev/pr77-gnu-inline-asm-escape-fix.py
 python3 tools/dev/pr77-shared-local-declaration-lookahead.py
 python3 tools/dev/pr77-gnu-inline-asm-readwrite-output.py
 python3 tools/dev/pr77-gnu-compiletime-selection-builtins.py
+python3 tools/dev/pr77-rv64-integer-aggregate-return.py
 printf '%s\n' 'staged Linux discovery semantics'
