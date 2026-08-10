@@ -115,8 +115,7 @@ jobs:
             tests/compiler/c0/gnu_inline_asm_named_operands.c \
             tests/compiler/c0/run-gnu-inline-asm-named-operands.sh \
             tests/compiler/c0/run-gnu-inline-asm-named-operands-rv64.sh \
-            tools/dev/pr76-focused.sh \
-            .github/workflows/lua-stack-abi-validation.yml
+            tools/dev/pr76-focused.sh
           git commit -m 'target: lower named RV64 GNU asm operands' \
                      -m '目标：lower RV64 GNU asm 命名操作数'
           git push origin HEAD:refactor/foundation-v1
