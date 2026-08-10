@@ -57,6 +57,7 @@ typedef struct MinicType {
     unsigned int pointer_qualifiers;
     unsigned int pointer_volatile_qualifiers;
     unsigned int pointer_depth;
+    size_t explicit_alignment;
 } MinicType;
 
 MinicType minic_type_void(void);

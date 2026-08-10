@@ -35,6 +35,7 @@ static MinicType minic_type_integer(MinicIntegerSign sign, MinicIntegerRank rank
     type.pointer_qualifiers = MINIC_TYPE_QUALIFIER_NONE;
     type.pointer_volatile_qualifiers = MINIC_TYPE_QUALIFIER_NONE;
     type.pointer_depth = 0U;
+    type.explicit_alignment = 0U;
     return type;
 }
 
@@ -52,6 +53,7 @@ static MinicType minic_type_scalar(MinicTypeBaseKind base_kind) {
     type.pointer_qualifiers = MINIC_TYPE_QUALIFIER_NONE;
     type.pointer_volatile_qualifiers = MINIC_TYPE_QUALIFIER_NONE;
     type.pointer_depth = 0U;
+    type.explicit_alignment = 0U;
     return type;
 }
 

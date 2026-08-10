@@ -60,11 +60,15 @@ static bool typedef_token_text_equals(const MinicParser *parser, const char *tex
            memcmp(parser->source + parser->current.span.begin.offset, text, length) == 0;
 }
 
-static bool parse_redundant_typedef_alignment(MinicParser *parser, MinicType aliased_type) {
-    int64_t alignment;
+static bool parse_typedef_alignment(MinicParser *parser, MinicType *aliased_type) {
+    int64_t alignment_value;
+    size_t natural_size;
+    size_t natural_alignment;
+    size_t alignment;
 
-    if (!typedef_token_text_equals(parser, "__attribute__") &&
-        !typedef_token_text_equals(parser, "__attribute")) {
+    if (parser == NULL || aliased_type == NULL ||
+        (!typedef_token_text_equals(parser, "__attribute__") &&
+         !typedef_token_text_equals(parser, "__attribute"))) {
         return true;
     }
     if (!minic_parser_advance(parser) ||
@@ -81,29 +85,43 @@ static bool parse_redundant_typedef_alignment(MinicParser *parser, MinicType ali
     }
     if (!minic_parser_advance(parser) ||
         !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '(' after typedef aligned") ||
-        !minic_parser_parse_integer_value64(parser, &alignment) || alignment <= 0 ||
+        !minic_parser_parse_integer_constant_expression(parser, &alignment_value) ||
         !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')' after typedef alignment") ||
         !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')' in typedef attribute") ||
         !minic_parser_expect(
             parser, MINIC_TOKEN_RPAREN, "expected second ')' in typedef attribute")) {
-        if (parser != NULL && parser->diagnostic != NULL &&
-            parser->diagnostic->message[0] == '\0') {
-            minic_parser_error(parser, "typedef alignment must be a positive integer");
+        if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+            minic_parser_error(parser, "typedef alignment requires an integer constant expression");
         }
         return false;
     }
-
-    /* This discovery bridge is deliberately narrower than GCC's full attributed-type
-       semantics.  Linux first reaches aligned(16) on GNU __int128, whose natural RV64
-       alignment is already 16.  Accept that semantics-preserving spelling, but reject
-       any alignment that would alter the type.  Permanent support belongs in the
-       Declarator/AttributeSet + Target DataLayout architecture rather than silently
-       discarding an ABI-affecting attribute here. */
-    if (!minic_type_is_int128_integer(aliased_type) || alignment != 16) {
-        minic_parser_error(parser,
-                           "non-redundant GNU typedef alignment requires attributed-type support");
+    if (alignment_value <= 0 || (uint64_t)alignment_value > (uint64_t)SIZE_MAX) {
+        minic_parser_error(parser, "typedef alignment must be a positive target-size value");
         return false;
     }
+    alignment = (size_t)alignment_value;
+    if ((alignment & (alignment - 1U)) != 0U) {
+        minic_parser_error(parser, "typedef alignment must be a power of two");
+        return false;
+    }
+    if (minic_type_is_pointer(*aliased_type)) {
+        minic_parser_error(parser, "aligned pointer typedefs require per-layer type attributes");
+        return false;
+    }
+    if (!minic_data_layout_type(minic_target_info_data_layout(parser->target_info),
+                                parser->program,
+                                *aliased_type,
+                                &natural_size,
+                                &natural_alignment)) {
+        minic_parser_error(parser, "cannot determine natural typedef alignment");
+        return false;
+    }
+    (void)natural_size;
+    if (alignment < natural_alignment) {
+        minic_parser_error(parser, "reducing GNU typedef alignment is not supported yet");
+        return false;
+    }
+    aliased_type->explicit_alignment = alignment;
     return true;
 }
 
@@ -177,7 +195,7 @@ bool minic_parser_parse_typedef(MinicParser *parser) {
             return false;
         }
     }
-    if (!parse_redundant_typedef_alignment(parser, aliased_type)) {
+    if (!parse_typedef_alignment(parser, &aliased_type)) {
         return false;
     }
     if (parser->current.kind != MINIC_TOKEN_SEMICOLON) {

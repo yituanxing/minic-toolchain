@@ -35,6 +35,22 @@ static bool minic_data_layout_align_up(size_t value, size_t alignment, size_t *r
     return true;
 }
 
+static bool minic_data_layout_apply_explicit_alignment(MinicType type, size_t *alignment) {
+    if (alignment == NULL) {
+        return false;
+    }
+    if (type.pointer_depth != 0U || type.explicit_alignment == 0U) {
+        return true;
+    }
+    if ((type.explicit_alignment & (type.explicit_alignment - 1U)) != 0U) {
+        return false;
+    }
+    if (type.explicit_alignment > *alignment) {
+        *alignment = type.explicit_alignment;
+    }
+    return true;
+}
+
 static bool minic_data_layout_type_depth(const MinicDataLayout *layout,
                                          const MinicC0Program *program,
                                          MinicType type,
@@ -194,17 +210,17 @@ static bool minic_data_layout_type_depth(const MinicDataLayout *layout,
         }
         *size = layout->integer_size[rank];
         *alignment = layout->integer_alignment[rank];
-        return true;
+        return minic_data_layout_apply_explicit_alignment(type, alignment);
     }
     if (minic_type_is_float(type)) {
         *size = layout->float_size;
         *alignment = layout->float_alignment;
-        return true;
+        return minic_data_layout_apply_explicit_alignment(type, alignment);
     }
     if (minic_type_is_double(type)) {
         *size = layout->double_size;
         *alignment = layout->double_alignment;
-        return true;
+        return minic_data_layout_apply_explicit_alignment(type, alignment);
     }
     if (minic_type_is_array(type)) {
         const MinicArrayType *array_type;
@@ -224,14 +240,17 @@ static bool minic_data_layout_type_depth(const MinicDataLayout *layout,
         }
         *size = element_size * array_type->element_count;
         *alignment = element_alignment;
-        return true;
+        return minic_data_layout_apply_explicit_alignment(type, alignment);
     }
     if (minic_type_is_record(type)) {
         const MinicRecord *record;
 
         record = minic_c0_program_record(program, type.record_id);
-        return minic_data_layout_record_depth(
-            layout, program, record, depth + 1U, SIZE_MAX, NULL, size, alignment);
+        if (!minic_data_layout_record_depth(
+                layout, program, record, depth + 1U, SIZE_MAX, NULL, size, alignment)) {
+            return false;
+        }
+        return minic_data_layout_apply_explicit_alignment(type, alignment);
     }
     return false;
 }
