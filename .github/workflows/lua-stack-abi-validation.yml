@@ -21,12 +21,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Stage Lua discovery semantics and build MiniC
+      - name: Build committed MiniC source
         shell: bash
         run: |
           set -Eeuo pipefail
-          sh tools/dev/pr75-stage.sh
-          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+          git diff --exit-code -- include src tools/minic
           make -j4 MODE=release BUILD_DIR=build/lua-stack-abi-compiler
 
       - name: Restore RISC-V package archives
@@ -59,6 +59,7 @@ jobs:
       - name: Run GCC-MiniC fixed stack-argument differential
         shell: bash
         run: |
+          set -Eeuo pipefail
           MINIC="$GITHUB_WORKSPACE/build/lua-stack-abi-compiler/bin/minic" \
           BUILD_DIR="$GITHUB_WORKSPACE/build/lua-stack-abi" \
           RISCV_CC=riscv64-linux-gnu-gcc \
