@@ -9,7 +9,7 @@ on:
       - main
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: foundation-refactor-${{ github.ref }}
@@ -20,55 +20,23 @@ jobs:
     if: github.event_name == 'push' || github.head_ref == 'refactor/foundation-v1'
     runs-on: ubuntu-24.04
     steps:
-      - name: Checkout candidate branch
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          ref: refactor/foundation-v1
 
-      - name: Apply fixed register binding candidate once
-        id: candidate
+      - name: Verify committed source is canonical
         shell: bash
         run: |
           set -Eeuo pipefail
-          if ! grep -q 'MINIC_EXPRESSION_FIXED_REGISTER' src/frontend/ast.h; then
-            python3 tools/dev/foundation-fixed-register-binding-once.py
-            chmod +x tests/compiler/c0/run-gnu-fixed-register-bindings.sh
-            echo 'applied=1' >> "$GITHUB_OUTPUT"
-          else
-            echo 'applied=0' >> "$GITHUB_OUTPUT"
-          fi
-          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+          git diff --exit-code -- include src tools/minic
 
-      - name: Verify candidate scope and ownership
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          bad=0
-          while IFS= read -r path; do
-            case "$path" in
-              src/frontend/ast.h|src/frontend/ast.c|src/frontend/ast_global.c|src/frontend/parser_internal.h|src/frontend/parser_global.c|src/frontend/parser_function.c|src/frontend/parser_expression.c|src/frontend/ast_verifier.c|src/frontend/cast_normalization.c|src/target/target_info.h|src/target/target_info.c|src/target/riscv64/codegen_expression.c|tests/compiler/c0/gnu_fixed_register_bindings.c|tests/compiler/c0/gnu_fixed_register_binding_reject.c|tests/compiler/c0/run-gnu-fixed-register-bindings.sh|tools/dev/pr76-focused.sh) ;;
-              '') ;;
-              *) printf '%s\n' "unexpected candidate path: $path" >&2; bad=1 ;;
-            esac
-          done <<EOF
-          $(git diff --name-only)
-          EOF
-          test "$bad" -eq 0
-          git diff --check
-          grep -q 'MINIC_EXPRESSION_FIXED_REGISTER' src/frontend/ast.h
-          grep -q 'MinicFixedRegisterBinding' src/frontend/ast.h
-          grep -q 'minic_target_info_fixed_register_supported' src/target/target_info.c
-          grep -q 'mv a0, %s' src/target/riscv64/codegen_expression.c
-          grep -q "! grep -F 'la a0, riscv_current_is_tp'" tests/compiler/c0/run-gnu-fixed-register-bindings.sh
-          grep -q "! grep -F 'la a0, current_stack_pointer'" tests/compiler/c0/run-gnu-fixed-register-bindings.sh
-
-      - name: Build candidate compiler
+      - name: Build committed compiler
         shell: bash
         run: |
           set -Eeuo pipefail
           make -j4 MODE=release BUILD_DIR=build/foundation-compiler
 
-      - name: Run full fast contracts
+      - name: Run fast compiler contracts
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -83,30 +51,9 @@ jobs:
           HOST_CC=cc \
             sh tools/dev/pr76-focused.sh
 
-      - name: Commit validated source candidate
-        if: steps.candidate.outputs.applied == '1'
+      - name: Recheck source-of-truth invariant
         shell: bash
         run: |
           set -Eeuo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add \
-            src/frontend/ast.h \
-            src/frontend/ast.c \
-            src/frontend/ast_global.c \
-            src/frontend/parser_internal.h \
-            src/frontend/parser_global.c \
-            src/frontend/parser_function.c \
-            src/frontend/parser_expression.c \
-            src/frontend/ast_verifier.c \
-            src/frontend/cast_normalization.c \
-            src/target/target_info.h \
-            src/target/target_info.c \
-            src/target/riscv64/codegen_expression.c \
-            tests/compiler/c0/gnu_fixed_register_bindings.c \
-            tests/compiler/c0/gnu_fixed_register_binding_reject.c \
-            tests/compiler/c0/run-gnu-fixed-register-bindings.sh \
-            tools/dev/pr76-focused.sh
-          git diff --cached --check
-          git commit -m 'frontend: model fixed register bindings explicitly'
-          git push origin HEAD:refactor/foundation-v1
+          git diff --exit-code -- include src tools/minic
+          printf '%s\n' 'PASS foundation/source-of-truth committed-source-only=1'
