@@ -29,4 +29,5 @@ python3 tools/dev/pr77-gnu-inline-asm-readwrite-output.py
 python3 tools/dev/pr77-gnu-compiletime-selection-builtins.py
 python3 tools/dev/pr77-rv64-integer-aggregate-return.py
 python3 tools/dev/pr77-rv64-integer-aggregate-return-escape-fix.py
+python3 tools/dev/pr77-rv64-integer-aggregate-call.py
 printf '%s\n' 'staged Linux discovery semantics'
