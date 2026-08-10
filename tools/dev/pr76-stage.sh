@@ -21,4 +21,5 @@ python3 tools/dev/pr77-fix-generated-nul.py
 python3 tools/dev/pr77-block-scope-extern-functions.py
 python3 tools/dev/pr77-gnu-void-pointer-arithmetic.py
 python3 tools/dev/pr77-gnu-statement-expressions-v2.py
+python3 tools/dev/pr77-gnu-statement-expression-comma-compat.py
 printf '%s\n' 'staged Linux discovery semantics'
