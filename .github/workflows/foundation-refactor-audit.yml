@@ -9,7 +9,7 @@ on:
       - main
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: foundation-refactor-${{ github.ref }}
@@ -20,105 +20,17 @@ jobs:
     if: github.event_name == 'push' || github.head_ref == 'refactor/foundation-v1'
     runs-on: ubuntu-24.04
     steps:
-      - name: Checkout refactor branch
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          ref: refactor/foundation-v1
 
-      - name: Apply extern DeclarationHead candidate
+      - name: Verify committed source is canonical
         shell: bash
         run: |
           set -Eeuo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-          path = Path('tools/dev/foundation-extern-declaration-head-once.py')
-          text = path.read_text()
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+          git diff --exit-code -- include src tools/minic
 
-          old = '''text = replace_once(\n    text,\n    "    bool is_inline;\\n",\n    "    bool is_function_pointer_object;\\n    bool is_inline;\\n",\n    "function-head-flags",\n)'''
-          new = '''text = replace_once(\n    text,\n    "    bool is_inline;\\n    bool is_main;\\n    bool is_variadic;\\n",\n    "    bool is_function_pointer_object;\\n    bool is_inline;\\n    bool is_main;\\n    bool is_variadic;\\n",\n    "function-head-flags",\n)'''
-          if text.count(old) != 1:
-              raise SystemExit(f'helper-anchor-fix: expected one match, found {text.count(old)}')
-          text = text.replace(old, new, 1)
-
-          old_cli = '"$MINIC" tests/compiler/c0/extern_interleaved_function_attributes.c -S -o "$work/probe.s"'
-          new_cli = '"$MINIC" -S tests/compiler/c0/extern_interleaved_function_attributes.c -o "$work/probe.s"'
-          if text.count(old_cli) != 1:
-              raise SystemExit(f'runner-cli-fix: expected one match, found {text.count(old_cli)}')
-          path.write_text(text.replace(old_cli, new_cli, 1))
-          PY
-          python3 tools/dev/foundation-extern-declaration-head-once.py
-          python3 - <<'PY'
-          from pathlib import Path
-
-          def replace_once(text, old, new, label):
-              count = text.count(old)
-              if count != 1:
-                  raise SystemExit(f'{label}: expected one match, found {count}')
-              return text.replace(old, new, 1)
-
-          path = Path('src/frontend/parser_function.c')
-          text = path.read_text()
-          text = replace_once(
-              text,
-              '    bool is_function_pointer_object;\n    bool is_inline;\n',
-              '    bool is_extern_declaration;\n    bool is_function_pointer_object;\n    bool is_inline;\n',
-              'extern-head-state',
-          )
-          text = replace_once(
-              text,
-              '    is_function_pointer_object = false;\n    is_inline = false;\n',
-              '    is_extern_declaration = false;\n    is_function_pointer_object = false;\n    is_inline = false;\n',
-              'extern-head-init',
-          )
-          text = replace_once(
-              text,
-              '    if (!is_internal && parser->current.kind == MINIC_TOKEN_KW_EXTERN &&\n'
-              '        !minic_parser_advance(parser)) {\n'
-              '        return false;\n'
-              '    }\n',
-              '    if (!is_internal && parser->current.kind == MINIC_TOKEN_KW_EXTERN) {\n'
-              '        is_extern_declaration = true;\n'
-              '        if (!minic_parser_advance(parser)) {\n'
-              '            return false;\n'
-              '        }\n'
-              '    }\n',
-              'extern-storage-parse',
-          )
-          text = replace_once(
-              text,
-              '        if (name_probe.current.kind == MINIC_TOKEN_STAR) {\n',
-              '        if (is_extern_declaration && name_probe.current.kind == MINIC_TOKEN_STAR) {\n',
-              'extern-function-pointer-object-only',
-          )
-          text = replace_once(
-              text,
-              '        if (is_function_pointer_object || parser->current.kind == MINIC_TOKEN_SEMICOLON ||\n'
-              '            parser->current.kind == MINIC_TOKEN_COMMA) {\n',
-              '        if (is_extern_declaration) {\n',
-              'extern-object-tail-dispatch',
-          )
-          path.write_text(text)
-          PY
-          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
-
-      - name: Enforce candidate scope
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          allowed='^(src/frontend/parser_internal\.h|src/frontend/parser_attribute\.c|src/frontend/parser_function\.c|src/frontend/parser_global\.c|tests/compiler/c0/extern_interleaved_function_attributes\.c|tests/compiler/c0/run-extern-interleaved-function-attributes\.sh|tools/dev/pr76-focused\.sh|tools/dev/foundation-extern-declaration-head-once\.py)$'
-          changed=$(git status --porcelain=v1 | sed -E 's/^.. //')
-          printf '%s\n' "$changed"
-          bad=$(printf '%s\n' "$changed" | grep -Ev "$allowed" || true)
-          if test -n "$bad"; then
-            printf '%s\n' 'unexpected candidate paths:' "$bad" >&2
-            exit 1
-          fi
-          test -n "$changed"
-          ! grep -q 'extern_declaration_is_function' src/frontend/parser_function.c
-          grep -q 'static_declaration_is_function' src/frontend/parser_function.c
-          grep -q 'is_extern_declaration' src/frontend/parser_function.c
-
-      - name: Build compiler candidate
+      - name: Build committed compiler
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -139,20 +51,9 @@ jobs:
           HOST_CC=cc \
             sh tools/dev/pr76-focused.sh
 
-      - name: Commit validated candidate
+      - name: Recheck source-of-truth invariant
         shell: bash
         run: |
           set -Eeuo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add \
-            src/frontend/parser_internal.h \
-            src/frontend/parser_attribute.c \
-            src/frontend/parser_function.c \
-            src/frontend/parser_global.c \
-            tests/compiler/c0/extern_interleaved_function_attributes.c \
-            tests/compiler/c0/run-extern-interleaved-function-attributes.sh \
-            tools/dev/pr76-focused.sh
-          git commit -m 'refactor: parse extern declaration heads once' \
-                     -m '重构：单遍解析 extern 声明头'
-          git push origin HEAD:refactor/foundation-v1
+          git diff --exit-code -- include src tools/minic
+          printf '%s\n' 'PASS foundation/source-of-truth committed-source-only=1'
