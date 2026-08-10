@@ -36,20 +36,59 @@ jobs:
           path = Path('src/frontend/attribute.h')
           replace_one(
               path,
-              '''    MINIC_ATTRIBUTE_GNU_INLINE,\n    MINIC_ATTRIBUTE_SECTION,\n    MINIC_ATTRIBUTE_VISIBILITY\n} MinicAttributeKind;''',
-              '''    MINIC_ATTRIBUTE_GNU_INLINE,\n    MINIC_ATTRIBUTE_SECTION,\n    MINIC_ATTRIBUTE_VISIBILITY,\n    MINIC_ATTRIBUTE_PACKED,\n    MINIC_ATTRIBUTE_ALIGNED\n} MinicAttributeKind;''',
+              '''    MINIC_ATTRIBUTE_GNU_INLINE,
+    MINIC_ATTRIBUTE_SECTION,
+    MINIC_ATTRIBUTE_VISIBILITY
+} MinicAttributeKind;''',
+              '''    MINIC_ATTRIBUTE_GNU_INLINE,
+    MINIC_ATTRIBUTE_SECTION,
+    MINIC_ATTRIBUTE_VISIBILITY,
+    MINIC_ATTRIBUTE_PACKED,
+    MINIC_ATTRIBUTE_ALIGNED
+} MinicAttributeKind;''',
               'attribute kinds')
           replace_one(
               path,
-              '''    MINIC_ATTRIBUTE_CLASS_CONTROL_FLOW,\n    MINIC_ATTRIBUTE_CLASS_LANGUAGE_SEMANTIC,\n    MINIC_ATTRIBUTE_CLASS_SYMBOL\n} MinicAttributeClass;''',
-              '''    MINIC_ATTRIBUTE_CLASS_CONTROL_FLOW,\n    MINIC_ATTRIBUTE_CLASS_LANGUAGE_SEMANTIC,\n    MINIC_ATTRIBUTE_CLASS_SYMBOL,\n    MINIC_ATTRIBUTE_CLASS_LAYOUT\n} MinicAttributeClass;''',
+              '''    MINIC_ATTRIBUTE_CLASS_CONTROL_FLOW,
+    MINIC_ATTRIBUTE_CLASS_LANGUAGE_SEMANTIC,
+    MINIC_ATTRIBUTE_CLASS_SYMBOL
+} MinicAttributeClass;''',
+              '''    MINIC_ATTRIBUTE_CLASS_CONTROL_FLOW,
+    MINIC_ATTRIBUTE_CLASS_LANGUAGE_SEMANTIC,
+    MINIC_ATTRIBUTE_CLASS_SYMBOL,
+    MINIC_ATTRIBUTE_CLASS_LAYOUT
+} MinicAttributeClass;''',
               'attribute classes')
 
           path = Path('src/frontend/attribute.c')
           replace_one(
               path,
-              '''    MINIC_ATTRIBUTE_ENTRY("__visibility__",\n                          MINIC_ATTRIBUTE_VISIBILITY,\n                          MINIC_ATTRIBUTE_CLASS_SYMBOL,\n                          MINIC_ATTRIBUTE_TARGET_FUNCTION | MINIC_ATTRIBUTE_TARGET_OBJECT),\n};''',
-              '''    MINIC_ATTRIBUTE_ENTRY("__visibility__",\n                          MINIC_ATTRIBUTE_VISIBILITY,\n                          MINIC_ATTRIBUTE_CLASS_SYMBOL,\n                          MINIC_ATTRIBUTE_TARGET_FUNCTION | MINIC_ATTRIBUTE_TARGET_OBJECT),\n    MINIC_ATTRIBUTE_ENTRY("packed",\n                          MINIC_ATTRIBUTE_PACKED,\n                          MINIC_ATTRIBUTE_CLASS_LAYOUT,\n                          MINIC_ATTRIBUTE_TARGET_TYPE),\n    MINIC_ATTRIBUTE_ENTRY("__packed__",\n                          MINIC_ATTRIBUTE_PACKED,\n                          MINIC_ATTRIBUTE_CLASS_LAYOUT,\n                          MINIC_ATTRIBUTE_TARGET_TYPE),\n    MINIC_ATTRIBUTE_ENTRY("aligned",\n                          MINIC_ATTRIBUTE_ALIGNED,\n                          MINIC_ATTRIBUTE_CLASS_LAYOUT,\n                          MINIC_ATTRIBUTE_TARGET_TYPE | MINIC_ATTRIBUTE_TARGET_FIELD),\n    MINIC_ATTRIBUTE_ENTRY("__aligned__",\n                          MINIC_ATTRIBUTE_ALIGNED,\n                          MINIC_ATTRIBUTE_CLASS_LAYOUT,\n                          MINIC_ATTRIBUTE_TARGET_TYPE | MINIC_ATTRIBUTE_TARGET_FIELD),\n};''',
+              '''    MINIC_ATTRIBUTE_ENTRY("__visibility__",
+                          MINIC_ATTRIBUTE_VISIBILITY,
+                          MINIC_ATTRIBUTE_CLASS_SYMBOL,
+                          MINIC_ATTRIBUTE_TARGET_FUNCTION | MINIC_ATTRIBUTE_TARGET_OBJECT),
+};''',
+              '''    MINIC_ATTRIBUTE_ENTRY("__visibility__",
+                          MINIC_ATTRIBUTE_VISIBILITY,
+                          MINIC_ATTRIBUTE_CLASS_SYMBOL,
+                          MINIC_ATTRIBUTE_TARGET_FUNCTION | MINIC_ATTRIBUTE_TARGET_OBJECT),
+    MINIC_ATTRIBUTE_ENTRY("packed",
+                          MINIC_ATTRIBUTE_PACKED,
+                          MINIC_ATTRIBUTE_CLASS_LAYOUT,
+                          MINIC_ATTRIBUTE_TARGET_TYPE),
+    MINIC_ATTRIBUTE_ENTRY("__packed__",
+                          MINIC_ATTRIBUTE_PACKED,
+                          MINIC_ATTRIBUTE_CLASS_LAYOUT,
+                          MINIC_ATTRIBUTE_TARGET_TYPE),
+    MINIC_ATTRIBUTE_ENTRY("aligned",
+                          MINIC_ATTRIBUTE_ALIGNED,
+                          MINIC_ATTRIBUTE_CLASS_LAYOUT,
+                          MINIC_ATTRIBUTE_TARGET_TYPE | MINIC_ATTRIBUTE_TARGET_FIELD),
+    MINIC_ATTRIBUTE_ENTRY("__aligned__",
+                          MINIC_ATTRIBUTE_ALIGNED,
+                          MINIC_ATTRIBUTE_CLASS_LAYOUT,
+                          MINIC_ATTRIBUTE_TARGET_TYPE | MINIC_ATTRIBUTE_TARGET_FIELD),
+};''',
               'layout attribute descriptors')
 
           path = Path('src/frontend/parser_internal.h')
@@ -60,20 +99,86 @@ jobs:
               'parser attribute include')
           replace_one(
               path,
-              '''bool minic_parser_span_equals(const MinicParser *parser,\n                              MinicSourceSpan left,\n                              MinicSourceSpan right);\n''',
-              '''bool minic_parser_span_equals(const MinicParser *parser,\n                              MinicSourceSpan left,\n                              MinicSourceSpan right);\nconst MinicAttributeDescriptor *minic_parser_current_attribute(const MinicParser *parser);\nbool minic_parser_current_attribute_is(const MinicParser *parser,\n                                       MinicAttributeKind kind,\n                                       MinicAttributeTarget target);\n''',
+              '''bool minic_parser_span_equals(const MinicParser *parser,
+                              MinicSourceSpan left,
+                              MinicSourceSpan right);
+''',
+              '''bool minic_parser_span_equals(const MinicParser *parser,
+                              MinicSourceSpan left,
+                              MinicSourceSpan right);
+const MinicAttributeDescriptor *minic_parser_current_attribute(const MinicParser *parser);
+bool minic_parser_current_attribute_is(const MinicParser *parser,
+                                       MinicAttributeKind kind,
+                                       MinicAttributeTarget target);
+''',
               'parser attribute helpers declaration')
 
           path = Path('src/frontend/parser_core.c')
           replace_one(
               path,
-              '''bool minic_parser_span_equals(const MinicParser *parser,\n                              MinicSourceSpan left,\n                              MinicSourceSpan right) {\n    size_t left_length;\n    size_t right_length;\n\n    left_length = minic_parser_span_length(left);\n    right_length = minic_parser_span_length(right);\n    return left_length == right_length && memcmp(parser->source + left.begin.offset,\n                                                 parser->source + right.begin.offset,\n                                                 left_length) == 0;\n}\n\n''',
-              '''bool minic_parser_span_equals(const MinicParser *parser,\n                              MinicSourceSpan left,\n                              MinicSourceSpan right) {\n    size_t left_length;\n    size_t right_length;\n\n    left_length = minic_parser_span_length(left);\n    right_length = minic_parser_span_length(right);\n    return left_length == right_length && memcmp(parser->source + left.begin.offset,\n                                                 parser->source + right.begin.offset,\n                                                 left_length) == 0;\n}\n\nconst MinicAttributeDescriptor *minic_parser_current_attribute(const MinicParser *parser) {\n    size_t name_length;\n\n    if (parser == NULL || parser->current.kind != MINIC_TOKEN_IDENTIFIER) {\n        return NULL;\n    }\n    name_length = minic_parser_span_length(parser->current.span);\n    return minic_attribute_lookup(parser->source + parser->current.span.begin.offset, name_length);\n}\n\nbool minic_parser_current_attribute_is(const MinicParser *parser,\n                                       MinicAttributeKind kind,\n                                       MinicAttributeTarget target) {\n    const MinicAttributeDescriptor *descriptor;\n\n    descriptor = minic_parser_current_attribute(parser);\n    return descriptor != NULL && descriptor->kind == kind &&\n           minic_attribute_allowed_on(descriptor, target);\n}\n\n''',
+              '''bool minic_parser_span_equals(const MinicParser *parser,
+                              MinicSourceSpan left,
+                              MinicSourceSpan right) {
+    size_t left_length;
+    size_t right_length;
+
+    left_length = minic_parser_span_length(left);
+    right_length = minic_parser_span_length(right);
+    return left_length == right_length && memcmp(parser->source + left.begin.offset,
+                                                 parser->source + right.begin.offset,
+                                                 left_length) == 0;
+}
+
+''',
+              '''bool minic_parser_span_equals(const MinicParser *parser,
+                              MinicSourceSpan left,
+                              MinicSourceSpan right) {
+    size_t left_length;
+    size_t right_length;
+
+    left_length = minic_parser_span_length(left);
+    right_length = minic_parser_span_length(right);
+    return left_length == right_length && memcmp(parser->source + left.begin.offset,
+                                                 parser->source + right.begin.offset,
+                                                 left_length) == 0;
+}
+
+const MinicAttributeDescriptor *minic_parser_current_attribute(const MinicParser *parser) {
+    size_t name_length;
+
+    if (parser == NULL || parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
+        return NULL;
+    }
+    name_length = minic_parser_span_length(parser->current.span);
+    return minic_attribute_lookup(parser->source + parser->current.span.begin.offset, name_length);
+}
+
+bool minic_parser_current_attribute_is(const MinicParser *parser,
+                                       MinicAttributeKind kind,
+                                       MinicAttributeTarget target) {
+    const MinicAttributeDescriptor *descriptor;
+
+    descriptor = minic_parser_current_attribute(parser);
+    return descriptor != NULL && descriptor->kind == kind &&
+           minic_attribute_allowed_on(descriptor, target);
+}
+
+''',
               'parser attribute helpers implementation')
 
           path = Path('src/frontend/parser_function.c')
           text = path.read_text()
-          old = '''static const MinicAttributeDescriptor *current_function_attribute(const MinicParser *parser) {\n    size_t name_length;\n\n    if (parser == NULL || parser->current.kind == MINIC_TOKEN_EOF) {\n        return NULL;\n    }\n    name_length = minic_parser_span_length(parser->current.span);\n    return minic_attribute_lookup(parser->source + parser->current.span.begin.offset, name_length);\n}\n\n'''
+          old = '''static const MinicAttributeDescriptor *current_function_attribute(const MinicParser *parser) {
+    size_t name_length;
+
+    if (parser == NULL || parser->current.kind == MINIC_TOKEN_EOF) {
+        return NULL;
+    }
+    name_length = minic_parser_span_length(parser->current.span);
+    return minic_attribute_lookup(parser->source + parser->current.span.begin.offset, name_length);
+}
+
+'''
           if text.count(old) != 1:
               raise SystemExit('function attribute helper: anchor mismatch')
           text = text.replace(old, '', 1)
@@ -87,27 +192,35 @@ jobs:
 
           path = Path('src/frontend/parser_record.c')
           text = path.read_text()
-          text = text.replace(
-              '''    if (!token_text_equals(parser, parser->current, "__packed__") &&\n        !token_text_equals(parser, parser->current, "packed")) {''',
-              '''    if (!minic_parser_current_attribute_is(\n            parser, MINIC_ATTRIBUTE_PACKED, MINIC_ATTRIBUTE_TARGET_TYPE)) {''')
-          text = text.replace(
-              '''    if (!token_text_equals(parser, parser->current, "__aligned__") &&\n        !token_text_equals(parser, parser->current, "aligned")) {''',
-              '''    if (!minic_parser_current_attribute_is(\n            parser, MINIC_ATTRIBUTE_ALIGNED, MINIC_ATTRIBUTE_TARGET_FIELD)) {''',
-              1)
-          text = text.replace(
-              '''    if (!token_text_equals(parser, parser->current, "aligned") &&\n        !token_text_equals(parser, parser->current, "__aligned__")) {''',
-              '''    if (!minic_parser_current_attribute_is(\n            parser, MINIC_ATTRIBUTE_ALIGNED, MINIC_ATTRIBUTE_TARGET_TYPE)) {''',
-              1)
-          if 'only packed record attribute is supported here' not in text or \
-             'unsupported GNU record field attribute' not in text or \
-             'unsupported GNU record suffix attribute' not in text:
-              raise SystemExit('record attribute migration anchors did not survive')
+          old = '''    if (!token_text_equals(parser, parser->current, "__packed__") &&
+        !token_text_equals(parser, parser->current, "packed")) {'''
+          new = '''    if (!minic_parser_current_attribute_is(
+            parser, MINIC_ATTRIBUTE_PACKED, MINIC_ATTRIBUTE_TARGET_TYPE)) {'''
+          if text.count(old) != 1:
+              raise SystemExit('packed record classifier: anchor mismatch')
+          text = text.replace(old, new, 1)
+          old = '''    if (!token_text_equals(parser, parser->current, "__aligned__") &&
+        !token_text_equals(parser, parser->current, "aligned")) {'''
+          new = '''    if (!minic_parser_current_attribute_is(
+            parser, MINIC_ATTRIBUTE_ALIGNED, MINIC_ATTRIBUTE_TARGET_FIELD)) {'''
+          if text.count(old) != 1:
+              raise SystemExit('field aligned classifier: anchor mismatch')
+          text = text.replace(old, new, 1)
+          old = '''    if (!token_text_equals(parser, parser->current, "aligned") &&
+        !token_text_equals(parser, parser->current, "__aligned__")) {'''
+          new = '''    if (!minic_parser_current_attribute_is(
+            parser, MINIC_ATTRIBUTE_ALIGNED, MINIC_ATTRIBUTE_TARGET_TYPE)) {'''
+          if text.count(old) != 1:
+              raise SystemExit('record aligned classifier: anchor mismatch')
+          text = text.replace(old, new, 1)
           path.write_text(text)
 
           path = Path('src/frontend/parser_typedef.c')
           text = path.read_text()
-          old = '''    if (!typedef_token_text_equals(parser, "aligned") &&\n        !typedef_token_text_equals(parser, "__aligned__")) {'''
-          new = '''    if (!minic_parser_current_attribute_is(\n            parser, MINIC_ATTRIBUTE_ALIGNED, MINIC_ATTRIBUTE_TARGET_TYPE)) {'''
+          old = '''    if (!typedef_token_text_equals(parser, "aligned") &&
+        !typedef_token_text_equals(parser, "__aligned__")) {'''
+          new = '''    if (!minic_parser_current_attribute_is(
+            parser, MINIC_ATTRIBUTE_ALIGNED, MINIC_ATTRIBUTE_TARGET_TYPE)) {'''
           if text.count(old) != 1:
               raise SystemExit('typedef aligned classifier: anchor mismatch')
           path.write_text(text.replace(old, new, 1))
