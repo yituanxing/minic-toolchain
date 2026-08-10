@@ -36,7 +36,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          allowed='^(src/frontend/token\.h|src/frontend/token\.c|src/frontend/lexer\.c|src/frontend/parser_expression\.c|src/target/riscv64/codegen_expression\.c|tests/frontend/token_model_test\.c|tests/frontend/lexer_test\.c|tests/compiler/c0/compound_assignment_full\.c|tests/compiler/c0/run-compound-assignment-full\.sh)$'
+          allowed='^(src/frontend/token\.h|src/frontend/token\.c|src/frontend/lexer\.c|src/frontend/parser_expression\.c|src/frontend/ast_verifier\.c|src/target/riscv64/codegen_expression\.c|tests/frontend/token_model_test\.c|tests/frontend/lexer_test\.c|tests/compiler/c0/compound_assignment_full\.c|tests/compiler/c0/run-compound-assignment-full\.sh)$'
           changed=$(git status --porcelain=v1 | sed -E 's/^.. //')
           printf '%s\n' "$changed"
           bad=$(printf '%s\n' "$changed" | grep -Ev "$allowed" || true)
@@ -48,6 +48,7 @@ jobs:
           grep -q 'MINIC_TOKEN_LESS_LESS_EQUAL' src/frontend/token.h
           grep -q 'MINIC_TOKEN_LESS_LESS_EQUAL' src/frontend/lexer.c
           grep -q 'MINIC_TOKEN_LESS_LESS_EQUAL' src/frontend/parser_expression.c
+          grep -q 'MINIC_BINARY_SHIFT_LEFT' src/frontend/ast_verifier.c
           grep -q 'MINIC_BINARY_SHIFT_LEFT' src/target/riscv64/codegen_expression.c
           grep -q 'shift-right=signed+unsigned' tests/compiler/c0/run-compound-assignment-full.sh
 
@@ -83,6 +84,7 @@ jobs:
             src/frontend/token.c \
             src/frontend/lexer.c \
             src/frontend/parser_expression.c \
+            src/frontend/ast_verifier.c \
             src/target/riscv64/codegen_expression.c \
             tests/frontend/token_model_test.c \
             tests/frontend/lexer_test.c \
