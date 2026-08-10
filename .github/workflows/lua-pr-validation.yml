@@ -5,62 +5,89 @@ on:
     branches: [main]
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: foundation-one-shot-${{ github.event.pull_request.number }}
+  group: lua-pr-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
   lua-compile:
-    name: foundation-one-shot-migration
-    if: github.head_ref == 'refactor/foundation-v1'
+    name: lua-compile
     runs-on: ubuntu-24.04
+    env:
+      DEBIAN_FRONTEND: noninteractive
     steps:
-      - name: Checkout refactor branch
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          ref: refactor/foundation-v1
 
-      - name: Apply audited one-shot migration
+      - name: Build committed MiniC source
         shell: bash
         run: |
           set -Eeuo pipefail
-          python3 tools/maintenance/foundation-one-shot.py
-
-      - name: Format candidate source
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+          git diff --exit-code -- include src tools/minic
+          make -j4 MODE=release BUILD_DIR=build/lua-compiler
+          make -j4 MODE=sanitize BUILD_DIR=build/lua-sanitize
 
-      - name: Build and run fast gates
+      - name: Verify focused Lua-driven semantics
         shell: bash
         run: |
           set -Eeuo pipefail
-          make -j4 MODE=release BUILD_DIR=build/foundation-one-shot
-          make -j4 MODE=release BUILD_DIR=build/foundation-one-shot check-fast
-
-      - name: Run frozen Lua and Linux focused gates
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          MINIC="$GITHUB_WORKSPACE/build/foundation-one-shot/bin/minic" \
-          BUILD_DIR="$GITHUB_WORKSPACE/build/foundation-one-shot-focused" \
+          MINIC="$GITHUB_WORKSPACE/build/lua-compiler/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/lua-focused" \
           HOST_CC=cc \
-            sh tools/dev/pr76-focused.sh
+            sh tools/dev/pr75-focused.sh
 
-      - name: Commit validated migration
+      - name: Upload nested aggregate diagnostic
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lua-nested-aggregate-diagnostic
+          path: build/lua-focused/tests/compiler-c0-static-nested-record-initializer/static_nested_record_initializer.s
+          if-no-files-found: ignore
+          retention-days: 1
+
+      - name: Restore RISC-V package archives
+        id: rv64-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/minic-apt/archives
+          key: rv64-apt-${{ runner.os }}-${{ runner.arch }}-noble-${{ hashFiles('tools/ci/ubuntu-24.04-packages.txt') }}
+
+      - name: Install real RISC-V Linux headers and toolchain
         shell: bash
         run: |
           set -Eeuo pipefail
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add src tests
-          if git diff --cached --quiet; then
-            echo 'no source/test migration to commit'
-            exit 0
+          apt_cache="$HOME/.cache/minic-apt/archives"
+          mkdir -p "$apt_cache/partial"
+          mapfile -t packages < <(grep -Ev '^[[:space:]]*(#|$)' tools/ci/ubuntu-24.04-packages.txt)
+          mapfile -d '' -t cached < <(find "$apt_cache" -maxdepth 1 -type f -name '*.deb' -print0 | sort -z)
+          if (( ${#cached[@]} > 0 )); then
+            sudo apt-get install -y --no-install-recommends "${cached[@]}"
+          else
+            sudo apt-get update
+            sudo apt-get \
+              -o Dir::Cache::archives="$apt_cache" \
+              -o APT::Keep-Downloaded-Packages=true \
+              install -y --no-install-recommends "${packages[@]}"
           fi
-          git commit -m 'refactor: align materialized frontend contracts'
-          git push origin HEAD:refactor/foundation-v1
+          sudo chown -R "$USER:$USER" "$(dirname "$apt_cache")"
+          sh tools/ci/verify-validation-tools.sh
+
+      - name: Compile official Lua 5.5.0 translation units
+        shell: bash
+        run: |
+          set +e
+          MINIC="$GITHUB_WORKSPACE/build/lua-compiler/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/lua-discovery" \
+          HOST_CC=cc \
+          TARGET_CC=riscv64-linux-gnu-gcc \
+            sh tests/external/lua/probe.sh
+          status=$?
+          set -e
+
+          if test "$status" -ge 128; then
+            echo "LUA_SANITIZER_NOTE release_status=$status"
+          fi
+          exit "$status"
