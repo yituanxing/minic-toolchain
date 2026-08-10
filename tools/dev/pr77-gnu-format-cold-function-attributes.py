@@ -4,17 +4,12 @@ from pathlib import Path
 path = Path("src/frontend/parser_function.c")
 text = path.read_text()
 
-# TEMPORARY discovery diagnostic: remove once the real attribute token/path is
-# identified. The focused gate runs against the fully staged compiler, so this
-# tells us exactly what that parser instance sees instead of guessing from the
-# committed pre-stage source.
+# TEMPORARY discovery diagnostic: remove once the real attribute path is known.
 include_anchor = "#include <string.h>\n"
 if text.count(include_anchor) != 1:
     raise SystemExit(f"attribute debug include: expected one string.h include, found {text.count(include_anchor)}")
 text = text.replace(include_anchor, "#include <stdio.h>\n#include <string.h>\n", 1)
 
-# GNU attribute names occupy their own syntactic namespace. Compare token
-# spelling rather than requiring MINIC_TOKEN_IDENTIFIER.
 anchor = '''static bool gnu_function_attribute_is_metadata(const MinicParser *parser) {
 '''
 helper = r'''static bool function_attribute_name_is(const MinicParser *parser, const char *name) {
@@ -97,5 +92,19 @@ new = '''            } else if (!is_known_nonabi_prefix &&
 '''
 if text.count(old) != 1:
     raise SystemExit(f"prefix diagnostic routing: expected one classifier condition, found {text.count(old)}")
-path.write_text(text.replace(old, new, 1))
-print("staged temporary prefix-attribute token diagnostic with explicit format/cold recognition")
+text = text.replace(old, new, 1)
+path.write_text(text)
+
+# TEMPORARY: print every remaining site carrying the same diagnostic so the CI
+# log exposes duplicate/generated parser paths after all previous staging.
+lines = text.splitlines()
+needle = "unsupported GNU prefix function attribute"
+matches = [index for index, line in enumerate(lines) if needle in line]
+print(f"ATTR_SITE_COUNT={len(matches)}")
+for index in matches:
+    begin = max(0, index - 12)
+    end = min(len(lines), index + 8)
+    print(f"ATTR_SITE line={index + 1} context_begin={begin + 1}")
+    for source_index in range(begin, end):
+        print(f"ATTR_SRC {source_index + 1}: {lines[source_index]}")
+print("staged temporary prefix-attribute path diagnostics")
