@@ -1,6 +1,7 @@
 #ifndef MINIC_FRONTEND_ATTRIBUTE_H
 #define MINIC_FRONTEND_ATTRIBUTE_H
 
+#include <stdbool.h>
 #include <stddef.h>
 
 typedef enum MinicAttributeKind {
