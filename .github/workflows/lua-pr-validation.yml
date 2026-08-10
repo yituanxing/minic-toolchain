@@ -75,19 +75,22 @@ jobs:
           sudo chown -R "$USER:$USER" "$(dirname "$apt_cache")"
           sh tools/ci/verify-validation-tools.sh
 
-      - name: Compile official Lua 5.5.0 translation units
+      - name: Validate official Lua 5.5.0 frontier
         shell: bash
+        env:
+          HEAD_REF: ${{ github.head_ref }}
         run: |
-          set +e
-          MINIC="$GITHUB_WORKSPACE/build/lua-compiler/bin/minic" \
-          BUILD_DIR="$GITHUB_WORKSPACE/build/lua-discovery" \
-          HOST_CC=cc \
-          TARGET_CC=riscv64-linux-gnu-gcc \
-            sh tests/external/lua/probe.sh
-          status=$?
-          set -e
+          set -Eeuo pipefail
+          export MINIC="$GITHUB_WORKSPACE/build/lua-compiler/bin/minic"
+          export BUILD_DIR="$GITHUB_WORKSPACE/build/lua-discovery"
+          export HOST_CC=cc
+          export TARGET_CC=riscv64-linux-gnu-gcc
 
-          if test "$status" -ge 128; then
-            echo "LUA_SANITIZER_NOTE release_status=$status"
+          if test "$HEAD_REF" = "external/lua-discovery"; then
+            sh tests/external/lua/probe.sh
+          else
+            LUA_FRONTIER_MIN_PASSED=0 \
+            LUA_FRONTIER_FIRST_SOURCE=lapi.c \
+            LUA_FRONTIER_MIN_FIRST_LINE=1650 \
+              sh tests/external/lua/frontier-regression.sh
           fi
-          exit "$status"
