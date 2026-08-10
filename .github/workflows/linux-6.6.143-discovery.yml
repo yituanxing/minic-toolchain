@@ -71,6 +71,39 @@ jobs:
           set -e
           exit "$status"
 
+      - name: Prepare compact Linux frontier diagnostics
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-discovery"
+          summary="$work/frontier-summary.txt"
+          : > "$summary"
+          if test -s "$work/minic.stderr"; then
+            frontier_line=$(sed -n 's/.*init\/main\.i:\([0-9][0-9]*\):.*/\1/p' "$work/minic.stderr" | head -n 1)
+            printf '%s\n' "frontier_line=${frontier_line:-unknown}" >> "$summary"
+            printf '%s\n' 'MiniC diagnostic:' >> "$summary"
+            sed -n '1,80p' "$work/minic.stderr" >> "$summary"
+            if test -n "${frontier_line:-}" && test -s "$work/kbuild/init/main.i"; then
+              start=$((frontier_line > 10 ? frontier_line - 10 : 1))
+              end=$((frontier_line + 10))
+              printf '\n%s\n' "init/main.i lines=$start-$end:" >> "$summary"
+              nl -ba "$work/kbuild/init/main.i" | sed -n "${start},${end}p" >> "$summary"
+            fi
+          else
+            printf '%s\n' 'No MiniC diagnostic; Linux probe may have passed or failed before MiniC.' >> "$summary"
+          fi
+          cat "$summary"
+
+      - name: Upload compact Linux frontier diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-frontier-${{ github.run_id }}
+          path: build/linux-discovery/frontier-summary.txt
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Save pinned Linux source archive
         if: always() && steps.linux-source-cache.outputs.cache-hit != 'true' && hashFiles('build/linux-cache/linux-6.6.143.tar.xz') != ''
         uses: actions/cache/save@v4
