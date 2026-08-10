@@ -197,14 +197,11 @@ printf '%s\n' 'PASS compiler/c0/extern_multidimensional_array dimensions=2 bound
 # Keep the new regression in the frozen Linux-focused set.
 path = Path("tools/dev/pr76-focused.sh")
 text = path.read_text()
-anchor = "sh \"$root/tests/compiler/c0/run-extern-fixed-integer-arrays.sh\"\n"
-if anchor not in text:
-    # Current script may use a singular neighboring gate; place it after incomplete arrays instead.
-    anchor = "sh \"$root/tests/compiler/c0/run-extern-incomplete-arrays.sh\"\n"
+anchor = 'sh tests/compiler/c0/run-extern-multi-declarators.sh\n'
 text = replace_once(
     text,
     anchor,
-    anchor + 'sh "$root/tests/compiler/c0/run-extern-multidimensional-array.sh"\n',
+    anchor + 'sh tests/compiler/c0/run-extern-multidimensional-array.sh\n',
     "extern-multidimensional-focused-gate",
 )
 path.write_text(text)
