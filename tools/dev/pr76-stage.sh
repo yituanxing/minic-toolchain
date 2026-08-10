@@ -37,4 +37,5 @@ python3 tools/dev/pr77-gnu-overflow-builtins-span-fix.py
 python3 tools/dev/pr77-register-storage-class.py
 python3 tools/dev/pr77-rv64-inline-asm-register-output.py
 python3 tools/dev/pr77-function-linkage-inheritance.py
+python3 tools/dev/pr77-extern-incomplete-record-object.py
 printf '%s\n' 'staged Linux discovery semantics'
