@@ -65,9 +65,6 @@ bool minic_parser_find_enum_tag(const MinicParser *parser, MinicSourceSpan name_
     "enum-tag-prototypes",
 )
 
-# Parser-owned tag registry. Source spans are stable for the translation unit,
-# so no string copy is needed during discovery; StringId interning can absorb
-# this later when the staged frontend is materialized.
 path = Path("src/frontend/parser_typedef.c")
 text = path.read_text()
 marker = "bool minic_parser_find_enum_constant(const MinicParser *parser,\n"
@@ -191,12 +188,12 @@ if text.count(old) != 1:
 path.write_text(text.replace(old, new, 1))
 
 # pr77-type-name-lookahead-fix.py already restores MINIC_TOKEN_KW_ENUM in the
-# shared type-name predicate. Do not patch that list twice; only add the actual
-# enum-tag resolution arm below.
+# shared type-name predicate. Insert the actual tag-resolution arm immediately
+# before the staged struct/union arm from pr75-anonymous-record-type-specifiers.
 path = Path("src/frontend/parser_type.c")
 text = path.read_text()
-anchor = """    } else if (parser->current.kind == MINIC_TOKEN_KW_STRUCT) {
-        MinicRecordId record_id;
+anchor = """    } else if (parser->current.kind == MINIC_TOKEN_KW_STRUCT ||
+               parser->current.kind == MINIC_TOKEN_KW_UNION) {
 """
 arm = r'''    } else if (parser->current.kind == MINIC_TOKEN_KW_ENUM) {
         MinicSourceSpan tag_span;
@@ -214,11 +211,11 @@ arm = r'''    } else if (parser->current.kind == MINIC_TOKEN_KW_ENUM) {
         if (!minic_parser_advance(parser)) {
             return false;
         }
-    } else if (parser->current.kind == MINIC_TOKEN_KW_STRUCT) {
-        MinicRecordId record_id;
+    } else if (parser->current.kind == MINIC_TOKEN_KW_STRUCT ||
+               parser->current.kind == MINIC_TOKEN_KW_UNION) {
 '''
 if text.count(anchor) != 1:
-    raise SystemExit(f"enum type parser arm: expected one struct arm, found {text.count(anchor)}")
+    raise SystemExit(f"enum type parser arm: expected one shared record arm, found {text.count(anchor)}")
 path.write_text(text.replace(anchor, arm, 1))
 
 print("staged enum tag registry and validated enum-tag type-name references")
