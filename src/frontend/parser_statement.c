@@ -564,9 +564,21 @@ static bool parse_block_scope_extern_function_declaration(MinicParser *parser) {
     return minic_parser_advance(parser);
 }
 
-static bool static_record_integer_constant(const MinicC0Program *program,
-                                           MinicExpressionId expression_id,
-                                           int *value);
+static bool
+parse_static_local_integer_constant(MinicParser *parser, const char *range_message, int *value) {
+    int64_t parsed;
+
+    if (parser == NULL || range_message == NULL || value == NULL ||
+        !minic_parser_parse_integer_constant_expression(parser, &parsed)) {
+        return false;
+    }
+    if (parsed < INT_MIN || parsed > INT_MAX) {
+        minic_parser_error(parser, "%s", range_message);
+        return false;
+    }
+    *value = (int)parsed;
+    return true;
+}
 
 static bool parse_inferred_static_local_array(MinicParser *parser,
                                               MinicType element_type,
@@ -741,15 +753,16 @@ static bool parse_inferred_static_local_array(MinicParser *parser,
                     return false;
                 }
             } else {
-                MinicExpressionId value_id;
                 int value;
 
-                if (!minic_parser_parse_expression(parser, &value_id, 1U) ||
-                    !static_record_integer_constant(parser->program, value_id, &value) ||
+                if (!parse_static_local_integer_constant(
+                        parser,
+                        "static local array initializer is out of supported integer range",
+                        &value) ||
                     !minic_c0_global_object_add_initializer(parser->program, object_id, value)) {
                     if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
                         minic_parser_error(
-                            parser, "static local array requires integer constant initializers");
+                            parser, "static local array requires an integer constant expression");
                     }
                     return false;
                 }
@@ -784,55 +797,6 @@ static bool parse_inferred_static_local_array(MinicParser *parser,
     minic_parser_error(parser,
                        "inferred static local array requires a string or brace initializer");
     return false;
-}
-
-static bool static_record_integer_constant(const MinicC0Program *program,
-                                           MinicExpressionId expression_id,
-                                           int *value) {
-    const MinicExpression *expression;
-    int operand;
-
-    if (program == NULL || value == NULL) {
-        return false;
-    }
-    expression = minic_c0_program_expression(program, expression_id);
-    if (expression == NULL || !minic_type_is_integer(expression->type)) {
-        return false;
-    }
-    if (expression->kind == MINIC_EXPRESSION_INTEGER) {
-        if (expression->value.integer_value < INT_MIN ||
-            expression->value.integer_value > INT_MAX) {
-            return false;
-        }
-        *value = (int)expression->value.integer_value;
-        return true;
-    }
-    if (expression->kind == MINIC_EXPRESSION_CAST) {
-        return static_record_integer_constant(program, expression->value.unary.operand, value);
-    }
-    if (expression->kind != MINIC_EXPRESSION_UNARY ||
-        !static_record_integer_constant(program, expression->value.unary.operand, &operand)) {
-        return false;
-    }
-    switch (expression->value.unary.operator_kind) {
-    case MINIC_UNARY_PLUS:
-        *value = operand;
-        return true;
-    case MINIC_UNARY_NEGATE:
-        if (operand == INT_MIN) {
-            return false;
-        }
-        *value = -operand;
-        return true;
-    case MINIC_UNARY_LOGICAL_NOT:
-        *value = operand == 0 ? 1 : 0;
-        return true;
-    case MINIC_UNARY_BITWISE_NOT:
-        *value = ~operand;
-        return true;
-    default:
-        return false;
-    }
 }
 
 static bool parse_static_local_record_initializer(MinicParser *parser,
@@ -902,11 +866,11 @@ static bool parse_static_local_record_initializer(MinicParser *parser,
                 return false;
             }
         } else {
-            MinicExpressionId value_id;
-
             if (!minic_type_is_integer(field->type) ||
-                !minic_parser_parse_expression(parser, &value_id, 1U) ||
-                !static_record_integer_constant(parser->program, value_id, &value)) {
+                !parse_static_local_integer_constant(
+                    parser,
+                    "static record field constant is out of supported integer range",
+                    &value)) {
                 if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
                     minic_parser_error(
                         parser, "static record field requires an integer constant expression");
@@ -1000,7 +964,6 @@ static bool parse_static_local_array_declarator(MinicParser *parser, MinicType b
     if (bound_count == 0U) {
         char scalar_symbol_name[96];
         MinicGlobalObjectId scalar_object_id;
-        MinicExpressionId scalar_initializer_id;
         int scalar_value;
         int scalar_symbol_length;
 
@@ -1055,12 +1018,11 @@ static bool parse_static_local_array_declarator(MinicParser *parser, MinicType b
             return true;
         }
 
-        if (!minic_parser_parse_expression(parser, &scalar_initializer_id, 0U) ||
-            !static_record_integer_constant(
-                parser->program, scalar_initializer_id, &scalar_value)) {
+        if (!parse_static_local_integer_constant(
+                parser, "static local integer constant is out of supported range", &scalar_value)) {
             if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
-                minic_parser_error(
-                    parser, "static local integer requires a supported constant initializer");
+                minic_parser_error(parser,
+                                   "static local integer requires an integer constant expression");
             }
             return false;
         }
