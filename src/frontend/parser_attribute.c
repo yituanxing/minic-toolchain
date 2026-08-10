@@ -13,6 +13,17 @@ static bool parser_token_text_is(const MinicParser *parser, MinicToken token, co
            memcmp(parser->source + token.span.begin.offset, text, text_length) == 0;
 }
 
+static const MinicAttributeDescriptor *attribute_descriptor_for_token(const MinicParser *parser,
+                                                                      MinicToken token) {
+    size_t name_length;
+
+    if (parser == NULL || token.kind == MINIC_TOKEN_EOF) {
+        return NULL;
+    }
+    name_length = minic_parser_span_length(token.span);
+    return minic_attribute_lookup(parser->source + token.span.begin.offset, name_length);
+}
+
 static bool parse_attribute_arguments(MinicParser *parser, MinicParsedAttribute *attribute) {
     size_t depth;
 
@@ -72,7 +83,7 @@ bool minic_parser_parse_gnu_attribute_lists(MinicParser *parser,
             }
             (void)memset(&attribute, 0, sizeof(attribute));
             attribute.name_span = parser->current.span;
-            attribute.descriptor = minic_parser_current_attribute(parser);
+            attribute.descriptor = attribute_descriptor_for_token(parser, parser->current);
             if (!minic_parser_advance(parser) ||
                 !parse_attribute_arguments(parser, &attribute) ||
                 !consumer(parser, &attribute, context)) {
