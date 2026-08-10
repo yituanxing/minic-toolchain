@@ -109,7 +109,7 @@ static bool validate_input(const MinicInlineAsm *inline_asm,
 
     if (inline_asm == NULL || program == NULL || operand == NULL ||
         operand->access != MINIC_INLINE_ASM_OPERAND_READ_ONLY ||
-        (!constraint_is(operand, "r") && !(inline_asm->is_goto && constraint_is(operand, "i")))) {
+        (inline_asm->is_goto ? !constraint_is(operand, "i") : !constraint_is(operand, "r"))) {
         return false;
     }
     expression = minic_c0_program_expression(program, operand->expression);
@@ -400,7 +400,7 @@ bool minic_riscv64_emit_inline_asm(FILE *file,
     if (operand_count > (SIZE_MAX - 15U) / 8U) {
         return false;
     }
-    temporary_size = (operand_count * 8U + 15U) & ~(size_t)15U;
+    temporary_size = inline_asm->is_goto ? 0U : (operand_count * 8U + 15U) & ~(size_t)15U;
     if (!minic_riscv64_emit_stack_allocate(file, temporary_size)) {
         return false;
     }

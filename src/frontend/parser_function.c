@@ -108,25 +108,119 @@ static bool apply_function_attribute_list(MinicParser *parser,
     return true;
 }
 
-static bool validate_object_attribute_list(MinicParser *parser,
-                                           const MinicParsedAttributeList *attributes) {
+static bool decode_deferred_section_argument(MinicParser *parser,
+                                             const MinicParsedAttribute *attribute,
+                                             char *buffer,
+                                             size_t capacity,
+                                             size_t *length,
+                                             bool *has_section) {
+    size_t cursor;
+    size_t end;
+    char parsed[256];
+    size_t parsed_length;
+    bool saw_literal;
+
+    if (parser == NULL || attribute == NULL || buffer == NULL || length == NULL ||
+        has_section == NULL || capacity == 0U || !attribute->has_arguments ||
+        attribute->arguments_span.end.offset <= attribute->arguments_span.begin.offset + 1U) {
+        return false;
+    }
+    cursor = attribute->arguments_span.begin.offset + 1U;
+    end = attribute->arguments_span.end.offset - 1U;
+    parsed_length = 0U;
+    saw_literal = false;
+    while (cursor < end) {
+        while (cursor < end && (parser->source[cursor] == ' ' || parser->source[cursor] == '\t' ||
+                                parser->source[cursor] == '\n' || parser->source[cursor] == '\r' ||
+                                parser->source[cursor] == '\f' || parser->source[cursor] == '\v')) {
+            cursor += 1U;
+        }
+        if (cursor >= end) {
+            break;
+        }
+        if (parser->source[cursor] != '"') {
+            minic_parser_error(parser,
+                               "GNU section attribute requires concatenated string literals");
+            return false;
+        }
+        saw_literal = true;
+        cursor += 1U;
+        while (cursor < end && parser->source[cursor] != '"') {
+            if (parser->source[cursor] == '\\') {
+                minic_parser_error(parser, "escaped GNU section names are not supported yet");
+                return false;
+            }
+            if (parsed_length + 1U >= sizeof(parsed)) {
+                minic_parser_error(parser, "GNU section name is too long");
+                return false;
+            }
+            parsed[parsed_length++] = parser->source[cursor++];
+        }
+        if (cursor >= end || parser->source[cursor] != '"') {
+            minic_parser_error(parser, "unterminated GNU section string");
+            return false;
+        }
+        cursor += 1U;
+    }
+    if (!saw_literal || parsed_length == 0U || parsed_length + 1U > capacity) {
+        minic_parser_error(parser, "invalid GNU section attribute argument");
+        return false;
+    }
+    parsed[parsed_length] = '\0';
+    if (*has_section) {
+        if (*length != parsed_length || memcmp(buffer, parsed, parsed_length) != 0) {
+            minic_parser_error(parser, "conflicting GNU section attributes");
+            return false;
+        }
+        return true;
+    }
+    (void)memcpy(buffer, parsed, parsed_length + 1U);
+    *length = parsed_length;
+    *has_section = true;
+    return true;
+}
+
+static bool apply_object_attribute_list(MinicParser *parser,
+                                        const MinicParsedAttributeList *attributes,
+                                        char *section_name,
+                                        size_t section_capacity,
+                                        size_t *section_name_length,
+                                        bool *has_section) {
     size_t index;
 
-    if (parser == NULL || attributes == NULL) {
+    if (parser == NULL || attributes == NULL || section_name == NULL ||
+        section_name_length == NULL || has_section == NULL) {
         return false;
     }
     for (index = 0U; index < attributes->count; ++index) {
-        const MinicAttributeDescriptor *descriptor = attributes->values[index].descriptor;
+        const MinicParsedAttribute *attribute;
+        const MinicAttributeDescriptor *descriptor;
 
+        attribute = &attributes->values[index];
+        descriptor = attribute->descriptor;
         if (descriptor == NULL ||
-            !minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_OBJECT) ||
-            !function_attribute_class_is_parse_only(descriptor->semantic_class)) {
-            minic_parser_error(parser,
-                               "unsupported GNU object prefix attribute; symbol/layout "
-                               "attributes require "
-                               "explicit object semantics");
+            !minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_OBJECT)) {
+            minic_parser_error(parser, "unsupported GNU object prefix attribute");
             return false;
         }
+        if (function_attribute_class_is_parse_only(descriptor->semantic_class)) {
+            continue;
+        }
+        if (descriptor->kind == MINIC_ATTRIBUTE_SECTION) {
+            if (!decode_deferred_section_argument(parser,
+                                                  attribute,
+                                                  section_name,
+                                                  section_capacity,
+                                                  section_name_length,
+                                                  has_section)) {
+                return false;
+            }
+            continue;
+        }
+        minic_parser_error(parser,
+                           "unsupported GNU object prefix attribute; symbol/layout attributes "
+                           "require explicit object semantics");
+        return false;
     }
     return true;
 }
@@ -1220,7 +1314,12 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
             minic_parser_error(parser, "inline specifier requires a function declarator");
             return false;
         }
-        if (!validate_object_attribute_list(parser, &deferred_attributes)) {
+        if (!apply_object_attribute_list(parser,
+                                         &deferred_attributes,
+                                         section_name,
+                                         sizeof(section_name),
+                                         &section_name_length,
+                                         &has_section)) {
             return false;
         }
         if (has_section || has_visibility) {
@@ -1236,7 +1335,12 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
             minic_parser_error(parser, "inline specifier requires a function declarator");
             return false;
         }
-        if (!validate_object_attribute_list(parser, &deferred_attributes)) {
+        if (!apply_object_attribute_list(parser,
+                                         &deferred_attributes,
+                                         section_name,
+                                         sizeof(section_name),
+                                         &section_name_length,
+                                         &has_section)) {
             return false;
         }
         if (is_extern_declaration) {
