@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   committed-source:
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' || github.head_ref == 'refactor/foundation-v1'
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout refactor branch
