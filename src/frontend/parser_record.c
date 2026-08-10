@@ -109,8 +109,8 @@ static bool parse_packed_record_attribute(MinicParser *parser, bool *is_packed) 
         !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '(' in __attribute__")) {
         return false;
     }
-    if (!token_text_equals(parser, parser->current, "__packed__") &&
-        !token_text_equals(parser, parser->current, "packed")) {
+    if (!minic_parser_current_attribute_is(
+            parser, MINIC_ATTRIBUTE_PACKED, MINIC_ATTRIBUTE_TARGET_TYPE)) {
         minic_parser_error(parser, "only packed record attribute is supported here");
         return false;
     }
@@ -136,8 +136,8 @@ static bool parse_record_field_alignment_attribute(MinicParser *parser, size_t *
         !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '((' in field __attribute__")) {
         return false;
     }
-    if (!token_text_equals(parser, parser->current, "__aligned__") &&
-        !token_text_equals(parser, parser->current, "aligned")) {
+    if (!minic_parser_current_attribute_is(
+            parser, MINIC_ATTRIBUTE_ALIGNED, MINIC_ATTRIBUTE_TARGET_FIELD)) {
         minic_parser_error(parser, "unsupported GNU record field attribute");
         return false;
     }
@@ -335,8 +335,8 @@ static bool parse_record_suffix_alignment(MinicParser *parser, size_t *alignment
         !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '((' in record __attribute__")) {
         return false;
     }
-    if (!token_text_equals(parser, parser->current, "aligned") &&
-        !token_text_equals(parser, parser->current, "__aligned__")) {
+    if (!minic_parser_current_attribute_is(
+            parser, MINIC_ATTRIBUTE_ALIGNED, MINIC_ATTRIBUTE_TARGET_TYPE)) {
         minic_parser_error(parser, "unsupported GNU record suffix attribute");
         return false;
     }

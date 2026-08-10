@@ -2,6 +2,7 @@
 #define MINIC_FRONTEND_PARSER_INTERNAL_H
 
 #include "frontend/ast.h"
+#include "frontend/attribute.h"
 #include "frontend/lexer.h"
 #include "frontend/token.h"
 #include "minic/compiler.h"
@@ -115,6 +116,10 @@ size_t minic_parser_span_length(MinicSourceSpan span);
 bool minic_parser_span_equals(const MinicParser *parser,
                               MinicSourceSpan left,
                               MinicSourceSpan right);
+const MinicAttributeDescriptor *minic_parser_current_attribute(const MinicParser *parser);
+bool minic_parser_current_attribute_is(const MinicParser *parser,
+                                       MinicAttributeKind kind,
+                                       MinicAttributeTarget target);
 bool minic_parser_add_expression(MinicParser *parser,
                                  const MinicExpression *expression,
                                  MinicExpressionId *expression_id);

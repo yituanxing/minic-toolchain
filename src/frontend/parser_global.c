@@ -1,7 +1,6 @@
 #include "frontend/parser_internal.h"
 
 #include <limits.h>
-#include <limits.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>

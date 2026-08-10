@@ -52,7 +52,11 @@ expect_compile_failure() {
             "FAIL compiler/c0/$name: compilation unexpectedly succeeded" >&2
         exit 1
     fi
-    grep -F "$expected_message" "$work/$name.stderr" >/dev/null
+    if ! grep -F "$expected_message" "$work/$name.stderr" >/dev/null; then
+        printf '%s\n' "FAIL compiler/c0/$name: diagnostic mismatch" >&2
+        cat "$work/$name.stderr" >&2
+        exit 1
+    fi
     printf '%s\n' "PASS compiler/c0/$name"
 }
 
@@ -217,7 +221,7 @@ expect_compile_failure \
     "use of undeclared local"
 expect_compile_failure \
     invalid_address_of_rvalue \
-    "address-of requires an lvalue operand"
+    "address-of requires an lvalue object or function designator"
 expect_compile_failure \
     invalid_dereference_integer \
     "dereference requires a pointer operand"
@@ -226,7 +230,7 @@ expect_compile_failure \
     "initializer type does not match local type"
 expect_compile_failure \
     invalid_assignment_rvalue \
-    "assignment expression requires a modifiable scalar lvalue"
+    "assignment expression requires a modifiable object lvalue"
 expect_compile_failure \
     invalid_pointer_assignment_type \
     "assignment expression type does not match target type"
@@ -254,9 +258,10 @@ expect_compile_failure \
 expect_compile_failure \
     invalid_duplicate_record_definition \
     "duplicate record definition"
-expect_compile_failure \
-    invalid_empty_record \
-    "record definition requires at least one field"
+MINIC="$minic" \
+HOST_CC="$host_cc" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+sh "$root/tests/compiler/c0/run-gnu-empty-records.sh"
 expect_compile_failure \
     invalid_conflicting_const_parameter \
     "conflicting function declaration"

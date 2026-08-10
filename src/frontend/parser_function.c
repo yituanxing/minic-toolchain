@@ -16,20 +16,10 @@ static bool function_identifier_is(const MinicParser *parser, const char *name) 
            memcmp(parser->source + parser->current.span.begin.offset, name, name_length) == 0;
 }
 
-static const MinicAttributeDescriptor *current_function_attribute(const MinicParser *parser) {
-    size_t name_length;
-
-    if (parser == NULL || parser->current.kind == MINIC_TOKEN_EOF) {
-        return NULL;
-    }
-    name_length = minic_parser_span_length(parser->current.span);
-    return minic_attribute_lookup(parser->source + parser->current.span.begin.offset, name_length);
-}
-
 static bool gnu_function_attribute_is_metadata(const MinicParser *parser) {
     const MinicAttributeDescriptor *descriptor;
 
-    descriptor = current_function_attribute(parser);
+    descriptor = minic_parser_current_attribute(parser);
     if (!minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_FUNCTION)) {
         return false;
     }
@@ -41,7 +31,7 @@ static bool gnu_function_attribute_is_metadata(const MinicParser *parser) {
 static bool gnu_function_attribute_is_diagnostic(const MinicParser *parser) {
     const MinicAttributeDescriptor *descriptor;
 
-    descriptor = current_function_attribute(parser);
+    descriptor = minic_parser_current_attribute(parser);
     return minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_FUNCTION) &&
            descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_DIAGNOSTIC;
 }
@@ -517,7 +507,7 @@ bool minic_parser_parse_parameter_list(MinicParser *parser,
         bool is_function_pointer_parameter;
 
         if (*parameter_count >= MINIC_MAX_FUNCTION_PARAMETERS) {
-            minic_parser_error(parser, "at most eight parameters are supported");
+            minic_parser_error(parser, "parameter count exceeds compiler limit");
             return false;
         }
         if (!minic_parser_parse_type_name(parser, &parameter_type)) {

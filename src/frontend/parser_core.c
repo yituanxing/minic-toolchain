@@ -774,6 +774,26 @@ bool minic_parser_span_equals(const MinicParser *parser,
                                                  left_length) == 0;
 }
 
+const MinicAttributeDescriptor *minic_parser_current_attribute(const MinicParser *parser) {
+    size_t name_length;
+
+    if (parser == NULL || parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
+        return NULL;
+    }
+    name_length = minic_parser_span_length(parser->current.span);
+    return minic_attribute_lookup(parser->source + parser->current.span.begin.offset, name_length);
+}
+
+bool minic_parser_current_attribute_is(const MinicParser *parser,
+                                       MinicAttributeKind kind,
+                                       MinicAttributeTarget target) {
+    const MinicAttributeDescriptor *descriptor;
+
+    descriptor = minic_parser_current_attribute(parser);
+    return descriptor != NULL && descriptor->kind == kind &&
+           minic_attribute_allowed_on(descriptor, target);
+}
+
 bool minic_parser_add_expression(MinicParser *parser,
                                  const MinicExpression *expression,
                                  MinicExpressionId *expression_id) {

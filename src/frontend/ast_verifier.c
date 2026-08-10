@@ -686,24 +686,26 @@ verify_expression(const MinicC0Program *program, size_t expression_index, MinicC
                minic_type_equal(expression->type, expected_type);
     }
     case MINIC_EXPRESSION_BUILTIN_OVERFLOW: {
-        const MinicExpression *left;
-        const MinicExpression *right;
+        const MinicExpression *overflow_left;
+        const MinicExpression *overflow_right;
         const MinicExpression *result_pointer;
         MinicType result_type;
 
-        left = expression_before(program, expression->value.overflow.left, expression_index);
-        right = expression_before(program, expression->value.overflow.right, expression_index);
+        overflow_left =
+            expression_before(program, expression->value.overflow.left, expression_index);
+        overflow_right =
+            expression_before(program, expression->value.overflow.right, expression_index);
         result_pointer =
             expression_before(program, expression->value.overflow.result_pointer, expression_index);
-        return left != NULL && right != NULL && result_pointer != NULL &&
+        return overflow_left != NULL && overflow_right != NULL && result_pointer != NULL &&
                expression->value_category == MINIC_VALUE_RVALUE &&
                minic_type_equal(expression->type, minic_type_bool()) &&
                expression->value.overflow.operator_kind >= MINIC_OVERFLOW_ADD &&
                expression->value.overflow.operator_kind <= MINIC_OVERFLOW_MULTIPLY &&
                minic_type_pointee(result_pointer->type, &result_type) &&
                minic_type_is_integer(result_type) && !minic_type_is_bool_integer(result_type) &&
-               minic_type_equal(left->type, result_type) &&
-               minic_type_equal(right->type, result_type);
+               minic_type_equal(overflow_left->type, result_type) &&
+               minic_type_equal(overflow_right->type, result_type);
     }
     case MINIC_EXPRESSION_STATEMENT: {
         const MinicBlock *block;

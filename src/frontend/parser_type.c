@@ -125,10 +125,6 @@ static bool minic_parser_try_gnu_int128(MinicParser *parser, MinicType *type, bo
     return minic_parser_advance(parser);
 }
 
-#include <string.h>
-
-#include <string.h>
-
 static bool minic_parser_identifier_is(const MinicParser *parser, const char *name) {
     size_t name_length;
 

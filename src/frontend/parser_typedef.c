@@ -340,8 +340,8 @@ static bool parse_redundant_typedef_alignment(MinicParser *parser, MinicType ali
             parser, MINIC_TOKEN_LPAREN, "expected '((' in typedef __attribute__")) {
         return false;
     }
-    if (!typedef_token_text_equals(parser, "aligned") &&
-        !typedef_token_text_equals(parser, "__aligned__")) {
+    if (!minic_parser_current_attribute_is(
+            parser, MINIC_ATTRIBUTE_ALIGNED, MINIC_ATTRIBUTE_TARGET_TYPE)) {
         minic_parser_error(parser, "unsupported GNU typedef attribute");
         return false;
     }
