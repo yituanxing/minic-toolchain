@@ -32,6 +32,7 @@ jobs:
           set -Eeuo pipefail
           if grep -q 'for update only supports a discarded void cast here' src/frontend/parser_statement.c; then
             python3 tools/dev/foundation-for-update-expression-once.py
+            python3 tools/dev/foundation-for-update-contract-fix.py
             chmod +x tests/compiler/c0/run-for-expression-initializers.sh
             echo 'applied=1' >> "$GITHUB_OUTPUT"
           else
@@ -46,7 +47,7 @@ jobs:
           bad=0
           while IFS= read -r path; do
             case "$path" in
-              src/frontend/parser_statement.c|tests/compiler/c0/for_expression_initializer.c|tests/compiler/c0/run-for-expression-initializers.sh) ;;
+              src/frontend/parser_statement.c|tests/compiler/c0/for_expression_initializer.c|tests/compiler/c0/run-for-expression-initializers.sh|tests/compiler/c0/run-for-loops.sh) ;;
               '') ;;
               *) printf '%s\n' "unexpected candidate path: $path" >&2; bad=1 ;;
             esac
@@ -90,7 +91,8 @@ jobs:
           git add \
             src/frontend/parser_statement.c \
             tests/compiler/c0/for_expression_initializer.c \
-            tests/compiler/c0/run-for-expression-initializers.sh
+            tests/compiler/c0/run-for-expression-initializers.sh \
+            tests/compiler/c0/run-for-loops.sh
           git diff --cached --check
           git commit -m 'frontend: parse for updates as full expressions'
           git push origin HEAD:refactor/foundation-v1
