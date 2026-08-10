@@ -1,4 +1,4 @@
-name: Lua RV64 Stack ABI
+name: RV64 Stack ABI Regression
 
 on:
   pull_request:
@@ -8,12 +8,11 @@ permissions:
   contents: read
 
 concurrency:
-  group: lua-stack-abi-${{ github.event.pull_request.number }}
+  group: rv64-stack-abi-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
   stack-abi:
-    if: github.event.pull_request.number == 75
     runs-on: ubuntu-24.04
     env:
       DEBIAN_FRONTEND: noninteractive
@@ -27,7 +26,7 @@ jobs:
           set -Eeuo pipefail
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
           git diff --exit-code -- include src tools/minic
-          make -j4 MODE=release BUILD_DIR=build/lua-stack-abi-compiler
+          make -j4 MODE=release BUILD_DIR=build/rv64-stack-abi-compiler
 
       - name: Restore RISC-V package archives
         id: rv64-cache
@@ -60,8 +59,8 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          MINIC="$GITHUB_WORKSPACE/build/lua-stack-abi-compiler/bin/minic" \
-          BUILD_DIR="$GITHUB_WORKSPACE/build/lua-stack-abi" \
+          MINIC="$GITHUB_WORKSPACE/build/rv64-stack-abi-compiler/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/rv64-stack-abi" \
           RISCV_CC=riscv64-linux-gnu-gcc \
           QEMU_RISCV64=qemu-riscv64 \
             sh tests/compiler/c0/run-stack-fixed-arguments-rv64.sh
