@@ -22,7 +22,7 @@ if test "$call_count" -ne 1; then
     exit 1
 fi
 grep -F "  xor a0, t0, a0" "$work/compound_xor_assignment.s" >/dev/null
-grep -F "  sw a0, 0(t0)" "$work/compound_xor_assignment.s" >/dev/null
+grep -F "  sw t0, 0(t1)" "$work/compound_xor_assignment.s" >/dev/null
 printf '%s\n' "PASS compiler/c0/compound_xor_assignment"
 
 check_invalid() {
