@@ -48,6 +48,21 @@ jobs:
           if text.count(old) != 1:
               raise SystemExit(f'replace_once guard expected once, found {text.count(old)}')
           text = text.replace(old, new, 1)
+          old = '''text = replace_once(
+              text,
+              '''        expect_name(MINIC_TOKEN_KW_SIZEOF, "sizeof") != 0 ||\n''',
+              '''        expect_name(MINIC_TOKEN_KW_SIZEOF, "sizeof") != 0 ||\n        expect_name(MINIC_TOKEN_KW_ALIGNOF, "alignof") != 0 ||\n''',
+              "token-model-alignof",
+          )'''
+          new = '''text = replace_once(
+              text,
+              '''        expect_name(MINIC_TOKEN_KW_STATIC_ASSERT, "_Static_assert") != 0 ||\n''',
+              '''        expect_name(MINIC_TOKEN_KW_STATIC_ASSERT, "_Static_assert") != 0 ||\n        expect_name(MINIC_TOKEN_KW_ALIGNOF, "alignof") != 0 ||\n''',
+              "token-model-alignof",
+          )'''
+          if text.count(old) != 1:
+              raise SystemExit(f'token-model helper block expected once, found {text.count(old)}')
+          text = text.replace(old, new, 1)
           path.write_text(text)
           PY
           python3 tools/dev/foundation-data-layout-alignof-once.py
