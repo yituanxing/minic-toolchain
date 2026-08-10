@@ -24,8 +24,24 @@ static const MinicAttributeDescriptor *attribute_descriptor_for_token(const Mini
     return minic_attribute_lookup(parser->source + token.span.begin.offset, name_length);
 }
 
+static bool validate_attribute_argument_count(MinicParser *parser,
+                                              const MinicParsedAttribute *attribute,
+                                              size_t argument_count) {
+    if (parser == NULL || attribute == NULL) {
+        return false;
+    }
+    if (attribute->descriptor != NULL &&
+        !minic_attribute_argument_count_allowed(attribute->descriptor, argument_count)) {
+        minic_parser_error(parser, "GNU attribute has an invalid number of arguments");
+        return false;
+    }
+    return true;
+}
+
 static bool parse_attribute_arguments(MinicParser *parser, MinicParsedAttribute *attribute) {
     size_t depth;
+    size_t argument_count;
+    bool saw_argument_token;
 
     if (parser == NULL || attribute == NULL) {
         return false;
@@ -33,31 +49,56 @@ static bool parse_attribute_arguments(MinicParser *parser, MinicParsedAttribute 
     attribute->has_arguments = false;
     (void)memset(&attribute->arguments_span, 0, sizeof(attribute->arguments_span));
     if (parser->current.kind != MINIC_TOKEN_LPAREN) {
-        return true;
+        return validate_attribute_argument_count(parser, attribute, 0U);
     }
 
     attribute->has_arguments = true;
     attribute->arguments_span.begin = parser->current.span.begin;
     depth = 0U;
+    argument_count = 0U;
+    saw_argument_token = false;
     do {
-        if (parser->current.kind == MINIC_TOKEN_LPAREN) {
+        MinicTokenKind kind;
+
+        kind = parser->current.kind;
+        if (kind == MINIC_TOKEN_LPAREN) {
+            if (depth == 1U) {
+                saw_argument_token = true;
+            }
             depth += 1U;
-        } else if (parser->current.kind == MINIC_TOKEN_RPAREN) {
+        } else if (kind == MINIC_TOKEN_RPAREN) {
             if (depth == 0U) {
                 minic_parser_error(parser, "internal error: invalid GNU attribute argument depth");
                 return false;
             }
+            if (depth == 1U) {
+                if (saw_argument_token) {
+                    argument_count += 1U;
+                } else if (argument_count != 0U) {
+                    minic_parser_error(parser, "GNU attribute argument list cannot end with ','");
+                    return false;
+                }
+            }
             depth -= 1U;
-        } else if (parser->current.kind == MINIC_TOKEN_EOF) {
+        } else if (kind == MINIC_TOKEN_EOF) {
             minic_parser_error(parser, "unterminated GNU attribute arguments");
             return false;
+        } else if (depth == 1U && kind == MINIC_TOKEN_COMMA) {
+            if (!saw_argument_token) {
+                minic_parser_error(parser, "GNU attribute argument cannot be empty");
+                return false;
+            }
+            argument_count += 1U;
+            saw_argument_token = false;
+        } else if (depth != 0U) {
+            saw_argument_token = true;
         }
         attribute->arguments_span.end = parser->current.span.end;
         if (!minic_parser_advance(parser)) {
             return false;
         }
     } while (depth != 0U);
-    return true;
+    return validate_attribute_argument_count(parser, attribute, argument_count);
 }
 
 bool minic_parser_parse_gnu_attribute_lists(MinicParser *parser,
