@@ -30,5 +30,20 @@ if grep -F '%[ext]' "$assembly" >/dev/null; then
     exit 1
 fi
 
+cat >"$work/register_input.c" <<'EOF'
+int unsupported_register_input(int value) {
+    asm goto("beqz %0, %l[zero]" : : "r"(value) : : zero);
+    return 0;
+zero:
+    return 1;
+}
+EOF
+"$host_cc" -E -P -std=gnu11 -x c "$work/register_input.c" -o "$work/register_input.i"
+if "$minic" -S "$work/register_input.i" -o "$work/register_input.s" \
+    >"$work/register_input.stdout" 2>"$work/register_input.stderr"; then
+    printf '%s\n' 'asm goto register input unexpectedly compiled in immediate-only v0' >&2
+    exit 1
+fi
+
 printf '%s\n' \
-    'PASS compiler/c0/gnu_inline_asm_goto labels=statement-id named-label=1 immediate-constant=33 dynamic-i=deferred-specialization target=RV64'
+    'PASS compiler/c0/gnu_inline_asm_goto labels=statement-id named-label=1 immediate-constant=33 dynamic-i=deferred-specialization register-input=reject temp-stack=none target=RV64'
