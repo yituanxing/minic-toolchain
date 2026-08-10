@@ -29,6 +29,16 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('tools/dev/foundation-extern-declaration-head-once.py')
+          text = path.read_text()
+          old = '''text = replace_once(\n    text,\n    "    bool is_inline;\\n",\n    "    bool is_function_pointer_object;\\n    bool is_inline;\\n",\n    "function-head-flags",\n)'''
+          new = '''text = replace_once(\n    text,\n    "    bool is_inline;\\n    bool is_main;\\n    bool is_variadic;\\n",\n    "    bool is_function_pointer_object;\\n    bool is_inline;\\n    bool is_main;\\n    bool is_variadic;\\n",\n    "function-head-flags",\n)'''
+          if text.count(old) != 1:
+              raise SystemExit(f'helper-anchor-fix: expected one match, found {text.count(old)}')
+          path.write_text(text.replace(old, new, 1))
+          PY
           python3 tools/dev/foundation-extern-declaration-head-once.py
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
 
@@ -36,7 +46,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          allowed='^(src/frontend/parser_internal\.h|src/frontend/parser_attribute\.c|src/frontend/parser_function\.c|src/frontend/parser_global\.c|tests/compiler/c0/extern_interleaved_function_attributes\.c|tests/compiler/c0/run-extern-interleaved-function-attributes\.sh|tools/dev/pr76-focused\.sh)$'
+          allowed='^(src/frontend/parser_internal\.h|src/frontend/parser_attribute\.c|src/frontend/parser_function\.c|src/frontend/parser_global\.c|tests/compiler/c0/extern_interleaved_function_attributes\.c|tests/compiler/c0/run-extern-interleaved-function-attributes\.sh|tools/dev/pr76-focused\.sh|tools/dev/foundation-extern-declaration-head-once\.py)$'
           changed=$(git status --porcelain=v1 | sed -E 's/^.. //')
           printf '%s\n' "$changed"
           bad=$(printf '%s\n' "$changed" | grep -Ev "$allowed" || true)
