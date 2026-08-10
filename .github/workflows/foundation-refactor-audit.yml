@@ -9,7 +9,7 @@ on:
       - main
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: foundation-refactor-${{ github.ref }}
@@ -20,47 +20,23 @@ jobs:
     if: github.event_name == 'push' || github.head_ref == 'refactor/foundation-v1'
     runs-on: ubuntu-24.04
     steps:
-      - name: Checkout refactor branch
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          ref: refactor/foundation-v1
 
-      - name: Apply semantic-free TokenCursor migration
+      - name: Verify committed source is canonical
         shell: bash
         run: |
           set -Eeuo pipefail
-          python3 tools/maintenance/foundation-token-cursor-once.py
-
-      - name: Format candidate
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+          git diff --exit-code -- include src tools/minic
 
-      - name: Verify candidate diff scope and semantic-probe preservation
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          git diff --name-only
-          bad=$(git diff --name-only | grep -Ev '^(Makefile|src/frontend/token_cursor\.(c|h)|src/frontend/parser_function\.c|src/frontend/parser_typedef\.c|tests/frontend/token_cursor_test\.c)$' || true)
-          if test -n "$bad"; then
-            printf '%s\n' "unexpected TokenCursor migration paths:" >&2
-            printf '%s\n' "$bad" >&2
-            exit 1
-          fi
-          grep -F 'static bool static_declaration_is_function' src/frontend/parser_function.c >/dev/null
-          grep -F 'static bool extern_declaration_is_function' src/frontend/parser_function.c >/dev/null
-          grep -F 'probe = *parser;' src/frontend/parser_function.c >/dev/null
-          git diff --exit-code -- src/frontend/parser_string.c
-
-      - name: Build compiler candidate
+      - name: Build committed compiler
         shell: bash
         run: |
           set -Eeuo pipefail
           make -j4 MODE=release BUILD_DIR=build/foundation-compiler
 
-      - name: Run fast compiler contracts including TokenCursor isolation
+      - name: Run fast compiler contracts
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -75,18 +51,9 @@ jobs:
           HOST_CC=cc \
             sh tools/dev/pr76-focused.sh
 
-      - name: Commit validated TokenCursor migration
+      - name: Recheck source-of-truth invariant
         shell: bash
         run: |
           set -Eeuo pipefail
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add Makefile src/frontend/token_cursor.c src/frontend/token_cursor.h \
-            src/frontend/parser_function.c src/frontend/parser_typedef.c \
-            tests/frontend/token_cursor_test.c
-          if git diff --cached --quiet; then
-            echo 'no TokenCursor candidate changes to commit'
-            exit 0
-          fi
-          git commit -m 'refactor: isolate semantic-free token lookahead'
-          git push origin HEAD:refactor/foundation-v1
+          git diff --exit-code -- include src tools/minic
+          printf '%s\n' 'PASS foundation/source-of-truth committed-source-only=1'
