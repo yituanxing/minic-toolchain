@@ -31,13 +31,12 @@ jobs:
           path: build/linux-cache/linux-6.6.143.tar.xz
           key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
 
-      - name: Stage current compiler semantics and build MiniC
+      - name: Build committed MiniC source
         shell: bash
         run: |
           set -Eeuo pipefail
-          sh tools/dev/pr76-stage.sh
-          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+          git diff --exit-code -- include src tools/minic
           make -j4 MODE=release BUILD_DIR=build/linux-compiler
 
       - name: Verify Linux-specific focused semantics
