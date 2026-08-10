@@ -903,13 +903,35 @@ bool minic_parser_parse_extern_global_after_head(MinicParser *parser,
         MinicGlobalObjectId object_id;
         MinicSourceSpan name_span;
         MinicType object_type;
+        char declarator_section_name[256];
+        size_t declarator_section_name_length;
+        bool declarator_has_section;
         bool is_array;
+
+        declarator_section_name_length = section_name_length;
+        declarator_has_section = has_section;
+        (void)memset(declarator_section_name, 0, sizeof(declarator_section_name));
+        if (has_section) {
+            if (section_name == NULL ||
+                section_name_length + 1U > sizeof(declarator_section_name)) {
+                minic_parser_error(parser, "invalid shared GNU section attribute");
+                return false;
+            }
+            (void)memcpy(declarator_section_name, section_name, section_name_length + 1U);
+        }
 
         if (first_declarator) {
             name_span = first_name_span;
             object_type = first_object_type;
             first_declarator = false;
         } else if (!parse_extern_object_declarator(parser, base_type, &name_span, &object_type)) {
+            return false;
+        }
+        if (!minic_parser_parse_gnu_section_attribute(parser,
+                                                      declarator_section_name,
+                                                      sizeof(declarator_section_name),
+                                                      &declarator_section_name_length,
+                                                      &declarator_has_section)) {
             return false;
         }
         if (minic_type_is_void(object_type) || minic_type_is_function(object_type) ||
@@ -947,6 +969,13 @@ bool minic_parser_parse_extern_global_after_head(MinicParser *parser,
                 return false;
             }
             object_type = array_type;
+            if (!minic_parser_parse_gnu_section_attribute(parser,
+                                                          declarator_section_name,
+                                                          sizeof(declarator_section_name),
+                                                          &declarator_section_name_length,
+                                                          &declarator_has_section)) {
+                return false;
+            }
         }
 
         if (!minic_c0_program_add_global_object(
@@ -960,8 +989,11 @@ bool minic_parser_parse_extern_global_after_head(MinicParser *parser,
                          : minic_type_is_const(object_type),
                 &object_id) ||
             !minic_c0_global_object_set_extern(parser->program, object_id) ||
-            (has_section && !minic_c0_global_object_set_section(
-                                parser->program, object_id, section_name, section_name_length)) ||
+            (declarator_has_section &&
+             !minic_c0_global_object_set_section(parser->program,
+                                                 object_id,
+                                                 declarator_section_name,
+                                                 declarator_section_name_length)) ||
             (has_visibility &&
              !minic_c0_global_object_set_visibility(parser->program, object_id, visibility))) {
             if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {

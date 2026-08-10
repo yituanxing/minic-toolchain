@@ -14,6 +14,12 @@ mkdir -p "$work"
 test -s "$assembly"
 grep -F '.section .probe.data' "$assembly" >/dev/null
 grep -F 'placed_data:' "$assembly" >/dev/null
+grep -F '.section .probe.suffix.first' "$assembly" >/dev/null
+grep -F 'suffix_first:' "$assembly" >/dev/null
+grep -F '.section .probe.suffix.second' "$assembly" >/dev/null
+grep -F 'suffix_second:' "$assembly" >/dev/null
+grep -F '.section .probe.suffix.array' "$assembly" >/dev/null
+grep -F 'suffix_array:' "$assembly" >/dev/null
 grep -F '.section .probe.text' "$assembly" >/dev/null
 grep -F 'placed_function:' "$assembly" >/dev/null
-printf '%s\n' 'PASS compiler/c0/gnu_section_symbol_attribute extern-object=preserved function-declaration=preserved definition-inherits=1 rv64-section-emission=1'
+printf '%s\n' 'PASS compiler/c0/gnu_section_symbol_attribute extern-object=prefix+suffix per-declarator=isolated array-suffix=1 function-declaration=preserved definition-inherits=1 rv64-section-emission=1'
