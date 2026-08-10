@@ -9,7 +9,7 @@ on:
       - main
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: foundation-refactor-${{ github.ref }}
@@ -20,101 +20,17 @@ jobs:
     if: github.event_name == 'push' || github.head_ref == 'refactor/foundation-v1'
     runs-on: ubuntu-24.04
     steps:
-      - name: Checkout refactor branch
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          ref: refactor/foundation-v1
 
-      - name: Apply shared DataLayout and alignof candidate
+      - name: Verify committed source is canonical
         shell: bash
         run: |
           set -Eeuo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-          path = Path('tools/dev/foundation-data-layout-alignof-once.py')
-          text = path.read_text()
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+          git diff --exit-code -- include src tools/minic
 
-          old = "'''        !constant_record_member_offset(parser->program,\\n"
-          new = "'''    if (!constant_record_member_offset(parser->program,\\n"
-          if text.count(old) != 1:
-              raise SystemExit(f'candidate helper anchor expected once, found {text.count(old)}')
-          text = text.replace(old, new, 1)
-
-          old = "'''        !constant_record_member_offset(parser,\\n"
-          new = "'''    if (!constant_record_member_offset(parser,\\n"
-          if text.count(old) != 1:
-              raise SystemExit(f'candidate helper replacement expected once, found {text.count(old)}')
-          text = text.replace(old, new, 1)
-
-          old = "    if count != 1:\n        raise SystemExit(f\"{label}: expected one anchor, found {count}\")\n"
-          new = "    if count != 1 and not (label == 'makefile-data-layout' and count == 2):\n        raise SystemExit(f\"{label}: expected one anchor, found {count}\")\n"
-          if text.count(old) != 1:
-              raise SystemExit(f'replace_once guard expected once, found {text.count(old)}')
-          text = text.replace(old, new, 1)
-
-          label = '"token-model-alignof"'
-          label_index = text.find(label)
-          if label_index < 0:
-              raise SystemExit('token-model-alignof helper label not found')
-          block_start = text.rfind('text = replace_once(', 0, label_index)
-          block_end = text.find('\n)', label_index)
-          if block_start < 0 or block_end < 0:
-              raise SystemExit('token-model-alignof helper block not found')
-          block_end += 2
-          block = text[block_start:block_end]
-          old_token = 'MINIC_TOKEN_KW_SIZEOF, "sizeof"'
-          new_token = 'MINIC_TOKEN_KW_STATIC_ASSERT, "_Static_assert"'
-          if block.count(old_token) != 2:
-              raise SystemExit(f'token-model helper expected two sizeof anchors, found {block.count(old_token)}')
-          block = block.replace(old_token, new_token)
-          text = text[:block_start] + block + text[block_end:]
-
-          label = '"focused-alignof-gate"'
-          label_index = text.find(label)
-          if label_index < 0:
-              raise SystemExit('focused-alignof-gate helper label not found')
-          block_start = text.rfind('text = replace_once(', 0, label_index)
-          block_end = text.find('\n)', label_index)
-          if block_start < 0 or block_end < 0:
-              raise SystemExit('focused-alignof-gate helper block not found')
-          block_end += 2
-          block = text[block_start:block_end]
-          old_gate = 'run-builtin offsetof.sh'.replace(' ', '-')
-          new_gate = 'run-static-assert-declaration.sh'
-          if block.count(old_gate) != 2:
-              raise SystemExit(f'focused helper expected two old anchors, found {block.count(old_gate)}')
-          block = block.replace(old_gate, new_gate)
-          text = text[:block_start] + block + text[block_end:]
-
-          path.write_text(text)
-          PY
-          python3 tools/dev/foundation-data-layout-alignof-once.py
-          git checkout -- tools/dev/foundation-data-layout-alignof-once.py
-          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
-
-      - name: Enforce candidate scope
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          allowed='^(Makefile|src/target/data_layout\.h|src/target/data_layout\.c|src/frontend/parser_internal\.h|src/frontend/parser_function\.c|src/frontend/parser_type_query\.c|src/frontend/parser_core\.c|src/frontend/parser_expression\.c|src/frontend/token\.h|src/frontend/token\.c|src/frontend/lexer\.c|src/target/riscv64/layout\.c|tests/frontend/token_model_test\.c|tests/frontend/lexer_test\.c|tests/compiler/c0/alignof_type_query\.c|tests/compiler/c0/run-alignof-type-query\.sh|tools/dev/pr76-focused\.sh)$'
-          changed=$(git status --porcelain=v1 | sed -E 's/^.. //')
-          printf '%s\n' "$changed"
-          bad=$(printf '%s\n' "$changed" | grep -Ev "$allowed" || true)
-          if test -n "$bad"; then
-            printf '%s\n' 'unexpected candidate paths:' "$bad" >&2
-            exit 1
-          fi
-          test -n "$changed"
-          grep -q 'typedef struct MinicDataLayout' src/target/data_layout.h
-          grep -q 'const MinicDataLayout \*data_layout' src/frontend/parser_internal.h
-          grep -q 'minic_parser_parse_alignof_type_value' src/frontend/parser_type_query.c
-          ! grep -q 'constant_type_layout' src/frontend/parser_core.c
-          grep -q 'minic_data_layout_record_field_offset' src/frontend/parser_core.c
-          grep -q 'MINIC_TOKEN_KW_ALIGNOF' src/frontend/lexer.c
-          grep -q 'minic_data_layout_type(minic_default_data_layout()' src/target/riscv64/layout.c
-          grep -q 'service=shared-data-layout' tests/compiler/c0/run-alignof-type-query.sh
-
-      - name: Build compiler candidate
+      - name: Build committed compiler
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -135,30 +51,9 @@ jobs:
           HOST_CC=cc \
             sh tools/dev/pr76-focused.sh
 
-      - name: Commit validated candidate
+      - name: Recheck source-of-truth invariant
         shell: bash
         run: |
           set -Eeuo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add \
-            Makefile \
-            src/target/data_layout.h \
-            src/target/data_layout.c \
-            src/frontend/parser_internal.h \
-            src/frontend/parser_function.c \
-            src/frontend/parser_type_query.c \
-            src/frontend/parser_core.c \
-            src/frontend/parser_expression.c \
-            src/frontend/token.h \
-            src/frontend/token.c \
-            src/frontend/lexer.c \
-            src/target/riscv64/layout.c \
-            tests/frontend/token_model_test.c \
-            tests/frontend/lexer_test.c \
-            tests/compiler/c0/alignof_type_query.c \
-            tests/compiler/c0/run-alignof-type-query.sh \
-            tools/dev/pr76-focused.sh
-          git commit -m 'architecture: centralize DataLayout queries and alignof' \
-                     -m '架构：集中 DataLayout 查询并支持 alignof'
-          git push origin HEAD:refactor/foundation-v1
+          git diff --exit-code -- include src tools/minic
+          printf '%s\n' 'PASS foundation/source-of-truth committed-source-only=1'
