@@ -9,7 +9,7 @@ on:
       - main
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: foundation-refactor-${{ github.ref }}
@@ -20,37 +20,17 @@ jobs:
     if: github.event_name == 'push' || github.head_ref == 'refactor/foundation-v1'
     runs-on: ubuntu-24.04
     steps:
-      - name: Checkout refactor branch
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          ref: refactor/foundation-v1
 
-      - name: Apply RV64 inline-asm operand candidate
+      - name: Verify committed source is canonical
         shell: bash
         run: |
           set -Eeuo pipefail
-          python3 tools/dev/foundation-rv64-inline-asm-operands-once.py
-          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+          git diff --exit-code -- include src tools/minic
 
-      - name: Enforce candidate scope
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          allowed='^(Makefile|src/frontend/ast\.h|src/frontend/ast\.c|src/frontend/ast_verifier\.c|src/frontend/parser_statement\.c|src/target/riscv64/codegen_internal\.h|src/target/riscv64/codegen_inline_asm\.c|src/target/riscv64/codegen_statement\.c|tests/compiler/c0/gnu_inline_asm_operands\.c|tests/compiler/c0/run-gnu-inline-asm-operands\.sh|tests/compiler/c0/run-gnu-inline-asm-operands-rv64\.sh|tools/dev/pr76-focused\.sh)$'
-          changed=$(git status --porcelain=v1 | sed -E 's/^.. //')
-          printf '%s\n' "$changed"
-          bad=$(printf '%s\n' "$changed" | grep -Ev "$allowed" || true)
-          if test -n "$bad"; then
-            printf '%s\n' 'unexpected candidate paths:' "$bad" >&2
-            exit 1
-          fi
-          test -n "$changed"
-          grep -q 'MINIC_INLINE_ASM_OPERAND_READ_ONLY' src/frontend/ast.h
-          grep -q 'minic_c0_program_add_inline_asm_input' src/frontend/ast.c
-          grep -q 'codegen_inline_asm.c' Makefile
-          grep -q 'minic_riscv64_emit_inline_asm' src/target/riscv64/codegen_statement.c
-
-      - name: Build compiler candidate
+      - name: Build committed compiler
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -71,43 +51,9 @@ jobs:
           HOST_CC=cc \
             sh tools/dev/pr76-focused.sh
 
-      - name: Install RV64 runtime validation tools
+      - name: Recheck source-of-truth invariant
         shell: bash
         run: |
           set -Eeuo pipefail
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            gcc-riscv64-linux-gnu libc6-dev-riscv64-cross qemu-user
-
-      - name: Run GCC-MiniC GNU asm operand differential
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          MINIC="$GITHUB_WORKSPACE/build/foundation-compiler/bin/minic" \
-          BUILD_DIR="$GITHUB_WORKSPACE/build/foundation-rv64-asm-operands" \
-          RISCV_CC=riscv64-linux-gnu-gcc \
-          QEMU_RISCV64=qemu-riscv64 \
-            sh tests/compiler/c0/run-gnu-inline-asm-operands-rv64.sh
-
-      - name: Commit validated candidate
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add \
-            Makefile \
-            src/frontend/ast.h \
-            src/frontend/ast.c \
-            src/frontend/ast_verifier.c \
-            src/frontend/parser_statement.c \
-            src/target/riscv64/codegen_internal.h \
-            src/target/riscv64/codegen_inline_asm.c \
-            src/target/riscv64/codegen_statement.c \
-            tests/compiler/c0/gnu_inline_asm_operands.c \
-            tests/compiler/c0/run-gnu-inline-asm-operands.sh \
-            tests/compiler/c0/run-gnu-inline-asm-operands-rv64.sh \
-            tools/dev/pr76-focused.sh
-          git commit -m 'target: lower RV64 GNU asm register and address operands' \
-                     -m '目标：lower RV64 GNU asm 寄存器与地址操作数'
-          git push origin HEAD:refactor/foundation-v1
+          git diff --exit-code -- include src tools/minic
+          printf '%s\n' 'PASS foundation/source-of-truth committed-source-only=1'
