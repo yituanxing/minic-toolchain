@@ -36,6 +36,7 @@ jobs:
             echo 'applied=0' >> "$GITHUB_OUTPUT"
           else
             python3 tools/dev/foundation-builtin-clzll-once.py
+            python3 tools/dev/foundation-builtin-clzll-candidate-fix.py
             chmod +x tests/compiler/c0/run-builtin-clzll.sh tests/compiler/c0/run-builtin-clzll-rv64.sh
             echo 'applied=1' >> "$GITHUB_OUTPUT"
           fi
