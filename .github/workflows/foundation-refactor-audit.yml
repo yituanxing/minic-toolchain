@@ -47,7 +47,7 @@ jobs:
           bad=0
           while IFS= read -r path; do
             case "$path" in
-              src/frontend/parser_statement.c|tests/compiler/c0/for_expression_initializer.c|tests/compiler/c0/run-for-expression-initializers.sh|tests/compiler/c0/run-for-loops.sh) ;;
+              src/frontend/parser_statement.c|tests/compiler/c0/for_expression_initializer.c|tests/compiler/c0/run-for-expression-initializers.sh|tests/compiler/c0/run-for-loops.sh|tests/compiler/c0/run-const-locals.sh) ;;
               '') ;;
               *) printf '%s\n' "unexpected candidate path: $path" >&2; bad=1 ;;
             esac
@@ -92,7 +92,8 @@ jobs:
             src/frontend/parser_statement.c \
             tests/compiler/c0/for_expression_initializer.c \
             tests/compiler/c0/run-for-expression-initializers.sh \
-            tests/compiler/c0/run-for-loops.sh
+            tests/compiler/c0/run-for-loops.sh \
+            tests/compiler/c0/run-const-locals.sh
           git diff --cached --check
           git commit -m 'frontend: parse for updates as full expressions'
           git push origin HEAD:refactor/foundation-v1
