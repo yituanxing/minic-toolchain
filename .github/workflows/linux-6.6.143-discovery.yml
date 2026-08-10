@@ -4,7 +4,7 @@ on:
   push:
     branches: [external/linux-6.6.143-discovery-v2]
   pull_request:
-    branches: [external/lua-discovery]
+    branches: [external/lua-discovery, main]
   workflow_dispatch:
 
 permissions:
@@ -16,6 +16,7 @@ concurrency:
 
 jobs:
   linux-frontier:
+    if: github.event_name == 'workflow_dispatch' || github.ref_name == 'external/linux-6.6.143-discovery-v2' || github.head_ref == 'refactor/foundation-v1'
     name: riscv-defconfig-init-main
     runs-on: ubuntu-24.04
     env:
@@ -77,6 +78,7 @@ jobs:
           set -Eeuo pipefail
           work="$GITHUB_WORKSPACE/build/linux-discovery"
           summary="$work/frontier-summary.txt"
+          mkdir -p "$work"
           : > "$summary"
           if test -s "$work/kbuild/init/main.i"; then
             printf '%s\n' "total_lines=$(wc -l < "$work/kbuild/init/main.i" | tr -d ' ')" >> "$summary"
