@@ -48,7 +48,7 @@ check_invalid() {
 
 check_invalid \
     invalid_compound_xor_pointer_target \
-    "compound assignment expression requires integer operands"
+    "pointer compound assignment expression requires += or -= with an integer"
 check_invalid \
     invalid_compound_xor_pointer_rhs \
     "compound assignment expression requires integer operands"
