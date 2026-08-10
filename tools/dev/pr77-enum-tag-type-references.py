@@ -190,25 +190,9 @@ if text.count(old) != 1:
     raise SystemExit(f"enum definition tag binding: expected one staged definition head, found {text.count(old)}")
 path.write_text(text.replace(old, new, 1))
 
-# Type-name lookahead must recognize `enum` anywhere a type can start.
-replace_once(
-    "src/frontend/parser_type.c",
-    """    case MINIC_TOKEN_KW_VOID:
-    case MINIC_TOKEN_KW_STRUCT:
-        return true;
-""",
-    """    case MINIC_TOKEN_KW_VOID:
-    case MINIC_TOKEN_KW_ENUM:
-    case MINIC_TOKEN_KW_STRUCT:
-        return true;
-""",
-    "enum-type-lookahead",
-)
-
-# A referenced tag resolves to the compiler's current enum representation (int),
-# but only after validating that the tag is known. This preserves type-name
-# legality without pretending the compiler already models arbitrary enum
-# underlying types.
+# pr77-type-name-lookahead-fix.py already restores MINIC_TOKEN_KW_ENUM in the
+# shared type-name predicate. Do not patch that list twice; only add the actual
+# enum-tag resolution arm below.
 path = Path("src/frontend/parser_type.c")
 text = path.read_text()
 anchor = """    } else if (parser->current.kind == MINIC_TOKEN_KW_STRUCT) {
