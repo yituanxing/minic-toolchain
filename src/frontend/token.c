@@ -18,6 +18,8 @@ const char *minic_token_kind_name(MinicTokenKind kind) {
         return "string literal";
     case MINIC_TOKEN_KW_BOOL:
         return "_Bool";
+    case MINIC_TOKEN_KW_STATIC_ASSERT:
+        return "_Static_assert";
     case MINIC_TOKEN_KW_CHAR:
         return "char";
     case MINIC_TOKEN_KW_DOUBLE:

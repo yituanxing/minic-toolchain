@@ -692,9 +692,9 @@ parse_generic_selection(MinicParser *parser, MinicExpressionId *expression_id, b
     return true;
 }
 
-static bool builtin_constant_integer_value(const MinicC0Program *program,
-                                           MinicExpressionId expression_id,
-                                           int64_t *value) {
+bool minic_parser_evaluate_integer_constant_expression(const MinicC0Program *program,
+                                                       MinicExpressionId expression_id,
+                                                       int64_t *value) {
     const MinicExpression *expression;
 
     if (program == NULL || value == NULL) {
@@ -711,7 +711,8 @@ static bool builtin_constant_integer_value(const MinicC0Program *program,
     if (expression->kind == MINIC_EXPRESSION_UNARY) {
         int64_t operand;
 
-        if (!builtin_constant_integer_value(program, expression->value.unary.operand, &operand)) {
+        if (!minic_parser_evaluate_integer_constant_expression(
+                program, expression->value.unary.operand, &operand)) {
             return false;
         }
         switch (expression->value.unary.operator_kind) {
@@ -738,8 +739,10 @@ static bool builtin_constant_integer_value(const MinicC0Program *program,
         int64_t left;
         int64_t right;
 
-        if (!builtin_constant_integer_value(program, expression->value.binary.left, &left) ||
-            !builtin_constant_integer_value(program, expression->value.binary.right, &right)) {
+        if (!minic_parser_evaluate_integer_constant_expression(
+                program, expression->value.binary.left, &left) ||
+            !minic_parser_evaluate_integer_constant_expression(
+                program, expression->value.binary.right, &right)) {
             return false;
         }
         switch (expression->value.binary.operator_kind) {
@@ -889,7 +892,8 @@ parse_builtin_choose_expr(MinicParser *parser, MinicExpressionId *expression_id,
             parser, MINIC_TOKEN_RPAREN, "expected ')' after __builtin_choose_expr")) {
         return false;
     }
-    if (!builtin_constant_integer_value(parser->program, condition_id, &condition_value)) {
+    if (!minic_parser_evaluate_integer_constant_expression(
+            parser->program, condition_id, &condition_value)) {
         minic_parser_error(
             parser, "__builtin_choose_expr condition must be an integer constant expression");
         return false;
@@ -922,7 +926,8 @@ static bool parse_builtin_constant_p(MinicParser *parser, MinicExpressionId *exp
         return false;
     }
     end = parser->current.span.end;
-    is_constant = builtin_constant_integer_value(parser->program, operand_id, &constant_value);
+    is_constant = minic_parser_evaluate_integer_constant_expression(
+        parser->program, operand_id, &constant_value);
     (void)constant_value;
     if (!minic_parser_advance(parser)) {
         return false;

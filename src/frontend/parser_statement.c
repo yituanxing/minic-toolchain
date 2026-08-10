@@ -3213,6 +3213,13 @@ bool minic_parser_parse_statement(MinicParser *parser, bool allow_declaration) {
     if (parser->current.kind == MINIC_TOKEN_LBRACE) {
         return parse_compound_statement(parser);
     }
+    if (parser->current.kind == MINIC_TOKEN_KW_STATIC_ASSERT) {
+        if (!allow_declaration) {
+            minic_parser_error(parser, "_Static_assert requires a declaration scope");
+            return false;
+        }
+        return minic_parser_parse_static_assert_declaration(parser);
+    }
     if (parser->current.kind == MINIC_TOKEN_KW_IF) {
         return parse_if(parser);
     }

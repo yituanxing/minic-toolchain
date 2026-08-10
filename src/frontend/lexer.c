@@ -98,6 +98,9 @@ static MinicTokenKind minic_classify_identifier(const char *text, size_t length)
     if (length == 5U && memcmp(text, "_Bool", 5U) == 0) {
         return MINIC_TOKEN_KW_BOOL;
     }
+    if (length == 14U && memcmp(text, "_Static_assert", 14U) == 0) {
+        return MINIC_TOKEN_KW_STATIC_ASSERT;
+    }
     if (length == 4U && memcmp(text, "char", 4U) == 0) {
         return MINIC_TOKEN_KW_CHAR;
     }
