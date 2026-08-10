@@ -28,7 +28,7 @@ bool minic_parser_parse_alignof_type_value(MinicParser *parser,
         return false;
     }
     end = parser->current.span.end;
-    if (!minic_data_layout_type(parser->data_layout,
+    if (!minic_data_layout_type(minic_target_info_data_layout(parser->target_info),
                                 parser->program,
                                 measured_type,
                                 &measured_size,

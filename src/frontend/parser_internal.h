@@ -3,10 +3,11 @@
 
 #include "frontend/ast.h"
 #include "frontend/attribute.h"
+#include "frontend/const_eval.h"
 #include "frontend/lexer.h"
 #include "frontend/token.h"
 #include "minic/compiler.h"
-#include "target/data_layout.h"
+#include "target/target_info.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -44,7 +45,7 @@ typedef struct MinicParser {
     MinicToken current;
     MinicDiagnostic *diagnostic;
     MinicC0Program *program;
-    const MinicDataLayout *data_layout;
+    const MinicTargetInfo *target_info;
     MinicBlockId current_block;
     MinicFunctionId current_function;
     size_t local_begin;
@@ -247,9 +248,6 @@ bool minic_parser_parse_expression(MinicParser *parser,
                                    unsigned int minimum_precedence);
 bool minic_parser_parse_expression_no_decay(MinicParser *parser, MinicExpressionId *expression_id);
 bool minic_parser_parse_full_expression(MinicParser *parser, MinicExpressionId *expression_id);
-bool minic_parser_evaluate_integer_constant_expression(const MinicC0Program *program,
-                                                       MinicExpressionId expression_id,
-                                                       int64_t *value);
 bool minic_parser_parse_static_assert_declaration(MinicParser *parser);
 bool minic_parser_add_default_return(MinicParser *parser);
 bool minic_parser_parse_statement(MinicParser *parser, bool allow_declaration);

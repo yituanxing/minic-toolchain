@@ -57,14 +57,12 @@ static bool parse_array_bound_unary(MinicParser *parser, int64_t *value);
 
 static bool array_bound_type_size(const MinicParser *parser, MinicType type, uint64_t *size) {
     size_t measured_size;
-    size_t measured_alignment;
 
     if (parser == NULL || size == NULL ||
-        !minic_data_layout_type(
-            parser->data_layout, parser->program, type, &measured_size, &measured_alignment)) {
+        !minic_target_info_sizeof_type(
+            parser->target_info, parser->program, type, &measured_size)) {
         return false;
     }
-    (void)measured_alignment;
     *size = (uint64_t)measured_size;
     return true;
 }
@@ -218,9 +216,12 @@ static bool constant_record_member_offset(const MinicParser *parser,
         const MinicRecordField *field = &record->fields[field_index];
 
         if (field->name_length == name_length && memcmp(field->name, name, name_length) == 0) {
-            if (field->is_bit_field ||
-                !minic_data_layout_record_field_offset(
-                    parser->data_layout, parser->program, record, field_index, &field_offset)) {
+            if (field->is_bit_field || !minic_data_layout_record_field_offset(
+                                           minic_target_info_data_layout(parser->target_info),
+                                           parser->program,
+                                           record,
+                                           field_index,
+                                           &field_offset)) {
                 return false;
             }
             *offset = (uint64_t)field_offset;

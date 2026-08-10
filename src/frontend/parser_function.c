@@ -1531,7 +1531,7 @@ bool minic_parse_c0_program(const char *path,
     parser.source = source;
     parser.diagnostic = diagnostic;
     parser.program = program;
-    parser.data_layout = minic_default_data_layout();
+    parser.target_info = minic_default_target_info();
     parser.current_block = MINIC_BLOCK_INVALID;
     parser.current_function = MINIC_FUNCTION_INVALID;
     parser.continue_target_statement = MINIC_STATEMENT_INVALID;

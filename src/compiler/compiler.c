@@ -5,6 +5,7 @@
 #include "frontend/cast_normalization.h"
 #include "frontend/parser.h"
 #include "target/riscv64/codegen.h"
+#include "target/target_info.h"
 #include "target/riscv64/layout.h"
 
 #include <errno.h>
@@ -93,6 +94,7 @@ int minic_compile_preprocessed_file(const char *input_path,
                                     MinicDiagnostic *diagnostic) {
     MinicSourceBuffer buffer;
     MinicC0Program program;
+    const MinicTargetInfo *target_info;
     bool success;
 
     if (input_path == NULL || output_path == NULL) {
@@ -113,8 +115,9 @@ int minic_compile_preprocessed_file(const char *input_path,
     }
 
     minic_c0_program_initialize(&program);
+    target_info = minic_default_target_info();
     success = minic_parse_c0_program(input_path, buffer.data, buffer.size, &program, diagnostic);
-    if (success && !minic_c0_program_verify(&program, MINIC_C0_AST_PARSED)) {
+    if (success && !minic_c0_program_verify_target(&program, MINIC_C0_AST_PARSED, target_info)) {
         minic_set_diagnostic(
             diagnostic, input_path, 1U, 1U, "parsed AST violates compiler contracts");
         success = false;
@@ -123,7 +126,8 @@ int minic_compile_preprocessed_file(const char *input_path,
         minic_set_diagnostic(diagnostic, input_path, 1U, 1U, "cannot normalize cast expressions");
         success = false;
     }
-    if (success && !minic_c0_program_verify(&program, MINIC_C0_AST_NORMALIZED)) {
+    if (success &&
+        !minic_c0_program_verify_target(&program, MINIC_C0_AST_NORMALIZED, target_info)) {
         minic_set_diagnostic(
             diagnostic, input_path, 1U, 1U, "normalized AST violates backend contracts");
         success = false;

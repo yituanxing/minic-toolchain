@@ -354,6 +354,8 @@ static bool parse_record_field(MinicParser *parser, MinicRecordId record_id) {
     }
 
     if (parser->current.kind == MINIC_TOKEN_COLON) {
+        MinicConstValue width_value;
+        MinicExpressionId width_expression;
         int64_t bit_width;
 
         if (!minic_type_is_integer(base_type)) {
@@ -361,7 +363,15 @@ static bool parse_record_field(MinicParser *parser, MinicRecordId record_id) {
             return false;
         }
         if (!minic_parser_advance(parser) ||
-            !minic_parser_parse_integer_constant_expression_value(parser, &bit_width)) {
+            !minic_parser_parse_expression(parser, &width_expression, 0U) ||
+            !minic_const_eval_integer(
+                parser->program, parser->target_info, width_expression, &width_value) ||
+            !minic_const_value_as_int64(
+                parser->program, parser->target_info, &width_value, &bit_width)) {
+            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                minic_parser_error(parser,
+                                   "bit-field width must be an integer constant expression");
+            }
             return false;
         }
         if (bit_width < 0 || (uint64_t)bit_width > (uint64_t)SIZE_MAX) {

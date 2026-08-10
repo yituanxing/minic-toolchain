@@ -692,149 +692,6 @@ parse_generic_selection(MinicParser *parser, MinicExpressionId *expression_id, b
     return true;
 }
 
-bool minic_parser_evaluate_integer_constant_expression(const MinicC0Program *program,
-                                                       MinicExpressionId expression_id,
-                                                       int64_t *value) {
-    const MinicExpression *expression;
-
-    if (program == NULL || value == NULL) {
-        return false;
-    }
-    expression = minic_c0_program_expression(program, expression_id);
-    if (expression == NULL) {
-        return false;
-    }
-    if (expression->kind == MINIC_EXPRESSION_INTEGER) {
-        *value = expression->value.integer_value;
-        return true;
-    }
-    if (expression->kind == MINIC_EXPRESSION_UNARY) {
-        int64_t operand;
-
-        if (!minic_parser_evaluate_integer_constant_expression(
-                program, expression->value.unary.operand, &operand)) {
-            return false;
-        }
-        switch (expression->value.unary.operator_kind) {
-        case MINIC_UNARY_PLUS:
-            *value = operand;
-            return true;
-        case MINIC_UNARY_NEGATE:
-            if (operand == INT64_MIN) {
-                return false;
-            }
-            *value = -operand;
-            return true;
-        case MINIC_UNARY_LOGICAL_NOT:
-            *value = operand == 0 ? 1 : 0;
-            return true;
-        case MINIC_UNARY_BITWISE_NOT:
-            *value = ~operand;
-            return true;
-        default:
-            return false;
-        }
-    }
-    if (expression->kind == MINIC_EXPRESSION_BINARY) {
-        int64_t left;
-        int64_t right;
-
-        if (!minic_parser_evaluate_integer_constant_expression(
-                program, expression->value.binary.left, &left) ||
-            !minic_parser_evaluate_integer_constant_expression(
-                program, expression->value.binary.right, &right)) {
-            return false;
-        }
-        switch (expression->value.binary.operator_kind) {
-        case MINIC_BINARY_ADD:
-            if ((right > 0 && left > INT64_MAX - right) ||
-                (right < 0 && left < INT64_MIN - right)) {
-                return false;
-            }
-            *value = left + right;
-            return true;
-        case MINIC_BINARY_SUBTRACT:
-            if ((right < 0 && left > INT64_MAX + right) ||
-                (right > 0 && left < INT64_MIN + right)) {
-                return false;
-            }
-            *value = left - right;
-            return true;
-        case MINIC_BINARY_MULTIPLY:
-            if (left != 0 &&
-                ((left == -1 && right == INT64_MIN) || (right == -1 && left == INT64_MIN) ||
-                 (left > 0 && right > 0 && left > INT64_MAX / right) ||
-                 (left > 0 && right < 0 && right < INT64_MIN / left) ||
-                 (left < 0 && right > 0 && left < INT64_MIN / right) ||
-                 (left < 0 && right < 0 && left < INT64_MAX / right))) {
-                return false;
-            }
-            *value = left * right;
-            return true;
-        case MINIC_BINARY_DIVIDE:
-            if (right == 0 || (left == INT64_MIN && right == -1)) {
-                return false;
-            }
-            *value = left / right;
-            return true;
-        case MINIC_BINARY_REMAINDER:
-            if (right == 0 || (left == INT64_MIN && right == -1)) {
-                return false;
-            }
-            *value = left % right;
-            return true;
-        case MINIC_BINARY_SHIFT_LEFT:
-            if (right < 0 || right >= 63 || left < 0 || left > (INT64_MAX >> right)) {
-                return false;
-            }
-            *value = left << right;
-            return true;
-        case MINIC_BINARY_SHIFT_RIGHT:
-            if (right < 0 || right >= 63) {
-                return false;
-            }
-            *value = left >> right;
-            return true;
-        case MINIC_BINARY_BITWISE_AND:
-            *value = left & right;
-            return true;
-        case MINIC_BINARY_BITWISE_XOR:
-            *value = left ^ right;
-            return true;
-        case MINIC_BINARY_BITWISE_OR:
-            *value = left | right;
-            return true;
-        case MINIC_BINARY_EQUAL:
-            *value = left == right ? 1 : 0;
-            return true;
-        case MINIC_BINARY_NOT_EQUAL:
-            *value = left != right ? 1 : 0;
-            return true;
-        case MINIC_BINARY_LESS:
-            *value = left < right ? 1 : 0;
-            return true;
-        case MINIC_BINARY_LESS_EQUAL:
-            *value = left <= right ? 1 : 0;
-            return true;
-        case MINIC_BINARY_GREATER:
-            *value = left > right ? 1 : 0;
-            return true;
-        case MINIC_BINARY_GREATER_EQUAL:
-            *value = left >= right ? 1 : 0;
-            return true;
-        case MINIC_BINARY_LOGICAL_AND:
-            *value = left != 0 && right != 0 ? 1 : 0;
-            return true;
-        case MINIC_BINARY_LOGICAL_OR:
-            *value = left != 0 || right != 0 ? 1 : 0;
-            return true;
-        default:
-            return false;
-        }
-    }
-    return false;
-}
-
 static bool parse_builtin_types_compatible_p(MinicParser *parser,
                                              MinicExpressionId *expression_id) {
     MinicExpression expression;
@@ -873,7 +730,8 @@ parse_builtin_choose_expr(MinicParser *parser, MinicExpressionId *expression_id,
     MinicExpressionId condition_id;
     MinicExpressionId when_true_id;
     MinicExpressionId when_false_id;
-    int64_t condition_value;
+    MinicConstValue condition_value;
+    bool condition_is_zero;
 
     if (!generic_token_text_equals(parser, "__builtin_choose_expr")) {
         return false;
@@ -892,13 +750,15 @@ parse_builtin_choose_expr(MinicParser *parser, MinicExpressionId *expression_id,
             parser, MINIC_TOKEN_RPAREN, "expected ')' after __builtin_choose_expr")) {
         return false;
     }
-    if (!minic_parser_evaluate_integer_constant_expression(
-            parser->program, condition_id, &condition_value)) {
+    if (!minic_const_eval_integer(
+            parser->program, parser->target_info, condition_id, &condition_value) ||
+        !minic_const_value_is_zero(
+            parser->program, parser->target_info, &condition_value, &condition_is_zero)) {
         minic_parser_error(
             parser, "__builtin_choose_expr condition must be an integer constant expression");
         return false;
     }
-    *expression_id = condition_value != 0 ? when_true_id : when_false_id;
+    *expression_id = condition_is_zero ? when_false_id : when_true_id;
     return true;
 }
 
@@ -907,7 +767,7 @@ static bool parse_builtin_constant_p(MinicParser *parser, MinicExpressionId *exp
     MinicExpressionId operand_id;
     MinicSourcePosition begin;
     MinicSourcePosition end;
-    int64_t constant_value;
+    MinicConstValue constant_value;
     bool is_constant;
 
     if (parser == NULL || expression_id == NULL ||
@@ -926,9 +786,8 @@ static bool parse_builtin_constant_p(MinicParser *parser, MinicExpressionId *exp
         return false;
     }
     end = parser->current.span.end;
-    is_constant = minic_parser_evaluate_integer_constant_expression(
-        parser->program, operand_id, &constant_value);
-    (void)constant_value;
+    is_constant =
+        minic_const_eval_integer(parser->program, parser->target_info, operand_id, &constant_value);
     if (!minic_parser_advance(parser)) {
         return false;
     }
@@ -1388,9 +1247,15 @@ static bool parse_sizeof(MinicParser *parser, MinicExpressionId *expression_id) 
         end = operand->span.end;
     }
 
-    if (!type_is_complete_object(parser->program, measured_type)) {
-        minic_parser_error(parser, "sizeof requires a complete object type");
-        return false;
+    {
+        size_t measured_size;
+
+        if (!minic_target_info_sizeof_type(
+                parser->target_info, parser->program, measured_type, &measured_size)) {
+            minic_parser_error(parser, "sizeof requires a supported complete type");
+            return false;
+        }
+        (void)measured_size;
     }
 
     (void)memset(&expression, 0, sizeof(expression));

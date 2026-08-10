@@ -5,7 +5,8 @@
 bool minic_parser_parse_static_assert_declaration(MinicParser *parser) {
     const MinicExpression *condition;
     MinicExpressionId condition_id;
-    int64_t condition_value;
+    MinicConstValue condition_value;
+    bool condition_is_zero;
 
     if (parser == NULL || parser->current.kind != MINIC_TOKEN_KW_STATIC_ASSERT) {
         if (parser != NULL) {
@@ -20,8 +21,10 @@ bool minic_parser_parse_static_assert_declaration(MinicParser *parser) {
     }
     condition = minic_c0_program_expression(parser->program, condition_id);
     if (condition == NULL || !minic_type_is_integer(condition->type) ||
-        !minic_parser_evaluate_integer_constant_expression(
-            parser->program, condition_id, &condition_value)) {
+        !minic_const_eval_integer(
+            parser->program, parser->target_info, condition_id, &condition_value) ||
+        !minic_const_value_is_zero(
+            parser->program, parser->target_info, &condition_value, &condition_is_zero)) {
         minic_parser_error(parser,
                            "_Static_assert condition must be an integer constant expression");
         return false;
@@ -42,7 +45,7 @@ bool minic_parser_parse_static_assert_declaration(MinicParser *parser) {
         !minic_parser_expect(parser, MINIC_TOKEN_SEMICOLON, "expected ';' after _Static_assert")) {
         return false;
     }
-    if (condition_value == 0) {
+    if (condition_is_zero) {
         minic_parser_error(parser, "static assertion failed");
         return false;
     }

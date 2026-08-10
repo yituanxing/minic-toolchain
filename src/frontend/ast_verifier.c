@@ -400,8 +400,10 @@ static bool verify_call_arguments(const MinicC0Program *program,
     return true;
 }
 
-static bool
-verify_expression(const MinicC0Program *program, size_t expression_index, MinicC0AstForm form) {
+static bool verify_expression(const MinicC0Program *program,
+                              size_t expression_index,
+                              MinicC0AstForm form,
+                              const MinicTargetInfo *target) {
     const MinicExpression *expression;
     const MinicExpression *left;
     const MinicExpression *right;
@@ -460,11 +462,15 @@ verify_expression(const MinicC0Program *program, size_t expression_index, MinicC
         }
         return true;
     }
-    case MINIC_EXPRESSION_SIZEOF:
-        return expression->value_category == MINIC_VALUE_RVALUE &&
+    case MINIC_EXPRESSION_SIZEOF: {
+        size_t measured_size;
+
+        return target != NULL && expression->value_category == MINIC_VALUE_RVALUE &&
                minic_type_equal(expression->type, minic_type_unsigned_long()) &&
                type_is_valid(program, expression->value.sizeof_type) &&
-               type_is_complete_object(program, expression->value.sizeof_type);
+               minic_target_info_sizeof_type(
+                   target, program, expression->value.sizeof_type, &measured_size);
+    }
     case MINIC_EXPRESSION_OFFSETOF: {
         const MinicRecord *record;
 
@@ -953,10 +959,12 @@ static bool incomplete_array_is_extern_object_type(const MinicC0Program *program
     return false;
 }
 
-bool minic_c0_program_verify(const MinicC0Program *program, MinicC0AstForm form) {
+bool minic_c0_program_verify_target(const MinicC0Program *program,
+                                    MinicC0AstForm form,
+                                    const MinicTargetInfo *target) {
     size_t index;
 
-    if ((form != MINIC_C0_AST_PARSED && form != MINIC_C0_AST_NORMALIZED) ||
+    if (target == NULL || (form != MINIC_C0_AST_PARSED && form != MINIC_C0_AST_NORMALIZED) ||
         !verify_program_storage(program)) {
         return false;
     }
@@ -1084,7 +1092,7 @@ bool minic_c0_program_verify(const MinicC0Program *program, MinicC0AstForm form)
         }
     }
     for (index = 0U; index < program->expression_count; ++index) {
-        if (!verify_expression(program, index, form)) {
+        if (!verify_expression(program, index, form, target)) {
             fprintf(stderr,
                     "VERIFY_FAIL expression=%zu kind=%d form=%d\n",
                     index,
@@ -1124,4 +1132,8 @@ bool minic_c0_program_verify(const MinicC0Program *program, MinicC0AstForm form)
             program->entry_function < program->function_count) &&
            (program->return_expression == MINIC_EXPRESSION_INVALID ||
             program->return_expression < program->expression_count);
+}
+
+bool minic_c0_program_verify(const MinicC0Program *program, MinicC0AstForm form) {
+    return minic_c0_program_verify_target(program, form, minic_default_target_info());
 }
