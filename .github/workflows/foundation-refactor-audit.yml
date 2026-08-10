@@ -20,7 +20,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: refactor/foundation-v1
-          fetch-depth: 2
+          fetch-depth: 1
 
       - name: Apply bounded object-size semantic query
         shell: bash
@@ -220,14 +220,12 @@ jobs:
           PY
           clang-format-18 -i src/frontend/parser_expression.c
 
-      - name: Restore validation workflow and commit source
+      - name: Commit source change
         shell: bash
         run: |
           set -Eeuo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git show HEAD^:.github/workflows/foundation-refactor-audit.yml > .github/workflows/foundation-refactor-audit.yml
-          git rm -f .github/workflows/agent-object-size-patch.yml
-          git add src/frontend/parser_expression.c .github/workflows/foundation-refactor-audit.yml
+          git add src/frontend/parser_expression.c
           git commit -m 'frontend: add bounded object size query'
           git push origin HEAD:refactor/foundation-v1
