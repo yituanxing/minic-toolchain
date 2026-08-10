@@ -712,11 +712,15 @@ verify_expression(const MinicC0Program *program, size_t expression_index, MinicC
         const MinicExpression *result;
 
         block = minic_c0_program_block(program, expression->value.statement_expression.block);
+        if (block == NULL || expression->value_category != MINIC_VALUE_RVALUE) {
+            return false;
+        }
+        if (expression->value.statement_expression.result == MINIC_EXPRESSION_INVALID) {
+            return minic_type_is_void(expression->type);
+        }
         result = expression_before(
             program, expression->value.statement_expression.result, expression_index);
-        return block != NULL && result != NULL &&
-               expression->value_category == MINIC_VALUE_RVALUE &&
-               minic_type_equal(expression->type, result->type);
+        return result != NULL && minic_type_equal(expression->type, result->type);
     }
     case MINIC_EXPRESSION_CALL:
         if (expression->value_category != MINIC_VALUE_RVALUE) {

@@ -112,6 +112,9 @@ static bool remap_non_cast_expression(MinicExpression *expression,
                                    expression->value.overflow.result_pointer,
                                    &expression->value.overflow.result_pointer);
     case MINIC_EXPRESSION_STATEMENT:
+        if (expression->value.statement_expression.result == MINIC_EXPRESSION_INVALID) {
+            return minic_type_is_void(expression->type);
+        }
         return remap_expression_id(mapping,
                                    old_expression_count,
                                    current_old_index,

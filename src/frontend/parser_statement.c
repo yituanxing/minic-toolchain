@@ -1618,39 +1618,36 @@ bool minic_parser_parse_statement_expression(MinicParser *parser,
     block = block_id < parser->program->block_count ? &parser->program->blocks[block_id] : NULL;
     last_statement = NULL;
     result = NULL;
-    if (success && (block == NULL || block->statement_count == 0U)) {
-        minic_parser_error(parser,
-                           "GNU statement expression currently requires a final expression");
+    last_statement_id = MINIC_STATEMENT_INVALID;
+    if (success && block == NULL) {
+        minic_parser_error(parser, "invalid GNU statement-expression block");
         success = false;
     }
-    if (success) {
+    if (success && block->statement_count != 0U) {
         last_statement_id = block->statements[block->statement_count - 1U];
         last_statement = minic_c0_program_statement(parser->program, last_statement_id);
-        if (last_statement == NULL || last_statement->kind != MINIC_STATEMENT_EXPRESSION ||
-            last_statement->expression == MINIC_EXPRESSION_INVALID) {
-            minic_parser_error(
-                parser,
-                "GNU statement expression currently requires an expression as its final statement");
-            success = false;
+        if (last_statement != NULL && last_statement->kind == MINIC_STATEMENT_EXPRESSION &&
+            last_statement->expression != MINIC_EXPRESSION_INVALID) {
+            result = minic_c0_program_expression(parser->program, last_statement->expression);
+            if (result == NULL) {
+                minic_parser_error(parser, "invalid GNU statement-expression result");
+                success = false;
+            }
         }
     }
     if (success) {
-        result = minic_c0_program_expression(parser->program, last_statement->expression);
-        if (result == NULL) {
-            minic_parser_error(parser, "invalid GNU statement-expression result");
-            success = false;
-        }
-    }
-    if (success) {
-        block->statement_count -= 1U;
         (void)memset(&expression, 0, sizeof(expression));
         expression.kind = MINIC_EXPRESSION_STATEMENT;
         expression.span.begin = begin;
         expression.span.end = parser->current.span.end;
-        expression.type = result->type;
+        expression.type = result == NULL ? minic_type_void() : result->type;
         expression.value_category = MINIC_VALUE_RVALUE;
         expression.value.statement_expression.block = block_id;
-        expression.value.statement_expression.result = last_statement->expression;
+        expression.value.statement_expression.result =
+            result == NULL ? MINIC_EXPRESSION_INVALID : last_statement->expression;
+        if (result != NULL) {
+            block->statement_count -= 1U;
+        }
         success = minic_parser_add_expression(parser, &expression, expression_id) &&
                   minic_parser_expect(
                       parser, MINIC_TOKEN_RBRACE, "expected '}' in GNU statement expression");

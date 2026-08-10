@@ -1266,13 +1266,18 @@ bool minic_riscv64_emit_expression(FILE *file,
             return false;
         }
         label_counter = label_stride + expression_id * label_stride;
-        return minic_riscv64_emit_block(file,
-                                        program,
-                                        function,
-                                        expression->value.statement_expression.block,
-                                        &label_counter) &&
-               minic_riscv64_emit_expression(
-                   file, program, function, expression->value.statement_expression.result);
+        if (!minic_riscv64_emit_block(file,
+                                      program,
+                                      function,
+                                      expression->value.statement_expression.block,
+                                      &label_counter)) {
+            return false;
+        }
+        if (expression->value.statement_expression.result == MINIC_EXPRESSION_INVALID) {
+            return minic_type_is_void(expression->type);
+        }
+        return minic_riscv64_emit_expression(
+            file, program, function, expression->value.statement_expression.result);
     }
     case MINIC_EXPRESSION_CALL: {
         const MinicFunction *direct_callee;

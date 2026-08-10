@@ -16,6 +16,7 @@ mkdir -p "$work"
 
 test -s "$assembly"
 grep -F 'statement_value:' "$assembly" >/dev/null
+grep -F 'statement_void:' "$assembly" >/dev/null
 grep -F '.Lwhile_condition_' "$assembly" >/dev/null
 
-printf '%s\n' 'PASS compiler/c0/gnu_statement_expression scope=owned-block final-expression=value sequencing=expression-site loop=1'
+printf '%s\n' 'PASS compiler/c0/gnu_statement_expression scope=owned-block final-expression=value void-final=non-expression sequencing=expression-site loop=1'
