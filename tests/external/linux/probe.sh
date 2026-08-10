@@ -9,15 +9,27 @@ work=${BUILD_DIR:-"$root/build/linux-discovery"}
 minic=${MINIC:-"$root/build/linux-compiler/bin/minic"}
 cross_compile=${CROSS_COMPILE:-riscv64-linux-gnu-}
 version=6.6.143
-archive="$work/linux-$version.tar.xz"
+archive=${LINUX_ARCHIVE_CACHE:-"$work/linux-$version.tar.xz"}
 src="$work/linux-$version"
 out="$work/kbuild"
 sha256=dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
+url="https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-$version.tar.xz"
 
 rm -rf "$work"
 mkdir -p "$work"
+mkdir -p "$(dirname -- "$archive")"
 
-curl -fsSL "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-$version.tar.xz" -o "$archive"
+archive_valid=false
+if test -s "$archive" && printf '%s  %s\n' "$sha256" "$archive" | sha256sum -c - >/dev/null 2>&1; then
+    archive_valid=true
+    printf '%s\n' "LINUX_ARCHIVE_CACHE hit path=$archive"
+fi
+if test "$archive_valid" != true; then
+    rm -f "$archive" "$archive.tmp"
+    curl -fsSL "$url" -o "$archive.tmp"
+    mv "$archive.tmp" "$archive"
+    printf '%s\n' "LINUX_ARCHIVE_CACHE fill path=$archive"
+fi
 printf '%s  %s\n' "$sha256" "$archive" | sha256sum -c -
 tar -xJf "$archive" -C "$work"
 
