@@ -69,6 +69,23 @@ jobs:
           block = block.replace(old_token, new_token)
           text = text[:block_start] + block + text[block_end:]
 
+          label = '"focused-alignof-gate"'
+          label_index = text.find(label)
+          if label_index < 0:
+              raise SystemExit('focused-alignof-gate helper label not found')
+          block_start = text.rfind('text = replace_once(', 0, label_index)
+          block_end = text.find('\n)', label_index)
+          if block_start < 0 or block_end < 0:
+              raise SystemExit('focused-alignof-gate helper block not found')
+          block_end += 2
+          block = text[block_start:block_end]
+          old_gate = 'run-builtin offsetof.sh'.replace(' ', '-')
+          new_gate = 'run-static-assert-declaration.sh'
+          if block.count(old_gate) != 2:
+              raise SystemExit(f'focused helper expected two old anchors, found {block.count(old_gate)}')
+          block = block.replace(old_gate, new_gate)
+          text = text[:block_start] + block + text[block_end:]
+
           path.write_text(text)
           PY
           python3 tools/dev/foundation-data-layout-alignof-once.py
