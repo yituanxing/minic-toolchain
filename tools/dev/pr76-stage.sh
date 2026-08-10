@@ -45,4 +45,5 @@ python3 tools/dev/pr77-enum-tag-type-references.py
 python3 tools/dev/pr77-extern-multi-declarators.py
 python3 tools/dev/pr77-gnu-section-symbol-attribute.py
 python3 tools/dev/pr77-gnu-const-function-attribute.py
+python3 tools/dev/pr77-gnu-octal-character-case-ranges.py
 printf '%s\n' 'staged Linux discovery semantics'
