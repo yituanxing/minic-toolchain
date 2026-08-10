@@ -300,9 +300,49 @@ def repair_materialized_contracts() -> None:
     path.write_text(text)
 
 
+def repair_final_c0_runner() -> None:
+    path = Path("tests/compiler/c0/run.sh")
+    replace_one(
+        path,
+        """expect_compile_failure \\
+    invalid_assignment_rvalue \\
+    "assignment expression requires a modifiable scalar lvalue"""",
+        """expect_compile_failure \\
+    invalid_assignment_rvalue \\
+    "assignment expression requires a modifiable object lvalue"""",
+        "final assignment-rvalue diagnostic",
+    )
+    replace_one(
+        path,
+        """expect_compile_failure \\
+    invalid_empty_record \\
+    "record definition requires at least one field"""",
+        """MINIC="$minic" \\
+HOST_CC="$host_cc" \\
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \\
+sh "$root/tests/compiler/c0/run-gnu-empty-records.sh"""",
+        "GNU empty-record final gate",
+    )
+    replace_one(
+        path,
+        '''    grep -F "$expected_message" "$work/$name.stderr" >/dev/null
+    printf '%s\\n' "PASS compiler/c0/$name"
+''',
+        '''    if ! grep -F "$expected_message" "$work/$name.stderr" >/dev/null; then
+        printf '%s\\n' "FAIL compiler/c0/$name: diagnostic mismatch" >&2
+        cat "$work/$name.stderr" >&2
+        exit 1
+    fi
+    printf '%s\\n' "PASS compiler/c0/$name"
+''',
+        "final C0 diagnostic visibility",
+    )
+
+
 def main() -> None:
     migrate_attribute_registry()
     repair_materialized_contracts()
+    repair_final_c0_runner()
     print("foundation one-shot migration applied")
 
 
