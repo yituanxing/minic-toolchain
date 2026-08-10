@@ -71,6 +71,17 @@ typedef struct MinicParser {
     size_t enum_tag_capacity;
 } MinicParser;
 
+typedef struct MinicParsedAttribute {
+    const MinicAttributeDescriptor *descriptor;
+    MinicSourceSpan name_span;
+    MinicSourceSpan arguments_span;
+    bool has_arguments;
+} MinicParsedAttribute;
+
+typedef bool (*MinicParsedAttributeConsumer)(MinicParser *parser,
+                                             const MinicParsedAttribute *attribute,
+                                             void *context);
+
 void minic_parser_error(MinicParser *parser, const char *format, ...);
 bool minic_parser_advance(MinicParser *parser);
 bool minic_parser_expect(MinicParser *parser, MinicTokenKind kind, const char *message);
@@ -120,6 +131,9 @@ const MinicAttributeDescriptor *minic_parser_current_attribute(const MinicParser
 bool minic_parser_current_attribute_is(const MinicParser *parser,
                                        MinicAttributeKind kind,
                                        MinicAttributeTarget target);
+bool minic_parser_parse_gnu_attribute_lists(MinicParser *parser,
+                                            MinicParsedAttributeConsumer consumer,
+                                            void *context);
 bool minic_parser_add_expression(MinicParser *parser,
                                  const MinicExpression *expression,
                                  MinicExpressionId *expression_id);
