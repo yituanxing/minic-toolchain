@@ -327,6 +327,9 @@ static bool parse_record_field(MinicParser *parser, MinicRecordId record_id) {
         minic_parser_error(parser, "invalid record while adding field");
         return false;
     }
+    if (parser->current.kind == MINIC_TOKEN_SEMICOLON) {
+        return minic_parser_advance(parser);
+    }
     if (record->field_count > 0U && record->fields[record->field_count - 1U].is_flexible_array) {
         minic_parser_error(parser, "flexible array member must be the last record field");
         return false;

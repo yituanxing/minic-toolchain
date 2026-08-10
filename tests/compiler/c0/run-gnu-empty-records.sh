@@ -15,10 +15,11 @@ mkdir -p "$work"
 "$minic" -S "$work/gnu_empty_records.i" -o "$assembly"
 
 test -s "$assembly"
-for symbol in empty_struct_size empty_union_size empty_identity; do
+for symbol in empty_struct_size empty_union_size empty_member_record_size empty_identity; do
     grep -F "$symbol:" "$assembly" >/dev/null
 done
 size0=$(grep -c '  li a0, 0' "$assembly" || true)
 test "$size0" -ge 2
+grep -F '  li a0, 8' "$assembly" >/dev/null
 
-printf '%s\n' 'PASS compiler/c0/gnu_empty_records struct-size=0 union-size=0 complete=1 layout-sentinel=alignment'
+printf '%s\n' 'PASS compiler/c0/gnu_empty_records struct-size=0 union-size=0 empty-member-declaration=ignored member-record-size=8 complete=1 layout-sentinel=alignment'
