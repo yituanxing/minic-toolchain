@@ -13,6 +13,7 @@
 
 #define MINIC_PARSER_MAX_SWITCH_DEPTH 16U
 #define MINIC_PARSER_MAX_SWITCH_CASES 128U
+#define MINIC_MAX_PARSED_ATTRIBUTES 32U
 
 typedef struct MinicParserLocalBinding {
     MinicSourceSpan name_span;
@@ -77,6 +78,11 @@ typedef struct MinicParsedAttribute {
     MinicSourceSpan arguments_span;
     bool has_arguments;
 } MinicParsedAttribute;
+
+typedef struct MinicParsedAttributeList {
+    MinicParsedAttribute values[MINIC_MAX_PARSED_ATTRIBUTES];
+    size_t count;
+} MinicParsedAttributeList;
 
 typedef bool (*MinicParsedAttributeConsumer)(MinicParser *parser,
                                              const MinicParsedAttribute *attribute,
@@ -143,6 +149,8 @@ bool minic_parser_current_attribute_is(const MinicParser *parser,
 bool minic_parser_parse_gnu_attribute_lists(MinicParser *parser,
                                             MinicParsedAttributeConsumer consumer,
                                             void *context);
+bool minic_parser_collect_gnu_attribute_lists(MinicParser *parser,
+                                              MinicParsedAttributeList *attributes);
 bool minic_parser_parse_parenthesized_function_declarator(
     MinicParser *parser,
     bool require_name,
@@ -191,6 +199,15 @@ bool minic_parser_parse_enum_definition(MinicParser *parser);
 bool minic_parser_parse_typedef(MinicParser *parser);
 bool minic_parser_parse_static_global(MinicParser *parser);
 bool minic_parser_parse_extern_global(MinicParser *parser);
+bool minic_parser_parse_extern_global_after_head(MinicParser *parser,
+                                                 MinicType base_type,
+                                                 MinicType first_object_type,
+                                                 MinicSourceSpan first_name_span,
+                                                 const char *section_name,
+                                                 size_t section_name_length,
+                                                 bool has_section,
+                                                 MinicSymbolVisibility visibility,
+                                                 bool has_visibility);
 bool minic_parser_parse_pointer_member(MinicParser *parser,
                                        MinicExpressionId base_id,
                                        MinicExpressionId *expression_id);

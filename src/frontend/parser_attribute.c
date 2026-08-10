@@ -107,3 +107,29 @@ bool minic_parser_parse_gnu_attribute_lists(MinicParser *parser,
     }
     return true;
 }
+
+static bool collect_parsed_attribute(MinicParser *parser,
+                                     const MinicParsedAttribute *attribute,
+                                     void *opaque_context) {
+    MinicParsedAttributeList *attributes;
+
+    if (parser == NULL || attribute == NULL || opaque_context == NULL) {
+        return false;
+    }
+    attributes = (MinicParsedAttributeList *)opaque_context;
+    if (attributes->count >= MINIC_MAX_PARSED_ATTRIBUTES) {
+        minic_parser_error(parser, "too many GNU attributes on one declaration");
+        return false;
+    }
+    attributes->values[attributes->count] = *attribute;
+    attributes->count += 1U;
+    return true;
+}
+
+bool minic_parser_collect_gnu_attribute_lists(MinicParser *parser,
+                                              MinicParsedAttributeList *attributes) {
+    if (parser == NULL || attributes == NULL) {
+        return false;
+    }
+    return minic_parser_parse_gnu_attribute_lists(parser, collect_parsed_attribute, attributes);
+}

@@ -864,45 +864,53 @@ static bool parse_extern_function_pointer_object_declarator(MinicParser *parser,
     return true;
 }
 
-bool minic_parser_parse_extern_global(MinicParser *parser) {
-    MinicType base_type;
-    char section_name[256];
-    size_t section_name_length;
-    bool has_section;
-
-    section_name_length = 0U;
-    has_section = false;
-    (void)memset(section_name, 0, sizeof(section_name));
-    if (!minic_parser_expect(parser, MINIC_TOKEN_KW_EXTERN, "expected keyword 'extern'") ||
-        !minic_parser_parse_type_specifiers(parser, &base_type) ||
-        !minic_parser_parse_gnu_section_attribute(
-            parser, section_name, sizeof(section_name), &section_name_length, &has_section)) {
+static bool parse_extern_object_declarator(MinicParser *parser,
+                                           MinicType base_type,
+                                           MinicSourceSpan *name_span,
+                                           MinicType *object_type) {
+    if (parser == NULL || name_span == NULL || object_type == NULL ||
+        !minic_parser_parse_pointer_declarator(parser, base_type, object_type)) {
         return false;
     }
+    if (parser->current.kind == MINIC_TOKEN_LPAREN) {
+        return parse_extern_function_pointer_object_declarator(
+            parser, *object_type, name_span, object_type);
+    }
+    if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
+        minic_parser_error(parser, "expected extern object name");
+        return false;
+    }
+    *name_span = parser->current.span;
+    return minic_parser_advance(parser);
+}
 
+bool minic_parser_parse_extern_global_after_head(MinicParser *parser,
+                                                 MinicType base_type,
+                                                 MinicType first_object_type,
+                                                 MinicSourceSpan first_name_span,
+                                                 const char *section_name,
+                                                 size_t section_name_length,
+                                                 bool has_section,
+                                                 MinicSymbolVisibility visibility,
+                                                 bool has_visibility) {
+    bool first_declarator;
+
+    if (parser == NULL) {
+        return false;
+    }
+    first_declarator = true;
     for (;;) {
         MinicGlobalObjectId object_id;
         MinicSourceSpan name_span;
         MinicType object_type;
         bool is_array;
 
-        if (!minic_parser_parse_pointer_declarator(parser, base_type, &object_type)) {
+        if (first_declarator) {
+            name_span = first_name_span;
+            object_type = first_object_type;
+            first_declarator = false;
+        } else if (!parse_extern_object_declarator(parser, base_type, &name_span, &object_type)) {
             return false;
-        }
-        if (parser->current.kind == MINIC_TOKEN_LPAREN) {
-            if (!parse_extern_function_pointer_object_declarator(
-                    parser, object_type, &name_span, &object_type)) {
-                return false;
-            }
-        } else {
-            if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
-                minic_parser_error(parser, "expected extern object name");
-                return false;
-            }
-            name_span = parser->current.span;
-            if (!minic_parser_advance(parser)) {
-                return false;
-            }
         }
         if (minic_type_is_void(object_type) || minic_type_is_function(object_type) ||
             minic_type_is_array(object_type)) {
@@ -930,15 +938,13 @@ bool minic_parser_parse_extern_global(MinicParser *parser) {
                     minic_parser_error(parser, "cannot declare incomplete extern array");
                     return false;
                 }
-            } else {
-                if (!minic_parser_parse_fixed_array_bound(parser, &element_count) ||
-                    !minic_c0_program_add_array_type(
-                        parser->program, object_type, element_count, &array_type)) {
-                    if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
-                        minic_parser_error(parser, "cannot declare extern array");
-                    }
-                    return false;
+            } else if (!minic_parser_parse_fixed_array_bound(parser, &element_count) ||
+                       !minic_c0_program_add_array_type(
+                           parser->program, object_type, element_count, &array_type)) {
+                if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                    minic_parser_error(parser, "cannot declare extern array");
                 }
+                return false;
             }
             object_type = array_type;
         }
@@ -955,7 +961,9 @@ bool minic_parser_parse_extern_global(MinicParser *parser) {
                 &object_id) ||
             !minic_c0_global_object_set_extern(parser->program, object_id) ||
             (has_section && !minic_c0_global_object_set_section(
-                                parser->program, object_id, section_name, section_name_length))) {
+                                parser->program, object_id, section_name, section_name_length)) ||
+            (has_visibility &&
+             !minic_c0_global_object_set_visibility(parser->program, object_id, visibility))) {
             if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
                 minic_parser_error(parser, "cannot declare extern object");
             }
@@ -972,6 +980,35 @@ bool minic_parser_parse_extern_global(MinicParser *parser) {
 
     return minic_parser_expect(
         parser, MINIC_TOKEN_SEMICOLON, "expected ';' after extern object declaration");
+}
+
+bool minic_parser_parse_extern_global(MinicParser *parser) {
+    MinicSourceSpan first_name_span;
+    MinicType base_type;
+    MinicType first_object_type;
+    char section_name[256];
+    size_t section_name_length;
+    bool has_section;
+
+    section_name_length = 0U;
+    has_section = false;
+    (void)memset(section_name, 0, sizeof(section_name));
+    if (!minic_parser_expect(parser, MINIC_TOKEN_KW_EXTERN, "expected keyword 'extern'") ||
+        !minic_parser_parse_type_specifiers(parser, &base_type) ||
+        !minic_parser_parse_gnu_section_attribute(
+            parser, section_name, sizeof(section_name), &section_name_length, &has_section) ||
+        !parse_extern_object_declarator(parser, base_type, &first_name_span, &first_object_type)) {
+        return false;
+    }
+    return minic_parser_parse_extern_global_after_head(parser,
+                                                       base_type,
+                                                       first_object_type,
+                                                       first_name_span,
+                                                       section_name,
+                                                       section_name_length,
+                                                       has_section,
+                                                       MINIC_SYMBOL_VISIBILITY_DEFAULT,
+                                                       false);
 }
 
 static bool
