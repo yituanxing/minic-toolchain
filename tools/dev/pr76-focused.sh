@@ -21,6 +21,7 @@ sh tests/compiler/c0/run-gnu-inline-asm-fence.sh
 sh tests/compiler/c0/run-gnu-typeof-local-declaration.sh
 sh tests/compiler/c0/run-gnu-inline-asm-readwrite-output.sh
 sh tests/compiler/c0/run-gnu-compiletime-selection-builtins.sh
+sh tests/compiler/c0/run-gnu-builtin-constant-p.sh
 sh tests/compiler/c0/run-rv64-integer-aggregate-return.sh
 sh tests/compiler/c0/run-unnamed-bit-fields.sh
 sh tests/compiler/c0/run-gnu-overflow-builtins.sh
