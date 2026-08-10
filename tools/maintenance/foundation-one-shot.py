@@ -106,7 +106,6 @@ def migrate_attributes() -> None:
         '    if (!minic_parser_current_attribute_is(\n            parser, MINIC_ATTRIBUTE_ALIGNED, MINIC_ATTRIBUTE_TARGET_TYPE)) {',
         "typedef aligned",
     )
-
     replace_one(
         "src/frontend/parser_type.c",
         "\n#include <string.h>\n\n#include <string.h>\n\nstatic bool minic_parser_identifier_is",
@@ -150,24 +149,35 @@ def repair_final_runner() -> None:
     path = Path("tests/compiler/c0/run.sh")
     text = path.read_text()
 
-    old = 'expect_compile_failure \\\n    invalid_assignment_rvalue \\\n    "assignment expression requires a modifiable scalar lvalue"'
-    new = 'expect_compile_failure \\\n    invalid_assignment_rvalue \\\n    "assignment expression requires a modifiable object lvalue"'
-    if text.count(old) != 1:
-        raise SystemExit(f"assignment-rvalue final anchor count={text.count(old)}")
-    text = text.replace(old, new, 1)
-
-    old = 'expect_compile_failure \\\n    invalid_empty_record \\\n    "record definition requires at least one field"'
-    new = 'MINIC="$minic" \\\nHOST_CC="$host_cc" \\\nBUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \\\nsh "$root/tests/compiler/c0/run-gnu-empty-records.sh"'
-    if text.count(old) != 1:
-        raise SystemExit(f"empty-record final anchor count={text.count(old)}")
-    text = text.replace(old, new, 1)
+    replacements = [
+        (
+            'expect_compile_failure \\\n    invalid_address_of_rvalue \\\n    "address-of requires an lvalue operand"',
+            'expect_compile_failure \\\n    invalid_address_of_rvalue \\\n    "address-of requires an lvalue object or function designator"',
+            "address-of diagnostic",
+        ),
+        (
+            'expect_compile_failure \\\n    invalid_assignment_rvalue \\\n    "assignment expression requires a modifiable scalar lvalue"',
+            'expect_compile_failure \\\n    invalid_assignment_rvalue \\\n    "assignment expression requires a modifiable object lvalue"',
+            "assignment-rvalue diagnostic",
+        ),
+        (
+            'expect_compile_failure \\\n    invalid_empty_record \\\n    "record definition requires at least one field"',
+            'MINIC="$minic" \\\nHOST_CC="$host_cc" \\\nBUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \\\nsh "$root/tests/compiler/c0/run-gnu-empty-records.sh"',
+            "GNU empty-record gate",
+        ),
+    ]
+    for old, new, label in replacements:
+        count = text.count(old)
+        if count != 1:
+            raise SystemExit(f"{label}: expected one anchor, found {count}")
+        text = text.replace(old, new, 1)
 
     old = '    grep -F "$expected_message" "$work/$name.stderr" >/dev/null\n    printf \'%s\\n\' "PASS compiler/c0/$name"\n'
     new = '    if ! grep -F "$expected_message" "$work/$name.stderr" >/dev/null; then\n        printf \'%s\\n\' "FAIL compiler/c0/$name: diagnostic mismatch" >&2\n        cat "$work/$name.stderr" >&2\n        exit 1\n    fi\n    printf \'%s\\n\' "PASS compiler/c0/$name"\n'
-    if text.count(old) != 1:
-        raise SystemExit(f"diagnostic helper final anchor count={text.count(old)}")
-    text = text.replace(old, new, 1)
-    path.write_text(text)
+    count = text.count(old)
+    if count != 1:
+        raise SystemExit(f"diagnostic helper: expected one anchor, found {count}")
+    path.write_text(text.replace(old, new, 1))
 
 
 def main() -> None:
