@@ -69,11 +69,12 @@ static bool minic_riscv64_layout_records(MinicC0Program *program) {
             size_t field_offset;
 
             field = &record->fields[field_index];
-            if (!minic_data_layout_record_field_offset(layout,
-                                                       program,
-                                                       record,
-                                                       field_index,
-                                                       &field_offset)) {
+            if (!minic_data_layout_record_field_offset(
+                    layout,
+                    program,
+                    record,
+                    field_index,
+                    &field_offset)) {
                 return false;
             }
             field->storage_offset = field_offset;
