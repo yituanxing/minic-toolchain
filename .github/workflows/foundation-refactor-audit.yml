@@ -1,58 +1,59 @@
 name: Foundation Refactor Validation
 
 on:
+  push:
+    branches:
+      - refactor/foundation-v1
   pull_request:
     branches:
       - main
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: foundation-refactor-pointer-sign-call-patch
+  group: foundation-refactor-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  patch-source:
-    if: github.head_ref == 'refactor/foundation-v1'
+  committed-source:
+    if: github.event_name == 'push' || github.head_ref == 'refactor/foundation-v1'
     runs-on: ubuntu-24.04
     steps:
-      - name: Checkout active branch
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          ref: refactor/foundation-v1
-          fetch-depth: 1
 
-      - name: Generate pointer-sign call conversions
+      - name: Verify committed source is canonical
         shell: bash
         run: |
           set -Eeuo pipefail
-          python3 tools/dev/agent_pointer_sign_call_patch.py
-          clang-format-18 -i \
-            src/frontend/parser_internal.h \
-            src/frontend/parser_expression.c \
-            src/frontend/parser_postfix.c
-          git diff --check -- src/frontend/parser_internal.h src/frontend/parser_expression.c \
-            src/frontend/parser_postfix.c
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+          git diff --exit-code -- include src tools/minic
 
-      - name: Build and run focused call conversion gate
+      - name: Build committed compiler
         shell: bash
         run: |
           set -Eeuo pipefail
-          make -j4 MODE=release BUILD_DIR=build/pointer-sign-call-generated
-          MINIC="$GITHUB_WORKSPACE/build/pointer-sign-call-generated/bin/minic" \
-          BUILD_DIR="$GITHUB_WORKSPACE/build/pointer-sign-call-focused" \
+          make -j4 MODE=release BUILD_DIR=build/foundation-compiler
+
+      - name: Run fast compiler contracts
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release BUILD_DIR=build/foundation-compiler check-fast
+
+      - name: Run frozen Lua and Linux focused semantics
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/foundation-compiler/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/foundation-focused" \
           HOST_CC=cc \
-            sh -x tests/compiler/c0/run-gnu-pointer-sign-call-conversion.sh
-          make -j4 MODE=release BUILD_DIR=build/pointer-sign-call-generated check-fast
+            sh tools/dev/pr76-focused.sh
 
-      - name: Publish generated source commit
+      - name: Recheck source-of-truth invariant
         shell: bash
         run: |
           set -Eeuo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add src/frontend/parser_internal.h src/frontend/parser_expression.c \
-            src/frontend/parser_postfix.c
-          git commit -m 'frontend: model pointer-sign call conversions'
-          git push --force origin HEAD:agent/pointer-sign-call-generated
+          git diff --exit-code -- include src tools/minic
+          printf '%s\n' 'PASS foundation/source-of-truth committed-source-only=1'
