@@ -12,6 +12,9 @@ mkdir -p "$work"
 "$host_cc" -E -P -std=gnu11 -x c "$root/tests/compiler/c0/function_linkage_inheritance.c" -o "$work/input.i"
 "$minic" -S "$work/input.i" -o "$assembly"
 test -s "$assembly"
-grep -F '.local read_timer_like' "$assembly" >/dev/null
 grep -F 'read_timer_like:' "$assembly" >/dev/null
-printf '%s\n' 'PASS compiler/c0/function_linkage_inheritance prior=static-inline later=non-static-declaration effective-linkage=internal'
+if grep -F '.globl read_timer_like' "$assembly" >/dev/null; then
+    printf '%s\n' 'FAIL compiler/c0/function_linkage_inheritance internal function was exported' >&2
+    exit 1
+fi
+printf '%s\n' 'PASS compiler/c0/function_linkage_inheritance prior=static-inline later=non-static-declaration effective-linkage=internal export=none'
