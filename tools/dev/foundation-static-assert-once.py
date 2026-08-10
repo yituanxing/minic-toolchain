@@ -143,8 +143,8 @@ path = root / "tools/dev/pr76-focused.sh"
 text = path.read_text()
 text = replace_once(
     text,
-    '''MINIC="$minic" BUILD_DIR="$build_dir" HOST_CC="$host_cc" sh "$root/tests/compiler/c0/run-gnu-builtin-constant-p.sh"\n''',
-    '''MINIC="$minic" BUILD_DIR="$build_dir" HOST_CC="$host_cc" sh "$root/tests/compiler/c0/run-gnu-builtin-constant-p.sh"\nMINIC="$minic" BUILD_DIR="$build_dir" HOST_CC="$host_cc" sh "$root/tests/compiler/c0/run-static-assert-declaration.sh"\n''',
+    '''sh tests/compiler/c0/run-gnu-builtin-constant-p.sh\n''',
+    '''sh tests/compiler/c0/run-gnu-builtin-constant-p.sh\nsh tests/compiler/c0/run-static-assert-declaration.sh\n''',
     "focused-static-assert-gate",
 )
 path.write_text(text)
