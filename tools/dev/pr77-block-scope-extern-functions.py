@@ -12,7 +12,7 @@ def replace_once(path: str, old: str, new: str) -> None:
 
 
 # Turn the function-declaration pieces that were previously private to the
-# translation-unit parser into shared declaration helpers.  This is still a
+# translation-unit parser into shared declaration helpers. This is still a
 # discovery-stage materialization, but it deliberately removes one source of
 # parser-context duplication before adding the Linux block-scope form.
 replace_once(
@@ -20,9 +20,13 @@ replace_once(
     "static bool function_signature_matches(const MinicFunction *function,\n",
     "bool minic_parser_function_signature_matches(const MinicFunction *function,\n",
 )
+replace_once(
+    "src/frontend/parser_function.c",
+    "!function_signature_matches(\n",
+    "!minic_parser_function_signature_matches(\n",
+)
 path = Path("src/frontend/parser_function.c")
 text = path.read_text()
-text = text.replace("function_signature_matches(\n", "minic_parser_function_signature_matches(\n")
 text = text.replace("static bool parse_gnu_function_attributes(MinicParser *parser) {",
                     "bool minic_parser_parse_gnu_function_attributes(MinicParser *parser) {")
 text = text.replace("return parse_gnu_function_attributes(parser);",
@@ -37,9 +41,9 @@ text = text.replace("!parse_gnu_prefix_function_attributes(&probe,",
                     "!minic_parser_parse_gnu_prefix_function_attributes(&probe,")
 path.write_text(text)
 
-# GCC's error attribute is a compile-time diagnostic attribute, not ABI/layout
-# metadata.  Parse it explicitly in the suffix attribute path rather than
-# silently treating every unknown attribute as harmless.  Its call-site
+# GCC's error/warning attributes are compile-time diagnostic attributes, not
+# ABI/layout metadata. Parse them explicitly in the suffix attribute path rather
+# than silently treating every unknown attribute as harmless. Their call-site
 # diagnostic semantics remain a later AttributeSet/Sema consumer; this gate
 # first preserves the unchanged Linux declaration and its identity.
 path = Path("src/frontend/parser_function.c")
@@ -71,7 +75,7 @@ if text.count(old) != 1:
     raise SystemExit(f"suffix attribute classification anchor: expected one match, found {text.count(old)}")
 path.write_text(text.replace(old, new, 1))
 
-# Publish the shared declaration helpers to statement parsing.  Permanent
+# Publish the shared declaration helpers to statement parsing. Permanent
 # materialization will move these behind the Declarator/Attribute interfaces;
 # the discovery branch should already have one semantic implementation.
 path = Path("src/frontend/parser_internal.h")
@@ -98,9 +102,9 @@ if text.count(anchor) != 1:
 path.write_text(text.replace(anchor, anchor + prototypes, 1))
 
 # Add the C block-scope extern function-declaration form used by Linux's
-# compile-time assertion machinery.  It deliberately creates/redeclares the
-# same Program-owned function symbol used by file-scope declarations, so direct
-# calls and function designators resolve through the existing semantic path.
+# compile-time assertion machinery. It deliberately creates/redeclares the same
+# Program-owned function symbol used by file-scope declarations, so direct calls
+# and function designators resolve through the existing semantic path.
 path = Path("src/frontend/parser_statement.c")
 text = path.read_text()
 anchor = '''static bool parse_declaration(MinicParser *parser) {
@@ -169,7 +173,7 @@ helper = r'''static bool parse_block_scope_extern_function_declaration(MinicPars
     if (!minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '('") ||
         !minic_parser_parse_parameter_list(
             parser, NULL, parameter_types, &parameter_count, false, &is_variadic) ||
-        !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')'" ) ||
+        !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')'") ||
         !minic_parser_parse_gnu_function_attributes(parser)) {
         return false;
     }
