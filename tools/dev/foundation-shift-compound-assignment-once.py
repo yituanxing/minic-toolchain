@@ -57,6 +57,16 @@ text = replace_once(
 )
 path.write_text(text)
 
+path = root / "src/frontend/ast_verifier.c"
+text = path.read_text()
+text = replace_once(
+    text,
+    '''            operator_kind != MINIC_BINARY_BITWISE_OR && operator_kind != MINIC_BINARY_BITWISE_XOR &&\n            operator_kind != MINIC_BINARY_SHIFT_RIGHT) {\n''',
+    '''            operator_kind != MINIC_BINARY_BITWISE_OR && operator_kind != MINIC_BINARY_BITWISE_XOR &&\n            operator_kind != MINIC_BINARY_SHIFT_LEFT && operator_kind != MINIC_BINARY_SHIFT_RIGHT) {\n''',
+    "compound-shift-left-verifier",
+)
+path.write_text(text)
+
 path = root / "src/target/riscv64/codegen_expression.c"
 text = path.read_text()
 text = replace_once(
