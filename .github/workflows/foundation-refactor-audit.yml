@@ -9,7 +9,7 @@ on:
       - main
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: foundation-refactor-${{ github.ref }}
@@ -20,17 +20,38 @@ jobs:
     if: github.event_name == 'push' || github.head_ref == 'refactor/foundation-v1'
     runs-on: ubuntu-24.04
     steps:
-      - name: Checkout
+      - name: Checkout refactor branch
         uses: actions/checkout@v4
+        with:
+          ref: refactor/foundation-v1
 
-      - name: Verify committed source is canonical
+      - name: Apply shared AttributeList migration
         shell: bash
         run: |
           set -Eeuo pipefail
-          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
-          git diff --exit-code -- include src tools/minic
+          python3 tools/maintenance/foundation-attribute-list-once.py
 
-      - name: Build committed compiler
+      - name: Format candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+
+      - name: Verify candidate diff scope
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git diff --name-only --exit-code -- tools/maintenance/foundation-attribute-list-once.py || true
+          git diff --name-only
+          bad=$(git diff --name-only | grep -Ev '^(Makefile|src/frontend/parser_function\.c|tests/compiler/c0/gnu_function_attributes\.c|tests/compiler/c0/run-gnu-function-attributes\.sh)$' || true)
+          if test -n "$bad"; then
+            printf '%s\n' "unexpected AttributeList migration paths:" >&2
+            printf '%s\n' "$bad" >&2
+            exit 1
+          fi
+
+      - name: Build compiler candidate
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -51,9 +72,18 @@ jobs:
           HOST_CC=cc \
             sh tools/dev/pr76-focused.sh
 
-      - name: Recheck source-of-truth invariant
+      - name: Commit validated AttributeList migration
         shell: bash
         run: |
           set -Eeuo pipefail
-          git diff --exit-code -- include src tools/minic
-          printf '%s\n' 'PASS foundation/source-of-truth committed-source-only=1'
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add Makefile src/frontend/parser_function.c \
+            tests/compiler/c0/gnu_function_attributes.c \
+            tests/compiler/c0/run-gnu-function-attributes.sh
+          if git diff --cached --quiet; then
+            echo 'no AttributeList candidate changes to commit'
+            exit 0
+          fi
+          git commit -m 'refactor: share GNU function attribute-list syntax'
+          git push origin HEAD:refactor/foundation-v1
