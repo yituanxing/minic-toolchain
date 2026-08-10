@@ -64,3 +64,13 @@ jobs:
           RISCV_CC=riscv64-linux-gnu-gcc \
           QEMU_RISCV64=qemu-riscv64 \
             sh tests/compiler/c0/run-stack-fixed-arguments-rv64.sh
+
+      - name: Run GCC-MiniC named GNU asm operand differential
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/rv64-stack-abi-compiler/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/rv64-named-asm" \
+          RISCV_CC=riscv64-linux-gnu-gcc \
+          QEMU_RISCV64=qemu-riscv64 \
+            sh tests/compiler/c0/run-gnu-inline-asm-named-operands-rv64.sh
