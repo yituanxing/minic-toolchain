@@ -16,6 +16,8 @@ mkdir -p "$work"
 
 test -s "$assembly"
 grep -F 'add_pair:' "$assembly" >/dev/null
+grep -F 'forward_pair:' "$assembly" >/dev/null
+grep -F 'call add_pair' "$assembly" >/dev/null
 grep -F 'sd a0,' "$assembly" >/dev/null
 grep -F 'sd a1,' "$assembly" >/dev/null
 grep -F 'sd a2,' "$assembly" >/dev/null
@@ -23,4 +25,4 @@ grep -F 'sd a3,' "$assembly" >/dev/null
 grep -F 'ld a0, 0(t0)' "$assembly" >/dev/null
 grep -F 'ld a1, 8(t0)' "$assembly" >/dev/null
 
-printf '%s\n' 'PASS compiler/c0/rv64_integer_aggregate_return size=16 class=integer params=a0-a3 return=a0-a1 record-local=1'
+printf '%s\n' 'PASS compiler/c0/rv64_integer_aggregate_return size=16 class=integer callee-params=a0-a3 caller-chunks=1 return=a0-a1 record-local=1 record-call=1'
