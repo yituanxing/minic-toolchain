@@ -3,7 +3,13 @@
 #include <string.h>
 
 #define MINIC_ATTRIBUTE_ENTRY(name_value, kind_value, class_value, targets_value)                  \
-    { name_value, sizeof(name_value) - 1U, kind_value, class_value, targets_value }
+    { name_value, sizeof(name_value) - 1U, kind_value, class_value, targets_value, 0U, 0U, false }
+#define MINIC_ATTRIBUTE_ENTRY_ARGUMENTS(                                                            \
+    name_value, kind_value, class_value, targets_value, minimum_value, maximum_value)              \
+    {                                                                                                \
+        name_value, sizeof(name_value) - 1U, kind_value, class_value, targets_value, minimum_value, \
+            maximum_value, true                                                                      \
+    }
 
 static const MinicAttributeDescriptor minic_attribute_descriptors[] = {
     MINIC_ATTRIBUTE_ENTRY("__nothrow__",
@@ -42,6 +48,18 @@ static const MinicAttributeDescriptor minic_attribute_descriptors[] = {
                           MINIC_ATTRIBUTE_MALLOC,
                           MINIC_ATTRIBUTE_CLASS_OPTIMIZATION,
                           MINIC_ATTRIBUTE_TARGET_FUNCTION),
+    MINIC_ATTRIBUTE_ENTRY_ARGUMENTS("alloc_size",
+                                    MINIC_ATTRIBUTE_ALLOC_SIZE,
+                                    MINIC_ATTRIBUTE_CLASS_OPTIMIZATION,
+                                    MINIC_ATTRIBUTE_TARGET_FUNCTION,
+                                    1U,
+                                    2U),
+    MINIC_ATTRIBUTE_ENTRY_ARGUMENTS("__alloc_size__",
+                                    MINIC_ATTRIBUTE_ALLOC_SIZE,
+                                    MINIC_ATTRIBUTE_CLASS_OPTIMIZATION,
+                                    MINIC_ATTRIBUTE_TARGET_FUNCTION,
+                                    1U,
+                                    2U),
     MINIC_ATTRIBUTE_ENTRY("__unused__",
                           MINIC_ATTRIBUTE_UNUSED,
                           MINIC_ATTRIBUTE_CLASS_INFORMATIONAL,
@@ -175,4 +193,13 @@ bool minic_attribute_allowed_on(const MinicAttributeDescriptor *descriptor,
                                 MinicAttributeTarget target) {
     return descriptor != NULL && target != MINIC_ATTRIBUTE_TARGET_NONE &&
            (descriptor->allowed_targets & (unsigned int)target) != 0U;
+}
+
+bool minic_attribute_argument_count_allowed(const MinicAttributeDescriptor *descriptor,
+                                            size_t argument_count) {
+    if (descriptor == NULL || !descriptor->validates_argument_count) {
+        return true;
+    }
+    return argument_count >= descriptor->minimum_argument_count &&
+           argument_count <= descriptor->maximum_argument_count;
 }
