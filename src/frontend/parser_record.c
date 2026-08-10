@@ -24,64 +24,22 @@ static bool parse_function_pointer_field_declarator(MinicParser *parser,
                                                     MinicType return_type,
                                                     MinicSourceSpan *name_span,
                                                     MinicType *field_type) {
-    MinicType parameter_types[MINIC_MAX_FUNCTION_PARAMETERS];
-    MinicType function_type;
-    size_t parameter_count;
-    size_t pointer_depth;
-    bool is_variadic;
+    MinicParsedFunctionDeclarator declarator;
 
-    parameter_count = 0U;
-    pointer_depth = 0U;
-    is_variadic = false;
-    (void)memset(parameter_types, 0, sizeof(parameter_types));
-
-    if (!minic_parser_expect(
-            parser, MINIC_TOKEN_LPAREN, "expected '(' before function pointer declarator")) {
+    if (parser == NULL || name_span == NULL || field_type == NULL ||
+        !minic_parser_parse_parenthesized_function_declarator(parser, true, true, &declarator)) {
         return false;
     }
-    while (parser->current.kind == MINIC_TOKEN_STAR) {
-        pointer_depth += 1U;
-        if (!minic_parser_advance(parser)) {
-            return false;
-        }
-    }
-    if (pointer_depth == 0U) {
-        minic_parser_error(parser, "function pointer declarator requires '*'");
-        return false;
-    }
-    if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
-        minic_parser_error(parser, "expected function pointer field name");
-        return false;
-    }
-    *name_span = parser->current.span;
-    if (!minic_parser_advance(parser) ||
-        !minic_parser_expect(
-            parser, MINIC_TOKEN_RPAREN, "expected ')' after function pointer field name") ||
-        !minic_parser_expect(
-            parser, MINIC_TOKEN_LPAREN, "expected '(' before function pointer parameters") ||
-        !minic_parser_parse_parameter_list(
-            parser, NULL, parameter_types, &parameter_count, false, &is_variadic) ||
-        !minic_parser_expect(
-            parser, MINIC_TOKEN_RPAREN, "expected ')' after function pointer parameters")) {
-        return false;
-    }
-    if (is_variadic) {
+    if (declarator.is_variadic) {
         minic_parser_error(parser, "variadic function pointer fields are not supported yet");
         return false;
     }
-    if (!minic_c0_program_add_function_type(
-            parser->program, return_type, parameter_types, parameter_count, &function_type)) {
+    if (!minic_parser_build_function_declarator_type(
+            parser, return_type, &declarator, field_type)) {
         minic_parser_error(parser, "cannot build function pointer field type");
         return false;
     }
-    while (pointer_depth > 0U) {
-        if (!minic_type_pointer_to(function_type, &function_type)) {
-            minic_parser_error(parser, "function pointer declarator depth is unsupported");
-            return false;
-        }
-        pointer_depth -= 1U;
-    }
-    *field_type = function_type;
+    *name_span = declarator.name_span;
     return true;
 }
 

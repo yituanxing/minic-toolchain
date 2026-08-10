@@ -844,68 +844,23 @@ static bool parse_extern_function_pointer_object_declarator(MinicParser *parser,
                                                             MinicType return_type,
                                                             MinicSourceSpan *name_span,
                                                             MinicType *object_type) {
-    MinicType parameter_types[8];
-    MinicType function_type;
-    size_t parameter_count;
-    size_t pointer_depth;
-    bool is_variadic;
+    MinicParsedFunctionDeclarator declarator;
 
     if (parser == NULL || name_span == NULL || object_type == NULL ||
-        parser->current.kind != MINIC_TOKEN_LPAREN) {
+        !minic_parser_parse_parenthesized_function_declarator(parser, true, true, &declarator)) {
         return false;
     }
-    parameter_count = 0U;
-    pointer_depth = 0U;
-    is_variadic = false;
-    (void)memset(parameter_types, 0, sizeof(parameter_types));
-
-    if (!minic_parser_advance(parser)) {
-        return false;
-    }
-    while (parser->current.kind == MINIC_TOKEN_STAR) {
-        pointer_depth += 1U;
-        if (!minic_parser_advance(parser)) {
-            return false;
-        }
-    }
-    if (pointer_depth == 0U) {
-        minic_parser_error(parser, "extern parenthesized object declarator requires '*'");
-        return false;
-    }
-    if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
-        minic_parser_error(parser, "expected extern function pointer object name");
-        return false;
-    }
-    *name_span = parser->current.span;
-    if (!minic_parser_advance(parser) ||
-        !minic_parser_expect(
-            parser, MINIC_TOKEN_RPAREN, "expected ')' after extern function pointer object name") ||
-        !minic_parser_expect(
-            parser, MINIC_TOKEN_LPAREN, "expected '(' before extern function pointer parameters") ||
-        !minic_parser_parse_parameter_list(
-            parser, NULL, parameter_types, &parameter_count, false, &is_variadic) ||
-        !minic_parser_expect(
-            parser, MINIC_TOKEN_RPAREN, "expected ')' after extern function pointer parameters")) {
-        return false;
-    }
-    if (is_variadic) {
+    if (declarator.is_variadic) {
         minic_parser_error(parser,
                            "variadic extern function pointer objects are not supported yet");
         return false;
     }
-    if (!minic_c0_program_add_function_type(
-            parser->program, return_type, parameter_types, parameter_count, &function_type)) {
+    if (!minic_parser_build_function_declarator_type(
+            parser, return_type, &declarator, object_type)) {
         minic_parser_error(parser, "cannot build extern function pointer object type");
         return false;
     }
-    while (pointer_depth > 0U) {
-        if (!minic_type_pointer_to(function_type, &function_type)) {
-            minic_parser_error(parser, "extern function pointer object depth is unsupported");
-            return false;
-        }
-        pointer_depth -= 1U;
-    }
-    *object_type = function_type;
+    *name_span = declarator.name_span;
     return true;
 }
 

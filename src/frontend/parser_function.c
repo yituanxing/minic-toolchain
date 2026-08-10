@@ -363,75 +363,24 @@ static bool parse_function_pointer_parameter_declarator(MinicParser *parser,
                                                         bool *has_name,
                                                         MinicType *parameter_type,
                                                         bool require_name) {
-    MinicType nested_parameter_types[MINIC_MAX_FUNCTION_PARAMETERS];
-    MinicType function_type;
-    size_t nested_parameter_count;
-    size_t pointer_depth;
-    bool is_variadic;
+    MinicParsedFunctionDeclarator declarator;
 
-    if (parser == NULL || name_span == NULL || has_name == NULL || parameter_type == NULL) {
+    if (parser == NULL || name_span == NULL || has_name == NULL || parameter_type == NULL ||
+        !minic_parser_parse_parenthesized_function_declarator(
+            parser, require_name, true, &declarator)) {
         return false;
     }
-    *has_name = false;
-    nested_parameter_count = 0U;
-    pointer_depth = 0U;
-    is_variadic = false;
-    (void)memset(nested_parameter_types, 0, sizeof(nested_parameter_types));
-
-    if (!minic_parser_expect(
-            parser, MINIC_TOKEN_LPAREN, "expected '(' before function pointer parameter")) {
-        return false;
-    }
-    while (parser->current.kind == MINIC_TOKEN_STAR) {
-        pointer_depth += 1U;
-        if (!minic_parser_advance(parser)) {
-            return false;
-        }
-    }
-    if (pointer_depth == 0U) {
-        minic_parser_error(parser, "function pointer parameter requires '*'");
-        return false;
-    }
-    if (parser->current.kind == MINIC_TOKEN_IDENTIFIER) {
-        *name_span = parser->current.span;
-        *has_name = true;
-        if (!minic_parser_advance(parser)) {
-            return false;
-        }
-    } else if (require_name) {
-        minic_parser_error(parser, "expected function pointer parameter name");
-        return false;
-    }
-    if (!minic_parser_expect(
-            parser, MINIC_TOKEN_RPAREN, "expected ')' after function pointer parameter") ||
-        !minic_parser_expect(
-            parser, MINIC_TOKEN_LPAREN, "expected '(' before function pointer parameter list") ||
-        !minic_parser_parse_parameter_list(
-            parser, NULL, nested_parameter_types, &nested_parameter_count, false, &is_variadic) ||
-        !minic_parser_expect(
-            parser, MINIC_TOKEN_RPAREN, "expected ')' after function pointer parameter list")) {
-        return false;
-    }
-    if (is_variadic) {
+    if (declarator.is_variadic) {
         minic_parser_error(parser, "variadic function pointer parameters are not supported yet");
         return false;
     }
-    if (!minic_c0_program_add_function_type(parser->program,
-                                            return_type,
-                                            nested_parameter_types,
-                                            nested_parameter_count,
-                                            &function_type)) {
+    if (!minic_parser_build_function_declarator_type(
+            parser, return_type, &declarator, parameter_type)) {
         minic_parser_error(parser, "cannot build function pointer parameter type");
         return false;
     }
-    while (pointer_depth > 0U) {
-        if (!minic_type_pointer_to(function_type, &function_type)) {
-            minic_parser_error(parser, "function pointer parameter depth is unsupported");
-            return false;
-        }
-        pointer_depth -= 1U;
-    }
-    *parameter_type = function_type;
+    *name_span = declarator.name_span;
+    *has_name = declarator.has_name;
     return true;
 }
 

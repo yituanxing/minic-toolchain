@@ -82,6 +82,15 @@ typedef bool (*MinicParsedAttributeConsumer)(MinicParser *parser,
                                              const MinicParsedAttribute *attribute,
                                              void *context);
 
+typedef struct MinicParsedFunctionDeclarator {
+    MinicSourceSpan name_span;
+    MinicType parameter_types[MINIC_MAX_FUNCTION_PARAMETERS];
+    size_t parameter_count;
+    size_t pointer_depth;
+    bool has_name;
+    bool is_variadic;
+} MinicParsedFunctionDeclarator;
+
 void minic_parser_error(MinicParser *parser, const char *format, ...);
 bool minic_parser_advance(MinicParser *parser);
 bool minic_parser_expect(MinicParser *parser, MinicTokenKind kind, const char *message);
@@ -134,6 +143,15 @@ bool minic_parser_current_attribute_is(const MinicParser *parser,
 bool minic_parser_parse_gnu_attribute_lists(MinicParser *parser,
                                             MinicParsedAttributeConsumer consumer,
                                             void *context);
+bool minic_parser_parse_parenthesized_function_declarator(
+    MinicParser *parser,
+    bool require_name,
+    bool require_pointer,
+    MinicParsedFunctionDeclarator *declarator);
+bool minic_parser_build_function_declarator_type(MinicParser *parser,
+                                                 MinicType return_type,
+                                                 const MinicParsedFunctionDeclarator *declarator,
+                                                 MinicType *declarator_type);
 bool minic_parser_add_expression(MinicParser *parser,
                                  const MinicExpression *expression,
                                  MinicExpressionId *expression_id);

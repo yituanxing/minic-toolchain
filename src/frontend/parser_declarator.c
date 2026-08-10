@@ -55,11 +55,10 @@ bool minic_parser_parse_parenthesized_function_declarator(
     return true;
 }
 
-bool minic_parser_build_function_declarator_type(
-    MinicParser *parser,
-    MinicType return_type,
-    const MinicParsedFunctionDeclarator *declarator,
-    MinicType *declarator_type) {
+bool minic_parser_build_function_declarator_type(MinicParser *parser,
+                                                 MinicType return_type,
+                                                 const MinicParsedFunctionDeclarator *declarator,
+                                                 MinicType *declarator_type) {
     MinicType function_type;
     size_t pointer_depth;
 
