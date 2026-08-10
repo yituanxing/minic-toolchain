@@ -917,6 +917,7 @@ bool minic_parser_parse_extern_global_after_head(MinicParser *parser,
         size_t declarator_section_name_length;
         bool declarator_has_section;
         bool is_array;
+        MinicType declarator_element_type;
 
         declarator_section_name_length = section_name_length;
         declarator_has_section = has_section;
@@ -937,6 +938,7 @@ bool minic_parser_parse_extern_global_after_head(MinicParser *parser,
         } else if (!parse_extern_object_declarator(parser, base_type, &name_span, &object_type)) {
             return false;
         }
+        declarator_element_type = object_type;
         if (!minic_parser_parse_gnu_section_attribute(parser,
                                                       declarator_section_name,
                                                       sizeof(declarator_section_name),
@@ -954,50 +956,23 @@ bool minic_parser_parse_extern_global_after_head(MinicParser *parser,
             return false;
         }
 
-        is_array = false;
-        if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
-            size_t element_count;
-            MinicType array_type;
-
-            is_array = true;
-            if (!minic_parser_advance(parser)) {
-                return false;
-            }
-            if (parser->current.kind == MINIC_TOKEN_RBRACKET) {
-                if (!minic_c0_program_add_incomplete_array_type(
-                        parser->program, object_type, &array_type) ||
-                    !minic_parser_advance(parser)) {
-                    minic_parser_error(parser, "cannot declare incomplete extern array");
-                    return false;
-                }
-            } else if (!minic_parser_parse_fixed_array_bound(parser, &element_count) ||
-                       !minic_c0_program_add_array_type(
-                           parser->program, object_type, element_count, &array_type)) {
-                if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
-                    minic_parser_error(parser, "cannot declare extern array");
-                }
-                return false;
-            }
-            object_type = array_type;
-            if (!minic_parser_parse_gnu_section_attribute(parser,
-                                                          declarator_section_name,
-                                                          sizeof(declarator_section_name),
-                                                          &declarator_section_name_length,
-                                                          &declarator_has_section)) {
-                return false;
-            }
+        if (!minic_parser_parse_array_declarator_suffix(
+                parser, object_type, true, &object_type, &is_array) ||
+            !minic_parser_parse_gnu_section_attribute(parser,
+                                                      declarator_section_name,
+                                                      sizeof(declarator_section_name),
+                                                      &declarator_section_name_length,
+                                                      &declarator_has_section)) {
+            return false;
         }
 
-        if (!minic_c0_program_add_global_object(
-                parser->program,
-                parser->source + name_span.begin.offset,
-                minic_parser_span_length(name_span),
-                object_type,
-                false,
-                is_array ? minic_type_is_const(
-                               parser->program->array_types[object_type.array_type_id].element_type)
-                         : minic_type_is_const(object_type),
-                &object_id) ||
+        if (!minic_c0_program_add_global_object(parser->program,
+                                                parser->source + name_span.begin.offset,
+                                                minic_parser_span_length(name_span),
+                                                object_type,
+                                                false,
+                                                minic_type_is_const(declarator_element_type),
+                                                &object_id) ||
             !minic_c0_global_object_set_extern(parser->program, object_id) ||
             (declarator_has_section &&
              !minic_c0_global_object_set_section(parser->program,

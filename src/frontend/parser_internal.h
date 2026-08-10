@@ -162,6 +162,11 @@ bool minic_parser_parse_parenthesized_function_declarator(
     bool require_name,
     bool require_pointer,
     MinicParsedFunctionDeclarator *declarator);
+bool minic_parser_parse_array_declarator_suffix(MinicParser *parser,
+                                                MinicType element_type,
+                                                bool allow_incomplete_outermost,
+                                                MinicType *declarator_type,
+                                                bool *is_array);
 bool minic_parser_build_function_declarator_type(MinicParser *parser,
                                                  MinicType return_type,
                                                  const MinicParsedFunctionDeclarator *declarator,
