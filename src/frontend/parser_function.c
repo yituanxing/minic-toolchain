@@ -1541,6 +1541,9 @@ bool minic_parse_c0_program(const char *path,
             success = parse_function(&parser, false);
         }
     }
+    if (!success && diagnostic != NULL && diagnostic->message[0] == '\0') {
+        minic_parser_error(&parser, "parser failed without diagnostic");
+    }
     minic_parser_destroy_scopes(&parser);
     minic_parser_destroy_enum_constants(&parser);
     return success;
