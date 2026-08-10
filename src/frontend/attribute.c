@@ -2,8 +2,8 @@
 
 #include <string.h>
 
-#define MINIC_ATTRIBUTE_ENTRY(name_value, kind_value, class_value, targets_value) \
-    {name_value, sizeof(name_value) - 1U, kind_value, class_value, targets_value}
+#define MINIC_ATTRIBUTE_ENTRY(name_value, kind_value, class_value, targets_value)                  \
+    { name_value, sizeof(name_value) - 1U, kind_value, class_value, targets_value }
 
 static const MinicAttributeDescriptor minic_attribute_descriptors[] = {
     MINIC_ATTRIBUTE_ENTRY("__nothrow__",

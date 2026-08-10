@@ -1,3 +1,4 @@
+#include "frontend/attribute.h"
 #include "frontend/parser.h"
 #include "frontend/parser_internal.h"
 
@@ -15,45 +16,34 @@ static bool function_identifier_is(const MinicParser *parser, const char *name) 
            memcmp(parser->source + parser->current.span.begin.offset, name, name_length) == 0;
 }
 
-static bool function_attribute_name_is(const MinicParser *parser, const char *name) {
+static const MinicAttributeDescriptor *current_function_attribute(const MinicParser *parser) {
     size_t name_length;
 
-    if (parser == NULL || name == NULL || parser->current.kind == MINIC_TOKEN_EOF) {
-        return false;
+    if (parser == NULL || parser->current.kind == MINIC_TOKEN_EOF) {
+        return NULL;
     }
-    name_length = strlen(name);
-    return minic_parser_span_length(parser->current.span) == name_length &&
-           memcmp(parser->source + parser->current.span.begin.offset, name, name_length) == 0;
+    name_length = minic_parser_span_length(parser->current.span);
+    return minic_attribute_lookup(parser->source + parser->current.span.begin.offset, name_length);
 }
 
 static bool gnu_function_attribute_is_metadata(const MinicParser *parser) {
-    return function_identifier_is(parser, "__nothrow__") ||
-           function_identifier_is(parser, "__leaf__") ||
-           function_identifier_is(parser, "__nonnull__") ||
-           function_identifier_is(parser, "__access__") ||
-           function_identifier_is(parser, "__pure__") ||
-           function_attribute_name_is(parser, "const") ||
-           function_attribute_name_is(parser, "__const__") ||
-           function_identifier_is(parser, "__malloc__") ||
-           function_identifier_is(parser, "__unused__") ||
-           function_identifier_is(parser, "__no_instrument_function__") ||
-           function_identifier_is(parser, "__always_inline__") ||
-           function_attribute_name_is(parser, "__cold__") ||
-           function_attribute_name_is(parser, "cold") ||
-           function_identifier_is(parser, "noreturn") ||
-           function_identifier_is(parser, "__noreturn__") ||
-           function_identifier_is(parser, "deprecated") ||
-           function_identifier_is(parser, "__deprecated__");
+    const MinicAttributeDescriptor *descriptor;
+
+    descriptor = current_function_attribute(parser);
+    if (!minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_FUNCTION)) {
+        return false;
+    }
+    return descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_INFORMATIONAL ||
+           descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_OPTIMIZATION ||
+           descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_CONTROL_FLOW;
 }
 
 static bool gnu_function_attribute_is_diagnostic(const MinicParser *parser) {
-    return function_identifier_is(parser, "error") || function_identifier_is(parser, "__error__") ||
-           function_identifier_is(parser, "warning") ||
-           function_identifier_is(parser, "__warning__") ||
-           function_attribute_name_is(parser, "format") ||
-           function_attribute_name_is(parser, "__format__") ||
-           function_identifier_is(parser, "warn_unused_result") ||
-           function_identifier_is(parser, "__warn_unused_result__");
+    const MinicAttributeDescriptor *descriptor;
+
+    descriptor = current_function_attribute(parser);
+    return minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_FUNCTION) &&
+           descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_DIAGNOSTIC;
 }
 
 static bool parse_gnu_attribute_arguments(MinicParser *parser) {

@@ -43,6 +43,7 @@ MINIC_INCLUDES := -Iinclude -Isrc
 
 MINIC_SOURCES := \
 	src/compiler/compiler.c \
+	src/frontend/attribute.c \
 	src/frontend/ast.c \
 	src/frontend/ast_verifier.c \
 	src/frontend/cast_normalization.c \
