@@ -43,6 +43,16 @@ text = text.replace(wrong_operand,
                     'minic_c0_expression_bit_field(parser->program, operand)',
                     1)
 
+# _Bool precision is one bit for width validation, but its storage/alignment boundary
+# remains one byte. DataLayout must use storage bits for the boundary-crossing rule.
+bool_storage_override = '''            if (minic_type_is_bool_integer(field->type)) {
+                type_bits = 1U;
+            }
+'''
+if text.count(bool_storage_override) != 1:
+    raise SystemExit(f"expected one DataLayout bool storage override, got {text.count(bool_storage_override)}")
+text = text.replace(bool_storage_override, "", 1)
+
 path.write_text(text)
 runpy.run_path(str(path), run_name="__main__")
 
