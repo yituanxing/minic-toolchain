@@ -365,6 +365,7 @@ typedef struct MinicGlobalObject {
     MinicGlobalObjectRelocation *object_relocations;
     size_t object_relocation_count;
     size_t object_relocation_capacity;
+    size_t explicit_alignment;
     size_t storage_size;
     size_t alignment;
     MinicSymbolVisibility visibility;
@@ -588,6 +589,9 @@ bool minic_c0_global_object_set_section(MinicC0Program *program,
                                         MinicGlobalObjectId global_object_id,
                                         const char *name,
                                         size_t name_length);
+bool minic_c0_global_object_set_explicit_alignment(MinicC0Program *program,
+                                                   MinicGlobalObjectId global_object_id,
+                                                   size_t alignment);
 
 const MinicExpression *minic_c0_program_expression(const MinicC0Program *program,
                                                    MinicExpressionId expression_id);

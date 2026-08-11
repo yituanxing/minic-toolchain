@@ -279,6 +279,22 @@ bool minic_c0_global_object_set_visibility(MinicC0Program *program,
     return true;
 }
 
+bool minic_c0_global_object_set_explicit_alignment(MinicC0Program *program,
+                                                   MinicGlobalObjectId global_object_id,
+                                                   size_t alignment) {
+    MinicGlobalObject *object;
+
+    if (program == NULL || global_object_id >= program->global_object_count || alignment == 0U ||
+        (alignment & (alignment - 1U)) != 0U) {
+        return false;
+    }
+    object = &program->global_objects[global_object_id];
+    if (alignment > object->explicit_alignment) {
+        object->explicit_alignment = alignment;
+    }
+    return true;
+}
+
 bool minic_c0_global_object_set_section(MinicC0Program *program,
                                         MinicGlobalObjectId global_object_id,
                                         const char *name,

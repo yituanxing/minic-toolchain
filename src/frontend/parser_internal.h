@@ -246,6 +246,7 @@ bool minic_parser_parse_extern_global_after_head(MinicParser *parser,
                                                  const char *section_name,
                                                  size_t section_name_length,
                                                  bool has_section,
+                                                 size_t explicit_alignment,
                                                  MinicSymbolVisibility visibility,
                                                  bool has_visibility);
 bool minic_parser_parse_pointer_member(MinicParser *parser,

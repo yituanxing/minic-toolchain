@@ -983,6 +983,7 @@ static bool merge_extern_object_declaration(MinicParser *parser,
                                             const char *section_name,
                                             size_t section_name_length,
                                             bool has_section,
+                                            size_t explicit_alignment,
                                             MinicSymbolVisibility visibility,
                                             bool has_visibility) {
     MinicGlobalObject *object;
@@ -1003,6 +1004,8 @@ static bool merge_extern_object_declaration(MinicParser *parser,
     }
     if ((has_section && !minic_c0_global_object_set_section(
                             parser->program, object_id, section_name, section_name_length)) ||
+        (explicit_alignment != 0U && !minic_c0_global_object_set_explicit_alignment(
+                                         parser->program, object_id, explicit_alignment)) ||
         (has_visibility &&
          !minic_c0_global_object_set_visibility(parser->program, object_id, visibility))) {
         minic_parser_error(parser, "conflicting extern object redeclaration attributes");
@@ -1018,6 +1021,7 @@ bool minic_parser_parse_extern_global_after_head(MinicParser *parser,
                                                  const char *section_name,
                                                  size_t section_name_length,
                                                  bool has_section,
+                                                 size_t explicit_alignment,
                                                  MinicSymbolVisibility visibility,
                                                  bool has_visibility) {
     bool first_declarator;
@@ -1088,6 +1092,7 @@ bool minic_parser_parse_extern_global_after_head(MinicParser *parser,
                                                  declarator_section_name,
                                                  declarator_section_name_length,
                                                  declarator_has_section,
+                                                 explicit_alignment,
                                                  visibility,
                                                  has_visibility)) {
                 return false;
@@ -1106,6 +1111,9 @@ bool minic_parser_parse_extern_global_after_head(MinicParser *parser,
                                                         object_id,
                                                         declarator_section_name,
                                                         declarator_section_name_length)) ||
+                   (explicit_alignment != 0U &&
+                    !minic_c0_global_object_set_explicit_alignment(
+                        parser->program, object_id, explicit_alignment)) ||
                    (has_visibility && !minic_c0_global_object_set_visibility(
                                           parser->program, object_id, visibility))) {
             if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
@@ -1151,6 +1159,7 @@ bool minic_parser_parse_extern_global(MinicParser *parser) {
                                                        section_name,
                                                        section_name_length,
                                                        has_section,
+                                                       0U,
                                                        MINIC_SYMBOL_VISIBILITY_DEFAULT,
                                                        false);
 }

@@ -116,6 +116,14 @@ static bool minic_riscv64_layout_globals(MinicC0Program *program) {
         if (!minic_riscv64_type_layout(program, object->type, &storage_size, &alignment)) {
             return false;
         }
+        if (object->explicit_alignment != 0U) {
+            if ((object->explicit_alignment & (object->explicit_alignment - 1U)) != 0U) {
+                return false;
+            }
+            if (object->explicit_alignment > alignment) {
+                alignment = object->explicit_alignment;
+            }
+        }
         object->storage_size = storage_size;
         object->alignment = alignment;
     }

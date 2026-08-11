@@ -164,11 +164,13 @@ static const MinicAttributeDescriptor minic_attribute_descriptors[] = {
     MINIC_ATTRIBUTE_ENTRY("aligned",
                           MINIC_ATTRIBUTE_ALIGNED,
                           MINIC_ATTRIBUTE_CLASS_LAYOUT,
-                          MINIC_ATTRIBUTE_TARGET_TYPE | MINIC_ATTRIBUTE_TARGET_FIELD),
+                          MINIC_ATTRIBUTE_TARGET_OBJECT | MINIC_ATTRIBUTE_TARGET_TYPE |
+                              MINIC_ATTRIBUTE_TARGET_FIELD),
     MINIC_ATTRIBUTE_ENTRY("__aligned__",
                           MINIC_ATTRIBUTE_ALIGNED,
                           MINIC_ATTRIBUTE_CLASS_LAYOUT,
-                          MINIC_ATTRIBUTE_TARGET_TYPE | MINIC_ATTRIBUTE_TARGET_FIELD),
+                          MINIC_ATTRIBUTE_TARGET_OBJECT | MINIC_ATTRIBUTE_TARGET_TYPE |
+                              MINIC_ATTRIBUTE_TARGET_FIELD),
 };
 
 const MinicAttributeDescriptor *minic_attribute_lookup(const char *name, size_t name_length) {
