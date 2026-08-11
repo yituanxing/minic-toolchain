@@ -7,14 +7,22 @@ fixture_path = root / "tests/compiler/c0/gnu_top_level_empty_declaration.c"
 runner_path = root / "tests/compiler/c0/run-gnu-top-level-empty-declaration.sh"
 
 parser = parser_path.read_text()
-old = """        if (parser.current.kind == MINIC_TOKEN_KW_STATIC_ASSERT) {\n            success = minic_parser_parse_static_assert_declaration(&parser);\n"""
-new = """        if (parser.current.kind == MINIC_TOKEN_SEMICOLON) {\n            success = minic_parser_advance(&parser);\n        } else if (parser.current.kind == MINIC_TOKEN_KW_STATIC_ASSERT) {\n            success = minic_parser_parse_static_assert_declaration(&parser);\n"""
+old = (
+    "        if (parser.current.kind == MINIC_TOKEN_KW_STATIC_ASSERT) {\n"
+    "            success = minic_parser_parse_static_assert_declaration(&parser);\n"
+)
+new = (
+    "        if (parser.current.kind == MINIC_TOKEN_SEMICOLON) {\n"
+    "            success = minic_parser_advance(&parser);\n"
+    "        } else if (parser.current.kind == MINIC_TOKEN_KW_STATIC_ASSERT) {\n"
+    "            success = minic_parser_parse_static_assert_declaration(&parser);\n"
+)
 if parser.count(old) != 1:
     raise SystemExit("top-level dispatch anchor mismatch")
 parser_path.write_text(parser.replace(old, new, 1))
 
 fixture_path.write_text(
-    """;\n"
+    ";\n"
     "static int first(void)\n"
     "{\n"
     "    return 11;\n"
@@ -35,7 +43,7 @@ fixture_path.write_text(
 )
 
 runner_path.write_text(
-    """#!/bin/sh\n"
+    "#!/bin/sh\n"
     "set -eu\n\n"
     "root=$(CDPATH= cd -- \"$(dirname -- \"$0\")/../../..\" && pwd)\n"
     "minic=${MINIC:-\"$root/build/debug/bin/minic\"}\n"
