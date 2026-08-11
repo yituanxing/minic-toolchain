@@ -35,5 +35,13 @@ if text.count(old_helper) != 1:
     raise SystemExit("cannot locate strict replace_once helper")
 text = text.replace(old_helper, new_helper, 1)
 
+# parse_unary names the already-parsed operand expression id `operand`.
+wrong_operand = 'minic_c0_expression_bit_field(parser->program, operand_id)'
+if text.count(wrong_operand) != 1:
+    raise SystemExit(f"expected one stale unary operand id, got {text.count(wrong_operand)}")
+text = text.replace(wrong_operand,
+                    'minic_c0_expression_bit_field(parser->program, operand)',
+                    1)
+
 path.write_text(text)
 runpy.run_path(str(path), run_name="__main__")
