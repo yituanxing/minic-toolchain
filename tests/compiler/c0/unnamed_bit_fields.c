@@ -18,6 +18,11 @@ struct bool_bits {
     char tail;
 };
 
+struct signed_bits {
+    int signed_three : 3;
+    char tail;
+};
+
 struct int_bits {
     unsigned int low : 10;
     unsigned int high : 12;
@@ -49,6 +54,10 @@ unsigned long bool_tail_offset(void) {
     return __builtin_offsetof(struct bool_bits, tail);
 }
 
+unsigned long signed_tail_offset(void) {
+    return __builtin_offsetof(struct signed_bits, tail);
+}
+
 unsigned long int_tail_offset(void) {
     return __builtin_offsetof(struct int_bits, tail);
 }
@@ -69,6 +78,10 @@ void write_bool_second(struct bool_bits *bits, int value) {
     bits->second = value;
 }
 
+int read_signed_three(struct signed_bits *bits) {
+    return bits->signed_three;
+}
+
 unsigned int read_int_high(struct int_bits *bits) {
     return bits->high;
 }
@@ -83,8 +96,9 @@ unsigned int increment_barrier_second(struct named_zero_barrier *bits) {
 
 int main(void) {
     return full_unit_tail_offset() == 8UL && zero_width_tail_offset() == 4UL &&
-                   bool_tail_offset() == 1UL && int_tail_offset() == 3UL &&
-                   short_boundary_tail_offset() == 4UL && named_zero_tail_offset() == 5UL
+                   bool_tail_offset() == 1UL && signed_tail_offset() == 4UL &&
+                   int_tail_offset() == 3UL && short_boundary_tail_offset() == 4UL &&
+                   named_zero_tail_offset() == 5UL
                ? 0
                : 1;
 }
