@@ -112,7 +112,7 @@ static bool parse_record_field_attributes(MinicParser *parser, size_t *explicit_
     if (parser == NULL || explicit_alignment == NULL) {
         return false;
     }
-    context.explicit_alignment = 0U;
+    context.explicit_alignment = *explicit_alignment;
     if (!minic_parser_parse_gnu_attribute_lists(parser, consume_record_field_attribute, &context)) {
         return false;
     }
@@ -164,8 +164,10 @@ static bool parse_record_bit_field_width(MinicParser *parser,
     return true;
 }
 
-static bool
-parse_record_field_declarator(MinicParser *parser, MinicRecordId record_id, MinicType base_type) {
+static bool parse_record_field_declarator(MinicParser *parser,
+                                          MinicRecordId record_id,
+                                          MinicType base_type,
+                                          size_t declaration_alignment) {
     MinicSourceSpan name_span;
     MinicType field_type;
     size_t element_count;
@@ -230,7 +232,7 @@ parse_record_field_declarator(MinicParser *parser, MinicRecordId record_id, Mini
     }
 
     element_count = 1U;
-    explicit_alignment = 0U;
+    explicit_alignment = declaration_alignment;
     is_array = false;
     is_flexible_array = false;
     is_zero_length_array = false;
@@ -399,6 +401,7 @@ static bool parse_record_suffix_attributes(MinicParser *parser,
 static bool parse_record_field(MinicParser *parser, MinicRecordId record_id) {
     MinicType base_type;
     const MinicRecord *record;
+    size_t declaration_alignment;
 
     record = minic_c0_program_record(parser->program, record_id);
     if (record == NULL) {
@@ -415,7 +418,15 @@ static bool parse_record_field(MinicParser *parser, MinicRecordId record_id) {
     if (!minic_parser_parse_type_specifiers(parser, &base_type)) {
         return false;
     }
+    declaration_alignment = 0U;
+    if (!parse_record_field_attributes(parser, &declaration_alignment)) {
+        return false;
+    }
     if (minic_type_is_record(base_type) && parser->current.kind == MINIC_TOKEN_SEMICOLON) {
+        if (declaration_alignment != 0U) {
+            minic_parser_error(parser, "GNU alignment on anonymous record members is unsupported");
+            return false;
+        }
         MinicRecord *mutable_record;
 
         if (!minic_parser_require_complete_object_type(
@@ -434,6 +445,10 @@ static bool parse_record_field(MinicParser *parser, MinicRecordId record_id) {
     if (parser->current.kind == MINIC_TOKEN_COLON) {
         size_t bit_width;
 
+        if (declaration_alignment != 0U) {
+            minic_parser_error(parser, "GNU alignment on unnamed bit-fields is unsupported");
+            return false;
+        }
         if (!parse_record_bit_field_width(parser, base_type, true, &bit_width) ||
             !minic_parser_expect(parser, MINIC_TOKEN_SEMICOLON, "expected ';' after bit-field") ||
             !minic_c0_record_add_unnamed_bit_field(
@@ -447,7 +462,7 @@ static bool parse_record_field(MinicParser *parser, MinicRecordId record_id) {
     }
 
     for (;;) {
-        if (!parse_record_field_declarator(parser, record_id, base_type)) {
+        if (!parse_record_field_declarator(parser, record_id, base_type, declaration_alignment)) {
             return false;
         }
         record = minic_c0_program_record(parser->program, record_id);
