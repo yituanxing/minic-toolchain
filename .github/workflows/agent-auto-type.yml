@@ -19,6 +19,21 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('tools/dev/agent_auto_type_patch.py')
+          text = path.read_text()
+          old = '''    return parser != NULL && parser->current.kind == MINIC_TOKEN_IDENTIFIER &&
+                     identifier_equals(parser, parser->current.span, "__auto_type", 11U);'''
+          new = '''    return parser != NULL && parser->current.kind == MINIC_TOKEN_IDENTIFIER &&
+                     minic_parser_span_length(parser->current.span) == 11U &&
+                     memcmp(parser->source + parser->current.span.begin.offset,
+                            "__auto_type",
+                            11U) == 0;'''
+          if text.count(old) != 1:
+              raise SystemExit('auto-type detector patch anchor mismatch')
+          path.write_text(text.replace(old, new, 1))
+          PY
           python3 tools/dev/agent_auto_type_patch.py
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
