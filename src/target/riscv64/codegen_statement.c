@@ -71,9 +71,8 @@ static bool minic_riscv64_emit_record_copy(FILE *file,
     target = minic_c0_program_expression(program, statement->target_expression);
     source = minic_c0_program_expression(program, statement->expression);
     if (target == NULL || source == NULL || target->value_category != MINIC_VALUE_LVALUE ||
-        source->value_category != MINIC_VALUE_LVALUE || minic_type_is_const(target->type) ||
-        !minic_type_is_record(target->type) || !minic_type_is_record(source->type) ||
-        target->type.record_id != source->type.record_id) {
+        minic_type_is_const(target->type) || !minic_type_is_record(target->type) ||
+        !minic_type_is_record(source->type) || target->type.record_id != source->type.record_id) {
         return false;
     }
     record = minic_c0_program_record(program, target->type.record_id);
@@ -84,7 +83,8 @@ static bool minic_riscv64_emit_record_copy(FILE *file,
     storage_size = record->storage_size;
     temporary_size = (storage_size + 15U) & ~(size_t)15U;
 
-    if (!minic_riscv64_emit_lvalue_address(file, program, function, statement->expression) ||
+    if (!minic_riscv64_emit_address_backed_record_value(
+            file, program, function, statement->expression) ||
         !minic_riscv64_emit_stack_allocate(file, temporary_size) ||
         fprintf(file, "  mv t2, a0\n  mv t3, sp\n") < 0) {
         return false;

@@ -591,6 +591,8 @@ bool minic_c0_global_object_set_section(MinicC0Program *program,
 
 const MinicExpression *minic_c0_program_expression(const MinicC0Program *program,
                                                    MinicExpressionId expression_id);
+bool minic_c0_record_value_is_address_backed(const MinicC0Program *program,
+                                             MinicExpressionId expression_id);
 bool minic_c0_assignment_compatible(const MinicC0Program *program,
                                     MinicType target_type,
                                     MinicExpressionId source_expression_id);

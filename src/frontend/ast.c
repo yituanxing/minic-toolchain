@@ -902,6 +902,39 @@ const MinicExpression *minic_c0_program_expression(const MinicC0Program *program
     return &program->expressions[expression_id];
 }
 
+bool minic_c0_record_value_is_address_backed(const MinicC0Program *program,
+                                             MinicExpressionId expression_id) {
+    size_t remaining;
+
+    if (program == NULL) {
+        return false;
+    }
+    remaining = program->expression_count + 1U;
+    while (remaining > 0U) {
+        const MinicExpression *expression;
+        MinicExpressionId result_id;
+
+        expression = minic_c0_program_expression(program, expression_id);
+        if (expression == NULL || !minic_type_is_record(expression->type)) {
+            return false;
+        }
+        if (expression->value_category == MINIC_VALUE_LVALUE) {
+            return true;
+        }
+        if (expression->value_category != MINIC_VALUE_RVALUE ||
+            expression->kind != MINIC_EXPRESSION_STATEMENT) {
+            return false;
+        }
+        result_id = expression->value.statement_expression.result;
+        if (result_id == MINIC_EXPRESSION_INVALID || result_id >= expression_id) {
+            return false;
+        }
+        expression_id = result_id;
+        remaining -= 1U;
+    }
+    return false;
+}
+
 static bool expression_is_null_pointer_value(const MinicC0Program *program,
                                              MinicExpressionId expression_id) {
     size_t remaining;

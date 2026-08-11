@@ -485,6 +485,26 @@ bool minic_riscv64_emit_lvalue_address(FILE *file,
     }
 }
 
+bool minic_riscv64_emit_address_backed_record_value(FILE *file,
+                                                    const MinicC0Program *program,
+                                                    const MinicFunction *function,
+                                                    MinicExpressionId expression_id) {
+    const MinicExpression *expression;
+
+    if (!minic_c0_record_value_is_address_backed(program, expression_id)) {
+        return false;
+    }
+    expression = minic_c0_program_expression(program, expression_id);
+    if (expression == NULL) {
+        return false;
+    }
+    if (expression->value_category == MINIC_VALUE_LVALUE) {
+        return minic_riscv64_emit_lvalue_address(file, program, function, expression_id);
+    }
+    return expression->kind == MINIC_EXPRESSION_STATEMENT &&
+           minic_riscv64_emit_expression(file, program, function, expression_id);
+}
+
 static bool minic_riscv64_emit_record_assignment_expression(FILE *file,
                                                             const MinicC0Program *program,
                                                             const MinicFunction *function,
@@ -499,9 +519,8 @@ static bool minic_riscv64_emit_record_assignment_expression(FILE *file,
     target = minic_c0_program_expression(program, expression->value.binary.left);
     source = minic_c0_program_expression(program, expression->value.binary.right);
     if (target == NULL || source == NULL || target->value_category != MINIC_VALUE_LVALUE ||
-        source->value_category != MINIC_VALUE_LVALUE || minic_type_is_const(target->type) ||
-        !minic_type_is_record(target->type) || !minic_type_is_record(source->type) ||
-        target->type.record_id != source->type.record_id ||
+        minic_type_is_const(target->type) || !minic_type_is_record(target->type) ||
+        !minic_type_is_record(source->type) || target->type.record_id != source->type.record_id ||
         !minic_type_equal(expression->type, target->type)) {
         return false;
     }
@@ -513,7 +532,7 @@ static bool minic_riscv64_emit_record_assignment_expression(FILE *file,
     storage_size = record->storage_size;
     temporary_size = (storage_size + 15U) & ~(size_t)15U;
 
-    if (!minic_riscv64_emit_lvalue_address(
+    if (!minic_riscv64_emit_address_backed_record_value(
             file, program, function, expression->value.binary.right) ||
         !minic_riscv64_emit_stack_allocate(file, temporary_size) ||
         fprintf(file, "  mv t2, a0\n  mv t3, sp\n") < 0) {
@@ -1389,6 +1408,18 @@ bool minic_riscv64_emit_expression(FILE *file,
         }
         if (expression->value.statement_expression.result == MINIC_EXPRESSION_INVALID) {
             return minic_type_is_void(expression->type);
+        }
+        if (minic_type_is_record(expression->type)) {
+            const MinicExpression *result;
+
+            result =
+                minic_c0_program_expression(program, expression->value.statement_expression.result);
+            if (result == NULL || !minic_type_is_record(result->type) ||
+                result->type.record_id != expression->type.record_id) {
+                return false;
+            }
+            return minic_riscv64_emit_address_backed_record_value(
+                file, program, function, expression->value.statement_expression.result);
         }
         return minic_riscv64_emit_expression(
             file, program, function, expression->value.statement_expression.result);

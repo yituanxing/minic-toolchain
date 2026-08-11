@@ -552,11 +552,13 @@ parse_local_declarator(MinicParser *parser, MinicType base_type, bool is_registe
                     return false;
                 }
                 source = minic_c0_program_expression(parser->program, source_id);
-                if (source == NULL || source->value_category != MINIC_VALUE_LVALUE ||
+                if (source == NULL ||
+                    !minic_c0_record_value_is_address_backed(parser->program, source_id) ||
                     !minic_type_is_record(source->type) ||
                     source->type.record_id != local.type.record_id) {
                     minic_parser_error(
-                        parser, "record local initializer requires a matching record lvalue");
+                        parser,
+                        "record local initializer requires a matching address-backed record value");
                     return false;
                 }
                 return add_record_copy_assignments(parser, target_id, source_id, source->span);
@@ -1296,10 +1298,11 @@ static bool add_record_copy_assignments(MinicParser *parser,
     target = minic_c0_program_expression(parser->program, target_id);
     source = minic_c0_program_expression(parser->program, source_id);
     if (target == NULL || source == NULL || target->value_category != MINIC_VALUE_LVALUE ||
-        source->value_category != MINIC_VALUE_LVALUE || !minic_type_is_record(target->type) ||
-        !minic_type_is_record(source->type) || target->type.record_id != source->type.record_id ||
-        minic_type_is_const(target->type)) {
-        minic_parser_error(parser, "record assignment requires matching modifiable record lvalues");
+        !minic_c0_record_value_is_address_backed(parser->program, source_id) ||
+        !minic_type_is_record(target->type) || !minic_type_is_record(source->type) ||
+        target->type.record_id != source->type.record_id || minic_type_is_const(target->type)) {
+        minic_parser_error(parser,
+                           "record assignment requires matching address-backed record values");
         return false;
     }
     record = minic_c0_program_record(parser->program, target->type.record_id);
