@@ -16,10 +16,21 @@ static bool function_identifier_is(const MinicParser *parser, const char *name) 
            memcmp(parser->source + parser->current.span.begin.offset, name, name_length) == 0;
 }
 
+static bool decode_deferred_section_argument(MinicParser *parser,
+                                             const MinicParsedAttribute *attribute,
+                                             char *buffer,
+                                             size_t capacity,
+                                             size_t *length,
+                                             bool *has_section);
+
 typedef struct MinicFunctionAttributeContext {
     bool allow_gnu_inline;
     bool is_internal;
     bool is_inline;
+    char *section_name;
+    size_t section_capacity;
+    size_t *section_name_length;
+    bool *has_section;
     const char *unsupported_message;
 } MinicFunctionAttributeContext;
 
@@ -45,6 +56,23 @@ static bool consume_function_attribute(MinicParser *parser,
         !minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_FUNCTION)) {
         minic_parser_error(parser, "%s", context->unsupported_message);
         return false;
+    }
+
+    if (descriptor->kind == MINIC_ATTRIBUTE_SECTION) {
+        if (context->section_name == NULL || context->section_name_length == NULL ||
+            context->has_section == NULL || context->section_capacity == 0U ||
+            !decode_deferred_section_argument(parser,
+                                              attribute,
+                                              context->section_name,
+                                              context->section_capacity,
+                                              context->section_name_length,
+                                              context->has_section)) {
+            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                minic_parser_error(parser, "%s", context->unsupported_message);
+            }
+            return false;
+        }
+        return true;
     }
 
     if (descriptor->kind == MINIC_ATTRIBUTE_GNU_INLINE) {
@@ -80,6 +108,10 @@ static bool parse_function_attribute_lists(MinicParser *parser,
     context.allow_gnu_inline = allow_gnu_inline;
     context.is_internal = is_internal;
     context.is_inline = is_inline;
+    context.section_name = NULL;
+    context.section_capacity = 0U;
+    context.section_name_length = NULL;
+    context.has_section = NULL;
     context.unsupported_message = unsupported_message;
     return minic_parser_parse_gnu_attribute_lists(parser, consume_function_attribute, &context);
 }
@@ -89,6 +121,10 @@ static bool apply_function_attribute_list(MinicParser *parser,
                                           bool allow_gnu_inline,
                                           bool is_internal,
                                           bool is_inline,
+                                          char *section_name,
+                                          size_t section_capacity,
+                                          size_t *section_name_length,
+                                          bool *has_section,
                                           const char *unsupported_message) {
     MinicFunctionAttributeContext context;
     size_t index;
@@ -99,6 +135,10 @@ static bool apply_function_attribute_list(MinicParser *parser,
     context.allow_gnu_inline = allow_gnu_inline;
     context.is_internal = is_internal;
     context.is_inline = is_inline;
+    context.section_name = section_name;
+    context.section_capacity = section_capacity;
+    context.section_name_length = section_name_length;
+    context.has_section = has_section;
     context.unsupported_message = unsupported_message;
     for (index = 0U; index < attributes->count; ++index) {
         if (!consume_function_attribute(parser, &attributes->values[index], &context)) {
@@ -1396,6 +1436,10 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
             true,
             is_internal,
             is_inline,
+            section_name,
+            sizeof(section_name),
+            &section_name_length,
+            &has_section,
             "unsupported GNU prefix function attribute; semantic and ABI-affecting attributes must "
             "be implemented explicitly")) {
         return false;

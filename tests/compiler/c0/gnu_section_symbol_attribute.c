@@ -25,6 +25,19 @@ void __attribute__((__section__(".probe.text"))) placed_function(void);
 void placed_function(void) {
 }
 
+/* Linux init/main.i shape: symbol section before the return type, optimization
+ * metadata beside it, and function metadata after the declarator. */
+__attribute__((__section__(".probe.prefix.text"))) __attribute__((__cold__))
+void *prefix_placed_function(int nid, unsigned long size, unsigned long mask)
+    __attribute__((__alloc_size__(2))) __attribute__((__malloc__));
+
+void *prefix_placed_function(int nid, unsigned long size, unsigned long mask) {
+    if (nid || size || mask) {
+        return (void *)0;
+    }
+    return (void *)0;
+}
+
 int main(void) {
     placed_function();
     return placed_data[0] == 'x' && suffix_first == 7 && suffix_second == 9 &&
