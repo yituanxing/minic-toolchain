@@ -532,15 +532,13 @@ static bool parse_function_pointer_parameter_declarator(MinicParser *parser,
 static bool parse_function_signature_type_name(MinicParser *parser, MinicType *type) {
     MinicType base_type;
 
-    if (parser == NULL || type == NULL || !minic_parser_parse_type_specifiers(parser, &base_type) ||
-        !minic_parser_parse_pointer_declarator(parser, base_type, type)) {
-        return false;
-    }
-    if (minic_type_is_record(*type)) {
-        return minic_parser_require_complete_object_type(
-            parser, *type, "incomplete record type requires pointer declarator");
-    }
-    return true;
+    /* A function declaration may preserve an incomplete record/enum by value in
+     * its signature. Completeness becomes mandatory only when a definition
+     * materializes the return/parameter ABI or when ordinary object storage is
+     * created. Keep this parser about signature identity, not storage. */
+    return parser != NULL && type != NULL &&
+           minic_parser_parse_type_specifiers(parser, &base_type) &&
+           minic_parser_parse_pointer_declarator(parser, base_type, type);
 }
 
 bool minic_parser_parse_parameter_list(MinicParser *parser,
@@ -1399,10 +1397,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
             is_internal,
             is_inline,
             "unsupported GNU prefix function attribute; semantic and ABI-affecting attributes must "
-            "be implemented explicitly") ||
-        (minic_type_is_record(return_type) &&
-         !minic_parser_require_complete_object_type(
-             parser, return_type, "incomplete record type requires pointer declarator"))) {
+            "be implemented explicitly")) {
         return false;
     }
 
@@ -1506,11 +1501,12 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
         size_t parameter_index;
 
         for (parameter_index = 0U; parameter_index < parameter_count; ++parameter_index) {
-            if (minic_type_is_enum(parameter_types[parameter_index]) &&
+            if ((minic_type_is_record(parameter_types[parameter_index]) ||
+                 minic_type_is_enum(parameter_types[parameter_index])) &&
                 !minic_parser_require_complete_object_type(
                     parser,
                     parameter_types[parameter_index],
-                    "function definition requires complete enum parameter types")) {
+                    "function definition requires complete object parameter types")) {
                 return false;
             }
         }
