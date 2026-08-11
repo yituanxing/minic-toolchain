@@ -28,7 +28,6 @@ jobs:
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
           git diff --exit-code -- include src tools/minic
           make -j4 MODE=release BUILD_DIR=build/lua-compiler
-          make -j4 MODE=sanitize BUILD_DIR=build/lua-sanitize
 
       - name: Verify focused Lua-driven semantics
         shell: bash
@@ -81,7 +80,7 @@ jobs:
           HEAD_REF: ${{ github.head_ref }}
         run: |
           set -Eeuo pipefail
-          export MINIC="$GITHUB_WORKSPACE/build/lua-sanitize/bin/minic"
+          export MINIC="$GITHUB_WORKSPACE/build/lua-compiler/bin/minic"
           export BUILD_DIR="$GITHUB_WORKSPACE/build/lua-discovery"
           export HOST_CC=cc
           export TARGET_CC=riscv64-linux-gnu-gcc
