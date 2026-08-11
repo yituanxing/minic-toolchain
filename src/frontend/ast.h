@@ -178,6 +178,14 @@ typedef struct MinicExpression {
     } value;
 } MinicExpression;
 
+typedef struct MinicArrayObjectInfo {
+    MinicType element_type;
+    size_t element_count;
+    bool is_incomplete;
+    bool is_zero_length;
+    bool has_materialized_type;
+} MinicArrayObjectInfo;
+
 typedef struct MinicLocal {
     MinicSourceSpan name_span;
     MinicType type;
@@ -602,6 +610,9 @@ bool minic_c0_global_object_set_explicit_alignment(MinicC0Program *program,
 
 const MinicExpression *minic_c0_program_expression(const MinicC0Program *program,
                                                    MinicExpressionId expression_id);
+bool minic_c0_expression_array_object_info(const MinicC0Program *program,
+                                           const MinicExpression *expression,
+                                           MinicArrayObjectInfo *info);
 const MinicRecordField *minic_c0_expression_bit_field(const MinicC0Program *program,
                                                       MinicExpressionId expression_id);
 bool minic_c0_record_value_is_address_backed(const MinicC0Program *program,

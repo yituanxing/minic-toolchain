@@ -337,24 +337,31 @@ static bool verify_binary_type(const MinicC0Program *program,
            verifier_pointer_arithmetic_pointee_allowed(program, pointee_type);
 }
 
+static bool array_object_type_matches(const MinicC0Program *program,
+                                      const MinicArrayObjectInfo *info,
+                                      MinicType array_type) {
+    const MinicArrayType *materialized;
+
+    if (program == NULL || info == NULL || !minic_type_is_array(array_type) ||
+        info->is_zero_length) {
+        return false;
+    }
+    materialized = minic_c0_program_array_type(program, array_type.array_type_id);
+    if (materialized == NULL || !minic_type_equal(materialized->element_type, info->element_type)) {
+        return false;
+    }
+    return info->is_incomplete ? materialized->element_count == 0U
+                               : materialized->element_count == info->element_count;
+}
+
 static bool verify_subscript_type(const MinicC0Program *program,
                                   const MinicExpression *base,
                                   MinicType result_type) {
+    MinicArrayObjectInfo array_info;
     MinicType pointee_type;
 
-    if (base->kind == MINIC_EXPRESSION_LOCAL) {
-        const MinicLocal *local;
-
-        local = minic_c0_program_local(program, base->value.local_id);
-        if (local != NULL && local->is_array) {
-            return minic_type_equal(local->type, result_type);
-        }
-    }
-    if (minic_type_is_array(base->type)) {
-        const MinicArrayType *array_type;
-
-        array_type = minic_c0_program_array_type(program, base->type.array_type_id);
-        return array_type != NULL && minic_type_equal(array_type->element_type, result_type);
+    if (minic_c0_expression_array_object_info(program, base, &array_info)) {
+        return minic_type_equal(array_info.element_type, result_type);
     }
     if (minic_type_pointee(base->type, &pointee_type)) {
         return minic_type_equal(pointee_type, result_type);
@@ -529,9 +536,18 @@ static bool verify_expression(const MinicC0Program *program,
             return minic_type_pointee(expression->type, &pointee_type) &&
                    minic_type_equal(pointee_type, operand->type);
         }
-        return operand->value_category == MINIC_VALUE_LVALUE &&
-               minic_type_pointee(expression->type, &pointee_type) &&
-               minic_type_equal(pointee_type, operand->type);
+        if (operand->value_category != MINIC_VALUE_LVALUE ||
+            !minic_type_pointee(expression->type, &pointee_type)) {
+            return false;
+        }
+        {
+            MinicArrayObjectInfo array_info;
+
+            if (minic_c0_expression_array_object_info(program, operand, &array_info)) {
+                return array_object_type_matches(program, &array_info, pointee_type);
+            }
+        }
+        return minic_type_equal(pointee_type, operand->type);
     }
     case MINIC_EXPRESSION_DEREFERENCE: {
         MinicType pointee_type;
@@ -594,11 +610,6 @@ static bool verify_expression(const MinicC0Program *program,
             !minic_type_add_const(expected_type, &expected_type)) {
             return false;
         }
-        if (field->is_array) {
-            return expression->value_category == MINIC_VALUE_RVALUE &&
-                   minic_type_pointer_to(expected_type, &expected_type) &&
-                   minic_type_equal(expression->type, expected_type);
-        }
         return expression->value_category == MINIC_VALUE_LVALUE &&
                minic_type_equal(expression->type, expected_type);
     }
@@ -613,7 +624,8 @@ static bool verify_expression(const MinicC0Program *program,
         left = expression_before(program, expression->value.binary.left, expression_index);
         right = expression_before(program, expression->value.binary.right, expression_index);
         if (left == NULL || right == NULL || left->value_category != MINIC_VALUE_LVALUE ||
-            minic_type_is_const(left->type) || minic_type_is_array(left->type) ||
+            minic_type_is_const(left->type) ||
+            minic_c0_expression_array_object_info(program, left, NULL) ||
             minic_type_is_function(left->type) ||
             expression->value_category != MINIC_VALUE_RVALUE ||
             !minic_type_equal(expression->type, left->type)) {
@@ -635,7 +647,8 @@ static bool verify_expression(const MinicC0Program *program,
         operator_kind = expression->value.binary.operator_kind;
         if (left == NULL || right == NULL || left->value_category != MINIC_VALUE_LVALUE ||
             expression->value_category != MINIC_VALUE_RVALUE ||
-            !minic_type_equal(expression->type, left->type) || minic_type_is_const(left->type)) {
+            !minic_type_equal(expression->type, left->type) || minic_type_is_const(left->type) ||
+            minic_c0_expression_array_object_info(program, left, NULL)) {
             return false;
         }
         if (minic_type_is_pointer(left->type)) {
@@ -987,20 +1000,84 @@ static bool verify_program_storage(const MinicC0Program *program) {
                             program->global_object_capacity);
 }
 
-static bool incomplete_array_is_extern_object_type(const MinicC0Program *program,
-                                                   MinicArrayTypeId array_type_id) {
-    size_t object_index;
+static bool
+type_owns_array_descriptor(MinicType type, MinicArrayTypeId array_type_id, bool require_pointer) {
+    return type.base_kind == MINIC_TYPE_BASE_ARRAY && type.array_type_id == array_type_id &&
+           (!require_pointer || type.pointer_depth != 0U);
+}
+
+static bool incomplete_array_has_semantic_owner(const MinicC0Program *program,
+                                                MinicArrayTypeId array_type_id) {
+    size_t index;
 
     if (program == NULL) {
         return false;
     }
-    for (object_index = 0U; object_index < program->global_object_count; ++object_index) {
+    for (index = 0U; index < program->expression_count; ++index) {
+        if (type_owns_array_descriptor(program->expressions[index].type, array_type_id, false)) {
+            return true;
+        }
+    }
+    for (index = 0U; index < program->type_alias_count; ++index) {
+        if (type_owns_array_descriptor(program->type_aliases[index].type, array_type_id, false)) {
+            return true;
+        }
+    }
+    for (index = 0U; index < program->global_object_count; ++index) {
         const MinicGlobalObject *object;
 
-        object = &program->global_objects[object_index];
-        if (object->is_extern && minic_type_is_array(object->type) &&
-            object->type.array_type_id == array_type_id) {
+        object = &program->global_objects[index];
+        if ((object->is_extern && minic_type_is_array(object->type) &&
+             object->type.array_type_id == array_type_id) ||
+            type_owns_array_descriptor(object->type, array_type_id, true)) {
             return true;
+        }
+    }
+    for (index = 0U; index < program->local_count; ++index) {
+        if (type_owns_array_descriptor(program->locals[index].type, array_type_id, true)) {
+            return true;
+        }
+    }
+    for (index = 0U; index < program->record_count; ++index) {
+        const MinicRecord *record;
+        size_t field_index;
+
+        record = &program->records[index];
+        for (field_index = 0U; field_index < record->field_count; ++field_index) {
+            if (type_owns_array_descriptor(record->fields[field_index].type, array_type_id, true)) {
+                return true;
+            }
+        }
+    }
+    for (index = 0U; index < program->function_count; ++index) {
+        const MinicFunction *function;
+        size_t parameter_index;
+
+        function = &program->functions[index];
+        if (type_owns_array_descriptor(function->return_type, array_type_id, true)) {
+            return true;
+        }
+        for (parameter_index = 0U; parameter_index < function->parameter_count; ++parameter_index) {
+            if (type_owns_array_descriptor(
+                    function->parameter_types[parameter_index], array_type_id, true)) {
+                return true;
+            }
+        }
+    }
+    for (index = 0U; index < program->function_type_count; ++index) {
+        const MinicFunctionType *function_type;
+        size_t parameter_index;
+
+        function_type = &program->function_types[index];
+        if (type_owns_array_descriptor(function_type->return_type, array_type_id, true)) {
+            return true;
+        }
+        for (parameter_index = 0U; parameter_index < function_type->parameter_count;
+             ++parameter_index) {
+            if (type_owns_array_descriptor(
+                    function_type->parameter_types[parameter_index], array_type_id, true)) {
+                return true;
+            }
         }
     }
     return false;
@@ -1021,7 +1098,7 @@ bool minic_c0_program_verify_target(const MinicC0Program *program,
 
         array_type = &program->array_types[index];
         if ((array_type->element_count == 0U &&
-             !incomplete_array_is_extern_object_type(program, index)) ||
+             !incomplete_array_has_semantic_owner(program, index)) ||
             !type_is_valid(program, array_type->element_type) ||
             minic_type_is_function(array_type->element_type)) {
             return false;

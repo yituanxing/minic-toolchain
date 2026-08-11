@@ -279,6 +279,9 @@ bool minic_parser_apply_fixed_call_argument_conversion(MinicParser *parser,
 bool minic_parser_apply_array_decay(MinicParser *parser,
                                     MinicExpressionId input_id,
                                     MinicExpressionId *expression_id);
+bool minic_parser_materialize_array_object_type(MinicParser *parser,
+                                                MinicExpressionId expression_id,
+                                                MinicType *array_type);
 bool minic_parser_parse_postfix(MinicParser *parser,
                                 MinicExpressionId base_id,
                                 MinicExpressionId *expression_id);

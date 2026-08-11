@@ -285,6 +285,13 @@ bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type) {
                 return false;
             }
             parsed_type = operand->type;
+            if (minic_c0_expression_array_object_info(parser->program, operand, NULL) &&
+                !minic_parser_materialize_array_object_type(parser, operand_id, &parsed_type)) {
+                if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                    minic_parser_error(parser, "cannot preserve GNU typeof array operand");
+                }
+                return false;
+            }
         }
         if (!minic_parser_expect(
                 parser, MINIC_TOKEN_RPAREN, "expected ')' after GNU typeof operand")) {

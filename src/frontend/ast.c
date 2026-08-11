@@ -912,6 +912,81 @@ const MinicExpression *minic_c0_program_expression(const MinicC0Program *program
     return &program->expressions[expression_id];
 }
 
+bool minic_c0_expression_array_object_info(const MinicC0Program *program,
+                                           const MinicExpression *expression,
+                                           MinicArrayObjectInfo *info) {
+    MinicArrayObjectInfo resolved;
+
+    if (program == NULL || expression == NULL || expression->value_category != MINIC_VALUE_LVALUE) {
+        return false;
+    }
+    (void)memset(&resolved, 0, sizeof(resolved));
+    if (expression->kind == MINIC_EXPRESSION_LOCAL) {
+        const MinicLocal *local;
+
+        local = minic_c0_program_local(program, expression->value.local_id);
+        if (local != NULL && local->is_array) {
+            resolved.element_type = expression->type;
+            resolved.element_count = local->element_count;
+        } else if (!minic_type_is_array(expression->type)) {
+            return false;
+        } else {
+            const MinicArrayType *array_type;
+
+            array_type = minic_c0_program_array_type(program, expression->type.array_type_id);
+            if (array_type == NULL) {
+                return false;
+            }
+            resolved.element_type = array_type->element_type;
+            resolved.element_count = array_type->element_count;
+            resolved.is_incomplete = array_type->element_count == 0U;
+            resolved.has_materialized_type = true;
+        }
+    } else if (expression->kind == MINIC_EXPRESSION_MEMBER) {
+        const MinicRecord *record;
+        const MinicRecordField *field;
+
+        record = minic_c0_program_record(program, expression->value.member.record_id);
+        field = minic_c0_record_field(record, expression->value.member.field_index);
+        if (field != NULL && field->is_array) {
+            resolved.element_type = expression->type;
+            resolved.element_count = field->element_count;
+            resolved.is_incomplete = field->is_flexible_array;
+            resolved.is_zero_length = field->is_zero_length_array;
+        } else if (!minic_type_is_array(expression->type)) {
+            return false;
+        } else {
+            const MinicArrayType *array_type;
+
+            array_type = minic_c0_program_array_type(program, expression->type.array_type_id);
+            if (array_type == NULL) {
+                return false;
+            }
+            resolved.element_type = array_type->element_type;
+            resolved.element_count = array_type->element_count;
+            resolved.is_incomplete = array_type->element_count == 0U;
+            resolved.has_materialized_type = true;
+        }
+    } else if (minic_type_is_array(expression->type)) {
+        const MinicArrayType *array_type;
+
+        array_type = minic_c0_program_array_type(program, expression->type.array_type_id);
+        if (array_type == NULL) {
+            return false;
+        }
+        resolved.element_type = array_type->element_type;
+        resolved.element_count = array_type->element_count;
+        resolved.is_incomplete = array_type->element_count == 0U;
+        resolved.has_materialized_type = true;
+    } else {
+        return false;
+    }
+    if (info != NULL) {
+        *info = resolved;
+    }
+    return true;
+}
+
 const MinicRecordField *minic_c0_expression_bit_field(const MinicC0Program *program,
                                                       MinicExpressionId expression_id) {
     const MinicExpression *expression;

@@ -105,16 +105,8 @@ static bool add_pointer_record_field(MinicParser *parser,
     member_expression.value.member.base = pointer_base_id;
     member_expression.value.member.record_id = record_id;
     member_expression.value.member.field_index = field_index;
-    if (field->is_array) {
-        if (!minic_type_pointer_to(member_type, &member_expression.type)) {
-            minic_parser_error(parser, "record array member pointer depth is unsupported");
-            return false;
-        }
-        member_expression.value_category = MINIC_VALUE_RVALUE;
-    } else {
-        member_expression.type = member_type;
-        member_expression.value_category = MINIC_VALUE_LVALUE;
-    }
+    member_expression.type = member_type;
+    member_expression.value_category = MINIC_VALUE_LVALUE;
     return minic_parser_add_expression(parser, &member_expression, expression_id);
 }
 

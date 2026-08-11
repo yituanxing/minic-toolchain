@@ -1476,18 +1476,6 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
     return false;
 }
 
-static bool local_array_without_array_type(const MinicParser *parser,
-                                           const MinicExpression *expression) {
-    const MinicLocal *local;
-
-    if (expression == NULL || expression->kind != MINIC_EXPRESSION_LOCAL ||
-        minic_type_is_array(expression->type)) {
-        return false;
-    }
-    local = minic_c0_program_local(parser->program, expression->value.local_id);
-    return local != NULL && local->is_array;
-}
-
 static bool current_is_sizeof(const MinicParser *parser) {
     return parser->current.kind == MINIC_TOKEN_KW_SIZEOF;
 }
@@ -1550,16 +1538,12 @@ static bool parse_sizeof(MinicParser *parser, MinicExpressionId *expression_id) 
             return false;
         }
         measured_type = operand->type;
-        if (local_array_without_array_type(parser, operand)) {
-            const MinicLocal *local;
-
-            local = minic_c0_program_local(parser->program, operand->value.local_id);
-            if (local == NULL ||
-                !minic_c0_program_add_array_type(
-                    parser->program, local->type, local->element_count, &measured_type)) {
-                minic_parser_error(parser, "cannot preserve local array type for sizeof");
-                return false;
+        if (minic_c0_expression_array_object_info(parser->program, operand, NULL) &&
+            !minic_parser_materialize_array_object_type(parser, operand_id, &measured_type)) {
+            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                minic_parser_error(parser, "cannot preserve array object type for sizeof");
             }
+            return false;
         }
         end = operand->span.end;
     }
@@ -1669,7 +1653,8 @@ static bool parse_unary(MinicParser *parser, MinicExpressionId *expression_id, b
         MinicType pointee_type;
 
         if (operand_expression->value_category != MINIC_VALUE_LVALUE ||
-            minic_type_is_const(operand_expression->type)) {
+            minic_type_is_const(operand_expression->type) ||
+            minic_c0_expression_array_object_info(parser->program, operand_expression, NULL)) {
             minic_parser_error(parser, "prefix update requires a modifiable scalar lvalue");
             return false;
         }
@@ -1704,11 +1689,18 @@ static bool parse_unary(MinicParser *parser, MinicExpressionId *expression_id, b
                 minic_parser_error(parser, "cannot form pointer to function designator");
                 return false;
             }
-        } else {
-            if (local_array_without_array_type(parser, operand_expression)) {
-                minic_parser_error(parser, "address-of local array object is not supported yet");
+        } else if (minic_c0_expression_array_object_info(
+                       parser->program, operand_expression, NULL)) {
+            MinicType array_type;
+
+            if (!minic_parser_materialize_array_object_type(parser, operand, &array_type) ||
+                !minic_type_pointer_to(array_type, &expression.type)) {
+                if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                    minic_parser_error(parser, "cannot form pointer to array object");
+                }
                 return false;
             }
+        } else {
             if (minic_c0_expression_bit_field(parser->program, operand) != NULL) {
                 minic_parser_error(parser, "cannot take the address of a bit-field");
                 return false;
@@ -2247,7 +2239,7 @@ static bool parse_expression_internal(MinicParser *parser,
         target_expression = minic_c0_program_expression(parser->program, left);
         if (target_expression == NULL || target_expression->value_category != MINIC_VALUE_LVALUE ||
             minic_type_is_const(target_expression->type) ||
-            minic_type_is_array(target_expression->type) ||
+            minic_c0_expression_array_object_info(parser->program, target_expression, NULL) ||
             minic_type_is_function(target_expression->type) ||
             minic_type_is_record(target_expression->type)) {
             minic_parser_error(
@@ -2326,7 +2318,7 @@ static bool parse_expression_internal(MinicParser *parser,
         target_expression = minic_c0_program_expression(parser->program, left);
         if (target_expression == NULL || target_expression->value_category != MINIC_VALUE_LVALUE ||
             minic_type_is_const(target_expression->type) ||
-            minic_type_is_array(target_expression->type) ||
+            minic_c0_expression_array_object_info(parser->program, target_expression, NULL) ||
             minic_type_is_function(target_expression->type)) {
             minic_parser_error(parser, "assignment expression requires a modifiable object lvalue");
             return false;

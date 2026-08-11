@@ -22,6 +22,7 @@ sh tests/compiler/c0/run-gnu-static-local-implicit-zero.sh
 sh tests/compiler/c0/run-gnu-top-level-empty-declaration.sh
 sh tests/compiler/c0/run-gnu-object-alignment-attribute.sh
 sh tests/compiler/c0/run-gnu-auto-type-local.sh
+sh tests/compiler/c0/run-gnu-array-object-identity.sh
 sh tests/compiler/c0/run-gnu-local-label-address.sh
 sh tests/compiler/c0/run-gnu-inline-asm-fence.sh
 sh tests/compiler/c0/run-gnu-typeof-local-declaration.sh

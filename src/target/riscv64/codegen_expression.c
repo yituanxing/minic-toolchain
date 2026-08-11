@@ -517,40 +517,11 @@ static bool minic_riscv64_emit_subscript_address(FILE *file,
         return false;
     }
 
-    base_is_array_object = false;
-    if (base->kind == MINIC_EXPRESSION_LOCAL && base->value_category == MINIC_VALUE_LVALUE) {
-        const MinicLocal *local;
+    {
+        MinicArrayObjectInfo array_info;
 
-        local = minic_c0_program_local(program, base->value.local_id);
-        base_is_array_object = local != NULL && local->is_array;
-        if (base_is_array_object && !minic_type_equal(local->type, expression->type)) {
-            return false;
-        }
-    } else if (base->kind == MINIC_EXPRESSION_GLOBAL_OBJECT &&
-               base->value_category == MINIC_VALUE_LVALUE) {
-        const MinicGlobalObject *object;
-
-        object = minic_c0_program_global_object(program, base->value.global_object_id);
-        if (object == NULL) {
-            return false;
-        }
-        if (minic_type_is_array(object->type)) {
-            const MinicArrayType *array_type;
-
-            array_type = minic_c0_program_array_type(program, object->type.array_type_id);
-            base_is_array_object = array_type != NULL;
-            if (!base_is_array_object ||
-                !minic_type_equal(array_type->element_type, expression->type)) {
-                return false;
-            }
-        }
-    } else if (base->value_category == MINIC_VALUE_LVALUE && minic_type_is_array(base->type)) {
-        const MinicArrayType *array_type;
-
-        array_type = minic_c0_program_array_type(program, base->type.array_type_id);
-        base_is_array_object = array_type != NULL;
-        if (!base_is_array_object ||
-            !minic_type_equal(array_type->element_type, expression->type)) {
+        base_is_array_object = minic_c0_expression_array_object_info(program, base, &array_info);
+        if (base_is_array_object && !minic_type_equal(array_info.element_type, expression->type)) {
             return false;
         }
     }
@@ -1173,7 +1144,7 @@ bool minic_riscv64_emit_expression(FILE *file,
             return false;
         }
         if (field->is_array) {
-            return minic_type_is_pointer(expression->type);
+            return expression->value_category == MINIC_VALUE_LVALUE;
         }
         return minic_riscv64_emit_lvalue_load_from_address(
             file, program, expression_id, expression->type, "a0", "a0");
