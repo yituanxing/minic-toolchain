@@ -18,6 +18,7 @@ typedef size_t MinicEnumeratorId;
 typedef size_t MinicGlobalObjectId;
 typedef size_t MinicFixedRegisterBindingId;
 typedef size_t MinicInlineAsmId;
+typedef size_t MinicCleanupContextId;
 
 #define MINIC_EXPRESSION_INVALID ((MinicExpressionId) - 1)
 #define MINIC_LOCAL_INVALID ((MinicLocalId) - 1)
@@ -29,6 +30,7 @@ typedef size_t MinicInlineAsmId;
 #define MINIC_GLOBAL_OBJECT_INVALID ((MinicGlobalObjectId) - 1)
 #define MINIC_FIXED_REGISTER_BINDING_INVALID ((MinicFixedRegisterBindingId) - 1)
 #define MINIC_INLINE_ASM_INVALID ((MinicInlineAsmId) - 1)
+#define MINIC_CLEANUP_CONTEXT_ROOT ((MinicCleanupContextId)0)
 #define MINIC_MAX_FUNCTION_PARAMETERS 16U
 
 typedef enum MinicValueCategory { MINIC_VALUE_RVALUE = 0, MINIC_VALUE_LVALUE } MinicValueCategory;
@@ -203,6 +205,11 @@ typedef struct MinicLocal {
     bool is_register_storage;
 } MinicLocal;
 
+typedef struct MinicCleanupContext {
+    MinicCleanupContextId parent;
+    MinicExpressionId cleanup_expression;
+} MinicCleanupContext;
+
 typedef enum MinicStatementKind {
     MINIC_STATEMENT_ASSIGN = 0,
     MINIC_STATEMENT_RECORD_COPY,
@@ -227,6 +234,8 @@ typedef struct MinicStatement {
     MinicExpressionId expression;
     MinicStatementId target_statement;
     MinicInlineAsmId inline_asm_id;
+    MinicCleanupContextId cleanup_context;
+    MinicCleanupContextId cleanup_stop_context;
     MinicBlockId then_block;
     MinicBlockId else_block;
 } MinicStatement;
@@ -416,6 +425,10 @@ typedef struct MinicC0Program {
     size_t local_count;
     size_t local_capacity;
 
+    MinicCleanupContext *cleanup_contexts;
+    size_t cleanup_context_count;
+    size_t cleanup_context_capacity;
+
     MinicStatement *statements;
     size_t statement_count;
     size_t statement_capacity;
@@ -478,6 +491,13 @@ bool minic_c0_program_add_expression(MinicC0Program *program,
 bool minic_c0_program_add_local(MinicC0Program *program,
                                 const MinicLocal *local,
                                 MinicLocalId *local_id);
+bool minic_c0_program_add_cleanup_context(MinicC0Program *program,
+                                          MinicCleanupContextId parent,
+                                          MinicExpressionId cleanup_expression,
+                                          MinicCleanupContextId *cleanup_context_id);
+bool minic_c0_cleanup_context_reaches(const MinicC0Program *program,
+                                      MinicCleanupContextId current,
+                                      MinicCleanupContextId stop);
 bool minic_c0_program_add_statement(MinicC0Program *program,
                                     const MinicStatement *statement,
                                     MinicStatementId *statement_id);
@@ -657,9 +677,6 @@ bool minic_c0_global_object_set_explicit_alignment(MinicC0Program *program,
 /* Program entity accessors return borrowed pointers into growable owner arrays.
  * IDs remain stable, but growing the same entity array may relocate its storage.
  * Keep an ID or copy required value fields across any operation that may grow that pool. */
-/* Program entity accessors return borrowed pointers into growable owner arrays.
- * IDs remain stable, but growing the same entity array may relocate its storage.
- * Keep an ID or copy required value fields across any operation that may grow that pool. */
 const MinicExpression *minic_c0_program_expression(const MinicC0Program *program,
                                                    MinicExpressionId expression_id);
 bool minic_c0_expression_array_object_info(const MinicC0Program *program,
@@ -678,6 +695,9 @@ bool minic_c0_pointer_equality_compatible(const MinicC0Program *program,
                                           MinicExpressionId left_expression_id,
                                           MinicExpressionId right_expression_id);
 const MinicLocal *minic_c0_program_local(const MinicC0Program *program, MinicLocalId local_id);
+const MinicCleanupContext *
+minic_c0_program_cleanup_context(const MinicC0Program *program,
+                                 MinicCleanupContextId cleanup_context_id);
 const MinicStatement *minic_c0_program_statement(const MinicC0Program *program,
                                                  MinicStatementId statement_id);
 const MinicBlock *minic_c0_program_block(const MinicC0Program *program, MinicBlockId block_id);

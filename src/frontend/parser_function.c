@@ -1651,9 +1651,10 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
             return false;
         }
     }
-    if ((!minic_type_is_pointer(return_type) && !minic_type_is_double(return_type) &&
-         !minic_type_is_record(return_type) && !minic_parser_add_default_return(parser)) ||
-        !minic_parser_expect(parser, MINIC_TOKEN_RBRACE, "expected '}'")) {
+    if (!minic_parser_materialize_cleanup_contexts(parser, MINIC_CLEANUP_CONTEXT_ROOT) ||
+        ((!minic_type_is_pointer(return_type) && !minic_type_is_double(return_type) &&
+          !minic_type_is_record(return_type) && !minic_parser_add_default_return(parser)) ||
+         !minic_parser_expect(parser, MINIC_TOKEN_RBRACE, "expected '}'"))) {
         return false;
     }
 

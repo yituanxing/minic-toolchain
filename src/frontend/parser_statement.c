@@ -141,6 +141,8 @@ static bool add_zero_initialized_local_array(MinicParser *parser,
         statement.target_expression = target_id;
         statement.expression = value_id;
         statement.target_statement = MINIC_STATEMENT_INVALID;
+        statement.cleanup_context = parser->cleanup_context;
+        statement.cleanup_stop_context = MINIC_CLEANUP_CONTEXT_ROOT;
         statement.then_block = MINIC_BLOCK_INVALID;
         statement.else_block = MINIC_BLOCK_INVALID;
         if (!minic_parser_add_statement(parser, &statement)) {
@@ -282,6 +284,8 @@ static bool add_zero_assignment_to_lvalue(MinicParser *parser,
     statement.target_expression = target_id;
     statement.expression = value_id;
     statement.target_statement = MINIC_STATEMENT_INVALID;
+    statement.cleanup_context = parser->cleanup_context;
+    statement.cleanup_stop_context = MINIC_CLEANUP_CONTEXT_ROOT;
     statement.then_block = MINIC_BLOCK_INVALID;
     statement.else_block = MINIC_BLOCK_INVALID;
     return minic_parser_add_statement(parser, &statement);
@@ -456,12 +460,51 @@ bool minic_parser_parse_runtime_record_initializer(MinicParser *parser,
     }
 }
 
+typedef struct MinicLocalObjectAttributes {
+    MinicFunctionId cleanup_function;
+    MinicSourceSpan cleanup_attribute_span;
+} MinicLocalObjectAttributes;
+
+static bool parse_cleanup_attribute_function(MinicParser *parser,
+                                             const MinicParsedAttribute *attribute,
+                                             MinicFunctionId *function_id) {
+    MinicParser probe;
+    MinicSourceSpan name_span;
+
+    if (parser == NULL || attribute == NULL || function_id == NULL || !attribute->has_arguments ||
+        attribute->arguments_span.end.offset <= attribute->arguments_span.begin.offset + 1U) {
+        return false;
+    }
+    probe = *parser;
+    minic_lexer_initialize(&probe.lexer, parser->path, parser->source, parser->lexer.length);
+    probe.lexer.cursor = attribute->arguments_span.begin.offset + 1U;
+    probe.lexer.line = attribute->arguments_span.begin.line;
+    probe.lexer.column = attribute->arguments_span.begin.column + 1U;
+    if (!minic_parser_advance(&probe) || probe.current.kind != MINIC_TOKEN_IDENTIFIER) {
+        minic_parser_error(parser, "GNU cleanup attribute requires one function name");
+        return false;
+    }
+    name_span = probe.current.span;
+    if (!minic_parser_advance(&probe) || probe.current.kind != MINIC_TOKEN_RPAREN ||
+        probe.current.span.end.offset != attribute->arguments_span.end.offset) {
+        minic_parser_error(parser, "GNU cleanup attribute requires one function name");
+        return false;
+    }
+    *function_id = minic_parser_find_function(parser, name_span);
+    if (*function_id == MINIC_FUNCTION_INVALID) {
+        minic_parser_error(parser, "GNU cleanup function must be declared before the local object");
+        return false;
+    }
+    return true;
+}
+
 static bool consume_local_object_attribute(MinicParser *parser,
                                            const MinicParsedAttribute *attribute,
                                            void *context) {
+    MinicLocalObjectAttributes *attributes;
     const MinicAttributeDescriptor *descriptor;
 
-    (void)context;
+    attributes = (MinicLocalObjectAttributes *)context;
     if (parser == NULL || attribute == NULL) {
         return false;
     }
@@ -474,6 +517,25 @@ static bool consume_local_object_attribute(MinicParser *parser,
         minic_parser_error(parser, "GNU attribute is not valid on a local object");
         return false;
     }
+    if (descriptor->kind == MINIC_ATTRIBUTE_CLEANUP) {
+        if (attributes == NULL || parser->statement_expression_depth != 0U) {
+            minic_parser_error(
+                parser,
+                parser->statement_expression_depth != 0U
+                    ? "GNU cleanup inside a statement expression is not supported yet"
+                    : "invalid GNU cleanup attribute context");
+            return false;
+        }
+        if (attributes->cleanup_function != MINIC_FUNCTION_INVALID) {
+            minic_parser_error(parser, "local object may have only one GNU cleanup function");
+            return false;
+        }
+        if (!parse_cleanup_attribute_function(parser, attribute, &attributes->cleanup_function)) {
+            return false;
+        }
+        attributes->cleanup_attribute_span = attribute->name_span;
+        return true;
+    }
     if (attribute->has_arguments ||
         descriptor->semantic_class != MINIC_ATTRIBUTE_CLASS_INFORMATIONAL) {
         minic_parser_error(parser, "local object attribute semantics are not supported yet");
@@ -482,16 +544,92 @@ static bool consume_local_object_attribute(MinicParser *parser,
     return true;
 }
 
-static bool parse_local_object_attributes(MinicParser *parser) {
-    return minic_parser_parse_gnu_attribute_lists(parser, consume_local_object_attribute, NULL);
+static bool parse_local_object_attributes(MinicParser *parser,
+                                          MinicLocalObjectAttributes *attributes) {
+    return minic_parser_parse_gnu_attribute_lists(
+        parser, consume_local_object_attribute, attributes);
+}
+
+static bool finalize_local_cleanup(MinicParser *parser,
+                                   const MinicLocalObjectAttributes *attributes,
+                                   const MinicLocal *local,
+                                   MinicLocalId local_id) {
+    MinicExpression address;
+    MinicExpression call;
+    MinicExpressionId address_id;
+    MinicExpressionId call_id;
+    MinicExpressionId local_expression_id;
+    MinicCleanupContextId cleanup_context_id;
+    MinicFunction function;
+    const MinicFunction *function_borrow;
+    MinicType pointer_type;
+
+    if (attributes == NULL || local == NULL ||
+        attributes->cleanup_function == MINIC_FUNCTION_INVALID) {
+        return true;
+    }
+    if (local->is_register_storage) {
+        minic_parser_error(parser, "GNU cleanup cannot be applied to a register local");
+        return false;
+    }
+    if (local->is_array) {
+        minic_parser_error(parser, "GNU cleanup on local arrays is not supported yet");
+        return false;
+    }
+    function_borrow = minic_c0_program_function(parser->program, attributes->cleanup_function);
+    if (function_borrow == NULL) {
+        minic_parser_error(parser, "invalid GNU cleanup function");
+        return false;
+    }
+    function = *function_borrow;
+    if (function.parameter_count != 1U || function.is_variadic ||
+        !minic_type_pointer_to(local->type, &pointer_type) ||
+        !minic_c0_types_compatible(parser->program, function.parameter_types[0], pointer_type)) {
+        minic_parser_error(parser, "GNU cleanup function must accept a pointer to the local type");
+        return false;
+    }
+    if (!add_local_lvalue_expression(parser, local_id, local->name_span, &local_expression_id)) {
+        return false;
+    }
+
+    (void)memset(&address, 0, sizeof(address));
+    address.kind = MINIC_EXPRESSION_ADDRESS_OF;
+    address.span = local->name_span;
+    address.type = pointer_type;
+    address.value_category = MINIC_VALUE_RVALUE;
+    address.value.unary.operand = local_expression_id;
+    if (!minic_parser_add_expression(parser, &address, &address_id)) {
+        return false;
+    }
+
+    (void)memset(&call, 0, sizeof(call));
+    call.kind = MINIC_EXPRESSION_CALL;
+    call.span = attributes->cleanup_attribute_span;
+    call.type = function.return_type;
+    call.value_category = MINIC_VALUE_RVALUE;
+    call.value.call.function_id = attributes->cleanup_function;
+    call.value.call.callee = MINIC_EXPRESSION_INVALID;
+    call.value.call.argument_count = 1U;
+    call.value.call.arguments[0] = address_id;
+    if (!minic_parser_add_expression(parser, &call, &call_id) ||
+        !minic_c0_program_add_cleanup_context(
+            parser->program, parser->cleanup_context, call_id, &cleanup_context_id)) {
+        minic_parser_error(parser, "cannot record GNU cleanup lifetime");
+        return false;
+    }
+    parser->cleanup_context = cleanup_context_id;
+    return true;
 }
 
 static bool
 parse_local_declarator(MinicParser *parser, MinicType base_type, bool is_register_storage) {
     MinicLocal local;
     MinicLocalId local_id;
+    MinicLocalObjectAttributes attributes;
     MinicType declared_type;
 
+    (void)memset(&attributes, 0, sizeof(attributes));
+    attributes.cleanup_function = MINIC_FUNCTION_INVALID;
     if (!minic_parser_parse_pointer_declarator(parser, base_type, &declared_type)) {
         return false;
     }
@@ -524,7 +662,7 @@ parse_local_declarator(MinicParser *parser, MinicType base_type, bool is_registe
         }
         local.is_array = true;
     }
-    if (!parse_local_object_attributes(parser)) {
+    if (!parse_local_object_attributes(parser, &attributes)) {
         return false;
     }
     if (!minic_c0_program_add_local(parser->program, &local, &local_id)) {
@@ -540,7 +678,10 @@ parse_local_declarator(MinicParser *parser, MinicType base_type, bool is_registe
         const MinicExpression *initializer;
 
         if (local.element_count != 1U) {
-            return parse_local_array_zero_initializer(parser, local_id, local.name_span);
+            if (!parse_local_array_zero_initializer(parser, local_id, local.name_span)) {
+                return false;
+            }
+            return finalize_local_cleanup(parser, &attributes, &local, local_id);
         }
         if (minic_type_is_record(local.type)) {
             MinicExpressionId target_id;
@@ -550,7 +691,10 @@ parse_local_declarator(MinicParser *parser, MinicType base_type, bool is_registe
                 return false;
             }
             if (parser->current.kind == MINIC_TOKEN_LBRACE) {
-                return minic_parser_parse_runtime_record_initializer(parser, target_id);
+                if (!minic_parser_parse_runtime_record_initializer(parser, target_id)) {
+                    return false;
+                }
+                return finalize_local_cleanup(parser, &attributes, &local, local_id);
             } else {
                 MinicExpressionId source_id;
                 const MinicExpression *source;
@@ -567,7 +711,10 @@ parse_local_declarator(MinicParser *parser, MinicType base_type, bool is_registe
                         parser, "record local initializer requires a matching record copy source");
                     return false;
                 }
-                return add_record_copy_assignments(parser, target_id, source_id, source->span);
+                if (!add_record_copy_assignments(parser, target_id, source_id, source->span)) {
+                    return false;
+                }
+                return finalize_local_cleanup(parser, &attributes, &local, local_id);
             }
         }
         (void)memset(&statement, 0, sizeof(statement));
@@ -591,7 +738,7 @@ parse_local_declarator(MinicParser *parser, MinicType base_type, bool is_registe
             return false;
         }
     }
-    return true;
+    return finalize_local_cleanup(parser, &attributes, &local, local_id);
 }
 
 static bool current_identifier_is_auto_type(const MinicParser *parser) {
@@ -1831,12 +1978,14 @@ static bool parse_expression_or_assignment_statement(MinicParser *parser,
 }
 
 static bool parse_compound_statement(MinicParser *parser) {
+    MinicCleanupContextId scope_cleanup_context;
     bool success;
 
     if (parser->current.kind != MINIC_TOKEN_LBRACE) {
         minic_parser_error(parser, "expected '{'");
         return false;
     }
+    scope_cleanup_context = parser->cleanup_context;
     if (!minic_parser_begin_scope(parser)) {
         return false;
     }
@@ -1851,7 +2000,8 @@ static bool parse_compound_statement(MinicParser *parser) {
         success = minic_parser_parse_statement(parser, true);
     }
     if (success) {
-        success = minic_parser_expect(parser, MINIC_TOKEN_RBRACE, "expected '}'");
+        success = minic_parser_expect(parser, MINIC_TOKEN_RBRACE, "expected '}'") &&
+                  minic_parser_materialize_cleanup_contexts(parser, scope_cleanup_context);
     }
 
     minic_parser_end_scope(parser);
@@ -1883,6 +2033,7 @@ bool minic_parser_parse_statement_expression(MinicParser *parser,
         return false;
     }
     parser->current_block = block_id;
+    parser->statement_expression_depth += 1U;
     success = minic_parser_advance(parser);
     while (success && parser->current.kind != MINIC_TOKEN_RBRACE) {
         if (parser->current.kind == MINIC_TOKEN_EOF) {
@@ -1931,6 +2082,7 @@ bool minic_parser_parse_statement_expression(MinicParser *parser,
                       parser, MINIC_TOKEN_RBRACE, "expected '}' in GNU statement expression");
     }
 
+    parser->statement_expression_depth -= 1U;
     parser->current_block = parent_block;
     minic_parser_end_scope(parser);
     return success;
@@ -1958,16 +2110,21 @@ static bool parse_branch(MinicParser *parser, MinicBlockId *block_id) {
 }
 
 static bool parse_loop_branch(MinicParser *parser, MinicBlockId *block_id) {
+    MinicCleanupContextId previous_break_cleanup_context;
     bool success;
 
+    previous_break_cleanup_context = parser->break_cleanup_context;
+    parser->break_cleanup_context = parser->cleanup_context;
     parser->loop_depth += 1U;
     success = parse_branch(parser, block_id);
     parser->loop_depth -= 1U;
+    parser->break_cleanup_context = previous_break_cleanup_context;
     return success;
 }
 
 static bool parse_switch_branch(MinicParser *parser, MinicBlockId *block_id) {
     MinicParserSwitchContext *context;
+    MinicCleanupContextId previous_break_cleanup_context;
     bool success;
 
     if (parser->switch_depth >= MINIC_PARSER_MAX_SWITCH_DEPTH) {
@@ -1976,9 +2133,12 @@ static bool parse_switch_branch(MinicParser *parser, MinicBlockId *block_id) {
     }
     context = &parser->switch_contexts[parser->switch_depth];
     (void)memset(context, 0, sizeof(*context));
+    previous_break_cleanup_context = parser->break_cleanup_context;
+    parser->break_cleanup_context = parser->cleanup_context;
     parser->switch_depth += 1U;
     success = parse_branch(parser, block_id);
     parser->switch_depth -= 1U;
+    parser->break_cleanup_context = previous_break_cleanup_context;
     return success;
 }
 
@@ -2052,6 +2212,8 @@ static bool add_internal_continue_label(MinicParser *parser,
     label.target_expression = MINIC_EXPRESSION_INVALID;
     label.expression = MINIC_EXPRESSION_INVALID;
     label.target_statement = MINIC_STATEMENT_INVALID;
+    label.cleanup_context = parser->cleanup_context;
+    label.cleanup_stop_context = MINIC_CLEANUP_CONTEXT_ROOT;
     label.then_block = MINIC_BLOCK_INVALID;
     label.else_block = MINIC_BLOCK_INVALID;
     if (!minic_c0_program_add_statement(parser->program, &label, statement_id)) {
@@ -2075,6 +2237,8 @@ static bool parse_continue(MinicParser *parser) {
     statement.target_expression = MINIC_EXPRESSION_INVALID;
     statement.expression = MINIC_EXPRESSION_INVALID;
     statement.target_statement = parser->continue_target_statement;
+    statement.cleanup_context = parser->cleanup_context;
+    statement.cleanup_stop_context = parser->continue_cleanup_context;
     statement.then_block = MINIC_BLOCK_INVALID;
     statement.else_block = MINIC_BLOCK_INVALID;
     return minic_parser_advance(parser) &&
@@ -2086,6 +2250,7 @@ static bool parse_while(MinicParser *parser) {
     MinicStatement statement;
     MinicStatementId continue_label;
     MinicStatementId previous_continue_target;
+    MinicCleanupContextId previous_continue_cleanup_context;
     MinicSourceSpan while_span;
     bool success;
 
@@ -2109,9 +2274,12 @@ static bool parse_while(MinicParser *parser) {
     }
 
     previous_continue_target = parser->continue_target_statement;
+    previous_continue_cleanup_context = parser->continue_cleanup_context;
     parser->continue_target_statement = continue_label;
+    parser->continue_cleanup_context = parser->cleanup_context;
     success = parse_loop_branch(parser, &statement.then_block);
     parser->continue_target_statement = previous_continue_target;
+    parser->continue_cleanup_context = previous_continue_cleanup_context;
     if (!success) {
         return false;
     }
@@ -2129,6 +2297,7 @@ static bool parse_do_while(MinicParser *parser) {
     MinicStatementId condition_check_id;
     MinicStatementId break_statement_id;
     MinicStatementId previous_continue_target;
+    MinicCleanupContextId previous_continue_cleanup_context;
     MinicBlockId break_block;
     MinicExpressionId condition_id;
     MinicExpressionId negated_condition_id;
@@ -2157,9 +2326,12 @@ static bool parse_do_while(MinicParser *parser) {
     }
 
     previous_continue_target = parser->continue_target_statement;
+    previous_continue_cleanup_context = parser->continue_cleanup_context;
     parser->continue_target_statement = continue_label;
+    parser->continue_cleanup_context = parser->cleanup_context;
     success = parse_loop_branch(parser, &statement.then_block);
     parser->continue_target_statement = previous_continue_target;
+    parser->continue_cleanup_context = previous_continue_cleanup_context;
     if (!success || parser->current.kind != MINIC_TOKEN_KW_WHILE ||
         !minic_c0_block_add_statement(parser->program, statement.then_block, continue_label)) {
         if (success && parser->current.kind != MINIC_TOKEN_KW_WHILE) {
@@ -2571,6 +2743,8 @@ static bool parse_for(MinicParser *parser) {
     MinicStatementId update_statement;
     MinicStatementId continue_label;
     MinicStatementId previous_continue_target;
+    MinicCleanupContextId previous_continue_cleanup_context;
+    MinicCleanupContextId scope_cleanup_context;
     bool has_update;
     MinicSourceSpan for_span;
     bool success;
@@ -2587,6 +2761,7 @@ static bool parse_for(MinicParser *parser) {
         !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '('")) {
         return false;
     }
+    scope_cleanup_context = parser->cleanup_context;
     if (!minic_parser_begin_scope(parser)) {
         return false;
     }
@@ -2626,9 +2801,12 @@ static bool parse_for(MinicParser *parser) {
         return false;
     }
     previous_continue_target = parser->continue_target_statement;
+    previous_continue_cleanup_context = parser->continue_cleanup_context;
     parser->continue_target_statement = continue_label;
+    parser->continue_cleanup_context = parser->cleanup_context;
     success = parse_loop_branch(parser, &statement.then_block);
     parser->continue_target_statement = previous_continue_target;
+    parser->continue_cleanup_context = previous_continue_cleanup_context;
     if (!success ||
         !minic_c0_block_add_statement(parser->program, statement.then_block, continue_label)) {
         if (success) {
@@ -2643,7 +2821,8 @@ static bool parse_for(MinicParser *parser) {
     }
     statement.span.begin = for_span.begin;
     statement.span.end = parser->current.span.begin;
-    success = minic_parser_add_statement(parser, &statement);
+    success = minic_parser_add_statement(parser, &statement) &&
+              minic_parser_materialize_cleanup_contexts(parser, scope_cleanup_context);
     minic_parser_end_scope(parser);
     return success;
 }
@@ -2726,6 +2905,8 @@ static bool parse_gnu_local_label_declaration(MinicParser *parser) {
         label.target_expression = MINIC_EXPRESSION_INVALID;
         label.expression = MINIC_EXPRESSION_INVALID;
         label.target_statement = MINIC_STATEMENT_INVALID;
+        label.cleanup_context = parser->cleanup_context;
+        label.cleanup_stop_context = MINIC_CLEANUP_CONTEXT_ROOT;
         label.then_block = MINIC_BLOCK_INVALID;
         label.else_block = MINIC_BLOCK_INVALID;
         if (!minic_c0_program_add_statement(parser->program, &label, &statement_id) ||
@@ -2763,6 +2944,18 @@ static bool parse_goto(MinicParser *parser) {
     name_span = parser->current.span;
     statement.span = name_span;
     statement.target_statement = minic_parser_find_label_statement(parser, name_span);
+    if (statement.target_statement != MINIC_STATEMENT_INVALID) {
+        const MinicStatement *target;
+
+        target = minic_c0_program_statement(parser->program, statement.target_statement);
+        if (target == NULL || target->kind != MINIC_STATEMENT_LABEL ||
+            !minic_c0_cleanup_context_reaches(
+                parser->program, statement.cleanup_context, target->cleanup_context)) {
+            minic_parser_error(parser, "goto cannot enter a different GNU cleanup lifetime");
+            return false;
+        }
+        statement.cleanup_stop_context = target->cleanup_context;
+    }
     if (!minic_parser_advance(parser) ||
         !minic_parser_expect(parser, MINIC_TOKEN_SEMICOLON, "expected ';' after goto")) {
         return false;
@@ -2843,6 +3036,7 @@ static bool parse_label(MinicParser *parser, bool allow_declaration) {
         }
         local_label = &parser->program->statements[label_statement_id];
         local_label->span = name_span;
+        local_label->cleanup_context = parser->cleanup_context;
     } else {
         (void)memset(&statement, 0, sizeof(statement));
         statement.kind = MINIC_STATEMENT_LABEL;
@@ -2879,7 +3073,14 @@ static bool parse_label(MinicParser *parser, bool allow_declaration) {
             if (pending->kind == MINIC_STATEMENT_GOTO &&
                 pending->target_statement == MINIC_STATEMENT_INVALID &&
                 minic_parser_span_equals(parser, pending->span, name_span)) {
+                if (!minic_c0_cleanup_context_reaches(
+                        parser->program, pending->cleanup_context, statement.cleanup_context)) {
+                    minic_parser_error(parser,
+                                       "goto cannot enter a different GNU cleanup lifetime");
+                    return false;
+                }
                 pending->target_statement = label_statement_id;
+                pending->cleanup_stop_context = statement.cleanup_context;
             }
         }
         resolve_pending_inline_asm_labels(parser, name_span, label_statement_id);
@@ -2905,6 +3106,8 @@ static bool parse_break(MinicParser *parser) {
     statement.span.begin = parser->current.span.begin;
     statement.target_expression = MINIC_EXPRESSION_INVALID;
     statement.expression = MINIC_EXPRESSION_INVALID;
+    statement.cleanup_context = parser->cleanup_context;
+    statement.cleanup_stop_context = parser->break_cleanup_context;
     statement.then_block = MINIC_BLOCK_INVALID;
     statement.else_block = MINIC_BLOCK_INVALID;
 
@@ -2931,6 +3134,8 @@ static bool parse_return(MinicParser *parser) {
     statement.span.begin = parser->current.span.begin;
     statement.target_expression = MINIC_EXPRESSION_INVALID;
     statement.expression = MINIC_EXPRESSION_INVALID;
+    statement.cleanup_context = parser->cleanup_context;
+    statement.cleanup_stop_context = MINIC_CLEANUP_CONTEXT_ROOT;
     if (!minic_parser_advance(parser)) {
         return false;
     }

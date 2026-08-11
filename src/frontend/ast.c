@@ -113,6 +113,7 @@ void minic_c0_program_destroy(MinicC0Program *program) {
     }
     free(program->expressions);
     free(program->locals);
+    free(program->cleanup_contexts);
     free(program->statements);
     free(program->inline_asms);
     free(program->blocks);
@@ -346,6 +347,57 @@ bool minic_c0_program_add_local(MinicC0Program *program,
     *local_id = program->local_count;
     program->locals[program->local_count] = *local;
     program->local_count += 1U;
+    return true;
+}
+
+bool minic_c0_program_add_cleanup_context(MinicC0Program *program,
+                                          MinicCleanupContextId parent,
+                                          MinicExpressionId cleanup_expression,
+                                          MinicCleanupContextId *cleanup_context_id) {
+    MinicCleanupContext context;
+
+    if (program == NULL || cleanup_context_id == NULL || parent > program->cleanup_context_count ||
+        cleanup_expression >= program->expression_count ||
+        !minic_grow_array((void **)&program->cleanup_contexts,
+                          &program->cleanup_context_capacity,
+                          program->cleanup_context_count,
+                          sizeof(*program->cleanup_contexts))) {
+        return false;
+    }
+    context.parent = parent;
+    context.cleanup_expression = cleanup_expression;
+    program->cleanup_contexts[program->cleanup_context_count] = context;
+    program->cleanup_context_count += 1U;
+    *cleanup_context_id = program->cleanup_context_count;
+    return true;
+}
+
+const MinicCleanupContext *
+minic_c0_program_cleanup_context(const MinicC0Program *program,
+                                 MinicCleanupContextId cleanup_context_id) {
+    if (program == NULL || cleanup_context_id == MINIC_CLEANUP_CONTEXT_ROOT ||
+        cleanup_context_id > program->cleanup_context_count) {
+        return NULL;
+    }
+    return &program->cleanup_contexts[cleanup_context_id - 1U];
+}
+
+bool minic_c0_cleanup_context_reaches(const MinicC0Program *program,
+                                      MinicCleanupContextId current,
+                                      MinicCleanupContextId stop) {
+    if (program == NULL || current > program->cleanup_context_count ||
+        stop > program->cleanup_context_count) {
+        return false;
+    }
+    while (current != stop) {
+        const MinicCleanupContext *context;
+
+        context = minic_c0_program_cleanup_context(program, current);
+        if (context == NULL) {
+            return false;
+        }
+        current = context->parent;
+    }
     return true;
 }
 

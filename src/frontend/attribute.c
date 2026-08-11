@@ -199,6 +199,26 @@ static const MinicAttributeDescriptor minic_attribute_descriptors[] = {
                           MINIC_ATTRIBUTE_CLASS_LAYOUT,
                           MINIC_ATTRIBUTE_TARGET_OBJECT | MINIC_ATTRIBUTE_TARGET_TYPE |
                               MINIC_ATTRIBUTE_TARGET_FIELD),
+    {
+        "cleanup",
+        sizeof("cleanup") - 1U,
+        MINIC_ATTRIBUTE_CLEANUP,
+        MINIC_ATTRIBUTE_CLASS_LANGUAGE_SEMANTIC,
+        MINIC_ATTRIBUTE_TARGET_OBJECT,
+        1U,
+        1U,
+        true,
+    },
+    {
+        "__cleanup__",
+        sizeof("__cleanup__") - 1U,
+        MINIC_ATTRIBUTE_CLEANUP,
+        MINIC_ATTRIBUTE_CLASS_LANGUAGE_SEMANTIC,
+        MINIC_ATTRIBUTE_TARGET_OBJECT,
+        1U,
+        1U,
+        true,
+    },
 };
 
 const MinicAttributeDescriptor *minic_attribute_lookup(const char *name, size_t name_length) {
