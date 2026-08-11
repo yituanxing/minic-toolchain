@@ -54,7 +54,7 @@ ast_c.write_text(text.replace(anchor, helper + anchor, 1))
 # Parser and verifier consume the broader copy-source contract, while the old
 # address-backed predicate remains available to the target address path.
 for relative, expected in [
-    ("src/frontend/parser_statement.c", 2),
+    ("src/frontend/parser_statement.c", 3),
     ("src/frontend/parser_expression.c", 1),
     ("src/frontend/ast_verifier.c", 2),
 ]:
@@ -71,6 +71,10 @@ text = parser_statement.read_text()
 text = text.replace(
     "record local initializer requires a matching address-backed record value",
     "record local initializer requires a matching record copy source",
+)
+text = text.replace(
+    "record assignment requires matching address-backed record values",
+    "record assignment requires a matching record copy source",
 )
 text = text.replace(
     "GNU __auto_type record initializer must be address-backed",
