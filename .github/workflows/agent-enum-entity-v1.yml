@@ -24,7 +24,9 @@ jobs:
           fetch-depth: 0
 
       - name: Generate EnumEntity v1 source
-        run: python3 tools/dev/agent_enum_entity_v1_patch.py
+        run: |
+          python3 tools/dev/agent_enum_entity_v1_patch.py
+          python3 tools/dev/agent_enum_entity_v1_fix.py
 
       - name: Format generated source
         run: |
