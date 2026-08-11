@@ -32,6 +32,11 @@ typedef struct MinicParserLocalBinding {
     MinicGlobalObjectId global_object_id;
 } MinicParserLocalBinding;
 
+typedef struct MinicParserScopeFrame {
+    size_t binding_begin;
+    MinicCleanupContextId cleanup_context;
+} MinicParserScopeFrame;
+
 typedef struct MinicParserLocalLabel {
     MinicSourceSpan name_span;
     MinicStatementId statement_id;
@@ -69,6 +74,10 @@ typedef struct MinicParser {
     size_t local_begin;
     size_t loop_depth;
     MinicStatementId continue_target_statement;
+    MinicCleanupContextId cleanup_context;
+    MinicCleanupContextId break_cleanup_context;
+    MinicCleanupContextId continue_cleanup_context;
+    size_t statement_expression_depth;
     size_t switch_depth;
     MinicParserSwitchContext switch_contexts[MINIC_PARSER_MAX_SWITCH_DEPTH];
 
@@ -84,7 +93,7 @@ typedef struct MinicParser {
     size_t local_binding_count;
     size_t local_binding_capacity;
 
-    size_t *scope_binding_begins;
+    MinicParserScopeFrame *scopes;
     size_t scope_count;
     size_t scope_capacity;
 
@@ -203,6 +212,8 @@ bool minic_parser_add_expression(MinicParser *parser,
                                  const MinicExpression *expression,
                                  MinicExpressionId *expression_id);
 bool minic_parser_add_statement(MinicParser *parser, const MinicStatement *statement);
+bool minic_parser_materialize_cleanup_contexts(MinicParser *parser,
+                                               MinicCleanupContextId stop_context);
 
 bool minic_parser_begin_scope(MinicParser *parser);
 void minic_parser_end_scope(MinicParser *parser);

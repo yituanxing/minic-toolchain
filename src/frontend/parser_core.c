@@ -667,15 +667,62 @@ bool minic_parser_add_statement(MinicParser *parser, const MinicStatement *state
     return false;
 }
 
+bool minic_parser_materialize_cleanup_contexts(MinicParser *parser,
+                                               MinicCleanupContextId stop_context) {
+    MinicCleanupContextId current;
+
+    if (parser == NULL ||
+        !minic_c0_cleanup_context_reaches(parser->program, parser->cleanup_context, stop_context)) {
+        if (parser != NULL) {
+            minic_parser_error(parser, "invalid cleanup lifetime exit");
+        }
+        return false;
+    }
+    current = parser->cleanup_context;
+    while (current != stop_context) {
+        const MinicCleanupContext *context;
+        const MinicExpression *expression;
+        MinicStatement statement;
+
+        context = minic_c0_program_cleanup_context(parser->program, current);
+        expression = context == NULL ? NULL
+                                     : minic_c0_program_expression(parser->program,
+                                                                   context->cleanup_expression);
+        if (context == NULL || expression == NULL) {
+            minic_parser_error(parser, "invalid cleanup lifetime context");
+            return false;
+        }
+        (void)memset(&statement, 0, sizeof(statement));
+        statement.kind = MINIC_STATEMENT_EXPRESSION;
+        statement.span = expression->span;
+        statement.target_expression = MINIC_EXPRESSION_INVALID;
+        statement.expression = context->cleanup_expression;
+        statement.target_statement = MINIC_STATEMENT_INVALID;
+        statement.inline_asm_id = MINIC_INLINE_ASM_INVALID;
+        statement.cleanup_context = MINIC_CLEANUP_CONTEXT_ROOT;
+        statement.cleanup_stop_context = MINIC_CLEANUP_CONTEXT_ROOT;
+        statement.then_block = MINIC_BLOCK_INVALID;
+        statement.else_block = MINIC_BLOCK_INVALID;
+        if (!minic_parser_add_statement(parser, &statement)) {
+            return false;
+        }
+        current = context->parent;
+    }
+    return true;
+}
+
 bool minic_parser_begin_scope(MinicParser *parser) {
+    MinicParserScopeFrame *scope;
+
     if (parser->scope_count == parser->scope_capacity &&
-        !minic_parser_grow_array((void **)&parser->scope_binding_begins,
-                                 &parser->scope_capacity,
-                                 sizeof(*parser->scope_binding_begins))) {
+        !minic_parser_grow_array(
+            (void **)&parser->scopes, &parser->scope_capacity, sizeof(*parser->scopes))) {
         minic_parser_error(parser, "out of memory while entering scope");
         return false;
     }
-    parser->scope_binding_begins[parser->scope_count] = parser->local_binding_count;
+    scope = &parser->scopes[parser->scope_count];
+    scope->binding_begin = parser->local_binding_count;
+    scope->cleanup_context = parser->cleanup_context;
     parser->scope_count += 1U;
     return true;
 }
@@ -695,7 +742,8 @@ void minic_parser_end_scope(MinicParser *parser) {
         }
     }
     parser->scope_count -= 1U;
-    parser->local_binding_count = parser->scope_binding_begins[parser->scope_count];
+    parser->local_binding_count = parser->scopes[parser->scope_count].binding_begin;
+    parser->cleanup_context = parser->scopes[parser->scope_count].cleanup_context;
 }
 
 bool minic_parser_declare_local_label(MinicParser *parser,
@@ -846,7 +894,7 @@ bool minic_parser_name_bound_in_current_scope(const MinicParser *parser,
     if (parser->scope_count == 0U) {
         return false;
     }
-    scope_begin = parser->scope_binding_begins[parser->scope_count - 1U];
+    scope_begin = parser->scopes[parser->scope_count - 1U].binding_begin;
     for (index = parser->local_binding_count; index > scope_begin; --index) {
         const MinicParserLocalBinding *binding;
 
@@ -866,7 +914,7 @@ MinicLocalId minic_parser_find_local_in_current_scope(const MinicParser *parser,
     if (parser->scope_count == 0U) {
         return MINIC_LOCAL_INVALID;
     }
-    scope_begin = parser->scope_binding_begins[parser->scope_count - 1U];
+    scope_begin = parser->scopes[parser->scope_count - 1U].binding_begin;
     for (index = parser->local_binding_count; index > scope_begin; --index) {
         const MinicParserLocalBinding *binding;
 
@@ -885,11 +933,11 @@ void minic_parser_destroy_scopes(MinicParser *parser) {
     parser->local_label_count = 0U;
     parser->local_label_capacity = 0U;
     free(parser->local_bindings);
-    free(parser->scope_binding_begins);
+    free(parser->scopes);
     parser->local_bindings = NULL;
     parser->local_binding_count = 0U;
     parser->local_binding_capacity = 0U;
-    parser->scope_binding_begins = NULL;
+    parser->scopes = NULL;
     parser->scope_count = 0U;
     parser->scope_capacity = 0U;
 }

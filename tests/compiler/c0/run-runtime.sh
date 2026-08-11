@@ -102,4 +102,5 @@ run_case if_branch_return 6 if_else -DCASE=5
 run_case if_false_fallthrough 2 if_else -DCASE=6
 run_case if_multi_statement 9 if_else -DCASE=7
 run_case array_declaration 0 array_declaration
+run_case gnu_cleanup_runtime 0 gnu_cleanup_runtime
 run_double_return_abi

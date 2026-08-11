@@ -99,11 +99,35 @@ static bool minic_riscv64_emit_xor_assignment(FILE *file,
     return true;
 }
 
+static bool minic_riscv64_emit_cleanup_contexts(FILE *file,
+                                                const MinicC0Program *program,
+                                                const MinicFunction *function,
+                                                MinicCleanupContextId current,
+                                                MinicCleanupContextId stop) {
+    if (!minic_c0_cleanup_context_reaches(program, current, stop)) {
+        return false;
+    }
+    while (current != stop) {
+        const MinicCleanupContext *context;
+
+        context = minic_c0_program_cleanup_context(program, current);
+        if (context == NULL ||
+            !minic_riscv64_emit_expression(file, program, function, context->cleanup_expression)) {
+            return false;
+        }
+        current = context->parent;
+    }
+    return true;
+}
+
 static bool minic_riscv64_emit_return(FILE *file,
                                       const MinicC0Program *program,
                                       const MinicFunction *function,
                                       const MinicStatement *statement) {
-    if (statement->expression == MINIC_EXPRESSION_INVALID) {
+    bool has_value;
+
+    has_value = statement->expression != MINIC_EXPRESSION_INVALID;
+    if (!has_value) {
         if (!minic_type_is_void(function->return_type)) {
             return false;
         }
@@ -146,10 +170,27 @@ static bool minic_riscv64_emit_return(FILE *file,
             !minic_riscv64_emit_integer_conversion(file, function->return_type, "a0")) {
             return false;
         }
-        if (minic_type_is_double(function->return_type) &&
-            fprintf(file, "  fmv.d.x fa0, a0\n") < 0) {
+    }
+
+    if (statement->cleanup_context != statement->cleanup_stop_context) {
+        if (has_value &&
+            fprintf(file, "  addi sp, sp, -16\n  sd a0, 0(sp)\n  sd a1, 8(sp)\n") < 0) {
             return false;
         }
+        if (!minic_riscv64_emit_cleanup_contexts(file,
+                                                 program,
+                                                 function,
+                                                 statement->cleanup_context,
+                                                 statement->cleanup_stop_context)) {
+            return false;
+        }
+        if (has_value && fprintf(file, "  ld a0, 0(sp)\n  ld a1, 8(sp)\n  addi sp, sp, 16\n") < 0) {
+            return false;
+        }
+    }
+    if (has_value && minic_type_is_double(function->return_type) &&
+        fprintf(file, "  fmv.d.x fa0, a0\n") < 0) {
+        return false;
     }
     return fprintf(file, "  j .L%s_return\n", function->name) >= 0;
 }
@@ -321,10 +362,20 @@ static bool minic_riscv64_emit_statement(FILE *file,
         return minic_riscv64_emit_return(file, program, function, statement);
 
     case MINIC_STATEMENT_BREAK:
-        return minic_riscv64_emit_break(file, break_target);
+        return minic_riscv64_emit_cleanup_contexts(file,
+                                                   program,
+                                                   function,
+                                                   statement->cleanup_context,
+                                                   statement->cleanup_stop_context) &&
+               minic_riscv64_emit_break(file, break_target);
 
     case MINIC_STATEMENT_GOTO:
         return statement->target_statement != MINIC_STATEMENT_INVALID &&
+               minic_riscv64_emit_cleanup_contexts(file,
+                                                   program,
+                                                   function,
+                                                   statement->cleanup_context,
+                                                   statement->cleanup_stop_context) &&
                fprintf(file, "  j .Luser_%zu\n", (size_t)statement->target_statement) >= 0;
 
     case MINIC_STATEMENT_LABEL:
