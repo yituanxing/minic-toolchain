@@ -1,0 +1,54 @@
+name: Agent Typeof Incomplete Type V1
+
+on:
+  pull_request:
+    types: [synchronize]
+
+permissions:
+  contents: write
+
+jobs:
+  patch-source:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/foundation-v1
+          fetch-depth: 0
+      - name: Generate typeof incomplete type source
+        run: python3 tools/dev/agent_typeof_incomplete_type_v1.py
+      - name: Format generated source
+        run: CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+      - name: Build release compiler
+        run: make -j4 MODE=release BUILD_DIR=build/agent-typeof-incomplete-type
+      - name: Run typeof/generic focused contract
+        run: |
+          MINIC="$GITHUB_WORKSPACE/build/agent-typeof-incomplete-type/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/agent-typeof-incomplete-type-focused" \
+          HOST_CC=cc \
+            sh tests/compiler/c0/run-typeof-generic.sh
+      - name: Run incomplete record signature focused contract
+        run: |
+          MINIC="$GITHUB_WORKSPACE/build/agent-typeof-incomplete-type/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/agent-typeof-incomplete-type-signature" \
+          HOST_CC=cc \
+            sh tests/compiler/c0/run-gnu-incomplete-record-function-signature.sh
+      - name: Run Foundation focused contracts
+        run: |
+          MINIC="$GITHUB_WORKSPACE/build/agent-typeof-incomplete-type/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/agent-typeof-incomplete-type-foundation" \
+          HOST_CC=cc \
+            sh tools/dev/pr76-focused.sh
+      - name: Run fast compiler contracts
+        run: make -j4 MODE=release BUILD_DIR=build/agent-typeof-incomplete-type check-fast
+      - name: Publish generated source to scratch branch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/frontend/parser_internal.h \
+                  src/frontend/parser_type.c \
+                  src/frontend/parser_function.c \
+                  tests/compiler/c0/typeof_generic.c \
+                  tests/compiler/c0/run-typeof-generic.sh
+          git commit -m 'frontend: preserve incomplete types in GNU typeof'
+          git push --force origin HEAD:agent/typeof-incomplete-type-v1
