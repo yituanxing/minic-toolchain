@@ -155,10 +155,22 @@ void minic_parser_destroy_enum_constants(MinicParser *parser) {
 }
 
 static bool parse_enum_integer_value(MinicParser *parser, int *value) {
+    const MinicExpression *expression;
+    MinicConstValue constant_value;
+    MinicExpressionId expression_id;
     int64_t parsed;
 
     if (parser == NULL || value == NULL ||
-        !minic_parser_parse_integer_constant_expression(parser, &parsed)) {
+        !minic_parser_parse_expression(parser, &expression_id, 0U)) {
+        return false;
+    }
+    expression = minic_c0_program_expression(parser->program, expression_id);
+    if (expression == NULL || !minic_type_is_integer(expression->type) ||
+        !minic_const_eval_integer(
+            parser->program, parser->target_info, expression_id, &constant_value) ||
+        !minic_const_value_as_int64(
+            parser->program, parser->target_info, &constant_value, &parsed)) {
+        minic_parser_error(parser, "enum initializer must be an integer constant expression");
         return false;
     }
     if (parsed < INT_MIN || parsed > INT_MAX) {
