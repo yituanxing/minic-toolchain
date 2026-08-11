@@ -28,6 +28,7 @@ jobs:
           python3 tools/dev/agent_enum_entity_v1_patch.py
           python3 tools/dev/agent_enum_entity_v1_fix.py
           python3 tools/dev/agent_enum_entity_v1_diag.py
+          python3 tools/dev/agent_enum_entity_v1_docs.py
 
       - name: Format generated source
         run: |
