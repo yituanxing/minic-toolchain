@@ -19,7 +19,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          python3 tools/dev/agent_bitfield_rv64_patch.py
+          python3 tools/dev/agent_bitfield_rv64_wrapper.py
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
           git diff --check
