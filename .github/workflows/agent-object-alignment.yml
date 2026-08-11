@@ -19,6 +19,15 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('tools/dev/agent_object_alignment_patch.py')
+          text = path.read_text()
+          text = text.replace(r"message[0] == '\0'", r"message[0] == '\\0'")
+          text = text.replace(r"/^  \.align 6$/", r"/^\.align 6$/")
+          text = text.replace(r"/^  \.align 3$/", r"/^\.align 3$/")
+          path.write_text(text)
+          PY
           python3 tools/dev/agent_object_alignment_patch.py
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
@@ -27,7 +36,7 @@ jobs:
           MINIC="$GITHUB_WORKSPACE/build/object-alignment-compiler/bin/minic" \
           HOST_CC=cc \
           BUILD_DIR="$GITHUB_WORKSPACE/build/object-alignment-focused" \
-            sh tests/compiler/c0/run-gnu-object-alignment-attribute.sh
+            sh -x tests/compiler/c0/run-gnu-object-alignment-attribute.sh
           MINIC="$GITHUB_WORKSPACE/build/object-alignment-compiler/bin/minic" \
           HOST_CC=cc \
           BUILD_DIR="$GITHUB_WORKSPACE/build/object-alignment-focused-all" \
