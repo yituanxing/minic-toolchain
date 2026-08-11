@@ -23,19 +23,19 @@ jobs:
           ref: ${{ github.head_ref }}
           fetch-depth: 0
 
-      - name: Apply and commit stable-borrow fixes
+      - name: Apply and commit stable-borrow fixup
         shell: bash
         run: |
           set -Eeuo pipefail
-          python3 tools/dev/staging-stable-borrows.py
+          python3 tools/dev/staging-stable-borrows-fixup.py
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
           git diff --check
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add src/frontend/parser_expression.c src/frontend/parser_postfix.c src/frontend/parser_statement.c src/frontend/ast.h tests/compiler/c0/run.sh
+          git add src/frontend/parser_statement.c
           if git diff --cached --quiet; then
-            echo 'Stable-borrow source fix already materialized.'
+            echo 'Stable-borrow fixup already materialized.'
             exit 0
           fi
-          git commit -m 'frontend: keep Program borrows stable across pool growth'
+          git commit -m 'frontend: finish stable initializer borrow snapshots'
           git push origin HEAD:${{ github.head_ref }}
