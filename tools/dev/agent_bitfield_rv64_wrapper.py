@@ -45,3 +45,13 @@ text = text.replace(wrong_operand,
 
 path.write_text(text)
 runpy.run_path(str(path), run_name="__main__")
+
+# re.sub replacement strings interpret \0 specially. The generated C must contain the
+# two-character escape sequence, never an embedded NUL byte.
+record_path = Path(__file__).resolve().parents[2] / "src/frontend/parser_record.c"
+data = record_path.read_bytes()
+if b"\x00" in data:
+    data = data.replace(b"'\x00'", b"'\\0'")
+    record_path.write_bytes(data)
+if b"\x00" in record_path.read_bytes():
+    raise SystemExit("embedded NUL remains in generated parser_record.c")
