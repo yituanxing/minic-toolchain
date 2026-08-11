@@ -121,9 +121,7 @@ p="tests/compiler/c0/gnu_aligned_record_field.c"; s=read(p)
 s=one(s,'__attribute__((__aligned__(16)))','__attribute__((__aligned__(1 << (4))))',"Linux shift alignment shape")
 write(p,s)
 
-p="tests/compiler/c0/run-gnu-aligned-record-field.sh"; s=read(p)
-s=s.replace('packing=little-endian boundary=type-alignment', 'packing=little-endian boundary=type-alignment') if False else s
-# Preserve existing assertions; only make the migration visible in the PASS contract.
+p="tests/compiler/c0/run-gnu-aligned-record-fields.sh"; s=read(p)
 if 'typed-ast-consteval=1' not in s:
     s=s.replace('minimum-align=16 ', 'minimum-align=16 typed-ast-consteval=1 ', 1)
 write(p,s)
