@@ -15,6 +15,7 @@ mkdir -p "$work"
     -o "$work/comma_operator.s"
 
 test -s "$work/comma_operator.s"
+grep -F 'comma_growth:' "$work/comma_operator.s" >/dev/null
 grep -F 'comma_value:' "$work/comma_operator.s" >/dev/null
 grep -F 'comma_conditions:' "$work/comma_operator.s" >/dev/null
-printf '%s\n' 'PASS compiler/c0/comma_operator parenthesized=1 top-level-condition=while,if void-left=1 assignment-side-effect=1 result=right'
+printf '%s\n' 'PASS compiler/c0/comma_operator parenthesized=1 pool-growth=1 top-level-condition=while,if void-left=1 assignment-side-effect=1 result=right'
