@@ -27,7 +27,7 @@ jobs:
           MINIC="$GITHUB_WORKSPACE/build/bitfield-compiler/bin/minic" \
           HOST_CC=cc \
           BUILD_DIR="$GITHUB_WORKSPACE/build/bitfield-focused" \
-            sh tests/compiler/c0/run-unnamed-bit-fields.sh
+            sh -x tests/compiler/c0/run-unnamed-bit-fields.sh
           MINIC="$GITHUB_WORKSPACE/build/bitfield-compiler/bin/minic" \
           HOST_CC=cc \
           BUILD_DIR="$GITHUB_WORKSPACE/build/bitfield-focused-all" \
