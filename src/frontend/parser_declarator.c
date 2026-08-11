@@ -2,6 +2,25 @@
 
 #include <string.h>
 
+bool minic_parser_parse_function_parameter_suffix(MinicParser *parser,
+                                                  MinicParsedFunctionDeclarator *declarator) {
+    if (parser == NULL || declarator == NULL) {
+        return false;
+    }
+    declarator->parameter_count = 0U;
+    declarator->is_variadic = false;
+    return minic_parser_expect(
+               parser, MINIC_TOKEN_LPAREN, "expected '(' before function parameter list") &&
+           minic_parser_parse_parameter_list(parser,
+                                             NULL,
+                                             declarator->parameter_types,
+                                             &declarator->parameter_count,
+                                             false,
+                                             &declarator->is_variadic) &&
+           minic_parser_expect(
+               parser, MINIC_TOKEN_RPAREN, "expected ')' after function parameter list");
+}
+
 bool minic_parser_parse_parenthesized_function_declarator(
     MinicParser *parser,
     bool require_name,
@@ -38,21 +57,9 @@ bool minic_parser_parse_parenthesized_function_declarator(
         return false;
     }
 
-    if (!minic_parser_expect(
-            parser, MINIC_TOKEN_RPAREN, "expected ')' after function declarator") ||
-        !minic_parser_expect(
-            parser, MINIC_TOKEN_LPAREN, "expected '(' before function parameter list") ||
-        !minic_parser_parse_parameter_list(parser,
-                                           NULL,
-                                           declarator->parameter_types,
-                                           &declarator->parameter_count,
-                                           false,
-                                           &declarator->is_variadic) ||
-        !minic_parser_expect(
-            parser, MINIC_TOKEN_RPAREN, "expected ')' after function parameter list")) {
-        return false;
-    }
-    return true;
+    return minic_parser_expect(
+               parser, MINIC_TOKEN_RPAREN, "expected ')' after function declarator") &&
+           minic_parser_parse_function_parameter_suffix(parser, declarator);
 }
 
 bool minic_parser_parse_array_declarator_suffix(MinicParser *parser,

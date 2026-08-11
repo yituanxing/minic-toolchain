@@ -26,10 +26,10 @@ MinicTypeAliasId minic_parser_find_type_alias(const MinicParser *parser,
     return MINIC_TYPE_ALIAS_INVALID;
 }
 
-static bool parse_function_pointer_typedef(MinicParser *parser,
-                                           MinicType return_type,
-                                           MinicSourceSpan *name_span,
-                                           MinicType *aliased_type) {
+static bool parse_parenthesized_function_typedef(MinicParser *parser,
+                                                 MinicType return_type,
+                                                 MinicSourceSpan *name_span,
+                                                 MinicType *aliased_type) {
     MinicParsedFunctionDeclarator declarator;
 
     if (parser == NULL || name_span == NULL || aliased_type == NULL ||
@@ -131,10 +131,10 @@ bool minic_parser_parse_typedef(MinicParser *parser) {
     MinicTypeAliasId alias_id;
     size_t bounds[8];
     size_t bound_count;
-    bool is_function_pointer;
+    bool is_function_declarator;
 
     bound_count = 0U;
-    is_function_pointer = false;
+    is_function_declarator = false;
     if (!minic_parser_expect(parser, MINIC_TOKEN_KW_TYPEDEF, "expected keyword 'typedef'")) {
         return false;
     }
@@ -146,25 +146,45 @@ bool minic_parser_parse_typedef(MinicParser *parser) {
             return false;
         }
         if (parser->current.kind == MINIC_TOKEN_LPAREN) {
-            if (!parse_function_pointer_typedef(parser, aliased_type, &name_span, &aliased_type)) {
+            if (!parse_parenthesized_function_typedef(
+                    parser, aliased_type, &name_span, &aliased_type)) {
                 return false;
             }
-            is_function_pointer = true;
+            is_function_declarator = true;
+        } else {
+            MinicParsedFunctionDeclarator declarator;
+
+            if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
+                minic_parser_error(parser, "expected typedef name");
+                return false;
+            }
+            name_span = parser->current.span;
+            if (!minic_parser_advance(parser)) {
+                return false;
+            }
+            if (parser->current.kind == MINIC_TOKEN_LPAREN) {
+                (void)memset(&declarator, 0, sizeof(declarator));
+                declarator.name_span = name_span;
+                declarator.has_name = true;
+                if (!minic_parser_parse_function_parameter_suffix(parser, &declarator)) {
+                    return false;
+                }
+                if (declarator.is_variadic) {
+                    minic_parser_error(parser, "variadic function typedefs are not supported yet");
+                    return false;
+                }
+                if (!minic_parser_build_function_declarator_type(
+                        parser, aliased_type, &declarator, &aliased_type)) {
+                    minic_parser_error(parser, "cannot build function typedef type");
+                    return false;
+                }
+                is_function_declarator = true;
+            }
         }
     }
     if (minic_type_is_void(aliased_type)) {
         minic_parser_error(parser, "typedef cannot name bare void");
         return false;
-    }
-    if (!is_function_pointer) {
-        if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
-            minic_parser_error(parser, "expected typedef name");
-            return false;
-        }
-        name_span = parser->current.span;
-        if (!minic_parser_advance(parser)) {
-            return false;
-        }
     }
     if (minic_parser_find_type_alias(parser, name_span) != MINIC_TYPE_ALIAS_INVALID) {
         minic_parser_error(parser, "duplicate typedef name");
@@ -172,8 +192,8 @@ bool minic_parser_parse_typedef(MinicParser *parser) {
     }
 
     while (parser->current.kind == MINIC_TOKEN_LBRACKET) {
-        if (is_function_pointer) {
-            minic_parser_error(parser, "function pointer typedef arrays are not supported yet");
+        if (is_function_declarator) {
+            minic_parser_error(parser, "function typedef array declarators are not supported yet");
             return false;
         }
         if (bound_count >= sizeof(bounds) / sizeof(bounds[0])) {

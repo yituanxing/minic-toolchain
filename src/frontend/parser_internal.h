@@ -183,6 +183,8 @@ bool minic_parser_apply_alignment_attribute(MinicParser *parser,
                                             const MinicParsedAttribute *attribute,
                                             const char *subject,
                                             size_t *explicit_alignment);
+bool minic_parser_parse_function_parameter_suffix(MinicParser *parser,
+                                                  MinicParsedFunctionDeclarator *declarator);
 bool minic_parser_parse_parenthesized_function_declarator(
     MinicParser *parser,
     bool require_name,
