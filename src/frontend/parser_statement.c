@@ -586,7 +586,7 @@ parse_local_declarator(MinicParser *parser, MinicType base_type, bool is_registe
             minic_parser_error(parser, "initializer type does not match local type");
             return false;
         }
-        statement.span.end = initializer_span.end;
+        statement.span.end = initializer->span.end;
         if (!minic_parser_add_statement(parser, &statement)) {
             return false;
         }
@@ -607,8 +607,6 @@ static bool parse_auto_type_local_declaration(MinicParser *parser) {
     MinicLocal local;
     MinicLocalId local_id;
     MinicSourcePosition begin;
-    MinicSourceSpan initializer_span;
-    MinicType initializer_type;
     MinicSourceSpan initializer_span;
     MinicType initializer_type;
 
