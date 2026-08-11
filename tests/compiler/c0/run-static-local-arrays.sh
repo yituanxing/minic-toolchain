@@ -55,8 +55,5 @@ expect_failure() {
 }
 
 expect_failure \
-    invalid_static_local_scalar \
-    "static local object currently requires an initializer or fixed array declarator"
-expect_failure \
     invalid_static_local_duplicate \
     "duplicate local declaration"
