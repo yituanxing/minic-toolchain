@@ -1038,6 +1038,46 @@ static bool parse_static_local_record_initializer(MinicParser *parser,
     return true;
 }
 
+static bool add_implicitly_zero_initialized_static_local(MinicParser *parser,
+                                                         MinicType declared_type,
+                                                         MinicSourceSpan name_span) {
+    char symbol_name[96];
+    MinicGlobalObjectId object_id;
+    int symbol_length;
+
+    if (parser == NULL ||
+        !minic_parser_require_complete_object_type(
+            parser,
+            declared_type,
+            "static local object without an initializer requires a complete object type")) {
+        return false;
+    }
+    symbol_length = snprintf(symbol_name,
+                             sizeof(symbol_name),
+                             "__minic_static_local_%zu_%zu",
+                             (size_t)parser->current_function,
+                             parser->program->global_object_count);
+    if (symbol_length <= 0 || (size_t)symbol_length >= sizeof(symbol_name)) {
+        minic_parser_error(parser, "cannot build implicit-zero static local symbol name");
+        return false;
+    }
+    if (!minic_c0_program_add_global_object(parser->program,
+                                            symbol_name,
+                                            (size_t)symbol_length,
+                                            declared_type,
+                                            true,
+                                            minic_type_is_const(declared_type),
+                                            &object_id) ||
+        !minic_c0_global_object_set_zero_initialized(parser->program, object_id) ||
+        !minic_parser_bind_static_local(parser, name_span, object_id)) {
+        if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+            minic_parser_error(parser, "cannot create implicit-zero static local storage");
+        }
+        return false;
+    }
+    return true;
+}
+
 static bool parse_static_local_array_declarator(MinicParser *parser, MinicType base_type) {
     char symbol_name[96];
     MinicSourceSpan name_span;
@@ -1095,10 +1135,7 @@ static bool parse_static_local_array_declarator(MinicParser *parser, MinicType b
         int scalar_symbol_length;
 
         if (parser->current.kind != MINIC_TOKEN_EQUAL) {
-            minic_parser_error(
-                parser,
-                "static local object currently requires an initializer or fixed array declarator");
-            return false;
+            return add_implicitly_zero_initialized_static_local(parser, declared_type, name_span);
         }
         if (minic_type_is_record(declared_type)) {
             return parse_static_local_record_initializer(parser, declared_type, name_span);
