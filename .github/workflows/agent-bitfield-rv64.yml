@@ -1,0 +1,63 @@
+name: Agent RV64 Bit Field
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  patch-source:
+    if: ${{ github.head_ref == 'refactor/foundation-v1' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/bitfield-rv64-v0
+          fetch-depth: 0
+      - name: Generate and validate slice
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/agent_bitfield_rv64_patch.py
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+          git diff --check
+          make -j4 MODE=release BUILD_DIR=build/bitfield-compiler
+          MINIC="$GITHUB_WORKSPACE/build/bitfield-compiler/bin/minic" \
+          HOST_CC=cc \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/bitfield-focused" \
+            sh tests/compiler/c0/run-unnamed-bit-fields.sh
+          MINIC="$GITHUB_WORKSPACE/build/bitfield-compiler/bin/minic" \
+          HOST_CC=cc \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/bitfield-focused-all" \
+            sh tools/dev/pr76-focused.sh
+          make -j4 MODE=release BUILD_DIR=build/bitfield-compiler check-fast
+      - name: Publish generated source commit
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            src/frontend/ast.h \
+            src/frontend/ast.c \
+            src/frontend/parser_record.c \
+            src/frontend/parser_expression.c \
+            src/target/data_layout.h \
+            src/target/data_layout.c \
+            src/target/riscv64/layout.c \
+            src/target/riscv64/codegen_expression.c \
+            tests/compiler/c0/unnamed_bit_fields.c \
+            tests/compiler/c0/invalid_bit_field_address.c \
+            tests/compiler/c0/invalid_named_zero_bit_field.c \
+            tests/compiler/c0/invalid_bit_field_width.c \
+            tests/compiler/c0/run-unnamed-bit-fields.sh
+          git diff --cached --check
+          git diff --cached --quiet && {
+            printf '%s\n' 'generator produced no source changes' >&2
+            exit 1
+          }
+          git commit -m '[generated] frontend: complete RV64 partial bit-field foundation' \
+            -m 'Extend the canonical DataLayout record allocator from full-width bit-fields to RV64 psABI little-endian partial bit-fields. Keep byte and bit placement owned by DataLayout, materialize it into MinicRecordField, parse named widths through typed ConstEval/TargetInfo, and lower bit-field reads and mutations as byte-precise read-modify-write operations so adjacent ordinary fields are not clobbered. Preserve zero-width barriers and reject address-taking and invalid named widths.\n\n将 canonical DataLayout record allocator 从 full-width bit-field 扩展为符合 RV64 psABI 的 little-endian partial bit-field。字节/位 placement 继续唯一归 DataLayout，materialize 到 MinicRecordField；named width 复用 typed ConstEval/TargetInfo；bit-field 读写和修改使用 byte-precise read-modify-write，避免破坏相邻普通字段。保留 zero-width barrier，并明确拒绝 bit-field 取地址与非法 named width。'
+          git push origin HEAD:agent/bitfield-rv64-v0 --force-with-lease
