@@ -47,8 +47,7 @@ jobs:
             src/frontend/const_eval.c \
             src/target/riscv64/codegen_expression.c \
             tests/compiler/c0/builtin_offsetof.c \
-            tests/compiler/c0/run-builtin-offset-of.sh 2>/dev/null || true
-          git add tests/compiler/c0/run-builtin-offsetof.sh
+            tests/compiler/c0/run-builtin-offsetof.sh
           git diff --cached --check
           git diff --cached --quiet && {
             printf '%s\n' 'generator produced no source changes' >&2
