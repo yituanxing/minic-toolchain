@@ -1087,6 +1087,34 @@ static bool parse_builtin_call_frame_address(MinicParser *parser,
            minic_parser_add_expression(parser, &expression, expression_id);
 }
 
+static bool parse_builtin_unreachable(MinicParser *parser, MinicExpressionId *expression_id) {
+    MinicExpression expression;
+    MinicSourcePosition begin;
+
+    if (parser == NULL || expression_id == NULL ||
+        !generic_token_text_equals(parser, "__builtin_unreachable")) {
+        return false;
+    }
+    begin = parser->current.span.begin;
+    if (!minic_parser_advance(parser) ||
+        !minic_parser_expect(
+            parser, MINIC_TOKEN_LPAREN, "expected '(' after __builtin_unreachable")) {
+        return false;
+    }
+    if (parser->current.kind != MINIC_TOKEN_RPAREN) {
+        minic_parser_error(parser, "__builtin_unreachable takes no arguments");
+        return false;
+    }
+    (void)memset(&expression, 0, sizeof(expression));
+    expression.kind = MINIC_EXPRESSION_BUILTIN_UNREACHABLE;
+    expression.span.begin = begin;
+    expression.span.end = parser->current.span.end;
+    expression.type = minic_type_void();
+    expression.value_category = MINIC_VALUE_RVALUE;
+    return minic_parser_advance(parser) &&
+           minic_parser_add_expression(parser, &expression, expression_id);
+}
+
 static bool parse_builtin_unary(MinicParser *parser,
                                 MinicBuiltinUnaryOperator operator_kind,
                                 const char *spelling,
@@ -1216,6 +1244,13 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
     MinicFixedRegisterBindingId fixed_register_binding_id;
     MinicEnumeratorId enumerator_id;
 
+    if (generic_token_text_equals(parser, "__builtin_unreachable")) {
+        if (!parse_builtin_unreachable(parser, &primary_id) ||
+            !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
+            return false;
+        }
+        return finish_value_expression(parser, primary_id, decay_array, expression_id);
+    }
     if (generic_token_text_equals(parser, "__builtin_return_address")) {
         if (!parse_builtin_call_frame_address(
                 parser, MINIC_CALL_FRAME_ADDRESS_RETURN, "__builtin_return_address", &primary_id) ||

@@ -996,6 +996,11 @@ bool minic_riscv64_emit_expression(FILE *file,
                minic_type_is_function(function_type) &&
                fprintf(file, "  la a0, %s\n", minic_c0_function_symbol_name(designator)) >= 0;
     }
+    case MINIC_EXPRESSION_BUILTIN_UNREACHABLE:
+        /* Reaching this expression is undefined by GNU C. Keep the semantic
+         * leaf for future CFG/IR reasoning, but do not invent a target trap or
+         * external runtime symbol in the current non-optimizing backend. */
+        return minic_type_is_void(expression->type);
     case MINIC_EXPRESSION_CALL_FRAME_ADDRESS: {
         MinicRiscv64FrameLayout frame_layout;
         MinicType pointee;

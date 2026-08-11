@@ -507,6 +507,9 @@ static bool verify_expression(const MinicC0Program *program,
         }
         return true;
     }
+    case MINIC_EXPRESSION_BUILTIN_UNREACHABLE:
+        return expression->value_category == MINIC_VALUE_RVALUE &&
+               minic_type_is_void(expression->type);
     case MINIC_EXPRESSION_CALL_FRAME_ADDRESS: {
         MinicType pointee;
 
