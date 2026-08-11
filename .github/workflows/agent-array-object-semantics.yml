@@ -1,0 +1,62 @@
+name: Agent Array Object Semantics
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  patch-source:
+    if: ${{ github.head_ref == 'refactor/foundation-v1' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/array-object-semantics-v0
+          fetch-depth: 0
+      - name: Generate and validate slice
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/agent_array_object_semantics_patch.py
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+          git diff --check
+          make -j4 MODE=release BUILD_DIR=build/array-object-compiler
+          MINIC="$GITHUB_WORKSPACE/build/array-object-compiler/bin/minic" \
+          HOST_CC=cc \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/array-object-focused" \
+            sh tests/compiler/c0/run-gnu-array-object-identity.sh
+          MINIC="$GITHUB_WORKSPACE/build/array-object-compiler/bin/minic" \
+          HOST_CC=cc \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/array-object-focused-all" \
+            sh tools/dev/pr76-focused.sh
+          make -j4 MODE=release BUILD_DIR=build/array-object-compiler check-fast
+      - name: Publish generated source commit
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            src/frontend/ast.h \
+            src/frontend/ast.c \
+            src/frontend/parser_internal.h \
+            src/frontend/parser_postfix.c \
+            src/frontend/parser_member.c \
+            src/frontend/parser_expression.c \
+            src/frontend/parser_type.c \
+            src/frontend/ast_verifier.c \
+            src/target/riscv64/codegen_expression.c \
+            tests/compiler/c0/gnu_array_object_identity.c \
+            tests/compiler/c0/invalid_record_array_assignment.c \
+            tests/compiler/c0/invalid_record_array_update.c \
+            tests/compiler/c0/invalid_flexible_array_sizeof.c \
+            tests/compiler/c0/run-gnu-array-object-identity.sh \
+            tools/dev/pr76-focused.sh
+          git diff --cached --check
+          git diff --cached --quiet && { echo 'generator produced no source changes' >&2; exit 1; }
+          git commit -m '[generated] frontend: unify array-object semantic identity' \
+            -m 'Preserve record array members as array-object lvalues and route legacy local/member arrays plus true ArrayType expressions through one AST semantic query. Materialize full ArrayType only in no-decay contexts such as address-of, sizeof, and GNU typeof, while decay, subscript, verifier mutation rules, and RV64 addressing consume the same identity. This fixes the Linux flexible-array address shape without encoding an element-pointer shortcut.\n\n保留 record array member 的 array-object lvalue 身份，让 legacy local/member array 与真正 ArrayType expression 共用一个 AST semantic query。仅在 address-of、sizeof、GNU typeof 等 no-decay 场景 materialize 完整 ArrayType；decay、subscript、Verifier 修改规则与 RV64 地址生成都消费同一身份。这样修复 Linux flexible-array 取地址，而不把它错误降级成 element pointer。'
+          git push origin HEAD:agent/array-object-semantics-v0 --force-with-lease
