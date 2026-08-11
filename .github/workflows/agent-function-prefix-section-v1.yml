@@ -1,0 +1,46 @@
+name: Agent Function Prefix Section V1
+
+on:
+  pull_request:
+    types: [synchronize]
+
+permissions:
+  contents: write
+
+jobs:
+  patch-source:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/foundation-v1
+          fetch-depth: 0
+      - name: Generate function prefix section source
+        run: python3 tools/dev/agent_function_prefix_section_v1.py
+      - name: Format generated source
+        run: CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+      - name: Build release compiler
+        run: make -j4 MODE=release BUILD_DIR=build/agent-function-prefix-section
+      - name: Run section symbol focused contract
+        run: |
+          MINIC="$GITHUB_WORKSPACE/build/agent-function-prefix-section/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/agent-function-prefix-section-focused" \
+          HOST_CC=cc \
+            sh tests/compiler/c0/run-gnu-section-symbol-attribute.sh
+      - name: Run Foundation focused contracts
+        run: |
+          MINIC="$GITHUB_WORKSPACE/build/agent-function-prefix-section/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/agent-function-prefix-section-foundation" \
+          HOST_CC=cc \
+            sh tools/dev/pr76-focused.sh
+      - name: Run fast compiler contracts
+        run: make -j4 MODE=release BUILD_DIR=build/agent-function-prefix-section check-fast
+      - name: Publish generated source to scratch branch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/frontend/parser_function.c \
+                  tests/compiler/c0/gnu_section_symbol_attribute.c \
+                  tests/compiler/c0/run-gnu-section-symbol-attribute.sh
+          git commit -m 'frontend: apply prefix section attributes to functions'
+          git push --force origin HEAD:agent/function-prefix-section-v1
