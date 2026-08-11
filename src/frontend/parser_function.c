@@ -569,18 +569,6 @@ static bool parse_function_pointer_parameter_declarator(MinicParser *parser,
     return true;
 }
 
-static bool parse_function_signature_type_name(MinicParser *parser, MinicType *type) {
-    MinicType base_type;
-
-    /* A function declaration may preserve an incomplete record/enum by value in
-     * its signature. Completeness becomes mandatory only when a definition
-     * materializes the return/parameter ABI or when ordinary object storage is
-     * created. Keep this parser about signature identity, not storage. */
-    return parser != NULL && type != NULL &&
-           minic_parser_parse_type_specifiers(parser, &base_type) &&
-           minic_parser_parse_pointer_declarator(parser, base_type, type);
-}
-
 bool minic_parser_parse_parameter_list(MinicParser *parser,
                                        MinicSourceSpan *parameter_name_spans,
                                        MinicType *parameter_types,
@@ -610,7 +598,7 @@ bool minic_parser_parse_parameter_list(MinicParser *parser,
             minic_parser_error(parser, "parameter count exceeds compiler limit");
             return false;
         }
-        if (!parse_function_signature_type_name(parser, &parameter_type)) {
+        if (!minic_parser_parse_type_name_preserving_incomplete(parser, &parameter_type)) {
             return false;
         }
         (void)memset(&declarator_name_span, 0, sizeof(declarator_name_span));

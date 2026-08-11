@@ -250,6 +250,7 @@ MinicFixedRegisterBindingId minic_parser_find_fixed_register_binding(const Minic
 MinicRecordId minic_parser_find_record(const MinicParser *parser, MinicSourceSpan name_span);
 MinicTypeAliasId minic_parser_find_type_alias(const MinicParser *parser, MinicSourceSpan name_span);
 
+bool minic_parser_parse_type_name_preserving_incomplete(MinicParser *parser, MinicType *type);
 bool minic_parser_parse_record_definition_specifier(MinicParser *parser, MinicType *record_type);
 bool minic_parser_parse_record_definition(MinicParser *parser);
 bool minic_parser_parse_enum_definition(MinicParser *parser);

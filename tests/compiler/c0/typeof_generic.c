@@ -1,5 +1,13 @@
 extern int generic_side_effect(void);
 
+struct TypeofPending;
+extern __attribute__((section(".probe.typeof.incomplete")))
+    __typeof__(struct TypeofPending) typeof_pending_object;
+
+void *typeof_incomplete_object_address(void) {
+    return &typeof_pending_object;
+}
+
 unsigned long generic_selected_value(unsigned long value) {
     return _Generic(value,
                     int: 3UL,

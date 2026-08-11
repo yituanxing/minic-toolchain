@@ -16,7 +16,8 @@ mkdir -p "$work"
 
 test -s "$assembly"
 for symbol in generic_selected_value generic_default_value generic_controlling_is_unevaluated \
-              typeof_expression_size typeof_type_name_size typeof_generic_pointer_size; do
+              typeof_expression_size typeof_type_name_size typeof_generic_pointer_size \
+              typeof_incomplete_object_address; do
     grep -F "$symbol:" "$assembly" >/dev/null
 done
 # Selected/default generic values must survive frontend selection lowering.
@@ -31,5 +32,18 @@ fi
 # RV64 unsigned long and pointers are both eight bytes.
 size8=$(grep -c '  li a0, 8' "$assembly" || true)
 test "$size8" -ge 3
+grep -F 'typeof_pending_object' "$assembly" >/dev/null
 
-printf '%s\n' 'PASS compiler/c0/typeof_generic typeof=expression,type-name generic=typed,default controlling=unevaluated linux-shape=1'
+cat >"$work/incomplete-sizeof.c" <<'EOF'
+struct StillPending;
+unsigned long bad_size(void) { return sizeof(__typeof__(struct StillPending)); }
+EOF
+"$host_cc" -E -P -std=gnu11 -x c "$work/incomplete-sizeof.c" -o "$work/incomplete-sizeof.i"
+if "$minic" -S "$work/incomplete-sizeof.i" -o "$work/incomplete-sizeof.s" \
+    2>"$work/incomplete-sizeof.stderr"; then
+    printf '%s\n' 'FAIL compiler/c0/typeof_generic: sizeof incomplete typeof accepted' >&2
+    exit 1
+fi
+grep -F 'incomplete record type requires pointer declarator' "$work/incomplete-sizeof.stderr" >/dev/null
+
+printf '%s\n' 'PASS compiler/c0/typeof_generic typeof=expression,type-name,incomplete-type-preserved generic=typed,default controlling=unevaluated linux-shape=1 completeness=consumer-owned'

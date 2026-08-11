@@ -279,7 +279,7 @@ bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type) {
             return false;
         }
         if (minic_parser_token_starts_type_name(parser, parser->current)) {
-            if (!minic_parser_parse_type_name(parser, &parsed_type)) {
+            if (!minic_parser_parse_type_name_preserving_incomplete(parser, &parsed_type)) {
                 return false;
             }
         } else {
@@ -562,11 +562,16 @@ bool minic_parser_parse_pointer_declarator(MinicParser *parser,
     return true;
 }
 
-bool minic_parser_parse_type_name(MinicParser *parser, MinicType *type) {
+bool minic_parser_parse_type_name_preserving_incomplete(MinicParser *parser, MinicType *type) {
     MinicType base_type;
 
-    if (!minic_parser_parse_type_specifiers(parser, &base_type) ||
-        !minic_parser_parse_pointer_declarator(parser, base_type, type)) {
+    return parser != NULL && type != NULL &&
+           minic_parser_parse_type_specifiers(parser, &base_type) &&
+           minic_parser_parse_pointer_declarator(parser, base_type, type);
+}
+
+bool minic_parser_parse_type_name(MinicParser *parser, MinicType *type) {
+    if (!minic_parser_parse_type_name_preserving_incomplete(parser, type)) {
         return false;
     }
     return minic_parser_require_complete_object_type(
