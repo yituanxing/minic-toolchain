@@ -617,6 +617,17 @@ static bool parse_builtin_offsetof(MinicParser *parser, MinicExpressionId *expre
         minic_parser_error(parser, "empty record field path in __builtin_offsetof");
         return false;
     }
+    {
+        const MinicRecord *final_record;
+        const MinicRecordField *final_field;
+
+        final_record = minic_c0_program_record(parser->program, path.record_ids[path.depth - 1U]);
+        final_field = minic_c0_record_field(final_record, path.field_indices[path.depth - 1U]);
+        if (final_field == NULL || final_field->is_bit_field) {
+            minic_parser_error(parser, "__builtin_offsetof cannot name a bit-field");
+            return false;
+        }
+    }
 
     anonymous_prefix_offset = 0U;
     for (path_index = 0U; path_index + 1U < path.depth; ++path_index) {
@@ -1696,6 +1707,10 @@ static bool parse_unary(MinicParser *parser, MinicExpressionId *expression_id, b
         } else {
             if (local_array_without_array_type(parser, operand_expression)) {
                 minic_parser_error(parser, "address-of local array object is not supported yet");
+                return false;
+            }
+            if (minic_c0_expression_bit_field(parser->program, operand) != NULL) {
+                minic_parser_error(parser, "cannot take the address of a bit-field");
                 return false;
             }
             if (operand_expression->value_category != MINIC_VALUE_LVALUE ||

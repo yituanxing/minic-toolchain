@@ -685,15 +685,18 @@ bool minic_c0_record_add_field(MinicC0Program *program,
     return true;
 }
 
-bool minic_c0_record_add_unnamed_bit_field(MinicC0Program *program,
-                                           MinicRecordId record_id,
-                                           MinicType type,
-                                           size_t bit_width) {
+bool minic_c0_record_add_bit_field(MinicC0Program *program,
+                                   MinicRecordId record_id,
+                                   const char *name,
+                                   size_t name_length,
+                                   MinicType type,
+                                   size_t bit_width) {
     MinicRecord *record;
     MinicRecordField *field;
 
-    if (program == NULL || record_id >= program->record_count || !minic_type_is_integer(type) ||
-        !minic_c0_record_add_field(program, record_id, "", 0U, type, 1U)) {
+    if (program == NULL || record_id >= program->record_count || name == NULL ||
+        !minic_type_is_integer(type) || (name_length != 0U && bit_width == 0U) ||
+        !minic_c0_record_add_field(program, record_id, name, name_length, type, 1U)) {
         return false;
     }
     record = &program->records[record_id];
@@ -702,6 +705,13 @@ bool minic_c0_record_add_unnamed_bit_field(MinicC0Program *program,
     field->bit_width = bit_width;
     field->bit_offset = 0U;
     return true;
+}
+
+bool minic_c0_record_add_unnamed_bit_field(MinicC0Program *program,
+                                           MinicRecordId record_id,
+                                           MinicType type,
+                                           size_t bit_width) {
+    return minic_c0_record_add_bit_field(program, record_id, "", 0U, type, bit_width);
 }
 
 bool minic_c0_program_finish_record(MinicC0Program *program, MinicRecordId record_id) {
@@ -896,10 +906,25 @@ bool minic_c0_program_add_type_alias(MinicC0Program *program,
 
 const MinicExpression *minic_c0_program_expression(const MinicC0Program *program,
                                                    MinicExpressionId expression_id) {
-    if (expression_id >= program->expression_count) {
+    if (program == NULL || expression_id >= program->expression_count) {
         return NULL;
     }
     return &program->expressions[expression_id];
+}
+
+const MinicRecordField *minic_c0_expression_bit_field(const MinicC0Program *program,
+                                                      MinicExpressionId expression_id) {
+    const MinicExpression *expression;
+    const MinicRecord *record;
+    const MinicRecordField *field;
+
+    expression = minic_c0_program_expression(program, expression_id);
+    if (expression == NULL || expression->kind != MINIC_EXPRESSION_MEMBER) {
+        return NULL;
+    }
+    record = minic_c0_program_record(program, expression->value.member.record_id);
+    field = minic_c0_record_field(record, expression->value.member.field_index);
+    return field != NULL && field->is_bit_field ? field : NULL;
 }
 
 bool minic_c0_record_value_is_address_backed(const MinicC0Program *program,

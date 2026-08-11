@@ -529,6 +529,12 @@ bool minic_c0_record_add_field(MinicC0Program *program,
                                size_t name_length,
                                MinicType type,
                                size_t element_count);
+bool minic_c0_record_add_bit_field(MinicC0Program *program,
+                                   MinicRecordId record_id,
+                                   const char *name,
+                                   size_t name_length,
+                                   MinicType type,
+                                   size_t bit_width);
 bool minic_c0_record_add_unnamed_bit_field(MinicC0Program *program,
                                            MinicRecordId record_id,
                                            MinicType type,
@@ -596,6 +602,8 @@ bool minic_c0_global_object_set_explicit_alignment(MinicC0Program *program,
 
 const MinicExpression *minic_c0_program_expression(const MinicC0Program *program,
                                                    MinicExpressionId expression_id);
+const MinicRecordField *minic_c0_expression_bit_field(const MinicC0Program *program,
+                                                      MinicExpressionId expression_id);
 bool minic_c0_record_value_is_address_backed(const MinicC0Program *program,
                                              MinicExpressionId expression_id);
 bool minic_c0_record_value_is_copy_source(const MinicC0Program *program,

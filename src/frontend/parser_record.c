@@ -117,6 +117,50 @@ static bool parse_record_field_alignment_attribute(MinicParser *parser, size_t *
     return true;
 }
 
+static bool parse_record_bit_field_width(MinicParser *parser,
+                                         MinicType field_type,
+                                         bool allow_zero,
+                                         size_t *bit_width) {
+    MinicConstValue width_value;
+    MinicExpressionId width_expression;
+    unsigned int type_bits;
+    int64_t width;
+
+    if (parser == NULL || bit_width == NULL || !minic_type_is_integer(field_type)) {
+        if (parser != NULL) {
+            minic_parser_error(parser, "bit-field requires an integer type");
+        }
+        return false;
+    }
+    if (!minic_parser_expect(parser, MINIC_TOKEN_COLON, "expected ':' before bit-field width") ||
+        !minic_parser_parse_expression(parser, &width_expression, 0U) ||
+        !minic_const_eval_integer(
+            parser->program, parser->target_info, width_expression, &width_value) ||
+        !minic_const_value_as_int64(parser->program, parser->target_info, &width_value, &width)) {
+        if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+            minic_parser_error(parser, "bit-field width must be an integer constant expression");
+        }
+        return false;
+    }
+    if (!minic_target_info_integer_width(
+            parser->target_info, parser->program, field_type, &type_bits)) {
+        minic_parser_error(parser, "cannot determine target width of bit-field type");
+        return false;
+    }
+    if (minic_type_is_bool_integer(field_type)) {
+        type_bits = 1U;
+    }
+    if (width < 0 || (uint64_t)width > (uint64_t)type_bits || (!allow_zero && width == 0)) {
+        minic_parser_error(parser,
+                           allow_zero
+                               ? "bit-field width exceeds its integer type"
+                               : "named bit-field width must be positive and fit its integer type");
+        return false;
+    }
+    *bit_width = (size_t)width;
+    return true;
+}
+
 static bool
 parse_record_field_declarator(MinicParser *parser, MinicRecordId record_id, MinicType base_type) {
     MinicSourceSpan name_span;
@@ -163,6 +207,23 @@ parse_record_field_declarator(MinicParser *parser, MinicRecordId record_id, Mini
     if (record_has_field(parser, record, name_span)) {
         minic_parser_error(parser, "duplicate record field");
         return false;
+    }
+    if (parser->current.kind == MINIC_TOKEN_COLON) {
+        size_t bit_width;
+
+        if (!parse_record_bit_field_width(parser, field_type, false, &bit_width) ||
+            !minic_c0_record_add_bit_field(parser->program,
+                                           record_id,
+                                           parser->source + name_span.begin.offset,
+                                           minic_parser_span_length(name_span),
+                                           field_type,
+                                           bit_width)) {
+            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                minic_parser_error(parser, "cannot add named bit-field");
+            }
+            return false;
+        }
+        return true;
     }
 
     element_count = 1U;
@@ -354,33 +415,12 @@ static bool parse_record_field(MinicParser *parser, MinicRecordId record_id) {
     }
 
     if (parser->current.kind == MINIC_TOKEN_COLON) {
-        MinicConstValue width_value;
-        MinicExpressionId width_expression;
-        int64_t bit_width;
+        size_t bit_width;
 
-        if (!minic_type_is_integer(base_type)) {
-            minic_parser_error(parser, "unnamed bit-field requires an integer type");
-            return false;
-        }
-        if (!minic_parser_advance(parser) ||
-            !minic_parser_parse_expression(parser, &width_expression, 0U) ||
-            !minic_const_eval_integer(
-                parser->program, parser->target_info, width_expression, &width_value) ||
-            !minic_const_value_as_int64(
-                parser->program, parser->target_info, &width_value, &bit_width)) {
-            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
-                minic_parser_error(parser,
-                                   "bit-field width must be an integer constant expression");
-            }
-            return false;
-        }
-        if (bit_width < 0 || (uint64_t)bit_width > (uint64_t)SIZE_MAX) {
-            minic_parser_error(parser, "bit-field width is outside the target object range");
-            return false;
-        }
-        if (!minic_parser_expect(parser, MINIC_TOKEN_SEMICOLON, "expected ';' after bit-field") ||
+        if (!parse_record_bit_field_width(parser, base_type, true, &bit_width) ||
+            !minic_parser_expect(parser, MINIC_TOKEN_SEMICOLON, "expected ';' after bit-field") ||
             !minic_c0_record_add_unnamed_bit_field(
-                parser->program, record_id, base_type, (size_t)bit_width)) {
+                parser->program, record_id, base_type, bit_width)) {
             if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
                 minic_parser_error(parser, "cannot add unnamed bit-field");
             }

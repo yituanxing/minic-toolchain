@@ -268,6 +268,170 @@ static bool minic_riscv64_emit_scale_register(FILE *file,
                    scratch_register) >= 0;
 }
 
+static bool minic_riscv64_emit_bit_field_load_from_address(FILE *file,
+                                                           const MinicRecordField *field,
+                                                           const char *result_register,
+                                                           const char *address_register) {
+    size_t byte_count;
+    size_t index;
+    unsigned int shift;
+
+    if (file == NULL || field == NULL || result_register == NULL || address_register == NULL ||
+        !field->is_bit_field || field->bit_width == 0U || field->bit_width > 64U ||
+        field->bit_offset >= 8U || field->bit_offset > SIZE_MAX - field->bit_width) {
+        return false;
+    }
+    byte_count = (field->bit_offset + field->bit_width + 7U) / 8U;
+    if (byte_count == 0U || byte_count > 8U ||
+        fprintf(file, "  mv t5, %s\n", address_register) < 0 ||
+        fprintf(file, "  li %s, 0\n", result_register) < 0) {
+        return false;
+    }
+    for (index = 0U; index < byte_count; ++index) {
+        if (fprintf(file, "  lbu t6, %zu(t5)\n", index) < 0) {
+            return false;
+        }
+        if (index != 0U && fprintf(file, "  slli t6, t6, %zu\n", index * 8U) < 0) {
+            return false;
+        }
+        if (fprintf(file, "  or %s, %s, t6\n", result_register, result_register) < 0) {
+            return false;
+        }
+    }
+    if (field->bit_offset != 0U &&
+        fprintf(file, "  srli %s, %s, %zu\n", result_register, result_register, field->bit_offset) <
+            0) {
+        return false;
+    }
+    if (field->bit_width == 64U) {
+        return true;
+    }
+    shift = 64U - (unsigned int)field->bit_width;
+    if (fprintf(file, "  slli %s, %s, %u\n", result_register, result_register, shift) < 0) {
+        return false;
+    }
+    return fprintf(file,
+                   minic_type_is_signed_integer(field->type) &&
+                           !minic_type_is_bool_integer(field->type)
+                       ? "  srai %s, %s, %u\n"
+                       : "  srli %s, %s, %u\n",
+                   result_register,
+                   result_register,
+                   shift) >= 0;
+}
+
+static bool minic_riscv64_emit_bit_field_store_to_address(FILE *file,
+                                                          const MinicRecordField *field,
+                                                          const char *value_register,
+                                                          const char *address_register) {
+    uint64_t value_mask;
+    uint64_t positioned_mask;
+    size_t byte_count;
+    size_t index;
+    unsigned int shift;
+
+    if (file == NULL || field == NULL || value_register == NULL || address_register == NULL ||
+        !field->is_bit_field || field->bit_width == 0U || field->bit_width > 64U ||
+        field->bit_offset >= 8U || field->bit_offset > SIZE_MAX - field->bit_width) {
+        return false;
+    }
+    byte_count = (field->bit_offset + field->bit_width + 7U) / 8U;
+    if (byte_count == 0U || byte_count > 8U ||
+        fprintf(file, "  mv t5, %s\n  li t2, 0\n", address_register) < 0) {
+        return false;
+    }
+    for (index = 0U; index < byte_count; ++index) {
+        if (fprintf(file, "  lbu t6, %zu(t5)\n", index) < 0 ||
+            (index != 0U && fprintf(file, "  slli t6, t6, %zu\n", index * 8U) < 0) ||
+            fprintf(file, "  or t2, t2, t6\n") < 0) {
+            return false;
+        }
+    }
+    if (field->bit_width == 64U) {
+        if (field->bit_offset != 0U || fprintf(file, "  mv t2, %s\n", value_register) < 0) {
+            return false;
+        }
+    } else {
+        value_mask = (UINT64_C(1) << field->bit_width) - UINT64_C(1);
+        positioned_mask = value_mask << field->bit_offset;
+        if (fprintf(file,
+                    "  li t3, %" PRIu64 "\n"
+                    "  and t4, %s, t3\n",
+                    value_mask,
+                    value_register) < 0 ||
+            (field->bit_offset != 0U &&
+             fprintf(file, "  slli t4, t4, %zu\n", field->bit_offset) < 0) ||
+            fprintf(file,
+                    "  li t3, %" PRIu64 "\n"
+                    "  not t3, t3\n"
+                    "  and t2, t2, t3\n"
+                    "  or t2, t2, t4\n",
+                    positioned_mask) < 0) {
+            return false;
+        }
+    }
+    for (index = 0U; index < byte_count; ++index) {
+        if (index == 0U) {
+            if (fprintf(file, "  sb t2, 0(t5)\n") < 0) {
+                return false;
+            }
+        } else if (fprintf(file,
+                           "  srli t6, t2, %zu\n"
+                           "  sb t6, %zu(t5)\n",
+                           index * 8U,
+                           index) < 0) {
+            return false;
+        }
+    }
+    if (field->bit_width == 64U) {
+        return true;
+    }
+    shift = 64U - (unsigned int)field->bit_width;
+    if (fprintf(file, "  slli %s, %s, %u\n", value_register, value_register, shift) < 0) {
+        return false;
+    }
+    return fprintf(file,
+                   minic_type_is_signed_integer(field->type) &&
+                           !minic_type_is_bool_integer(field->type)
+                       ? "  srai %s, %s, %u\n"
+                       : "  srli %s, %s, %u\n",
+                   value_register,
+                   value_register,
+                   shift) >= 0;
+}
+
+static bool minic_riscv64_emit_lvalue_load_from_address(FILE *file,
+                                                        const MinicC0Program *program,
+                                                        MinicExpressionId expression_id,
+                                                        MinicType type,
+                                                        const char *result_register,
+                                                        const char *address_register) {
+    const MinicRecordField *field;
+
+    field = minic_c0_expression_bit_field(program, expression_id);
+    if (field != NULL) {
+        return minic_riscv64_emit_bit_field_load_from_address(
+            file, field, result_register, address_register);
+    }
+    return minic_riscv64_emit_scalar_load(file, type, result_register, address_register);
+}
+
+static bool minic_riscv64_emit_lvalue_store_to_address(FILE *file,
+                                                       const MinicC0Program *program,
+                                                       MinicExpressionId expression_id,
+                                                       MinicType type,
+                                                       const char *value_register,
+                                                       const char *address_register) {
+    const MinicRecordField *field;
+
+    field = minic_c0_expression_bit_field(program, expression_id);
+    if (field != NULL) {
+        return minic_riscv64_emit_bit_field_store_to_address(
+            file, field, value_register, address_register);
+    }
+    return minic_riscv64_emit_scalar_store(file, type, value_register, address_register);
+}
+
 static bool minic_riscv64_emit_update(FILE *file,
                                       const MinicC0Program *program,
                                       const MinicFunction *function,
@@ -302,7 +466,8 @@ static bool minic_riscv64_emit_update(FILE *file,
     if (!minic_riscv64_emit_lvalue_address(
             file, program, function, expression->value.unary.operand) ||
         fprintf(file, "  addi sp, sp, -16\n  sd a0, 0(sp)\n") < 0 ||
-        !minic_riscv64_emit_scalar_load(file, operand->type, "t0", "a0") ||
+        !minic_riscv64_emit_lvalue_load_from_address(
+            file, program, expression->value.unary.operand, operand->type, "t0", "a0") ||
         fprintf(file, "  sd t0, 8(sp)\n") < 0) {
         return false;
     }
@@ -325,7 +490,8 @@ static bool minic_riscv64_emit_update(FILE *file,
         return false;
     }
     if (fprintf(file, "  ld t1, 0(sp)\n") < 0 ||
-        !minic_riscv64_emit_scalar_store(file, operand->type, "t0", "t1")) {
+        !minic_riscv64_emit_lvalue_store_to_address(
+            file, program, expression->value.unary.operand, operand->type, "t0", "t1")) {
         return false;
     }
     return prefix ? fprintf(file, "  mv a0, t0\n  addi sp, sp, 16\n") >= 0
@@ -1009,12 +1175,14 @@ bool minic_riscv64_emit_expression(FILE *file,
         if (field->is_array) {
             return minic_type_is_pointer(expression->type);
         }
-        return minic_riscv64_emit_scalar_load(file, expression->type, "a0", "a0");
+        return minic_riscv64_emit_lvalue_load_from_address(
+            file, program, expression_id, expression->type, "a0", "a0");
     }
     case MINIC_EXPRESSION_LVALUE_READ:
         return minic_riscv64_emit_lvalue_address(
                    file, program, function, expression->value.unary.operand) &&
-               minic_riscv64_emit_scalar_load(file, expression->type, "a0", "a0");
+               minic_riscv64_emit_lvalue_load_from_address(
+                   file, program, expression->value.unary.operand, expression->type, "a0", "a0");
     case MINIC_EXPRESSION_ASSIGNMENT: {
         const MinicExpression *target;
         const MinicExpression *value;
@@ -1044,7 +1212,8 @@ bool minic_riscv64_emit_expression(FILE *file,
                        "  mv t0, a0\n"
                        "  ld t1, 0(sp)\n"
                        "  addi sp, sp, 16\n") >= 0 &&
-               minic_riscv64_emit_scalar_store(file, target->type, "t0", "t1") &&
+               minic_riscv64_emit_lvalue_store_to_address(
+                   file, program, expression->value.binary.left, target->type, "t0", "t1") &&
                fprintf(file, "  mv a0, t0\n") >= 0;
     }
     case MINIC_EXPRESSION_COMPOUND_ASSIGNMENT: {
@@ -1060,7 +1229,8 @@ bool minic_riscv64_emit_expression(FILE *file,
             !minic_riscv64_emit_lvalue_address(
                 file, program, function, expression->value.binary.left) ||
             fprintf(file, "  addi sp, sp, -32\n  sd a0, 0(sp)\n") < 0 ||
-            !minic_riscv64_emit_scalar_load(file, target->type, "a0", "a0")) {
+            !minic_riscv64_emit_lvalue_load_from_address(
+                file, program, expression->value.binary.left, target->type, "a0", "a0")) {
             return false;
         }
         if (minic_type_is_pointer(target->type)) {
@@ -1161,7 +1331,8 @@ bool minic_riscv64_emit_expression(FILE *file,
                        "  mv t0, a0\n"
                        "  ld t1, 0(sp)\n"
                        "  addi sp, sp, 32\n") >= 0 &&
-               minic_riscv64_emit_scalar_store(file, target->type, "t0", "t1") &&
+               minic_riscv64_emit_lvalue_store_to_address(
+                   file, program, expression->value.binary.left, target->type, "t0", "t1") &&
                fprintf(file, "  mv a0, t0\n") >= 0;
     }
     case MINIC_EXPRESSION_UNARY:

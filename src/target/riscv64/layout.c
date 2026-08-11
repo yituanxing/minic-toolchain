@@ -67,16 +67,15 @@ static bool minic_riscv64_layout_records(MinicC0Program *program) {
         for (field_index = 0U; field_index < record->field_count; ++field_index) {
             MinicRecordField *field;
             size_t field_offset;
+            size_t bit_offset;
 
             field = &record->fields[field_index];
-            if (!minic_data_layout_record_field_offset(
-                    layout, program, record, field_index, &field_offset)) {
+            if (!minic_data_layout_record_field_layout(
+                    layout, program, record, field_index, &field_offset, &bit_offset)) {
                 return false;
             }
             field->storage_offset = field_offset;
-            if (field->is_bit_field) {
-                field->bit_offset = 0U;
-            }
+            field->bit_offset = bit_offset;
         }
         record->storage_size = storage_size;
         record->alignment = alignment;
