@@ -1,0 +1,53 @@
+name: Agent Enum Typed ConstEval
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  patch-source:
+    if: ${{ github.head_ref == 'refactor/foundation-v1' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/enum-typed-consteval-v0
+          fetch-depth: 0
+      - name: Generate and validate slice
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/agent_enum_typed_consteval_patch.py
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+          git diff --check
+          make -j4 MODE=release BUILD_DIR=build/enum-typed-consteval-compiler
+          MINIC="$GITHUB_WORKSPACE/build/enum-typed-consteval-compiler/bin/minic" \
+          HOST_CC=cc \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/enum-typed-consteval-focused" \
+            sh tests/compiler/c0/run-enum-constant-expressions.sh
+          MINIC="$GITHUB_WORKSPACE/build/enum-typed-consteval-compiler/bin/minic" \
+          HOST_CC=cc \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/enum-typed-consteval-focused-all" \
+            sh tools/dev/pr76-focused.sh
+          make -j4 MODE=release BUILD_DIR=build/enum-typed-consteval-compiler check-fast
+      - name: Publish generated source commit
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            src/frontend/parser_enum.c \
+            tests/compiler/c0/enum_constant_expression.c \
+            tests/compiler/c0/run-enum-constant-expressions.sh
+          git diff --cached --check
+          git diff --cached --quiet && {
+            printf '%s\n' 'generator produced no source changes' >&2
+            exit 1
+          }
+          git commit -m '[generated] frontend: evaluate enum initializers through typed ConstEval' \
+            -m 'Route enum initializer expressions through the normal semantic expression parser and typed integer ConstEval instead of extending the legacy token-level ICE interpreter. This immediately reuses relational, logical, and conditional-expression semantics, including selected-branch evaluation, while preserving int-range checks and rejection of runtime values. Keep other legacy ICE consumers unchanged for this bounded migration.\n\n将 enum initializer expression 接入普通 semantic expression parser 与 typed integer ConstEval，而不是继续扩展旧 token-level ICE interpreter。由此直接复用 relational、logical、conditional-expression 以及只求值被选分支的语义，同时保留 int 范围检查与 runtime value 拒绝。其他旧 ICE consumer 在本次受控迁移中保持不变。'
+          git push origin HEAD:agent/enum-typed-consteval-v0 --force-with-lease
