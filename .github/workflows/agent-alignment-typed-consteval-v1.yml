@@ -35,7 +35,7 @@ jobs:
           BUILD_DIR: ${{ github.workspace }}/build/agent-alignment-typed-focused
           HOST_CC: cc
         run: |
-          sh tests/compiler/c0/run-gnu-aligned-record-field.sh
+          sh tests/compiler/c0/run-gnu-aligned-record-fields.sh
           sh tests/compiler/c0/run-gnu-record-alignment.sh
       - name: Run Foundation focused contracts
         env:
