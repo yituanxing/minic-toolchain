@@ -29,7 +29,7 @@ jobs:
       - name: Format generated source
         run: |
           chmod +x tests/compiler/c0/run-gnu-enum-entity.sh
-          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh apply
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
 
       - name: Build release compiler
