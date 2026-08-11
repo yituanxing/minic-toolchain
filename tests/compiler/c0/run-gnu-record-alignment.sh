@@ -38,4 +38,4 @@ done
 grep -F 'GNU attribute has an invalid number of arguments' "$work/invalid_record_designated_init_arguments.err" >/dev/null
 grep -F 'GNU designated_init applies only to struct types' "$work/invalid_union_designated_init.err" >/dev/null
 
-printf '%s\n' 'PASS compiler/c0/gnu_record_alignment sizeof-pointer=8 overalign=16 holder-offset=16 holder-size=32 shared-alignment-decoder=1 designated-init=diagnostic-struct-only mixed-suffix=1'
+printf '%s\n' 'PASS compiler/c0/gnu_record_alignment sizeof-pointer=8 overalign=16 holder-offset=16 holder-size=32 shared-alignment-decoder=1 typed-alignment-consteval=1 designated-init=diagnostic-struct-only mixed-suffix=1'

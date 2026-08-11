@@ -1,6 +1,6 @@
 struct AlignedField {
     char prefix;
-    unsigned long long values[2] __attribute__((__aligned__(16)));
+    unsigned long long values[2] __attribute__((__aligned__(1 << (4))));
     char tail;
 };
 

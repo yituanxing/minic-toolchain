@@ -181,6 +181,9 @@ bool minic_parser_apply_alignment_attribute(MinicParser *parser,
                                             const char *subject,
                                             size_t *explicit_alignment) {
     MinicParser probe;
+    MinicExpressionId expression_id;
+    const MinicExpression *expression;
+    MinicConstValue constant_value;
     int64_t parsed_alignment;
     size_t alignment;
 
@@ -195,9 +198,21 @@ bool minic_parser_apply_alignment_attribute(MinicParser *parser,
     probe.lexer.line = attribute->arguments_span.begin.line;
     probe.lexer.column = attribute->arguments_span.begin.column + 1U;
     if (!minic_parser_advance(&probe) ||
-        !minic_parser_parse_integer_constant_expression(&probe, &parsed_alignment) ||
-        probe.current.kind != MINIC_TOKEN_RPAREN ||
-        probe.current.span.end.offset != attribute->arguments_span.end.offset) {
+        !minic_parser_parse_expression(&probe, &expression_id, 0U)) {
+        if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+            minic_parser_error(
+                parser, "GNU %s alignment requires one integer constant expression", subject);
+        }
+        return false;
+    }
+    expression = minic_c0_program_expression(parser->program, expression_id);
+    if (probe.current.kind != MINIC_TOKEN_RPAREN ||
+        probe.current.span.end.offset != attribute->arguments_span.end.offset ||
+        expression == NULL || !minic_type_is_integer(expression->type) ||
+        !minic_const_eval_integer(
+            parser->program, parser->target_info, expression_id, &constant_value) ||
+        !minic_const_value_as_int64(
+            parser->program, parser->target_info, &constant_value, &parsed_alignment)) {
         if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
             minic_parser_error(
                 parser, "GNU %s alignment requires one integer constant expression", subject);

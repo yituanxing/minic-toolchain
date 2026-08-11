@@ -78,42 +78,45 @@ static bool parse_packed_record_attribute(MinicParser *parser, bool *is_packed) 
            minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')' after __attribute__");
 }
 
-static bool parse_record_field_alignment_attribute(MinicParser *parser, size_t *alignment) {
-    int64_t value;
+typedef struct MinicRecordFieldAttributeContext {
+    size_t explicit_alignment;
+} MinicRecordFieldAttributeContext;
 
-    if (parser == NULL || alignment == NULL) {
+static bool consume_record_field_attribute(MinicParser *parser,
+                                           const MinicParsedAttribute *attribute,
+                                           void *opaque_context) {
+    MinicRecordFieldAttributeContext *context;
+    const MinicAttributeDescriptor *descriptor;
+
+    if (parser == NULL || attribute == NULL || opaque_context == NULL) {
         return false;
     }
-    *alignment = 0U;
-    if (!token_text_equals(parser, parser->current, "__attribute__")) {
-        return true;
-    }
-    if (!minic_parser_advance(parser) ||
-        !minic_parser_expect(
-            parser, MINIC_TOKEN_LPAREN, "expected '(' after field __attribute__") ||
-        !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '((' in field __attribute__")) {
-        return false;
-    }
-    if (!minic_parser_current_attribute_is(
-            parser, MINIC_ATTRIBUTE_ALIGNED, MINIC_ATTRIBUTE_TARGET_FIELD)) {
+    context = (MinicRecordFieldAttributeContext *)opaque_context;
+    descriptor = attribute->descriptor;
+    if (descriptor == NULL ||
+        !minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_FIELD)) {
         minic_parser_error(parser, "unsupported GNU record field attribute");
         return false;
     }
-    if (!minic_parser_advance(parser) ||
-        !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '(' after aligned") ||
-        !minic_parser_parse_integer_value64(parser, &value) || value <= 0 ||
-        (uint64_t)value > (uint64_t)SIZE_MAX ||
-        (((uint64_t)value & ((uint64_t)value - 1U)) != 0U) ||
-        !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')' after aligned value") ||
-        !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')' in field attribute") ||
-        !minic_parser_expect(
-            parser, MINIC_TOKEN_RPAREN, "expected second ')' in field attribute")) {
-        if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
-            minic_parser_error(parser, "record field alignment must be a positive power of two");
-        }
+    if (descriptor->kind == MINIC_ATTRIBUTE_ALIGNED) {
+        return minic_parser_apply_alignment_attribute(
+            parser, attribute, "record field", &context->explicit_alignment);
+    }
+    minic_parser_error(parser, "unsupported GNU record field attribute");
+    return false;
+}
+
+static bool parse_record_field_attributes(MinicParser *parser, size_t *explicit_alignment) {
+    MinicRecordFieldAttributeContext context;
+
+    if (parser == NULL || explicit_alignment == NULL) {
         return false;
     }
-    *alignment = (size_t)value;
+    context.explicit_alignment = 0U;
+    if (!minic_parser_parse_gnu_attribute_lists(parser, consume_record_field_attribute, &context)) {
+        return false;
+    }
+    *explicit_alignment = context.explicit_alignment;
     return true;
 }
 
@@ -314,7 +317,7 @@ parse_record_field_declarator(MinicParser *parser, MinicRecordId record_id, Mini
         }
     }
 
-    if (!parse_record_field_alignment_attribute(parser, &explicit_alignment)) {
+    if (!parse_record_field_attributes(parser, &explicit_alignment)) {
         return false;
     }
 
