@@ -609,6 +609,8 @@ static bool parse_auto_type_local_declaration(MinicParser *parser) {
     MinicSourcePosition begin;
     MinicSourceSpan initializer_span;
     MinicType initializer_type;
+    MinicSourceSpan initializer_span;
+    MinicType initializer_type;
 
     if (!current_identifier_is_auto_type(parser)) {
         return false;
@@ -683,7 +685,7 @@ static bool parse_auto_type_local_declaration(MinicParser *parser) {
         (void)memset(&statement, 0, sizeof(statement));
         statement.kind = MINIC_STATEMENT_ASSIGN;
         statement.span.begin = begin;
-        statement.span.end = initializer->span.end;
+        statement.span.end = initializer_span.end;
         statement.target_expression = target_id;
         statement.expression = initializer_id;
         statement.target_statement = MINIC_STATEMENT_INVALID;
