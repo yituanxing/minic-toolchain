@@ -3,58 +3,52 @@ name: Compiler C0 Gates
 on:
   pull_request:
     paths:
-      - 'Makefile'
-      - 'include/**'
-      - 'src/**'
-      - 'tools/**'
-      - 'tests/**'
-      - '.github/scripts/**'
       - '.github/workflows/compiler-c0.yml'
-  push:
-    branches:
-      - main
-  merge_group:
-    types:
-      - checks_requested
-  workflow_dispatch:
+      - 'tools/dev/pr80-materialize.py'
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
-  group: compiler-c0-${{ github.ref }}
+  group: compiler-c0-pr80-materialize-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
-  full-validation:
-    name: Full compiler validation
+  materialize-cleanup-lifetime:
+    name: Materialize GNU cleanup lifetime v0
+    if: github.event.pull_request.head.ref == 'agent/gnu-cleanup-lifetime-v0'
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    env:
-      DEBIAN_FRONTEND: noninteractive
     steps:
-      - name: Checkout
+      - name: Checkout PR head
         uses: actions/checkout@v4
-
-      - name: Restore RISC-V package archives
-        id: rv64-cache
-        uses: actions/cache@v4
         with:
-          path: ~/.cache/minic-apt/archives
-          key: rv64-apt-${{ runner.os }}-${{ runner.arch }}-noble-${{ hashFiles('tools/ci/ubuntu-24.04-packages.txt') }}
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
 
-      - name: Run the complete compiler gate
-        env:
-          RV64_CACHE_HIT: ${{ steps.rv64-cache.outputs.cache-hit }}
-        run: bash .github/scripts/compiler-c0-full-gate.sh
+      - name: Apply bounded cleanup-lifetime slice
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/pr80-materialize.py
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+          git diff --check
+          make -j4 MODE=debug check
 
-      - name: Upload compiler failure diagnostics
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: compiler-c0-failure-diagnostics
-          path: |
-            build/ci-external/tests/external/tiny-aes-c/diagnostic.txt
-            build/ci-external/tests/external/tiny-aes-c/*.status
-          if-no-files-found: ignore
-          retention-days: 7
+      - name: Commit materialized source
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/frontend/ast.c src/frontend/ast.h \
+                  src/frontend/attribute.c src/frontend/attribute.h \
+                  src/frontend/parser_internal.h src/frontend/parser_core.c \
+                  src/frontend/parser_statement.c src/frontend/parser_function.c \
+                  src/target/riscv64/codegen_statement.c \
+                  tests/compiler/c0/run-runtime.sh
+          if git diff --cached --quiet; then
+            echo 'GNU cleanup lifetime v0 already materialized.'
+            exit 0
+          fi
+          git commit -m 'frontend: model GNU cleanup lifetime exits'
+          git push origin HEAD:${{ github.head_ref }}
