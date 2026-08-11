@@ -1,0 +1,59 @@
+name: Agent Offsetof Anonymous Member
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  patch-source:
+    if: ${{ github.head_ref == 'refactor/foundation-v1' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/offsetof-anonymous-member-v0
+          fetch-depth: 0
+      - name: Generate and validate slice
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/agent_offsetof_anonymous_member_patch.py
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+          git diff --check
+          make -j4 MODE=release BUILD_DIR=build/offsetof-anonymous-compiler
+          MINIC="$GITHUB_WORKSPACE/build/offsetof-anonymous-compiler/bin/minic" \
+          HOST_CC=cc \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/offsetof-anonymous-focused" \
+            sh tests/compiler/c0/run-builtin-offsetof.sh
+          MINIC="$GITHUB_WORKSPACE/build/offsetof-anonymous-compiler/bin/minic" \
+          HOST_CC=cc \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/offsetof-anonymous-focused-all" \
+            sh tools/dev/pr76-focused.sh
+          make -j4 MODE=release BUILD_DIR=build/offsetof-anonymous-compiler check-fast
+      - name: Publish generated source commit
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            src/frontend/parser_internal.h \
+            src/frontend/parser_member.c \
+            src/frontend/parser_expression.c \
+            src/frontend/ast.h \
+            src/frontend/const_eval.c \
+            src/target/riscv64/codegen_expression.c \
+            tests/compiler/c0/builtin_offsetof.c \
+            tests/compiler/c0/run-builtin-offset-of.sh 2>/dev/null || true
+          git add tests/compiler/c0/run-builtin-offsetof.sh
+          git diff --cached --check
+          git diff --cached --quiet && {
+            printf '%s\n' 'generator produced no source changes' >&2
+            exit 1
+          }
+          git commit -m '[generated] frontend: share promoted-member lookup with offsetof' \
+            -m 'Converge ordinary record member access and __builtin_offsetof on one parser-internal anonymous-member path resolver. Preserve the final record/field identity in the offsetof AST, add only the accumulated anonymous-prefix byte offset, and keep all field placement rules in DataLayout/materialized target layout. Verify the existing two-level anonymous union/struct shape so promoted members and promoted array members have the same offsets as ordinary member access.\n\n让普通 record member access 与 __builtin_offsetof 共用一个 parser-internal anonymous-member path resolver。offsetof AST 继续保留最终 record/field identity，只额外保存匿名路径前缀的累计字节偏移，所有 field placement 规则仍由 DataLayout/target materialized layout 唯一负责。使用已有的两层匿名 union/struct 形状验证 promoted member 与 promoted array member 的 offset 与普通成员访问一致。'
+          git push origin HEAD:agent/offsetof-anonymous-member-v0 --force-with-lease
