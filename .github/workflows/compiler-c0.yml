@@ -3,39 +3,58 @@ name: Compiler C0 Gates
 on:
   pull_request:
     paths:
+      - 'Makefile'
+      - 'include/**'
+      - 'src/**'
+      - 'tools/**'
+      - 'tests/**'
+      - '.github/scripts/**'
       - '.github/workflows/compiler-c0.yml'
+  push:
+    branches:
+      - main
+  merge_group:
+    types:
+      - checks_requested
+  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: compiler-c0-materialize-${{ github.event.pull_request.number }}
+  group: compiler-c0-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  materialize-stable-borrows:
-    name: Materialize stable Program borrows
+  full-validation:
+    name: Full compiler validation
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      DEBIAN_FRONTEND: noninteractive
     steps:
-      - name: Checkout PR head
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.head_ref }}
-          fetch-depth: 0
 
-      - name: Apply and commit stable-borrow fixup
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          python3 tools/dev/staging-stable-borrows-fixup.py
-          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
-          git diff --check
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add src/frontend/parser_statement.c
-          if git diff --cached --quiet; then
-            echo 'Stable-borrow fixup already materialized.'
-            exit 0
-          fi
-          git commit -m 'frontend: finish stable initializer borrow snapshots'
-          git push origin HEAD:${{ github.head_ref }}
+      - name: Restore RISC-V package archives
+        id: rv64-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/minic-apt/archives
+          key: rv64-apt-${{ runner.os }}-${{ runner.arch }}-noble-${{ hashFiles('tools/ci/ubuntu-24.04-packages.txt') }}
+
+      - name: Run the complete compiler gate
+        env:
+          RV64_CACHE_HIT: ${{ steps.rv64-cache.outputs.cache-hit }}
+        run: bash .github/scripts/compiler-c0-full-gate.sh
+
+      - name: Upload compiler failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compiler-c0-failure-diagnostics
+          path: |
+            build/ci-external/tests/external/tiny-aes-c/diagnostic.txt
+            build/ci-external/tests/external/tiny-aes-c/*.status
+          if-no-files-found: ignore
+          retention-days: 7
