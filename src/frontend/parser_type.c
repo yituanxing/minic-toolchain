@@ -210,17 +210,27 @@ static bool minic_parser_is_integer_type_specifier(MinicTokenKind kind) {
 bool minic_parser_require_complete_object_type(MinicParser *parser,
                                                MinicType type,
                                                const char *message) {
-    const MinicRecord *record;
+    if (minic_type_is_record(type)) {
+        const MinicRecord *record;
 
-    if (!minic_type_is_record(type)) {
-        return true;
+        record = minic_c0_program_record(parser->program, type.record_id);
+        if (record != NULL && record->is_complete) {
+            return true;
+        }
+        minic_parser_error(parser, "%s", message);
+        return false;
     }
-    record = minic_c0_program_record(parser->program, type.record_id);
-    if (record != NULL && record->is_complete) {
-        return true;
+    if (minic_type_is_enum(type)) {
+        const MinicEnum *entity;
+
+        entity = minic_c0_program_enum(parser->program, type.enum_id);
+        if (entity != NULL && entity->is_complete) {
+            return true;
+        }
+        minic_parser_error(parser, "%s", message);
+        return false;
     }
-    minic_parser_error(parser, "%s", message);
-    return false;
+    return true;
 }
 
 bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type) {

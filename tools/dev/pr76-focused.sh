@@ -51,6 +51,7 @@ sh tests/compiler/c0/run-extern-function-pointer-object.sh
 sh tests/compiler/c0/run-extern-interleaved-function-attributes.sh
 sh tests/compiler/c0/run-shared-function-declarator.sh
 sh tests/compiler/c0/run-enum-tag-type-references.sh
+sh tests/compiler/c0/run-gnu-enum-entity.sh
 sh tests/compiler/c0/run-extern-multi-declarators.sh
 sh tests/compiler/c0/run-extern-multidimensional-array.sh
 sh tests/compiler/c0/run-gnu-extern-object-redeclaration.sh

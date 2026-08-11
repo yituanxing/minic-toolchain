@@ -95,6 +95,12 @@ void minic_c0_program_destroy(MinicC0Program *program) {
     for (index = 0U; index < program->type_alias_count; ++index) {
         free(program->type_aliases[index].name);
     }
+    for (index = 0U; index < program->enum_count; ++index) {
+        free(program->enums[index].name);
+    }
+    for (index = 0U; index < program->enumerator_count; ++index) {
+        free(program->enumerators[index].name);
+    }
     for (index = 0U; index < program->fixed_register_binding_count; ++index) {
         free(program->fixed_register_bindings[index].name);
         free(program->fixed_register_bindings[index].register_name);
@@ -115,9 +121,200 @@ void minic_c0_program_destroy(MinicC0Program *program) {
     free(program->array_types);
     free(program->function_types);
     free(program->type_aliases);
+    free(program->enums);
+    free(program->enumerators);
     free(program->global_objects);
     free(program->fixed_register_bindings);
     minic_c0_program_initialize(program);
+}
+
+static void
+minic_refresh_enum_type(MinicType *type, MinicEnumId enum_id, MinicType compatible_type) {
+    if (type != NULL && type->base_kind == MINIC_TYPE_BASE_ENUM && type->enum_id == enum_id) {
+        type->integer_sign = compatible_type.integer_sign;
+        type->integer_rank = compatible_type.integer_rank;
+    }
+}
+
+static void minic_refresh_program_enum_types(MinicC0Program *program,
+                                             MinicEnumId enum_id,
+                                             MinicType compatible_type) {
+    size_t index;
+
+    for (index = 0U; index < program->expression_count; ++index) {
+        minic_refresh_enum_type(&program->expressions[index].type, enum_id, compatible_type);
+        if (program->expressions[index].kind == MINIC_EXPRESSION_SIZEOF) {
+            minic_refresh_enum_type(
+                &program->expressions[index].value.sizeof_type, enum_id, compatible_type);
+        }
+    }
+    for (index = 0U; index < program->local_count; ++index) {
+        minic_refresh_enum_type(&program->locals[index].type, enum_id, compatible_type);
+    }
+    for (index = 0U; index < program->function_count; ++index) {
+        size_t parameter_index;
+
+        minic_refresh_enum_type(&program->functions[index].return_type, enum_id, compatible_type);
+        for (parameter_index = 0U; parameter_index < program->functions[index].parameter_count;
+             ++parameter_index) {
+            minic_refresh_enum_type(&program->functions[index].parameter_types[parameter_index],
+                                    enum_id,
+                                    compatible_type);
+        }
+    }
+    for (index = 0U; index < program->record_count; ++index) {
+        size_t field_index;
+
+        for (field_index = 0U; field_index < program->records[index].field_count; ++field_index) {
+            minic_refresh_enum_type(
+                &program->records[index].fields[field_index].type, enum_id, compatible_type);
+        }
+    }
+    for (index = 0U; index < program->array_type_count; ++index) {
+        minic_refresh_enum_type(
+            &program->array_types[index].element_type, enum_id, compatible_type);
+    }
+    for (index = 0U; index < program->function_type_count; ++index) {
+        size_t parameter_index;
+
+        minic_refresh_enum_type(
+            &program->function_types[index].return_type, enum_id, compatible_type);
+        for (parameter_index = 0U; parameter_index < program->function_types[index].parameter_count;
+             ++parameter_index) {
+            minic_refresh_enum_type(
+                &program->function_types[index].parameter_types[parameter_index],
+                enum_id,
+                compatible_type);
+        }
+    }
+    for (index = 0U; index < program->type_alias_count; ++index) {
+        minic_refresh_enum_type(&program->type_aliases[index].type, enum_id, compatible_type);
+    }
+    for (index = 0U; index < program->global_object_count; ++index) {
+        minic_refresh_enum_type(&program->global_objects[index].type, enum_id, compatible_type);
+    }
+    for (index = 0U; index < program->fixed_register_binding_count; ++index) {
+        minic_refresh_enum_type(
+            &program->fixed_register_bindings[index].type, enum_id, compatible_type);
+    }
+}
+
+bool minic_c0_program_add_enum(MinicC0Program *program,
+                               const char *name,
+                               size_t name_length,
+                               MinicEnumId *enum_id) {
+    MinicEnum entity;
+
+    if (program == NULL || enum_id == NULL || ((name == NULL) != (name_length == 0U)) ||
+        !minic_grow_array((void **)&program->enums,
+                          &program->enum_capacity,
+                          program->enum_count,
+                          sizeof(*program->enums))) {
+        return false;
+    }
+    (void)memset(&entity, 0, sizeof(entity));
+    if (name_length != 0U) {
+        entity.name = minic_copy_name(name, name_length);
+        if (entity.name == NULL) {
+            return false;
+        }
+        entity.name_length = name_length;
+    }
+    entity.compatible_type = minic_type_int();
+    *enum_id = program->enum_count;
+    program->enums[program->enum_count] = entity;
+    program->enum_count += 1U;
+    return true;
+}
+
+bool minic_c0_program_finish_enum(MinicC0Program *program,
+                                  MinicEnumId enum_id,
+                                  MinicType compatible_type) {
+    MinicEnum *entity;
+
+    if (program == NULL || enum_id >= program->enum_count ||
+        !minic_type_is_integer(compatible_type) ||
+        compatible_type.base_kind != MINIC_TYPE_BASE_INT || compatible_type.pointer_depth != 0U) {
+        return false;
+    }
+    entity = &program->enums[enum_id];
+    if (entity->is_complete) {
+        return false;
+    }
+    entity->compatible_type = compatible_type;
+    entity->is_complete = true;
+    minic_refresh_program_enum_types(program, enum_id, compatible_type);
+    return true;
+}
+
+bool minic_c0_program_add_enumerator(MinicC0Program *program,
+                                     MinicEnumId enum_id,
+                                     const char *name,
+                                     size_t name_length,
+                                     MinicType type,
+                                     uint64_t bits,
+                                     MinicEnumeratorId *enumerator_id) {
+    MinicEnumerator enumerator;
+
+    if (program == NULL || enum_id >= program->enum_count || name == NULL || name_length == 0U ||
+        enumerator_id == NULL || !minic_type_is_integer(type) || minic_type_is_enum(type) ||
+        !minic_grow_array((void **)&program->enumerators,
+                          &program->enumerator_capacity,
+                          program->enumerator_count,
+                          sizeof(*program->enumerators))) {
+        return false;
+    }
+    (void)memset(&enumerator, 0, sizeof(enumerator));
+    enumerator.name = minic_copy_name(name, name_length);
+    if (enumerator.name == NULL) {
+        return false;
+    }
+    enumerator.name_length = name_length;
+    enumerator.enum_id = enum_id;
+    enumerator.type = type;
+    enumerator.bits = bits;
+    *enumerator_id = program->enumerator_count;
+    program->enumerators[program->enumerator_count] = enumerator;
+    program->enumerator_count += 1U;
+    return true;
+}
+
+const MinicEnum *minic_c0_program_enum(const MinicC0Program *program, MinicEnumId enum_id) {
+    return program != NULL && enum_id < program->enum_count ? &program->enums[enum_id] : NULL;
+}
+
+const MinicEnumerator *minic_c0_program_enumerator(const MinicC0Program *program,
+                                                   MinicEnumeratorId enumerator_id) {
+    return program != NULL && enumerator_id < program->enumerator_count
+               ? &program->enumerators[enumerator_id]
+               : NULL;
+}
+
+bool minic_c0_types_compatible(const MinicC0Program *program, MinicType left, MinicType right) {
+    MinicType left_unqualified;
+    MinicType right_unqualified;
+    const MinicEnum *entity;
+
+    if (!minic_type_unqualified(left, &left_unqualified) ||
+        !minic_type_unqualified(right, &right_unqualified)) {
+        return minic_type_equal(left, right);
+    }
+    if (minic_type_is_enum(left_unqualified) && minic_type_is_enum(right_unqualified)) {
+        return minic_type_equal(left_unqualified, right_unqualified);
+    }
+    if (minic_type_is_enum(left_unqualified) &&
+        right_unqualified.base_kind == MINIC_TYPE_BASE_INT) {
+        entity = minic_c0_program_enum(program, left_unqualified.enum_id);
+        return entity != NULL && entity->is_complete &&
+               minic_type_equal(entity->compatible_type, right_unqualified);
+    }
+    if (minic_type_is_enum(right_unqualified) &&
+        left_unqualified.base_kind == MINIC_TYPE_BASE_INT) {
+        entity = minic_c0_program_enum(program, right_unqualified.enum_id);
+        return entity != NULL && entity->is_complete &&
+               minic_type_equal(entity->compatible_type, left_unqualified);
+    }
+    return minic_type_equal(left_unqualified, right_unqualified);
 }
 
 bool minic_c0_program_add_expression(MinicC0Program *program,

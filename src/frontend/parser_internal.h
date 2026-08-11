@@ -42,12 +42,12 @@ typedef struct MinicParserLocalLabel {
 
 typedef struct MinicParserEnumConstant {
     MinicSourceSpan name_span;
-    int value;
+    MinicEnumeratorId enumerator_id;
 } MinicParserEnumConstant;
 
 typedef struct MinicParserEnumTag {
     MinicSourceSpan name_span;
-    bool is_complete;
+    MinicEnumId enum_id;
 } MinicParserEnumTag;
 
 typedef struct MinicParserSwitchContext {
@@ -223,12 +223,12 @@ bool minic_parser_name_bound_in_current_scope(const MinicParser *parser, MinicSo
 MinicLocalId minic_parser_find_local_in_current_scope(const MinicParser *parser,
                                                       MinicSourceSpan name_span);
 void minic_parser_destroy_scopes(MinicParser *parser);
-bool minic_parser_bind_enum_constant(MinicParser *parser, MinicSourceSpan name_span, int value);
-bool minic_parser_find_enum_constant(const MinicParser *parser,
+bool minic_parser_bind_enum_constant(MinicParser *parser,
                                      MinicSourceSpan name_span,
-                                     int *value);
-bool minic_parser_bind_enum_tag(MinicParser *parser, MinicSourceSpan name_span);
-bool minic_parser_find_enum_tag(const MinicParser *parser, MinicSourceSpan name_span);
+                                     MinicEnumeratorId enumerator_id);
+MinicEnumeratorId minic_parser_find_enum_constant(const MinicParser *parser,
+                                                  MinicSourceSpan name_span);
+MinicEnumId minic_parser_find_enum_tag(const MinicParser *parser, MinicSourceSpan name_span);
 bool minic_parser_parse_enum_specifier(MinicParser *parser, MinicType *enum_type);
 bool minic_parser_find_record_field_path(const MinicParser *parser,
                                          const MinicRecord *record,

@@ -7,14 +7,17 @@
 typedef size_t MinicRecordId;
 typedef size_t MinicArrayTypeId;
 typedef size_t MinicFunctionTypeId;
+typedef size_t MinicEnumId;
 
 #define MINIC_RECORD_INVALID ((MinicRecordId) - 1)
 #define MINIC_ARRAY_TYPE_INVALID ((MinicArrayTypeId) - 1)
 #define MINIC_FUNCTION_TYPE_INVALID ((MinicFunctionTypeId) - 1)
+#define MINIC_ENUM_INVALID ((MinicEnumId) - 1)
 
 typedef enum MinicTypeBaseKind {
     MINIC_TYPE_BASE_VOID = 0,
     MINIC_TYPE_BASE_INT,
+    MINIC_TYPE_BASE_ENUM,
     MINIC_TYPE_BASE_FLOAT,
     MINIC_TYPE_BASE_DOUBLE,
     MINIC_TYPE_BASE_FUNCTION,
@@ -50,6 +53,7 @@ typedef struct MinicType {
     MinicRecordId record_id;
     MinicArrayTypeId array_type_id;
     MinicFunctionTypeId function_type_id;
+    MinicEnumId enum_id;
     MinicIntegerSign integer_sign;
     MinicIntegerRank integer_rank;
     bool is_plain_char;
@@ -73,6 +77,7 @@ MinicType minic_type_long(void);
 MinicType minic_type_unsigned_long(void);
 MinicType minic_type_long_long(void);
 MinicType minic_type_unsigned_long_long(void);
+MinicType minic_type_enum(MinicEnumId enum_id, MinicType compatible_type);
 MinicType minic_type_int128(void);
 MinicType minic_type_unsigned_int128(void);
 MinicType minic_type_float(void);
@@ -95,6 +100,7 @@ bool minic_type_cast_compatible(MinicType target, MinicType source);
 bool minic_type_is_const(MinicType type);
 bool minic_type_is_volatile(MinicType type);
 bool minic_type_is_void(MinicType type);
+bool minic_type_is_enum(MinicType type);
 bool minic_type_is_integer(MinicType type);
 bool minic_type_is_bool_integer(MinicType type);
 bool minic_type_is_char_integer(MinicType type);

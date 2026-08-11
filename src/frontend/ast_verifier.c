@@ -28,6 +28,9 @@ static bool type_is_valid(const MinicC0Program *program, MinicType type) {
         !pointer_qualifiers_are_valid(type)) {
         return false;
     }
+    if (type.base_kind != MINIC_TYPE_BASE_ENUM && type.enum_id != MINIC_ENUM_INVALID) {
+        return false;
+    }
     if (type.is_plain_char && type.base_kind != MINIC_TYPE_BASE_INT) {
         return false;
     }
@@ -58,6 +61,22 @@ static bool type_is_valid(const MinicC0Program *program, MinicType type) {
                 type.integer_rank == MINIC_INTEGER_RANK_LONG ||
                 type.integer_rank == MINIC_INTEGER_RANK_LONG_LONG ||
                 type.integer_rank == MINIC_INTEGER_RANK_INT128);
+    case MINIC_TYPE_BASE_ENUM: {
+        const MinicEnum *entity;
+
+        entity = minic_c0_program_enum(program, type.enum_id);
+        return entity != NULL && type.record_id == MINIC_RECORD_INVALID &&
+               type.array_type_id == MINIC_ARRAY_TYPE_INVALID &&
+               type.function_type_id == MINIC_FUNCTION_TYPE_INVALID && !type.is_plain_char &&
+               (type.integer_sign == MINIC_INTEGER_SIGN_SIGNED ||
+                type.integer_sign == MINIC_INTEGER_SIGN_UNSIGNED) &&
+               (type.integer_rank == MINIC_INTEGER_RANK_INT ||
+                type.integer_rank == MINIC_INTEGER_RANK_LONG ||
+                type.integer_rank == MINIC_INTEGER_RANK_LONG_LONG) &&
+               (!entity->is_complete ||
+                (type.integer_sign == entity->compatible_type.integer_sign &&
+                 type.integer_rank == entity->compatible_type.integer_rank));
+    }
     case MINIC_TYPE_BASE_FLOAT:
     case MINIC_TYPE_BASE_DOUBLE:
         return type.record_id == MINIC_RECORD_INVALID &&
@@ -99,6 +118,12 @@ static bool type_is_complete_object_bounded(const MinicC0Program *program,
                                             size_t remaining_depth) {
     if (remaining_depth == 0U || minic_type_is_void(type) || minic_type_is_function(type)) {
         return false;
+    }
+    if (minic_type_is_enum(type)) {
+        const MinicEnum *entity;
+
+        entity = minic_c0_program_enum(program, type.enum_id);
+        return entity != NULL && entity->is_complete;
     }
     if (minic_type_is_integer(type) || minic_type_is_float(type) || minic_type_is_double(type) ||
         minic_type_is_pointer(type)) {
@@ -995,6 +1020,9 @@ static bool verify_program_storage(const MinicC0Program *program) {
                             program->function_type_capacity) &&
            storage_is_valid(
                program->type_aliases, program->type_alias_count, program->type_alias_capacity) &&
+           storage_is_valid(program->enums, program->enum_count, program->enum_capacity) &&
+           storage_is_valid(
+               program->enumerators, program->enumerator_count, program->enumerator_capacity) &&
            storage_is_valid(program->global_objects,
                             program->global_object_count,
                             program->global_object_capacity);
@@ -1093,6 +1121,27 @@ bool minic_c0_program_verify_target(const MinicC0Program *program,
         return false;
     }
 
+    for (index = 0U; index < program->enum_count; ++index) {
+        const MinicEnum *entity;
+
+        entity = &program->enums[index];
+        if ((entity->name == NULL) != (entity->name_length == 0U) ||
+            !minic_type_is_integer(entity->compatible_type) ||
+            minic_type_is_enum(entity->compatible_type) ||
+            entity->compatible_type.pointer_depth != 0U) {
+            return false;
+        }
+    }
+    for (index = 0U; index < program->enumerator_count; ++index) {
+        const MinicEnumerator *enumerator;
+
+        enumerator = &program->enumerators[index];
+        if (enumerator->name == NULL || enumerator->name_length == 0U ||
+            enumerator->enum_id >= program->enum_count ||
+            !minic_type_is_integer(enumerator->type) || minic_type_is_enum(enumerator->type)) {
+            return false;
+        }
+    }
     for (index = 0U; index < program->array_type_count; ++index) {
         const MinicArrayType *array_type;
 

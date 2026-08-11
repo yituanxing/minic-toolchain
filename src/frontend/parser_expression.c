@@ -678,15 +678,9 @@ static bool generic_token_text_equals(const MinicParser *parser, const char *tex
            memcmp(parser->source + parser->current.span.begin.offset, text, length) == 0;
 }
 
-static bool generic_types_compatible(MinicType left, MinicType right) {
-    MinicType left_unqualified;
-    MinicType right_unqualified;
-
-    if (!minic_type_unqualified(left, &left_unqualified) ||
-        !minic_type_unqualified(right, &right_unqualified)) {
-        return minic_type_equal(left, right);
-    }
-    return minic_type_equal(left_unqualified, right_unqualified);
+static bool
+generic_types_compatible(const MinicC0Program *program, MinicType left, MinicType right) {
+    return minic_c0_types_compatible(program, left, right);
 }
 
 static bool
@@ -740,7 +734,7 @@ parse_generic_selection(MinicParser *parser, MinicExpressionId *expression_id, b
 
         if (is_default) {
             default_id = association_id;
-        } else if (generic_types_compatible(controlling_type, association_type)) {
+        } else if (generic_types_compatible(parser->program, controlling_type, association_type)) {
             if (saw_matching_type) {
                 minic_parser_error(parser, "multiple compatible type associations in _Generic");
                 return false;
@@ -798,7 +792,8 @@ static bool parse_builtin_types_compatible_p(MinicParser *parser,
     expression.span.end = parser->current.span.end;
     expression.type = minic_type_int();
     expression.value_category = MINIC_VALUE_RVALUE;
-    expression.value.integer_value = generic_types_compatible(left_type, right_type) ? 1 : 0;
+    expression.value.integer_value =
+        generic_types_compatible(parser->program, left_type, right_type) ? 1 : 0;
     return minic_parser_expect(
                parser, MINIC_TOKEN_RPAREN, "expected ')' after __builtin_types_compatible_p") &&
            minic_parser_add_expression(parser, &expression, expression_id);
@@ -1219,8 +1214,7 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
     MinicFunctionId function_id;
     MinicGlobalObjectId global_object_id;
     MinicFixedRegisterBindingId fixed_register_binding_id;
-    int enum_value;
-    bool is_enum_constant;
+    MinicEnumeratorId enumerator_id;
 
     if (generic_token_text_equals(parser, "__builtin_return_address")) {
         if (!parse_builtin_call_frame_address(
@@ -1340,7 +1334,7 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
         function_id = minic_parser_find_function(parser, name_span);
         global_object_id = minic_parser_find_global_object(parser, name_span);
         fixed_register_binding_id = minic_parser_find_fixed_register_binding(parser, name_span);
-        is_enum_constant = minic_parser_find_enum_constant(parser, name_span, &enum_value);
+        enumerator_id = minic_parser_find_enum_constant(parser, name_span);
         if (!minic_parser_advance(parser)) {
             return false;
         }
@@ -1402,13 +1396,21 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
             }
             return finish_value_expression(parser, primary_id, decay_array, expression_id);
         }
-        if (is_enum_constant) {
+        if (enumerator_id != MINIC_ENUMERATOR_INVALID) {
+            const MinicEnumerator *enumerator;
+
+            enumerator = minic_c0_program_enumerator(parser->program, enumerator_id);
+            if (enumerator == NULL) {
+                minic_parser_error(parser, "invalid enumerator entity");
+                return false;
+            }
             (void)memset(&expression, 0, sizeof(expression));
             expression.kind = MINIC_EXPRESSION_INTEGER;
             expression.span = name_span;
-            expression.type = minic_type_int();
+            expression.type = enumerator->type;
             expression.value_category = MINIC_VALUE_RVALUE;
-            expression.value.integer_value = enum_value;
+            (void)memcpy(
+                &expression.value.integer_value, &enumerator->bits, sizeof(enumerator->bits));
             if (!minic_parser_add_expression(parser, &expression, &primary_id) ||
                 !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
                 return false;

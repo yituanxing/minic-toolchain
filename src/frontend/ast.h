@@ -14,6 +14,7 @@ typedef size_t MinicStatementId;
 typedef size_t MinicBlockId;
 typedef size_t MinicFunctionId;
 typedef size_t MinicTypeAliasId;
+typedef size_t MinicEnumeratorId;
 typedef size_t MinicGlobalObjectId;
 typedef size_t MinicFixedRegisterBindingId;
 typedef size_t MinicInlineAsmId;
@@ -24,6 +25,7 @@ typedef size_t MinicInlineAsmId;
 #define MINIC_BLOCK_INVALID ((MinicBlockId) - 1)
 #define MINIC_FUNCTION_INVALID ((MinicFunctionId) - 1)
 #define MINIC_TYPE_ALIAS_INVALID ((MinicTypeAliasId) - 1)
+#define MINIC_ENUMERATOR_INVALID ((MinicEnumeratorId) - 1)
 #define MINIC_GLOBAL_OBJECT_INVALID ((MinicGlobalObjectId) - 1)
 #define MINIC_FIXED_REGISTER_BINDING_INVALID ((MinicFixedRegisterBindingId) - 1)
 #define MINIC_INLINE_ASM_INVALID ((MinicInlineAsmId) - 1)
@@ -342,6 +344,21 @@ typedef struct MinicTypeAlias {
     MinicType type;
 } MinicTypeAlias;
 
+typedef struct MinicEnum {
+    char *name;
+    size_t name_length;
+    MinicType compatible_type;
+    bool is_complete;
+} MinicEnum;
+
+typedef struct MinicEnumerator {
+    char *name;
+    size_t name_length;
+    MinicEnumId enum_id;
+    MinicType type;
+    uint64_t bits;
+} MinicEnumerator;
+
 typedef struct MinicFixedRegisterBinding {
     char *name;
     size_t name_length;
@@ -426,6 +443,14 @@ typedef struct MinicC0Program {
     MinicTypeAlias *type_aliases;
     size_t type_alias_count;
     size_t type_alias_capacity;
+
+    MinicEnum *enums;
+    size_t enum_count;
+    size_t enum_capacity;
+
+    MinicEnumerator *enumerators;
+    size_t enumerator_count;
+    size_t enumerator_capacity;
 
     MinicGlobalObject *global_objects;
     size_t global_object_count;
@@ -568,6 +593,21 @@ bool minic_c0_program_add_type_alias(MinicC0Program *program,
                                      size_t name_length,
                                      MinicType type,
                                      MinicTypeAliasId *alias_id);
+bool minic_c0_program_add_enum(MinicC0Program *program,
+                               const char *name,
+                               size_t name_length,
+                               MinicEnumId *enum_id);
+bool minic_c0_program_finish_enum(MinicC0Program *program,
+                                  MinicEnumId enum_id,
+                                  MinicType compatible_type);
+bool minic_c0_program_add_enumerator(MinicC0Program *program,
+                                     MinicEnumId enum_id,
+                                     const char *name,
+                                     size_t name_length,
+                                     MinicType type,
+                                     uint64_t bits,
+                                     MinicEnumeratorId *enumerator_id);
+bool minic_c0_types_compatible(const MinicC0Program *program, MinicType left, MinicType right);
 bool minic_c0_program_add_fixed_register_binding(MinicC0Program *program,
                                                  const char *name,
                                                  size_t name_length,
@@ -641,6 +681,9 @@ const MinicFunctionType *minic_c0_program_function_type(const MinicC0Program *pr
                                                         MinicFunctionTypeId function_type_id);
 const MinicTypeAlias *minic_c0_program_type_alias(const MinicC0Program *program,
                                                   MinicTypeAliasId alias_id);
+const MinicEnum *minic_c0_program_enum(const MinicC0Program *program, MinicEnumId enum_id);
+const MinicEnumerator *minic_c0_program_enumerator(const MinicC0Program *program,
+                                                   MinicEnumeratorId enumerator_id);
 const MinicGlobalObject *minic_c0_program_global_object(const MinicC0Program *program,
                                                         MinicGlobalObjectId global_object_id);
 const MinicFixedRegisterBinding *

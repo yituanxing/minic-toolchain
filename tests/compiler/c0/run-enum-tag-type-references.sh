@@ -28,4 +28,4 @@ if "$minic" -S "$work/duplicate.i" -o "$work/duplicate.s" 2>"$work/duplicate.std
 fi
 grep -F 'duplicate enum definition' "$work/duplicate.stderr" >/dev/null
 
-printf '%s\n' 'PASS compiler/c0/enum_tag_type_references lifecycle=incomplete-to-complete implicit-return=1 function-pointer-typedef=1 explicit-forward=1 record-function-pointer=1 representation=int duplicate-definition=reject'
+printf '%s\n' 'PASS compiler/c0/enum_tag_type_references lifecycle=incomplete-to-complete implicit-return=1 function-pointer-typedef=1 explicit-forward=1 record-function-pointer=1 stable-identity=1 compatible-representation=1 duplicate-definition=reject'

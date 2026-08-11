@@ -299,10 +299,26 @@ static bool parse_array_bound_primary(MinicParser *parser, int64_t *value) {
         return minic_parser_parse_integer_value64(parser, value);
     }
     if (parser->current.kind == MINIC_TOKEN_IDENTIFIER) {
-        int enum_value;
+        MinicEnumeratorId enumerator_id;
 
-        if (minic_parser_find_enum_constant(parser, parser->current.span, &enum_value)) {
-            *value = (int64_t)enum_value;
+        enumerator_id = minic_parser_find_enum_constant(parser, parser->current.span);
+        if (enumerator_id != MINIC_ENUMERATOR_INVALID) {
+            const MinicEnumerator *enumerator;
+            MinicConstValue constant;
+
+            enumerator = minic_c0_program_enumerator(parser->program, enumerator_id);
+            if (enumerator == NULL) {
+                minic_parser_error(parser, "invalid enumerator in integer constant expression");
+                return false;
+            }
+            constant.type = enumerator->type;
+            constant.bits = enumerator->bits;
+            if (!minic_const_value_as_int64(
+                    parser->program, parser->target_info, &constant, value)) {
+                minic_parser_error(parser,
+                                   "enumerator exceeds legacy integer constant expression range");
+                return false;
+            }
             return minic_parser_advance(parser);
         }
     }

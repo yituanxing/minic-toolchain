@@ -529,6 +529,20 @@ static bool parse_function_pointer_parameter_declarator(MinicParser *parser,
     return true;
 }
 
+static bool parse_function_signature_type_name(MinicParser *parser, MinicType *type) {
+    MinicType base_type;
+
+    if (parser == NULL || type == NULL || !minic_parser_parse_type_specifiers(parser, &base_type) ||
+        !minic_parser_parse_pointer_declarator(parser, base_type, type)) {
+        return false;
+    }
+    if (minic_type_is_record(*type)) {
+        return minic_parser_require_complete_object_type(
+            parser, *type, "incomplete record type requires pointer declarator");
+    }
+    return true;
+}
+
 bool minic_parser_parse_parameter_list(MinicParser *parser,
                                        MinicSourceSpan *parameter_name_spans,
                                        MinicType *parameter_types,
@@ -558,7 +572,7 @@ bool minic_parser_parse_parameter_list(MinicParser *parser,
             minic_parser_error(parser, "parameter count exceeds compiler limit");
             return false;
         }
-        if (!minic_parser_parse_type_name(parser, &parameter_type)) {
+        if (!parse_function_signature_type_name(parser, &parameter_type)) {
             return false;
         }
         (void)memset(&declarator_name_span, 0, sizeof(declarator_name_span));
@@ -1386,8 +1400,9 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
             is_inline,
             "unsupported GNU prefix function attribute; semantic and ABI-affecting attributes must "
             "be implemented explicitly") ||
-        !minic_parser_require_complete_object_type(
-            parser, return_type, "incomplete record type requires pointer declarator")) {
+        (minic_type_is_record(return_type) &&
+         !minic_parser_require_complete_object_type(
+             parser, return_type, "incomplete record type requires pointer declarator"))) {
         return false;
     }
 
@@ -1478,14 +1493,27 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
         minic_parser_error(parser, "unsupported function return type");
         return false;
     }
-    if (minic_type_is_record(return_type) &&
+    if ((minic_type_is_record(return_type) || minic_type_is_enum(return_type)) &&
         !minic_parser_require_complete_object_type(
-            parser, return_type, "function definition requires a complete record return type")) {
+            parser, return_type, "function definition requires a complete return type")) {
         return false;
     }
     if (parser->current.kind != MINIC_TOKEN_LBRACE) {
         minic_parser_error(parser, "expected ';' or '{' after function declarator");
         return false;
+    }
+    {
+        size_t parameter_index;
+
+        for (parameter_index = 0U; parameter_index < parameter_count; ++parameter_index) {
+            if (minic_type_is_enum(parameter_types[parameter_index]) &&
+                !minic_parser_require_complete_object_type(
+                    parser,
+                    parameter_types[parameter_index],
+                    "function definition requires complete enum parameter types")) {
+                return false;
+            }
+        }
     }
     {
         size_t parameter_index;

@@ -239,6 +239,14 @@ static bool minic_data_layout_type_depth(const MinicDataLayout *layout,
         *alignment = layout->pointer_alignment;
         return true;
     }
+    if (minic_type_is_enum(type)) {
+        const MinicEnum *entity;
+
+        entity = minic_c0_program_enum(program, type.enum_id);
+        if (entity == NULL || !entity->is_complete) {
+            return false;
+        }
+    }
     if (minic_type_is_integer(type)) {
         size_t rank = (size_t)type.integer_rank;
 
