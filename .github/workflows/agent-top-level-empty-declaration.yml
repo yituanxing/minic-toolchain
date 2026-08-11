@@ -1,16 +1,14 @@
 name: Agent Top-Level Empty Declaration
 
 on:
-  push:
-    branches:
-      - agent/top-level-empty-declaration-v0
+  pull_request:
 
 permissions:
   contents: write
 
 jobs:
   patch-source:
-    if: ${{ !contains(github.event.head_commit.message, '[generated]') }}
+    if: ${{ github.head_ref == 'refactor/foundation-v1' }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -53,4 +51,4 @@ jobs:
           }
           git commit -m '[generated] frontend: accept top-level empty declarations' \
             -m 'Accept file-scope empty declarations by consuming standalone semicolons in the translation-unit dispatch loop. Keep block-scope empty statements unchanged and verify leading, consecutive, between-declaration, post-function, and trailing placements.\n\n在 translation-unit 分发循环中消费独立分号，从而支持 file-scope empty declaration；不改变 block-scope empty statement，并验证文件开头、连续、声明之间、函数定义之后和文件结尾等位置。'
-          git push origin HEAD:agent/top-level-empty-declaration-v0
+          git push origin HEAD:agent/top-level-empty-declaration-v0 --force-with-lease
