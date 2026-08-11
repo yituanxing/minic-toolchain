@@ -22,7 +22,9 @@ jobs:
           ref: refactor/foundation-v1
           fetch-depth: 0
       - name: Generate typed alignment source
-        run: python3 tools/dev/agent_alignment_typed_consteval_v1.py
+        run: |
+          python3 tools/dev/agent_alignment_typed_consteval_v1.py
+          python3 tools/dev/agent_alignment_field_converge_v1.py
       - name: Format generated source
         run: |
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
