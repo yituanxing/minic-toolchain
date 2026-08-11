@@ -542,10 +542,31 @@ bool minic_parser_parse_integer_constant_expression_value(MinicParser *parser, i
     return value != NULL && parse_array_bound_additive(parser, value);
 }
 
+static bool minic_parser_parse_typed_integer_constant_expression(MinicParser *parser,
+                                                                 int64_t *value) {
+    MinicConstValue constant;
+    MinicExpressionId expression_id;
+
+    if (parser == NULL || value == NULL ||
+        !minic_parser_parse_expression(parser, &expression_id, 0U)) {
+        return false;
+    }
+    if (!minic_const_eval_integer(parser->program, parser->target_info, expression_id, &constant)) {
+        minic_parser_error(parser, "expected integer constant expression");
+        return false;
+    }
+    if (!minic_const_value_as_int64(parser->program, parser->target_info, &constant, value)) {
+        minic_parser_error(parser, "integer constant expression exceeds supported 64-bit range");
+        return false;
+    }
+    return true;
+}
+
 bool minic_parser_parse_fixed_array_bound(MinicParser *parser, size_t *element_count) {
     int64_t value;
 
-    if (element_count == NULL || !minic_parser_parse_integer_constant_expression(parser, &value)) {
+    if (element_count == NULL ||
+        !minic_parser_parse_typed_integer_constant_expression(parser, &value)) {
         return false;
     }
     if (value <= 0) {
@@ -569,7 +590,7 @@ bool minic_parser_parse_record_array_bound(MinicParser *parser,
     int64_t value;
 
     if (element_count == NULL || is_zero_length == NULL ||
-        !minic_parser_parse_integer_constant_expression(parser, &value)) {
+        !minic_parser_parse_typed_integer_constant_expression(parser, &value)) {
         return false;
     }
     if (value < 0) {

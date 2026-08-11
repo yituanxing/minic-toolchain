@@ -16,4 +16,4 @@ mkdir -p "$work"
 
 grep -F '  li a0, 32' "$work/array_bound_integer_cast.s" >/dev/null
 grep -F '  li a0, 4' "$work/array_bound_integer_cast.s" >/dev/null
-printf '%s\n' 'PASS compiler/c0/array_bound_integer_cast enum-cast=1 truncation=uint8 shared-constant-evaluator=1'
+printf '%s\n' 'PASS compiler/c0/array_bound_integer_cast enum-cast=1 truncation=uint8 typed-ast-consteval=1'

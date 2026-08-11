@@ -16,7 +16,9 @@ mkdir -p "$work"
 grep -F 'li a0, 1048576' "$work/array_bound_constant_expression.s" >/dev/null
 grep -F 'li a0, 35' "$work/array_bound_constant_expression.s" >/dev/null
 grep -F 'li a0, 44' "$work/array_bound_constant_expression.s" >/dev/null
-printf '%s\n' 'PASS compiler/c0/array_bound_constant_expression scope=local operators=+,-,*,/,% parentheses=1'
+linux8=$(grep -c -F '  li a0, 8' "$work/array_bound_constant_expression.s" || true)
+test "$linux8" -ge 2
+printf '%s\n' 'PASS compiler/c0/array_bound_constant_expression scope=local+record typed-ast-consteval=1 operators=+,-,*,/,% relational=1 conditional=linux-alignof-shape alignof=1 sizeof=1 parentheses=1'
 
 "$host_cc" -E -P -x c "$root/tests/compiler/c0/invalid_runtime_array_bound.c" \
     -o "$work/invalid_runtime_array_bound.i"
