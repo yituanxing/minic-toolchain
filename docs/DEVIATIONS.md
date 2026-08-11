@@ -38,9 +38,19 @@ Each entry must contain:
 
 ## Active deviations / 活跃偏离
 
-None.
+## DEV-0002: deferred dynamic immediate for GNU asm goto / GNU asm goto 动态立即数延迟特化
 
-暂无。
+- Status / 状态: Active
+- Rule / 规则: The active compiler boundary requires accepted `.i -> .s` output to remain suitable for external target assembly/link validation; temporary architectural debt must be visible and bounded. 当前编译器边界要求已接受的 `.i -> .s` 结果能够继续进入外部目标汇编/链接验证；临时架构债务必须可见且范围明确。
+- Scope / 范围: `src/target/riscv64/codegen_inline_asm.c`, `tests/compiler/c0/run-gnu-inline-asm-goto.sh`, unchanged Linux 6.6.143 discovery input. 涉及 RV64 inline-asm lowering、对应 focused gate 与 Linux 6.6.143 discovery 输入。
+- Reason / 原因: The current Linux `asm goto` sites use GCC `"i"` operands whose source expressions become constants only after always-inline specialization. MiniC does not yet have an inliner/specializer, so the discovery compiler preserves the unresolved dependency explicitly as `__minic_deferred_asm_immediate_*` instead of inventing an immediate value or silently changing control-flow semantics. 当前 Linux 的 `asm goto` 使用 GCC `"i"` 约束，其源表达式只有在 always-inline 特化之后才成为常量。MiniC 尚无 inliner/specializer，因此 discovery 编译器用显式 `__minic_deferred_asm_immediate_*` 保留未解析依赖，而不是伪造立即数或静默改变控制流语义。
+- Risk / 风险: MiniC can report successful `-S` discovery for a translation unit whose deferred asm immediate is not yet a final externally linkable program. Treating this discovery result as full compiler acceptance would hide an incomplete compilation responsibility. MiniC 可能对含 deferred asm immediate 的翻译单元成功完成 `-S` discovery，但该结果尚不是最终可外部链接的程序；若把 discovery 成功误当完整编译器验收，会掩盖未完成的编译职责。
+- Exit criteria / 退出条件:
+  1. Introduce a real inline/specialization or equivalent semantic lowering step that resolves every accepted GNU asm `"i"` operand before final target assembly emission. 建立真实的内联/特化或等价语义降低步骤，使所有已接受 GNU asm `"i"` operand 在最终目标汇编生成前得到解析。
+  2. Remove `__minic_deferred_asm_immediate_*` emission and the focused test expectation for deferred specialization. 删除 `__minic_deferred_asm_immediate_*` 输出及 focused gate 中对 deferred specialization 的通过条件。
+  3. Add an external RISC-V assemble/link validation case for the affected asm-goto shape and keep all frozen real-project/Linux gates at or beyond their prior frontier. 为受影响的 asm-goto 形状增加外部 RISC-V 汇编/链接验证，并保持所有冻结真实项目/Linux 门禁不退线。
+- Target milestone / 目标里程碑: Function specialization/inlining boundary before full Linux object acceptance / 完整 Linux object 验收前的函数特化/内联边界。
+- Related evidence / 相关证据: `run-gnu-inline-asm-goto.sh` requires the explicit deferred marker today; Linux 6.6.143 inventory currently contains four `asm goto` sites. 当前 `run-gnu-inline-asm-goto.sh` 明确要求 deferred marker；Linux 6.6.143 inventory 当前包含 4 个 `asm goto` 用例。
 
 ## Resolved deviations / 已解决偏离
 
