@@ -48,6 +48,7 @@ sh tests/compiler/c0/run-shared-function-declarator.sh
 sh tests/compiler/c0/run-enum-tag-type-references.sh
 sh tests/compiler/c0/run-extern-multi-declarators.sh
 sh tests/compiler/c0/run-extern-multidimensional-array.sh
+sh tests/compiler/c0/run-gnu-extern-object-redeclaration.sh
 sh tests/compiler/c0/run-gnu-section-symbol-attribute.sh
 sh tests/compiler/c0/run-gnu-const-function-attribute.sh
 sh tests/compiler/c0/run-gnu-octal-character-case-range.sh

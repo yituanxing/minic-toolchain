@@ -915,6 +915,102 @@ static bool parse_extern_object_declarator(MinicParser *parser,
     return minic_parser_advance(parser);
 }
 
+static bool extern_object_types_compatible(const MinicC0Program *program,
+                                           MinicType existing_type,
+                                           MinicType declared_type) {
+    const MinicArrayType *existing_array;
+    const MinicArrayType *declared_array;
+
+    if (minic_type_equal(existing_type, declared_type)) {
+        return true;
+    }
+    if (program == NULL || !minic_type_is_array(existing_type) ||
+        !minic_type_is_array(declared_type)) {
+        return false;
+    }
+    existing_array = minic_c0_program_array_type(program, existing_type.array_type_id);
+    declared_array = minic_c0_program_array_type(program, declared_type.array_type_id);
+    if (existing_array == NULL || declared_array == NULL ||
+        !extern_object_types_compatible(
+            program, existing_array->element_type, declared_array->element_type)) {
+        return false;
+    }
+    return existing_array->element_count == 0U || declared_array->element_count == 0U ||
+           existing_array->element_count == declared_array->element_count;
+}
+
+static bool merge_extern_array_composite_type(MinicC0Program *program,
+                                              MinicType existing_type,
+                                              MinicType declared_type) {
+    const MinicArrayType *existing_array;
+    const MinicArrayType *declared_array;
+    MinicType existing_element;
+    MinicType declared_element;
+    size_t declared_count;
+
+    if (minic_type_equal(existing_type, declared_type)) {
+        return true;
+    }
+    if (program == NULL || !minic_type_is_array(existing_type) ||
+        !minic_type_is_array(declared_type)) {
+        return minic_type_equal(existing_type, declared_type);
+    }
+    existing_array = minic_c0_program_array_type(program, existing_type.array_type_id);
+    declared_array = minic_c0_program_array_type(program, declared_type.array_type_id);
+    if (existing_array == NULL || declared_array == NULL) {
+        return false;
+    }
+    existing_element = existing_array->element_type;
+    declared_element = declared_array->element_type;
+    declared_count = declared_array->element_count;
+    if (!extern_object_types_compatible(program, existing_element, declared_element) ||
+        !merge_extern_array_composite_type(program, existing_element, declared_element)) {
+        return false;
+    }
+    existing_array = minic_c0_program_array_type(program, existing_type.array_type_id);
+    if (existing_array == NULL) {
+        return false;
+    }
+    if (existing_array->element_count == 0U && declared_count != 0U) {
+        return minic_c0_program_complete_array_type(program, existing_type, declared_count);
+    }
+    return declared_count == 0U || existing_array->element_count == declared_count;
+}
+
+static bool merge_extern_object_declaration(MinicParser *parser,
+                                            MinicGlobalObjectId object_id,
+                                            MinicType declared_type,
+                                            const char *section_name,
+                                            size_t section_name_length,
+                                            bool has_section,
+                                            MinicSymbolVisibility visibility,
+                                            bool has_visibility) {
+    MinicGlobalObject *object;
+
+    if (parser == NULL || parser->program == NULL ||
+        object_id >= parser->program->global_object_count) {
+        return false;
+    }
+    object = &parser->program->global_objects[object_id];
+    if (!extern_object_types_compatible(parser->program, object->type, declared_type)) {
+        minic_parser_error(parser, "conflicting extern object redeclaration");
+        return false;
+    }
+    if (minic_type_is_array(object->type) &&
+        !merge_extern_array_composite_type(parser->program, object->type, declared_type)) {
+        minic_parser_error(parser, "conflicting extern object array redeclaration");
+        return false;
+    }
+    if ((has_section && !minic_c0_global_object_set_section(
+                            parser->program, object_id, section_name, section_name_length)) ||
+        (has_visibility &&
+         !minic_c0_global_object_set_visibility(parser->program, object_id, visibility))) {
+        minic_parser_error(parser, "conflicting extern object redeclaration attributes");
+        return false;
+    }
+    return true;
+}
+
 bool minic_parser_parse_extern_global_after_head(MinicParser *parser,
                                                  MinicType base_type,
                                                  MinicType first_object_type,
@@ -939,6 +1035,7 @@ bool minic_parser_parse_extern_global_after_head(MinicParser *parser,
         bool declarator_has_section;
         bool is_array;
         MinicType declarator_element_type;
+        size_t array_type_begin;
 
         declarator_section_name_length = section_name_length;
         declarator_has_section = has_section;
@@ -972,11 +1069,7 @@ bool minic_parser_parse_extern_global_after_head(MinicParser *parser,
             minic_parser_error(parser, "unsupported extern object type");
             return false;
         }
-        if (minic_parser_find_global_object(parser, name_span) != MINIC_GLOBAL_OBJECT_INVALID) {
-            minic_parser_error(parser, "duplicate global object");
-            return false;
-        }
-
+        array_type_begin = parser->program->array_type_count;
         if (!minic_parser_parse_array_declarator_suffix(
                 parser, object_type, true, &object_type, &is_array) ||
             !minic_parser_parse_gnu_section_attribute(parser,
@@ -987,21 +1080,34 @@ bool minic_parser_parse_extern_global_after_head(MinicParser *parser,
             return false;
         }
 
-        if (!minic_c0_program_add_global_object(parser->program,
-                                                parser->source + name_span.begin.offset,
-                                                minic_parser_span_length(name_span),
-                                                object_type,
-                                                false,
-                                                minic_type_is_const(declarator_element_type),
-                                                &object_id) ||
-            !minic_c0_global_object_set_extern(parser->program, object_id) ||
-            (declarator_has_section &&
-             !minic_c0_global_object_set_section(parser->program,
+        object_id = minic_parser_find_global_object(parser, name_span);
+        if (object_id != MINIC_GLOBAL_OBJECT_INVALID) {
+            if (!merge_extern_object_declaration(parser,
                                                  object_id,
+                                                 object_type,
                                                  declarator_section_name,
-                                                 declarator_section_name_length)) ||
-            (has_visibility &&
-             !minic_c0_global_object_set_visibility(parser->program, object_id, visibility))) {
+                                                 declarator_section_name_length,
+                                                 declarator_has_section,
+                                                 visibility,
+                                                 has_visibility)) {
+                return false;
+            }
+            parser->program->array_type_count = array_type_begin;
+        } else if (!minic_c0_program_add_global_object(parser->program,
+                                                       parser->source + name_span.begin.offset,
+                                                       minic_parser_span_length(name_span),
+                                                       object_type,
+                                                       false,
+                                                       minic_type_is_const(declarator_element_type),
+                                                       &object_id) ||
+                   !minic_c0_global_object_set_extern(parser->program, object_id) ||
+                   (declarator_has_section &&
+                    !minic_c0_global_object_set_section(parser->program,
+                                                        object_id,
+                                                        declarator_section_name,
+                                                        declarator_section_name_length)) ||
+                   (has_visibility && !minic_c0_global_object_set_visibility(
+                                          parser->program, object_id, visibility))) {
             if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
                 minic_parser_error(parser, "cannot declare extern object");
             }
