@@ -58,6 +58,10 @@ unsigned long signed_tail_offset(void) {
     return __builtin_offsetof(struct signed_bits, tail);
 }
 
+unsigned long signed_record_size(void) {
+    return sizeof(struct signed_bits);
+}
+
 unsigned long int_tail_offset(void) {
     return __builtin_offsetof(struct int_bits, tail);
 }
@@ -96,9 +100,9 @@ unsigned int increment_barrier_second(struct named_zero_barrier *bits) {
 
 int main(void) {
     return full_unit_tail_offset() == 8UL && zero_width_tail_offset() == 4UL &&
-                   bool_tail_offset() == 1UL && signed_tail_offset() == 4UL &&
-                   int_tail_offset() == 3UL && short_boundary_tail_offset() == 4UL &&
-                   named_zero_tail_offset() == 5UL
+                   bool_tail_offset() == 1UL && signed_tail_offset() == 1UL &&
+                   signed_record_size() == 4UL && int_tail_offset() == 3UL &&
+                   short_boundary_tail_offset() == 4UL && named_zero_tail_offset() == 5UL
                ? 0
                : 1;
 }
