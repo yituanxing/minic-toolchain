@@ -20,21 +20,21 @@ new_normal = """        initializer = minic_c0_program_expression(parser->progra
         statement.span.end = initializer->span.end;
 """
 
-old_auto = """        statement.kind = MINIC_STATEMENT_ASSIGN;
-        statement.span.begin = begin;
-        statement.span.end = initializer->span.end;
-        statement.target_expression = target_id;
+old_duplicate = """    MinicSourcePosition begin;
+    MinicSourceSpan initializer_span;
+    MinicType initializer_type;
+    MinicSourceSpan initializer_span;
+    MinicType initializer_type;
 """
-new_auto = """        statement.kind = MINIC_STATEMENT_ASSIGN;
-        statement.span.begin = begin;
-        statement.span.end = initializer_span.end;
-        statement.target_expression = target_id;
+new_duplicate = """    MinicSourcePosition begin;
+    MinicSourceSpan initializer_span;
+    MinicType initializer_type;
 """
 
 if old_normal not in source:
     raise SystemExit("normal local initializer fixup anchor not found")
-if old_auto not in source:
-    raise SystemExit("__auto_type initializer fixup anchor not found")
+if old_duplicate not in source:
+    raise SystemExit("duplicate __auto_type snapshot anchor not found")
 source = source.replace(old_normal, new_normal, 1)
-source = source.replace(old_auto, new_auto, 1)
+source = source.replace(old_duplicate, new_duplicate, 1)
 path.write_text(source)
