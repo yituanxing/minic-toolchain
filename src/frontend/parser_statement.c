@@ -553,12 +553,11 @@ parse_local_declarator(MinicParser *parser, MinicType base_type, bool is_registe
                 }
                 source = minic_c0_program_expression(parser->program, source_id);
                 if (source == NULL ||
-                    !minic_c0_record_value_is_address_backed(parser->program, source_id) ||
+                    !minic_c0_record_value_is_copy_source(parser->program, source_id) ||
                     !minic_type_is_record(source->type) ||
                     source->type.record_id != local.type.record_id) {
                     minic_parser_error(
-                        parser,
-                        "record local initializer requires a matching address-backed record value");
+                        parser, "record local initializer requires a matching record copy source");
                     return false;
                 }
                 return add_record_copy_assignments(parser, target_id, source_id, source->span);
@@ -658,11 +657,12 @@ static bool parse_auto_type_local_declaration(MinicParser *parser) {
     }
 
     if (minic_type_is_record(local.type)) {
-        if (!minic_c0_record_value_is_address_backed(parser->program, initializer_id) ||
+        if (!minic_c0_record_value_is_copy_source(parser->program, initializer_id) ||
             !add_record_copy_assignments(parser, target_id, initializer_id, initializer->span)) {
             if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
-                minic_parser_error(parser,
-                                   "GNU __auto_type record initializer must be address-backed");
+                minic_parser_error(
+                    parser,
+                    "GNU __auto_type record initializer requires a supported record copy source");
             }
             return false;
         }
@@ -1438,11 +1438,10 @@ static bool add_record_copy_assignments(MinicParser *parser,
     target = minic_c0_program_expression(parser->program, target_id);
     source = minic_c0_program_expression(parser->program, source_id);
     if (target == NULL || source == NULL || target->value_category != MINIC_VALUE_LVALUE ||
-        !minic_c0_record_value_is_address_backed(parser->program, source_id) ||
+        !minic_c0_record_value_is_copy_source(parser->program, source_id) ||
         !minic_type_is_record(target->type) || !minic_type_is_record(source->type) ||
         target->type.record_id != source->type.record_id || minic_type_is_const(target->type)) {
-        minic_parser_error(parser,
-                           "record assignment requires matching address-backed record values");
+        minic_parser_error(parser, "record assignment requires a matching record copy source");
         return false;
     }
     record = minic_c0_program_record(parser->program, target->type.record_id);

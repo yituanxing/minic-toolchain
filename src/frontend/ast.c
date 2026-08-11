@@ -935,6 +935,22 @@ bool minic_c0_record_value_is_address_backed(const MinicC0Program *program,
     return false;
 }
 
+bool minic_c0_record_value_is_copy_source(const MinicC0Program *program,
+                                          MinicExpressionId expression_id) {
+    const MinicExpression *expression;
+
+    if (program == NULL) {
+        return false;
+    }
+    if (minic_c0_record_value_is_address_backed(program, expression_id)) {
+        return true;
+    }
+    expression = minic_c0_program_expression(program, expression_id);
+    return expression != NULL && expression->kind == MINIC_EXPRESSION_CALL &&
+           expression->value_category == MINIC_VALUE_RVALUE &&
+           minic_type_is_record(expression->type);
+}
+
 static bool expression_is_null_pointer_value(const MinicC0Program *program,
                                              MinicExpressionId expression_id) {
     size_t remaining;

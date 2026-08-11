@@ -2312,12 +2312,11 @@ static bool parse_expression_internal(MinicParser *parser,
             return false;
         }
         if (minic_type_is_record(target_type)) {
-            if (!minic_c0_record_value_is_address_backed(parser->program, value_id) ||
+            if (!minic_c0_record_value_is_copy_source(parser->program, value_id) ||
                 !minic_type_is_record(value_expression->type) ||
                 target_type.record_id != value_expression->type.record_id) {
                 minic_parser_error(
-                    parser,
-                    "record assignment expression requires matching address-backed record values");
+                    parser, "record assignment expression requires a matching record copy source");
                 return false;
             }
         } else {

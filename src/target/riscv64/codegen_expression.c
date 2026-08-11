@@ -505,10 +505,62 @@ bool minic_riscv64_emit_address_backed_record_value(FILE *file,
            minic_riscv64_emit_expression(file, program, function, expression_id);
 }
 
-static bool minic_riscv64_emit_record_assignment_expression(FILE *file,
-                                                            const MinicC0Program *program,
-                                                            const MinicFunction *function,
-                                                            const MinicExpression *expression) {
+static bool minic_riscv64_emit_record_value_temporary(FILE *file,
+                                                      const MinicC0Program *program,
+                                                      const MinicFunction *function,
+                                                      MinicExpressionId source_id,
+                                                      size_t storage_size,
+                                                      size_t temporary_size) {
+    const MinicExpression *source;
+
+    source = minic_c0_program_expression(program, source_id);
+    if (source == NULL || !minic_type_is_record(source->type) ||
+        !minic_c0_record_value_is_copy_source(program, source_id)) {
+        return false;
+    }
+    if (minic_c0_record_value_is_address_backed(program, source_id)) {
+        size_t index;
+
+        if (!minic_riscv64_emit_address_backed_record_value(file, program, function, source_id) ||
+            !minic_riscv64_emit_stack_allocate(file, temporary_size) ||
+            fprintf(file, "  mv t2, a0\n  mv t3, sp\n") < 0) {
+            return false;
+        }
+        for (index = 0U; index < storage_size; ++index) {
+            if (fprintf(file,
+                        "  lbu t0, 0(t2)\n"
+                        "  sb t0, 0(t3)\n"
+                        "  addi t2, t2, 1\n"
+                        "  addi t3, t3, 1\n") < 0) {
+                return false;
+            }
+        }
+        return true;
+    }
+    if (source->kind == MINIC_EXPRESSION_CALL) {
+        size_t aggregate_size;
+        size_t aggregate_chunks;
+
+        if (!minic_riscv64_integer_aggregate_abi(
+                program, source->type, &aggregate_size, &aggregate_chunks) ||
+            aggregate_size != storage_size ||
+            !minic_riscv64_emit_expression(file, program, function, source_id) ||
+            !minic_riscv64_emit_stack_allocate(file, temporary_size) ||
+            fprintf(file, "  sd a0, 0(sp)\n") < 0 ||
+            (aggregate_chunks == 2U && fprintf(file, "  sd a1, 8(sp)\n") < 0)) {
+            return false;
+        }
+        return aggregate_chunks == 1U || aggregate_chunks == 2U;
+    }
+    return false;
+}
+
+bool minic_riscv64_emit_record_copy_value(FILE *file,
+                                          const MinicC0Program *program,
+                                          const MinicFunction *function,
+                                          MinicExpressionId target_id,
+                                          MinicExpressionId source_id,
+                                          bool preserve_target_address) {
     const MinicExpression *target;
     const MinicExpression *source;
     const MinicRecord *record;
@@ -516,12 +568,12 @@ static bool minic_riscv64_emit_record_assignment_expression(FILE *file,
     size_t temporary_size;
     size_t index;
 
-    target = minic_c0_program_expression(program, expression->value.binary.left);
-    source = minic_c0_program_expression(program, expression->value.binary.right);
+    target = minic_c0_program_expression(program, target_id);
+    source = minic_c0_program_expression(program, source_id);
     if (target == NULL || source == NULL || target->value_category != MINIC_VALUE_LVALUE ||
         minic_type_is_const(target->type) || !minic_type_is_record(target->type) ||
         !minic_type_is_record(source->type) || target->type.record_id != source->type.record_id ||
-        !minic_type_equal(expression->type, target->type)) {
+        !minic_c0_record_value_is_copy_source(program, source_id)) {
         return false;
     }
     record = minic_c0_program_record(program, target->type.record_id);
@@ -532,10 +584,11 @@ static bool minic_riscv64_emit_record_assignment_expression(FILE *file,
     storage_size = record->storage_size;
     temporary_size = (storage_size + 15U) & ~(size_t)15U;
 
-    if (!minic_riscv64_emit_address_backed_record_value(
-            file, program, function, expression->value.binary.right) ||
-        !minic_riscv64_emit_stack_allocate(file, temporary_size) ||
-        fprintf(file, "  mv t2, a0\n  mv t3, sp\n") < 0) {
+    if (!minic_riscv64_emit_record_value_temporary(
+            file, program, function, source_id, storage_size, temporary_size) ||
+        !minic_riscv64_emit_lvalue_address(file, program, function, target_id) ||
+        (preserve_target_address && fprintf(file, "  mv t4, a0\n") < 0) ||
+        fprintf(file, "  mv t2, sp\n  mv t3, a0\n") < 0) {
         return false;
     }
     for (index = 0U; index < storage_size; ++index) {
@@ -547,22 +600,26 @@ static bool minic_riscv64_emit_record_assignment_expression(FILE *file,
             return false;
         }
     }
-    if (!minic_riscv64_emit_lvalue_address(
-            file, program, function, expression->value.binary.left) ||
-        fprintf(file, "  mv t4, a0\n  mv t2, sp\n  mv t3, a0\n") < 0) {
+    if (!minic_riscv64_emit_stack_release(file, temporary_size)) {
         return false;
     }
-    for (index = 0U; index < storage_size; ++index) {
-        if (fprintf(file,
-                    "  lbu t0, 0(t2)\n"
-                    "  sb t0, 0(t3)\n"
-                    "  addi t2, t2, 1\n"
-                    "  addi t3, t3, 1\n") < 0) {
-            return false;
-        }
-    }
-    return minic_riscv64_emit_stack_release(file, temporary_size) &&
-           fprintf(file, "  mv a0, t4\n") >= 0;
+    return !preserve_target_address || fprintf(file, "  mv a0, t4\n") >= 0;
+}
+
+static bool minic_riscv64_emit_record_assignment_expression(FILE *file,
+                                                            const MinicC0Program *program,
+                                                            const MinicFunction *function,
+                                                            const MinicExpression *expression) {
+    const MinicExpression *target;
+
+    target = minic_c0_program_expression(program, expression->value.binary.left);
+    return target != NULL && minic_type_equal(expression->type, target->type) &&
+           minic_riscv64_emit_record_copy_value(file,
+                                                program,
+                                                function,
+                                                expression->value.binary.left,
+                                                expression->value.binary.right,
+                                                true);
 }
 
 static bool minic_riscv64_emit_builtin_unary(FILE *file,

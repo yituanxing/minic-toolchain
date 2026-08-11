@@ -620,8 +620,7 @@ static bool verify_expression(const MinicC0Program *program,
             return false;
         }
         if (minic_type_is_record(left->type)) {
-            return minic_c0_record_value_is_address_backed(program,
-                                                           expression->value.binary.right) &&
+            return minic_c0_record_value_is_copy_source(program, expression->value.binary.right) &&
                    minic_type_is_record(right->type) &&
                    left->type.record_id == right->type.record_id;
         }
@@ -834,7 +833,7 @@ static bool verify_statement(const MinicC0Program *program, const MinicStatement
     case MINIC_STATEMENT_RECORD_COPY:
         return target != NULL && expression != NULL &&
                target->value_category == MINIC_VALUE_LVALUE &&
-               minic_c0_record_value_is_address_backed(program, statement->expression) &&
+               minic_c0_record_value_is_copy_source(program, statement->expression) &&
                !minic_type_is_const(target->type) && minic_type_is_record(target->type) &&
                minic_type_is_record(expression->type) &&
                target->type.record_id == expression->type.record_id;
