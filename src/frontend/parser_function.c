@@ -1702,7 +1702,9 @@ bool minic_parse_c0_program(const char *path,
         if (!success || parser.current.kind == MINIC_TOKEN_EOF) {
             break;
         }
-        if (parser.current.kind == MINIC_TOKEN_KW_STATIC_ASSERT) {
+        if (parser.current.kind == MINIC_TOKEN_SEMICOLON) {
+            success = minic_parser_advance(&parser);
+        } else if (parser.current.kind == MINIC_TOKEN_KW_STATIC_ASSERT) {
             success = minic_parser_parse_static_assert_declaration(&parser);
         } else if (parser.current.kind == MINIC_TOKEN_KW_TYPEDEF) {
             success = minic_parser_parse_typedef(&parser);
