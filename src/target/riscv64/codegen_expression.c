@@ -589,6 +589,26 @@ static bool minic_riscv64_emit_member_address(FILE *file,
                    field->storage_offset) >= 0;
 }
 
+static bool minic_riscv64_emit_expression_owned_block(FILE *file,
+                                                      const MinicC0Program *program,
+                                                      const MinicFunction *function,
+                                                      MinicExpressionId expression_id,
+                                                      MinicBlockId block_id) {
+    size_t label_stride;
+    size_t label_counter;
+
+    if (file == NULL || program == NULL || block_id >= program->block_count ||
+        program->statement_count == SIZE_MAX) {
+        return false;
+    }
+    label_stride = program->statement_count + 1U;
+    if (expression_id > (SIZE_MAX - label_stride) / label_stride) {
+        return false;
+    }
+    label_counter = label_stride + expression_id * label_stride;
+    return minic_riscv64_emit_block(file, program, function, block_id, &label_counter);
+}
+
 bool minic_riscv64_emit_lvalue_address(FILE *file,
                                        const MinicC0Program *program,
                                        const MinicFunction *function,
@@ -617,6 +637,15 @@ bool minic_riscv64_emit_lvalue_address(FILE *file,
         return minic_riscv64_emit_subscript_address(file, program, function, expression);
     case MINIC_EXPRESSION_MEMBER:
         return minic_riscv64_emit_member_address(file, program, function, expression);
+    case MINIC_EXPRESSION_COMPOUND_LITERAL:
+        return minic_riscv64_emit_expression_owned_block(
+                   file,
+                   program,
+                   function,
+                   expression_id,
+                   expression->value.compound_literal.initializer_block) &&
+               minic_riscv64_emit_object_address(
+                   file, program, function, expression->value.compound_literal.local_id);
     default:
         return false;
     }
@@ -962,6 +991,8 @@ bool minic_riscv64_emit_expression(FILE *file,
                fprintf(file, "  li a0, 0x%016" PRIx64 "\n", expression->value.floating_bits) >= 0;
     case MINIC_EXPRESSION_LOCAL:
         return minic_riscv64_emit_object_load(file, program, function, expression->value.local_id);
+    case MINIC_EXPRESSION_COMPOUND_LITERAL:
+        return minic_riscv64_emit_lvalue_address(file, program, function, expression_id);
     case MINIC_EXPRESSION_GLOBAL_OBJECT: {
         const MinicGlobalObject *object;
 
@@ -1599,22 +1630,12 @@ bool minic_riscv64_emit_expression(FILE *file,
     case MINIC_EXPRESSION_BUILTIN_OVERFLOW:
         return minic_riscv64_emit_overflow_builtin(file, program, function, expression);
     case MINIC_EXPRESSION_STATEMENT: {
-        size_t label_stride;
-        size_t label_counter;
-
-        if (program->statement_count == SIZE_MAX) {
-            return false;
-        }
-        label_stride = program->statement_count + 1U;
-        if (expression_id > (SIZE_MAX - label_stride) / label_stride) {
-            return false;
-        }
-        label_counter = label_stride + expression_id * label_stride;
-        if (!minic_riscv64_emit_block(file,
-                                      program,
-                                      function,
-                                      expression->value.statement_expression.block,
-                                      &label_counter)) {
+        if (!minic_riscv64_emit_expression_owned_block(
+                file,
+                program,
+                function,
+                expression_id,
+                expression->value.statement_expression.block)) {
             return false;
         }
         if (expression->value.statement_expression.result == MINIC_EXPRESSION_INVALID) {

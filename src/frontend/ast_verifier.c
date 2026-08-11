@@ -797,6 +797,22 @@ static bool verify_expression(const MinicC0Program *program,
                minic_type_equal(overflow_left->type, result_type) &&
                minic_type_equal(overflow_right->type, result_type);
     }
+    case MINIC_EXPRESSION_COMPOUND_LITERAL: {
+        const MinicLocal *local;
+        const MinicBlock *initializer_block;
+        const MinicRecord *record;
+
+        local = minic_c0_program_local(program, expression->value.compound_literal.local_id);
+        initializer_block =
+            minic_c0_program_block(program, expression->value.compound_literal.initializer_block);
+        record = minic_type_is_record(expression->type)
+                     ? minic_c0_program_record(program, expression->type.record_id)
+                     : NULL;
+        return local != NULL && initializer_block != NULL && record != NULL &&
+               record->is_complete && expression->value_category == MINIC_VALUE_LVALUE &&
+               !local->is_array && !local->is_register_storage && local->element_count == 1U &&
+               minic_type_equal(local->type, expression->type);
+    }
     case MINIC_EXPRESSION_STATEMENT: {
         const MinicBlock *block;
         const MinicExpression *result;

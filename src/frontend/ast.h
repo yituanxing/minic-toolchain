@@ -60,6 +60,7 @@ typedef enum MinicExpressionKind {
     MINIC_EXPRESSION_BINARY,
     MINIC_EXPRESSION_CONDITIONAL,
     MINIC_EXPRESSION_CALL,
+    MINIC_EXPRESSION_COMPOUND_LITERAL,
     MINIC_EXPRESSION_STATEMENT,
     MINIC_EXPRESSION_BUILTIN_UNARY,
     MINIC_EXPRESSION_BUILTIN_OVERFLOW
@@ -164,6 +165,10 @@ typedef struct MinicExpression {
             MinicExpressionId when_true;
             MinicExpressionId when_false;
         } conditional;
+        struct {
+            MinicLocalId local_id;
+            MinicBlockId initializer_block;
+        } compound_literal;
         struct {
             MinicBlockId block;
             MinicExpressionId result;

@@ -18,6 +18,7 @@ sh tests/compiler/c0/run-block-scope-extern-function-attributes.sh
 sh tests/compiler/c0/run-gnu-void-pointer-arithmetic.sh
 sh tests/compiler/c0/run-gnu-statement-expression.sh
 sh tests/compiler/c0/run-gnu-statement-record-value.sh
+sh tests/compiler/c0/run-gnu-record-compound-literal.sh
 sh tests/compiler/c0/run-gnu-static-local-implicit-zero.sh
 sh tests/compiler/c0/run-gnu-top-level-empty-declaration.sh
 sh tests/compiler/c0/run-gnu-object-alignment-attribute.sh

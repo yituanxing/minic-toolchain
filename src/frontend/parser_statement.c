@@ -365,8 +365,8 @@ static bool add_record_copy_assignments(MinicParser *parser,
                                         MinicExpressionId source_id,
                                         MinicSourceSpan span);
 
-static bool parse_local_designated_record_initializer(MinicParser *parser,
-                                                      MinicExpressionId target_id) {
+bool minic_parser_parse_runtime_record_initializer(MinicParser *parser,
+                                                   MinicExpressionId target_id) {
     MinicSourceSpan initializer_span;
     MinicSourceSpan zero_span;
 
@@ -543,7 +543,7 @@ parse_local_declarator(MinicParser *parser, MinicType base_type, bool is_registe
                 return false;
             }
             if (parser->current.kind == MINIC_TOKEN_LBRACE) {
-                return parse_local_designated_record_initializer(parser, target_id);
+                return minic_parser_parse_runtime_record_initializer(parser, target_id);
             } else {
                 MinicExpressionId source_id;
                 const MinicExpression *source;

@@ -38,6 +38,7 @@ static bool remap_non_cast_expression(MinicExpression *expression,
     case MINIC_EXPRESSION_BUILTIN_UNREACHABLE:
     case MINIC_EXPRESSION_SIZEOF:
     case MINIC_EXPRESSION_OFFSETOF:
+    case MINIC_EXPRESSION_COMPOUND_LITERAL:
         return true;
     case MINIC_EXPRESSION_ADDRESS_OF:
     case MINIC_EXPRESSION_DEREFERENCE:

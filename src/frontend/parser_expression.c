@@ -301,6 +301,82 @@ static bool same_floating_type(MinicType left, MinicType right) {
             (minic_type_is_float(left) && minic_type_is_float(right)));
 }
 
+static bool parse_record_compound_literal(MinicParser *parser,
+                                          MinicSourcePosition begin,
+                                          MinicType type,
+                                          MinicExpressionId *expression_id) {
+    const MinicRecord *record;
+    MinicLocal local;
+    MinicLocalId local_id;
+    MinicExpression hidden_lvalue;
+    MinicExpression compound_literal;
+    MinicExpressionId hidden_lvalue_id;
+    MinicExpressionId compound_literal_id;
+    MinicBlockId initializer_block;
+    MinicBlockId parent_block;
+    bool success;
+
+    if (parser == NULL || expression_id == NULL || parser->current.kind != MINIC_TOKEN_LBRACE ||
+        parser->current_function == MINIC_FUNCTION_INVALID || !minic_type_is_record(type)) {
+        if (parser != NULL) {
+            minic_parser_error(parser,
+                               "compound literals currently require a block-scope record type");
+        }
+        return false;
+    }
+    record = minic_c0_program_record(parser->program, type.record_id);
+    if (record == NULL || !record->is_complete) {
+        minic_parser_error(parser, "record compound literal requires a complete record type");
+        return false;
+    }
+
+    (void)memset(&local, 0, sizeof(local));
+    local.name_span.begin = begin;
+    local.name_span.end = begin;
+    local.type = type;
+    local.element_count = 1U;
+    local.is_array = false;
+    local.is_register_storage = false;
+    if (!minic_c0_program_add_local(parser->program, &local, &local_id)) {
+        minic_parser_error(parser, "cannot allocate compound literal backing object");
+        return false;
+    }
+
+    (void)memset(&hidden_lvalue, 0, sizeof(hidden_lvalue));
+    hidden_lvalue.kind = MINIC_EXPRESSION_LOCAL;
+    hidden_lvalue.span.begin = begin;
+    hidden_lvalue.span.end = parser->current.span.begin;
+    hidden_lvalue.type = type;
+    hidden_lvalue.value_category = MINIC_VALUE_LVALUE;
+    hidden_lvalue.value.local_id = local_id;
+    if (!minic_parser_add_expression(parser, &hidden_lvalue, &hidden_lvalue_id) ||
+        !minic_c0_program_add_block(parser->program, &initializer_block)) {
+        minic_parser_error(parser, "cannot create compound literal initializer block");
+        return false;
+    }
+
+    parent_block = parser->current_block;
+    parser->current_block = initializer_block;
+    success = minic_parser_parse_runtime_record_initializer(parser, hidden_lvalue_id);
+    parser->current_block = parent_block;
+    if (!success) {
+        return false;
+    }
+
+    (void)memset(&compound_literal, 0, sizeof(compound_literal));
+    compound_literal.kind = MINIC_EXPRESSION_COMPOUND_LITERAL;
+    compound_literal.span.begin = begin;
+    compound_literal.span.end = parser->current.span.begin;
+    compound_literal.type = type;
+    compound_literal.value_category = MINIC_VALUE_LVALUE;
+    compound_literal.value.compound_literal.local_id = local_id;
+    compound_literal.value.compound_literal.initializer_block = initializer_block;
+    if (!minic_parser_add_expression(parser, &compound_literal, &compound_literal_id)) {
+        return false;
+    }
+    return minic_parser_parse_postfix(parser, compound_literal_id, expression_id);
+}
+
 static bool parse_cast(MinicParser *parser, MinicExpressionId *expression_id) {
     MinicSourcePosition begin;
     MinicExpression expression;
@@ -310,8 +386,13 @@ static bool parse_cast(MinicParser *parser, MinicExpressionId *expression_id) {
 
     begin = parser->current.span.begin;
     if (!minic_parser_advance(parser) || !minic_parser_parse_type_name(parser, &target_type) ||
-        !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')' after cast type") ||
-        !parse_unary(parser, &operand_id, true)) {
+        !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')' after cast type")) {
+        return false;
+    }
+    if (parser->current.kind == MINIC_TOKEN_LBRACE) {
+        return parse_record_compound_literal(parser, begin, target_type, expression_id);
+    }
+    if (!parse_unary(parser, &operand_id, true)) {
         return false;
     }
 
