@@ -527,8 +527,14 @@ static bool parse_call_argument(MinicParser *parser,
 static bool parse_call_arguments(MinicParser *parser,
                                  MinicExpression *call_expression,
                                  const MinicFunction *callee) {
+    MinicFunction callee_snapshot;
     size_t argument_count;
 
+    if (callee == NULL) {
+        return false;
+    }
+    callee_snapshot = *callee;
+    callee = &callee_snapshot;
     argument_count = 0U;
     while (argument_count < callee->parameter_count) {
         if (parser->current.kind == MINIC_TOKEN_RPAREN) {
@@ -1560,9 +1566,15 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
             const MinicExpression *right_expression;
             MinicExpression comma_expression;
             MinicExpressionId right_id;
+            MinicSourcePosition left_begin;
 
             left_expression = minic_c0_program_expression(parser->program, primary_id);
-            if (left_expression == NULL || !minic_parser_advance(parser) ||
+            if (left_expression == NULL) {
+                minic_parser_error(parser, "invalid comma expression operand");
+                return false;
+            }
+            left_begin = left_expression->span.begin;
+            if (!minic_parser_advance(parser) ||
                 !parse_expression_internal(parser, &right_id, 0U, true)) {
                 return false;
             }
@@ -1573,7 +1585,7 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
             }
             (void)memset(&comma_expression, 0, sizeof(comma_expression));
             comma_expression.kind = MINIC_EXPRESSION_BINARY;
-            comma_expression.span.begin = left_expression->span.begin;
+            comma_expression.span.begin = left_begin;
             comma_expression.span.end = right_expression->span.end;
             comma_expression.type = right_expression->type;
             comma_expression.value_category = MINIC_VALUE_RVALUE;

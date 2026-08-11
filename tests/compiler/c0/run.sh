@@ -291,3 +291,8 @@ expect_compile_failure \
     invalid_braced_scalar_static_global \
     "expected integer constant expression"
 expect_compile_failure invalid_return "expected expression"
+
+MINIC="$minic" \
+HOST_CC="$host_cc" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+sh "$root/tests/compiler/c0/run-comma-operator.sh"

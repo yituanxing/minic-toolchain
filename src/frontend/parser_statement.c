@@ -255,12 +255,14 @@ static bool add_zero_assignment_to_lvalue(MinicParser *parser,
     MinicExpression zero;
     MinicExpressionId value_id;
     MinicStatement statement;
+    MinicType target_type;
 
     target = minic_c0_program_expression(parser->program, target_id);
     if (target == NULL || target->value_category != MINIC_VALUE_LVALUE) {
         minic_parser_error(parser, "invalid aggregate zero target");
         return false;
     }
+    target_type = target->type;
     (void)memset(&zero, 0, sizeof(zero));
     zero.kind = MINIC_EXPRESSION_INTEGER;
     zero.span = initializer_span;
@@ -268,8 +270,8 @@ static bool add_zero_assignment_to_lvalue(MinicParser *parser,
     zero.value_category = MINIC_VALUE_RVALUE;
     zero.value.integer_value = 0;
     if (!minic_parser_add_expression(parser, &zero, &value_id) ||
-        !apply_assignment_conversion(parser, target->type, &value_id) ||
-        !minic_c0_assignment_compatible(parser->program, target->type, value_id)) {
+        !apply_assignment_conversion(parser, target_type, &value_id) ||
+        !minic_c0_assignment_compatible(parser->program, target_type, value_id)) {
         minic_parser_error(parser, "aggregate zero initializer does not match member type");
         return false;
     }
@@ -292,6 +294,9 @@ static bool add_zero_initialized_record_lvalue(MinicParser *parser,
     const MinicRecord *record;
     MinicExpression address;
     MinicExpressionId address_id;
+    MinicRecordId record_id;
+    MinicSourceSpan base_span;
+    MinicType base_type;
     size_t field_index;
 
     base = minic_c0_program_expression(parser->program, base_id);
@@ -300,7 +305,10 @@ static bool add_zero_initialized_record_lvalue(MinicParser *parser,
         minic_parser_error(parser, "aggregate zero initializer requires a record lvalue");
         return false;
     }
-    record = minic_c0_program_record(parser->program, base->type.record_id);
+    base_span = base->span;
+    base_type = base->type;
+    record_id = base_type.record_id;
+    record = minic_c0_program_record(parser->program, record_id);
     if (record == NULL || !record->is_complete) {
         minic_parser_error(parser, "aggregate zero initializer requires a complete record");
         return false;
@@ -308,8 +316,8 @@ static bool add_zero_initialized_record_lvalue(MinicParser *parser,
 
     (void)memset(&address, 0, sizeof(address));
     address.kind = MINIC_EXPRESSION_ADDRESS_OF;
-    address.span = base->span;
-    if (!minic_type_pointer_to(base->type, &address.type)) {
+    address.span = base_span;
+    if (!minic_type_pointer_to(base_type, &address.type)) {
         minic_parser_error(parser, "record initializer address depth is unsupported");
         return false;
     }
@@ -336,7 +344,7 @@ static bool add_zero_initialized_record_lvalue(MinicParser *parser,
         member.type = field->type;
         member.value_category = MINIC_VALUE_LVALUE;
         member.value.member.base = address_id;
-        member.value.member.record_id = base->type.record_id;
+        member.value.member.record_id = record_id;
         member.value.member.field_index = field_index;
         if (!minic_parser_add_expression(parser, &member, &member_id)) {
             return false;
@@ -384,7 +392,9 @@ bool minic_parser_parse_runtime_record_initializer(MinicParser *parser,
         MinicExpressionId value_id;
         const MinicExpression *member;
         const MinicExpression *value;
+        MinicSourceSpan member_span;
         MinicStatement statement;
+        MinicType member_type;
 
         if (parser->current.kind != MINIC_TOKEN_DOT ||
             !minic_parser_parse_direct_member(parser, target_id, &member_id) ||
@@ -397,9 +407,14 @@ bool minic_parser_parse_runtime_record_initializer(MinicParser *parser,
             return false;
         }
         member = minic_c0_program_expression(parser->program, member_id);
-        if (member == NULL || member->value_category != MINIC_VALUE_LVALUE ||
-            !apply_assignment_conversion(parser, member->type, &value_id) ||
-            !minic_c0_assignment_compatible(parser->program, member->type, value_id)) {
+        if (member == NULL || member->value_category != MINIC_VALUE_LVALUE) {
+            minic_parser_error(parser, "record designated initializer type mismatch");
+            return false;
+        }
+        member_span = member->span;
+        member_type = member->type;
+        if (!apply_assignment_conversion(parser, member_type, &value_id) ||
+            !minic_c0_assignment_compatible(parser->program, member_type, value_id)) {
             minic_parser_error(parser, "record designated initializer type mismatch");
             return false;
         }
@@ -411,7 +426,7 @@ bool minic_parser_parse_runtime_record_initializer(MinicParser *parser,
 
         (void)memset(&statement, 0, sizeof(statement));
         statement.kind = MINIC_STATEMENT_ASSIGN;
-        statement.span.begin = member->span.begin;
+        statement.span.begin = member_span.begin;
         statement.span.end = value->span.end;
         statement.target_expression = member_id;
         statement.expression = value_id;
@@ -571,7 +586,7 @@ parse_local_declarator(MinicParser *parser, MinicType base_type, bool is_registe
             minic_parser_error(parser, "initializer type does not match local type");
             return false;
         }
-        statement.span.end = initializer->span.end;
+        statement.span.end = initializer_span.end;
         if (!minic_parser_add_statement(parser, &statement)) {
             return false;
         }
@@ -592,6 +607,8 @@ static bool parse_auto_type_local_declaration(MinicParser *parser) {
     MinicLocal local;
     MinicLocalId local_id;
     MinicSourcePosition begin;
+    MinicSourceSpan initializer_span;
+    MinicType initializer_type;
 
     if (!current_identifier_is_auto_type(parser)) {
         return false;
@@ -635,7 +652,9 @@ static bool parse_auto_type_local_declaration(MinicParser *parser) {
         }
         return false;
     }
-    local.type = initializer->type;
+    initializer_span = initializer->span;
+    initializer_type = initializer->type;
+    local.type = initializer_type;
 
     /* GNU __auto_type deliberately keeps the new name out of scope while the
        initializer is parsed.  Bind it only after the initializer type is known. */
@@ -650,7 +669,7 @@ static bool parse_auto_type_local_declaration(MinicParser *parser) {
 
     if (minic_type_is_record(local.type)) {
         if (!minic_c0_record_value_is_copy_source(parser->program, initializer_id) ||
-            !add_record_copy_assignments(parser, target_id, initializer_id, initializer->span)) {
+            !add_record_copy_assignments(parser, target_id, initializer_id, initializer_span)) {
             if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
                 minic_parser_error(
                     parser,

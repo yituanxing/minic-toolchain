@@ -226,6 +226,7 @@ static bool parse_one_indirect_call(MinicParser *parser,
                                     MinicExpressionId *expression_id) {
     const MinicExpression *callee;
     const MinicFunctionType *function_type;
+    MinicFunctionType function_type_snapshot;
     MinicExpression call;
     MinicSourcePosition call_end;
 
@@ -235,15 +236,16 @@ static bool parse_one_indirect_call(MinicParser *parser,
         minic_parser_error(parser, "called expression must have function-pointer type");
         return false;
     }
+    function_type_snapshot = *function_type;
 
     (void)memset(&call, 0, sizeof(call));
     call.kind = MINIC_EXPRESSION_CALL;
     call.span.begin = callee->span.begin;
-    call.type = function_type->return_type;
+    call.type = function_type_snapshot.return_type;
     call.value_category = MINIC_VALUE_RVALUE;
     call.value.call.function_id = MINIC_FUNCTION_INVALID;
     call.value.call.callee = callee_id;
-    if (!parse_indirect_arguments(parser, &call, function_type)) {
+    if (!parse_indirect_arguments(parser, &call, &function_type_snapshot)) {
         return false;
     }
     call_end = parser->current.span.end;
