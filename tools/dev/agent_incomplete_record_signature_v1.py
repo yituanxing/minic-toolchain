@@ -167,9 +167,9 @@ printf '%s\n' 'PASS compiler/c0/gnu_incomplete_record_function_signature declara
 p = "tools/dev/pr76-focused.sh"
 s = read(p)
 s = one(s,
-'''sh tests/compiler/c0/run-record-forward-declarations.sh
+'''sh tests/compiler/c0/run-shared-function-declarator.sh
 ''',
-'''sh tests/compiler/c0/run-record-forward-declarations.sh
+'''sh tests/compiler/c0/run-shared-function-declarator.sh
 sh tests/compiler/c0/run-gnu-incomplete-record-function-signature.sh
 ''', "focused registration")
 write(p, s)
