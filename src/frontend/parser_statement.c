@@ -588,6 +588,109 @@ parse_local_declarator(MinicParser *parser, MinicType base_type, bool is_registe
     return true;
 }
 
+static bool current_identifier_is_auto_type(const MinicParser *parser) {
+    return parser != NULL && parser->current.kind == MINIC_TOKEN_IDENTIFIER &&
+           minic_parser_span_length(parser->current.span) == 11U &&
+           memcmp(parser->source + parser->current.span.begin.offset, "__auto_type", 11U) == 0;
+}
+
+static bool parse_auto_type_local_declaration(MinicParser *parser) {
+    const MinicExpression *initializer;
+    MinicExpressionId initializer_id;
+    MinicExpressionId target_id;
+    MinicLocal local;
+    MinicLocalId local_id;
+    MinicSourcePosition begin;
+
+    if (!current_identifier_is_auto_type(parser)) {
+        return false;
+    }
+    begin = parser->current.span.begin;
+    if (!minic_parser_advance(parser) || parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
+        if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+            minic_parser_error(parser, "GNU __auto_type declarator must be an identifier");
+        }
+        return false;
+    }
+
+    (void)memset(&local, 0, sizeof(local));
+    local.name_span = parser->current.span;
+    local.element_count = 1U;
+    local.storage_offset = 0U;
+    local.is_array = false;
+    local.is_register_storage = false;
+    if (minic_parser_name_bound_in_current_scope(parser, local.name_span)) {
+        minic_parser_error(parser, "duplicate local declaration");
+        return false;
+    }
+    if (!minic_parser_advance(parser) || parser->current.kind != MINIC_TOKEN_EQUAL) {
+        if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+            minic_parser_error(parser, "GNU __auto_type declaration requires an initializer");
+        }
+        return false;
+    }
+    if (!minic_parser_advance(parser) ||
+        !minic_parser_parse_expression(parser, &initializer_id, 0U)) {
+        return false;
+    }
+    initializer = minic_c0_program_expression(parser->program, initializer_id);
+    if (initializer == NULL || minic_type_is_void(initializer->type) ||
+        !minic_parser_require_complete_object_type(
+            parser,
+            initializer->type,
+            "GNU __auto_type initializer must determine a complete object type")) {
+        if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+            minic_parser_error(parser, "invalid GNU __auto_type initializer type");
+        }
+        return false;
+    }
+    local.type = initializer->type;
+
+    /* GNU __auto_type deliberately keeps the new name out of scope while the
+       initializer is parsed.  Bind it only after the initializer type is known. */
+    if (!minic_c0_program_add_local(parser->program, &local, &local_id) ||
+        !minic_parser_bind_local(parser, local.name_span, local_id) ||
+        !add_local_lvalue_expression(parser, local_id, local.name_span, &target_id)) {
+        if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+            minic_parser_error(parser, "cannot materialize GNU __auto_type local");
+        }
+        return false;
+    }
+
+    if (minic_type_is_record(local.type)) {
+        if (!minic_c0_record_value_is_address_backed(parser->program, initializer_id) ||
+            !add_record_copy_assignments(parser, target_id, initializer_id, initializer->span)) {
+            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                minic_parser_error(parser,
+                                   "GNU __auto_type record initializer must be address-backed");
+            }
+            return false;
+        }
+    } else {
+        MinicStatement statement;
+
+        (void)memset(&statement, 0, sizeof(statement));
+        statement.kind = MINIC_STATEMENT_ASSIGN;
+        statement.span.begin = begin;
+        statement.span.end = initializer->span.end;
+        statement.target_expression = target_id;
+        statement.expression = initializer_id;
+        statement.target_statement = MINIC_STATEMENT_INVALID;
+        statement.then_block = MINIC_BLOCK_INVALID;
+        statement.else_block = MINIC_BLOCK_INVALID;
+        if (!minic_c0_assignment_compatible(parser->program, local.type, initializer_id) ||
+            !minic_parser_add_statement(parser, &statement)) {
+            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                minic_parser_error(parser, "cannot initialize GNU __auto_type local");
+            }
+            return false;
+        }
+    }
+
+    return minic_parser_expect(
+        parser, MINIC_TOKEN_SEMICOLON, "expected ';' after GNU __auto_type declaration");
+}
+
 static bool parse_declaration(MinicParser *parser) {
     MinicType base_type;
     bool is_register_storage;
@@ -3382,6 +3485,13 @@ bool minic_parser_parse_statement(MinicParser *parser, bool allow_declaration) {
             return false;
         }
         return parse_static_local_declaration(parser);
+    }
+    if (current_identifier_is_auto_type(parser)) {
+        if (!allow_declaration) {
+            minic_parser_error(parser, "GNU __auto_type requires a compound statement scope");
+            return false;
+        }
+        return parse_auto_type_local_declaration(parser);
     }
     if (token_starts_local_declaration(parser)) {
         if (!allow_declaration) {
