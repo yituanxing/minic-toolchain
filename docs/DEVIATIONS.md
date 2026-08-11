@@ -52,6 +52,19 @@ Each entry must contain:
 - Target milestone / 目标里程碑: Function specialization/inlining boundary before full Linux object acceptance / 完整 Linux object 验收前的函数特化/内联边界。
 - Related evidence / 相关证据: `run-gnu-inline-asm-goto.sh` requires the explicit deferred marker today; Linux 6.6.143 inventory currently contains four `asm goto` sites. 当前 `run-gnu-inline-asm-goto.sh` 明确要求 deferred marker；Linux 6.6.143 inventory 当前包含 4 个 `asm goto` 用例。
 
+## DEV-0003: call-frame introspection before inlining / 内联实现前的调用帧内省语义
+
+- Status / 状态: Active
+- Rule / 规则: Real-program acceptance should preserve the observable semantics of target/runtime-sensitive language features; optimization attributes that change observable builtin behavior must not be silently treated as semantically irrelevant. 真实程序验收应保持 target/runtime-sensitive 语言能力的可观察语义；会改变 builtin 可观察行为的优化属性不能被静默视为无语义元数据。
+- Scope / 范围: `__builtin_return_address(0)`, `__builtin_frame_address(0)`, parse-only `inline`/`always_inline` function metadata, and unchanged Linux 6.6.143 discovery. 涉及 level-0 return/frame-address builtin、当前仅解析不持久化的 inline/always_inline 元数据与 Linux 6.6.143 discovery。
+- Reason / 原因: Linux contains real level-0 call-frame builtin uses before MiniC has an inliner. The RV64 backend can still model the actual emitted MiniC frame exactly: return address is loaded from the entry-time saved RA slot and frame address is the current frame pointer. This is materially safer than reading live `ra` or inventing a value, but it cannot yet reproduce GCC's observable result when the containing wrapper is inlined. Linux 已出现真实的 level-0 调用帧 builtin，而 MiniC 尚无 inliner。RV64 backend 仍可精确表示 MiniC 实际生成的函数帧：return address 从函数入口保存的 RA slot 读取，frame address 使用当前 frame pointer。这比读取 live `ra` 或伪造值正确得多，但尚不能复现 GCC 在包含该 builtin 的 wrapper 被内联时的可观察结果。
+- Risk / 风险: Linux `-S` discovery can move beyond call-frame builtin syntax/target lowering while runtime caller-IP/frame identity may differ from GCC for wrappers that GCC inlines. Linux `-S` discovery 可以越过调用帧 builtin 的语法与 target lowering，但对于 GCC 会内联的 wrapper，运行时 caller-IP/frame identity 仍可能与 GCC 不同。
+- Exit criteria / 退出条件:
+  1. Persist supported `inline`/`always_inline` semantics on function entities instead of treating them only as parse-time metadata. 将受支持的 inline/always_inline 语义持久化到函数实体，而不是仅在解析时接受。
+  2. Implement and verify the required function inlining/specialization boundary before lowering call-frame builtin values whose observable result depends on inlining. 在降低可观察结果受内联影响的 call-frame builtin 前，实现并验证所需函数内联/特化边界。
+  3. Add RV64 assemble/link/runtime differential tests against GCC for representative return/frame-address wrappers, including a call before `__builtin_return_address(0)` so live `ra` cannot accidentally pass. 为典型 return/frame-address wrapper 增加 RV64 汇编、链接和 GCC 运行差分，并包含 builtin 前先调用函数的用例，防止 live `ra` 错误实现误过门禁。
+- Target milestone / 目标里程碑: Function inlining/specialization boundary before Linux runtime/object acceptance / Linux runtime/object 完整验收前的函数内联/特化边界。
+
 ## Resolved deviations / 已解决偏离
 
 ## DEV-0001: C0 parser performs direct lexical matching / C0 Parser 直接匹配源码字符

@@ -226,6 +226,10 @@ bool minic_riscv64_emit_sp_store64(FILE *file, const char *register_name, size_t
                    register_name) >= 0;
 }
 
+bool minic_riscv64_emit_s0_load64(FILE *file, const char *register_name, size_t offset) {
+    return minic_riscv64_emit_s0_access(file, "ld", register_name, offset);
+}
+
 bool minic_riscv64_emit_sp_load64(FILE *file, const char *register_name, size_t offset) {
     if (offset <= 2047U) {
         return fprintf(file, "  ld %s, %zu(sp)\n", register_name, offset) >= 0;

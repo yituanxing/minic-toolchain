@@ -475,6 +475,16 @@ static bool verify_expression(const MinicC0Program *program,
         }
         return true;
     }
+    case MINIC_EXPRESSION_CALL_FRAME_ADDRESS: {
+        MinicType pointee;
+
+        return expression->value_category == MINIC_VALUE_RVALUE &&
+               minic_type_pointee(expression->type, &pointee) && minic_type_is_void(pointee) &&
+               minic_target_info_call_frame_address_supported(
+                   target,
+                   expression->value.call_frame_address.kind,
+                   expression->value.call_frame_address.level);
+    }
     case MINIC_EXPRESSION_LABEL_ADDRESS: {
         const MinicStatement *label;
         MinicType pointee;

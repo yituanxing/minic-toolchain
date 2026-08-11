@@ -39,6 +39,7 @@ typedef enum MinicExpressionKind {
     MINIC_EXPRESSION_FIXED_REGISTER,
     MINIC_EXPRESSION_FUNCTION,
     MINIC_EXPRESSION_LABEL_ADDRESS,
+    MINIC_EXPRESSION_CALL_FRAME_ADDRESS,
     MINIC_EXPRESSION_SIZEOF,
     MINIC_EXPRESSION_OFFSETOF,
     MINIC_EXPRESSION_ADDRESS_OF,
@@ -97,6 +98,11 @@ typedef enum MinicBinaryOperator {
 
 typedef enum MinicBuiltinUnaryOperator { MINIC_BUILTIN_UNARY_CLZLL = 0 } MinicBuiltinUnaryOperator;
 
+typedef enum MinicCallFrameAddressKind {
+    MINIC_CALL_FRAME_ADDRESS_RETURN = 0,
+    MINIC_CALL_FRAME_ADDRESS_FRAME
+} MinicCallFrameAddressKind;
+
 typedef enum MinicOverflowOperator {
     MINIC_OVERFLOW_ADD = 0,
     MINIC_OVERFLOW_SUBTRACT,
@@ -116,6 +122,10 @@ typedef struct MinicExpression {
         MinicFixedRegisterBindingId fixed_register_binding_id;
         MinicFunctionId function_id;
         MinicStatementId label_statement_id;
+        struct {
+            MinicCallFrameAddressKind kind;
+            unsigned int level;
+        } call_frame_address;
         MinicType sizeof_type;
         struct {
             MinicRecordId record_id;

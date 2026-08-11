@@ -783,6 +783,23 @@ bool minic_riscv64_emit_expression(FILE *file,
                minic_type_is_function(function_type) &&
                fprintf(file, "  la a0, %s\n", minic_c0_function_symbol_name(designator)) >= 0;
     }
+    case MINIC_EXPRESSION_CALL_FRAME_ADDRESS: {
+        MinicRiscv64FrameLayout frame_layout;
+        MinicType pointee;
+
+        if (function == NULL || expression->value.call_frame_address.level != 0U ||
+            !minic_type_pointee(expression->type, &pointee) || !minic_type_is_void(pointee) ||
+            !minic_riscv64_frame_layout(program, function, &frame_layout)) {
+            return false;
+        }
+        switch (expression->value.call_frame_address.kind) {
+        case MINIC_CALL_FRAME_ADDRESS_RETURN:
+            return minic_riscv64_emit_s0_load64(file, "a0", frame_layout.saved_ra_offset);
+        case MINIC_CALL_FRAME_ADDRESS_FRAME:
+            return fprintf(file, "  mv a0, s0\n") >= 0;
+        }
+        return false;
+    }
     case MINIC_EXPRESSION_LABEL_ADDRESS: {
         const MinicStatement *label;
         MinicType pointee;

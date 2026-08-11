@@ -28,6 +28,7 @@ sh tests/compiler/c0/run-gnu-fixed-register-bindings.sh
 sh tests/compiler/c0/run-gnu-compiletime-selection-builtins.sh
 sh tests/compiler/c0/run-gnu-builtin-constant-p.sh
 sh tests/compiler/c0/run-gnu-builtin-object-size.sh
+sh tests/compiler/c0/run-gnu-call-frame-address.sh
 sh tests/compiler/c0/run-gnu-pointer-sign-call-conversion.sh
 sh tests/compiler/c0/run-static-assert-declaration.sh
 sh tests/compiler/c0/run-gnu-choose-expr-bitfield.sh

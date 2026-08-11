@@ -10,6 +10,8 @@ const MinicTargetInfo *minic_default_target_info(void) {
         target.data_layout = minic_default_data_layout();
         target.gnu_sizeof_void_is_one = true;
         target.gnu_sizeof_function_is_one = true;
+        target.call_frame_return_address_level0 = true;
+        target.call_frame_frame_address_level0 = true;
     }
     return &target;
 }
@@ -59,6 +61,21 @@ bool minic_target_info_integer_width(const MinicTargetInfo *target,
     (void)alignment;
     *bits = (unsigned int)(size * CHAR_BIT);
     return true;
+}
+
+bool minic_target_info_call_frame_address_supported(const MinicTargetInfo *target,
+                                                    MinicCallFrameAddressKind kind,
+                                                    unsigned int level) {
+    if (target == NULL || level != 0U) {
+        return false;
+    }
+    switch (kind) {
+    case MINIC_CALL_FRAME_ADDRESS_RETURN:
+        return target->call_frame_return_address_level0;
+    case MINIC_CALL_FRAME_ADDRESS_FRAME:
+        return target->call_frame_frame_address_level0;
+    }
+    return false;
 }
 
 bool minic_target_info_fixed_register_supported(const MinicTargetInfo *target,

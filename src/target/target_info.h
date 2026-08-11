@@ -10,6 +10,8 @@ typedef struct MinicTargetInfo {
     const MinicDataLayout *data_layout;
     bool gnu_sizeof_void_is_one;
     bool gnu_sizeof_function_is_one;
+    bool call_frame_return_address_level0;
+    bool call_frame_frame_address_level0;
 } MinicTargetInfo;
 
 const MinicTargetInfo *minic_default_target_info(void);
@@ -25,5 +27,8 @@ bool minic_target_info_integer_width(const MinicTargetInfo *target,
 bool minic_target_info_fixed_register_supported(const MinicTargetInfo *target,
                                                 const char *name,
                                                 size_t name_length);
+bool minic_target_info_call_frame_address_supported(const MinicTargetInfo *target,
+                                                    MinicCallFrameAddressKind kind,
+                                                    unsigned int level);
 
 #endif
