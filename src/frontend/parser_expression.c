@@ -2076,8 +2076,8 @@ pointer_relational_compatible(const MinicC0Program *program, MinicType left, Min
            minic_type_unqualified(left_pointee, &left_unqualified) &&
            minic_type_unqualified(right_pointee, &right_unqualified) &&
            minic_type_equal(left_unqualified, right_unqualified) &&
-           type_is_complete_object(program, left_pointee) &&
-           type_is_complete_object(program, right_pointee);
+           pointer_arithmetic_pointee_allowed(program, left_unqualified) &&
+           pointer_arithmetic_pointee_allowed(program, right_unqualified);
 }
 
 static bool
