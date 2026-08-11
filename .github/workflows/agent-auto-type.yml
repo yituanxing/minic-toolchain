@@ -1,0 +1,54 @@
+name: Agent GNU Auto Type
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  patch-source:
+    if: ${{ github.head_ref == 'refactor/foundation-v1' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/auto-type-v0
+          fetch-depth: 0
+      - name: Generate and validate slice
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/agent_auto_type_patch.py
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+          git diff --check
+          make -j4 MODE=release BUILD_DIR=build/auto-type-compiler
+          MINIC="$GITHUB_WORKSPACE/build/auto-type-compiler/bin/minic" \
+          HOST_CC=cc \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/auto-type-focused" \
+            sh tests/compiler/c0/run-gnu-auto-type-local.sh
+          MINIC="$GITHUB_WORKSPACE/build/auto-type-compiler/bin/minic" \
+          HOST_CC=cc \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/auto-type-focused-all" \
+            sh tools/dev/pr76-focused.sh
+          make -j4 MODE=release BUILD_DIR=build/auto-type-compiler check-fast
+      - name: Publish generated source commit
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            src/frontend/parser_statement.c \
+            tests/compiler/c0/gnu_auto_type_local.c \
+            tests/compiler/c0/run-gnu-auto-type-local.sh \
+            tools/dev/pr76-focused.sh
+          git diff --cached --check
+          git diff --cached --quiet && {
+            printf '%s\n' 'generator produced no source changes' >&2
+            exit 1
+          }
+          git commit -m '[generated] frontend: infer GNU __auto_type locals' \
+            -m 'Add initializer-driven GNU C __auto_type declarations at block scope. Parse the initializer before binding the declared name, infer the local semantic type from the initializer expression, then reuse existing local assignment and address-backed record-copy lowering. Keep the extension bounded to one identifier with a required initializer and lock the Linux max-macro shape plus initializer-scope behavior.\n\n在 block scope 增加由 initializer 驱动的 GNU C __auto_type 声明。先解析 initializer、再绑定新名字，从 initializer expression 推导 local semantic type，随后复用已有 local assignment 与 address-backed record-copy lowering。当前扩展明确限定为单个 identifier 且必须有 initializer，并冻结 Linux max 宏形状和 initializer scope 语义。'
+          git push origin HEAD:agent/auto-type-v0 --force-with-lease
