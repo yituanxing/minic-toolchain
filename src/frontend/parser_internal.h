@@ -16,6 +16,15 @@
 #define MINIC_PARSER_MAX_SWITCH_DEPTH 16U
 #define MINIC_PARSER_MAX_SWITCH_CASES 128U
 #define MINIC_MAX_PARSED_ATTRIBUTES 32U
+#define MINIC_RECORD_MEMBER_MAX_DEPTH 8U
+
+typedef struct MinicRecordFieldPath {
+    MinicRecordId record_ids[MINIC_RECORD_MEMBER_MAX_DEPTH];
+    size_t field_indices[MINIC_RECORD_MEMBER_MAX_DEPTH];
+    size_t depth;
+    bool found;
+    bool ambiguous;
+} MinicRecordFieldPath;
 
 typedef struct MinicParserLocalBinding {
     MinicSourceSpan name_span;
@@ -217,6 +226,10 @@ bool minic_parser_find_enum_constant(const MinicParser *parser,
 bool minic_parser_bind_enum_tag(MinicParser *parser, MinicSourceSpan name_span);
 bool minic_parser_find_enum_tag(const MinicParser *parser, MinicSourceSpan name_span);
 bool minic_parser_parse_enum_specifier(MinicParser *parser, MinicType *enum_type);
+bool minic_parser_find_record_field_path(const MinicParser *parser,
+                                         const MinicRecord *record,
+                                         MinicSourceSpan name_span,
+                                         MinicRecordFieldPath *result);
 void minic_parser_destroy_enum_constants(MinicParser *parser);
 
 MinicLocalId minic_parser_find_local(const MinicParser *parser, MinicSourceSpan name_span);

@@ -903,11 +903,18 @@ bool minic_riscv64_emit_expression(FILE *file,
         const MinicRecord *record;
         const MinicRecordField *field;
 
+        size_t offset;
+
         record = minic_c0_program_record(program, expression->value.offsetof_value.record_id);
         field = minic_c0_record_field(record, expression->value.offsetof_value.field_index);
-        return record != NULL && field != NULL && record->is_complete &&
-               minic_type_equal(expression->type, minic_type_unsigned_long()) &&
-               fprintf(file, "  li a0, %zu\n", field->storage_offset) >= 0;
+        if (record == NULL || field == NULL || !record->is_complete ||
+            !minic_type_equal(expression->type, minic_type_unsigned_long()) ||
+            expression->value.offsetof_value.anonymous_prefix_offset >
+                SIZE_MAX - field->storage_offset) {
+            return false;
+        }
+        offset = expression->value.offsetof_value.anonymous_prefix_offset + field->storage_offset;
+        return fprintf(file, "  li a0, %zu\n", offset) >= 0;
     }
     case MINIC_EXPRESSION_CAST:
         return false;

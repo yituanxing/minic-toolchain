@@ -2,16 +2,6 @@
 
 #include <string.h>
 
-#define MINIC_ANONYMOUS_MEMBER_MAX_DEPTH 8U
-
-typedef struct MinicRecordFieldPath {
-    MinicRecordId record_ids[MINIC_ANONYMOUS_MEMBER_MAX_DEPTH];
-    size_t field_indices[MINIC_ANONYMOUS_MEMBER_MAX_DEPTH];
-    size_t depth;
-    bool found;
-    bool ambiguous;
-} MinicRecordFieldPath;
-
 static void search_record_field_path(const MinicParser *parser,
                                      const MinicRecord *record,
                                      MinicSourceSpan name_span,
@@ -23,7 +13,7 @@ static void search_record_field_path(const MinicParser *parser,
     size_t index;
 
     if (parser == NULL || record == NULL || result == NULL || result->ambiguous ||
-        depth >= MINIC_ANONYMOUS_MEMBER_MAX_DEPTH) {
+        depth >= MINIC_RECORD_MEMBER_MAX_DEPTH) {
         return;
     }
     name_length = minic_parser_span_length(name_span);
@@ -63,12 +53,12 @@ static void search_record_field_path(const MinicParser *parser,
     }
 }
 
-static bool find_record_field_path(const MinicParser *parser,
-                                   const MinicRecord *record,
-                                   MinicSourceSpan name_span,
-                                   MinicRecordFieldPath *result) {
-    MinicRecordId record_stack[MINIC_ANONYMOUS_MEMBER_MAX_DEPTH];
-    size_t field_stack[MINIC_ANONYMOUS_MEMBER_MAX_DEPTH];
+bool minic_parser_find_record_field_path(const MinicParser *parser,
+                                         const MinicRecord *record,
+                                         MinicSourceSpan name_span,
+                                         MinicRecordFieldPath *result) {
+    MinicRecordId record_stack[MINIC_RECORD_MEMBER_MAX_DEPTH];
+    size_t field_stack[MINIC_RECORD_MEMBER_MAX_DEPTH];
 
     if (parser == NULL || record == NULL || result == NULL) {
         return false;
@@ -157,7 +147,7 @@ static bool parse_pointer_record_member(MinicParser *parser,
     }
 
     field_span = parser->current.span;
-    if (!find_record_field_path(parser, record, field_span, &path)) {
+    if (!minic_parser_find_record_field_path(parser, record, field_span, &path)) {
         minic_parser_error(parser,
                            path.ambiguous ? "record member is ambiguous through anonymous members"
                                           : "record has no such member");

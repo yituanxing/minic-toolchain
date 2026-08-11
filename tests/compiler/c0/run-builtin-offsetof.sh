@@ -15,4 +15,6 @@ mkdir -p "$work"
 
 grep -F '  li a0, 4' "$work/builtin_offsetof.s" >/dev/null
 grep -F '  li a0, 8' "$work/builtin_offsetof.s" >/dev/null
-printf '%s\n' 'PASS compiler/c0/builtin_offsetof direct-member=1 typedef=1 target-layout=1 array-bound=8'
+grep -F '  li a0, 32' "$work/builtin_offsetof.s" >/dev/null
+grep -F '  li a0, 24' "$work/builtin_offsetof.s" >/dev/null
+printf '%s\n' 'PASS compiler/c0/builtin_offsetof direct-member=1 typedef=1 promoted-anonymous=2 shared-member-resolver=1 target-layout=1 array-bound=8'

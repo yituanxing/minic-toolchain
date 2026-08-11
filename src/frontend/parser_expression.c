@@ -580,8 +580,9 @@ static bool parse_builtin_offsetof(MinicParser *parser, MinicExpressionId *expre
     MinicSourceSpan field_span;
     MinicType record_type;
     const MinicRecord *record;
-    size_t field_index;
-    size_t field_name_length;
+    MinicRecordFieldPath path;
+    size_t anonymous_prefix_offset;
+    size_t path_index;
 
     begin = parser->current.span.begin;
     if (!minic_parser_advance(parser) ||
@@ -606,21 +607,36 @@ static bool parse_builtin_offsetof(MinicParser *parser, MinicExpressionId *expre
         return false;
     }
     field_span = parser->current.span;
-    field_name_length = minic_parser_span_length(field_span);
-    field_index = 0U;
-    while (field_index < record->field_count) {
-        const MinicRecordField *field;
-
-        field = &record->fields[field_index];
-        if (field->name_length == field_name_length &&
-            memcmp(field->name, parser->source + field_span.begin.offset, field_name_length) == 0) {
-            break;
-        }
-        field_index += 1U;
-    }
-    if (field_index == record->field_count) {
-        minic_parser_error(parser, "record has no such field in __builtin_offsetof");
+    if (!minic_parser_find_record_field_path(parser, record, field_span, &path)) {
+        minic_parser_error(parser,
+                           path.ambiguous ? "record field is ambiguous in __builtin_offsetof"
+                                          : "record has no such field in __builtin_offsetof");
         return false;
+    }
+    if (path.depth == 0U) {
+        minic_parser_error(parser, "empty record field path in __builtin_offsetof");
+        return false;
+    }
+
+    anonymous_prefix_offset = 0U;
+    for (path_index = 0U; path_index + 1U < path.depth; ++path_index) {
+        const MinicRecord *path_record;
+        size_t field_offset;
+
+        path_record = minic_c0_program_record(parser->program, path.record_ids[path_index]);
+        if (path_record == NULL ||
+            !minic_data_layout_record_field_offset(
+                minic_target_info_data_layout(parser->target_info),
+                parser->program,
+                path_record,
+                path.field_indices[path_index],
+                &field_offset) ||
+            anonymous_prefix_offset > SIZE_MAX - field_offset) {
+            minic_parser_error(parser,
+                               "cannot lay out anonymous member path in __builtin_offsetof");
+            return false;
+        }
+        anonymous_prefix_offset += field_offset;
     }
     if (!minic_parser_advance(parser) || parser->current.kind != MINIC_TOKEN_RPAREN) {
         minic_parser_error(parser, "expected ')' after __builtin_offsetof");
@@ -633,8 +649,9 @@ static bool parse_builtin_offsetof(MinicParser *parser, MinicExpressionId *expre
     expression.span.end = parser->current.span.end;
     expression.type = minic_type_unsigned_long();
     expression.value_category = MINIC_VALUE_RVALUE;
-    expression.value.offsetof_value.record_id = record_type.record_id;
-    expression.value.offsetof_value.field_index = field_index;
+    expression.value.offsetof_value.record_id = path.record_ids[path.depth - 1U];
+    expression.value.offsetof_value.field_index = path.field_indices[path.depth - 1U];
+    expression.value.offsetof_value.anonymous_prefix_offset = anonymous_prefix_offset;
     return minic_parser_advance(parser) &&
            minic_parser_add_expression(parser, &expression, expression_id);
 }

@@ -130,6 +130,7 @@ typedef struct MinicExpression {
         struct {
             MinicRecordId record_id;
             size_t field_index;
+            size_t anonymous_prefix_offset;
         } offsetof_value;
         struct {
             MinicFunctionId function_id;

@@ -478,9 +478,11 @@ static bool eval_expression(const MinicC0Program *program,
                                                    program,
                                                    record,
                                                    expression->value.offsetof_value.field_index,
-                                                   &offset)) {
+                                                   &offset) ||
+            expression->value.offsetof_value.anonymous_prefix_offset > SIZE_MAX - offset) {
             return false;
         }
+        offset += expression->value.offsetof_value.anonymous_prefix_offset;
         value->type = expression->type;
         return normalize_bits(program, target, expression->type, (uint64_t)offset, &value->bits);
     }
