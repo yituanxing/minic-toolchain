@@ -26,3 +26,20 @@ unsigned long over_aligned_holder_size(void) {
 unsigned long over_aligned_holder_offset(void) {
     return __builtin_offsetof(struct OverAlignedHolder, payload);
 }
+
+struct DesignatedOnly {
+    int first;
+    int second;
+} __attribute__((__designated_init__));
+
+struct DesignatedAligned {
+    char byte;
+} __attribute__((__designated_init__, aligned(16)));
+
+unsigned long designated_only_size(void) {
+    return sizeof(struct DesignatedOnly);
+}
+
+unsigned long designated_aligned_size(void) {
+    return sizeof(struct DesignatedAligned);
+}

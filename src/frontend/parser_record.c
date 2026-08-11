@@ -337,45 +337,59 @@ parse_record_field_declarator(MinicParser *parser, MinicRecordId record_id, Mini
     return true;
 }
 
-static bool parse_record_suffix_alignment(MinicParser *parser, size_t *alignment) {
-    int64_t value;
+typedef struct MinicRecordSuffixAttributeContext {
+    MinicRecordId record_id;
+    size_t explicit_alignment;
+} MinicRecordSuffixAttributeContext;
 
-    if (parser == NULL || alignment == NULL) {
+static bool consume_record_suffix_attribute(MinicParser *parser,
+                                            const MinicParsedAttribute *attribute,
+                                            void *opaque_context) {
+    MinicRecordSuffixAttributeContext *context;
+    const MinicAttributeDescriptor *descriptor;
+    const MinicRecord *record;
+
+    if (parser == NULL || attribute == NULL || opaque_context == NULL) {
         return false;
     }
-    *alignment = 0U;
-    if (!token_text_equals(parser, parser->current, "__attribute__") &&
-        !token_text_equals(parser, parser->current, "__attribute")) {
-        return true;
-    }
-    if (!minic_parser_advance(parser) ||
-        !minic_parser_expect(
-            parser, MINIC_TOKEN_LPAREN, "expected '(' after record __attribute__") ||
-        !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '((' in record __attribute__")) {
-        return false;
-    }
-    if (!minic_parser_current_attribute_is(
-            parser, MINIC_ATTRIBUTE_ALIGNED, MINIC_ATTRIBUTE_TARGET_TYPE)) {
+    context = (MinicRecordSuffixAttributeContext *)opaque_context;
+    descriptor = attribute->descriptor;
+    record = minic_c0_program_record(parser->program, context->record_id);
+    if (descriptor == NULL || record == NULL ||
+        !minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_TYPE)) {
         minic_parser_error(parser, "unsupported GNU record suffix attribute");
         return false;
     }
-    if (!minic_parser_advance(parser) ||
-        !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '(' after record aligned") ||
-        !minic_parser_parse_integer_constant_expression(parser, &value)) {
+    if (descriptor->kind == MINIC_ATTRIBUTE_ALIGNED) {
+        return minic_parser_apply_alignment_attribute(
+            parser, attribute, "record", &context->explicit_alignment);
+    }
+    if (descriptor->kind == MINIC_ATTRIBUTE_DESIGNATED_INIT) {
+        if (record->is_union) {
+            minic_parser_error(parser, "GNU designated_init applies only to struct types");
+            return false;
+        }
+        return true;
+    }
+    minic_parser_error(parser, "unsupported GNU record suffix attribute");
+    return false;
+}
+
+static bool parse_record_suffix_attributes(MinicParser *parser,
+                                           MinicRecordId record_id,
+                                           size_t *explicit_alignment) {
+    MinicRecordSuffixAttributeContext context;
+
+    if (parser == NULL || explicit_alignment == NULL) {
         return false;
     }
-    if (value <= 0 || (uint64_t)value > (uint64_t)SIZE_MAX ||
-        (((uint64_t)value & ((uint64_t)value - UINT64_C(1))) != 0U)) {
-        minic_parser_error(parser, "record alignment must be a positive power of two");
+    context.record_id = record_id;
+    context.explicit_alignment = 0U;
+    if (!minic_parser_parse_gnu_attribute_lists(
+            parser, consume_record_suffix_attribute, &context)) {
         return false;
     }
-    if (!minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')' after record alignment") ||
-        !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')' in record attribute") ||
-        !minic_parser_expect(
-            parser, MINIC_TOKEN_RPAREN, "expected second ')' in record attribute")) {
-        return false;
-    }
-    *alignment = (size_t)value;
+    *explicit_alignment = context.explicit_alignment;
     return true;
 }
 
@@ -529,7 +543,7 @@ bool minic_parser_parse_record_definition_specifier(MinicParser *parser, MinicTy
     {
         size_t explicit_alignment;
 
-        if (!parse_record_suffix_alignment(parser, &explicit_alignment)) {
+        if (!parse_record_suffix_attributes(parser, record_id, &explicit_alignment)) {
             return false;
         }
         if (explicit_alignment != 0U) {

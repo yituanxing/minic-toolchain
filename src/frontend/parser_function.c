@@ -180,48 +180,6 @@ static bool decode_deferred_section_argument(MinicParser *parser,
     return true;
 }
 
-static bool decode_deferred_alignment_argument(MinicParser *parser,
-                                               const MinicParsedAttribute *attribute,
-                                               size_t *explicit_alignment) {
-    MinicParser probe;
-    int64_t parsed_alignment;
-    size_t alignment;
-
-    if (parser == NULL || attribute == NULL || explicit_alignment == NULL ||
-        !attribute->has_arguments ||
-        attribute->arguments_span.end.offset <= attribute->arguments_span.begin.offset + 1U) {
-        return false;
-    }
-    probe = *parser;
-    minic_lexer_initialize(&probe.lexer, parser->path, parser->source, parser->lexer.length);
-    probe.lexer.cursor = attribute->arguments_span.begin.offset + 1U;
-    probe.lexer.line = attribute->arguments_span.begin.line;
-    probe.lexer.column = attribute->arguments_span.begin.column + 1U;
-    if (!minic_parser_advance(&probe) ||
-        !minic_parser_parse_integer_constant_expression(&probe, &parsed_alignment) ||
-        probe.current.kind != MINIC_TOKEN_RPAREN ||
-        probe.current.span.end.offset != attribute->arguments_span.end.offset) {
-        if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
-            minic_parser_error(parser,
-                               "GNU object alignment requires one integer constant expression");
-        }
-        return false;
-    }
-    if (parsed_alignment <= 0 || (uint64_t)parsed_alignment > (uint64_t)SIZE_MAX) {
-        minic_parser_error(parser, "GNU object alignment must be a positive target-size value");
-        return false;
-    }
-    alignment = (size_t)parsed_alignment;
-    if ((alignment & (alignment - 1U)) != 0U) {
-        minic_parser_error(parser, "GNU object alignment must be a power of two");
-        return false;
-    }
-    if (alignment > *explicit_alignment) {
-        *explicit_alignment = alignment;
-    }
-    return true;
-}
-
 static bool apply_object_attribute_list(MinicParser *parser,
                                         const MinicParsedAttributeList *attributes,
                                         char *section_name,
@@ -261,7 +219,8 @@ static bool apply_object_attribute_list(MinicParser *parser,
             continue;
         }
         if (descriptor->kind == MINIC_ATTRIBUTE_ALIGNED) {
-            if (!decode_deferred_alignment_argument(parser, attribute, explicit_alignment)) {
+            if (!minic_parser_apply_alignment_attribute(
+                    parser, attribute, "object", explicit_alignment)) {
                 return false;
             }
             continue;
