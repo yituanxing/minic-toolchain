@@ -13,5 +13,19 @@ mkdir -p "$work"
 "$minic" -S "$work/input.i" -o "$assembly"
 test -s "$assembly"
 grep -F 'normalize_state:' "$assembly" >/dev/null
-grep -F 'system_state_like' "$assembly" >/dev/null || true
-printf '%s\n' 'PASS compiler/c0/enum_tag_type_references definition=tagged+extern-declspec reference=parameter+return+typedef top-level-bare-return=1 representation=int shared-specifier=1 unknown-tag=reject-by-registry'
+grep -F 'timer_result:' "$assembly" >/dev/null
+grep -F 'fs_value:' "$assembly" >/dev/null
+
+cat >"$work/duplicate.c" <<'EOF'
+enum duplicate_tag;
+enum duplicate_tag { DUPLICATE_A };
+enum duplicate_tag { DUPLICATE_B };
+EOF
+"$host_cc" -E -P -std=gnu11 -x c "$work/duplicate.c" -o "$work/duplicate.i"
+if "$minic" -S "$work/duplicate.i" -o "$work/duplicate.s" 2>"$work/duplicate.stderr"; then
+    printf '%s\n' 'FAIL compiler/c0/enum_tag_type_references: duplicate completed enum accepted' >&2
+    exit 1
+fi
+grep -F 'duplicate enum definition' "$work/duplicate.stderr" >/dev/null
+
+printf '%s\n' 'PASS compiler/c0/enum_tag_type_references lifecycle=incomplete-to-complete implicit-return=1 function-pointer-typedef=1 explicit-forward=1 record-function-pointer=1 representation=int duplicate-definition=reject'

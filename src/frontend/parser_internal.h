@@ -38,6 +38,7 @@ typedef struct MinicParserEnumConstant {
 
 typedef struct MinicParserEnumTag {
     MinicSourceSpan name_span;
+    bool is_complete;
 } MinicParserEnumTag;
 
 typedef struct MinicParserSwitchContext {

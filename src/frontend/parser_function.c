@@ -1673,10 +1673,10 @@ static bool skip_top_level_gnu_extension_markers(MinicParser *parser) {
     return true;
 }
 
-static bool enum_keyword_starts_definition(MinicParser *parser, bool *is_definition) {
+static bool enum_keyword_starts_standalone_declaration(MinicParser *parser, bool *is_standalone) {
     MinicParser probe;
 
-    if (parser == NULL || is_definition == NULL || parser->current.kind != MINIC_TOKEN_KW_ENUM) {
+    if (parser == NULL || is_standalone == NULL || parser->current.kind != MINIC_TOKEN_KW_ENUM) {
         return false;
     }
     probe = *parser;
@@ -1684,7 +1684,7 @@ static bool enum_keyword_starts_definition(MinicParser *parser, bool *is_definit
         return false;
     }
     if (probe.current.kind == MINIC_TOKEN_LBRACE) {
-        *is_definition = true;
+        *is_standalone = true;
         return true;
     }
     if (probe.current.kind != MINIC_TOKEN_IDENTIFIER) {
@@ -1694,7 +1694,8 @@ static bool enum_keyword_starts_definition(MinicParser *parser, bool *is_definit
     if (!minic_parser_advance(&probe)) {
         return false;
     }
-    *is_definition = probe.current.kind == MINIC_TOKEN_LBRACE;
+    *is_standalone =
+        probe.current.kind == MINIC_TOKEN_SEMICOLON || probe.current.kind == MINIC_TOKEN_LBRACE;
     return true;
 }
 
@@ -1785,11 +1786,11 @@ bool minic_parse_c0_program(const char *path,
                 success = parse_function(&parser, false);
             }
         } else if (parser.current.kind == MINIC_TOKEN_KW_ENUM) {
-            bool is_definition;
+            bool is_standalone;
 
-            if (!enum_keyword_starts_definition(&parser, &is_definition)) {
+            if (!enum_keyword_starts_standalone_declaration(&parser, &is_standalone)) {
                 success = false;
-            } else if (is_definition) {
+            } else if (is_standalone) {
                 success = minic_parser_parse_enum_definition(&parser);
             } else {
                 success = parse_function(&parser, false);

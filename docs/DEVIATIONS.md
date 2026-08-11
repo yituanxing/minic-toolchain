@@ -65,6 +65,20 @@ Each entry must contain:
   3. Add RV64 assemble/link/runtime differential tests against GCC for representative return/frame-address wrappers, including a call before `__builtin_return_address(0)` so live `ra` cannot accidentally pass. 为典型 return/frame-address wrapper 增加 RV64 汇编、链接和 GCC 运行差分，并包含 builtin 前先调用函数的用例，防止 live `ra` 错误实现误过门禁。
 - Target milestone / 目标里程碑: Function inlining/specialization boundary before Linux runtime/object acceptance / Linux runtime/object 完整验收前的函数内联/特化边界。
 
+## DEV-0004: incomplete enum tags before first-class enum types / 一等 enum 类型建立前的不完整 enum tag
+
+- Status / 状态: Active
+- Rule / 规则: Accepted GNU C syntax should preserve semantic distinctions needed for later correctness; temporary lowering shortcuts must remain explicit and bounded. 已接受的 GNU C 语法应保留后续正确性需要的语义区别；临时 lowering 简化必须显式且范围受控。
+- Scope / 范围: `src/frontend/parser_enum.c`, parser-owned enum tag lifecycle, current `MinicType` integer representation, and Linux 6.6.143 incomplete-enum references. 涉及 enum tag 生命周期、当前 `MinicType` 的整数表示，以及 Linux 6.6.143 的不完整 enum 引用。
+- Reason / 原因: Linux requires GNU C incomplete enum tags before their later definitions, including function return types, function-pointer typedefs/fields, and explicit `enum tag;` declarations. MiniC currently lowers every enum semantic type to `int`; introducing a first-class enum TypeKind/TypeId in this blocker would also require integer promotions, compatibility, ConstEval, DataLayout, ABI, typedef and diagnostic migration. Linux 需要在后续定义前引用 GNU C incomplete enum tag，包括函数返回类型、函数指针 typedef/字段和显式 `enum tag;` 声明。MiniC 当前把 enum semantic type 统一 lowering 为 `int`；若在本 blocker 中立即引入一等 enum TypeKind/TypeId，会同时牵动整数提升、兼容性、ConstEval、DataLayout、ABI、typedef 与诊断迁移。
+- Risk / 风险: The parser now preserves incomplete/complete tag lifecycle, but the resulting semantic `MinicType` does not retain enum identity or incompleteness. Therefore full enforcement of rules that depend on incomplete enum object size/storage, enum-to-enum type identity, or implementation-defined underlying type is deferred. Parser 会保存 incomplete/complete tag 生命周期，但生成的 semantic `MinicType` 尚不保留 enum identity/incompleteness，因此依赖 incomplete enum 对象尺寸/存储、enum 间类型身份或 implementation-defined underlying type 的完整规则仍被延迟。
+- Exit criteria / 退出条件:
+  1. Add program-owned canonical enum entities/IDs and make `MinicType` preserve enum identity through typedefs, pointers, functions and AST storage. 增加 Program-owned canonical enum entity/ID，并让 `MinicType` 在 typedef、pointer、function 与 AST 存储中保留 enum identity。
+  2. Make completeness and object-storage validation query the canonical enum entity rather than parser-local state. 让 completeness/object-storage 校验查询 canonical enum entity，而非 parser-local 状态。
+  3. Route enum integer representation, promotion, compatibility, DataLayout/ABI and ConstEval through the target/type model, then add negative tests for storage of incomplete enum objects and differential tests for completed enums. 将 enum 整数表示、提升、兼容性、DataLayout/ABI 与 ConstEval 接入 target/type model，并补充 incomplete enum 对象存储负例与 completed enum 差分测试。
+- Target milestone / 目标里程碑: TypeContext / first-class enum identity before claiming complete GNU enum semantics / 宣称完整 GNU enum 语义前的 TypeContext / 一等 enum identity 阶段。
+- Related evidence / 相关证据: Linux 6.6.143 `init/main.i` first references `enum hrtimer_restart` at line 14970 and defines it at line 23808; the same TU also contains forward-use shapes for `dev_dma_attr`, `fs_value_type`, and `print_line_t`. Linux 6.6.143 `init/main.i` 在 14970 首次引用 `enum hrtimer_restart`，到 23808 才定义；同一 TU 还包含 `dev_dma_attr`、`fs_value_type`、`print_line_t` 的前向使用形状。
+
 ## Resolved deviations / 已解决偏离
 
 ## DEV-0001: C0 parser performs direct lexical matching / C0 Parser 直接匹配源码字符

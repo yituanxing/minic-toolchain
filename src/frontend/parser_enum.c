@@ -4,28 +4,25 @@
 #include <stdlib.h>
 #include <string.h>
 
-bool minic_parser_find_enum_tag(const MinicParser *parser, MinicSourceSpan name_span) {
+static MinicParserEnumTag *find_enum_tag_binding(MinicParser *parser, MinicSourceSpan name_span) {
     size_t index;
 
     if (parser == NULL) {
-        return false;
+        return NULL;
     }
     for (index = parser->enum_tag_count; index > 0U; --index) {
         if (minic_parser_span_equals(parser, name_span, parser->enum_tags[index - 1U].name_span)) {
-            return true;
+            return &parser->enum_tags[index - 1U];
         }
     }
-    return false;
+    return NULL;
 }
 
-bool minic_parser_bind_enum_tag(MinicParser *parser, MinicSourceSpan name_span) {
+static bool append_enum_tag(MinicParser *parser, MinicSourceSpan name_span, bool is_complete) {
     MinicParserEnumTag *resized;
     size_t new_capacity;
 
-    if (parser == NULL || minic_parser_find_enum_tag(parser, name_span)) {
-        if (parser != NULL) {
-            minic_parser_error(parser, "duplicate enum tag");
-        }
+    if (parser == NULL) {
         return false;
     }
     if (parser->enum_tag_count == parser->enum_tag_capacity) {
@@ -45,8 +42,48 @@ bool minic_parser_bind_enum_tag(MinicParser *parser, MinicSourceSpan name_span) 
         parser->enum_tag_capacity = new_capacity;
     }
     parser->enum_tags[parser->enum_tag_count].name_span = name_span;
+    parser->enum_tags[parser->enum_tag_count].is_complete = is_complete;
     parser->enum_tag_count += 1U;
     return true;
+}
+
+bool minic_parser_find_enum_tag(const MinicParser *parser, MinicSourceSpan name_span) {
+    size_t index;
+
+    if (parser == NULL) {
+        return false;
+    }
+    for (index = parser->enum_tag_count; index > 0U; --index) {
+        if (minic_parser_span_equals(parser, name_span, parser->enum_tags[index - 1U].name_span)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool declare_incomplete_enum_tag(MinicParser *parser, MinicSourceSpan name_span) {
+    if (find_enum_tag_binding(parser, name_span) != NULL) {
+        return true;
+    }
+    return append_enum_tag(parser, name_span, false);
+}
+
+bool minic_parser_bind_enum_tag(MinicParser *parser, MinicSourceSpan name_span) {
+    MinicParserEnumTag *tag;
+
+    if (parser == NULL) {
+        return false;
+    }
+    tag = find_enum_tag_binding(parser, name_span);
+    if (tag != NULL) {
+        if (tag->is_complete) {
+            minic_parser_error(parser, "duplicate enum definition");
+            return false;
+        }
+        tag->is_complete = true;
+        return true;
+    }
+    return append_enum_tag(parser, name_span, true);
 }
 
 bool minic_parser_find_enum_constant(const MinicParser *parser,
@@ -152,9 +189,11 @@ bool minic_parser_parse_enum_specifier(MinicParser *parser, MinicType *enum_type
     }
 
     if (parser->current.kind != MINIC_TOKEN_LBRACE) {
-        if (!has_tag || !minic_parser_find_enum_tag(parser, tag_span)) {
-            minic_parser_error(parser,
-                               has_tag ? "unknown enum tag" : "expected enum tag or definition");
+        if (!has_tag) {
+            minic_parser_error(parser, "expected enum tag or definition");
+            return false;
+        }
+        if (!declare_incomplete_enum_tag(parser, tag_span)) {
             return false;
         }
         *enum_type = minic_type_int();
