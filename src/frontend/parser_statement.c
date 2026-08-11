@@ -192,18 +192,11 @@ static bool aggregate_expression_is_zero_constant(const MinicC0Program *program,
 static bool parse_zero_aggregate_initializer_contents(MinicParser *parser,
                                                       MinicSourcePosition begin,
                                                       MinicSourceSpan *initializer_span) {
-    bool saw_value;
-
     if (parser == NULL || initializer_span == NULL) {
         return false;
     }
-    saw_value = false;
     for (;;) {
         if (parser->current.kind == MINIC_TOKEN_RBRACE) {
-            if (!saw_value) {
-                minic_parser_error(parser, "empty aggregate initializer is unsupported");
-                return false;
-            }
             initializer_span->begin = begin;
             initializer_span->end = parser->current.span.end;
             return minic_parser_advance(parser);
@@ -229,7 +222,6 @@ static bool parse_zero_aggregate_initializer_contents(MinicParser *parser,
                 return false;
             }
         }
-        saw_value = true;
         if (parser->current.kind == MINIC_TOKEN_COMMA) {
             if (!minic_parser_advance(parser)) {
                 return false;

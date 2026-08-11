@@ -36,6 +36,18 @@ int compound_member(void)
     return ((struct Holder) { .tag = 7 }).tag;
 }
 
+/* Linux path_put_init shape: an empty compound literal means all-zero. */
+void clear_holder(struct Holder *out)
+{
+    *out = (struct Holder) { };
+}
+
+int local_empty_initializer(void)
+{
+    struct Holder holder = { };
+    return holder.tag + (int)holder.count;
+}
+
 int compound_address_and_order(void)
 {
     int left = left_effect();
