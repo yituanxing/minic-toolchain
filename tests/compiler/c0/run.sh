@@ -305,6 +305,11 @@ sh "$root/tests/compiler/c0/run-gnu-omitted-conditional.sh"
 MINIC="$minic" \
 HOST_CC="$host_cc" \
 BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+sh "$root/tests/compiler/c0/run-gnu-static-local-interleaved-attribute.sh"
+
+MINIC="$minic" \
+HOST_CC="$host_cc" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
 sh "$root/tests/compiler/c0/run-comma-operator.sh"
 
 MINIC="$minic" \
