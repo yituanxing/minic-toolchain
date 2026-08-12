@@ -697,6 +697,9 @@ static bool verify_expression(const MinicC0Program *program,
         return condition != NULL && when_true != NULL && when_false != NULL &&
                expression->value_category == MINIC_VALUE_RVALUE &&
                type_is_condition_scalar(condition->type) &&
+               (!expression->value.conditional.uses_condition_value ||
+                expression->value.conditional.when_true ==
+                    expression->value.conditional.condition) &&
                conditional_result_type(when_true->type, when_false->type, &expected_type) &&
                minic_type_equal(expression->type, expected_type);
     }
