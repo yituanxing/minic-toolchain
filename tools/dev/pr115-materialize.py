@@ -19,11 +19,6 @@ replace_once(
 )
 replace_once(
     path,
-    '''    if (parser == NULL || parser->current.kind != MINIC_TOKEN_LBRACKET) {\n        return false;\n    }\n''',
-    '''    if (parser == NULL || out_object_id == NULL ||\n        parser->current.kind != MINIC_TOKEN_LBRACKET) {\n        return false;\n    }\n    *out_object_id = MINIC_GLOBAL_OBJECT_INVALID;\n''',
-)
-replace_once(
-    path,
     '''        parser->program->global_objects[object_id].type = object_type;\n        parser->program->global_objects[object_id].is_read_only = minic_type_is_const(element_type);\n        return minic_parser_bind_scoped_global_object(parser, name_span, object_id);\n''',
     '''        parser->program->global_objects[object_id].type = object_type;\n        parser->program->global_objects[object_id].is_read_only = minic_type_is_const(element_type);\n        if (!minic_parser_bind_scoped_global_object(parser, name_span, object_id)) {\n            return false;\n        }\n        *out_object_id = object_id;\n        return true;\n''',
 )
@@ -40,11 +35,6 @@ replace_once(
 )
 replace_once(
     path,
-    '''    record = minic_c0_program_record(parser->program, declared_type.record_id);\n''',
-    '''    if (out_object_id == NULL) {\n        return false;\n    }\n    *out_object_id = MINIC_GLOBAL_OBJECT_INVALID;\n    record = minic_c0_program_record(parser->program, declared_type.record_id);\n''',
-)
-replace_once(
-    path,
     '''    if (!minic_parser_expect(\n            parser, MINIC_TOKEN_RBRACE, "expected '}' after static record initializer") ||\n        !minic_parser_bind_scoped_global_object(parser, name_span, object_id)) {\n        return false;\n    }\n    return true;\n}\n\nstatic bool add_implicitly_zero_initialized_static_local''',
     '''    if (!minic_parser_expect(\n            parser, MINIC_TOKEN_RBRACE, "expected '}' after static record initializer") ||\n        !minic_parser_bind_scoped_global_object(parser, name_span, object_id)) {\n        return false;\n    }\n    *out_object_id = object_id;\n    return true;\n}\n\nstatic bool add_implicitly_zero_initialized_static_local''',
 )
@@ -56,18 +46,8 @@ replace_once(
 )
 replace_once(
     path,
-    '''    if (parser == NULL ||\n        !minic_parser_require_complete_object_type(\n''',
-    '''    if (parser == NULL || out_object_id == NULL ||\n        !minic_parser_require_complete_object_type(\n''',
-)
-replace_once(
-    path,
-    '''    symbol_length = snprintf(symbol_name,\n''',
-    '''    *out_object_id = MINIC_GLOBAL_OBJECT_INVALID;\n    symbol_length = snprintf(symbol_name,\n''',
-)
-replace_once(
-    path,
-    '''    }\n    return true;\n}\n\nstatic bool parse_static_local_array_declarator''',
-    '''    }\n    *out_object_id = object_id;\n    return true;\n}\n\nstatic bool parse_static_local_array_declarator''',
+    '''    if (!minic_c0_program_add_global_object(parser->program,\n                                            symbol_name,\n                                            (size_t)symbol_length,\n                                            declared_type,\n                                            true,\n                                            minic_type_is_const(declared_type),\n                                            &object_id) ||\n        !minic_c0_global_object_set_zero_initialized(parser->program, object_id) ||\n        !minic_parser_bind_scoped_global_object(parser, name_span, object_id)) {\n        if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\\0') {\n            minic_parser_error(parser, "cannot create implicit-zero static local storage");\n        }\n        return false;\n    }\n    return true;\n}\n\nstatic bool parse_static_local_array_declarator''',
+    '''    if (!minic_c0_program_add_global_object(parser->program,\n                                            symbol_name,\n                                            (size_t)symbol_length,\n                                            declared_type,\n                                            true,\n                                            minic_type_is_const(declared_type),\n                                            &object_id) ||\n        !minic_c0_global_object_set_zero_initialized(parser->program, object_id) ||\n        !minic_parser_bind_scoped_global_object(parser, name_span, object_id)) {\n        if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\\0') {\n            minic_parser_error(parser, "cannot create implicit-zero static local storage");\n        }\n        return false;\n    }\n    *out_object_id = object_id;\n    return true;\n}\n\nstatic bool parse_static_local_array_declarator''',
 )
 
 replace_once(
@@ -77,8 +57,8 @@ replace_once(
 )
 replace_once(
     path,
-    '''    if (!minic_parser_parse_pointer_declarator(parser, base_type, &declared_type)) {\n''',
-    '''    if (out_object_id == NULL) {\n        return false;\n    }\n    *out_object_id = MINIC_GLOBAL_OBJECT_INVALID;\n    if (!minic_parser_parse_pointer_declarator(parser, base_type, &declared_type)) {\n''',
+    '''    if (!minic_parser_parse_pointer_declarator(parser, base_type, &declared_type)) {\n        return false;\n    }\n''',
+    '''    if (out_object_id == NULL) {\n        return false;\n    }\n    *out_object_id = MINIC_GLOBAL_OBJECT_INVALID;\n    if (!minic_parser_parse_pointer_declarator(parser, base_type, &declared_type)) {\n        return false;\n    }\n''',
 )
 replace_once(
     path,
@@ -102,8 +82,8 @@ replace_once(
 )
 replace_once(
     path,
-    '''        }\n        return true;\n    }\n    if (parser->current.kind == MINIC_TOKEN_EQUAL &&\n''',
-    '''        }\n        *out_object_id = scalar_object_id;\n        return true;\n    }\n    if (parser->current.kind == MINIC_TOKEN_EQUAL &&\n''',
+    '''        if ((scalar_value == 0 &&\n             !minic_c0_global_object_set_zero_initialized(parser->program, scalar_object_id)) ||\n            (scalar_value != 0 && !minic_c0_global_object_add_initializer(\n                                      parser->program, scalar_object_id, scalar_value)) ||\n            !minic_parser_bind_scoped_global_object(parser, name_span, scalar_object_id)) {\n            minic_parser_error(parser, "cannot finalize static local integer storage");\n            return false;\n        }\n        return true;\n''',
+    '''        if ((scalar_value == 0 &&\n             !minic_c0_global_object_set_zero_initialized(parser->program, scalar_object_id)) ||\n            (scalar_value != 0 && !minic_c0_global_object_add_initializer(\n                                      parser->program, scalar_object_id, scalar_value)) ||\n            !minic_parser_bind_scoped_global_object(parser, name_span, scalar_object_id)) {\n            minic_parser_error(parser, "cannot finalize static local integer storage");\n            return false;\n        }\n        *out_object_id = scalar_object_id;\n        return true;\n''',
 )
 replace_once(
     path,
@@ -140,24 +120,26 @@ replace_once(
 
 fixture = Path("tests/compiler/c0/gnu_static_local_interleaved_attribute.c")
 text = fixture.read_text()
-text = text.replace(
-    '''static int scalar_value(void)\n{\n    static int __attribute__((__unused__)) value = 7;\n    return value;\n}\n''',
-    '''static int scalar_value(void)\n{\n    static int __attribute__((__unused__)) value = 7;\n    return value;\n}\n\nstatic int section_value(void)\n{\n    static _Bool __attribute__((__section__(".data..once"))) already_done;\n    static int __attribute__((section(".data.localpair"))) first, second;\n    already_done = 1;\n    first = 3;\n    second = 4;\n    return (int)already_done + first + second;\n}\n''',
-)
-text = text.replace(
-    '''    return record_value() == 0 && scalar_value() == 7 ? 0 : 1;\n''',
-    '''    return record_value() == 0 && scalar_value() == 7 && section_value() == 8 ? 0 : 1;\n''',
-)
-fixture.write_text(text)
+old = '''static int scalar_value(void)\n{\n    static int __attribute__((__unused__)) value = 7;\n    return value;\n}\n'''
+new = '''static int scalar_value(void)\n{\n    static int __attribute__((__unused__)) value = 7;\n    return value;\n}\n\nstatic int section_value(void)\n{\n    static _Bool __attribute__((__section__(".data..once"))) already_done;\n    static int __attribute__((section(".data.localpair"))) first, second;\n    already_done = 1;\n    first = 3;\n    second = 4;\n    return (int)already_done + first + second;\n}\n'''
+if text.count(old) != 1:
+    raise SystemExit("fixture scalar anchor mismatch")
+text = text.replace(old, new, 1)
+old = '''    return record_value() == 0 && scalar_value() == 7 ? 0 : 1;\n'''
+new = '''    return record_value() == 0 && scalar_value() == 7 && section_value() == 8 ? 0 : 1;\n'''
+if text.count(old) != 1:
+    raise SystemExit("fixture main anchor mismatch")
+fixture.write_text(text.replace(old, new, 1))
 
 script = Path("tests/compiler/c0/run-gnu-static-local-interleaved-attribute.sh")
 text = script.read_text()
-text = text.replace(
-    '''grep -F '__minic_static_local_' "$work/output.s" >/dev/null\n''',
-    '''grep -F '__minic_static_local_' "$work/output.s" >/dev/null\ngrep -F '.section .data..once' "$work/output.s" >/dev/null\ntest "$(grep -c -F '.section .data.localpair' "$work/output.s")" -eq 2\n''',
-)
-text = text.replace(
-    '''printf '%s\\n'   'PASS compiler/c0/gnu_static_local_interleaved_attribute placement=type-before-declarator unused=informational record-empty-init=zero scalar=preserved layout-bearing=fail-closed'\n''',
-    '''printf '%s\\n'   'PASS compiler/c0/gnu_static_local_interleaved_attribute placement=type-before-declarator unused=informational section=global-object declaration-wide=2 aligned=fail-closed'\n''',
-)
-script.write_text(text)
+old = '''grep -F '__minic_static_local_' "$work/output.s" >/dev/null\n'''
+new = '''grep -F '__minic_static_local_' "$work/output.s" >/dev/null\ngrep -F '.section .data..once' "$work/output.s" >/dev/null\ntest "$(grep -c -F '.section .data.localpair' "$work/output.s")" -eq 2\n'''
+if text.count(old) != 1:
+    raise SystemExit("focused static symbol anchor mismatch")
+text = text.replace(old, new, 1)
+old = '''printf '%s\\n'   'PASS compiler/c0/gnu_static_local_interleaved_attribute placement=type-before-declarator unused=informational record-empty-init=zero scalar=preserved layout-bearing=fail-closed'\n'''
+new = '''printf '%s\\n'   'PASS compiler/c0/gnu_static_local_interleaved_attribute placement=type-before-declarator unused=informational section=global-object declaration-wide=2 aligned=fail-closed'\n'''
+if text.count(old) != 1:
+    raise SystemExit("focused summary anchor mismatch")
+script.write_text(text.replace(old, new, 1))
