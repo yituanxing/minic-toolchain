@@ -10,15 +10,27 @@ def replace_once(path: str, old: str, new: str) -> None:
     p.write_text(text.replace(old, new, 1))
 
 
-replace_once(
-    "src/frontend/parser_expression.c",
-    '''    return minic_type_same_unqualified(left_pointee, right_pointee) &&
-           minic_c0_type_is_complete_object(parser->program, left_pointee);
-''',
-    '''    return minic_type_same_unqualified(left_pointee, right_pointee) &&
-           minic_c0_pointer_arithmetic_pointee_allowed(parser->program, left_pointee);
-''',
-)
+# Keep the change scoped to the existing pointer-difference policy owner.  The
+# current helper already normalizes pointee qualifiers and requires identical
+# pointee identity; only its old complete-object eligibility check is stale.
+path = Path("src/frontend/parser_expression.c")
+text = path.read_text()
+start = text.find("static bool\npointer_difference_compatible(")
+end = text.find("\nstatic bool normalize_conditional_null_pointer_arm(", start)
+if start < 0 or end < 0:
+    raise SystemExit(f"pointer difference helper region mismatch start={start} end={end}")
+region = text[start:end]
+old = '''           minic_type_equal(left_unqualified, right_unqualified) &&
+           minic_c0_type_is_complete_object(program, left_unqualified) &&
+           minic_c0_type_is_complete_object(program, right_unqualified);
+'''
+new = '''           minic_type_equal(left_unqualified, right_unqualified) &&
+           minic_c0_pointer_arithmetic_pointee_allowed(program, left_unqualified);
+'''
+if region.count(old) != 1:
+    raise SystemExit(f"pointer difference eligibility mismatch: {region.count(old)}")
+region = region.replace(old, new, 1)
+path.write_text(text[:start] + region + text[end:])
 
 fixture = Path("tests/compiler/c0/gnu_void_pointer_arithmetic.c")
 text = fixture.read_text()
