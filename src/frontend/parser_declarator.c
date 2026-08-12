@@ -42,6 +42,37 @@ bool minic_parser_parse_pointer_qualifier_sequence(MinicParser *parser,
     return true;
 }
 
+bool minic_parser_parse_direct_declarator_name(MinicParser *parser, MinicSourceSpan *name_span) {
+    size_t parenthesis_depth;
+
+    if (parser == NULL || name_span == NULL) {
+        return false;
+    }
+    parenthesis_depth = 0U;
+    while (parser->current.kind == MINIC_TOKEN_LPAREN) {
+        parenthesis_depth += 1U;
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
+    }
+    if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
+        minic_parser_error(parser, "expected declarator name");
+        return false;
+    }
+    *name_span = parser->current.span;
+    if (!minic_parser_advance(parser)) {
+        return false;
+    }
+    while (parenthesis_depth > 0U) {
+        if (!minic_parser_expect(
+                parser, MINIC_TOKEN_RPAREN, "expected ')' after declarator name")) {
+            return false;
+        }
+        parenthesis_depth -= 1U;
+    }
+    return true;
+}
+
 bool minic_parser_parse_function_parameter_suffix(MinicParser *parser,
                                                   MinicParsedFunctionDeclarator *declarator) {
     if (parser == NULL || declarator == NULL) {
