@@ -11,7 +11,9 @@ jobs:
       - uses: actions/checkout@v4
         with: {ref: agent/transparent-union-v0, fetch-depth: 0}
       - name: Materialize transparent union semantics
-        run: python3 tools/dev/pr100-materialize-transparent-union.py
+        run: |
+          python3 tools/dev/pr100-materialize-transparent-union.py
+          python3 tools/dev/pr100-fix-transparent-union-materialization.py
       - name: Build and validate
         run: |
           set -Eeuo pipefail
@@ -19,11 +21,11 @@ jobs:
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
           git diff --check
           make -j4
-          MINIC="$GITHUB_WORKSPACE/build/debug/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/focused" HOST_CC=cc sh tests/compiler/c0/run-transparent-union.sh
+          MINIC="$GITHUB_WORKSPACE/build/debug/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/focused" HOST_CC=cc sh -x tests/compiler/c0/run-transparent-union.sh
           make check
       - name: Commit product source
         run: |
-          git rm .github/workflows/pr100-materialize-transparent-union.yml tools/dev/pr100-materialize-transparent-union.py
+          git rm .github/workflows/pr100-materialize-transparent-union.yml tools/dev/pr100-materialize-transparent-union.py tools/dev/pr100-fix-transparent-union-materialization.py
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add src tests
