@@ -1,3 +1,23 @@
+_Static_assert(__builtin_clzll(1ULL) == 63, "clzll one");
+_Static_assert(__builtin_clzll(16ULL) == 59, "clzll sixteen");
+_Static_assert(__builtin_clzll(0x8000000000000000ULL) == 0, "clzll top bit");
+
+struct MutexLike {
+    long state;
+};
+
+struct LinuxShape {
+    struct MutexLike open_file_mutex[
+        1 << (2 * (__builtin_constant_p(64 < 32 ? 64 : 32)
+                       ? ((64 < 32 ? 64 : 32) < 2
+                              ? 0
+                              : 63 - __builtin_clzll(64 < 32 ? 64 : 32))
+                       : 0))];
+};
+
+_Static_assert(sizeof(((struct LinuxShape *)0)->open_file_mutex) / sizeof(struct MutexLike) == 1024,
+               "Linux kernfs lock array bound");
+
 static int runtime_clzll_ull(unsigned long long value) {
     return __builtin_clzll(value);
 }
