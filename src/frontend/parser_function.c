@@ -1293,11 +1293,8 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     is_inline = declaration_prefix.is_inline;
     deferred_attributes = declaration_prefix.attributes;
     if (!minic_parser_parse_type_specifiers(parser, &base_type) ||
-        !minic_parser_parse_gnu_section_attribute(
-            parser, section_name, sizeof(section_name), &section_name_length, &has_section) ||
+        !minic_parser_collect_gnu_attribute_lists(parser, &deferred_attributes) ||
         !minic_parser_parse_pointer_declarator(parser, base_type, &return_type) ||
-        !minic_parser_parse_gnu_section_attribute(
-            parser, section_name, sizeof(section_name), &section_name_length, &has_section) ||
         !minic_parser_collect_gnu_attribute_lists(parser, &deferred_attributes)) {
         return false;
     }
