@@ -23,6 +23,9 @@ jobs:
         run: |
           set -Eeuo pipefail
           python tools/dev/pr85-materialize-gnu-void-return.py
+          sed -i 's/void function return expression must have void type/void function cannot return a value/g' \
+            src/frontend/parser_statement.c \
+            tests/compiler/c0/run-gnu-void-return-expression.sh
           chmod +x tests/compiler/c0/run-gnu-void-return-expression.sh
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
           git diff --check
