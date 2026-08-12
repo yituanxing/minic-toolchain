@@ -219,6 +219,26 @@ static const MinicAttributeDescriptor minic_attribute_descriptors[] = {
         1U,
         true,
     },
+    {
+        "fallthrough",
+        sizeof("fallthrough") - 1U,
+        MINIC_ATTRIBUTE_FALLTHROUGH,
+        MINIC_ATTRIBUTE_CLASS_DIAGNOSTIC,
+        MINIC_ATTRIBUTE_TARGET_STATEMENT,
+        0U,
+        0U,
+        true,
+    },
+    {
+        "__fallthrough__",
+        sizeof("__fallthrough__") - 1U,
+        MINIC_ATTRIBUTE_FALLTHROUGH,
+        MINIC_ATTRIBUTE_CLASS_DIAGNOSTIC,
+        MINIC_ATTRIBUTE_TARGET_STATEMENT,
+        0U,
+        0U,
+        true,
+    },
 };
 
 const MinicAttributeDescriptor *minic_attribute_lookup(const char *name, size_t name_length) {
