@@ -48,10 +48,28 @@ static bool minic_is_space(char character) {
            character == '\f' || character == '\v';
 }
 
+static bool minic_lexer_at_directive_start(const MinicLexer *lexer) {
+    size_t cursor;
+
+    if (lexer == NULL || minic_lexer_peek(lexer) != '#') {
+        return false;
+    }
+    cursor = lexer->cursor;
+    while (cursor > 0U && lexer->source[cursor - 1U] != '\n') {
+        char previous = lexer->source[cursor - 1U];
+
+        if (previous != ' ' && previous != '\t') {
+            return false;
+        }
+        cursor -= 1U;
+    }
+    return true;
+}
+
 static bool minic_lexer_skip_gcc_line_marker(MinicLexer *lexer) {
     size_t probe;
 
-    if (lexer == NULL || minic_lexer_peek(lexer) != '#' || lexer->column != 1U) {
+    if (lexer == NULL || !minic_lexer_at_directive_start(lexer)) {
         return false;
     }
 
@@ -466,6 +484,18 @@ bool minic_lexer_next(MinicLexer *lexer, MinicToken *token, MinicDiagnostic *dia
 
     if (character == '\0') {
         token->kind = MINIC_TOKEN_EOF;
+        return true;
+    }
+
+    if (character == '#' && minic_lexer_at_directive_start(lexer)) {
+        while (minic_lexer_peek(lexer) != '\0' && minic_lexer_peek(lexer) != '\n') {
+            minic_lexer_advance(lexer);
+        }
+        if (minic_lexer_peek(lexer) == '\n') {
+            minic_lexer_advance(lexer);
+        }
+        token->kind = MINIC_TOKEN_PREPROCESSOR_DIRECTIVE;
+        token->span.end = minic_lexer_position(lexer);
         return true;
     }
 

@@ -491,7 +491,7 @@ bool minic_parser_parse_record_definition_specifier(MinicParser *parser, MinicTy
     }
     is_union = record_keyword == MINIC_TOKEN_KW_UNION;
     explicit_alignment = 0U;
-    is_packed = false;
+    is_packed = parser->record_pack_alignment == 1U;
     if (!minic_parser_advance(parser) ||
         !parse_record_type_attributes(parser, is_union, &explicit_alignment, &is_packed)) {
         return false;

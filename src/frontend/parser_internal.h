@@ -79,6 +79,7 @@ typedef struct MinicParser {
     MinicCleanupContextId continue_cleanup_context;
     size_t statement_expression_depth;
     size_t switch_depth;
+    size_t record_pack_alignment;
     MinicParserSwitchContext switch_contexts[MINIC_PARSER_MAX_SWITCH_DEPTH];
 
     bool label_context_initialized;
