@@ -43,41 +43,6 @@ static bool parse_function_pointer_field_declarator(MinicParser *parser,
     return true;
 }
 
-static bool token_text_equals(const MinicParser *parser, MinicToken token, const char *text) {
-    size_t length;
-
-    if (parser == NULL || text == NULL || token.kind != MINIC_TOKEN_IDENTIFIER) {
-        return false;
-    }
-    length = minic_parser_span_length(token.span);
-    return strlen(text) == length &&
-           memcmp(parser->source + token.span.begin.offset, text, length) == 0;
-}
-
-static bool parse_packed_record_attribute(MinicParser *parser, bool *is_packed) {
-    if (parser == NULL || is_packed == NULL) {
-        return false;
-    }
-    *is_packed = false;
-    if (!token_text_equals(parser, parser->current, "__attribute__")) {
-        return true;
-    }
-    if (!minic_parser_advance(parser) ||
-        !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '(' after __attribute__") ||
-        !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '(' in __attribute__")) {
-        return false;
-    }
-    if (!minic_parser_current_attribute_is(
-            parser, MINIC_ATTRIBUTE_PACKED, MINIC_ATTRIBUTE_TARGET_TYPE)) {
-        minic_parser_error(parser, "only packed record attribute is supported here");
-        return false;
-    }
-    *is_packed = true;
-    return minic_parser_advance(parser) &&
-           minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')' after packed attribute") &&
-           minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')' after __attribute__");
-}
-
 typedef struct MinicRecordFieldAttributeContext {
     size_t explicit_alignment;
     bool is_packed;
@@ -355,59 +320,65 @@ static bool parse_record_field_declarator(MinicParser *parser,
     return true;
 }
 
-typedef struct MinicRecordSuffixAttributeContext {
-    MinicRecordId record_id;
+typedef struct MinicRecordTypeAttributeContext {
     size_t explicit_alignment;
-} MinicRecordSuffixAttributeContext;
+    bool is_packed;
+    bool is_union;
+} MinicRecordTypeAttributeContext;
 
-static bool consume_record_suffix_attribute(MinicParser *parser,
-                                            const MinicParsedAttribute *attribute,
-                                            void *opaque_context) {
-    MinicRecordSuffixAttributeContext *context;
+static bool consume_record_type_attribute(MinicParser *parser,
+                                          const MinicParsedAttribute *attribute,
+                                          void *opaque_context) {
+    MinicRecordTypeAttributeContext *context;
     const MinicAttributeDescriptor *descriptor;
-    const MinicRecord *record;
 
     if (parser == NULL || attribute == NULL || opaque_context == NULL) {
         return false;
     }
-    context = (MinicRecordSuffixAttributeContext *)opaque_context;
+    context = (MinicRecordTypeAttributeContext *)opaque_context;
     descriptor = attribute->descriptor;
-    record = minic_c0_program_record(parser->program, context->record_id);
-    if (descriptor == NULL || record == NULL ||
+    if (descriptor == NULL ||
         !minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_TYPE)) {
-        minic_parser_error(parser, "unsupported GNU record suffix attribute");
+        minic_parser_error(parser, "unsupported GNU record type attribute");
         return false;
+    }
+    if (descriptor->kind == MINIC_ATTRIBUTE_PACKED &&
+        descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_LAYOUT) {
+        context->is_packed = true;
+        return true;
     }
     if (descriptor->kind == MINIC_ATTRIBUTE_ALIGNED) {
         return minic_parser_apply_alignment_attribute(
             parser, attribute, "record", &context->explicit_alignment);
     }
     if (descriptor->kind == MINIC_ATTRIBUTE_DESIGNATED_INIT) {
-        if (record->is_union) {
+        if (context->is_union) {
             minic_parser_error(parser, "GNU designated_init applies only to struct types");
             return false;
         }
         return true;
     }
-    minic_parser_error(parser, "unsupported GNU record suffix attribute");
+    minic_parser_error(parser, "unsupported GNU record type attribute");
     return false;
 }
 
-static bool parse_record_suffix_attributes(MinicParser *parser,
-                                           MinicRecordId record_id,
-                                           size_t *explicit_alignment) {
-    MinicRecordSuffixAttributeContext context;
+static bool parse_record_type_attributes(MinicParser *parser,
+                                         bool is_union,
+                                         size_t *explicit_alignment,
+                                         bool *is_packed) {
+    MinicRecordTypeAttributeContext context;
 
-    if (parser == NULL || explicit_alignment == NULL) {
+    if (parser == NULL || explicit_alignment == NULL || is_packed == NULL) {
         return false;
     }
-    context.record_id = record_id;
-    context.explicit_alignment = 0U;
-    if (!minic_parser_parse_gnu_attribute_lists(
-            parser, consume_record_suffix_attribute, &context)) {
+    context.explicit_alignment = *explicit_alignment;
+    context.is_packed = *is_packed;
+    context.is_union = is_union;
+    if (!minic_parser_parse_gnu_attribute_lists(parser, consume_record_type_attribute, &context)) {
         return false;
     }
     *explicit_alignment = context.explicit_alignment;
+    *is_packed = context.is_packed;
     return true;
 }
 
@@ -505,6 +476,7 @@ static bool parse_record_field(MinicParser *parser, MinicRecordId record_id) {
 bool minic_parser_parse_record_definition_specifier(MinicParser *parser, MinicType *record_type) {
     MinicRecordId record_id;
     MinicTokenKind record_keyword;
+    size_t explicit_alignment;
     bool is_packed;
     bool is_union;
 
@@ -518,7 +490,10 @@ bool minic_parser_parse_record_definition_specifier(MinicParser *parser, MinicTy
         return false;
     }
     is_union = record_keyword == MINIC_TOKEN_KW_UNION;
-    if (!minic_parser_advance(parser) || !parse_packed_record_attribute(parser, &is_packed)) {
+    explicit_alignment = 0U;
+    is_packed = false;
+    if (!minic_parser_advance(parser) ||
+        !parse_record_type_attributes(parser, is_union, &explicit_alignment, &is_packed)) {
         return false;
     }
 
@@ -537,14 +512,17 @@ bool minic_parser_parse_record_definition_specifier(MinicParser *parser, MinicTy
                 return false;
             }
             parser->program->records[record_id].is_union = is_union;
-            parser->program->records[record_id].is_packed = is_packed;
         } else {
             record = minic_c0_program_record(parser->program, record_id);
-            if (record == NULL || record->is_complete || record->is_union != is_union ||
-                (is_packed && record->is_packed != is_packed)) {
+            if (record == NULL || record->is_complete || record->is_union != is_union) {
                 minic_parser_error(parser, "duplicate record definition");
                 return false;
             }
+        }
+        parser->program->records[record_id].is_packed =
+            parser->program->records[record_id].is_packed || is_packed;
+        if (explicit_alignment > parser->program->records[record_id].explicit_alignment) {
+            parser->program->records[record_id].explicit_alignment = explicit_alignment;
         }
         if (!minic_parser_advance(parser)) {
             return false;
@@ -556,6 +534,7 @@ bool minic_parser_parse_record_definition_specifier(MinicParser *parser, MinicTy
         }
         parser->program->records[record_id].is_union = is_union;
         parser->program->records[record_id].is_packed = is_packed;
+        parser->program->records[record_id].explicit_alignment = explicit_alignment;
     } else {
         minic_parser_error(parser, "expected record tag or '{' after 'struct'");
         return false;
@@ -576,15 +555,13 @@ bool minic_parser_parse_record_definition_specifier(MinicParser *parser, MinicTy
     if (!minic_parser_expect(parser, MINIC_TOKEN_RBRACE, "expected '}' after record fields")) {
         return false;
     }
-    {
-        size_t explicit_alignment;
-
-        if (!parse_record_suffix_attributes(parser, record_id, &explicit_alignment)) {
-            return false;
-        }
-        if (explicit_alignment != 0U) {
-            parser->program->records[record_id].explicit_alignment = explicit_alignment;
-        }
+    if (!parse_record_type_attributes(parser, is_union, &explicit_alignment, &is_packed)) {
+        return false;
+    }
+    parser->program->records[record_id].is_packed =
+        parser->program->records[record_id].is_packed || is_packed;
+    if (explicit_alignment > parser->program->records[record_id].explicit_alignment) {
+        parser->program->records[record_id].explicit_alignment = explicit_alignment;
     }
     if (!minic_c0_program_finish_record(parser->program, record_id)) {
         minic_parser_error(parser, "record definition requires at least one field");
