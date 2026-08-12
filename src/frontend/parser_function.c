@@ -593,6 +593,23 @@ static bool adjust_array_parameter_type(MinicParser *parser, MinicType *paramete
     return true;
 }
 
+static bool adjust_function_parameter_type(MinicParser *parser, MinicType *parameter_type) {
+    MinicType adjusted_type;
+
+    if (parser == NULL || parameter_type == NULL) {
+        return false;
+    }
+    if (!minic_type_is_function(*parameter_type)) {
+        return true;
+    }
+    if (!minic_type_pointer_to(*parameter_type, &adjusted_type)) {
+        minic_parser_error(parser, "cannot adjust function parameter to pointer type");
+        return false;
+    }
+    *parameter_type = adjusted_type;
+    return true;
+}
+
 bool minic_parser_parse_parameter_list(MinicParser *parser,
                                        MinicSourceSpan *parameter_name_spans,
                                        MinicType *parameter_types,
@@ -663,6 +680,10 @@ bool minic_parser_parse_parameter_list(MinicParser *parser,
 
         if (!is_function_pointer_parameter && parser->current.kind == MINIC_TOKEN_LBRACKET &&
             !adjust_array_parameter_type(parser, &parameter_type)) {
+            return false;
+        }
+        if (!is_function_pointer_parameter &&
+            !adjust_function_parameter_type(parser, &parameter_type)) {
             return false;
         }
 
