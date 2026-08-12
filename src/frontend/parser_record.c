@@ -43,17 +43,6 @@ static bool parse_function_pointer_field_declarator(MinicParser *parser,
     return true;
 }
 
-static bool token_text_equals(const MinicParser *parser, MinicToken token, const char *text) {
-    size_t length;
-
-    if (parser == NULL || text == NULL || token.kind != MINIC_TOKEN_IDENTIFIER) {
-        return false;
-    }
-    length = minic_parser_span_length(token.span);
-    return strlen(text) == length &&
-           memcmp(parser->source + token.span.begin.offset, text, length) == 0;
-}
-
 typedef struct MinicRecordFieldAttributeContext {
     size_t explicit_alignment;
     bool is_packed;
