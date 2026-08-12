@@ -21,6 +21,15 @@ grep -F "  j .Lswitch_end_" "$work/switch_control_flow.s" >/dev/null
 grep -F "  j .Lwhile_end_" "$work/switch_control_flow.s" >/dev/null
 printf '%s\n' "PASS compiler/c0/switch_control_flow_lowering"
 
+"$host_cc" -E -P -std=gnu11 -x c \
+    "$root/tests/compiler/c0/gnu_fallthrough_statement.c" \
+    -o "$work/gnu_fallthrough_statement.i"
+"$minic" -S \
+    "$work/gnu_fallthrough_statement.i" \
+    -o "$work/gnu_fallthrough_statement.s"
+grep -F 'fallthrough_shape:' "$work/gnu_fallthrough_statement.s" >/dev/null
+printf '%s\n' "PASS compiler/c0/gnu_fallthrough_statement attribute=diagnostic statement-only=1 aliases=2"
+
 expect_failure() {
     name=$1
     message=$2
@@ -60,3 +69,10 @@ expect_failure \
 expect_failure \
     invalid_case_nonconstant \
     "case label currently requires an integer constant expression"
+
+expect_failure \
+    invalid_fallthrough_outside_switch \
+    "GNU fallthrough statement attribute requires an enclosing switch"
+expect_failure \
+    invalid_statement_attribute_target \
+    "GNU attribute is not valid on a statement"

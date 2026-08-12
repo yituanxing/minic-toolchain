@@ -31,7 +31,8 @@ typedef enum MinicAttributeKind {
     MINIC_ATTRIBUTE_DESIGNATED_INIT,
     MINIC_ATTRIBUTE_PACKED,
     MINIC_ATTRIBUTE_ALIGNED,
-    MINIC_ATTRIBUTE_CLEANUP
+    MINIC_ATTRIBUTE_CLEANUP,
+    MINIC_ATTRIBUTE_FALLTHROUGH
 } MinicAttributeKind;
 
 typedef enum MinicAttributeClass {

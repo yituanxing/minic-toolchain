@@ -3794,6 +3794,76 @@ static bool parse_gnu_inline_asm_statement(MinicParser *parser) {
     return minic_parser_add_statement(parser, &statement);
 }
 
+typedef struct MinicStatementAttributeContext {
+    bool saw_fallthrough;
+} MinicStatementAttributeContext;
+
+static bool consume_statement_attribute(MinicParser *parser,
+                                        const MinicParsedAttribute *attribute,
+                                        void *opaque_context) {
+    MinicStatementAttributeContext *context;
+    const MinicAttributeDescriptor *descriptor;
+
+    if (parser == NULL || attribute == NULL || opaque_context == NULL) {
+        return false;
+    }
+    context = (MinicStatementAttributeContext *)opaque_context;
+    descriptor = attribute->descriptor;
+    if (descriptor == NULL) {
+        minic_parser_error(parser, "unsupported GNU statement attribute");
+        return false;
+    }
+    if (!minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_STATEMENT)) {
+        minic_parser_error(parser, "GNU attribute is not valid on a statement");
+        return false;
+    }
+    if (descriptor->kind != MINIC_ATTRIBUTE_FALLTHROUGH ||
+        descriptor->semantic_class != MINIC_ATTRIBUTE_CLASS_DIAGNOSTIC) {
+        minic_parser_error(parser, "GNU statement attribute semantics are not implemented");
+        return false;
+    }
+    context->saw_fallthrough = true;
+    return true;
+}
+
+static bool gnu_attribute_list_has_statement_shape(const MinicParser *parser) {
+    MinicDiagnostic diagnostic;
+    MinicParsedAttributeList attributes;
+    MinicParser probe;
+
+    if (parser == NULL || parser->current.kind != MINIC_TOKEN_IDENTIFIER ||
+        (!identifier_equals(parser, parser->current.span, "__attribute__", 13U) &&
+         !identifier_equals(parser, parser->current.span, "__attribute", 11U))) {
+        return false;
+    }
+    probe = *parser;
+    (void)memset(&diagnostic, 0, sizeof(diagnostic));
+    (void)memset(&attributes, 0, sizeof(attributes));
+    probe.diagnostic = &diagnostic;
+    if (!minic_parser_collect_gnu_attribute_lists(&probe, &attributes)) {
+        return false;
+    }
+    return attributes.count != 0U && probe.current.kind == MINIC_TOKEN_SEMICOLON;
+}
+
+static bool parse_gnu_statement_attribute(MinicParser *parser) {
+    MinicStatementAttributeContext context;
+
+    (void)memset(&context, 0, sizeof(context));
+    if (!minic_parser_parse_gnu_attribute_lists(parser, consume_statement_attribute, &context) ||
+        !context.saw_fallthrough ||
+        !minic_parser_expect(
+            parser, MINIC_TOKEN_SEMICOLON, "expected ';' after GNU statement attribute")) {
+        return false;
+    }
+    if (parser->switch_depth == 0U) {
+        minic_parser_error(parser,
+                           "GNU fallthrough statement attribute requires an enclosing switch");
+        return false;
+    }
+    return true;
+}
+
 static bool token_starts_local_declaration(const MinicParser *parser) {
     return parser != NULL &&
            minic_parser_token_starts_declaration_specifiers(parser, parser->current);
@@ -3865,6 +3935,9 @@ bool minic_parser_parse_statement(MinicParser *parser, bool allow_declaration) {
     }
     if (identifier_starts_label(parser)) {
         return parse_label(parser, allow_declaration);
+    }
+    if (gnu_attribute_list_has_statement_shape(parser)) {
+        return parse_gnu_statement_attribute(parser);
     }
     if (parser->current.kind == MINIC_TOKEN_KW_EXTERN ||
         (parser->current.kind == MINIC_TOKEN_IDENTIFIER &&
