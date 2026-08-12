@@ -8,14 +8,14 @@ work=${BUILD_DIR:-"$root/build/debug"}/tests/compiler-c0-pragma-pack
 rm -rf "$work"
 mkdir -p "$work"
 
-"$minic" -S "$root/tests/compiler/c0/pragma_pack_record_layout.i" -o "$work/pragma_pack.s"
+"$minic" -S "$root/tests/compiler/c0/pragma_pack_record_layout.c" -o "$work/pragma_pack.s"
 test -s "$work/pragma_pack.s"
 grep -F '.globl main' "$work/pragma_pack.s" >/dev/null
 
 expect_failure() {
     name=$1
     message=$2
-    if "$minic" -S "$root/tests/compiler/c0/$name.i" -o "$work/$name.s" \
+    if "$minic" -S "$root/tests/compiler/c0/$name.c" -o "$work/$name.s" \
         >"$work/$name.stdout" 2>"$work/$name.stderr"; then
         printf '%s\n' "FAIL compiler/c0/$name: compilation unexpectedly succeeded" >&2
         exit 1
