@@ -3322,11 +3322,22 @@ static bool parse_return(MinicParser *parser) {
     }
 
     if (minic_type_is_void(function->return_type)) {
-        if (parser->current.kind != MINIC_TOKEN_SEMICOLON) {
-            minic_parser_error(parser, "void function cannot return a value");
-            return false;
+        if (parser->current.kind == MINIC_TOKEN_SEMICOLON) {
+            statement.span.end = parser->current.span.end;
+        } else {
+            const MinicExpression *returned_expression;
+
+            if (!minic_parser_parse_full_expression(parser, &statement.expression)) {
+                return false;
+            }
+            returned_expression =
+                minic_c0_program_expression(parser->program, statement.expression);
+            if (returned_expression == NULL || !minic_type_is_void(returned_expression->type)) {
+                minic_parser_error(parser, "void function cannot return a value");
+                return false;
+            }
+            statement.span.end = returned_expression->span.end;
         }
-        statement.span.end = parser->current.span.end;
     } else {
         const MinicExpression *returned_expression;
 
