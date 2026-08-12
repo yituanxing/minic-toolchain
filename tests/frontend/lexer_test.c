@@ -389,6 +389,20 @@ static int test_string_literals(void)
     return 0;
 }
 
+static int test_wide_string_literals(void)
+{
+    static const char source[] = "L\"SecureBoot\" Lvalue";
+    MinicLexer lexer;
+
+    minic_lexer_initialize(&lexer, "wide-strings.c", source, sizeof(source) - 1U);
+    if (expect_token(&lexer, MINIC_TOKEN_WIDE_STRING_LITERAL, 1U, 1U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_IDENTIFIER, 1U, 15U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_EOF, 1U, 21U) != 0) {
+        return 1;
+    }
+    return 0;
+}
+
 static int test_invalid_string_literals(void)
 {
     static const char unterminated[] = "\"abc";
@@ -497,6 +511,7 @@ int main(void)
         test_keyword_boundaries() != 0 ||
         test_floating_constants() != 0 ||
         test_string_literals() != 0 ||
+        test_wide_string_literals() != 0 ||
         test_invalid_string_literals() != 0 ||
         test_invalid_floating_exponent() != 0 ||
         test_invalid_character() != 0) {

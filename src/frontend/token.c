@@ -16,6 +16,8 @@ const char *minic_token_kind_name(MinicTokenKind kind) {
         return "floating constant";
     case MINIC_TOKEN_STRING_LITERAL:
         return "string literal";
+    case MINIC_TOKEN_WIDE_STRING_LITERAL:
+        return "wide string literal";
     case MINIC_TOKEN_PREPROCESSOR_DIRECTIVE:
         return "preprocessor directive";
     case MINIC_TOKEN_KW_BOOL:

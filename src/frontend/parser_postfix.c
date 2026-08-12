@@ -191,9 +191,11 @@ static bool parse_indirect_arguments(MinicParser *parser,
         const MinicExpression *argument;
         MinicExpressionId argument_id;
 
-        if (parser->current.kind == MINIC_TOKEN_RPAREN ||
-            !minic_parser_parse_expression(parser, &argument_id, 0U)) {
+        if (parser->current.kind == MINIC_TOKEN_RPAREN) {
             indirect_argument_count_error(parser);
+            return false;
+        }
+        if (!minic_parser_parse_expression(parser, &argument_id, 0U)) {
             return false;
         }
         argument = minic_c0_program_expression(parser->program, argument_id);

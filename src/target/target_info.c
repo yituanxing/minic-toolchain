@@ -8,6 +8,7 @@ const MinicTargetInfo *minic_default_target_info(void) {
 
     if (target.data_layout == NULL) {
         target.data_layout = minic_default_data_layout();
+        target.wide_character_type = minic_type_unsigned_short();
         target.gnu_sizeof_void_is_one = true;
         target.gnu_sizeof_function_is_one = true;
         target.call_frame_return_address_level0 = true;
@@ -18,6 +19,14 @@ const MinicTargetInfo *minic_default_target_info(void) {
 
 const MinicDataLayout *minic_target_info_data_layout(const MinicTargetInfo *target) {
     return target == NULL ? NULL : target->data_layout;
+}
+
+bool minic_target_info_wide_character_type(const MinicTargetInfo *target, MinicType *type) {
+    if (target == NULL || type == NULL || !minic_type_is_integer(target->wide_character_type)) {
+        return false;
+    }
+    *type = target->wide_character_type;
+    return true;
 }
 
 bool minic_target_info_sizeof_type(const MinicTargetInfo *target,

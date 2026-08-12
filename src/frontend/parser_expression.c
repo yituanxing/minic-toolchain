@@ -21,6 +21,7 @@ bool minic_parser_token_starts_expression(MinicTokenKind kind) {
     case MINIC_TOKEN_CHARACTER_CONSTANT:
     case MINIC_TOKEN_FLOATING_CONSTANT:
     case MINIC_TOKEN_STRING_LITERAL:
+    case MINIC_TOKEN_WIDE_STRING_LITERAL:
     case MINIC_TOKEN_LPAREN:
     case MINIC_TOKEN_KW_SIZEOF:
     case MINIC_TOKEN_KW_ALIGNOF:
@@ -1577,7 +1578,8 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
         }
         return finish_value_expression(parser, primary_id, decay_array, expression_id);
     }
-    if (parser->current.kind == MINIC_TOKEN_STRING_LITERAL) {
+    if (parser->current.kind == MINIC_TOKEN_STRING_LITERAL ||
+        parser->current.kind == MINIC_TOKEN_WIDE_STRING_LITERAL) {
         if (!minic_parser_parse_string_literal(parser, &primary_id) ||
             !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
             return false;

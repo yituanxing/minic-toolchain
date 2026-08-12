@@ -320,7 +320,17 @@ static bool minic_lexer_scan_integer_suffix(MinicLexer *lexer,
 static bool minic_lexer_scan_string_literal(MinicLexer *lexer,
                                             MinicToken *token,
                                             MinicDiagnostic *diagnostic,
-                                            MinicSourcePosition begin) {
+                                            MinicSourcePosition begin,
+                                            MinicTokenKind kind) {
+    if (kind == MINIC_TOKEN_WIDE_STRING_LITERAL) {
+        if (minic_lexer_peek(lexer) != 'L' || minic_lexer_peek_next(lexer) != '"') {
+            return false;
+        }
+        minic_lexer_advance(lexer);
+    } else if (kind != MINIC_TOKEN_STRING_LITERAL || minic_lexer_peek(lexer) != '"') {
+        return false;
+    }
+
     minic_lexer_advance(lexer);
     for (;;) {
         char character;
@@ -328,7 +338,7 @@ static bool minic_lexer_scan_string_literal(MinicLexer *lexer,
         character = minic_lexer_peek(lexer);
         if (character == '"') {
             minic_lexer_advance(lexer);
-            token->kind = MINIC_TOKEN_STRING_LITERAL;
+            token->kind = kind;
             token->span.end = minic_lexer_position(lexer);
             return true;
         }
@@ -499,6 +509,11 @@ bool minic_lexer_next(MinicLexer *lexer, MinicToken *token, MinicDiagnostic *dia
         return true;
     }
 
+    if (character == 'L' && minic_lexer_peek_next(lexer) == '"') {
+        return minic_lexer_scan_string_literal(
+            lexer, token, diagnostic, begin, MINIC_TOKEN_WIDE_STRING_LITERAL);
+    }
+
     if (minic_is_identifier_start(character)) {
         size_t start;
 
@@ -512,7 +527,8 @@ bool minic_lexer_next(MinicLexer *lexer, MinicToken *token, MinicDiagnostic *dia
     }
 
     if (character == '"') {
-        return minic_lexer_scan_string_literal(lexer, token, diagnostic, begin);
+        return minic_lexer_scan_string_literal(
+            lexer, token, diagnostic, begin, MINIC_TOKEN_STRING_LITERAL);
     }
     if (character == '\'') {
         return minic_lexer_scan_character_constant(lexer, token, diagnostic, begin);
