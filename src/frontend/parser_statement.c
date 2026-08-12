@@ -1738,12 +1738,42 @@ static bool parse_static_local_array_declarator(MinicParser *parser, MinicType b
     return minic_parser_bind_static_local(parser, name_span, object_id);
 }
 
+static bool consume_static_local_interleaved_attribute(MinicParser *parser,
+                                                       const MinicParsedAttribute *attribute,
+                                                       void *opaque_context) {
+    const MinicAttributeDescriptor *descriptor;
+
+    (void)opaque_context;
+    if (parser == NULL || attribute == NULL) {
+        return false;
+    }
+    descriptor = attribute->descriptor;
+    if (descriptor == NULL) {
+        minic_parser_error(parser, "unsupported GNU attribute on static local object");
+        return false;
+    }
+    if (!minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_OBJECT)) {
+        minic_parser_error(parser, "GNU attribute is not valid on a static local object");
+        return false;
+    }
+    if (descriptor->kind == MINIC_ATTRIBUTE_UNUSED &&
+        descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_INFORMATIONAL) {
+        return true;
+    }
+    minic_parser_error(
+        parser,
+        "GNU static local object attribute semantics are not implemented at this placement");
+    return false;
+}
+
 static bool parse_static_local_declaration(MinicParser *parser) {
     MinicType base_type;
 
     if (parser->current_function == MINIC_FUNCTION_INVALID ||
         !minic_parser_expect(parser, MINIC_TOKEN_KW_STATIC, "expected keyword 'static'") ||
-        !minic_parser_parse_type_specifiers(parser, &base_type)) {
+        !minic_parser_parse_type_specifiers(parser, &base_type) ||
+        !minic_parser_parse_gnu_attribute_lists(
+            parser, consume_static_local_interleaved_attribute, NULL)) {
         return false;
     }
     if (minic_type_is_void(base_type)) {
