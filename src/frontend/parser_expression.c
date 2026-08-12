@@ -667,6 +667,8 @@ static bool parse_builtin_offsetof(MinicParser *parser, MinicExpressionId *expre
     MinicType record_type;
     const MinicRecord *record;
     MinicRecordFieldPath path;
+    MinicType final_field_type;
+    bool final_field_is_array;
     size_t anonymous_prefix_offset;
     size_t path_index;
 
@@ -713,6 +715,8 @@ static bool parse_builtin_offsetof(MinicParser *parser, MinicExpressionId *expre
             minic_parser_error(parser, "__builtin_offsetof cannot name a bit-field");
             return false;
         }
+        final_field_type = final_field->type;
+        final_field_is_array = final_field->is_array;
     }
 
     anonymous_prefix_offset = 0U;
@@ -735,22 +739,106 @@ static bool parse_builtin_offsetof(MinicParser *parser, MinicExpressionId *expre
         }
         anonymous_prefix_offset += field_offset;
     }
-    if (!minic_parser_advance(parser) || parser->current.kind != MINIC_TOKEN_RPAREN) {
-        minic_parser_error(parser, "expected ')' after __builtin_offsetof");
+    if (!minic_parser_advance(parser)) {
         return false;
     }
 
     (void)memset(&expression, 0, sizeof(expression));
     expression.kind = MINIC_EXPRESSION_OFFSETOF;
     expression.span.begin = begin;
-    expression.span.end = parser->current.span.end;
+    expression.span.end = field_span.end;
     expression.type = minic_type_unsigned_long();
     expression.value_category = MINIC_VALUE_RVALUE;
     expression.value.offsetof_value.record_id = path.record_ids[path.depth - 1U];
     expression.value.offsetof_value.field_index = path.field_indices[path.depth - 1U];
     expression.value.offsetof_value.anonymous_prefix_offset = anonymous_prefix_offset;
-    return minic_parser_advance(parser) &&
-           minic_parser_add_expression(parser, &expression, expression_id);
+    if (!minic_parser_add_expression(parser, &expression, expression_id)) {
+        return false;
+    }
+
+    if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
+        MinicExpressionId base_offset_id;
+        MinicExpressionId index_id;
+        MinicExpressionId stride_id;
+        MinicExpressionId scaled_id;
+        const MinicExpression *index_expression;
+        MinicExpression stride;
+        MinicExpression scaled;
+        MinicExpression adjusted;
+        MinicType scaled_type;
+        size_t element_size;
+
+        base_offset_id = *expression_id;
+        if (!final_field_is_array) {
+            minic_parser_error(parser,
+                               "__builtin_offsetof array designator requires an array field");
+            return false;
+        }
+        if (!minic_parser_advance(parser) ||
+            !parse_expression_internal(parser, &index_id, 0U, true)) {
+            return false;
+        }
+        index_expression = minic_c0_program_expression(parser->program, index_id);
+        if (index_expression == NULL || !minic_type_is_integer(index_expression->type)) {
+            minic_parser_error(parser, "__builtin_offsetof array index requires an integer");
+            return false;
+        }
+        if (parser->current.kind != MINIC_TOKEN_RBRACKET) {
+            minic_parser_error(parser, "expected ']' in __builtin_offsetof array designator");
+            return false;
+        }
+        if (!minic_target_info_sizeof_type(
+                parser->target_info, parser->program, final_field_type, &element_size) ||
+            element_size > (size_t)INT64_MAX) {
+            minic_parser_error(parser, "cannot lay out __builtin_offsetof array element");
+            return false;
+        }
+
+        (void)memset(&stride, 0, sizeof(stride));
+        stride.kind = MINIC_EXPRESSION_INTEGER;
+        stride.span = parser->current.span;
+        stride.type = minic_type_unsigned_long();
+        stride.value_category = MINIC_VALUE_RVALUE;
+        stride.value.integer_value = (int64_t)element_size;
+        if (!minic_parser_add_expression(parser, &stride, &stride_id) ||
+            !minic_type_integer_common(index_expression->type, stride.type, &scaled_type)) {
+            minic_parser_error(parser, "cannot type __builtin_offsetof array index scale");
+            return false;
+        }
+
+        (void)memset(&scaled, 0, sizeof(scaled));
+        scaled.kind = MINIC_EXPRESSION_BINARY;
+        scaled.span.begin = index_expression->span.begin;
+        scaled.span.end = parser->current.span.end;
+        scaled.type = scaled_type;
+        scaled.value_category = MINIC_VALUE_RVALUE;
+        scaled.value.binary.operator_kind = MINIC_BINARY_MULTIPLY;
+        scaled.value.binary.left = index_id;
+        scaled.value.binary.right = stride_id;
+        if (!minic_parser_add_expression(parser, &scaled, &scaled_id)) {
+            return false;
+        }
+
+        (void)memset(&adjusted, 0, sizeof(adjusted));
+        adjusted.kind = MINIC_EXPRESSION_BINARY;
+        adjusted.span.begin = begin;
+        adjusted.span.end = parser->current.span.end;
+        adjusted.type = minic_type_unsigned_long();
+        adjusted.value_category = MINIC_VALUE_RVALUE;
+        adjusted.value.binary.operator_kind = MINIC_BINARY_ADD;
+        adjusted.value.binary.left = base_offset_id;
+        adjusted.value.binary.right = scaled_id;
+        if (!minic_parser_add_expression(parser, &adjusted, expression_id) ||
+            !minic_parser_advance(parser)) {
+            return false;
+        }
+    }
+
+    if (parser->current.kind != MINIC_TOKEN_RPAREN) {
+        minic_parser_error(parser, "expected ')' after __builtin_offsetof");
+        return false;
+    }
+    return minic_parser_advance(parser);
 }
 
 static bool generic_token_text_equals(const MinicParser *parser, const char *text) {
