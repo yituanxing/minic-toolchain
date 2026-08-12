@@ -167,33 +167,6 @@ static bool type_is_condition_scalar(MinicType type) {
     return minic_type_is_integer(type) || minic_type_is_pointer(type);
 }
 
-static bool conditional_result_type(MinicType when_true, MinicType when_false, MinicType *result) {
-    bool has_double_operand;
-    bool has_numeric_operands;
-
-    if (result == NULL) {
-        return false;
-    }
-    if (minic_type_equal(when_true, when_false)) {
-        *result = when_true;
-        return true;
-    }
-    if (minic_type_conditional_pointer_common(when_true, when_false, result)) {
-        return true;
-    }
-    if (minic_type_is_integer(when_true) && minic_type_is_integer(when_false)) {
-        return minic_type_integer_common(when_true, when_false, result);
-    }
-    has_double_operand = minic_type_is_double(when_true) || minic_type_is_double(when_false);
-    has_numeric_operands = (minic_type_is_double(when_true) || minic_type_is_integer(when_true)) &&
-                           (minic_type_is_double(when_false) || minic_type_is_integer(when_false));
-    if (has_double_operand && has_numeric_operands) {
-        *result = minic_type_double();
-        return true;
-    }
-    return false;
-}
-
 static bool is_normalized_integer_cast_add(const MinicExpression *expression,
                                            const MinicExpression *left,
                                            const MinicExpression *right,
@@ -714,7 +687,10 @@ static bool verify_expression(const MinicC0Program *program,
                (!expression->value.conditional.uses_condition_value ||
                 expression->value.conditional.when_true ==
                     expression->value.conditional.condition) &&
-               conditional_result_type(when_true->type, when_false->type, &expected_type) &&
+               minic_c0_conditional_result_type(program,
+                                                expression->value.conditional.when_true,
+                                                expression->value.conditional.when_false,
+                                                &expected_type) &&
                minic_type_equal(expression->type, expected_type);
     }
     case MINIC_EXPRESSION_BUILTIN_UNARY: {
