@@ -63,32 +63,100 @@ static bool apply_assignment_conversion(MinicParser *parser,
     return minic_parser_add_expression(parser, &conversion, expression_id);
 }
 
-static bool add_zero_initialized_local_array(MinicParser *parser,
-                                             MinicLocalId local_id,
-                                             MinicSourceSpan initializer_span) {
+static bool add_local_array_element_assignment(MinicParser *parser,
+                                               MinicLocalId local_id,
+                                               size_t index,
+                                               MinicExpressionId value_id) {
     const MinicLocal *local;
+    const MinicExpression *value;
     MinicExpression base;
-    MinicExpression zero;
+    MinicExpression index_expression;
+    MinicExpression subscript;
     MinicExpressionId base_id;
-    MinicExpressionId zero_id;
-    MinicExpressionId value_id;
-    size_t index;
+    MinicExpressionId index_id;
+    MinicExpressionId target_id;
+    MinicSourceSpan name_span;
+    MinicSourceSpan value_span;
+    MinicStatement statement;
+    MinicType element_type;
 
     local = minic_c0_program_local(parser->program, local_id);
-    if (local == NULL || local->element_count <= 1U || local->element_count > (size_t)INT_MAX) {
-        minic_parser_error(parser, "unsupported local array zero initializer");
+    value = minic_c0_program_expression(parser->program, value_id);
+    if (local == NULL || value == NULL || !local->is_array || index > (size_t)INT64_MAX) {
+        minic_parser_error(parser, "invalid local array initializer element");
         return false;
     }
+    name_span = local->name_span;
+    element_type = local->type;
+    value_span = value->span;
+    if (minic_type_is_record(element_type)) {
+        minic_parser_error(parser, "record local array initializer lists are not supported yet");
+        return false;
+    }
+    if (!apply_assignment_conversion(parser, element_type, &value_id) ||
+        !minic_c0_assignment_compatible(parser->program, element_type, value_id)) {
+        minic_parser_error(parser,
+                           "local array initializer element type does not match element type");
+        return false;
+    }
+    value = minic_c0_program_expression(parser->program, value_id);
+    if (value == NULL) {
+        minic_parser_error(parser, "invalid converted local array initializer element");
+        return false;
+    }
+    value_span = value->span;
 
     (void)memset(&base, 0, sizeof(base));
     base.kind = MINIC_EXPRESSION_LOCAL;
-    base.span = local->name_span;
-    base.type = local->type;
+    base.span = name_span;
+    base.type = element_type;
     base.value_category = MINIC_VALUE_LVALUE;
     base.value.local_id = local_id;
     if (!minic_parser_add_expression(parser, &base, &base_id)) {
         return false;
     }
+
+    (void)memset(&index_expression, 0, sizeof(index_expression));
+    index_expression.kind = MINIC_EXPRESSION_INTEGER;
+    index_expression.span = value_span;
+    index_expression.type = minic_type_unsigned_long();
+    index_expression.value_category = MINIC_VALUE_RVALUE;
+    index_expression.value.integer_value = (int64_t)index;
+    if (!minic_parser_add_expression(parser, &index_expression, &index_id)) {
+        return false;
+    }
+
+    (void)memset(&subscript, 0, sizeof(subscript));
+    subscript.kind = MINIC_EXPRESSION_SUBSCRIPT;
+    subscript.span.begin = name_span.begin;
+    subscript.span.end = value_span.end;
+    subscript.type = element_type;
+    subscript.value_category = MINIC_VALUE_LVALUE;
+    subscript.value.subscript.base = base_id;
+    subscript.value.subscript.index = index_id;
+    if (!minic_parser_add_expression(parser, &subscript, &target_id)) {
+        return false;
+    }
+
+    (void)memset(&statement, 0, sizeof(statement));
+    statement.kind = MINIC_STATEMENT_ASSIGN;
+    statement.span = subscript.span;
+    statement.target_expression = target_id;
+    statement.expression = value_id;
+    statement.target_statement = MINIC_STATEMENT_INVALID;
+    statement.cleanup_context = parser->cleanup_context;
+    statement.cleanup_stop_context = MINIC_CLEANUP_CONTEXT_ROOT;
+    statement.then_block = MINIC_BLOCK_INVALID;
+    statement.else_block = MINIC_BLOCK_INVALID;
+    return minic_parser_add_statement(parser, &statement);
+}
+
+static bool add_local_array_zero_element(MinicParser *parser,
+                                         MinicLocalId local_id,
+                                         size_t index,
+                                         MinicSourceSpan initializer_span) {
+    MinicExpression zero;
+    MinicExpressionId zero_id;
 
     (void)memset(&zero, 0, sizeof(zero));
     zero.kind = MINIC_EXPRESSION_INTEGER;
@@ -96,82 +164,71 @@ static bool add_zero_initialized_local_array(MinicParser *parser,
     zero.type = minic_type_int();
     zero.value_category = MINIC_VALUE_RVALUE;
     zero.value.integer_value = 0;
-    if (!minic_parser_add_expression(parser, &zero, &zero_id)) {
-        return false;
-    }
-    value_id = zero_id;
-    if (!apply_assignment_conversion(parser, local->type, &value_id) ||
-        !minic_c0_assignment_compatible(parser->program, local->type, value_id)) {
-        minic_parser_error(parser, "array zero initializer does not match element type");
-        return false;
-    }
-
-    for (index = 0U; index < local->element_count; ++index) {
-        MinicExpression index_expression;
-        MinicExpression subscript;
-        MinicExpressionId index_id;
-        MinicExpressionId target_id;
-        MinicStatement statement;
-
-        (void)memset(&index_expression, 0, sizeof(index_expression));
-        index_expression.kind = MINIC_EXPRESSION_INTEGER;
-        index_expression.span = initializer_span;
-        index_expression.type = minic_type_int();
-        index_expression.value_category = MINIC_VALUE_RVALUE;
-        index_expression.value.integer_value = (int)index;
-        if (!minic_parser_add_expression(parser, &index_expression, &index_id)) {
-            return false;
-        }
-
-        (void)memset(&subscript, 0, sizeof(subscript));
-        subscript.kind = MINIC_EXPRESSION_SUBSCRIPT;
-        subscript.span.begin = local->name_span.begin;
-        subscript.span.end = initializer_span.end;
-        subscript.type = local->type;
-        subscript.value_category = MINIC_VALUE_LVALUE;
-        subscript.value.subscript.base = base_id;
-        subscript.value.subscript.index = index_id;
-        if (!minic_parser_add_expression(parser, &subscript, &target_id)) {
-            return false;
-        }
-
-        (void)memset(&statement, 0, sizeof(statement));
-        statement.kind = MINIC_STATEMENT_ASSIGN;
-        statement.span = subscript.span;
-        statement.target_expression = target_id;
-        statement.expression = value_id;
-        statement.target_statement = MINIC_STATEMENT_INVALID;
-        statement.cleanup_context = parser->cleanup_context;
-        statement.cleanup_stop_context = MINIC_CLEANUP_CONTEXT_ROOT;
-        statement.then_block = MINIC_BLOCK_INVALID;
-        statement.else_block = MINIC_BLOCK_INVALID;
-        if (!minic_parser_add_statement(parser, &statement)) {
-            return false;
-        }
-    }
-    return true;
+    return minic_parser_add_expression(parser, &zero, &zero_id) &&
+           add_local_array_element_assignment(parser, local_id, index, zero_id);
 }
 
-static bool parse_local_array_zero_initializer(MinicParser *parser,
-                                               MinicLocalId local_id,
-                                               MinicSourceSpan name_span) {
+static bool
+parse_local_array_initializer(MinicParser *parser, MinicLocalId local_id, bool infer_count) {
+    const MinicLocal *local;
     MinicSourceSpan initializer_span;
-    int value;
+    size_t declared_count;
+    size_t initializer_count;
 
+    local = minic_c0_program_local(parser->program, local_id);
+    if (local == NULL || !local->is_array) {
+        minic_parser_error(parser, "invalid local array initializer target");
+        return false;
+    }
+    declared_count = local->element_count;
+    initializer_span.begin = local->name_span.begin;
     if (!minic_parser_advance(parser) || parser->current.kind != MINIC_TOKEN_LBRACE ||
-        !minic_parser_advance(parser) || parser->current.kind != MINIC_TOKEN_INTEGER_CONSTANT) {
+        !minic_parser_advance(parser)) {
         minic_parser_error(parser, "array initializers are not supported yet");
         return false;
     }
-    initializer_span.begin = name_span.begin;
-    if (!minic_parser_parse_integer_value(parser, &value) || value != 0 ||
-        parser->current.kind != MINIC_TOKEN_RBRACE) {
-        minic_parser_error(parser, "array initializers are not supported yet");
+
+    initializer_count = 0U;
+    while (parser->current.kind != MINIC_TOKEN_RBRACE) {
+        MinicExpressionId value_id;
+
+        if ((!infer_count && initializer_count >= declared_count) ||
+            initializer_count == SIZE_MAX) {
+            minic_parser_error(parser, "too many local array initializers");
+            return false;
+        }
+        if (!minic_parser_parse_expression(parser, &value_id, 0U) ||
+            !add_local_array_element_assignment(parser, local_id, initializer_count, value_id)) {
+            return false;
+        }
+        initializer_count += 1U;
+        if (parser->current.kind == MINIC_TOKEN_COMMA) {
+            if (!minic_parser_advance(parser)) {
+                return false;
+            }
+            continue;
+        }
+        if (parser->current.kind != MINIC_TOKEN_RBRACE) {
+            minic_parser_error(parser, "expected ',' or '}' in local array initializer");
+            return false;
+        }
+    }
+    if (infer_count && initializer_count == 0U) {
+        minic_parser_error(parser, "inferred local array initializer must not be empty");
         return false;
     }
     initializer_span.end = parser->current.span.end;
-    return minic_parser_advance(parser) &&
-           add_zero_initialized_local_array(parser, local_id, initializer_span);
+    if (infer_count) {
+        parser->program->locals[local_id].element_count = initializer_count;
+        declared_count = initializer_count;
+    }
+    while (initializer_count < declared_count) {
+        if (!add_local_array_zero_element(parser, local_id, initializer_count, initializer_span)) {
+            return false;
+        }
+        initializer_count += 1U;
+    }
+    return minic_parser_advance(parser);
 }
 
 static bool aggregate_expression_is_zero_constant(const MinicC0Program *program,
@@ -835,32 +892,65 @@ parse_local_declarator(MinicParser *parser, MinicType base_type, bool is_registe
         return false;
     }
     if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
-        if (!minic_parser_advance(parser) ||
-            !minic_parser_parse_fixed_array_bound(parser, &local.element_count)) {
+        bool inferred_array;
+
+        inferred_array = false;
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
+        if (parser->current.kind == MINIC_TOKEN_RBRACKET) {
+            inferred_array = true;
+            local.element_count = 0U;
+            if (!minic_parser_advance(parser)) {
+                return false;
+            }
+        } else if (!minic_parser_parse_fixed_array_bound(parser, &local.element_count)) {
             return false;
         }
         local.is_array = true;
+        if (!parse_local_object_attributes(parser, &attributes)) {
+            return false;
+        }
+        if (!minic_c0_program_add_local(parser->program, &local, &local_id)) {
+            minic_parser_error(parser, "out of memory while adding local");
+            return false;
+        }
+        if (!minic_parser_bind_local(parser, local.name_span, local_id)) {
+            return false;
+        }
+        if (inferred_array && parser->current.kind != MINIC_TOKEN_EQUAL) {
+            minic_parser_error(parser, "inferred local array requires an initializer");
+            return false;
+        }
+        if (parser->current.kind == MINIC_TOKEN_EQUAL) {
+            if (!parse_local_array_initializer(parser, local_id, inferred_array)) {
+                return false;
+            }
+            local.element_count = parser->program->locals[local_id].element_count;
+            return finalize_local_cleanup(parser, &attributes, &local, local_id);
+        }
     }
-    if (!parse_local_object_attributes(parser, &attributes)) {
-        return false;
-    }
-    if (!minic_c0_program_add_local(parser->program, &local, &local_id)) {
-        minic_parser_error(parser, "out of memory while adding local");
-        return false;
-    }
-    if (!minic_parser_bind_local(parser, local.name_span, local_id)) {
-        return false;
+    if (!local.is_array) {
+        if (!parse_local_object_attributes(parser, &attributes)) {
+            return false;
+        }
+        if (!minic_c0_program_add_local(parser->program, &local, &local_id)) {
+            minic_parser_error(parser, "out of memory while adding local");
+            return false;
+        }
+        if (!minic_parser_bind_local(parser, local.name_span, local_id)) {
+            return false;
+        }
     }
 
     if (parser->current.kind == MINIC_TOKEN_EQUAL) {
         MinicStatement statement;
         const MinicExpression *initializer;
 
-        if (local.element_count != 1U) {
-            if (!parse_local_array_zero_initializer(parser, local_id, local.name_span)) {
-                return false;
-            }
-            return finalize_local_cleanup(parser, &attributes, &local, local_id);
+        if (local.is_array) {
+            minic_parser_error(parser,
+                               "internal error: local array initializer escaped array path");
+            return false;
         }
         if (minic_type_is_record(local.type)) {
             MinicExpressionId target_id;
