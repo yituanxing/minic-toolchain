@@ -26,7 +26,7 @@ jobs:
           marker = '\nreplace_once(\n    "tests/compiler/c0/run-builtin-clzll.sh",'
           if text.count(marker) != 1:
               raise SystemExit('runner transformation marker mismatch')
-          path.write_text(text.split(marker, 1)[0] + '\n')
+          path.write_text(text.split(marker, 1)[0].rstrip() + '\n')
           PY
           python tools/dev/pr92-materialize-clzll-consteval.py
           python - <<'PY'
