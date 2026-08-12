@@ -1,0 +1,36 @@
+name: PR112 Materialize Conditional Null Pointer
+on:
+  push:
+    branches: [agent/conditional-null-pointer-constant-v0]
+permissions:
+  contents: write
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Materialize conditional null-pointer semantics
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/pr112-materialize.py
+          chmod +x tests/compiler/c0/run-conditional-null-pointer-constant.sh
+          clang-format-18 -i src/frontend/ast.h src/frontend/ast.c src/frontend/parser_expression.c tests/compiler/c0/conditional_null_pointer_constant.c tests/compiler/c0/invalid_conditional_typed_null_pointer.c tests/compiler/c0/invalid_conditional_nonnull_void_pointer.c
+      - name: Build and validate
+        run: |
+          set -Eeuo pipefail
+          make -j4
+          MINIC="$GITHUB_WORKSPACE/build/debug/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/pr112-focused" sh tests/compiler/c0/run-conditional-null-pointer-constant.sh
+          make check
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+          git diff --check
+      - name: Commit product source
+        run: |
+          set -Eeuo pipefail
+          rm -f tools/dev/pr112-materialize.py .github/workflows/pr112-materialize-conditional-null.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'fix(frontend): preserve pointer type for null conditional arms'
+          git push origin HEAD:agent/conditional-null-pointer-constant-v0
