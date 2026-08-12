@@ -13,7 +13,6 @@ static bool parse_expression_internal(MinicParser *parser,
                                       bool decay_array);
 static bool
 parse_comma_expression(MinicParser *parser, MinicExpressionId *expression_id, bool decay_array);
-static bool type_is_complete_object(const MinicC0Program *program, MinicType type);
 
 static bool finish_value_expression(MinicParser *parser,
                                     MinicExpressionId input_id,
@@ -2010,36 +2009,6 @@ static bool binary_is_double_arithmetic(MinicTokenKind kind) {
            kind == MINIC_TOKEN_SLASH;
 }
 
-static bool type_is_complete_object(const MinicC0Program *program, MinicType type) {
-    if (program == NULL || minic_type_is_void(type) || minic_type_is_function(type)) {
-        return false;
-    }
-    if (minic_type_is_integer(type) || minic_type_is_pointer(type) || minic_type_is_float(type) ||
-        minic_type_is_double(type)) {
-        return true;
-    }
-    if (minic_type_is_record(type)) {
-        const MinicRecord *record;
-
-        record = minic_c0_program_record(program, type.record_id);
-        return record != NULL && record->is_complete;
-    }
-    if (minic_type_is_array(type)) {
-        const MinicArrayType *array_type;
-
-        array_type = minic_c0_program_array_type(program, type.array_type_id);
-        return array_type != NULL && array_type->element_count != 0U &&
-               type_is_complete_object(program, array_type->element_type);
-    }
-    return false;
-}
-
-static bool pointer_arithmetic_pointee_allowed(const MinicC0Program *program,
-                                               MinicType pointee_type) {
-    return minic_type_is_void(pointee_type) || minic_type_is_function(pointee_type) ||
-           type_is_complete_object(program, pointee_type);
-}
-
 static bool pointer_arithmetic_shape(MinicTokenKind kind,
                                      MinicType left,
                                      MinicType right,
@@ -2066,21 +2035,6 @@ static bool pointer_arithmetic_shape(MinicTokenKind kind,
 }
 
 static bool
-pointer_relational_compatible(const MinicC0Program *program, MinicType left, MinicType right) {
-    MinicType left_pointee;
-    MinicType right_pointee;
-    MinicType left_unqualified;
-    MinicType right_unqualified;
-
-    return minic_type_pointee(left, &left_pointee) && minic_type_pointee(right, &right_pointee) &&
-           minic_type_unqualified(left_pointee, &left_unqualified) &&
-           minic_type_unqualified(right_pointee, &right_unqualified) &&
-           minic_type_equal(left_unqualified, right_unqualified) &&
-           type_is_complete_object(program, left_pointee) &&
-           type_is_complete_object(program, right_pointee);
-}
-
-static bool
 pointer_difference_compatible(const MinicC0Program *program, MinicType left, MinicType right) {
     MinicType left_pointee;
     MinicType right_pointee;
@@ -2091,8 +2045,8 @@ pointer_difference_compatible(const MinicC0Program *program, MinicType left, Min
            minic_type_unqualified(left_pointee, &left_unqualified) &&
            minic_type_unqualified(right_pointee, &right_unqualified) &&
            minic_type_equal(left_unqualified, right_unqualified) &&
-           type_is_complete_object(program, left_unqualified) &&
-           type_is_complete_object(program, right_unqualified);
+           minic_c0_type_is_complete_object(program, left_unqualified) &&
+           minic_c0_type_is_complete_object(program, right_unqualified);
 }
 
 static bool conditional_result_type(MinicType when_true, MinicType when_false, MinicType *result) {
@@ -2160,7 +2114,8 @@ static bool binary_result_type(const MinicC0Program *program,
         return true;
     }
     if (binary_is_comparison(kind) && !binary_is_equality(kind) && minic_type_is_pointer(left) &&
-        minic_type_is_pointer(right) && pointer_relational_compatible(program, left, right)) {
+        minic_type_is_pointer(right) &&
+        minic_c0_pointer_relational_compatible(program, left, right)) {
         *result = minic_type_int();
         return true;
     }
@@ -2175,7 +2130,7 @@ static bool binary_result_type(const MinicC0Program *program,
     }
     if (!pointer_arithmetic_shape(kind, left, right, &pointer_type) ||
         !minic_type_pointee(pointer_type, &pointee_type) ||
-        !pointer_arithmetic_pointee_allowed(program, pointee_type)) {
+        !minic_c0_pointer_arithmetic_pointee_allowed(program, pointee_type)) {
         return false;
     }
     *result = pointer_type;
@@ -2245,7 +2200,8 @@ static bool parse_expression_internal(MinicParser *parser,
                 minic_parser_error(parser, "logical operator requires integer or pointer operands");
             } else if (has_pointer_arithmetic_shape &&
                        minic_type_pointee(pointer_type, &pointee_type) &&
-                       !pointer_arithmetic_pointee_allowed(parser->program, pointee_type)) {
+                       !minic_c0_pointer_arithmetic_pointee_allowed(parser->program,
+                                                                    pointee_type)) {
                 minic_parser_error(parser,
                                    "pointer arithmetic requires a complete object type or GNU "
                                    "byte-sized void/function pointee");
@@ -2395,7 +2351,7 @@ static bool parse_expression_internal(MinicParser *parser,
                  compound_operator != MINIC_BINARY_SUBTRACT) ||
                 !minic_type_is_integer(value_expression->type) ||
                 !minic_type_pointee(target_type, &pointee_type) ||
-                !type_is_complete_object(parser->program, pointee_type)) {
+                !minic_c0_type_is_complete_object(parser->program, pointee_type)) {
                 minic_parser_error(
                     parser,
                     "pointer compound assignment expression requires += or -= with an integer");
