@@ -1605,14 +1605,25 @@ bool minic_riscv64_emit_expression(FILE *file,
         when_false = minic_c0_program_expression(program, expression->value.conditional.when_false);
         if (condition == NULL || when_true == NULL || when_false == NULL ||
             !type_is_condition_scalar(condition->type) ||
+            (expression->value.conditional.uses_condition_value &&
+             expression->value.conditional.when_true != expression->value.conditional.condition) ||
             !minic_riscv64_emit_expression(
                 file, program, function, expression->value.conditional.condition) ||
-            fprintf(file, "  beqz a0, .Lminic_cond_false_%zu\n", expression_id) < 0 ||
-            !minic_riscv64_emit_expression(
-                file, program, function, expression->value.conditional.when_true) ||
-            !minic_riscv64_emit_conditional_result_conversion(
-                file, when_true->type, expression->type) ||
-            fprintf(file,
+            fprintf(file, "  beqz a0, .Lminic_cond_false_%zu\n", expression_id) < 0) {
+            return false;
+        }
+        if (expression->value.conditional.uses_condition_value) {
+            if (!minic_riscv64_emit_conditional_result_conversion(
+                    file, condition->type, expression->type)) {
+                return false;
+            }
+        } else if (!minic_riscv64_emit_expression(
+                       file, program, function, expression->value.conditional.when_true) ||
+                   !minic_riscv64_emit_conditional_result_conversion(
+                       file, when_true->type, expression->type)) {
+            return false;
+        }
+        if (fprintf(file,
                     "  j .Lminic_cond_end_%zu\n"
                     ".Lminic_cond_false_%zu:\n",
                     expression_id,

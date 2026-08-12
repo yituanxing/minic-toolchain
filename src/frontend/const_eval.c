@@ -556,6 +556,9 @@ static bool eval_expression(const MinicC0Program *program,
             !value_truthy(program, target, &condition, &truthy)) {
             return false;
         }
+        if (truthy && expression->value.conditional.uses_condition_value) {
+            return convert_value(program, target, &condition, expression->type, value);
+        }
         selected_id = truthy ? expression->value.conditional.when_true
                              : expression->value.conditional.when_false;
         return eval_expression(program, target, selected_id, depth + 1U, &selected) &&

@@ -166,6 +166,7 @@ typedef struct MinicExpression {
             MinicExpressionId condition;
             MinicExpressionId when_true;
             MinicExpressionId when_false;
+            bool uses_condition_value;
         } conditional;
         struct {
             MinicLocalId local_id;

@@ -2224,6 +2224,7 @@ static bool parse_expression_internal(MinicParser *parser,
         MinicSourceSpan condition_span;
         MinicExpressionId when_true;
         MinicExpressionId when_false;
+        bool uses_condition_value;
 
         if (!minic_parser_apply_array_decay(parser, left, &left)) {
             return false;
@@ -2235,11 +2236,22 @@ static bool parse_expression_internal(MinicParser *parser,
             return false;
         }
         condition_span = condition_expression->span;
-        if (!minic_parser_advance(parser) ||
-            !parse_expression_internal(parser, &when_true, 0U, true) ||
-            !minic_parser_expect(
-                parser, MINIC_TOKEN_COLON, "expected ':' in conditional expression") ||
-            !parse_expression_internal(parser, &when_false, 0U, true)) {
+        uses_condition_value = false;
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
+        if (parser->current.kind == MINIC_TOKEN_COLON) {
+            when_true = left;
+            uses_condition_value = true;
+            if (!minic_parser_expect(
+                    parser, MINIC_TOKEN_COLON, "expected ':' in conditional expression") ||
+                !parse_expression_internal(parser, &when_false, 0U, true)) {
+                return false;
+            }
+        } else if (!parse_expression_internal(parser, &when_true, 0U, true) ||
+                   !minic_parser_expect(
+                       parser, MINIC_TOKEN_COLON, "expected ':' in conditional expression") ||
+                   !parse_expression_internal(parser, &when_false, 0U, true)) {
             return false;
         }
         true_expression = minic_c0_program_expression(parser->program, when_true);
@@ -2257,6 +2269,7 @@ static bool parse_expression_internal(MinicParser *parser,
         conditional.value.conditional.condition = left;
         conditional.value.conditional.when_true = when_true;
         conditional.value.conditional.when_false = when_false;
+        conditional.value.conditional.uses_condition_value = uses_condition_value;
         if (!conditional_result_type(
                 true_expression->type, false_expression->type, &conditional.type)) {
             minic_parser_error(parser, "conditional expression branches have incompatible types");
