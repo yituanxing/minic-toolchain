@@ -559,14 +559,28 @@ static bool verify_expression(const MinicC0Program *program,
         const MinicRecordField *field;
         MinicType record_type;
         MinicType expected_type;
+        bool record_rvalue_base;
 
         operand = expression_before(program, expression->value.member.base, expression_index);
         record = minic_c0_program_record(program, expression->value.member.record_id);
         field = minic_c0_record_field(record, expression->value.member.field_index);
-        if (operand == NULL || record == NULL || field == NULL ||
-            !minic_type_pointee(operand->type, &record_type) ||
-            !minic_type_is_record(record_type) ||
-            record_type.record_id != expression->value.member.record_id) {
+        if (operand == NULL || record == NULL || field == NULL) {
+            return false;
+        }
+        record_rvalue_base = operand->value_category == MINIC_VALUE_RVALUE &&
+                             minic_type_is_record(operand->type) &&
+                             operand->type.record_id == expression->value.member.record_id;
+        if (record_rvalue_base) {
+            record_type = operand->type;
+            if (!minic_c0_record_value_is_copy_source(program, expression->value.member.base) ||
+                field->is_array || minic_type_is_record(field->type) ||
+                expression->value_category != MINIC_VALUE_RVALUE) {
+                return false;
+            }
+        } else if (!minic_type_pointee(operand->type, &record_type) ||
+                   !minic_type_is_record(record_type) ||
+                   record_type.record_id != expression->value.member.record_id ||
+                   expression->value_category != MINIC_VALUE_LVALUE) {
             return false;
         }
         expected_type = field->type;
@@ -574,8 +588,7 @@ static bool verify_expression(const MinicC0Program *program,
             !minic_type_add_const(expected_type, &expected_type)) {
             return false;
         }
-        return expression->value_category == MINIC_VALUE_LVALUE &&
-               minic_type_equal(expression->type, expected_type);
+        return minic_type_equal(expression->type, expected_type);
     }
     case MINIC_EXPRESSION_LVALUE_READ:
         operand = expression_before(program, expression->value.unary.operand, expression_index);

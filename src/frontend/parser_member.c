@@ -212,6 +212,74 @@ bool minic_parser_parse_pointer_member(MinicParser *parser,
     return parse_pointer_record_member(parser, base_id, member_begin, expression_id);
 }
 
+static bool parse_record_rvalue_member(MinicParser *parser,
+                                       MinicExpressionId base_id,
+                                       MinicSourcePosition member_begin,
+                                       MinicExpressionId *expression_id) {
+    const MinicExpression *base;
+    const MinicRecord *record;
+    const MinicRecordField *field;
+    MinicRecordFieldPath path;
+    MinicSourceSpan field_span;
+    MinicExpression member;
+    MinicType base_type;
+    MinicType member_type;
+
+    base = minic_c0_program_expression(parser->program, base_id);
+    if (base == NULL || base->value_category != MINIC_VALUE_RVALUE ||
+        !minic_type_is_record(base->type) ||
+        !minic_c0_record_value_is_copy_source(parser->program, base_id)) {
+        minic_parser_error(parser, "record rvalue member source is not materializable yet");
+        return false;
+    }
+    base_type = base->type;
+    record = minic_c0_program_record(parser->program, base_type.record_id);
+    if (record == NULL || !record->is_complete) {
+        minic_parser_error(parser, "member access requires a complete record");
+        return false;
+    }
+    if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
+        minic_parser_error(parser, "expected record member name");
+        return false;
+    }
+    field_span = parser->current.span;
+    if (!minic_parser_find_record_field_path(parser, record, field_span, &path)) {
+        minic_parser_error(parser,
+                           path.ambiguous ? "record member is ambiguous through anonymous members"
+                                          : "record has no such member");
+        return false;
+    }
+    if (path.depth != 1U || path.record_ids[0] != base_type.record_id) {
+        minic_parser_error(parser,
+                           "promoted member access on a record rvalue is not supported yet");
+        return false;
+    }
+    field = minic_c0_record_field(record, path.field_indices[0]);
+    if (field == NULL || field->is_array || minic_type_is_record(field->type)) {
+        minic_parser_error(parser, "record rvalue member currently requires a scalar field");
+        return false;
+    }
+    member_type = field->type;
+    if (minic_type_is_const(base_type) && !minic_type_add_const(member_type, &member_type)) {
+        minic_parser_error(parser, "cannot propagate const to record rvalue member");
+        return false;
+    }
+    if (!minic_parser_advance(parser)) {
+        return false;
+    }
+
+    (void)memset(&member, 0, sizeof(member));
+    member.kind = MINIC_EXPRESSION_MEMBER;
+    member.span.begin = member_begin;
+    member.span.end = field_span.end;
+    member.type = member_type;
+    member.value_category = MINIC_VALUE_RVALUE;
+    member.value.member.base = base_id;
+    member.value.member.record_id = base_type.record_id;
+    member.value.member.field_index = path.field_indices[0];
+    return minic_parser_add_expression(parser, &member, expression_id);
+}
+
 bool minic_parser_parse_direct_member(MinicParser *parser,
                                       MinicExpressionId base_id,
                                       MinicExpressionId *expression_id) {
@@ -221,13 +289,19 @@ bool minic_parser_parse_direct_member(MinicParser *parser,
     MinicSourcePosition member_begin;
 
     base = minic_c0_program_expression(parser->program, base_id);
-    if (base == NULL || base->value_category != MINIC_VALUE_LVALUE ||
-        !minic_type_is_record(base->type)) {
-        minic_parser_error(parser, "direct member access requires a record lvalue");
+    if (base == NULL || !minic_type_is_record(base->type)) {
+        minic_parser_error(parser, "direct member access requires a record expression");
         return false;
     }
     member_begin = base->span.begin;
     if (!minic_parser_expect(parser, MINIC_TOKEN_DOT, "expected '.'")) {
+        return false;
+    }
+    if (base->value_category == MINIC_VALUE_RVALUE) {
+        return parse_record_rvalue_member(parser, base_id, member_begin, expression_id);
+    }
+    if (base->value_category != MINIC_VALUE_LVALUE) {
+        minic_parser_error(parser, "direct member access requires a record value");
         return false;
     }
 

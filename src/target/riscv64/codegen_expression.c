@@ -721,6 +721,58 @@ static bool minic_riscv64_emit_record_value_temporary(FILE *file,
     return false;
 }
 
+static bool minic_riscv64_emit_record_rvalue_member(FILE *file,
+                                                    const MinicC0Program *program,
+                                                    const MinicFunction *function,
+                                                    const MinicExpression *expression,
+                                                    MinicExpressionId expression_id) {
+    const MinicExpression *base;
+    const MinicRecord *record;
+    const MinicRecordField *field;
+    size_t storage_size;
+    size_t temporary_size;
+
+    if (file == NULL || program == NULL || expression == NULL ||
+        expression->kind != MINIC_EXPRESSION_MEMBER ||
+        expression->value_category != MINIC_VALUE_RVALUE) {
+        return false;
+    }
+    base = minic_c0_program_expression(program, expression->value.member.base);
+    record = minic_c0_program_record(program, expression->value.member.record_id);
+    field = minic_c0_record_field(record, expression->value.member.field_index);
+    if (base == NULL || record == NULL || field == NULL || !record->is_complete ||
+        base->value_category != MINIC_VALUE_RVALUE || !minic_type_is_record(base->type) ||
+        base->type.record_id != expression->value.member.record_id ||
+        !minic_c0_record_value_is_copy_source(program, expression->value.member.base) ||
+        field->is_array || minic_type_is_record(field->type) || record->storage_size == 0U ||
+        record->storage_size > SIZE_MAX - 15U) {
+        return false;
+    }
+    storage_size = record->storage_size;
+    temporary_size = (storage_size + 15U) & ~(size_t)15U;
+    if (!minic_riscv64_emit_record_value_temporary(
+            file, program, function, expression->value.member.base, storage_size, temporary_size)) {
+        return false;
+    }
+    if (field->storage_offset == 0U) {
+        if (fprintf(file, "  mv a0, sp\n") < 0) {
+            return false;
+        }
+    } else if (field->storage_offset <= 2047U) {
+        if (fprintf(file, "  addi a0, sp, %zu\n", field->storage_offset) < 0) {
+            return false;
+        }
+    } else if (fprintf(file,
+                       "  li t0, %zu\n"
+                       "  add a0, sp, t0\n",
+                       field->storage_offset) < 0) {
+        return false;
+    }
+    return minic_riscv64_emit_lvalue_load_from_address(
+               file, program, expression_id, expression->type, "a0", "a0") &&
+           minic_riscv64_emit_stack_release(file, temporary_size);
+}
+
 bool minic_riscv64_emit_record_copy_value(FILE *file,
                                           const MinicC0Program *program,
                                           const MinicFunction *function,
@@ -1175,8 +1227,14 @@ bool minic_riscv64_emit_expression(FILE *file,
 
         record = minic_c0_program_record(program, expression->value.member.record_id);
         field = minic_c0_record_field(record, expression->value.member.field_index);
-        if (field == NULL ||
-            !minic_riscv64_emit_member_address(file, program, function, expression)) {
+        if (field == NULL) {
+            return false;
+        }
+        if (expression->value_category == MINIC_VALUE_RVALUE) {
+            return minic_riscv64_emit_record_rvalue_member(
+                file, program, function, expression, expression_id);
+        }
+        if (!minic_riscv64_emit_member_address(file, program, function, expression)) {
             return false;
         }
         if (field->is_array) {
