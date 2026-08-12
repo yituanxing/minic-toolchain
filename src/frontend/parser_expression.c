@@ -469,6 +469,16 @@ static bool pointer_sign_call_conversion_compatible(MinicType target, MinicType 
     return true;
 }
 
+static bool gnu_function_pointer_to_void_call_conversion_compatible(MinicType target,
+                                                                    MinicType source) {
+    MinicType source_pointee;
+    MinicType void_pointer;
+
+    return minic_type_pointer_to(minic_type_void(), &void_pointer) &&
+           minic_type_equal(target, void_pointer) && minic_type_pointee(source, &source_pointee) &&
+           minic_type_is_function(source_pointee);
+}
+
 static bool gnu_function_pointer_bridge_call_conversion_compatible(const MinicC0Program *program,
                                                                    MinicType target,
                                                                    const MinicExpression *source) {
@@ -512,6 +522,7 @@ bool minic_parser_apply_fixed_call_argument_conversion(MinicParser *parser,
     needs_explicit_conversion =
         (minic_type_is_double(target_type) && minic_type_is_integer(source->type)) ||
         pointer_sign_call_conversion_compatible(target_type, source->type) ||
+        gnu_function_pointer_to_void_call_conversion_compatible(target_type, source->type) ||
         gnu_function_pointer_bridge_call_conversion_compatible(
             parser->program, target_type, source);
     if (!needs_explicit_conversion) {
