@@ -1,0 +1,48 @@
+name: PR83 Materialize RV64 Inline Asm TargetConstraint
+
+on:
+  push:
+    branches:
+      - agent/rv64-inline-asm-target-constraint-v0
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/rv64-inline-asm-target-constraint-v0
+          fetch-depth: 0
+
+      - name: Apply bounded target-constraint patch
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git apply --check tools/dev/pr83-rv64-inline-asm-target-constraint.patch
+          git apply tools/dev/pr83-rv64-inline-asm-target-constraint.patch
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+          git diff --check
+
+      - name: Build and validate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=debug
+          sh tests/compiler/c0/run-gnu-inline-asm-operands.sh
+          make check
+
+      - name: Materialize source and remove staging
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -f tools/dev/pr83-rv64-inline-asm-target-constraint.patch
+          rm -f .github/workflows/pr83-materialize-rv64-inline-asm-target-constraint.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'frontend: add RV64 inline asm target constraints'
+          git push origin HEAD:agent/rv64-inline-asm-target-constraint-v0
