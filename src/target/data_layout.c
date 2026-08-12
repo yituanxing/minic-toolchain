@@ -155,6 +155,9 @@ static bool minic_data_layout_record_depth(const MinicDataLayout *layout,
             field_size = (field->is_flexible_array || field->is_zero_length_array)
                              ? 0U
                              : element_size * field->element_count;
+            if (field->is_packed) {
+                field_alignment = 1U;
+            }
             if (field->explicit_alignment != 0U) {
                 if ((field->explicit_alignment & (field->explicit_alignment - 1U)) != 0U) {
                     return false;
