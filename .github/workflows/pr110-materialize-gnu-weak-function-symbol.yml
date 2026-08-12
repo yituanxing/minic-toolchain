@@ -26,7 +26,7 @@ jobs:
           make check
       - name: Commit product source
         run: |
-          git rm .github/workflows/pr110-materialize-gnu-weak-function-symbol.yml tools/dev/pr110-materialize-gnu-weak-function-symbol.py tools/dev/pr110-fix-materializer-anchor.py tools/dev/pr110-fix-prefix-call-anchors.py tools/dev/pr110-fix-definition-metadata-anchor.py
+          git rm -f .github/workflows/pr110-materialize-gnu-weak-function-symbol.yml tools/dev/pr110-materialize-gnu-weak-function-symbol.py tools/dev/pr110-fix-materializer-anchor.py tools/dev/pr110-fix-prefix-call-anchors.py tools/dev/pr110-fix-definition-metadata-anchor.py
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add src tests
