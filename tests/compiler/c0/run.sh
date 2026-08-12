@@ -379,3 +379,5 @@ MINIC="$minic" BUILD_DIR="$work/gnu-extern-void-symbol" HOST_CC="$host_cc" sh "$
 MINIC="$minic" BUILD_DIR="$work/extern-typedef-array-object" HOST_CC="$host_cc" sh "$root/tests/compiler/c0/run-extern-typedef-array-object.sh"
 
 MINIC="$minic" BUILD_DIR="$work/expression-statement-entry" HOST_CC="$host_cc" sh "$root/tests/compiler/c0/run-expression-statement-entry.sh"
+
+MINIC="$minic" BUILD_DIR="$work/function-typed-declarator" HOST_CC="$host_cc" sh "$root/tests/compiler/c0/run-function-typed-declarator.sh"
