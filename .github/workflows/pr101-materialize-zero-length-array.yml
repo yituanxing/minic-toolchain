@@ -11,7 +11,9 @@ jobs:
       - uses: actions/checkout@v4
         with: {ref: agent/gnu-zero-length-array-v0, fetch-depth: 0}
       - name: Materialize GNU zero-length array semantics
-        run: python3 tools/dev/pr101-materialize-zero-length-array.py
+        run: |
+          python3 tools/dev/pr101-materialize-zero-length-array.py
+          python3 tools/dev/pr101-fix-typedef-array-convergence.py
       - name: Build and validate
         run: |
           set -Eeuo pipefail
@@ -23,7 +25,7 @@ jobs:
           make check
       - name: Commit product source
         run: |
-          git rm .github/workflows/pr101-materialize-zero-length-array.yml tools/dev/pr101-materialize-zero-length-array.py
+          git rm .github/workflows/pr101-materialize-zero-length-array.yml tools/dev/pr101-materialize-zero-length-array.py tools/dev/pr101-fix-typedef-array-convergence.py
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add src tests
