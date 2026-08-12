@@ -14,7 +14,7 @@ jobs:
       - name: Materialize external tentative definitions
         run: |
           set -Eeuo pipefail
-          sed -i 's/static bool minic_riscv64_emit_global_objects(/static bool minic_riscv64_emit_function(/' tools/dev/pr123-materialize.py
+          python3 tools/dev/pr123-fix-materializer.py
           python3 tools/dev/pr123-materialize.py
           chmod +x tests/compiler/c0/run-external-tentative-definitions.sh
           clang-format-18 -i src/frontend/ast.h src/frontend/ast_global.c src/frontend/ast_verifier.c src/frontend/parser_function.c src/target/riscv64/codegen_function.c tests/compiler/c0/external_tentative_definitions.c tests/compiler/c0/invalid_external_tentative_incomplete_array.c tests/compiler/c0/invalid_external_tentative_redeclaration.c
@@ -29,7 +29,7 @@ jobs:
       - name: Commit product source
         run: |
           set -Eeuo pipefail
-          rm -f tools/dev/pr123-materialize.py .github/workflows/pr123-materialize-tentative.yml
+          rm -f tools/dev/pr123-materialize.py tools/dev/pr123-fix-materializer.py .github/workflows/pr123-materialize-tentative.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
