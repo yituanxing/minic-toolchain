@@ -92,6 +92,11 @@ static bool minic_riscv64_layout_globals(MinicC0Program *program) {
         size_t alignment;
 
         object = &program->global_objects[object_index];
+        if (object->is_extern && minic_type_is_void(object->type)) {
+            object->storage_size = 0U;
+            object->alignment = 0U;
+            continue;
+        }
         if (object->is_extern && minic_type_is_record(object->type)) {
             const MinicRecord *record;
 

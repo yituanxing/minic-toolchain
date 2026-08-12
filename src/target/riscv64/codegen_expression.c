@@ -1,5 +1,6 @@
 #include "target/riscv64/codegen_internal.h"
 #include "target/riscv64/layout.h"
+#include "target/target_info.h"
 
 #include <inttypes.h>
 #include <string.h>
@@ -1114,12 +1115,12 @@ bool minic_riscv64_emit_expression(FILE *file,
     }
     case MINIC_EXPRESSION_SIZEOF: {
         MinicType measured_type;
-        size_t alignment;
         size_t size;
 
         measured_type = expression->value.sizeof_type;
         if (!minic_type_equal(expression->type, minic_type_unsigned_long()) ||
-            !minic_riscv64_type_layout(program, measured_type, &size, &alignment)) {
+            !minic_target_info_sizeof_type(
+                minic_default_target_info(), program, measured_type, &size)) {
             return false;
         }
         return fprintf(file, "  li a0, %zu\n", size) >= 0;

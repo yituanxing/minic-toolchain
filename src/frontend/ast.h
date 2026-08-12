@@ -670,6 +670,12 @@ bool minic_c0_program_add_global_object(MinicC0Program *program,
                                         bool is_internal,
                                         bool is_read_only,
                                         MinicGlobalObjectId *global_object_id);
+bool minic_c0_program_add_extern_global_object(MinicC0Program *program,
+                                               const char *name,
+                                               size_t name_length,
+                                               MinicType type,
+                                               bool is_read_only,
+                                               MinicGlobalObjectId *global_object_id);
 bool minic_c0_global_object_add_initializer(MinicC0Program *program,
                                             MinicGlobalObjectId global_object_id,
                                             int value);
