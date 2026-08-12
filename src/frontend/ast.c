@@ -1225,6 +1225,7 @@ bool minic_c0_expression_array_object_info(const MinicC0Program *program,
         if (local != NULL && local->is_array) {
             resolved.element_type = expression->type;
             resolved.element_count = local->element_count;
+            resolved.is_incomplete = local->element_count == 0U;
         } else if (!minic_type_is_array(expression->type)) {
             return false;
         } else {
