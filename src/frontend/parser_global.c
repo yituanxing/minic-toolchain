@@ -949,7 +949,11 @@ static bool extern_object_types_compatible(const MinicC0Program *program,
             program, existing_array->element_type, declared_array->element_type)) {
         return false;
     }
-    return existing_array->element_count == 0U || declared_array->element_count == 0U ||
+    if ((existing_array->element_count == 0U && !existing_array->is_zero_length) ||
+        (declared_array->element_count == 0U && !declared_array->is_zero_length)) {
+        return true;
+    }
+    return existing_array->is_zero_length == declared_array->is_zero_length &&
            existing_array->element_count == declared_array->element_count;
 }
 
@@ -985,10 +989,20 @@ static bool merge_extern_array_composite_type(MinicC0Program *program,
     if (existing_array == NULL) {
         return false;
     }
-    if (existing_array->element_count == 0U && declared_count != 0U) {
-        return minic_c0_program_complete_array_type(program, existing_type, declared_count);
+    if (existing_array->element_count == 0U && !existing_array->is_zero_length) {
+        if (declared_array->is_zero_length) {
+            return minic_c0_program_complete_zero_length_array_type(program, existing_type);
+        }
+        if (declared_count != 0U) {
+            return minic_c0_program_complete_array_type(program, existing_type, declared_count);
+        }
+        return true;
     }
-    return declared_count == 0U || existing_array->element_count == declared_count;
+    if (declared_count == 0U && !declared_array->is_zero_length) {
+        return true;
+    }
+    return existing_array->is_zero_length == declared_array->is_zero_length &&
+           existing_array->element_count == declared_count;
 }
 
 static bool merge_extern_object_declaration(MinicParser *parser,

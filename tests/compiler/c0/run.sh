@@ -272,9 +272,6 @@ expect_compile_failure \
     invalid_duplicate_typedef \
     "duplicate typedef name"
 expect_compile_failure \
-    invalid_zero_length_typedef_array \
-    "array bound must be greater than zero"
-expect_compile_failure \
     invalid_void_typedef \
     "typedef cannot name bare void"
 expect_compile_failure \
@@ -361,3 +358,8 @@ MINIC="$minic" \
 HOST_CC="$host_cc" \
 BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
 sh "$root/tests/compiler/c0/run-transparent-union.sh"
+
+MINIC="$minic" \
+HOST_CC="$host_cc" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+sh "$root/tests/compiler/c0/run-gnu-zero-length-array.sh"

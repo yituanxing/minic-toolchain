@@ -1043,6 +1043,7 @@ static bool minic_c0_program_add_array_descriptor(MinicC0Program *program,
         return false;
     }
 
+    (void)memset(&descriptor, 0, sizeof(descriptor));
     descriptor.element_type = element_type;
     descriptor.element_count = element_count;
     array_type_id = program->array_type_count;
@@ -1066,6 +1067,39 @@ bool minic_c0_program_add_incomplete_array_type(MinicC0Program *program,
     return minic_c0_program_add_array_descriptor(program, element_type, 0U, array_type);
 }
 
+bool minic_c0_program_add_zero_length_array_type(MinicC0Program *program,
+                                                 MinicType element_type,
+                                                 MinicType *array_type) {
+    MinicType created;
+
+    if (program == NULL || array_type == NULL ||
+        !minic_c0_program_add_array_descriptor(program, element_type, 0U, &created)) {
+        return false;
+    }
+    program->array_types[created.array_type_id].is_zero_length = true;
+    *array_type = created;
+    return true;
+}
+
+bool minic_c0_program_complete_zero_length_array_type(MinicC0Program *program,
+                                                      MinicType array_type) {
+    MinicArrayType *descriptor;
+
+    if (program == NULL || !minic_type_is_array(array_type) ||
+        array_type.array_type_id >= program->array_type_count) {
+        return false;
+    }
+    descriptor = &program->array_types[array_type.array_type_id];
+    if (descriptor->is_zero_length) {
+        return descriptor->element_count == 0U;
+    }
+    if (descriptor->element_count != 0U) {
+        return false;
+    }
+    descriptor->is_zero_length = true;
+    return true;
+}
+
 bool minic_c0_program_complete_array_type(MinicC0Program *program,
                                           MinicType array_type,
                                           size_t element_count) {
@@ -1076,6 +1110,9 @@ bool minic_c0_program_complete_array_type(MinicC0Program *program,
         return false;
     }
     descriptor = &program->array_types[array_type.array_type_id];
+    if (descriptor->is_zero_length) {
+        return false;
+    }
     if (descriptor->element_count != 0U) {
         return descriptor->element_count == element_count;
     }
@@ -1237,7 +1274,8 @@ bool minic_c0_expression_array_object_info(const MinicC0Program *program,
             }
             resolved.element_type = array_type->element_type;
             resolved.element_count = array_type->element_count;
-            resolved.is_incomplete = array_type->element_count == 0U;
+            resolved.is_zero_length = array_type->is_zero_length;
+            resolved.is_incomplete = array_type->element_count == 0U && !array_type->is_zero_length;
             resolved.has_materialized_type = true;
         }
     } else if (expression->kind == MINIC_EXPRESSION_MEMBER) {
@@ -1262,7 +1300,8 @@ bool minic_c0_expression_array_object_info(const MinicC0Program *program,
             }
             resolved.element_type = array_type->element_type;
             resolved.element_count = array_type->element_count;
-            resolved.is_incomplete = array_type->element_count == 0U;
+            resolved.is_zero_length = array_type->is_zero_length;
+            resolved.is_incomplete = array_type->element_count == 0U && !array_type->is_zero_length;
             resolved.has_materialized_type = true;
         }
     } else if (minic_type_is_array(expression->type)) {

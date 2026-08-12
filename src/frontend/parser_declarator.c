@@ -137,6 +137,28 @@ bool minic_parser_parse_parenthesized_function_declarator(
            minic_parser_parse_function_parameter_suffix(parser, declarator);
 }
 
+static bool parse_array_bound_allow_zero(MinicParser *parser, size_t *element_count) {
+    int64_t value;
+
+    if (parser == NULL || element_count == NULL ||
+        !minic_parser_parse_integer_constant_expression(parser, &value)) {
+        return false;
+    }
+    if (value < 0) {
+        minic_parser_error(parser, "array bound must not be negative");
+        return false;
+    }
+    if ((uint64_t)value > (uint64_t)SIZE_MAX) {
+        minic_parser_error(parser, "array bound exceeds target object range");
+        return false;
+    }
+    if (!minic_parser_expect(parser, MINIC_TOKEN_RBRACKET, "expected ']'")) {
+        return false;
+    }
+    *element_count = (size_t)value;
+    return true;
+}
+
 bool minic_parser_parse_array_declarator_suffix(MinicParser *parser,
                                                 MinicType element_type,
                                                 bool allow_incomplete_outermost,
@@ -145,6 +167,7 @@ bool minic_parser_parse_array_declarator_suffix(MinicParser *parser,
     size_t bounds[8];
     size_t bound_count;
     size_t dimension;
+    bool zero_length[8];
     bool outermost_incomplete;
     MinicType type;
 
@@ -158,6 +181,7 @@ bool minic_parser_parse_array_declarator_suffix(MinicParser *parser,
     }
 
     bound_count = 0U;
+    (void)memset(zero_length, 0, sizeof(zero_length));
     outermost_incomplete = false;
     while (parser->current.kind == MINIC_TOKEN_LBRACKET) {
         if (bound_count >= sizeof(bounds) / sizeof(bounds[0])) {
@@ -177,8 +201,10 @@ bool minic_parser_parse_array_declarator_suffix(MinicParser *parser,
             if (!minic_parser_advance(parser)) {
                 return false;
             }
-        } else if (!minic_parser_parse_fixed_array_bound(parser, &bounds[bound_count])) {
+        } else if (!parse_array_bound_allow_zero(parser, &bounds[bound_count])) {
             return false;
+        } else {
+            zero_length[bound_count] = bounds[bound_count] == 0U;
         }
         bound_count += 1U;
     }
@@ -190,6 +216,11 @@ bool minic_parser_parse_array_declarator_suffix(MinicParser *parser,
         if (dimension == 0U && outermost_incomplete) {
             if (!minic_c0_program_add_incomplete_array_type(parser->program, type, &type)) {
                 minic_parser_error(parser, "cannot build incomplete array declarator type");
+                return false;
+            }
+        } else if (zero_length[dimension]) {
+            if (!minic_c0_program_add_zero_length_array_type(parser->program, type, &type)) {
+                minic_parser_error(parser, "cannot build GNU zero-length array declarator type");
                 return false;
             }
         } else if (!minic_c0_program_add_array_type(
