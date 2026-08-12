@@ -1,0 +1,48 @@
+name: PR86 Materialize GNU Omitted Conditional
+
+on:
+  push:
+    branches:
+      - agent/gnu-omitted-conditional-v0
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/gnu-omitted-conditional-v0
+          fetch-depth: 0
+
+      - name: Materialize GNU omitted conditional semantics
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python tools/dev/pr86-materialize-gnu-omitted-conditional.py
+          chmod +x tests/compiler/c0/run-gnu-omitted-conditional.sh
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+          git diff --check
+
+      - name: Build and validate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=debug
+          sh tests/compiler/c0/run-gnu-omitted-conditional.sh
+          make check
+
+      - name: Commit product source
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -f tools/dev/pr86-materialize-gnu-omitted-conditional.py
+          rm -f .github/workflows/pr86-materialize-gnu-omitted-conditional.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'frontend: support GNU omitted conditional operands'
+          git push origin HEAD:agent/gnu-omitted-conditional-v0
