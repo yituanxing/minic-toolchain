@@ -1,0 +1,91 @@
+name: PR87 Linux Frontier Probe
+
+on:
+  push:
+    branches:
+      - agent/static-local-interleaved-attribute-v0
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pr87-linux-frontier
+  cancel-in-progress: true
+
+jobs:
+  linux-frontier:
+    runs-on: ubuntu-24.04
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/static-local-interleaved-attribute-v0
+          fetch-depth: 0
+      - uses: actions/cache/restore@v4
+        with:
+          path: build/linux-cache/linux-6.6.143.tar.xz
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
+      - name: Build release compiler
+        run: |
+          set -Eeuo pipefail
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+          git diff --exit-code -- include src tools/minic
+          make -j4 MODE=release BUILD_DIR=build/linux-compiler
+      - name: Focused regression
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/linux-compiler/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/linux-focused" HOST_CC=cc \
+            sh tests/compiler/c0/run-gnu-static-local-interleaved-attribute.sh
+      - name: Install Kbuild dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu flex bison bc libelf-dev libssl-dev
+      - name: Drive unchanged Linux
+        id: probe
+        continue-on-error: true
+        run: |
+          set +e
+          MINIC="$GITHUB_WORKSPACE/build/linux-compiler/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/linux-discovery" \
+          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-cache/linux-6.6.143.tar.xz" \
+          CROSS_COMPILE=riscv64-linux-gnu- sh tests/external/linux/probe.sh
+          status=$?
+          printf 'status=%s\n' "$status" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: Print frontier
+        if: always()
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-discovery"
+          if test -s "$work/minic.stderr"; then
+            line=$(sed -n 's/.*init\/main\.i:\([0-9][0-9]*\):.*/\1/p' "$work/minic.stderr" | head -n1)
+            printf 'frontier_line=%s\n' "${line:-unknown}"
+            sed -n '1,20p' "$work/minic.stderr"
+            if test -n "${line:-}"; then nl -ba "$work/kbuild/init/main.i" | sed -n "$((line>8?line-8:1)),$((line+8))p"; fi
+          else
+            echo 'No MiniC diagnostic; main.i may have passed.'
+          fi
+      - name: Upload frontier
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr87-linux-frontier-${{ github.run_id }}
+          path: |
+            build/linux-discovery/minic.stderr
+            build/linux-discovery/main-i-inventory.txt
+            build/linux-discovery/kbuild/init/main.i
+          if-no-files-found: ignore
+          retention-days: 3
+      - name: Remove one-off probe
+        if: always()
+        run: |
+          set -Eeuo pipefail
+          git rm .github/workflows/pr87-linux-frontier-probe.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'cleanup: remove PR87 Linux probe'
+          git push origin HEAD:agent/static-local-interleaved-attribute-v0
+      - name: Preserve result
+        if: always()
+        run: test "${{ steps.probe.outputs.status }}" -eq 0
