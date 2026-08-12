@@ -1,0 +1,48 @@
+name: PR85 Materialize GNU Void Return
+
+on:
+  push:
+    branches:
+      - agent/gnu-void-return-expression-v0
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/gnu-void-return-expression-v0
+          fetch-depth: 0
+
+      - name: Materialize GNU void return semantics
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python tools/dev/pr85-materialize-gnu-void-return.py
+          chmod +x tests/compiler/c0/run-gnu-void-return-expression.sh
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+          git diff --check
+
+      - name: Build and validate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=debug
+          sh tests/compiler/c0/run-gnu-void-return-expression.sh
+          make check
+
+      - name: Commit product source
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -f tools/dev/pr85-materialize-gnu-void-return.py
+          rm -f .github/workflows/pr85-materialize-gnu-void-return.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'frontend: support GNU void return expressions'
+          git push origin HEAD:agent/gnu-void-return-expression-v0
