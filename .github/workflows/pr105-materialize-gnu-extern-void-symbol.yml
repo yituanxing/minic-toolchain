@@ -1,0 +1,31 @@
+name: PR105 Materialize GNU Extern Void Symbol
+on:
+  push:
+    branches: [agent/gnu-extern-void-symbol-v0]
+permissions:
+  contents: write
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: agent/gnu-extern-void-symbol-v0, fetch-depth: 0}
+      - name: Materialize extern-only opaque symbol semantics
+        run: python3 tools/dev/pr105-materialize-gnu-extern-void-symbol.py
+      - name: Build and validate
+        run: |
+          set -Eeuo pipefail
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+          git diff --check
+          make -j4
+          MINIC="$GITHUB_WORKSPACE/build/debug/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/focused-extern-void" HOST_CC=cc sh tests/compiler/c0/run-gnu-extern-void-symbol.sh
+          make check
+      - name: Commit product source
+        run: |
+          git rm .github/workflows/pr105-materialize-gnu-extern-void-symbol.yml tools/dev/pr105-materialize-gnu-extern-void-symbol.py
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src tests
+          git diff --cached --check
+          git commit -m 'frontend: model GNU extern void linker symbols'
+          git push origin HEAD:agent/gnu-extern-void-symbol-v0
