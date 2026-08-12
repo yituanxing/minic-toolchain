@@ -354,9 +354,10 @@ static bool verify_call_arguments(const MinicC0Program *program,
             return false;
         }
         if (argument_index < parameter_count) {
-            if (!minic_c0_assignment_compatible(program,
-                                                parameter_types[argument_index],
-                                                expression->value.call.arguments[argument_index])) {
+            if (!minic_c0_fixed_call_argument_compatible(
+                    program,
+                    parameter_types[argument_index],
+                    expression->value.call.arguments[argument_index])) {
                 return false;
             }
         } else if (!minic_type_is_integer(argument->type) &&

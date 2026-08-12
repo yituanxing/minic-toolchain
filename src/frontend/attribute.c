@@ -220,6 +220,26 @@ static const MinicAttributeDescriptor minic_attribute_descriptors[] = {
                           MINIC_ATTRIBUTE_TARGET_OBJECT | MINIC_ATTRIBUTE_TARGET_TYPE |
                               MINIC_ATTRIBUTE_TARGET_FIELD),
     {
+        "transparent_union",
+        sizeof("transparent_union") - 1U,
+        MINIC_ATTRIBUTE_TRANSPARENT_UNION,
+        MINIC_ATTRIBUTE_CLASS_LANGUAGE_SEMANTIC,
+        MINIC_ATTRIBUTE_TARGET_TYPE,
+        0U,
+        0U,
+        true,
+    },
+    {
+        "__transparent_union__",
+        sizeof("__transparent_union__") - 1U,
+        MINIC_ATTRIBUTE_TRANSPARENT_UNION,
+        MINIC_ATTRIBUTE_CLASS_LANGUAGE_SEMANTIC,
+        MINIC_ATTRIBUTE_TARGET_TYPE,
+        0U,
+        0U,
+        true,
+    },
+    {
         "cleanup",
         sizeof("cleanup") - 1U,
         MINIC_ATTRIBUTE_CLEANUP,

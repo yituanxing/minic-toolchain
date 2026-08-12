@@ -349,6 +349,7 @@ typedef struct MinicRecord {
     size_t explicit_alignment;
     bool is_union;
     bool is_packed;
+    bool is_transparent_union;
     bool is_complete;
 } MinicRecord;
 
@@ -706,6 +707,12 @@ bool minic_c0_record_value_is_copy_source(const MinicC0Program *program,
 bool minic_c0_assignment_compatible(const MinicC0Program *program,
                                     MinicType target_type,
                                     MinicExpressionId source_expression_id);
+bool minic_c0_fixed_call_argument_compatible(const MinicC0Program *program,
+                                             MinicType parameter_type,
+                                             MinicExpressionId argument_expression_id);
+bool minic_c0_fixed_parameter_abi_type(const MinicC0Program *program,
+                                       MinicType parameter_type,
+                                       MinicType *abi_type);
 bool minic_c0_pointer_equality_compatible(const MinicC0Program *program,
                                           MinicExpressionId left_expression_id,
                                           MinicExpressionId right_expression_id);

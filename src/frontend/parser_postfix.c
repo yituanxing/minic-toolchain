@@ -200,7 +200,7 @@ static bool parse_indirect_arguments(MinicParser *parser,
         if (argument == NULL ||
             !minic_parser_apply_fixed_call_argument_conversion(
                 parser, function_type->parameter_types[argument_index], &argument_id) ||
-            !minic_c0_assignment_compatible(
+            !minic_c0_fixed_call_argument_compatible(
                 parser->program, function_type->parameter_types[argument_index], argument_id)) {
             minic_parser_error(parser, "indirect call argument type does not match declaration");
             return false;
