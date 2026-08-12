@@ -1,0 +1,583 @@
+diff --git a/src/frontend/ast.h b/src/frontend/ast.h
+index 7ceb3cc..0000000 100644
+--- a/src/frontend/ast.h
++++ b/src/frontend/ast.h
+@@ -250,6 +250,11 @@ typedef struct MinicInlineAsmLabel {
+     MinicStatementId target_statement;
+ } MinicInlineAsmLabel;
+ 
++typedef struct MinicInlineAsmRegisterClobber {
++    char *name;
++    size_t name_length;
++} MinicInlineAsmRegisterClobber;
++
+ typedef struct MinicInlineAsm {
+     char *template_text;
+     size_t template_length;
+@@ -263,6 +268,9 @@ typedef struct MinicInlineAsm {
+     size_t label_count;
+     size_t label_capacity;
++    MinicInlineAsmRegisterClobber *register_clobbers;
++    size_t register_clobber_count;
++    size_t register_clobber_capacity;
+     size_t clobber_count;
+     bool is_volatile;
+     bool is_goto;
+@@ -525,6 +533,10 @@ bool minic_c0_program_add_inline_asm_input(MinicC0Program *program,
+                                            size_t constraint_length,
+                                            MinicExpressionId expression);
++bool minic_c0_program_add_inline_asm_register_clobber(MinicC0Program *program,
++                                                      MinicInlineAsmId inline_asm_id,
++                                                      const char *name,
++                                                      size_t name_length);
+ bool minic_c0_program_set_inline_asm_memory_clobber(MinicC0Program *program,
+                                                     MinicInlineAsmId inline_asm_id,
+                                                     bool has_memory_clobber);
+diff --git a/src/frontend/ast.c b/src/frontend/ast.c
+index ed73a5e..0000000 100644
+--- a/src/frontend/ast.c
++++ b/src/frontend/ast.c
+@@ -55,6 +55,7 @@ void minic_c0_program_destroy(MinicC0Program *program) {
+     }
+     for (index = 0U; index < program->inline_asm_count; ++index) {
++        size_t clobber_index;
+         size_t operand_index;
+ 
+         free(program->inline_asms[index].template_text);
+@@ -73,9 +74,13 @@ void minic_c0_program_destroy(MinicC0Program *program) {
+         for (operand_index = 0U; operand_index < program->inline_asms[index].label_count;
+              ++operand_index) {
+             free(program->inline_asms[index].labels[operand_index].name);
+         }
++        for (clobber_index = 0U;
++             clobber_index < program->inline_asms[index].register_clobber_count;
++             ++clobber_index) {
++            free(program->inline_asms[index].register_clobbers[clobber_index].name);
++        }
+         free(program->inline_asms[index].outputs);
+         free(program->inline_asms[index].inputs);
+         free(program->inline_asms[index].labels);
++        free(program->inline_asms[index].register_clobbers);
+     }
+@@ -578,6 +583,45 @@ bool minic_c0_program_add_inline_asm_input(MinicC0Program *program,
+     return true;
+ }
+ 
++bool minic_c0_program_add_inline_asm_register_clobber(MinicC0Program *program,
++                                                      MinicInlineAsmId inline_asm_id,
++                                                      const char *name,
++                                                      size_t name_length) {
++    MinicInlineAsm *inline_asm;
++    MinicInlineAsmRegisterClobber clobber;
++    size_t index;
++
++    if (program == NULL || inline_asm_id >= program->inline_asm_count || name == NULL ||
++        name_length == 0U) {
++        return false;
++    }
++    inline_asm = &program->inline_asms[inline_asm_id];
++    for (index = 0U; index < inline_asm->register_clobber_count; ++index) {
++        if (inline_asm->register_clobbers[index].name_length == name_length &&
++            memcmp(inline_asm->register_clobbers[index].name, name, name_length) == 0) {
++            return true;
++        }
++    }
++    if (inline_asm->register_clobber_count == SIZE_MAX ||
++        !minic_grow_array((void **)&inline_asm->register_clobbers,
++                          &inline_asm->register_clobber_capacity,
++                          inline_asm->register_clobber_count,
++                          sizeof(*inline_asm->register_clobbers))) {
++        return false;
++    }
++    (void)memset(&clobber, 0, sizeof(clobber));
++    clobber.name = minic_copy_name(name, name_length);
++    if (clobber.name == NULL) {
++        return false;
++    }
++    clobber.name_length = name_length;
++    inline_asm->register_clobbers[inline_asm->register_clobber_count] = clobber;
++    inline_asm->register_clobber_count += 1U;
++    inline_asm->clobber_count = inline_asm->register_clobber_count +
++                                (inline_asm->has_memory_clobber ? 1U : 0U);
++    return true;
++}
++
+ bool minic_c0_program_set_inline_asm_memory_clobber(MinicC0Program *program,
+                                                     MinicInlineAsmId inline_asm_id,
+                                                     bool has_memory_clobber) {
+@@ -586,9 +630,13 @@ bool minic_c0_program_set_inline_asm_memory_clobber(MinicC0Program *program,
+     if (program == NULL || inline_asm_id >= program->inline_asm_count) {
+         return false;
+     }
+     inline_asm = &program->inline_asms[inline_asm_id];
++    if (has_memory_clobber && inline_asm->register_clobber_count == SIZE_MAX) {
++        return false;
++    }
+     inline_asm->has_memory_clobber = has_memory_clobber;
+-    inline_asm->clobber_count = has_memory_clobber ? 1U : 0U;
++    inline_asm->clobber_count = inline_asm->register_clobber_count +
++                                (has_memory_clobber ? 1U : 0U);
+     return true;
+ }
+diff --git a/src/frontend/ast_verifier.c b/src/frontend/ast_verifier.c
+index 6c6ea6d..0000000 100644
+--- a/src/frontend/ast_verifier.c
++++ b/src/frontend/ast_verifier.c
+@@ -944,20 +944,30 @@ static bool verify_statement(const MinicC0Program *program, const MinicStatement *statement) {
+     case MINIC_STATEMENT_INLINE_ASM: {
+         const MinicInlineAsm *inline_asm;
++        size_t clobber_index;
+         size_t operand_index;
+ 
+         inline_asm = minic_c0_program_inline_asm(program, statement->inline_asm_id);
+         if (inline_asm == NULL || inline_asm->template_text == NULL ||
+             inline_asm->output_count > inline_asm->output_capacity ||
+             inline_asm->input_count > inline_asm->input_capacity ||
+             inline_asm->label_count > inline_asm->label_capacity ||
++            inline_asm->register_clobber_count > inline_asm->register_clobber_capacity ||
+             (inline_asm->output_count != 0U && inline_asm->outputs == NULL) ||
+             (inline_asm->input_count != 0U && inline_asm->inputs == NULL) ||
+             (inline_asm->label_count != 0U && inline_asm->labels == NULL) ||
+-            inline_asm->clobber_count > 1U ||
++            (inline_asm->register_clobber_count != 0U && inline_asm->register_clobbers == NULL) ||
+             (inline_asm->is_goto ? (inline_asm->label_count == 0U || inline_asm->output_count != 0U)
+                                  : inline_asm->label_count != 0U) ||
+-            inline_asm->clobber_count != (inline_asm->has_memory_clobber ? 1U : 0U) ||
++            (inline_asm->has_memory_clobber && inline_asm->register_clobber_count == SIZE_MAX) ||
++            inline_asm->clobber_count != inline_asm->register_clobber_count +
++                                             (inline_asm->has_memory_clobber ? 1U : 0U) ||
+             statement->target_expression != MINIC_EXPRESSION_INVALID ||
+             statement->expression != MINIC_EXPRESSION_INVALID ||
+             statement->target_statement != MINIC_STATEMENT_INVALID ||
+             statement->then_block != MINIC_BLOCK_INVALID ||
+             statement->else_block != MINIC_BLOCK_INVALID) {
+             return false;
+         }
++        for (clobber_index = 0U; clobber_index < inline_asm->register_clobber_count;
++             ++clobber_index) {
++            if (inline_asm->register_clobbers[clobber_index].name == NULL ||
++                inline_asm->register_clobbers[clobber_index].name_length == 0U) {
++                return false;
++            }
++        }
+         for (operand_index = 0U; operand_index < inline_asm->output_count; ++operand_index) {
+             const MinicInlineAsmOperand *operand;
+diff --git a/src/target/target_info.h b/src/target/target_info.h
+index 836873b..0000000 100644
+--- a/src/target/target_info.h
++++ b/src/target/target_info.h
+@@ -6,6 +6,7 @@
+ #include <stdbool.h>
+ #include <stddef.h>
++#include <stdint.h>
+ 
+@@ -31,6 +32,14 @@ bool minic_target_info_fixed_register_supported(const MinicTargetInfo *target,
+                                                 const char *name,
+                                                 size_t name_length);
++bool minic_target_info_inline_asm_register_clobber_supported(const MinicTargetInfo *target,
++                                                             const char *name,
++                                                             size_t name_length);
++bool minic_target_info_inline_asm_immediate_constraint_supported(const MinicTargetInfo *target,
++                                                                 const char *constraint,
++                                                                 size_t constraint_length,
++                                                                 int64_t value);
+ bool minic_target_info_call_frame_address_supported(const MinicTargetInfo *target,
+                                                     MinicCallFrameAddressKind kind,
+                                                     unsigned int level);
+diff --git a/src/target/target_info.c b/src/target/target_info.c
+index 857f119..0000000 100644
+--- a/src/target/target_info.c
++++ b/src/target/target_info.c
+@@ -82,3 +82,26 @@ bool minic_target_info_fixed_register_supported(const MinicTargetInfo *target,
+     return (name_length == 2U && memcmp(name, "tp", 2U) == 0) ||
+            (name_length == 2U && memcmp(name, "sp", 2U) == 0);
+ }
++
++bool minic_target_info_inline_asm_register_clobber_supported(const MinicTargetInfo *target,
++                                                             const char *name,
++                                                             size_t name_length) {
++    if (target == NULL || name == NULL) {
++        return false;
++    }
++    /* TargetConstraint v0 exposes the RV64 temporary-register class used by
++     * unchanged Linux. Broader physical-register classes remain fail-closed. */
++    return name_length == 2U && name[0] == 't' && name[1] >= '0' && name[1] <= '6';
++}
++
++bool minic_target_info_inline_asm_immediate_constraint_supported(const MinicTargetInfo *target,
++                                                                 const char *constraint,
++                                                                 size_t constraint_length,
++                                                                 int64_t value) {
++    if (target == NULL || constraint == NULL) {
++        return false;
++    }
++    /* RISC-V GCC constraint I is a signed 12-bit integer immediate. */
++    return constraint_length == 1U && constraint[0] == 'I' && value >= -2048 && value <= 2047;
++}
+diff --git a/src/frontend/parser_statement.c b/src/frontend/parser_statement.c
+index b48981c..0000000 100644
+--- a/src/frontend/parser_statement.c
++++ b/src/frontend/parser_statement.c
+@@ -3566,6 +3566,35 @@ static bool parse_gnu_inline_asm_input(MinicParser *parser, MinicInlineAsmId inline_asm_id) {
+         minic_parser_error(parser,
+                            "GNU asm input operand currently requires an integer or pointer");
+         return false;
+     }
++    if (constraint_length == 1U && constraint[0] == 'I') {
++        MinicConstValue constant;
++        MinicExpression folded;
++        MinicSourceSpan operand_span;
++        int64_t immediate_value;
++
++        operand_span = operand_expression->span;
++        if (!minic_const_eval_integer(parser->program, parser->target_info, operand_id, &constant) ||
++            !minic_const_value_as_int64(
++                parser->program, parser->target_info, &constant, &immediate_value) ||
++            !minic_target_info_inline_asm_immediate_constraint_supported(parser->target_info,
++                                                                         constraint,
++                                                                         constraint_length,
++                                                                         immediate_value)) {
++            free(constraint);
++            minic_parser_error(parser,
++                               "GNU asm 'I' input requires a signed 12-bit integer constant");
++            return false;
++        }
++        (void)memset(&folded, 0, sizeof(folded));
++        folded.kind = MINIC_EXPRESSION_INTEGER;
++        folded.span = operand_span;
++        folded.type = constant.type;
++        folded.value_category = MINIC_VALUE_RVALUE;
++        folded.value.integer_value = immediate_value;
++        if (!minic_parser_add_expression(parser, &folded, &operand_id)) {
++            free(constraint);
++            minic_parser_error(parser, "cannot store GNU asm immediate operand");
++            return false;
++        }
++    }
+     if (!minic_c0_program_add_inline_asm_input(parser->program,
+                                                inline_asm_id,
+                                                name,
+@@ -3730,11 +3759,19 @@ static bool parse_gnu_inline_asm_statement(MinicParser *parser) {
+             }
+             if (clobber_length == 6U && memcmp(clobber, "memory", 6U) == 0) {
+                 has_memory_clobber = true;
+-            } else {
++            } else if (!minic_target_info_inline_asm_register_clobber_supported(
++                           parser->target_info, clobber, clobber_length)) {
+                 free(clobber);
+                 minic_parser_error(parser,
+-                                   "GNU asm register clobbers require TargetConstraint support");
++                                   "unsupported GNU asm register clobber for target");
+                 return false;
++            } else if (!minic_c0_program_add_inline_asm_register_clobber(
++                           parser->program, inline_asm_id, clobber, clobber_length)) {
++                free(clobber);
++                minic_parser_error(parser, "cannot store GNU asm register clobber");
++                return false;
+             }
+             free(clobber);
+             if (parser->current.kind != MINIC_TOKEN_COMMA) {
+diff --git a/src/target/riscv64/codegen_inline_asm.c b/src/target/riscv64/codegen_inline_asm.c
+index 7e9f682..0000000 100644
+--- a/src/target/riscv64/codegen_inline_asm.c
++++ b/src/target/riscv64/codegen_inline_asm.c
+@@ -20,6 +20,10 @@ static bool constraint_is(const MinicInlineAsmOperand *operand, const char *text) {
+            memcmp(operand->constraint_text, text, length) == 0;
+ }
+ 
++static bool constraint_is_immediate(const MinicInlineAsmOperand *operand) {
++    return constraint_is(operand, "i") || constraint_is(operand, "I");
++}
++
+ static const MinicInlineAsmOperand *operand_at(const MinicInlineAsm *inline_asm,
+                                                size_t operand_index) {
+@@ -92,6 +96,11 @@ static bool validate_output(const MinicC0Program *program, const MinicInlineAsmOperand *operand) {
+     if (constraint_is(operand, "+A")) {
+         return operand->access == MINIC_INLINE_ASM_OPERAND_READ_WRITE;
+     }
++    if (constraint_is(operand, "+r")) {
++        return operand->access == MINIC_INLINE_ASM_OPERAND_READ_WRITE &&
++               expression->kind == MINIC_EXPRESSION_LOCAL &&
++               (minic_type_is_integer(expression->type) || minic_type_is_pointer(expression->type));
++    }
+     if (constraint_is(operand, "=r") || constraint_is(operand, "=&r")) {
+         return operand->access == MINIC_INLINE_ASM_OPERAND_WRITE_ONLY &&
+                expression->kind == MINIC_EXPRESSION_LOCAL &&
+@@ -107,13 +116,60 @@ static bool validate_input(const MinicInlineAsm *inline_asm,
+     const MinicExpression *expression;
+ 
+     if (inline_asm == NULL || program == NULL || operand == NULL ||
+-        operand->access != MINIC_INLINE_ASM_OPERAND_READ_ONLY ||
+-        (inline_asm->is_goto ? !constraint_is(operand, "i") : !constraint_is(operand, "r"))) {
++        operand->access != MINIC_INLINE_ASM_OPERAND_READ_ONLY) {
++        return false;
++    }
++    if (inline_asm->is_goto) {
++        if (!constraint_is(operand, "i")) {
++            return false;
++        }
++    } else if (!constraint_is(operand, "r") && !constraint_is(operand, "I")) {
+         return false;
+     }
+     expression = minic_c0_program_expression(program, operand->expression);
+     return expression != NULL &&
+            (minic_type_is_integer(expression->type) || minic_type_is_pointer(expression->type));
+ }
++
++static bool inline_asm_clobbers_register(const MinicInlineAsm *inline_asm,
++                                         const char *register_name) {
++    size_t index;
++    size_t register_length;
++
++    if (inline_asm == NULL || register_name == NULL) {
++        return false;
++    }
++    register_length = strlen(register_name);
++    for (index = 0U; index < inline_asm->register_clobber_count; ++index) {
++        const MinicInlineAsmRegisterClobber *clobber;
++
++        clobber = &inline_asm->register_clobbers[index];
++        if (clobber->name != NULL && clobber->name_length == register_length &&
++            memcmp(clobber->name, register_name, register_length) == 0) {
++            return true;
++        }
++    }
++    return false;
++}
++
++static bool assign_operand_registers(const MinicInlineAsm *inline_asm,
++                                     const char **operand_registers,
++                                     size_t operand_count) {
++    size_t candidate_index;
++    size_t operand_index;
++
++    if (inline_asm == NULL || operand_registers == NULL) {
++        return false;
++    }
++    candidate_index = 0U;
++    for (operand_index = 0U; operand_index < operand_count; ++operand_index) {
++        const MinicInlineAsmOperand *operand;
++
++        operand = operand_at(inline_asm, operand_index);
++        if (operand == NULL) {
++            return false;
++        }
++        if (constraint_is_immediate(operand)) {
++            operand_registers[operand_index] = NULL;
++            continue;
++        }
++        while (candidate_index < MINIC_RISCV64_INLINE_ASM_MAX_OPERANDS &&
++               inline_asm_clobbers_register(
++                   inline_asm, minic_riscv64_inline_asm_registers[candidate_index])) {
++            candidate_index += 1U;
++        }
++        if (candidate_index >= MINIC_RISCV64_INLINE_ASM_MAX_OPERANDS) {
++            return false;
++        }
++        operand_registers[operand_index] = minic_riscv64_inline_asm_registers[candidate_index];
++        candidate_index += 1U;
++    }
++    return true;
++}
+@@ -264,7 +320,8 @@ static bool emit_immediate_operand(FILE *file,
+ static bool emit_template(FILE *file,
+                           const MinicC0Program *program,
+                           const MinicInlineAsm *inline_asm,
+-                          MinicInlineAsmId inline_asm_id) {
++                          MinicInlineAsmId inline_asm_id,
++                          const char *const *operand_registers) {
+     size_t operand_count;
+     size_t index;
+@@ -305,10 +362,13 @@ static bool emit_template(FILE *file,
+             const MinicInlineAsmOperand *operand;
+             const char *register_name;
+ 
+             operand = operand_at(inline_asm, operand_index);
+-            register_name = minic_riscv64_inline_asm_registers[operand_index];
+             if (operand == NULL) {
+                 return false;
+             }
+-            if (constraint_is(operand, "i")) {
++            register_name = operand_registers[operand_index];
++            if (constraint_is_immediate(operand)) {
+                 if (!emit_immediate_operand(file, program, operand, inline_asm_id, operand_index)) {
+                     return false;
+                 }
++            } else if (register_name == NULL) {
++                return false;
+             } else if (constraint_is(operand, "+A")) {
+                 if (fprintf(file, "(%s)", register_name) < 0) {
+@@ -329,6 +389,7 @@ bool minic_riscv64_emit_inline_asm(FILE *file,
+                                    const MinicFunction *function,
+                                    const MinicStatement *statement) {
+     const MinicInlineAsm *inline_asm;
++    const char *operand_registers[MINIC_RISCV64_INLINE_ASM_MAX_OPERANDS];
+     size_t operand_count;
+     size_t temporary_size;
+     size_t index;
+@@ -371,6 +432,9 @@ bool minic_riscv64_emit_inline_asm(FILE *file,
+             return false;
+         }
+     }
++    if (!assign_operand_registers(inline_asm, operand_registers, operand_count)) {
++        return false;
++    }
+ 
+     for (index = 0U; index < inline_asm->input_count; ++index) {
+@@ -408,11 +472,24 @@ bool minic_riscv64_emit_inline_asm(FILE *file,
+                 !minic_riscv64_emit_sp_store64(file, "a0", index * 8U)) {
+                 return false;
+             }
++        } else if (constraint_is(operand, "+r")) {
++            const MinicExpression *expression;
++
++            expression = minic_c0_program_expression(program, operand->expression);
++            if (expression == NULL || expression->kind != MINIC_EXPRESSION_LOCAL ||
++                !minic_riscv64_emit_object_load(
++                    file, program, function, expression->value.local_id) ||
++                !minic_riscv64_emit_sp_store64(file, "a0", index * 8U)) {
++                return false;
++            }
+         }
+     }
+@@ -424,7 +501,7 @@ bool minic_riscv64_emit_inline_asm(FILE *file,
+ 
+         operand = &inline_asm->inputs[index];
+         operand_index = inline_asm->output_count + index;
+-        if (constraint_is(operand, "i")) {
++        if (constraint_is_immediate(operand)) {
+             continue;
+         }
+@@ -436,19 +513,20 @@ bool minic_riscv64_emit_inline_asm(FILE *file,
+     }
+ 
+     for (index = 0U; index < inline_asm->output_count; ++index) {
+-        if (constraint_is(&inline_asm->outputs[index], "+A") &&
++        if ((constraint_is(&inline_asm->outputs[index], "+A") ||
++             constraint_is(&inline_asm->outputs[index], "+r")) &&
+             !minic_riscv64_emit_sp_load64(
+-                file, minic_riscv64_inline_asm_registers[index], index * 8U)) {
++                file, operand_registers[index], index * 8U)) {
+             return false;
+         }
+     }
+@@ -458,14 +536,14 @@ bool minic_riscv64_emit_inline_asm(FILE *file,
+ 
+         operand_index = inline_asm->output_count + index;
+-        if (constraint_is(&inline_asm->inputs[index], "i")) {
++        if (constraint_is_immediate(&inline_asm->inputs[index])) {
+             continue;
+         }
+         if (!minic_riscv64_emit_sp_load64(
+-                file, minic_riscv64_inline_asm_registers[operand_index], operand_index * 8U)) {
++                file, operand_registers[operand_index], operand_index * 8U)) {
+             return false;
+         }
+     }
+-    if (!emit_template(file, program, inline_asm, statement->inline_asm_id)) {
++    if (!emit_template(file, program, inline_asm, statement->inline_asm_id, operand_registers)) {
+         return false;
+     }
+@@ -476,7 +554,8 @@ bool minic_riscv64_emit_inline_asm(FILE *file,
+ 
+         operand = &inline_asm->outputs[index];
+-        if (!constraint_is(operand, "=r") && !constraint_is(operand, "=&r")) {
++        if (!constraint_is(operand, "=r") && !constraint_is(operand, "=&r") &&
++            !constraint_is(operand, "+r")) {
+             continue;
+         }
+@@ -487,7 +566,7 @@ bool minic_riscv64_emit_inline_asm(FILE *file,
+                                                       program,
+                                                       function,
+                                                       expression->value.local_id,
+-                                                      minic_riscv64_inline_asm_registers[index])) {
++                                                      operand_registers[index])) {
+             return false;
+         }
+     }
+diff --git a/tests/compiler/c0/gnu_inline_asm_operands.c b/tests/compiler/c0/gnu_inline_asm_operands.c
+index f0aced3..0000000 100644
+--- a/tests/compiler/c0/gnu_inline_asm_operands.c
++++ b/tests/compiler/c0/gnu_inline_asm_operands.c
+@@ -22,6 +22,27 @@ static int atomic_fetch_add_like(int value, AtomicLike *target) {
+     return previous;
+ }
+ 
++static int linux_target_constraint_shape(int value) {
++    __asm__ __volatile__("addi t3, zero, %1\n\t"
++                         "add %0, %0, t3"
++                         : "+r"(value)
++                         : "I"(7)
++                         : "t3");
++    return value;
++}
++
++static int clobber_reservation(int left, int right) {
++    int result;
++
++    __asm__ __volatile__("add %0, %1, %2"
++                         : "=r"(result)
++                         : "r"(left), "r"(right)
++                         : "t3");
++    return result;
++}
++
+ int main(void) {
+     int previous;
+ 
+     atomic_add_like(5, &global_counter);
+     previous = atomic_fetch_add_like(3, &global_counter);
+-    return previous == 12 && global_counter.counter == 15 ? 0 : 1;
++    return previous == 12 && global_counter.counter == 15 &&
++                   linux_target_constraint_shape(5) == 12 && clobber_reservation(4, 6) == 10
++               ? 0
++               : 1;
+ }
+diff --git a/tests/compiler/c0/run-gnu-inline-asm-operands.sh b/tests/compiler/c0/run-gnu-inline-asm-operands.sh
+index 03b4335..0000000 100755
+--- a/tests/compiler/c0/run-gnu-inline-asm-operands.sh
++++ b/tests/compiler/c0/run-gnu-inline-asm-operands.sh
+@@ -15,10 +15,48 @@ test -s "$assembly"
+ grep -F 'amoadd.w zero, t1, (t0)' "$assembly" >/dev/null
+ grep -F 'amoadd.w t1, t3, (t0)' "$assembly" >/dev/null
++grep -F 'addi t3, zero, 7' "$assembly" >/dev/null
++grep -F 'add t0, t0, t3' "$assembly" >/dev/null
++grep -F 'add t0, t1, t4' "$assembly" >/dev/null
+ if grep -E '\+A|"r"|=r' "$assembly" >/dev/null; then
+     printf '%s\n' 'unexpected raw GNU asm constraints in emitted assembly' >&2
+     exit 1
+ fi
+-printf '%s\n' 'PASS compiler/c0/gnu_inline_asm_operands outputs=+A,=r input=r placeholders=0,1,2 staging=stack target=RV64'
++
++cat >"$work/unsupported-clobber.c" <<'EOF'
++int f(int value) {
++    __asm__ __volatile__("add %0, %0, zero" : "+r"(value) : : "s1");
++    return value;
++}
++EOF
++"$host_cc" -E -P -std=gnu11 -x c "$work/unsupported-clobber.c" -o "$work/unsupported-clobber.i"
++if "$minic" -S "$work/unsupported-clobber.i" -o "$work/unsupported-clobber.s" \
++    2>"$work/unsupported-clobber.stderr"; then
++    printf '%s\n' 'unsupported register clobber unexpectedly accepted' >&2
++    exit 1
++fi
++grep -F 'unsupported GNU asm register clobber for target' \
++    "$work/unsupported-clobber.stderr" >/dev/null
++
++cat >"$work/out-of-range-I.c" <<'EOF'
++int f(int value) {
++    __asm__ __volatile__("addi %0, %0, %1" : "+r"(value) : "I"(4096));
++    return value;
++}
++EOF
++"$host_cc" -E -P -std=gnu11 -x c "$work/out-of-range-I.c" -o "$work/out-of-range-I.i"
++if "$minic" -S "$work/out-of-range-I.i" -o "$work/out-of-range-I.s" \
++    2>"$work/out-of-range-I.stderr"; then
++    printf '%s\n' 'out-of-range I constraint unexpectedly accepted' >&2
++    exit 1
++fi
++grep -F "GNU asm 'I' input requires a signed 12-bit integer constant" \
++    "$work/out-of-range-I.stderr" >/dev/null
++
++printf '%s\n' \
++    'PASS compiler/c0/gnu_inline_asm_operands outputs=+A,=r,+r inputs=r,I clobber=memory,t3 reservation=t3->t4 immediates=rv64-I placeholders=0,1,2 staging=stack target=RV64'
