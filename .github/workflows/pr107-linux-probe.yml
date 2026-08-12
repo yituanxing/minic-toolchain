@@ -1,0 +1,75 @@
+name: PR107 Linux Probe
+on:
+  push:
+    branches: [agent/record-type-attribute-placement-v0]
+permissions:
+  contents: read
+jobs:
+  linux-frontier:
+    name: riscv-defconfig-init-main
+    runs-on: ubuntu-24.04
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore pinned Linux source archive
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-cache/linux-6.6.143.tar.xz
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
+      - name: Build release compiler
+        run: |
+          set -Eeuo pipefail
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+          git diff --exit-code -- include src tools/minic
+          make -j4 MODE=release BUILD_DIR=build/linux-compiler
+      - name: Verify focused semantics
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/linux-compiler/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/linux-focused-packed" HOST_CC=cc sh tests/compiler/c0/run-packed-record-layout.sh
+          MINIC="$GITHUB_WORKSPACE/build/linux-compiler/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/linux-focused-record-align" HOST_CC=cc sh tests/compiler/c0/run-gnu-record-alignment.sh
+          MINIC="$GITHUB_WORKSPACE/build/linux-compiler/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/linux-focused-foundation" HOST_CC=cc sh tools/dev/pr76-focused.sh
+      - name: Install RISC-V Linux Kbuild dependencies
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu flex bison bc libelf-dev libssl-dev
+      - name: Drive unchanged Linux 6.6.143 init/main.i
+        run: |
+          set +e
+          MINIC="$GITHUB_WORKSPACE/build/linux-compiler/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/linux-discovery" LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-cache/linux-6.6.143.tar.xz" CROSS_COMPILE=riscv64-linux-gnu- sh tests/external/linux/probe.sh
+          status=$?
+          set -e
+          exit "$status"
+      - name: Prepare frontier diagnostics
+        if: always()
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-discovery"
+          summary="$work/frontier-summary.txt"
+          : > "$summary"
+          if test -s "$work/kbuild/init/main.i"; then
+            printf '%s\n' "total_lines=$(wc -l < "$work/kbuild/init/main.i" | tr -d ' ')" >> "$summary"
+          fi
+          if test -s "$work/minic.stderr"; then
+            frontier_line=$(sed -n 's/.*init\/main\.i:\([0-9][0-9]*\):.*/\1/p' "$work/minic.stderr" | head -n 1)
+            printf '%s\n' "frontier_line=${frontier_line:-unknown}" >> "$summary"
+            sed -n '1,80p' "$work/minic.stderr" >> "$summary"
+            if test -n "${frontier_line:-}" && test -s "$work/kbuild/init/main.i"; then
+              start=$((frontier_line > 10 ? frontier_line - 10 : 1)); end=$((frontier_line + 10))
+              nl -ba "$work/kbuild/init/main.i" | sed -n "${start},${end}p" >> "$summary"
+            fi
+          else
+            printf '%s\n' 'No MiniC diagnostic; probe may have passed.' >> "$summary"
+          fi
+          cat "$summary"
+      - name: Upload frontier
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr107-linux-frontier-${{ github.run_id }}
+          path: |
+            build/linux-discovery/frontier-summary.txt
+            build/linux-discovery/kbuild/init/main.i
+          if-no-files-found: ignore
+          retention-days: 7
