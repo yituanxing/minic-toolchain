@@ -694,6 +694,12 @@ bool minic_c0_assignment_compatible(const MinicC0Program *program,
 bool minic_c0_pointer_equality_compatible(const MinicC0Program *program,
                                           MinicExpressionId left_expression_id,
                                           MinicExpressionId right_expression_id);
+bool minic_c0_type_is_complete_object(const MinicC0Program *program, MinicType type);
+bool minic_c0_pointer_arithmetic_pointee_allowed(const MinicC0Program *program,
+                                                 MinicType pointee_type);
+bool minic_c0_pointer_relational_compatible(const MinicC0Program *program,
+                                            MinicType left,
+                                            MinicType right);
 const MinicLocal *minic_c0_program_local(const MinicC0Program *program, MinicLocalId local_id);
 const MinicCleanupContext *
 minic_c0_program_cleanup_context(const MinicC0Program *program,

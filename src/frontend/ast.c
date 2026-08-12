@@ -1348,6 +1348,77 @@ bool minic_c0_assignment_compatible(const MinicC0Program *program,
            expression_is_null_pointer_value(program, source_expression_id);
 }
 
+static bool minic_c0_type_is_complete_object_bounded(const MinicC0Program *program,
+                                                     MinicType type,
+                                                     size_t remaining_depth) {
+    if (program == NULL || remaining_depth == 0U || minic_type_is_void(type) ||
+        minic_type_is_function(type)) {
+        return false;
+    }
+    if (minic_type_is_enum(type)) {
+        const MinicEnum *entity;
+
+        entity = minic_c0_program_enum(program, type.enum_id);
+        return entity != NULL && entity->is_complete;
+    }
+    if (minic_type_is_integer(type) || minic_type_is_float(type) || minic_type_is_double(type) ||
+        minic_type_is_pointer(type)) {
+        return true;
+    }
+    if (minic_type_is_record(type)) {
+        const MinicRecord *record;
+
+        record = minic_c0_program_record(program, type.record_id);
+        return record != NULL && record->is_complete;
+    }
+    if (minic_type_is_array(type)) {
+        const MinicArrayType *array_type;
+
+        array_type = minic_c0_program_array_type(program, type.array_type_id);
+        return array_type != NULL && array_type->element_count != 0U &&
+               minic_c0_type_is_complete_object_bounded(
+                   program, array_type->element_type, remaining_depth - 1U);
+    }
+    return false;
+}
+
+bool minic_c0_type_is_complete_object(const MinicC0Program *program, MinicType type) {
+    size_t remaining_depth;
+
+    if (program == NULL) {
+        return false;
+    }
+    remaining_depth = program->array_type_count;
+    remaining_depth += program->record_count;
+    remaining_depth += program->function_type_count;
+    remaining_depth += program->enum_count;
+    remaining_depth += 1U;
+    return minic_c0_type_is_complete_object_bounded(program, type, remaining_depth);
+}
+
+bool minic_c0_pointer_arithmetic_pointee_allowed(const MinicC0Program *program,
+                                                 MinicType pointee_type) {
+    return minic_type_is_void(pointee_type) || minic_type_is_function(pointee_type) ||
+           minic_c0_type_is_complete_object(program, pointee_type);
+}
+
+bool minic_c0_pointer_relational_compatible(const MinicC0Program *program,
+                                            MinicType left,
+                                            MinicType right) {
+    MinicType left_pointee;
+    MinicType right_pointee;
+    MinicType left_unqualified;
+    MinicType right_unqualified;
+
+    return program != NULL && minic_type_pointee(left, &left_pointee) &&
+           minic_type_pointee(right, &right_pointee) &&
+           minic_type_unqualified(left_pointee, &left_unqualified) &&
+           minic_type_unqualified(right_pointee, &right_unqualified) &&
+           minic_type_equal(left_unqualified, right_unqualified) &&
+           minic_c0_pointer_arithmetic_pointee_allowed(program, left_unqualified) &&
+           minic_c0_pointer_arithmetic_pointee_allowed(program, right_unqualified);
+}
+
 bool minic_c0_pointer_equality_compatible(const MinicC0Program *program,
                                           MinicExpressionId left_expression_id,
                                           MinicExpressionId right_expression_id) {

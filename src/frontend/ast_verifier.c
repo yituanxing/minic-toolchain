@@ -113,49 +113,6 @@ static bool type_is_top_level_unqualified(MinicType type) {
     return minic_type_unqualified(type, &unqualified) && minic_type_equal(type, unqualified);
 }
 
-static bool type_is_complete_object_bounded(const MinicC0Program *program,
-                                            MinicType type,
-                                            size_t remaining_depth) {
-    if (remaining_depth == 0U || minic_type_is_void(type) || minic_type_is_function(type)) {
-        return false;
-    }
-    if (minic_type_is_enum(type)) {
-        const MinicEnum *entity;
-
-        entity = minic_c0_program_enum(program, type.enum_id);
-        return entity != NULL && entity->is_complete;
-    }
-    if (minic_type_is_integer(type) || minic_type_is_float(type) || minic_type_is_double(type) ||
-        minic_type_is_pointer(type)) {
-        return true;
-    }
-    if (minic_type_is_record(type)) {
-        const MinicRecord *record;
-
-        record = minic_c0_program_record(program, type.record_id);
-        return record != NULL && record->is_complete;
-    }
-    if (minic_type_is_array(type)) {
-        const MinicArrayType *array_type;
-
-        array_type = minic_c0_program_array_type(program, type.array_type_id);
-        return array_type != NULL && array_type->element_count != 0U &&
-               type_is_complete_object_bounded(
-                   program, array_type->element_type, remaining_depth - 1U);
-    }
-    return false;
-}
-
-static bool type_is_complete_object(const MinicC0Program *program, MinicType type) {
-    size_t remaining_depth;
-
-    remaining_depth = program->array_type_count;
-    remaining_depth += program->record_count;
-    remaining_depth += program->function_type_count;
-    remaining_depth += 1U;
-    return type_is_complete_object_bounded(program, type, remaining_depth);
-}
-
 static const MinicExpression *expression_before(const MinicC0Program *program,
                                                 MinicExpressionId expression_id,
                                                 size_t parent_index) {
@@ -210,21 +167,6 @@ static bool type_is_condition_scalar(MinicType type) {
     return minic_type_is_integer(type) || minic_type_is_pointer(type);
 }
 
-static bool
-pointer_relational_compatible(const MinicC0Program *program, MinicType left, MinicType right) {
-    MinicType left_pointee;
-    MinicType right_pointee;
-    MinicType left_unqualified;
-    MinicType right_unqualified;
-
-    return minic_type_pointee(left, &left_pointee) && minic_type_pointee(right, &right_pointee) &&
-           minic_type_unqualified(left_pointee, &left_unqualified) &&
-           minic_type_unqualified(right_pointee, &right_unqualified) &&
-           minic_type_equal(left_unqualified, right_unqualified) &&
-           type_is_complete_object(program, left_pointee) &&
-           type_is_complete_object(program, right_pointee);
-}
-
 static bool conditional_result_type(MinicType when_true, MinicType when_false, MinicType *result) {
     bool has_double_operand;
     bool has_numeric_operands;
@@ -264,12 +206,6 @@ static bool is_normalized_integer_cast_add(const MinicExpression *expression,
            minic_type_cast_compatible(expression->type, left->type);
 }
 
-static bool verifier_pointer_arithmetic_pointee_allowed(const MinicC0Program *program,
-                                                        MinicType pointee_type) {
-    return minic_type_is_void(pointee_type) || minic_type_is_function(pointee_type) ||
-           type_is_complete_object(program, pointee_type);
-}
-
 static bool verify_binary_type(const MinicC0Program *program,
                                const MinicExpression *expression,
                                const MinicExpression *left,
@@ -304,7 +240,7 @@ static bool verify_binary_type(const MinicC0Program *program,
          expression->value.binary.operator_kind == MINIC_BINARY_GREATER ||
          expression->value.binary.operator_kind == MINIC_BINARY_GREATER_EQUAL) &&
         minic_type_is_pointer(left->type) && minic_type_is_pointer(right->type) &&
-        pointer_relational_compatible(program, left->type, right->type)) {
+        minic_c0_pointer_relational_compatible(program, left->type, right->type)) {
         return minic_type_equal(expression->type, minic_type_int());
     }
 
@@ -339,7 +275,7 @@ static bool verify_binary_type(const MinicC0Program *program,
     if (expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT &&
         minic_type_is_pointer(left->type) && minic_type_is_pointer(right->type)) {
         return minic_type_equal(expression->type, minic_type_long()) &&
-               pointer_relational_compatible(program, left->type, right->type);
+               minic_c0_pointer_relational_compatible(program, left->type, right->type);
     }
 
     if (expression->value.binary.operator_kind == MINIC_BINARY_ADD) {
@@ -359,7 +295,7 @@ static bool verify_binary_type(const MinicC0Program *program,
 
     return minic_type_equal(expression->type, pointer_type) &&
            minic_type_pointee(pointer_type, &pointee_type) &&
-           verifier_pointer_arithmetic_pointee_allowed(program, pointee_type);
+           minic_c0_pointer_arithmetic_pointee_allowed(program, pointee_type);
 }
 
 static bool array_object_type_matches(const MinicC0Program *program,
@@ -683,7 +619,7 @@ static bool verify_expression(const MinicC0Program *program,
             return (operator_kind == MINIC_BINARY_ADD || operator_kind == MINIC_BINARY_SUBTRACT) &&
                    minic_type_is_integer(right->type) &&
                    minic_type_pointee(left->type, &pointee_type) &&
-                   type_is_complete_object(program, pointee_type);
+                   minic_c0_type_is_complete_object(program, pointee_type);
         }
         if (minic_type_is_double(left->type)) {
             return (operator_kind == MINIC_BINARY_ADD || operator_kind == MINIC_BINARY_SUBTRACT ||
@@ -724,7 +660,7 @@ static bool verify_expression(const MinicC0Program *program,
             }
             return minic_type_is_pointer(operand->type) &&
                    minic_type_pointee(operand->type, &pointee_type) &&
-                   type_is_complete_object(program, pointee_type);
+                   minic_c0_type_is_complete_object(program, pointee_type);
         }
         if (expression->value.unary.operator_kind == MINIC_UNARY_LOGICAL_NOT) {
             return type_is_condition_scalar(operand->type) &&
