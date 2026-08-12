@@ -444,6 +444,25 @@ static bool pointer_sign_call_conversion_compatible(MinicType target, MinicType 
     return true;
 }
 
+static bool gnu_function_pointer_bridge_call_conversion_compatible(const MinicC0Program *program,
+                                                                   MinicType target,
+                                                                   const MinicExpression *source) {
+    const MinicExpression *bridge_operand;
+    MinicType bridge_pointee;
+    MinicType target_pointee;
+    MinicType void_pointer;
+
+    if (program == NULL || source == NULL || source->kind != MINIC_EXPRESSION_CAST ||
+        !minic_type_pointer_to(minic_type_void(), &void_pointer) ||
+        !minic_type_equal(source->type, void_pointer) ||
+        !minic_type_pointee(target, &target_pointee) || !minic_type_is_function(target_pointee)) {
+        return false;
+    }
+    bridge_operand = minic_c0_program_expression(program, source->value.unary.operand);
+    return bridge_operand != NULL && minic_type_pointee(bridge_operand->type, &bridge_pointee) &&
+           minic_type_is_function(bridge_pointee);
+}
+
 bool minic_parser_apply_fixed_call_argument_conversion(MinicParser *parser,
                                                        MinicType target_type,
                                                        MinicExpressionId *argument_id) {
@@ -467,7 +486,9 @@ bool minic_parser_apply_fixed_call_argument_conversion(MinicParser *parser,
     }
     needs_explicit_conversion =
         (minic_type_is_double(target_type) && minic_type_is_integer(source->type)) ||
-        pointer_sign_call_conversion_compatible(target_type, source->type);
+        pointer_sign_call_conversion_compatible(target_type, source->type) ||
+        gnu_function_pointer_bridge_call_conversion_compatible(
+            parser->program, target_type, source);
     if (!needs_explicit_conversion) {
         return true;
     }
