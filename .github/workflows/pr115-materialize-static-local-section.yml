@@ -14,6 +14,16 @@ jobs:
       - name: Materialize static local section attributes
         run: |
           set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('tools/dev/pr115-materialize.py')
+          text = p.read_text()
+          text = text.replace(
+              'raise SystemExit(f"anchor mismatch {path}: {count}")',
+              'raise SystemExit(f"anchor mismatch {path}: {count}: {old[:160]!r}")',
+          )
+          p.write_text(text)
+          PY
           python3 tools/dev/pr115-materialize.py 2>&1 | tee /tmp/pr115-materialize.log
           clang-format-18 -i src/frontend/parser_statement.c tests/compiler/c0/gnu_static_local_interleaved_attribute.c
       - name: Upload materializer diagnostics
