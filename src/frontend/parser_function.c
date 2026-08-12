@@ -580,7 +580,7 @@ static bool adjust_array_parameter_type(MinicParser *parser, MinicType *paramete
     if (!minic_parser_parse_array_declarator_suffix(
             parser, *parameter_type, true, &declared_array_type, &is_array) ||
         !is_array || !minic_type_is_array(declared_array_type)) {
-        if (parser->diagnostic != NULL && parser->diagnostic->message[0] == ' ') {
+        if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
             minic_parser_error(parser, "cannot parse array parameter declarator");
         }
         return false;
