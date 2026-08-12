@@ -194,6 +194,25 @@ bool minic_parser_parse_gnu_attribute_lists(MinicParser *parser,
                                             void *context);
 bool minic_parser_collect_gnu_attribute_lists(MinicParser *parser,
                                               MinicParsedAttributeList *attributes);
+bool minic_parser_apply_section_attribute(MinicParser *parser,
+                                          const MinicParsedAttribute *attribute,
+                                          char *buffer,
+                                          size_t capacity,
+                                          size_t *length,
+                                          bool *has_section);
+bool minic_parser_apply_object_attribute_list(MinicParser *parser,
+                                              const MinicParsedAttributeList *attributes,
+                                              char *section_name,
+                                              size_t section_capacity,
+                                              size_t *section_name_length,
+                                              bool *has_section,
+                                              size_t *explicit_alignment);
+bool minic_parser_parse_gnu_object_attribute_lists(MinicParser *parser,
+                                                   char *section_name,
+                                                   size_t section_capacity,
+                                                   size_t *section_name_length,
+                                                   bool *has_section,
+                                                   size_t *explicit_alignment);
 bool minic_parser_apply_alignment_attribute(MinicParser *parser,
                                             const MinicParsedAttribute *attribute,
                                             const char *subject,
