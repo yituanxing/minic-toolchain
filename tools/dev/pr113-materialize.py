@@ -10,23 +10,16 @@ def replace_once(path: str, old: str, new: str) -> None:
     p.write_text(text.replace(old, new, 1))
 
 
-old = '''    if (!minic_parser_parse_type_specifiers(parser, &base_type) ||
-        !minic_parser_parse_gnu_section_attribute(
-            parser, section_name, sizeof(section_name), &section_name_length, &has_section) ||
-        !minic_parser_parse_pointer_declarator(parser, base_type, &return_type) ||
-        !minic_parser_parse_gnu_section_attribute(
-            parser, section_name, sizeof(section_name), &section_name_length, &has_section) ||
-        !minic_parser_collect_gnu_attribute_lists(parser, &deferred_attributes)) {
-        return false;
-    }
-'''
-new = '''    if (!minic_parser_parse_type_specifiers(parser, &base_type) ||
-        !minic_parser_collect_gnu_attribute_lists(parser, &deferred_attributes) ||
-        !minic_parser_parse_pointer_declarator(parser, base_type, &return_type) ||
-        !minic_parser_collect_gnu_attribute_lists(parser, &deferred_attributes)) {
-        return false;
-    }
-'''
+old = '''    MINIC_ATTRIBUTE_NO_INSTRUMENT_FUNCTION,\n    MINIC_ATTRIBUTE_ALWAYS_INLINE,\n    MINIC_ATTRIBUTE_EXTERNALLY_VISIBLE,\n'''
+new = '''    MINIC_ATTRIBUTE_NO_INSTRUMENT_FUNCTION,\n    MINIC_ATTRIBUTE_ALWAYS_INLINE,\n    MINIC_ATTRIBUTE_NOINLINE,\n    MINIC_ATTRIBUTE_EXTERNALLY_VISIBLE,\n'''
+replace_once("src/frontend/attribute.h", old, new)
+
+old = '''    MINIC_ATTRIBUTE_ENTRY("__always_inline__",\n                          MINIC_ATTRIBUTE_ALWAYS_INLINE,\n                          MINIC_ATTRIBUTE_CLASS_OPTIMIZATION,\n                          MINIC_ATTRIBUTE_TARGET_FUNCTION),\n    MINIC_ATTRIBUTE_ENTRY("externally_visible",\n'''
+new = '''    MINIC_ATTRIBUTE_ENTRY("__always_inline__",\n                          MINIC_ATTRIBUTE_ALWAYS_INLINE,\n                          MINIC_ATTRIBUTE_CLASS_OPTIMIZATION,\n                          MINIC_ATTRIBUTE_TARGET_FUNCTION),\n    {\n        "noinline",\n        sizeof("noinline") - 1U,\n        MINIC_ATTRIBUTE_NOINLINE,\n        MINIC_ATTRIBUTE_CLASS_OPTIMIZATION,\n        MINIC_ATTRIBUTE_TARGET_FUNCTION,\n        0U,\n        0U,\n        true,\n    },\n    {\n        "__noinline__",\n        sizeof("__noinline__") - 1U,\n        MINIC_ATTRIBUTE_NOINLINE,\n        MINIC_ATTRIBUTE_CLASS_OPTIMIZATION,\n        MINIC_ATTRIBUTE_TARGET_FUNCTION,\n        0U,\n        0U,\n        true,\n    },\n    MINIC_ATTRIBUTE_ENTRY("externally_visible",\n'''
+replace_once("src/frontend/attribute.c", old, new)
+
+old = '''    if (!minic_parser_parse_type_specifiers(parser, &base_type) ||\n        !minic_parser_parse_gnu_section_attribute(\n            parser, section_name, sizeof(section_name), &section_name_length, &has_section) ||\n        !minic_parser_parse_pointer_declarator(parser, base_type, &return_type) ||\n        !minic_parser_parse_gnu_section_attribute(\n            parser, section_name, sizeof(section_name), &section_name_length, &has_section) ||\n        !minic_parser_collect_gnu_attribute_lists(parser, &deferred_attributes)) {\n        return false;\n    }\n'''
+new = '''    if (!minic_parser_parse_type_specifiers(parser, &base_type) ||\n        !minic_parser_collect_gnu_attribute_lists(parser, &deferred_attributes) ||\n        !minic_parser_parse_pointer_declarator(parser, base_type, &return_type) ||\n        !minic_parser_collect_gnu_attribute_lists(parser, &deferred_attributes)) {\n        return false;\n    }\n'''
 replace_once("src/frontend/parser_function.c", old, new)
 
 Path("tests/compiler/c0/deferred_declarator_attributes.c").write_text(r'''void __attribute__((__section__(".text.preptr"))) __attribute__((__noinline__))
@@ -36,7 +29,7 @@ void *map_before_pointer(int value) {
     return value ? (void *)0 : (void *)0;
 }
 
-void *__attribute__((__noinline__)) map_after_pointer(int value);
+void *__attribute__((noinline)) map_after_pointer(int value);
 
 void *map_after_pointer(int value) {
     return value ? (void *)0 : (void *)0;
@@ -50,6 +43,9 @@ int use_deferred_declarator_attributes(void) {
 ''')
 
 Path("tests/compiler/c0/invalid_function_attribute_on_pointer_object.c").write_text(r'''extern int __attribute__((__noinline__)) *bad_object;
+''')
+
+Path("tests/compiler/c0/invalid_noinline_argument.c").write_text(r'''void __attribute__((noinline(1))) bad_noinline(void);
 ''')
 
 Path("tests/compiler/c0/run-deferred-declarator-attributes.sh").write_text(r'''#!/bin/sh
@@ -72,11 +68,18 @@ grep -F 'call map_before_pointer' "$work/deferred_declarator_attributes.s" >/dev
 grep -F 'call map_after_pointer' "$work/deferred_declarator_attributes.s" >/dev/null
 
 if "$minic" -S "$root/tests/compiler/c0/invalid_function_attribute_on_pointer_object.c" \
-    -o "$work/invalid.s" >"$work/invalid.stdout" 2>"$work/invalid.stderr"; then
+    -o "$work/invalid-object.s" >"$work/invalid-object.stdout" 2>"$work/invalid-object.stderr"; then
     printf '%s\n' 'FAIL compiler/c0/deferred_declarator_attributes: function-only attribute leaked onto object' >&2
     exit 1
 fi
-grep -F 'unsupported GNU object attribute' "$work/invalid.stderr" >/dev/null
+grep -F 'unsupported GNU object attribute' "$work/invalid-object.stderr" >/dev/null
+
+if "$minic" -S "$root/tests/compiler/c0/invalid_noinline_argument.c" \
+    -o "$work/invalid-noinline-argument.s" >"$work/invalid-noinline-argument.stdout" 2>"$work/invalid-noinline-argument.stderr"; then
+    printf '%s\n' 'FAIL compiler/c0/deferred_declarator_attributes: noinline accepted an argument' >&2
+    exit 1
+fi
+grep -F 'GNU attribute has an invalid number of arguments' "$work/invalid-noinline-argument.stderr" >/dev/null
 
 printf '%s\n' 'PASS compiler/c0/deferred_declarator_attributes pre-pointer=generic post-pointer=generic function-target=late object-target=late section=preserved noinline=parse-only'
 ''')
