@@ -1755,6 +1755,91 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     return true;
 }
 
+static void pragma_skip_horizontal_space(const char *text, size_t length, size_t *cursor) {
+    while (*cursor < length && (text[*cursor] == ' ' || text[*cursor] == '\t')) {
+        *cursor += 1U;
+    }
+}
+
+static bool pragma_consume_word(const char *text, size_t length, size_t *cursor, const char *word) {
+    size_t word_length;
+
+    word_length = strlen(word);
+    if (*cursor > length || word_length > length - *cursor ||
+        memcmp(text + *cursor, word, word_length) != 0) {
+        return false;
+    }
+    *cursor += word_length;
+    return true;
+}
+
+static bool pragma_only_trailing_space(const char *text, size_t length, size_t cursor) {
+    while (cursor < length) {
+        char character = text[cursor++];
+
+        if (character != ' ' && character != '\t' && character != '\r' && character != '\n') {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool parse_top_level_preprocessor_directive(MinicParser *parser) {
+    const char *text;
+    size_t length;
+    size_t cursor;
+    size_t alignment;
+
+    if (parser == NULL || parser->current.kind != MINIC_TOKEN_PREPROCESSOR_DIRECTIVE) {
+        return false;
+    }
+    text = parser->source + parser->current.span.begin.offset;
+    length = minic_parser_span_length(parser->current.span);
+    cursor = 0U;
+    if (cursor >= length || text[cursor] != '#') {
+        minic_parser_error(parser, "invalid preprocessor directive token");
+        return false;
+    }
+    cursor += 1U;
+    pragma_skip_horizontal_space(text, length, &cursor);
+    if (!pragma_consume_word(text, length, &cursor, "pragma")) {
+        minic_parser_error(parser, "unsupported preprocessor directive");
+        return false;
+    }
+    pragma_skip_horizontal_space(text, length, &cursor);
+    if (!pragma_consume_word(text, length, &cursor, "pack")) {
+        minic_parser_error(parser, "unsupported pragma directive");
+        return false;
+    }
+    pragma_skip_horizontal_space(text, length, &cursor);
+    if (cursor >= length || text[cursor] != '(') {
+        minic_parser_error(parser, "expected '(' after pragma pack");
+        return false;
+    }
+    cursor += 1U;
+    pragma_skip_horizontal_space(text, length, &cursor);
+    alignment = 0U;
+    if (cursor < length && text[cursor] == '1') {
+        alignment = 1U;
+        cursor += 1U;
+    } else if (cursor < length && text[cursor] != ')') {
+        minic_parser_error(parser, "unsupported pragma pack alignment");
+        return false;
+    }
+    pragma_skip_horizontal_space(text, length, &cursor);
+    if (cursor >= length || text[cursor] != ')') {
+        minic_parser_error(parser, "expected ')' after pragma pack alignment");
+        return false;
+    }
+    cursor += 1U;
+    if (!pragma_only_trailing_space(text, length, cursor)) {
+        minic_parser_error(parser, "unsupported pragma pack syntax");
+        return false;
+    }
+    parser->record_pack_alignment = alignment;
+    return minic_parser_advance(parser);
+}
+
 static bool top_level_is_gnu_extension_marker(const MinicParser *parser) {
     static const char marker[] = "__extension__";
     size_t length;
@@ -1865,7 +1950,9 @@ bool minic_parse_c0_program(const char *path,
         if (!success || parser.current.kind == MINIC_TOKEN_EOF) {
             break;
         }
-        if (parser.current.kind == MINIC_TOKEN_SEMICOLON) {
+        if (parser.current.kind == MINIC_TOKEN_PREPROCESSOR_DIRECTIVE) {
+            success = parse_top_level_preprocessor_directive(&parser);
+        } else if (parser.current.kind == MINIC_TOKEN_SEMICOLON) {
             success = minic_parser_advance(&parser);
         } else if (parser.current.kind == MINIC_TOKEN_KW_STATIC_ASSERT) {
             success = minic_parser_parse_static_assert_declaration(&parser);
