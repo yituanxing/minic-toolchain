@@ -4082,13 +4082,6 @@ static bool token_starts_local_declaration(const MinicParser *parser) {
            minic_parser_token_starts_declaration_specifiers(parser, parser->current);
 }
 
-static bool token_starts_expression(MinicTokenKind kind) {
-    return kind == MINIC_TOKEN_IDENTIFIER || kind == MINIC_TOKEN_INTEGER_CONSTANT ||
-           kind == MINIC_TOKEN_LPAREN || kind == MINIC_TOKEN_PLUS || kind == MINIC_TOKEN_MINUS ||
-           kind == MINIC_TOKEN_BANG || kind == MINIC_TOKEN_AMPERSAND ||
-           kind == MINIC_TOKEN_AMPERSAND_AMPERSAND || kind == MINIC_TOKEN_STAR;
-}
-
 bool minic_parser_parse_statement(MinicParser *parser, bool allow_declaration) {
     if (!ensure_function_label_context(parser)) {
         return false;
@@ -4185,7 +4178,7 @@ bool minic_parser_parse_statement(MinicParser *parser, bool allow_declaration) {
     if (parser->current.kind == MINIC_TOKEN_KW_RETURN) {
         return parse_return(parser);
     }
-    if (token_starts_expression(parser->current.kind)) {
+    if (minic_parser_token_starts_expression(parser->current.kind)) {
         return parse_expression_or_assignment_statement(parser, true);
     }
     minic_parser_error(parser,
