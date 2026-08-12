@@ -124,20 +124,30 @@ static bool minic_riscv64_emit_return(FILE *file,
                                       const MinicC0Program *program,
                                       const MinicFunction *function,
                                       const MinicStatement *statement) {
+    bool has_expression;
     bool has_value;
 
-    has_value = statement->expression != MINIC_EXPRESSION_INVALID;
-    if (!has_value) {
-        if (!minic_type_is_void(function->return_type)) {
-            return false;
+    has_expression = statement->expression != MINIC_EXPRESSION_INVALID;
+    has_value = has_expression && !minic_type_is_void(function->return_type);
+    if (minic_type_is_void(function->return_type)) {
+        if (has_expression) {
+            const MinicExpression *expression;
+
+            expression = minic_c0_program_expression(program, statement->expression);
+            if (expression == NULL || !minic_type_is_void(expression->type) ||
+                !minic_riscv64_emit_expression(file, program, function, statement->expression)) {
+                return false;
+            }
         }
     } else {
         const MinicExpression *value;
 
+        if (!has_expression) {
+            return false;
+        }
         value = minic_c0_program_expression(program, statement->expression);
-        if (minic_type_is_void(function->return_type) || value == NULL ||
-            !minic_c0_assignment_compatible(
-                program, function->return_type, statement->expression)) {
+        if (value == NULL || !minic_c0_assignment_compatible(
+                                 program, function->return_type, statement->expression)) {
             return false;
         }
         if (minic_type_is_record(function->return_type)) {
