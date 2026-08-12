@@ -1388,33 +1388,87 @@ bool minic_c0_record_value_is_copy_source(const MinicC0Program *program,
            minic_type_is_record(expression->type);
 }
 
-static bool expression_is_null_pointer_value(const MinicC0Program *program,
-                                             MinicExpressionId expression_id) {
-    size_t remaining;
+bool minic_c0_expression_is_null_pointer_constant_v0(const MinicC0Program *program,
+                                                     MinicExpressionId expression_id) {
+    const MinicExpression *expression;
+    const MinicExpression *operand;
+    MinicType pointee;
 
     if (program == NULL) {
         return false;
     }
-    remaining = program->expression_count + 1U;
-    while (remaining > 0U) {
-        const MinicExpression *expression;
+    expression = minic_c0_program_expression(program, expression_id);
+    if (expression == NULL) {
+        return false;
+    }
+    if (expression->kind == MINIC_EXPRESSION_INTEGER) {
+        return minic_type_is_integer(expression->type) && expression->value.integer_value == 0;
+    }
+    if ((expression->kind != MINIC_EXPRESSION_CAST &&
+         expression->kind != MINIC_EXPRESSION_BITCAST) ||
+        expression->type.pointer_depth != 1U || !minic_type_pointee(expression->type, &pointee) ||
+        !minic_type_is_void(pointee)) {
+        return false;
+    }
+    operand = minic_c0_program_expression(program, expression->value.unary.operand);
+    return operand != NULL && operand->kind == MINIC_EXPRESSION_INTEGER &&
+           minic_type_is_integer(operand->type) && operand->value.integer_value == 0;
+}
 
-        expression = minic_c0_program_expression(program, expression_id);
-        if (expression == NULL) {
-            return false;
-        }
-        if (expression->kind == MINIC_EXPRESSION_INTEGER) {
-            return minic_type_is_integer(expression->type) && expression->value.integer_value == 0;
-        }
-        if ((expression->kind != MINIC_EXPRESSION_CAST &&
-             expression->kind != MINIC_EXPRESSION_BITCAST) ||
-            !minic_type_is_pointer(expression->type)) {
-            return false;
-        }
-        expression_id = expression->value.unary.operand;
-        remaining -= 1U;
+static bool
+minic_c0_conditional_type_only(MinicType when_true, MinicType when_false, MinicType *result) {
+    bool has_double_operand;
+    bool has_numeric_operands;
+
+    if (result == NULL) {
+        return false;
+    }
+    if (minic_type_equal(when_true, when_false)) {
+        *result = when_true;
+        return true;
+    }
+    if (minic_type_conditional_pointer_common(when_true, when_false, result)) {
+        return true;
+    }
+    if (minic_type_is_integer(when_true) && minic_type_is_integer(when_false)) {
+        return minic_type_integer_common(when_true, when_false, result);
+    }
+    has_double_operand = minic_type_is_double(when_true) || minic_type_is_double(when_false);
+    has_numeric_operands = (minic_type_is_double(when_true) || minic_type_is_integer(when_true)) &&
+                           (minic_type_is_double(when_false) || minic_type_is_integer(when_false));
+    if (has_double_operand && has_numeric_operands) {
+        *result = minic_type_double();
+        return true;
     }
     return false;
+}
+
+bool minic_c0_conditional_result_type(const MinicC0Program *program,
+                                      MinicExpressionId when_true_expression_id,
+                                      MinicExpressionId when_false_expression_id,
+                                      MinicType *result) {
+    const MinicExpression *when_true;
+    const MinicExpression *when_false;
+
+    if (program == NULL || result == NULL) {
+        return false;
+    }
+    when_true = minic_c0_program_expression(program, when_true_expression_id);
+    when_false = minic_c0_program_expression(program, when_false_expression_id);
+    if (when_true == NULL || when_false == NULL) {
+        return false;
+    }
+    if (minic_type_is_pointer(when_true->type) &&
+        minic_c0_expression_is_null_pointer_constant_v0(program, when_false_expression_id)) {
+        *result = when_true->type;
+        return true;
+    }
+    if (minic_c0_expression_is_null_pointer_constant_v0(program, when_true_expression_id) &&
+        minic_type_is_pointer(when_false->type)) {
+        *result = when_false->type;
+        return true;
+    }
+    return minic_c0_conditional_type_only(when_true->type, when_false->type, result);
 }
 
 bool minic_c0_assignment_compatible(const MinicC0Program *program,
@@ -1433,7 +1487,7 @@ bool minic_c0_assignment_compatible(const MinicC0Program *program,
         return true;
     }
     return minic_type_is_pointer(target_type) &&
-           expression_is_null_pointer_value(program, source_expression_id);
+           minic_c0_expression_is_null_pointer_constant_v0(program, source_expression_id);
 }
 
 static bool minic_c0_type_is_complete_object_bounded(const MinicC0Program *program,
@@ -1525,8 +1579,8 @@ bool minic_c0_pointer_equality_compatible(const MinicC0Program *program,
         return true;
     }
     return (minic_type_is_pointer(left->type) &&
-            expression_is_null_pointer_value(program, right_expression_id)) ||
-           (expression_is_null_pointer_value(program, left_expression_id) &&
+            minic_c0_expression_is_null_pointer_constant_v0(program, right_expression_id)) ||
+           (minic_c0_expression_is_null_pointer_constant_v0(program, left_expression_id) &&
             minic_type_is_pointer(right->type));
 }
 
