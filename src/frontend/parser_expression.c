@@ -847,6 +847,8 @@ static bool parse_offsetof_array_segment(MinicParser *parser,
     const MinicArrayType *nested_array;
     MinicExpression stride;
     MinicExpression scaled;
+    MinicSourceSpan index_span;
+    MinicType index_type;
     MinicType selected_type;
     MinicType scaled_type;
     size_t element_size;
@@ -867,6 +869,10 @@ static bool parse_offsetof_array_segment(MinicParser *parser,
         minic_parser_error(parser, "__builtin_offsetof array index requires an integer");
         return false;
     }
+    /* The expression pool may grow while adding the stride/scaled nodes below.
+     * Snapshot semantic data before any append instead of retaining a pool pointer. */
+    index_type = index_expression->type;
+    index_span = index_expression->span;
     if (parser->current.kind != MINIC_TOKEN_RBRACKET) {
         minic_parser_error(parser, "expected ']' in __builtin_offsetof array designator");
         return false;
@@ -885,14 +891,14 @@ static bool parse_offsetof_array_segment(MinicParser *parser,
     stride.value_category = MINIC_VALUE_RVALUE;
     stride.value.integer_value = (int64_t)element_size;
     if (!minic_parser_add_expression(parser, &stride, &stride_id) ||
-        !minic_type_integer_common(index_expression->type, stride.type, &scaled_type)) {
+        !minic_type_integer_common(index_type, stride.type, &scaled_type)) {
         minic_parser_error(parser, "cannot type __builtin_offsetof array index scale");
         return false;
     }
 
     (void)memset(&scaled, 0, sizeof(scaled));
     scaled.kind = MINIC_EXPRESSION_BINARY;
-    scaled.span.begin = index_expression->span.begin;
+    scaled.span.begin = index_span.begin;
     scaled.span.end = parser->current.span.end;
     scaled.type = scaled_type;
     scaled.value_category = MINIC_VALUE_RVALUE;
