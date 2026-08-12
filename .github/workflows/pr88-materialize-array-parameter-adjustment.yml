@@ -1,0 +1,42 @@
+name: PR88 Materialize Array Parameter Adjustment
+
+on:
+  push:
+    branches:
+      - agent/array-parameter-adjustment-v0
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/array-parameter-adjustment-v0
+          fetch-depth: 0
+      - name: Materialize array parameter semantics
+        run: |
+          set -Eeuo pipefail
+          python tools/dev/pr88-materialize-array-parameter-adjustment.py
+          chmod +x tests/compiler/c0/run-array-parameter-adjustment.sh
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+          git diff --check
+      - name: Build and validate
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=debug
+          sh tests/compiler/c0/run-array-parameter-adjustment.sh
+          make check
+      - name: Commit product source
+        run: |
+          set -Eeuo pipefail
+          rm -f tools/dev/pr88-materialize-array-parameter-adjustment.py
+          rm -f .github/workflows/pr88-materialize-array-parameter-adjustment.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'frontend: adjust array parameters to pointer types'
+          git push origin HEAD:agent/array-parameter-adjustment-v0
