@@ -14,6 +14,12 @@ def replace_once(path: str, old: str, new: str) -> None:
 
 replace_once(
     "src/target/riscv64/codegen_expression.c",
+    '#include "target/riscv64/layout.h"\n',
+    '#include "target/riscv64/layout.h"\n#include "target/target_info.h"\n',
+)
+
+replace_once(
+    "src/target/riscv64/codegen_expression.c",
     """    case MINIC_EXPRESSION_SIZEOF: {\n        MinicType measured_type;\n        size_t alignment;\n        size_t size;\n\n        measured_type = expression->value.sizeof_type;\n        if (!minic_type_equal(expression->type, minic_type_unsigned_long()) ||\n            !minic_riscv64_type_layout(program, measured_type, &size, &alignment)) {\n            return false;\n        }\n        return fprintf(file, \"  li a0, %zu\\n\", size) >= 0;\n    }\n""",
     """    case MINIC_EXPRESSION_SIZEOF: {\n        MinicType measured_type;\n        size_t size;\n\n        measured_type = expression->value.sizeof_type;\n        if (!minic_type_equal(expression->type, minic_type_unsigned_long()) ||\n            !minic_target_info_sizeof_type(\n                minic_default_target_info(), program, measured_type, &size)) {\n            return false;\n        }\n        return fprintf(file, \"  li a0, %zu\\n\", size) >= 0;\n    }\n""",
 )
