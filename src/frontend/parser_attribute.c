@@ -176,6 +176,194 @@ bool minic_parser_collect_gnu_attribute_lists(MinicParser *parser,
     return minic_parser_parse_gnu_attribute_lists(parser, collect_parsed_attribute, attributes);
 }
 
+bool minic_parser_apply_section_attribute(MinicParser *parser,
+                                          const MinicParsedAttribute *attribute,
+                                          char *buffer,
+                                          size_t capacity,
+                                          size_t *length,
+                                          bool *has_section) {
+    size_t cursor;
+    size_t end;
+    char parsed[256];
+    size_t parsed_length;
+    bool saw_literal;
+
+    if (parser == NULL || attribute == NULL || buffer == NULL || length == NULL ||
+        has_section == NULL || capacity == 0U || !attribute->has_arguments ||
+        attribute->arguments_span.end.offset <= attribute->arguments_span.begin.offset + 1U) {
+        return false;
+    }
+    cursor = attribute->arguments_span.begin.offset + 1U;
+    end = attribute->arguments_span.end.offset - 1U;
+    parsed_length = 0U;
+    saw_literal = false;
+    while (cursor < end) {
+        while (cursor < end && (parser->source[cursor] == ' ' || parser->source[cursor] == '\t' ||
+                                parser->source[cursor] == '\n' || parser->source[cursor] == '\r' ||
+                                parser->source[cursor] == '\f' || parser->source[cursor] == '\v')) {
+            cursor += 1U;
+        }
+        if (cursor >= end) {
+            break;
+        }
+        if (parser->source[cursor] != '"') {
+            minic_parser_error(parser,
+                               "GNU section attribute requires concatenated string literals");
+            return false;
+        }
+        saw_literal = true;
+        cursor += 1U;
+        while (cursor < end && parser->source[cursor] != '"') {
+            if (parser->source[cursor] == '\\') {
+                minic_parser_error(parser, "escaped GNU section names are not supported yet");
+                return false;
+            }
+            if (parsed_length + 1U >= sizeof(parsed)) {
+                minic_parser_error(parser, "GNU section name is too long");
+                return false;
+            }
+            parsed[parsed_length++] = parser->source[cursor++];
+        }
+        if (cursor >= end || parser->source[cursor] != '"') {
+            minic_parser_error(parser, "unterminated GNU section string");
+            return false;
+        }
+        cursor += 1U;
+    }
+    if (!saw_literal || parsed_length == 0U || parsed_length + 1U > capacity) {
+        minic_parser_error(parser, "invalid GNU section attribute argument");
+        return false;
+    }
+    parsed[parsed_length] = '\0';
+    if (*has_section) {
+        if (*length != parsed_length || memcmp(buffer, parsed, parsed_length) != 0) {
+            minic_parser_error(parser, "conflicting GNU section attributes");
+            return false;
+        }
+        return true;
+    }
+    (void)memcpy(buffer, parsed, parsed_length + 1U);
+    *length = parsed_length;
+    *has_section = true;
+    return true;
+}
+
+typedef struct MinicObjectAttributeContext {
+    char *section_name;
+    size_t section_capacity;
+    size_t *section_name_length;
+    bool *has_section;
+    size_t *explicit_alignment;
+} MinicObjectAttributeContext;
+
+static bool object_attribute_class_is_parse_only(MinicAttributeClass semantic_class) {
+    return semantic_class == MINIC_ATTRIBUTE_CLASS_INFORMATIONAL ||
+           semantic_class == MINIC_ATTRIBUTE_CLASS_DIAGNOSTIC ||
+           semantic_class == MINIC_ATTRIBUTE_CLASS_OPTIMIZATION ||
+           semantic_class == MINIC_ATTRIBUTE_CLASS_CONTROL_FLOW;
+}
+
+static bool consume_object_attribute(MinicParser *parser,
+                                     const MinicParsedAttribute *attribute,
+                                     void *opaque_context) {
+    const MinicAttributeDescriptor *descriptor;
+    MinicObjectAttributeContext *context;
+
+    if (parser == NULL || attribute == NULL || opaque_context == NULL) {
+        return false;
+    }
+    context = (MinicObjectAttributeContext *)opaque_context;
+    descriptor = attribute->descriptor;
+    if (descriptor == NULL ||
+        !minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_OBJECT)) {
+        minic_parser_error(parser, "unsupported GNU object attribute");
+        return false;
+    }
+    if (object_attribute_class_is_parse_only(descriptor->semantic_class)) {
+        return true;
+    }
+    if (descriptor->kind == MINIC_ATTRIBUTE_SECTION) {
+        return minic_parser_apply_section_attribute(parser,
+                                                    attribute,
+                                                    context->section_name,
+                                                    context->section_capacity,
+                                                    context->section_name_length,
+                                                    context->has_section);
+    }
+    if (descriptor->kind == MINIC_ATTRIBUTE_ALIGNED) {
+        return minic_parser_apply_alignment_attribute(
+            parser, attribute, "object", context->explicit_alignment);
+    }
+    minic_parser_error(parser,
+                       "unsupported GNU object attribute; symbol/layout attributes require "
+                       "explicit object semantics");
+    return false;
+}
+
+static bool initialize_object_attribute_context(MinicObjectAttributeContext *context,
+                                                char *section_name,
+                                                size_t section_capacity,
+                                                size_t *section_name_length,
+                                                bool *has_section,
+                                                size_t *explicit_alignment) {
+    if (context == NULL || section_name == NULL || section_capacity == 0U ||
+        section_name_length == NULL || has_section == NULL || explicit_alignment == NULL) {
+        return false;
+    }
+    context->section_name = section_name;
+    context->section_capacity = section_capacity;
+    context->section_name_length = section_name_length;
+    context->has_section = has_section;
+    context->explicit_alignment = explicit_alignment;
+    return true;
+}
+
+bool minic_parser_apply_object_attribute_list(MinicParser *parser,
+                                              const MinicParsedAttributeList *attributes,
+                                              char *section_name,
+                                              size_t section_capacity,
+                                              size_t *section_name_length,
+                                              bool *has_section,
+                                              size_t *explicit_alignment) {
+    MinicObjectAttributeContext context;
+    size_t index;
+
+    if (parser == NULL || attributes == NULL ||
+        !initialize_object_attribute_context(&context,
+                                             section_name,
+                                             section_capacity,
+                                             section_name_length,
+                                             has_section,
+                                             explicit_alignment)) {
+        return false;
+    }
+    for (index = 0U; index < attributes->count; ++index) {
+        if (!consume_object_attribute(parser, &attributes->values[index], &context)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool minic_parser_parse_gnu_object_attribute_lists(MinicParser *parser,
+                                                   char *section_name,
+                                                   size_t section_capacity,
+                                                   size_t *section_name_length,
+                                                   bool *has_section,
+                                                   size_t *explicit_alignment) {
+    MinicObjectAttributeContext context;
+
+    if (parser == NULL || !initialize_object_attribute_context(&context,
+                                                               section_name,
+                                                               section_capacity,
+                                                               section_name_length,
+                                                               has_section,
+                                                               explicit_alignment)) {
+        return false;
+    }
+    return minic_parser_parse_gnu_attribute_lists(parser, consume_object_attribute, &context);
+}
+
 bool minic_parser_apply_alignment_attribute(MinicParser *parser,
                                             const MinicParsedAttribute *attribute,
                                             const char *subject,

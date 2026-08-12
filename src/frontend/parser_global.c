@@ -1093,7 +1093,7 @@ bool minic_parser_parse_extern_global_after_head(MinicParser *parser,
                                                  const char *section_name,
                                                  size_t section_name_length,
                                                  bool has_section,
-                                                 size_t explicit_alignment,
+                                                 size_t shared_explicit_alignment,
                                                  MinicSymbolVisibility visibility,
                                                  bool has_visibility) {
     bool first_declarator;
@@ -1108,12 +1108,14 @@ bool minic_parser_parse_extern_global_after_head(MinicParser *parser,
         MinicType object_type;
         char declarator_section_name[256];
         size_t declarator_section_name_length;
+        size_t declarator_explicit_alignment;
         bool declarator_has_section;
         bool is_array;
         MinicType declarator_element_type;
         size_t array_type_begin;
 
         declarator_section_name_length = section_name_length;
+        declarator_explicit_alignment = shared_explicit_alignment;
         declarator_has_section = has_section;
         (void)memset(declarator_section_name, 0, sizeof(declarator_section_name));
         if (has_section) {
@@ -1133,11 +1135,12 @@ bool minic_parser_parse_extern_global_after_head(MinicParser *parser,
             return false;
         }
         declarator_element_type = object_type;
-        if (!minic_parser_parse_gnu_section_attribute(parser,
-                                                      declarator_section_name,
-                                                      sizeof(declarator_section_name),
-                                                      &declarator_section_name_length,
-                                                      &declarator_has_section)) {
+        if (!minic_parser_parse_gnu_object_attribute_lists(parser,
+                                                           declarator_section_name,
+                                                           sizeof(declarator_section_name),
+                                                           &declarator_section_name_length,
+                                                           &declarator_has_section,
+                                                           &declarator_explicit_alignment)) {
             return false;
         }
         if (minic_type_is_void(object_type) || minic_type_is_function(object_type) ||
@@ -1148,11 +1151,12 @@ bool minic_parser_parse_extern_global_after_head(MinicParser *parser,
         array_type_begin = parser->program->array_type_count;
         if (!minic_parser_parse_array_declarator_suffix(
                 parser, object_type, true, &object_type, &is_array) ||
-            !minic_parser_parse_gnu_section_attribute(parser,
-                                                      declarator_section_name,
-                                                      sizeof(declarator_section_name),
-                                                      &declarator_section_name_length,
-                                                      &declarator_has_section)) {
+            !minic_parser_parse_gnu_object_attribute_lists(parser,
+                                                           declarator_section_name,
+                                                           sizeof(declarator_section_name),
+                                                           &declarator_section_name_length,
+                                                           &declarator_has_section,
+                                                           &declarator_explicit_alignment)) {
             return false;
         }
 
@@ -1164,7 +1168,7 @@ bool minic_parser_parse_extern_global_after_head(MinicParser *parser,
                                                  declarator_section_name,
                                                  declarator_section_name_length,
                                                  declarator_has_section,
-                                                 explicit_alignment,
+                                                 declarator_explicit_alignment,
                                                  visibility,
                                                  has_visibility)) {
                 return false;
@@ -1183,9 +1187,9 @@ bool minic_parser_parse_extern_global_after_head(MinicParser *parser,
                                                         object_id,
                                                         declarator_section_name,
                                                         declarator_section_name_length)) ||
-                   (explicit_alignment != 0U &&
+                   (declarator_explicit_alignment != 0U &&
                     !minic_c0_global_object_set_explicit_alignment(
-                        parser->program, object_id, explicit_alignment)) ||
+                        parser->program, object_id, declarator_explicit_alignment)) ||
                    (has_visibility && !minic_c0_global_object_set_visibility(
                                           parser->program, object_id, visibility))) {
             if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
@@ -1213,15 +1217,21 @@ bool minic_parser_parse_extern_global(MinicParser *parser) {
     MinicType first_object_type;
     char section_name[256];
     size_t section_name_length;
+    size_t explicit_alignment;
     bool has_section;
 
     section_name_length = 0U;
+    explicit_alignment = 0U;
     has_section = false;
     (void)memset(section_name, 0, sizeof(section_name));
     if (!minic_parser_expect(parser, MINIC_TOKEN_KW_EXTERN, "expected keyword 'extern'") ||
         !minic_parser_parse_type_specifiers(parser, &base_type) ||
-        !minic_parser_parse_gnu_section_attribute(
-            parser, section_name, sizeof(section_name), &section_name_length, &has_section) ||
+        !minic_parser_parse_gnu_object_attribute_lists(parser,
+                                                       section_name,
+                                                       sizeof(section_name),
+                                                       &section_name_length,
+                                                       &has_section,
+                                                       &explicit_alignment) ||
         !parse_extern_object_declarator(parser, base_type, &first_name_span, &first_object_type)) {
         return false;
     }
@@ -1232,7 +1242,7 @@ bool minic_parser_parse_extern_global(MinicParser *parser) {
                                                        section_name,
                                                        section_name_length,
                                                        has_section,
-                                                       0U,
+                                                       explicit_alignment,
                                                        MINIC_SYMBOL_VISIBILITY_DEFAULT,
                                                        false);
 }
