@@ -10,7 +10,7 @@ start = text.find("static bool finish_function_declaration_entity(")
 end = text.find("\nstatic bool parse_function(", start)
 if start < 0 or end < 0:
     raise SystemExit(f"function declaration helper region mismatch start={start} end={end}")
-region = text[start:end]
+region = text[start:end].rstrip("\n")
 region = region.replace(
     "static bool finish_function_declaration_entity(",
     "static bool record_function_declaration_entity(",
