@@ -1,0 +1,32 @@
+name: PR97 Materialize GNU Function Pointer Bridge Call
+on:
+  push:
+    branches: [agent/gnu-function-pointer-bridge-call-v0]
+permissions:
+  contents: write
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: agent/gnu-function-pointer-bridge-call-v0, fetch-depth: 0}
+      - name: Materialize GNU function pointer bridge call semantics
+        run: python3 tools/dev/pr97-materialize-gnu-function-pointer-bridge-call.py
+      - name: Build and validate
+        run: |
+          set -Eeuo pipefail
+          chmod +x tests/compiler/c0/run-gnu-function-pointer-bridge-call.sh
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+          git diff --check
+          make -j4
+          MINIC="$GITHUB_WORKSPACE/build/debug/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/focused" HOST_CC=cc sh tests/compiler/c0/run-gnu-function-pointer-bridge-call.sh
+          make check
+      - name: Commit product source
+        run: |
+          git rm .github/workflows/pr97-materialize-gnu-function-pointer-bridge-call.yml tools/dev/pr97-materialize-gnu-function-pointer-bridge-call.py
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src tests
+          git diff --cached --check
+          git commit -m 'frontend: support explicit GNU function pointer bridge calls'
+          git push origin HEAD:agent/gnu-function-pointer-bridge-call-v0
