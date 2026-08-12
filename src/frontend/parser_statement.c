@@ -1141,7 +1141,7 @@ static bool parse_declaration(MinicParser *parser) {
     return minic_parser_expect(parser, MINIC_TOKEN_SEMICOLON, "expected ';'");
 }
 
-static bool parse_block_scope_extern_function_declaration(MinicParser *parser) {
+static bool parse_block_scope_extern_declaration(MinicParser *parser) {
     MinicSourceSpan name_span;
     MinicType parameter_types[16];
     MinicType return_type;
@@ -1165,6 +1165,40 @@ static bool parse_block_scope_extern_function_declaration(MinicParser *parser) {
             minic_parser_error(parser, "expected block-scope extern function name");
         }
         return false;
+    }
+
+    if (parser->current.kind != MINIC_TOKEN_LPAREN) {
+        MinicGlobalObjectId current_scope_object;
+        MinicGlobalObjectId object_id;
+        MinicType object_type;
+        bool is_array;
+
+        object_type = return_type;
+        if (!minic_parser_parse_array_declarator_suffix(
+                parser, object_type, true, &object_type, &is_array)) {
+            return false;
+        }
+        (void)is_array;
+        if (parser->current.kind != MINIC_TOKEN_SEMICOLON) {
+            minic_parser_error(parser, "block-scope extern object declaration must end with ';'");
+            return false;
+        }
+        if (!minic_parser_declare_block_scope_extern_object(
+                parser, name_span, object_type, &object_id)) {
+            return false;
+        }
+        current_scope_object =
+            minic_parser_find_scoped_global_object_in_current_scope(parser, name_span);
+        if (minic_parser_name_bound_in_current_scope(parser, name_span)) {
+            if (current_scope_object != object_id) {
+                minic_parser_error(parser,
+                                   "block-scope extern object conflicts with local declaration");
+                return false;
+            }
+        } else if (!minic_parser_bind_scoped_global_object(parser, name_span, object_id)) {
+            return false;
+        }
+        return minic_parser_advance(parser);
     }
 
     if (!minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '('") ||
@@ -1263,7 +1297,7 @@ static bool parse_inferred_static_local_array(MinicParser *parser,
            static-local name to the same storage object. */
         parser->program->global_objects[object_id].type = object_type;
         parser->program->global_objects[object_id].is_read_only = minic_type_is_const(element_type);
-        return minic_parser_bind_static_local(parser, name_span, object_id);
+        return minic_parser_bind_scoped_global_object(parser, name_span, object_id);
     }
 
     if (parser->current.kind == MINIC_TOKEN_LBRACE) {
@@ -1427,7 +1461,7 @@ static bool parse_inferred_static_local_array(MinicParser *parser,
                 parser, MINIC_TOKEN_RBRACE, "expected '}' after static local array initializer") ||
             !minic_c0_program_complete_array_type(
                 parser->program, object_type, initializer_count) ||
-            !minic_parser_bind_static_local(parser, name_span, object_id)) {
+            !minic_parser_bind_scoped_global_object(parser, name_span, object_id)) {
             if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
                 minic_parser_error(parser, "cannot finalize inferred static local array");
             }
@@ -1547,7 +1581,7 @@ static bool parse_static_local_record_initializer(MinicParser *parser,
     }
     if (!minic_parser_expect(
             parser, MINIC_TOKEN_RBRACE, "expected '}' after static record initializer") ||
-        !minic_parser_bind_static_local(parser, name_span, object_id)) {
+        !minic_parser_bind_scoped_global_object(parser, name_span, object_id)) {
         return false;
     }
     return true;
@@ -1584,7 +1618,7 @@ static bool add_implicitly_zero_initialized_static_local(MinicParser *parser,
                                             minic_type_is_const(declared_type),
                                             &object_id) ||
         !minic_c0_global_object_set_zero_initialized(parser->program, object_id) ||
-        !minic_parser_bind_static_local(parser, name_span, object_id)) {
+        !minic_parser_bind_scoped_global_object(parser, name_span, object_id)) {
         if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
             minic_parser_error(parser, "cannot create implicit-zero static local storage");
         }
@@ -1688,7 +1722,7 @@ static bool parse_static_local_array_declarator(MinicParser *parser, MinicType b
         if (minic_type_is_pointer(declared_type)) {
             if (!minic_parser_parse_zero_pointer_constant(parser) ||
                 !minic_c0_global_object_set_zero_initialized(parser->program, scalar_object_id) ||
-                !minic_parser_bind_static_local(parser, name_span, scalar_object_id)) {
+                !minic_parser_bind_scoped_global_object(parser, name_span, scalar_object_id)) {
                 if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
                     minic_parser_error(parser, "cannot finalize static local null pointer storage");
                 }
@@ -1709,7 +1743,7 @@ static bool parse_static_local_array_declarator(MinicParser *parser, MinicType b
              !minic_c0_global_object_set_zero_initialized(parser->program, scalar_object_id)) ||
             (scalar_value != 0 && !minic_c0_global_object_add_initializer(
                                       parser->program, scalar_object_id, scalar_value)) ||
-            !minic_parser_bind_static_local(parser, name_span, scalar_object_id)) {
+            !minic_parser_bind_scoped_global_object(parser, name_span, scalar_object_id)) {
             minic_parser_error(parser, "cannot finalize static local integer storage");
             return false;
         }
@@ -1808,7 +1842,7 @@ static bool parse_static_local_array_declarator(MinicParser *parser, MinicType b
         minic_parser_error(parser, "cannot zero-initialize static local array object");
         return false;
     }
-    return minic_parser_bind_static_local(parser, name_span, object_id);
+    return minic_parser_bind_scoped_global_object(parser, name_span, object_id);
 }
 
 static bool consume_static_local_interleaved_attribute(MinicParser *parser,
@@ -4095,7 +4129,7 @@ bool minic_parser_parse_statement(MinicParser *parser, bool allow_declaration) {
             minic_parser_error(parser, "a declaration requires a compound statement scope");
             return false;
         }
-        return parse_block_scope_extern_function_declaration(parser);
+        return parse_block_scope_extern_declaration(parser);
     }
     if (parser->current.kind == MINIC_TOKEN_KW_STATIC) {
         if (!allow_declaration) {

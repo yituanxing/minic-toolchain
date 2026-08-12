@@ -5,17 +5,14 @@
 #include <stdlib.h>
 #include <string.h>
 
-MinicGlobalObjectId minic_parser_find_global_object(const MinicParser *parser,
-                                                    MinicSourceSpan name_span) {
-    MinicGlobalObjectId static_local_id;
+MinicGlobalObjectId minic_parser_find_global_object_entity(const MinicParser *parser,
+                                                           MinicSourceSpan name_span) {
     size_t name_length;
     size_t index;
 
-    static_local_id = minic_parser_find_static_local(parser, name_span);
-    if (static_local_id != MINIC_GLOBAL_OBJECT_INVALID) {
-        return static_local_id;
+    if (parser == NULL || parser->program == NULL) {
+        return MINIC_GLOBAL_OBJECT_INVALID;
     }
-
     name_length = minic_parser_span_length(name_span);
     for (index = 0U; index < parser->program->global_object_count; ++index) {
         const MinicGlobalObject *object;
@@ -27,6 +24,23 @@ MinicGlobalObjectId minic_parser_find_global_object(const MinicParser *parser,
         }
     }
     return MINIC_GLOBAL_OBJECT_INVALID;
+}
+
+MinicGlobalObjectId minic_parser_find_global_object(const MinicParser *parser,
+                                                    MinicSourceSpan name_span) {
+    MinicGlobalObjectId object_id;
+    const MinicGlobalObject *object;
+
+    object_id = minic_parser_find_scoped_global_object(parser, name_span);
+    if (object_id != MINIC_GLOBAL_OBJECT_INVALID) {
+        return object_id;
+    }
+    object_id = minic_parser_find_global_object_entity(parser, name_span);
+    object = object_id == MINIC_GLOBAL_OBJECT_INVALID
+                 ? NULL
+                 : minic_c0_program_global_object(parser->program, object_id);
+    return object != NULL && !object->is_block_scope_extern_only ? object_id
+                                                                 : MINIC_GLOBAL_OBJECT_INVALID;
 }
 
 MinicFixedRegisterBindingId minic_parser_find_fixed_register_binding(const MinicParser *parser,
@@ -1014,6 +1028,50 @@ static bool merge_extern_object_declaration(MinicParser *parser,
     return true;
 }
 
+bool minic_parser_declare_block_scope_extern_object(MinicParser *parser,
+                                                    MinicSourceSpan name_span,
+                                                    MinicType object_type,
+                                                    MinicGlobalObjectId *object_id) {
+    MinicGlobalObjectId existing_id;
+
+    if (parser == NULL || object_id == NULL || minic_type_is_void(object_type) ||
+        minic_type_is_function(object_type)) {
+        if (parser != NULL) {
+            minic_parser_error(parser, "invalid block-scope extern object type");
+        }
+        return false;
+    }
+    existing_id = minic_parser_find_global_object_entity(parser, name_span);
+    if (existing_id != MINIC_GLOBAL_OBJECT_INVALID) {
+        if (!merge_extern_object_declaration(parser,
+                                             existing_id,
+                                             object_type,
+                                             NULL,
+                                             0U,
+                                             false,
+                                             0U,
+                                             MINIC_SYMBOL_VISIBILITY_DEFAULT,
+                                             false)) {
+            return false;
+        }
+        *object_id = existing_id;
+        return true;
+    }
+    if (!minic_c0_program_add_global_object(parser->program,
+                                            parser->source + name_span.begin.offset,
+                                            minic_parser_span_length(name_span),
+                                            object_type,
+                                            false,
+                                            minic_type_is_const(object_type),
+                                            object_id) ||
+        !minic_c0_global_object_set_extern(parser->program, *object_id)) {
+        minic_parser_error(parser, "cannot declare block-scope extern object");
+        return false;
+    }
+    parser->program->global_objects[*object_id].is_block_scope_extern_only = true;
+    return true;
+}
+
 bool minic_parser_parse_extern_global_after_head(MinicParser *parser,
                                                  MinicType base_type,
                                                  MinicType first_object_type,
@@ -1084,7 +1142,7 @@ bool minic_parser_parse_extern_global_after_head(MinicParser *parser,
             return false;
         }
 
-        object_id = minic_parser_find_global_object(parser, name_span);
+        object_id = minic_parser_find_global_object_entity(parser, name_span);
         if (object_id != MINIC_GLOBAL_OBJECT_INVALID) {
             if (!merge_extern_object_declaration(parser,
                                                  object_id,
@@ -1121,6 +1179,7 @@ bool minic_parser_parse_extern_global_after_head(MinicParser *parser,
             }
             return false;
         }
+        parser->program->global_objects[object_id].is_block_scope_extern_only = false;
 
         if (parser->current.kind != MINIC_TOKEN_COMMA) {
             break;

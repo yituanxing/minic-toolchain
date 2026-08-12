@@ -236,9 +236,9 @@ bool minic_parser_statement_is_local_label(const MinicParser *parser,
                                            MinicStatementId statement_id);
 MinicStatementId minic_parser_find_label_statement(MinicParser *parser, MinicSourceSpan name_span);
 bool minic_parser_bind_local(MinicParser *parser, MinicSourceSpan name_span, MinicLocalId local_id);
-bool minic_parser_bind_static_local(MinicParser *parser,
-                                    MinicSourceSpan name_span,
-                                    MinicGlobalObjectId global_object_id);
+bool minic_parser_bind_scoped_global_object(MinicParser *parser,
+                                            MinicSourceSpan name_span,
+                                            MinicGlobalObjectId global_object_id);
 bool minic_parser_name_bound_in_current_scope(const MinicParser *parser, MinicSourceSpan name_span);
 MinicLocalId minic_parser_find_local_in_current_scope(const MinicParser *parser,
                                                       MinicSourceSpan name_span);
@@ -257,12 +257,21 @@ bool minic_parser_find_record_field_path(const MinicParser *parser,
 void minic_parser_destroy_enum_constants(MinicParser *parser);
 
 MinicLocalId minic_parser_find_local(const MinicParser *parser, MinicSourceSpan name_span);
-MinicGlobalObjectId minic_parser_find_static_local(const MinicParser *parser,
-                                                   MinicSourceSpan name_span);
+MinicGlobalObjectId minic_parser_find_scoped_global_object(const MinicParser *parser,
+                                                           MinicSourceSpan name_span);
+MinicGlobalObjectId
+minic_parser_find_scoped_global_object_in_current_scope(const MinicParser *parser,
+                                                        MinicSourceSpan name_span);
 bool minic_parser_name_bound(const MinicParser *parser, MinicSourceSpan name_span);
 MinicFunctionId minic_parser_find_function(const MinicParser *parser, MinicSourceSpan name_span);
 MinicGlobalObjectId minic_parser_find_global_object(const MinicParser *parser,
                                                     MinicSourceSpan name_span);
+MinicGlobalObjectId minic_parser_find_global_object_entity(const MinicParser *parser,
+                                                           MinicSourceSpan name_span);
+bool minic_parser_declare_block_scope_extern_object(MinicParser *parser,
+                                                    MinicSourceSpan name_span,
+                                                    MinicType object_type,
+                                                    MinicGlobalObjectId *object_id);
 MinicFixedRegisterBindingId minic_parser_find_fixed_register_binding(const MinicParser *parser,
                                                                      MinicSourceSpan name_span);
 MinicRecordId minic_parser_find_record(const MinicParser *parser, MinicSourceSpan name_span);

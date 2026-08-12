@@ -879,9 +879,9 @@ bool minic_parser_bind_local(MinicParser *parser,
         parser, name_span, local_id, MINIC_GLOBAL_OBJECT_INVALID);
 }
 
-bool minic_parser_bind_static_local(MinicParser *parser,
-                                    MinicSourceSpan name_span,
-                                    MinicGlobalObjectId global_object_id) {
+bool minic_parser_bind_scoped_global_object(MinicParser *parser,
+                                            MinicSourceSpan name_span,
+                                            MinicGlobalObjectId global_object_id) {
     return minic_parser_bind_scoped_object(
         parser, name_span, MINIC_LOCAL_INVALID, global_object_id);
 }
@@ -927,6 +927,28 @@ MinicLocalId minic_parser_find_local_in_current_scope(const MinicParser *parser,
     return MINIC_LOCAL_INVALID;
 }
 
+MinicGlobalObjectId
+minic_parser_find_scoped_global_object_in_current_scope(const MinicParser *parser,
+                                                        MinicSourceSpan name_span) {
+    size_t scope_begin;
+    size_t index;
+
+    if (parser == NULL || parser->scope_count == 0U) {
+        return MINIC_GLOBAL_OBJECT_INVALID;
+    }
+    scope_begin = parser->scopes[parser->scope_count - 1U].binding_begin;
+    for (index = parser->local_binding_count; index > scope_begin; --index) {
+        const MinicParserLocalBinding *binding;
+
+        binding = &parser->local_bindings[index - 1U];
+        if (binding->global_object_id != MINIC_GLOBAL_OBJECT_INVALID &&
+            minic_parser_span_equals(parser, name_span, binding->name_span)) {
+            return binding->global_object_id;
+        }
+    }
+    return MINIC_GLOBAL_OBJECT_INVALID;
+}
+
 void minic_parser_destroy_scopes(MinicParser *parser) {
     free(parser->local_labels);
     parser->local_labels = NULL;
@@ -957,8 +979,8 @@ MinicLocalId minic_parser_find_local(const MinicParser *parser, MinicSourceSpan 
     return MINIC_LOCAL_INVALID;
 }
 
-MinicGlobalObjectId minic_parser_find_static_local(const MinicParser *parser,
-                                                   MinicSourceSpan name_span) {
+MinicGlobalObjectId minic_parser_find_scoped_global_object(const MinicParser *parser,
+                                                           MinicSourceSpan name_span) {
     size_t index;
 
     for (index = parser->local_binding_count; index > 0U; --index) {
