@@ -332,6 +332,11 @@ sh "$root/tests/compiler/c0/run-gnu-function-pointer-bridge-call.sh"
 MINIC="$minic" \
 HOST_CC="$host_cc" \
 BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+sh "$root/tests/compiler/c0/run-pointer-to-bool-conversion.sh"
+
+MINIC="$minic" \
+HOST_CC="$host_cc" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
 sh "$root/tests/compiler/c0/run-block-scope-extern-multi-declarator.sh"
 
 MINIC="$minic" \

@@ -398,6 +398,7 @@ bool minic_type_assignment_compatible(MinicType target, MinicType source) {
     MinicType unqualified_source;
 
     if ((minic_type_is_integer(target) && minic_type_is_integer(source)) ||
+        (minic_type_is_bool_integer(target) && minic_type_is_pointer(source)) ||
         (minic_type_is_float(target) && minic_type_is_float(source)) ||
         (minic_type_is_double(target) && minic_type_is_double(source))) {
         return true;
