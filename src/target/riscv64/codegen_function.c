@@ -685,7 +685,7 @@ static bool minic_riscv64_emit_function(FILE *file,
                   ? fprintf(file, ".section %s\n", function->section_name) >= 0
                   : fprintf(file, ".text\n") >= 0;
     if (success && !function->is_internal) {
-        success = fprintf(file, ".globl %s\n", symbol_name) >= 0;
+        success = fprintf(file, function->is_weak ? ".weak %s\n" : ".globl %s\n", symbol_name) >= 0;
         if (success && function->visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT) {
             const char *directive;
 
@@ -894,6 +894,13 @@ bool minic_riscv64_write_c0_program(const char *path,
 
         function = &program->functions[function_index];
         if (!function->is_defined) {
+            const char *symbol_name;
+
+            symbol_name = minic_c0_function_symbol_name(function);
+            if (function->is_weak && !function->is_internal) {
+                success = symbol_name != NULL && symbol_name[0] != '\0' &&
+                          fprintf(file, ".weak %s\n", symbol_name) >= 0;
+            }
             continue;
         }
         success = minic_riscv64_emit_function(file, program, function, &label_counter);

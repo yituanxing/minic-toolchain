@@ -1194,6 +1194,7 @@ bool minic_c0_program_verify_target(const MinicC0Program *program,
             minic_type_is_array(function->return_type) ||
             function->local_begin > program->local_count ||
             function->local_count > program->local_count - function->local_begin ||
+            (function->is_internal && function->is_weak) ||
             (function->is_defined && function->body_block >= program->block_count) ||
             (!function->is_defined && function->body_block != MINIC_BLOCK_INVALID)) {
             return false;
