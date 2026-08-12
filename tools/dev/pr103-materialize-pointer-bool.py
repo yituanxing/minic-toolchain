@@ -59,13 +59,12 @@ mkdir -p "$work"
 "$minic" -S "$work/valid.i" -o "$work/valid.s"
 
 # Return and assignment boundaries already normalize integer targets through
-# the target type.  Pointer-to-bool therefore must produce real 0/1 values.
+# the target type. Pointer-to-bool therefore must produce real 0/1 values.
 count=$(grep -c 'snez .*' "$work/valid.s" || true)
 test "$count" -ge 4
 
-# A fixed bool parameter is another assignment-conversion boundary.  Require
-# a normalization in the caller before the direct call rather than merely
-# accepting the pointer type in the AST.
+# A fixed bool parameter is another assignment-conversion boundary. Require
+# normalization in the caller before the direct call, not merely AST acceptance.
 awk '
   /pass_function_pointer:/ { in_fn=1; saw=0 }
   in_fn && /snez a0, a0/ { saw=1 }
@@ -86,8 +85,8 @@ printf '%s\n' 'PASS compiler/c0/pointer_to_bool_conversion return=function+objec
 
 run = root / "tests/compiler/c0/run.sh"
 run_text = run.read_text()
-anchor = '''MINIC="$minic" \\\nHOST_CC="$host_cc" \\\nBUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \\\nsh "$root/tests/compiler/c0/run-bool-semantics.sh"\n'''
+anchor = '''MINIC="$minic" \\\nHOST_CC="$host_cc" \\\nBUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \\\nsh "$root/tests/compiler/c0/run-gnu-function-pointer-bridge-call.sh"\n'''
 insert = anchor + '''\nMINIC="$minic" \\\nHOST_CC="$host_cc" \\\nBUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \\\nsh "$root/tests/compiler/c0/run-pointer-to-bool-conversion.sh"\n'''
 if run_text.count(anchor) != 1:
-    raise SystemExit(f"bool gate insertion anchor count={run_text.count(anchor)}")
+    raise SystemExit(f"C0 gate insertion anchor count={run_text.count(anchor)}")
 run.write_text(run_text.replace(anchor, insert, 1))
