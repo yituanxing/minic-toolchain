@@ -1,0 +1,35 @@
+name: PR109 Clean Embedded NUL
+on:
+  push:
+    branches: [agent/function-typed-declarator-v0]
+permissions:
+  contents: write
+jobs:
+  clean:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: agent/function-typed-declarator-v0, fetch-depth: 0}
+      - name: Normalize source literal
+        run: python3 tools/dev/pr109-clean-nul.py
+      - name: Validate cleanup
+        run: |
+          set -Eeuo pipefail
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+          git diff --check
+          if grep -P -n '\x00' src/frontend/parser_function.c; then
+            echo 'embedded NUL remains in parser_function.c' >&2
+            exit 1
+          fi
+          make -j4
+          MINIC="$GITHUB_WORKSPACE/build/debug/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/focused-function-typed" HOST_CC=cc sh tests/compiler/c0/run-function-typed-declarator.sh
+          make check
+      - name: Commit cleanup
+        run: |
+          git rm .github/workflows/pr109-clean-nul.yml tools/dev/pr109-clean-nul.py
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src
+          git diff --cached --check
+          git commit -m 'frontend: normalize function declarator source literal'
+          git push origin HEAD:agent/function-typed-declarator-v0
