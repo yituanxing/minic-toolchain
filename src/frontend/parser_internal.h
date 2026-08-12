@@ -347,6 +347,7 @@ bool minic_parser_parse_string_text(MinicParser *parser,
                                     char **text,
                                     size_t *length,
                                     MinicSourceSpan *span);
+bool minic_parser_token_starts_expression(MinicTokenKind kind);
 bool minic_parser_parse_expression(MinicParser *parser,
                                    MinicExpressionId *expression_id,
                                    unsigned int minimum_precedence);

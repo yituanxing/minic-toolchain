@@ -14,6 +14,31 @@ static bool parse_expression_internal(MinicParser *parser,
 static bool
 parse_comma_expression(MinicParser *parser, MinicExpressionId *expression_id, bool decay_array);
 
+bool minic_parser_token_starts_expression(MinicTokenKind kind) {
+    switch (kind) {
+    case MINIC_TOKEN_IDENTIFIER:
+    case MINIC_TOKEN_INTEGER_CONSTANT:
+    case MINIC_TOKEN_CHARACTER_CONSTANT:
+    case MINIC_TOKEN_FLOATING_CONSTANT:
+    case MINIC_TOKEN_STRING_LITERAL:
+    case MINIC_TOKEN_LPAREN:
+    case MINIC_TOKEN_KW_SIZEOF:
+    case MINIC_TOKEN_KW_ALIGNOF:
+    case MINIC_TOKEN_PLUS:
+    case MINIC_TOKEN_MINUS:
+    case MINIC_TOKEN_BANG:
+    case MINIC_TOKEN_TILDE:
+    case MINIC_TOKEN_AMPERSAND:
+    case MINIC_TOKEN_AMPERSAND_AMPERSAND:
+    case MINIC_TOKEN_STAR:
+    case MINIC_TOKEN_PLUS_PLUS:
+    case MINIC_TOKEN_MINUS_MINUS:
+        return true;
+    default:
+        return false;
+    }
+}
+
 static bool finish_value_expression(MinicParser *parser,
                                     MinicExpressionId input_id,
                                     bool decay_array,
