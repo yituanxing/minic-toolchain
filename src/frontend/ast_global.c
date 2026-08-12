@@ -164,6 +164,66 @@ bool minic_c0_program_add_extern_global_object(MinicC0Program *program,
         program, name, name_length, type, false, is_read_only, true, global_object_id);
 }
 
+bool minic_c0_program_add_tentative_global_object(MinicC0Program *program,
+                                                  const char *name,
+                                                  size_t name_length,
+                                                  MinicType type,
+                                                  bool is_internal,
+                                                  bool is_read_only,
+                                                  MinicGlobalObjectId *global_object_id) {
+    if (!add_global_object_entity(
+            program, name, name_length, type, is_internal, is_read_only, false, global_object_id)) {
+        return false;
+    }
+    program->global_objects[*global_object_id].is_tentative = true;
+    return true;
+}
+
+static bool global_object_has_definition_payload(const MinicGlobalObject *object) {
+    return object != NULL &&
+           (object->initializer_count != 0U || object->function_relocation_count != 0U ||
+            object->object_relocation_count != 0U || object->is_zero_initialized);
+}
+
+bool minic_c0_global_object_merge_tentative(MinicC0Program *program,
+                                            MinicGlobalObjectId global_object_id) {
+    MinicGlobalObject *object;
+
+    if (program == NULL || global_object_id >= program->global_object_count) {
+        return false;
+    }
+    object = &program->global_objects[global_object_id];
+    if (!object->is_extern && !object->is_tentative) {
+        /* A tentative definition after a full definition is another declaration
+         * of the same already-defined entity. */
+        return true;
+    }
+    if (global_object_has_definition_payload(object)) {
+        return false;
+    }
+    object->is_extern = false;
+    object->is_tentative = true;
+    return true;
+}
+
+bool minic_c0_global_object_begin_definition(MinicC0Program *program,
+                                             MinicGlobalObjectId global_object_id) {
+    MinicGlobalObject *object;
+
+    if (program == NULL || global_object_id >= program->global_object_count) {
+        return false;
+    }
+    object = &program->global_objects[global_object_id];
+    if ((!object->is_extern && !object->is_tentative) ||
+        global_object_has_definition_payload(object)) {
+        return false;
+    }
+    object->is_extern = false;
+    object->is_tentative = false;
+    object->is_block_scope_extern_only = false;
+    return true;
+}
+
 bool minic_c0_global_object_add_initializer(MinicC0Program *program,
                                             MinicGlobalObjectId global_object_id,
                                             int value) {
@@ -173,7 +233,8 @@ bool minic_c0_global_object_add_initializer(MinicC0Program *program,
         return false;
     }
     object = &program->global_objects[global_object_id];
-    if (object->is_zero_initialized || object->function_relocation_count != 0U) {
+    if (object->is_tentative || object->is_zero_initialized ||
+        object->function_relocation_count != 0U) {
         return false;
     }
     if (!grow_array((void **)&object->initializer_values,
@@ -199,7 +260,8 @@ bool minic_c0_global_object_add_function_relocation(MinicC0Program *program,
         return false;
     }
     object = &program->global_objects[global_object_id];
-    if (object->initializer_count != 0U || object->function_relocation_count >= 8U) {
+    if (object->is_tentative || object->initializer_count != 0U ||
+        object->function_relocation_count >= 8U) {
         return false;
     }
     relocation = &object->function_relocations[object->function_relocation_count];
@@ -217,9 +279,9 @@ bool minic_c0_global_object_set_extern(MinicC0Program *program,
         return false;
     }
     object = &program->global_objects[global_object_id];
-    if (object->initializer_count != 0U || object->function_relocation_count != 0U ||
-        object->object_relocation_count != 0U || object->is_zero_initialized ||
-        object->is_internal) {
+    if (object->is_tentative || object->initializer_count != 0U ||
+        object->function_relocation_count != 0U || object->object_relocation_count != 0U ||
+        object->is_zero_initialized || object->is_internal) {
         return false;
     }
     object->is_extern = true;
@@ -238,7 +300,8 @@ bool minic_c0_global_object_add_object_relocation(MinicC0Program *program,
         return false;
     }
     object = &program->global_objects[global_object_id];
-    if (object->initializer_count != 0U || object->function_relocation_count != 0U ||
+    if (object->is_tentative || object->initializer_count != 0U ||
+        object->function_relocation_count != 0U ||
         !grow_array((void **)&object->object_relocations,
                     &object->object_relocation_capacity,
                     object->object_relocation_count,
@@ -260,7 +323,7 @@ bool minic_c0_global_object_set_zero_initialized(MinicC0Program *program,
         return false;
     }
     object = &program->global_objects[global_object_id];
-    if (object->initializer_count != 0U) {
+    if (object->is_tentative || object->initializer_count != 0U) {
         return false;
     }
     object->is_zero_initialized = true;

@@ -261,6 +261,13 @@ external_tiny_aes() {
         sh tests/external/tiny-aes-c/probe.sh
 }
 
+external_tentative_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" \
+    HOST_CC=cc \
+    BUILD_DIR="$root/build/ci-external-tentative" \
+        sh tests/compiler/c0/run-external-tentative-definitions.sh
+}
+
 external_cjson_frontier() {
     MINIC="$root/build/ci-release/bin/minic" \
     BUILD_DIR="$root/build/ci-external" \
@@ -287,6 +294,7 @@ start_gate variadic-declarations-focused variadic_declaration_focused
 start_gate variadic-call-focused variadic_call_focused
 start_gate pointer-equality-focused pointer_equality_focused
 start_gate switch-control-flow-focused switch_control_flow_focused
+start_gate external-tentative-focused external_tentative_focused
 start_gate wide-string-focused wide_string_focused
 start_gate record-array-init-focused runtime_record_array_initializer_focused
 start_gate linenoise-driven-focused linenoise_driven_focused

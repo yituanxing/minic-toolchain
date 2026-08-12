@@ -547,7 +547,7 @@ static bool minic_riscv64_emit_global_object(FILE *file,
 
     directive = NULL;
     scalar_width = 0U;
-    if (object->is_zero_initialized) {
+    if (object->is_zero_initialized || object->is_tentative) {
         if (object->initializer_count != 0U) {
             return false;
         }
@@ -624,7 +624,7 @@ static bool minic_riscv64_emit_global_object(FILE *file,
         if (!emit_object_relocs(file, program, object)) {
             return false;
         }
-    } else if (object->is_zero_initialized) {
+    } else if (object->is_zero_initialized || object->is_tentative) {
         if (!minic_riscv64_emit_zero_bytes(file, object->storage_size)) {
             return false;
         }
