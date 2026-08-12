@@ -535,27 +535,13 @@ bool minic_parser_parse_pointer_declarator(MinicParser *parser,
             minic_parser_error(parser, "pointer declarator depth is unsupported");
             return false;
         }
-        while (parser->current.kind == MINIC_TOKEN_KW_CONST ||
-               parser->current.kind == MINIC_TOKEN_KW_VOLATILE ||
-               minic_parser_identifier_is(parser, "restrict") ||
-               minic_parser_identifier_is(parser, "__restrict")) {
-            if (parser->current.kind == MINIC_TOKEN_KW_VOLATILE) {
-                if (!minic_type_add_volatile(parsed_type, &parsed_type)) {
-                    minic_parser_error(parser, "cannot apply pointer volatile qualifier");
-                    return false;
-                }
-            } else if (parser->current.kind == MINIC_TOKEN_KW_CONST) {
-                if (!minic_type_add_const(parsed_type, &parsed_type)) {
-                    minic_parser_error(parser, "cannot apply pointer const qualifier");
-                    return false;
-                }
-            }
-            /* restrict is an aliasing promise, not an ABI/layout qualifier. MiniC does
-               not yet perform restrict-based alias optimization, so accepting it here
-               preserves observable semantics while keeping the target type unchanged. */
-            if (!minic_parser_advance(parser)) {
-                return false;
-            }
+        if (!minic_parser_parse_pointer_qualifier_sequence(
+                parser,
+                parsed_type.pointer_depth,
+                &parsed_type.pointer_qualifiers,
+                &parsed_type.pointer_volatile_qualifiers)) {
+            minic_parser_error(parser, "cannot parse pointer qualifiers");
+            return false;
         }
     }
     *type = parsed_type;
