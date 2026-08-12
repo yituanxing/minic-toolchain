@@ -375,3 +375,5 @@ BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
 sh "$root/tests/compiler/c0/run-gnu-zero-length-array.sh"
 
 MINIC="$minic" BUILD_DIR="$work/gnu-extern-void-symbol" HOST_CC="$host_cc" sh "$root/tests/compiler/c0/run-gnu-extern-void-symbol.sh"
+
+MINIC="$minic" BUILD_DIR="$work/extern-typedef-array-object" HOST_CC="$host_cc" sh "$root/tests/compiler/c0/run-extern-typedef-array-object.sh"
