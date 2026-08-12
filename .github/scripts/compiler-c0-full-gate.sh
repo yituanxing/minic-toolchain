@@ -174,6 +174,13 @@ switch_control_flow_focused() {
         sh tests/compiler/c0/run-switch-control-flow.sh
 }
 
+wide_string_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" \
+    HOST_CC=cc \
+    BUILD_DIR="$root/build/ci-wide-string" \
+        sh tests/compiler/c0/run-wide-string-literal.sh
+}
+
 linenoise_driven_focused() {
     local script
     for script in \
@@ -267,12 +274,13 @@ if ! wait_phase; then
 fi
 
 printf '%s\n' \
-    'Phase 2: focused declaration/static-local/variadic-call/pointer-equality/switch/linenoise/SDS/RV64 suites, differential programs, tiny-AES, and cJSON'
+    'Phase 2: focused declaration/static-local/variadic-call/pointer-equality/switch/wide-string/linenoise/SDS/RV64 suites, differential programs, tiny-AES, and cJSON'
 start_gate static-local-focused static_local_focused
 start_gate variadic-declarations-focused variadic_declaration_focused
 start_gate variadic-call-focused variadic_call_focused
 start_gate pointer-equality-focused pointer_equality_focused
 start_gate switch-control-flow-focused switch_control_flow_focused
+start_gate wide-string-focused wide_string_focused
 start_gate linenoise-driven-focused linenoise_driven_focused
 start_gate sds-driven-focused sds_driven_focused
 start_gate rv64-focused rv64_focused

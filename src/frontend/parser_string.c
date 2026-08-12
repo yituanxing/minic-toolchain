@@ -63,6 +63,50 @@ static int hex_digit_value(char character) {
     return -1;
 }
 
+static bool string_literal_kind(MinicTokenKind kind) {
+    return kind == MINIC_TOKEN_STRING_LITERAL || kind == MINIC_TOKEN_WIDE_STRING_LITERAL;
+}
+
+static bool string_literal_payload_bounds(const MinicParser *parser,
+                                          MinicSourceSpan span,
+                                          MinicTokenKind kind,
+                                          size_t *cursor,
+                                          size_t *end) {
+    size_t prefix_length;
+
+    if (parser == NULL || cursor == NULL || end == NULL || !string_literal_kind(kind)) {
+        return false;
+    }
+    prefix_length = kind == MINIC_TOKEN_WIDE_STRING_LITERAL ? 2U : 1U;
+    if (span.end.offset <= span.begin.offset + prefix_length ||
+        parser->source[span.end.offset - 1U] != '"') {
+        return false;
+    }
+    if (kind == MINIC_TOKEN_WIDE_STRING_LITERAL) {
+        if (parser->source[span.begin.offset] != 'L' ||
+            parser->source[span.begin.offset + 1U] != '"') {
+            return false;
+        }
+    } else if (parser->source[span.begin.offset] != '"') {
+        return false;
+    }
+    *cursor = span.begin.offset + prefix_length;
+    *end = span.end.offset - 1U;
+    return true;
+}
+
+static bool string_literal_element_type(MinicParser *parser, MinicTokenKind kind, MinicType *type) {
+    if (parser == NULL || type == NULL) {
+        return false;
+    }
+    if (kind == MINIC_TOKEN_STRING_LITERAL) {
+        *type = minic_type_char();
+        return true;
+    }
+    return kind == MINIC_TOKEN_WIDE_STRING_LITERAL &&
+           minic_target_info_wide_character_type(parser->target_info, type);
+}
+
 static bool decode_string_escape(const char *source, size_t *cursor, size_t end, int *value) {
     unsigned int decoded;
     int digit;
@@ -94,16 +138,18 @@ static bool decode_string_escape(const char *source, size_t *cursor, size_t end,
     return true;
 }
 
-static bool decoded_string_length(MinicParser *parser, MinicSourceSpan span, size_t *length) {
+static bool decoded_string_length(MinicParser *parser,
+                                  MinicSourceSpan span,
+                                  MinicTokenKind kind,
+                                  size_t *length) {
     size_t cursor;
     size_t end;
     size_t result;
 
-    if (parser == NULL || length == NULL || span.end.offset <= span.begin.offset + 1U) {
+    if (parser == NULL || length == NULL ||
+        !string_literal_payload_bounds(parser, span, kind, &cursor, &end)) {
         return false;
     }
-    cursor = span.begin.offset + 1U;
-    end = span.end.offset - 1U;
     result = 0U;
     while (cursor < end) {
         if (parser->source[cursor] == '\\') {
@@ -128,15 +174,27 @@ static bool decoded_string_length(MinicParser *parser, MinicSourceSpan span, siz
 }
 
 bool minic_parser_parse_string_literal_size(MinicParser *parser, uint64_t *size) {
+    MinicTokenKind literal_kind;
+    MinicType element_type;
     size_t decoded_length;
+    size_t element_size;
     size_t total_length;
 
-    if (parser == NULL || size == NULL || parser->current.kind != MINIC_TOKEN_STRING_LITERAL) {
+    if (parser == NULL || size == NULL || !string_literal_kind(parser->current.kind)) {
+        return false;
+    }
+    literal_kind = parser->current.kind;
+    if (!string_literal_element_type(parser, literal_kind, &element_type)) {
         return false;
     }
     total_length = 0U;
-    while (parser->current.kind == MINIC_TOKEN_STRING_LITERAL) {
-        if (!decoded_string_length(parser, parser->current.span, &decoded_length) ||
+    while (string_literal_kind(parser->current.kind)) {
+        if (parser->current.kind != literal_kind) {
+            minic_parser_error(parser, "mixed string literal encodings are not supported yet");
+            return false;
+        }
+        if (!decoded_string_length(
+                parser, parser->current.span, parser->current.kind, &decoded_length) ||
             total_length > SIZE_MAX - decoded_length) {
             if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
                 minic_parser_error(parser, "concatenated string literal is too long");
@@ -148,21 +206,27 @@ bool minic_parser_parse_string_literal_size(MinicParser *parser, uint64_t *size)
             return false;
         }
     }
-    if (total_length == SIZE_MAX) {
+    if (total_length == SIZE_MAX ||
+        !minic_target_info_sizeof_type(
+            parser->target_info, parser->program, element_type, &element_size) ||
+        element_size == 0U || (uint64_t)(total_length + 1U) > UINT64_MAX / element_size) {
         minic_parser_error(parser, "string literal sizeof result is too large");
         return false;
     }
-    *size = (uint64_t)(total_length + 1U);
+    *size = (uint64_t)(total_length + 1U) * (uint64_t)element_size;
     return true;
 }
 
-static bool
-add_string_payload(MinicParser *parser, MinicSourceSpan span, MinicGlobalObjectId object_id) {
+static bool add_string_payload(MinicParser *parser,
+                               MinicSourceSpan span,
+                               MinicTokenKind kind,
+                               MinicGlobalObjectId object_id) {
     size_t cursor;
     size_t end;
 
-    cursor = span.begin.offset + 1U;
-    end = span.end.offset - 1U;
+    if (!string_literal_payload_bounds(parser, span, kind, &cursor, &end)) {
+        return false;
+    }
     while (cursor < end) {
         int value;
 
@@ -198,7 +262,8 @@ bool minic_parser_add_string_literal_initializer(MinicParser *parser,
     probe = *parser;
     total_length = 0U;
     while (probe.current.kind == MINIC_TOKEN_STRING_LITERAL) {
-        if (!decoded_string_length(&probe, probe.current.span, &decoded_length) ||
+        if (!decoded_string_length(
+                &probe, probe.current.span, probe.current.kind, &decoded_length) ||
             total_length > SIZE_MAX - decoded_length || !minic_parser_advance(&probe)) {
             return false;
         }
@@ -212,7 +277,8 @@ bool minic_parser_add_string_literal_initializer(MinicParser *parser,
         MinicSourceSpan literal_span;
 
         literal_span = parser->current.span;
-        if (!add_string_payload(parser, literal_span, object_id) || !minic_parser_advance(parser)) {
+        if (!add_string_payload(parser, literal_span, MINIC_TOKEN_STRING_LITERAL, object_id) ||
+            !minic_parser_advance(parser)) {
             return false;
         }
     }
@@ -229,6 +295,8 @@ bool minic_parser_create_string_literal_object(MinicParser *parser,
                                                MinicType *array_type,
                                                MinicSourceSpan *span) {
     MinicParser probe;
+    MinicTokenKind literal_kind;
+    MinicType element_type;
     char object_name[64];
     int object_name_length;
     size_t decoded_length;
@@ -236,15 +304,25 @@ bool minic_parser_create_string_literal_object(MinicParser *parser,
     MinicSourceSpan combined_span;
 
     if (parser == NULL || object_id == NULL || array_type == NULL || span == NULL ||
-        parser->current.kind != MINIC_TOKEN_STRING_LITERAL) {
+        !string_literal_kind(parser->current.kind)) {
         return false;
     }
 
+    literal_kind = parser->current.kind;
+    if (!string_literal_element_type(parser, literal_kind, &element_type)) {
+        minic_parser_error(parser, "unsupported string literal element type");
+        return false;
+    }
     probe = *parser;
     combined_span = probe.current.span;
     total_length = 0U;
-    while (probe.current.kind == MINIC_TOKEN_STRING_LITERAL) {
-        if (!decoded_string_length(&probe, probe.current.span, &decoded_length) ||
+    while (string_literal_kind(probe.current.kind)) {
+        if (probe.current.kind != literal_kind) {
+            minic_parser_error(parser, "mixed string literal encodings are not supported yet");
+            return false;
+        }
+        if (!decoded_string_length(
+                &probe, probe.current.span, probe.current.kind, &decoded_length) ||
             total_length > SIZE_MAX - decoded_length) {
             if (probe.diagnostic != NULL && probe.diagnostic->message[0] == '\0') {
                 minic_parser_error(&probe, "concatenated string literal is too long");
@@ -259,7 +337,7 @@ bool minic_parser_create_string_literal_object(MinicParser *parser,
     }
     if (total_length == SIZE_MAX ||
         !minic_c0_program_add_array_type(
-            parser->program, minic_type_char(), total_length + 1U, array_type)) {
+            parser->program, element_type, total_length + 1U, array_type)) {
         minic_parser_error(parser, "cannot build string literal array type");
         return false;
     }
@@ -280,11 +358,15 @@ bool minic_parser_create_string_literal_object(MinicParser *parser,
         return false;
     }
 
-    while (parser->current.kind == MINIC_TOKEN_STRING_LITERAL) {
+    while (string_literal_kind(parser->current.kind)) {
         MinicSourceSpan literal_span;
 
+        if (parser->current.kind != literal_kind) {
+            minic_parser_error(parser, "mixed string literal encodings are not supported yet");
+            return false;
+        }
         literal_span = parser->current.span;
-        if (!add_string_payload(parser, literal_span, *object_id) ||
+        if (!add_string_payload(parser, literal_span, parser->current.kind, *object_id) ||
             !minic_parser_advance(parser)) {
             return false;
         }
@@ -316,7 +398,8 @@ bool minic_parser_parse_string_text(MinicParser *parser,
     combined_span = probe.current.span;
     total_length = 0U;
     while (probe.current.kind == MINIC_TOKEN_STRING_LITERAL) {
-        if (!decoded_string_length(&probe, probe.current.span, &decoded_length) ||
+        if (!decoded_string_length(
+                &probe, probe.current.span, probe.current.kind, &decoded_length) ||
             total_length > SIZE_MAX - decoded_length) {
             minic_parser_error(parser, "inline assembly string is too long");
             return false;

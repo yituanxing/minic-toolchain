@@ -75,7 +75,8 @@ static bool parse_array_bound_sizeof(MinicParser *parser, int64_t *value) {
         !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '(' after sizeof")) {
         return false;
     }
-    if (parser->current.kind == MINIC_TOKEN_STRING_LITERAL) {
+    if (parser->current.kind == MINIC_TOKEN_STRING_LITERAL ||
+        parser->current.kind == MINIC_TOKEN_WIDE_STRING_LITERAL) {
         if (!minic_parser_parse_string_literal_size(parser, &measured_size) ||
             !minic_parser_expect(
                 parser, MINIC_TOKEN_RPAREN, "expected ')' after sizeof string literal")) {
