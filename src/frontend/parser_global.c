@@ -1143,7 +1143,7 @@ bool minic_parser_parse_extern_global_after_head(MinicParser *parser,
                                                            &declarator_explicit_alignment)) {
             return false;
         }
-        if (minic_type_is_function(object_type) || minic_type_is_array(object_type)) {
+        if (minic_type_is_function(object_type)) {
             minic_parser_error(parser, "unsupported extern object type");
             return false;
         }
