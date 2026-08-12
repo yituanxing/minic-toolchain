@@ -32,7 +32,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           make -j4 MODE=debug
-          sh tests/compiler/c0/run-gnu-omitted-conditional.sh
+          sh -x tests/compiler/c0/run-gnu-omitted-conditional.sh
           make check
 
       - name: Commit product source
