@@ -15,6 +15,8 @@ test -s "$work/output.s"
 grep -F 'record_value:' "$work/output.s" >/dev/null
 grep -F 'scalar_value:' "$work/output.s" >/dev/null
 grep -F '__minic_static_local_' "$work/output.s" >/dev/null
+grep -F '.section .data..once' "$work/output.s" >/dev/null
+test "$(grep -c -F '.section .data.localpair' "$work/output.s")" -eq 2
 
 cat >"$work/layout-attribute.c" <<'EOF'
 int bad(void)
@@ -32,4 +34,4 @@ fi
 grep -F 'GNU static local object attribute semantics are not implemented at this placement'     "$work/layout-attribute.stderr" >/dev/null
 
 printf '%s
-'   'PASS compiler/c0/gnu_static_local_interleaved_attribute placement=type-before-declarator unused=informational record-empty-init=zero scalar=preserved layout-bearing=fail-closed'
+'   'PASS compiler/c0/gnu_static_local_interleaved_attribute placement=type-before-declarator unused=informational record-empty-init=zero scalar=preserved section=global-object declaration-wide=2 aligned=fail-closed'
