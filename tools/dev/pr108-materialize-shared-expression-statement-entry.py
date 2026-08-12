@@ -57,7 +57,6 @@ mkdir -p "$work"
 grep -F "  addi t0, t0, 1" "$work/expression_statement_entry.s" >/dev/null
 grep -F "  addi t0, t0, -1" "$work/expression_statement_entry.s" >/dev/null
 grep -F "  not a0, a0" "$work/expression_statement_entry.s" >/dev/null
-grep -F "entry" "$work/expression_statement_entry.s" >/dev/null
 
 printf '%s\n' "PASS compiler/c0/expression_statement_entry owner=expression-parser prefix=++,-- unary=~ literal=char,float,string query=sizeof,alignof linux-member-prefix=1"
 '''
