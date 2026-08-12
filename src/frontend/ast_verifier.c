@@ -1219,6 +1219,7 @@ bool minic_c0_program_verify_target(const MinicC0Program *program,
         object = &program->global_objects[index];
         if (object->name == NULL || !type_is_valid(program, object->type) ||
             minic_type_is_function(object->type) ||
+            (minic_type_is_void(object->type) && !object->is_extern) ||
             (object->is_extern &&
              (object->is_internal || object->is_zero_initialized ||
               object->initializer_count != 0U || object->function_relocation_count != 0U ||

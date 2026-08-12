@@ -1143,8 +1143,7 @@ bool minic_parser_parse_extern_global_after_head(MinicParser *parser,
                                                            &declarator_explicit_alignment)) {
             return false;
         }
-        if (minic_type_is_void(object_type) || minic_type_is_function(object_type) ||
-            minic_type_is_array(object_type)) {
+        if (minic_type_is_function(object_type) || minic_type_is_array(object_type)) {
             minic_parser_error(parser, "unsupported extern object type");
             return false;
         }
@@ -1174,14 +1173,13 @@ bool minic_parser_parse_extern_global_after_head(MinicParser *parser,
                 return false;
             }
             parser->program->array_type_count = array_type_begin;
-        } else if (!minic_c0_program_add_global_object(parser->program,
-                                                       parser->source + name_span.begin.offset,
-                                                       minic_parser_span_length(name_span),
-                                                       object_type,
-                                                       false,
-                                                       minic_type_is_const(declarator_element_type),
-                                                       &object_id) ||
-                   !minic_c0_global_object_set_extern(parser->program, object_id) ||
+        } else if (!minic_c0_program_add_extern_global_object(
+                       parser->program,
+                       parser->source + name_span.begin.offset,
+                       minic_parser_span_length(name_span),
+                       object_type,
+                       minic_type_is_const(declarator_element_type),
+                       &object_id) ||
                    (declarator_has_section &&
                     !minic_c0_global_object_set_section(parser->program,
                                                         object_id,

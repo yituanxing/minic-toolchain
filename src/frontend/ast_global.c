@@ -106,17 +106,18 @@ bool minic_c0_program_add_fixed_register_binding(MinicC0Program *program,
     return true;
 }
 
-bool minic_c0_program_add_global_object(MinicC0Program *program,
-                                        const char *name,
-                                        size_t name_length,
-                                        MinicType type,
-                                        bool is_internal,
-                                        bool is_read_only,
-                                        MinicGlobalObjectId *global_object_id) {
+static bool add_global_object_entity(MinicC0Program *program,
+                                     const char *name,
+                                     size_t name_length,
+                                     MinicType type,
+                                     bool is_internal,
+                                     bool is_read_only,
+                                     bool is_extern,
+                                     MinicGlobalObjectId *global_object_id) {
     MinicGlobalObject object;
 
-    if (program == NULL || name == NULL || global_object_id == NULL || minic_type_is_void(type) ||
-        name_conflicts(program, name, name_length)) {
+    if (program == NULL || name == NULL || global_object_id == NULL ||
+        (minic_type_is_void(type) && !is_extern) || name_conflicts(program, name, name_length)) {
         return false;
     }
     if (!grow_array((void **)&program->global_objects,
@@ -135,10 +136,32 @@ bool minic_c0_program_add_global_object(MinicC0Program *program,
     object.type = type;
     object.is_internal = is_internal;
     object.is_read_only = is_read_only;
+    object.is_extern = is_extern;
     *global_object_id = program->global_object_count;
     program->global_objects[program->global_object_count] = object;
     program->global_object_count += 1U;
     return true;
+}
+
+bool minic_c0_program_add_global_object(MinicC0Program *program,
+                                        const char *name,
+                                        size_t name_length,
+                                        MinicType type,
+                                        bool is_internal,
+                                        bool is_read_only,
+                                        MinicGlobalObjectId *global_object_id) {
+    return add_global_object_entity(
+        program, name, name_length, type, is_internal, is_read_only, false, global_object_id);
+}
+
+bool minic_c0_program_add_extern_global_object(MinicC0Program *program,
+                                               const char *name,
+                                               size_t name_length,
+                                               MinicType type,
+                                               bool is_read_only,
+                                               MinicGlobalObjectId *global_object_id) {
+    return add_global_object_entity(
+        program, name, name_length, type, false, is_read_only, true, global_object_id);
 }
 
 bool minic_c0_global_object_add_initializer(MinicC0Program *program,
