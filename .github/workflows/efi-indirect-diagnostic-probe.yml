@@ -1,0 +1,76 @@
+name: EFI Indirect Diagnostic Probe
+on:
+  push:
+    branches: [probe/efi-indirect-diagnostic-71992]
+permissions:
+  contents: read
+jobs:
+  linux-frontier:
+    name: riscv-defconfig-init-main
+    runs-on: ubuntu-24.04
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - uses: actions/checkout@v4
+      - name: Preserve nested indirect-call diagnostics
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/frontend/parser_postfix.c')
+          text = p.read_text()
+          old = '''        if (parser->current.kind == MINIC_TOKEN_RPAREN ||
+            !minic_parser_parse_expression(parser, &argument_id, 0U)) {
+            indirect_argument_count_error(parser);
+            return false;
+        }
+'''
+          new = '''        if (parser->current.kind == MINIC_TOKEN_RPAREN) {
+            indirect_argument_count_error(parser);
+            return false;
+        }
+        if (!minic_parser_parse_expression(parser, &argument_id, 0U)) {
+            return false;
+        }
+'''
+          if text.count(old) != 1:
+              raise SystemExit(f'anchor mismatch: {text.count(old)}')
+          p.write_text(text.replace(old, new, 1))
+          PY
+          clang-format-18 -i src/frontend/parser_postfix.c
+      - name: Restore pinned Linux source archive
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-cache/linux-6.6.143.tar.xz
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
+      - name: Build release compiler
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release BUILD_DIR=build/linux-compiler
+      - name: Install RISC-V Linux Kbuild dependencies
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu flex bison bc libelf-dev libssl-dev
+      - name: Drive unchanged Linux 6.6.143 init/main.i
+        run: |
+          set +e
+          MINIC="$GITHUB_WORKSPACE/build/linux-compiler/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/linux-discovery" LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-cache/linux-6.6.143.tar.xz" CROSS_COMPILE=riscv64-linux-gnu- sh tests/external/linux/probe.sh
+          status=$?
+          set -e
+          exit "$status"
+      - name: Prepare diagnostic
+        if: always()
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-discovery"
+          { test -s "$work/minic.stderr" && sed -n '1,120p' "$work/minic.stderr" || true; } > "$work/efi-diagnostic.txt"
+          cat "$work/efi-diagnostic.txt"
+      - name: Upload diagnostic
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: efi-indirect-diagnostic-${{ github.run_id }}
+          path: build/linux-discovery/efi-diagnostic.txt
+          if-no-files-found: ignore
+          retention-days: 2
