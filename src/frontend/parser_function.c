@@ -1164,7 +1164,7 @@ static bool finish_function_declaration_entity(MinicParser *parser,
                 parser->program, function_id, return_type, parameter_types, parameter_count) ||
             !minic_c0_program_set_function_internal(parser->program, function_id, is_internal) ||
             !minic_c0_program_set_function_variadic(parser->program, function_id, is_variadic)) {
-            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == ' ') {
+            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
                 minic_parser_error(parser, "cannot declare function entity");
             }
             return false;
