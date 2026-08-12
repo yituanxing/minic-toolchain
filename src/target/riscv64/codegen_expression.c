@@ -1730,6 +1730,7 @@ bool minic_riscv64_emit_expression(FILE *file,
         const MinicFunctionType *indirect_type;
         const MinicExpression *indirect_callee;
         const MinicType *parameter_types;
+        MinicType abi_parameter_types[MINIC_MAX_FUNCTION_PARAMETERS];
         size_t parameter_count;
         size_t argument_count;
         size_t argument_index;
@@ -1791,6 +1792,14 @@ bool minic_riscv64_emit_expression(FILE *file,
             }
         }
 
+        for (argument_index = 0U; argument_index < parameter_count; ++argument_index) {
+            if (!minic_c0_fixed_parameter_abi_type(program,
+                                                   parameter_types[argument_index],
+                                                   &abi_parameter_types[argument_index])) {
+                return false;
+            }
+        }
+
         if (!is_indirect && direct_callee != NULL && direct_callee->name_length == 16U &&
             strcmp(direct_callee->name, "__minic_va_start") == 0) {
             MinicRiscv64FrameLayout frame_layout;
@@ -1818,15 +1827,15 @@ bool minic_riscv64_emit_expression(FILE *file,
                 return false;
             }
             if (argument_index < parameter_count &&
-                minic_type_is_record(parameter_types[argument_index])) {
+                minic_type_is_record(abi_parameter_types[argument_index])) {
                 size_t aggregate_size;
                 size_t aggregate_chunks;
 
                 if (!minic_type_is_record(argument->type) ||
-                    argument->type.record_id != parameter_types[argument_index].record_id ||
+                    argument->type.record_id != abi_parameter_types[argument_index].record_id ||
                     argument->value_category != MINIC_VALUE_LVALUE ||
                     !minic_riscv64_integer_aggregate_abi(program,
-                                                         parameter_types[argument_index],
+                                                         abi_parameter_types[argument_index],
                                                          &aggregate_size,
                                                          &aggregate_chunks) ||
                     !minic_riscv64_emit_lvalue_address(
@@ -1851,9 +1860,9 @@ bool minic_riscv64_emit_expression(FILE *file,
                 return false;
             }
             if (argument_index < parameter_count) {
-                if (minic_type_is_integer(parameter_types[argument_index]) &&
+                if (minic_type_is_integer(abi_parameter_types[argument_index]) &&
                     !minic_riscv64_emit_integer_conversion(
-                        file, parameter_types[argument_index], "a0")) {
+                        file, abi_parameter_types[argument_index], "a0")) {
                     return false;
                 }
             } else if (!is_variadic ||
@@ -1875,21 +1884,21 @@ bool minic_riscv64_emit_expression(FILE *file,
                 bool fixed_floating;
 
                 fixed_floating = argument_index < parameter_count &&
-                                 (minic_type_is_double(parameter_types[argument_index]) ||
-                                  minic_type_is_float(parameter_types[argument_index]));
+                                 (minic_type_is_double(abi_parameter_types[argument_index]) ||
+                                  minic_type_is_float(abi_parameter_types[argument_index]));
                 if (fixed_floating) {
                     if (floating_register_index >= 8U) {
                         return false;
                     }
                     floating_register_index += 1U;
                 } else if (argument_index < parameter_count &&
-                           minic_type_is_record(parameter_types[argument_index])) {
+                           minic_type_is_record(abi_parameter_types[argument_index])) {
                     size_t aggregate_size;
                     size_t aggregate_chunks;
                     size_t chunk_index;
 
                     if (!minic_riscv64_integer_aggregate_abi(program,
-                                                             parameter_types[argument_index],
+                                                             abi_parameter_types[argument_index],
                                                              &aggregate_size,
                                                              &aggregate_chunks)) {
                         return false;
@@ -1931,12 +1940,12 @@ bool minic_riscv64_emit_expression(FILE *file,
 
                 offset = outgoing_stack_bytes + (argument_count - 1U - argument_index) * 16U;
                 fixed_floating = argument_index < parameter_count &&
-                                 (minic_type_is_double(parameter_types[argument_index]) ||
-                                  minic_type_is_float(parameter_types[argument_index]));
+                                 (minic_type_is_double(abi_parameter_types[argument_index]) ||
+                                  minic_type_is_float(abi_parameter_types[argument_index]));
                 if (fixed_floating) {
                     if (floating_register_index >= 8U ||
                         fprintf(file,
-                                minic_type_is_double(parameter_types[argument_index])
+                                minic_type_is_double(abi_parameter_types[argument_index])
                                     ? "  ld t0, %zu(sp)\n  fmv.d.x fa%zu, t0\n"
                                     : "  ld t0, %zu(sp)\n  fmv.w.x fa%zu, t0\n",
                                 offset,
@@ -1945,13 +1954,13 @@ bool minic_riscv64_emit_expression(FILE *file,
                     }
                     floating_register_index += 1U;
                 } else if (argument_index < parameter_count &&
-                           minic_type_is_record(parameter_types[argument_index])) {
+                           minic_type_is_record(abi_parameter_types[argument_index])) {
                     size_t aggregate_size;
                     size_t aggregate_chunks;
                     size_t chunk_index;
 
                     if (!minic_riscv64_integer_aggregate_abi(program,
-                                                             parameter_types[argument_index],
+                                                             abi_parameter_types[argument_index],
                                                              &aggregate_size,
                                                              &aggregate_chunks)) {
                         return false;

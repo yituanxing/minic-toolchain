@@ -532,7 +532,7 @@ static bool parse_call_argument(MinicParser *parser,
             minic_parser_error(parser, "invalid converted call argument");
             return false;
         }
-        if (!minic_c0_assignment_compatible(
+        if (!minic_c0_fixed_call_argument_compatible(
                 parser->program, callee->parameter_types[argument_index], argument_id)) {
             minic_parser_error(parser, "call argument type does not match declaration");
             return false;

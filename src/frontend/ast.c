@@ -1566,3 +1566,67 @@ const MinicInlineAsm *minic_c0_program_inline_asm(const MinicC0Program *program,
     }
     return &program->inline_asms[inline_asm_id];
 }
+
+bool minic_c0_fixed_parameter_abi_type(const MinicC0Program *program,
+                                       MinicType parameter_type,
+                                       MinicType *abi_type) {
+    const MinicRecord *record;
+    const MinicRecordField *first_field;
+
+    if (program == NULL || abi_type == NULL) {
+        return false;
+    }
+    *abi_type = parameter_type;
+    if (!minic_type_is_record(parameter_type)) {
+        return true;
+    }
+    record = minic_c0_program_record(program, parameter_type.record_id);
+    if (record == NULL || !record->is_transparent_union) {
+        return record != NULL;
+    }
+    if (!record->is_complete || !record->is_union || record->field_count == 0U) {
+        return false;
+    }
+    first_field = minic_c0_record_field(record, 0U);
+    if (first_field == NULL || first_field->is_array || first_field->is_bit_field ||
+        !minic_type_is_pointer(first_field->type)) {
+        return false;
+    }
+    *abi_type = first_field->type;
+    return true;
+}
+
+bool minic_c0_fixed_call_argument_compatible(const MinicC0Program *program,
+                                             MinicType parameter_type,
+                                             MinicExpressionId argument_expression_id) {
+    const MinicRecord *record;
+    size_t field_index;
+
+    if (program == NULL) {
+        return false;
+    }
+    if (minic_c0_assignment_compatible(program, parameter_type, argument_expression_id)) {
+        return true;
+    }
+    if (!minic_type_is_record(parameter_type)) {
+        return false;
+    }
+    record = minic_c0_program_record(program, parameter_type.record_id);
+    if (record == NULL || !record->is_complete || !record->is_union ||
+        !record->is_transparent_union || record->field_count == 0U) {
+        return false;
+    }
+    for (field_index = 0U; field_index < record->field_count; ++field_index) {
+        const MinicRecordField *field;
+
+        field = minic_c0_record_field(record, field_index);
+        if (field == NULL || field->is_array || field->is_bit_field ||
+            !minic_type_is_pointer(field->type)) {
+            return false;
+        }
+        if (minic_c0_assignment_compatible(program, field->type, argument_expression_id)) {
+            return true;
+        }
+    }
+    return false;
+}
