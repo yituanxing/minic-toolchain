@@ -1,0 +1,35 @@
+name: PR121 Materialize Noclone Attribute
+on:
+  push:
+    branches: [agent/noclone-function-attribute-v0]
+permissions:
+  contents: write
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Materialize noclone function attribute
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/pr121-materialize.py
+          clang-format-18 -i src/frontend/attribute.c src/frontend/attribute.h tests/compiler/c0/deferred_declarator_attributes.c tests/compiler/c0/invalid_noclone_argument.c tests/compiler/c0/invalid_noclone_object.c
+      - name: Build and validate
+        run: |
+          set -Eeuo pipefail
+          make -j4
+          MINIC="$GITHUB_WORKSPACE/build/debug/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/pr121-focused" sh tests/compiler/c0/run-deferred-declarator-attributes.sh
+          make check
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+          git diff --check
+      - name: Commit product source
+        run: |
+          set -Eeuo pipefail
+          rm -f tools/dev/pr121-materialize.py .github/workflows/pr121-materialize-noclone.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'feat(frontend): model GNU noclone attribute'
+          git push origin HEAD:agent/noclone-function-attribute-v0
