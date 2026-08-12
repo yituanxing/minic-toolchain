@@ -58,3 +58,40 @@ int compound_address_and_order(void)
     });
     return left + holder->tag + (int)holder->count;
 }
+
+typedef struct {
+    unsigned long val;
+} kernel_cap_t;
+
+/* Linux capability.h shape: positional compound literal from runtime expressions. */
+kernel_cap_t cap_combine_shape(const kernel_cap_t a, const kernel_cap_t b)
+{
+    return (kernel_cap_t) { a.val | b.val };
+}
+
+int positional_member(void)
+{
+    kernel_cap_t a = { .val = 5 };
+    kernel_cap_t b = { .val = 10 };
+    kernel_cap_t result = cap_combine_shape(a, b);
+    return (int)result.val;
+}
+
+struct NestedInner {
+    unsigned long first;
+    unsigned long second;
+};
+
+struct NestedOuter {
+    struct NestedInner inner;
+    int count;
+};
+
+int nested_designated_braces(int value)
+{
+    struct NestedOuter item = {
+        .inner = { 3, 4 },
+        .count = value,
+    };
+    return (int)(item.inner.first + item.inner.second) + item.count;
+}

@@ -369,6 +369,197 @@ static bool add_record_copy_assignments(MinicParser *parser,
                                         MinicExpressionId source_id,
                                         MinicSourceSpan span);
 
+static bool add_record_field_lvalue(MinicParser *parser,
+                                    MinicExpressionId target_id,
+                                    MinicRecordId record_id,
+                                    size_t field_index,
+                                    MinicSourceSpan span,
+                                    MinicExpressionId *member_id) {
+    const MinicExpression *target;
+    const MinicRecord *record;
+    const MinicRecordField *field;
+    MinicExpression address;
+    MinicExpression member;
+    MinicExpressionId address_id;
+    MinicType target_type;
+
+    if (parser == NULL || member_id == NULL) {
+        return false;
+    }
+    target = minic_c0_program_expression(parser->program, target_id);
+    record = minic_c0_program_record(parser->program, record_id);
+    field = minic_c0_record_field(record, field_index);
+    if (target == NULL || record == NULL || field == NULL ||
+        target->value_category != MINIC_VALUE_LVALUE || !minic_type_is_record(target->type) ||
+        target->type.record_id != record_id || field->element_count != 1U ||
+        field->is_flexible_array) {
+        minic_parser_error(parser, "unsupported positional record initializer field");
+        return false;
+    }
+    target_type = target->type;
+
+    (void)memset(&address, 0, sizeof(address));
+    address.kind = MINIC_EXPRESSION_ADDRESS_OF;
+    address.span = target->span;
+    if (!minic_type_pointer_to(target_type, &address.type)) {
+        minic_parser_error(parser, "record initializer address depth is unsupported");
+        return false;
+    }
+    address.value_category = MINIC_VALUE_RVALUE;
+    address.value.unary.operand = target_id;
+    if (!minic_parser_add_expression(parser, &address, &address_id)) {
+        return false;
+    }
+
+    (void)memset(&member, 0, sizeof(member));
+    member.kind = MINIC_EXPRESSION_MEMBER;
+    member.span = span;
+    member.type = field->type;
+    if (minic_type_is_const(target_type) && !minic_type_add_const(member.type, &member.type)) {
+        minic_parser_error(parser, "cannot propagate const to record initializer member");
+        return false;
+    }
+    member.value_category = MINIC_VALUE_LVALUE;
+    member.value.member.base = address_id;
+    member.value.member.record_id = record_id;
+    member.value.member.field_index = field_index;
+    return minic_parser_add_expression(parser, &member, member_id);
+}
+
+static bool add_runtime_record_member_assignment(MinicParser *parser,
+                                                 MinicExpressionId member_id,
+                                                 MinicExpressionId value_id) {
+    const MinicExpression *member;
+    const MinicExpression *value;
+    MinicSourceSpan member_span;
+    MinicStatement statement;
+    MinicType member_type;
+
+    member = minic_c0_program_expression(parser->program, member_id);
+    if (member == NULL || member->value_category != MINIC_VALUE_LVALUE) {
+        minic_parser_error(parser, "record initializer member is not assignable");
+        return false;
+    }
+    member_span = member->span;
+    member_type = member->type;
+    if (!apply_assignment_conversion(parser, member_type, &value_id) ||
+        !minic_c0_assignment_compatible(parser->program, member_type, value_id)) {
+        minic_parser_error(parser, "record initializer value type mismatch");
+        return false;
+    }
+    value = minic_c0_program_expression(parser->program, value_id);
+    if (value == NULL) {
+        minic_parser_error(parser, "invalid record initializer value");
+        return false;
+    }
+
+    (void)memset(&statement, 0, sizeof(statement));
+    statement.kind = MINIC_STATEMENT_ASSIGN;
+    statement.span.begin = member_span.begin;
+    statement.span.end = value->span.end;
+    statement.target_expression = member_id;
+    statement.expression = value_id;
+    statement.target_statement = MINIC_STATEMENT_INVALID;
+    statement.cleanup_context = parser->cleanup_context;
+    statement.cleanup_stop_context = MINIC_CLEANUP_CONTEXT_ROOT;
+    statement.then_block = MINIC_BLOCK_INVALID;
+    statement.else_block = MINIC_BLOCK_INVALID;
+    return minic_parser_add_statement(parser, &statement);
+}
+
+static bool parse_positional_runtime_record_initializer(MinicParser *parser,
+                                                        MinicExpressionId target_id,
+                                                        MinicSourcePosition begin) {
+    const MinicExpression *target;
+    const MinicRecord *record;
+    MinicRecordId record_id;
+    MinicSourceSpan initializer_span;
+    size_t field_index;
+
+    target = minic_c0_program_expression(parser->program, target_id);
+    if (target == NULL || target->value_category != MINIC_VALUE_LVALUE ||
+        !minic_type_is_record(target->type)) {
+        minic_parser_error(parser, "positional initializer requires a record lvalue");
+        return false;
+    }
+    record_id = target->type.record_id;
+    record = minic_c0_program_record(parser->program, record_id);
+    if (record == NULL || !record->is_complete || record->is_union) {
+        minic_parser_error(parser,
+                           "positional runtime initializer requires a complete struct type");
+        return false;
+    }
+    initializer_span.begin = begin;
+    initializer_span.end = parser->current.span.end;
+    field_index = 0U;
+
+    while (parser->current.kind != MINIC_TOKEN_RBRACE) {
+        const MinicRecordField *field;
+        MinicExpressionId member_id;
+        MinicSourceSpan member_span;
+
+        if (field_index >= record->field_count) {
+            minic_parser_error(parser, "too many positional record initializers");
+            return false;
+        }
+        field = minic_c0_record_field(record, field_index);
+        if (field == NULL || field->element_count != 1U || field->is_flexible_array) {
+            minic_parser_error(parser, "unsupported positional record initializer field");
+            return false;
+        }
+        member_span.begin = parser->current.span.begin;
+        member_span.end = parser->current.span.end;
+        if (!add_record_field_lvalue(
+                parser, target_id, record_id, field_index, member_span, &member_id)) {
+            return false;
+        }
+        if (parser->current.kind == MINIC_TOKEN_LBRACE && minic_type_is_record(field->type)) {
+            if (!minic_parser_parse_runtime_record_initializer(parser, member_id)) {
+                return false;
+            }
+        } else {
+            MinicExpressionId value_id;
+
+            if (!minic_parser_parse_expression(parser, &value_id, 0U) ||
+                !add_runtime_record_member_assignment(parser, member_id, value_id)) {
+                return false;
+            }
+        }
+        field_index += 1U;
+
+        if (parser->current.kind == MINIC_TOKEN_COMMA) {
+            if (!minic_parser_advance(parser)) {
+                return false;
+            }
+            if (parser->current.kind == MINIC_TOKEN_RBRACE) {
+                break;
+            }
+        } else if (parser->current.kind != MINIC_TOKEN_RBRACE) {
+            minic_parser_error(parser, "expected ',' or '}' in positional record initializer");
+            return false;
+        }
+    }
+    initializer_span.end = parser->current.span.end;
+
+    while (field_index < record->field_count) {
+        MinicExpressionId member_id;
+
+        if (!add_record_field_lvalue(
+                parser, target_id, record_id, field_index, initializer_span, &member_id)) {
+            return false;
+        }
+        if (minic_type_is_record(record->fields[field_index].type)) {
+            if (!add_zero_initialized_record_lvalue(parser, member_id, initializer_span)) {
+                return false;
+            }
+        } else if (!add_zero_assignment_to_lvalue(parser, member_id, initializer_span)) {
+            return false;
+        }
+        field_index += 1U;
+    }
+    return minic_parser_advance(parser);
+}
+
 bool minic_parser_parse_runtime_record_initializer(MinicParser *parser,
                                                    MinicExpressionId target_id) {
     MinicSourceSpan initializer_span;
@@ -383,9 +574,13 @@ bool minic_parser_parse_runtime_record_initializer(MinicParser *parser,
         return false;
     }
     if (parser->current.kind != MINIC_TOKEN_DOT) {
-        return parse_zero_aggregate_initializer_contents(
-                   parser, initializer_span.begin, &initializer_span) &&
-               add_zero_initialized_record_lvalue(parser, target_id, initializer_span);
+        if (parser->current.kind == MINIC_TOKEN_RBRACE) {
+            initializer_span.end = parser->current.span.end;
+            return minic_parser_advance(parser) &&
+                   add_zero_initialized_record_lvalue(parser, target_id, initializer_span);
+        }
+        return parse_positional_runtime_record_initializer(
+            parser, target_id, initializer_span.begin);
     }
     if (!add_zero_initialized_record_lvalue(parser, target_id, zero_span)) {
         return false;
@@ -393,18 +588,13 @@ bool minic_parser_parse_runtime_record_initializer(MinicParser *parser,
 
     for (;;) {
         MinicExpressionId member_id;
-        MinicExpressionId value_id;
         const MinicExpression *member;
-        const MinicExpression *value;
-        MinicSourceSpan member_span;
-        MinicStatement statement;
         MinicType member_type;
 
         if (parser->current.kind != MINIC_TOKEN_DOT ||
             !minic_parser_parse_direct_member(parser, target_id, &member_id) ||
             !minic_parser_expect(
-                parser, MINIC_TOKEN_EQUAL, "expected '=' after record designator") ||
-            !minic_parser_parse_expression(parser, &value_id, 0U)) {
+                parser, MINIC_TOKEN_EQUAL, "expected '=' after record designator")) {
             if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
                 minic_parser_error(parser, "expected designated record initializer");
             }
@@ -415,30 +605,21 @@ bool minic_parser_parse_runtime_record_initializer(MinicParser *parser,
             minic_parser_error(parser, "record designated initializer type mismatch");
             return false;
         }
-        member_span = member->span;
         member_type = member->type;
-        if (!apply_assignment_conversion(parser, member_type, &value_id) ||
-            !minic_c0_assignment_compatible(parser->program, member_type, value_id)) {
-            minic_parser_error(parser, "record designated initializer type mismatch");
-            return false;
-        }
-        value = minic_c0_program_expression(parser->program, value_id);
-        if (value == NULL) {
-            minic_parser_error(parser, "invalid record designated initializer value");
-            return false;
-        }
+        if (parser->current.kind == MINIC_TOKEN_LBRACE && minic_type_is_record(member_type)) {
+            if (!minic_parser_parse_runtime_record_initializer(parser, member_id)) {
+                return false;
+            }
+        } else {
+            MinicExpressionId value_id;
 
-        (void)memset(&statement, 0, sizeof(statement));
-        statement.kind = MINIC_STATEMENT_ASSIGN;
-        statement.span.begin = member_span.begin;
-        statement.span.end = value->span.end;
-        statement.target_expression = member_id;
-        statement.expression = value_id;
-        statement.target_statement = MINIC_STATEMENT_INVALID;
-        statement.then_block = MINIC_BLOCK_INVALID;
-        statement.else_block = MINIC_BLOCK_INVALID;
-        if (!minic_parser_add_statement(parser, &statement)) {
-            return false;
+            if (!minic_parser_parse_expression(parser, &value_id, 0U) ||
+                !add_runtime_record_member_assignment(parser, member_id, value_id)) {
+                if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                    minic_parser_error(parser, "record designated initializer type mismatch");
+                }
+                return false;
+            }
         }
 
         if (parser->current.kind == MINIC_TOKEN_COMMA) {
