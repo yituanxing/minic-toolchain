@@ -3,7 +3,7 @@ from pathlib import Path
 
 # Adding is_zero_length to MinicArrayType changes the construction invariant:
 # every descriptor must initialize the new identity bit, not only the GNU [0]
-# constructor.  Keep ordinary/incomplete arrays explicitly false so existing
+# constructor. Keep ordinary/incomplete arrays explicitly false so existing
 # ArrayType consumers never observe indeterminate state.
 ast = Path("src/frontend/ast.c")
 text = ast.read_text()
@@ -13,6 +13,10 @@ if text.count(old) != 1:
     raise SystemExit(f"array descriptor initialization anchor count={text.count(old)}")
 ast.write_text(text.replace(old, new, 1))
 
+# Typedef arrays should consume the same array-declarator semantics as the
+# other declaration paths. This is what makes `typedef T A[0]` carry the same
+# complete-zero identity as `extern T a[0]` instead of preserving an old
+# typedef-only rejection.
 p = Path("src/frontend/parser_typedef.c")
 text = p.read_text()
 
@@ -23,8 +27,19 @@ if text.count(old) != 1:
 text = text.replace(old, new, 1)
 
 old = '''    while (parser->current.kind == MINIC_TOKEN_LBRACKET) {\n        if (is_function_declarator) {\n            minic_parser_error(parser, "function typedef array declarators are not supported yet");\n            return false;\n        }\n        if (bound_count >= sizeof(bounds) / sizeof(bounds[0])) {\n            minic_parser_error(parser, "at most eight array dimensions are supported");\n            return false;\n        }\n        if (!minic_parser_advance(parser) ||\n            !minic_parser_parse_fixed_array_bound(parser, &bounds[bound_count])) {\n            return false;\n        }\n        bound_count += 1U;\n    }\n\n    while (bound_count > 0U) {\n        bound_count -= 1U;\n        if (!minic_c0_program_add_array_type(\n                parser->program, aliased_type, bounds[bound_count], &aliased_type)) {\n            minic_parser_error(parser, "out of memory while building typedef array type");\n            return false;\n        }\n    }\n'''
-new = '''    if (parser->current.kind == MINIC_TOKEN_LBRACKET) {\n        bool is_array;\n\n        if (is_function_declarator) {\n            minic_parser_error(parser, "function typedef array declarators are not supported yet");\n            return false;\n        }\n        if (!minic_parser_parse_array_declarator_suffix(\n                parser, aliased_type, false, &aliased_type, &is_array) || !is_array) {\n            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {\n                minic_parser_error(parser, "cannot build typedef array declarator type");\n            }\n            return false;\n        }\n    }\n'''
+new = '''    if (parser->current.kind == MINIC_TOKEN_LBRACKET) {\n        bool is_array;\n\n        if (is_function_declarator) {\n            minic_parser_error(parser, "function typedef array declarators are not supported yet");\n            return false;\n        }\n        if (!minic_parser_parse_array_declarator_suffix(\n                parser, aliased_type, false, &aliased_type, &is_array) || !is_array) {\n            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\\0') {\n                minic_parser_error(parser, "cannot build typedef array declarator type");\n            }\n            return false;\n        }\n    }\n'''
 if text.count(old) != 1:
     raise SystemExit(f"typedef array parser anchor count={text.count(old)}")
 text = text.replace(old, new, 1)
 p.write_text(text)
+
+# The old typedef-only zero-bound negative gate contradicts the new shared
+# complete-zero array type. The positive focused test already freezes typedef
+# [0], sizeof==0 and decay, while zero-vs-positive redeclaration remains a
+# negative boundary.
+run = Path("tests/compiler/c0/run.sh")
+text = run.read_text()
+old = '''expect_compile_failure \\\n    invalid_zero_length_typedef_array \\\n    "array bound must be greater than zero"\n'''
+if text.count(old) != 1:
+    raise SystemExit(f"old typedef zero-length negative gate count={text.count(old)}")
+run.write_text(text.replace(old, "", 1))
