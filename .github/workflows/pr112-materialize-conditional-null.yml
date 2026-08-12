@@ -14,9 +14,9 @@ jobs:
       - name: Materialize conditional null-pointer semantics
         run: |
           set -Eeuo pipefail
-          python3 tools/dev/pr112-materialize.py
+          python3 tools/dev/pr112-materialize-v2.py
           chmod +x tests/compiler/c0/run-conditional-null-pointer-constant.sh
-          clang-format-18 -i src/frontend/ast.h src/frontend/ast.c src/frontend/parser_expression.c tests/compiler/c0/conditional_null_pointer_constant.c tests/compiler/c0/invalid_conditional_typed_null_pointer.c tests/compiler/c0/invalid_conditional_nonnull_void_pointer.c
+          clang-format-18 -i src/frontend/ast.h src/frontend/ast.c src/frontend/ast_verifier.c src/frontend/parser_expression.c tests/compiler/c0/conditional_null_pointer_constant.c tests/compiler/c0/invalid_conditional_typed_null_pointer.c tests/compiler/c0/invalid_conditional_nonnull_void_pointer.c
       - name: Build and validate
         run: |
           set -Eeuo pipefail
@@ -28,7 +28,7 @@ jobs:
       - name: Commit product source
         run: |
           set -Eeuo pipefail
-          rm -f tools/dev/pr112-materialize.py .github/workflows/pr112-materialize-conditional-null.yml
+          rm -f tools/dev/pr112-materialize.py tools/dev/pr112-materialize-v2.py .github/workflows/pr112-materialize-conditional-null.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
