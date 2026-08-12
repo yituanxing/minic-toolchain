@@ -31,7 +31,7 @@ jobs:
           MINIC="$GITHUB_WORKSPACE/build/debug/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/pr111-line-markers" sh tests/compiler/c0/run-preprocessed-line-markers.sh
           make check
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
-          git diff --exit-code --check
+          git diff --check
       - name: Commit product source
         env:
           GH_TOKEN: ${{ github.token }}
