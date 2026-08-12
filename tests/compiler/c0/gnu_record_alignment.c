@@ -2,6 +2,10 @@ struct PointerAligned {
     char byte;
 } __attribute__((aligned(sizeof(void *))));
 
+struct __attribute__((aligned(16))) PrefixAligned {
+    char byte;
+};
+
 struct OverAligned {
     char byte;
 } __attribute__((__aligned__(16)));
@@ -13,6 +17,10 @@ struct OverAlignedHolder {
 
 unsigned long pointer_aligned_size(void) {
     return sizeof(struct PointerAligned);
+}
+
+unsigned long prefix_aligned_size(void) {
+    return sizeof(struct PrefixAligned);
 }
 
 unsigned long over_aligned_size(void) {
