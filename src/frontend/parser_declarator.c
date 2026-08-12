@@ -1,6 +1,46 @@
 #include "frontend/parser_internal.h"
 
+#include <limits.h>
 #include <string.h>
+
+static bool declarator_identifier_is(const MinicParser *parser, const char *text) {
+    size_t length;
+
+    if (parser == NULL || text == NULL || parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
+        return false;
+    }
+    length = minic_parser_span_length(parser->current.span);
+    return strlen(text) == length &&
+           memcmp(parser->source + parser->current.span.begin.offset, text, length) == 0;
+}
+
+bool minic_parser_parse_pointer_qualifier_sequence(MinicParser *parser,
+                                                   size_t pointer_depth,
+                                                   unsigned int *const_qualifiers,
+                                                   unsigned int *volatile_qualifiers) {
+    unsigned int bit;
+
+    if (parser == NULL || const_qualifiers == NULL || volatile_qualifiers == NULL ||
+        pointer_depth == 0U || pointer_depth > sizeof(unsigned int) * CHAR_BIT) {
+        return false;
+    }
+    bit = 1U << (pointer_depth - 1U);
+    while (parser->current.kind == MINIC_TOKEN_KW_CONST ||
+           parser->current.kind == MINIC_TOKEN_KW_VOLATILE ||
+           declarator_identifier_is(parser, "restrict") ||
+           declarator_identifier_is(parser, "__restrict")) {
+        if (parser->current.kind == MINIC_TOKEN_KW_CONST) {
+            *const_qualifiers |= bit;
+        } else if (parser->current.kind == MINIC_TOKEN_KW_VOLATILE) {
+            *volatile_qualifiers |= bit;
+        }
+        /* restrict remains a parse-only aliasing promise until alias-aware optimization exists. */
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
+    }
+    return true;
+}
 
 bool minic_parser_parse_function_parameter_suffix(MinicParser *parser,
                                                   MinicParsedFunctionDeclarator *declarator) {
@@ -37,7 +77,11 @@ bool minic_parser_parse_parenthesized_function_declarator(
     }
     while (parser->current.kind == MINIC_TOKEN_STAR) {
         declarator->pointer_depth += 1U;
-        if (!minic_parser_advance(parser)) {
+        if (!minic_parser_advance(parser) || !minic_parser_parse_pointer_qualifier_sequence(
+                                                 parser,
+                                                 declarator->pointer_depth,
+                                                 &declarator->pointer_const_qualifiers,
+                                                 &declarator->pointer_volatile_qualifiers)) {
             return false;
         }
     }
@@ -147,12 +191,23 @@ bool minic_parser_build_function_declarator_type(MinicParser *parser,
         return false;
     }
 
-    pointer_depth = declarator->pointer_depth;
-    while (pointer_depth > 0U) {
+    pointer_depth = 0U;
+    while (pointer_depth < declarator->pointer_depth) {
+        unsigned int bit;
+
         if (!minic_type_pointer_to(function_type, &function_type)) {
             return false;
         }
-        pointer_depth -= 1U;
+        bit = 1U << pointer_depth;
+        if ((declarator->pointer_const_qualifiers & bit) != 0U &&
+            !minic_type_add_const(function_type, &function_type)) {
+            return false;
+        }
+        if ((declarator->pointer_volatile_qualifiers & bit) != 0U &&
+            !minic_type_add_volatile(function_type, &function_type)) {
+            return false;
+        }
+        pointer_depth += 1U;
     }
     *declarator_type = function_type;
     return true;

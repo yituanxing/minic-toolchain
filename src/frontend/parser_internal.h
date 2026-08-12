@@ -127,6 +127,8 @@ typedef struct MinicParsedFunctionDeclarator {
     MinicType parameter_types[MINIC_MAX_FUNCTION_PARAMETERS];
     size_t parameter_count;
     size_t pointer_depth;
+    unsigned int pointer_const_qualifiers;
+    unsigned int pointer_volatile_qualifiers;
     bool has_name;
     bool is_variadic;
 } MinicParsedFunctionDeclarator;
@@ -146,6 +148,10 @@ bool minic_parser_token_starts_type_name(const MinicParser *parser, MinicToken t
 bool minic_parser_token_starts_declaration_specifiers(const MinicParser *parser, MinicToken token);
 bool minic_parser_parse_local_storage_class(MinicParser *parser, bool *is_register_storage);
 bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type);
+bool minic_parser_parse_pointer_qualifier_sequence(MinicParser *parser,
+                                                   size_t pointer_depth,
+                                                   unsigned int *const_qualifiers,
+                                                   unsigned int *volatile_qualifiers);
 bool minic_parser_parse_pointer_declarator(MinicParser *parser,
                                            MinicType base_type,
                                            MinicType *type);
