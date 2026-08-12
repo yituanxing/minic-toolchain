@@ -48,8 +48,15 @@ replace_once(
 
 replace_once(
     "tests/compiler/c0/for_declaration_initializer.c",
+    '''typedef unsigned long size_t;\n\nint main(void) {\n''',
+    '''typedef unsigned long size_t;\n\nenum mod_mem_type { MOD_TEXT = 0, MOD_DATA = 1, MOD_MEM_NUM_TYPES = 2 };\n\nint main(void) {\n''',
+    "file-scope enum for Linux-shaped for declarator",
+)
+
+replace_once(
+    "tests/compiler/c0/for_declaration_initializer.c",
     '''    for (int i = 0; i < 3; i++) {\n        sum += i;\n    }\n\n    int i = 7;\n''',
-    '''    for (int i = 0; i < 3; i++) {\n        sum += i;\n    }\n\n    enum mod_mem_type { MOD_TEXT = 0, MOD_DATA = 1, MOD_MEM_NUM_TYPES = 2 };\n    for (enum mod_mem_type (type) = 0; type < MOD_MEM_NUM_TYPES; type++) {\n        sum += type;\n    }\n\n    int (parenthesized) = 3;\n    sum += parenthesized;\n\n    int i = 7;\n''',
+    '''    for (int i = 0; i < 3; i++) {\n        sum += i;\n    }\n\n    for (enum mod_mem_type (type) = 0; type < MOD_MEM_NUM_TYPES; type++) {\n        sum += type;\n    }\n\n    int (parenthesized) = 3;\n    sum += parenthesized;\n\n    int i = 7;\n''',
     "Linux-shaped parenthesized local declarators",
 )
 
