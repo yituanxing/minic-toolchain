@@ -19,6 +19,8 @@ grep -F "  call typed_direct" "$work/function_typed_declarator.s" >/dev/null
 grep -F "  call parenthesized_direct" "$work/function_typed_declarator.s" >/dev/null
 grep -F "  la a0, callback_slot" "$work/function_typed_declarator.s" >/dev/null
 grep -F "  jalr ra, t0, 0" "$work/function_typed_declarator.s" >/dev/null
+grep -F "  call fs_param_is_bool" "$work/function_typed_declarator.s" >/dev/null
+grep -F "  call fs_param_is_fd" "$work/function_typed_declarator.s" >/dev/null
 
 preprocess invalid_function_typed_redeclaration
 if "$minic" -S "$work/invalid_function_typed_redeclaration.i" \
@@ -37,4 +39,4 @@ if "$minic" -S "$work/invalid_function_typed_definition.i" \
     exit 1
 fi
 
-printf '%s\n' "PASS compiler/c0/function_typed_declarator entity=function typedef=direct typeof=function parenthesized=1 redeclaration=shared-signature pointer-typedef=object+jalr definition=reject"
+printf '%s\n' "PASS compiler/c0/function_typed_declarator entity=function typedef=direct typeof=function parenthesized=1 redeclaration=shared-signature pointer-typedef=object+jalr declaration-list=direct-functions definition=reject"

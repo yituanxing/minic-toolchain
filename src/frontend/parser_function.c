@@ -1143,7 +1143,7 @@ static bool parse_declaration_prefix(MinicParser *parser,
     return true;
 }
 
-static bool finish_function_declaration_entity(MinicParser *parser,
+static bool record_function_declaration_entity(MinicParser *parser,
                                                MinicSourceSpan name_span,
                                                MinicType return_type,
                                                const MinicType *parameter_types,
@@ -1163,8 +1163,7 @@ static bool finish_function_declaration_entity(MinicParser *parser,
     const MinicFunction *existing_function;
 
     if (parser == NULL || parameter_count > MINIC_MAX_FUNCTION_PARAMETERS ||
-        (parameter_count != 0U && parameter_types == NULL) ||
-        parser->current.kind != MINIC_TOKEN_SEMICOLON) {
+        (parameter_count != 0U && parameter_types == NULL)) {
         return false;
     }
     if (is_weak && is_internal) {
@@ -1221,6 +1220,44 @@ static bool finish_function_declaration_entity(MinicParser *parser,
     if (has_section && !minic_c0_program_set_function_section(
                            parser->program, function_id, section_name, section_name_length)) {
         minic_parser_error(parser, "conflicting or invalid GNU function section");
+        return false;
+    }
+    return true;
+}
+
+static bool finish_function_declaration_entity(MinicParser *parser,
+                                               MinicSourceSpan name_span,
+                                               MinicType return_type,
+                                               const MinicType *parameter_types,
+                                               size_t parameter_count,
+                                               bool is_variadic,
+                                               bool is_internal,
+                                               bool is_weak,
+                                               const char *assembler_name,
+                                               size_t assembler_name_length,
+                                               bool has_assembler_name,
+                                               MinicSymbolVisibility visibility,
+                                               bool has_visibility,
+                                               const char *section_name,
+                                               size_t section_name_length,
+                                               bool has_section) {
+    if (parser == NULL || parser->current.kind != MINIC_TOKEN_SEMICOLON ||
+        !record_function_declaration_entity(parser,
+                                            name_span,
+                                            return_type,
+                                            parameter_types,
+                                            parameter_count,
+                                            is_variadic,
+                                            is_internal,
+                                            is_weak,
+                                            assembler_name,
+                                            assembler_name_length,
+                                            has_assembler_name,
+                                            visibility,
+                                            has_visibility,
+                                            section_name,
+                                            section_name_length,
+                                            has_section)) {
         return false;
     }
     return minic_parser_advance(parser);
@@ -1393,6 +1430,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
         MinicType typed_parameter_types[MINIC_MAX_FUNCTION_PARAMETERS];
         size_t typed_parameter_count;
         size_t parameter_index;
+        bool declaration_is_weak;
 
         if (parser->current.kind == MINIC_TOKEN_LPAREN) {
             minic_parser_error(parser,
@@ -1426,36 +1464,63 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                 &has_section,
                 &is_weak,
                 "unsupported GNU prefix function attribute; semantic and ABI-affecting attributes "
-                "must be implemented explicitly") ||
-            !parse_gnu_function_asm_label(parser,
-                                          assembler_name,
-                                          sizeof(assembler_name),
-                                          &assembler_name_length,
-                                          &has_assembler_name) ||
-            !parse_persistent_function_attributes(parser, is_internal, &is_weak)) {
+                "must be implemented explicitly")) {
             return false;
         }
-        if (parser->current.kind != MINIC_TOKEN_SEMICOLON) {
-            minic_parser_error(parser,
-                               "function-typed declarators currently support declarations only");
-            return false;
+        declaration_is_weak = is_weak;
+
+        for (;;) {
+            bool entity_is_weak;
+
+            if (parser->current.kind == MINIC_TOKEN_LPAREN) {
+                minic_parser_error(parser,
+                                   "function-typed declarator cannot add another function suffix");
+                return false;
+            }
+            entity_is_weak = declaration_is_weak;
+            assembler_name_length = 0U;
+            has_assembler_name = false;
+            (void)memset(assembler_name, 0, sizeof(assembler_name));
+            if (!parse_gnu_function_asm_label(parser,
+                                              assembler_name,
+                                              sizeof(assembler_name),
+                                              &assembler_name_length,
+                                              &has_assembler_name) ||
+                !parse_persistent_function_attributes(parser, is_internal, &entity_is_weak)) {
+                return false;
+            }
+            if (parser->current.kind != MINIC_TOKEN_COMMA &&
+                parser->current.kind != MINIC_TOKEN_SEMICOLON) {
+                minic_parser_error(
+                    parser, "function-typed declarators currently support declarations only");
+                return false;
+            }
+            if (!record_function_declaration_entity(parser,
+                                                    name_span,
+                                                    typed_return_type,
+                                                    typed_parameter_types,
+                                                    typed_parameter_count,
+                                                    false,
+                                                    is_internal,
+                                                    entity_is_weak,
+                                                    assembler_name,
+                                                    assembler_name_length,
+                                                    has_assembler_name,
+                                                    visibility,
+                                                    has_visibility,
+                                                    section_name,
+                                                    section_name_length,
+                                                    has_section)) {
+                return false;
+            }
+            if (parser->current.kind == MINIC_TOKEN_SEMICOLON) {
+                return minic_parser_advance(parser);
+            }
+            if (!minic_parser_advance(parser) ||
+                !minic_parser_parse_direct_declarator_name(parser, &name_span)) {
+                return false;
+            }
         }
-        return finish_function_declaration_entity(parser,
-                                                  name_span,
-                                                  typed_return_type,
-                                                  typed_parameter_types,
-                                                  typed_parameter_count,
-                                                  false,
-                                                  is_internal,
-                                                  is_weak,
-                                                  assembler_name,
-                                                  assembler_name_length,
-                                                  has_assembler_name,
-                                                  visibility,
-                                                  has_visibility,
-                                                  section_name,
-                                                  section_name_length,
-                                                  has_section);
     }
     if (is_static_declaration && parser->current.kind != MINIC_TOKEN_LPAREN) {
         if (is_inline) {
