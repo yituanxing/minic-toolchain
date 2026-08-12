@@ -331,6 +331,7 @@ typedef struct MinicRecordField {
     size_t bit_offset;
     size_t explicit_alignment;
     bool is_array;
+    bool is_packed;
     bool is_bit_field;
     bool is_flexible_array;
     bool is_zero_length_array;

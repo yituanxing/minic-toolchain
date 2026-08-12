@@ -80,6 +80,7 @@ static bool parse_packed_record_attribute(MinicParser *parser, bool *is_packed) 
 
 typedef struct MinicRecordFieldAttributeContext {
     size_t explicit_alignment;
+    bool is_packed;
 } MinicRecordFieldAttributeContext;
 
 static bool consume_record_field_attribute(MinicParser *parser,
@@ -102,21 +103,29 @@ static bool consume_record_field_attribute(MinicParser *parser,
         return minic_parser_apply_alignment_attribute(
             parser, attribute, "record field", &context->explicit_alignment);
     }
+    if (descriptor->kind == MINIC_ATTRIBUTE_PACKED &&
+        descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_LAYOUT) {
+        context->is_packed = true;
+        return true;
+    }
     minic_parser_error(parser, "unsupported GNU record field attribute");
     return false;
 }
 
-static bool parse_record_field_attributes(MinicParser *parser, size_t *explicit_alignment) {
+static bool
+parse_record_field_attributes(MinicParser *parser, size_t *explicit_alignment, bool *is_packed) {
     MinicRecordFieldAttributeContext context;
 
-    if (parser == NULL || explicit_alignment == NULL) {
+    if (parser == NULL || explicit_alignment == NULL || is_packed == NULL) {
         return false;
     }
     context.explicit_alignment = *explicit_alignment;
+    context.is_packed = *is_packed;
     if (!minic_parser_parse_gnu_attribute_lists(parser, consume_record_field_attribute, &context)) {
         return false;
     }
     *explicit_alignment = context.explicit_alignment;
+    *is_packed = context.is_packed;
     return true;
 }
 
@@ -167,7 +176,8 @@ static bool parse_record_bit_field_width(MinicParser *parser,
 static bool parse_record_field_declarator(MinicParser *parser,
                                           MinicRecordId record_id,
                                           MinicType base_type,
-                                          size_t declaration_alignment) {
+                                          size_t declaration_alignment,
+                                          bool declaration_packed) {
     MinicSourceSpan name_span;
     MinicType field_type;
     size_t element_count;
@@ -175,6 +185,7 @@ static bool parse_record_field_declarator(MinicParser *parser,
     MinicRecord *mutable_record;
     const MinicRecord *record;
     bool is_array;
+    bool is_packed;
     bool is_flexible_array;
     bool is_zero_length_array;
 
@@ -233,6 +244,7 @@ static bool parse_record_field_declarator(MinicParser *parser,
 
     element_count = 1U;
     explicit_alignment = declaration_alignment;
+    is_packed = declaration_packed;
     is_array = false;
     is_flexible_array = false;
     is_zero_length_array = false;
@@ -319,7 +331,7 @@ static bool parse_record_field_declarator(MinicParser *parser,
         }
     }
 
-    if (!parse_record_field_attributes(parser, &explicit_alignment)) {
+    if (!parse_record_field_attributes(parser, &explicit_alignment, &is_packed)) {
         return false;
     }
 
@@ -335,6 +347,7 @@ static bool parse_record_field_declarator(MinicParser *parser,
     mutable_record = &parser->program->records[record_id];
     mutable_record->fields[mutable_record->field_count - 1U].explicit_alignment =
         explicit_alignment;
+    mutable_record->fields[mutable_record->field_count - 1U].is_packed = is_packed;
     mutable_record->fields[mutable_record->field_count - 1U].is_array = is_array;
     mutable_record->fields[mutable_record->field_count - 1U].is_flexible_array = is_flexible_array;
     mutable_record->fields[mutable_record->field_count - 1U].is_zero_length_array =
@@ -402,6 +415,7 @@ static bool parse_record_field(MinicParser *parser, MinicRecordId record_id) {
     MinicType base_type;
     const MinicRecord *record;
     size_t declaration_alignment;
+    bool declaration_packed;
 
     record = minic_c0_program_record(parser->program, record_id);
     if (record == NULL) {
@@ -419,12 +433,14 @@ static bool parse_record_field(MinicParser *parser, MinicRecordId record_id) {
         return false;
     }
     declaration_alignment = 0U;
-    if (!parse_record_field_attributes(parser, &declaration_alignment)) {
+    declaration_packed = false;
+    if (!parse_record_field_attributes(parser, &declaration_alignment, &declaration_packed)) {
         return false;
     }
     if (minic_type_is_record(base_type) && parser->current.kind == MINIC_TOKEN_SEMICOLON) {
-        if (declaration_alignment != 0U) {
-            minic_parser_error(parser, "GNU alignment on anonymous record members is unsupported");
+        if (declaration_alignment != 0U || declaration_packed) {
+            minic_parser_error(parser,
+                               "GNU layout attributes on anonymous record members are unsupported");
             return false;
         }
         MinicRecord *mutable_record;
@@ -445,8 +461,9 @@ static bool parse_record_field(MinicParser *parser, MinicRecordId record_id) {
     if (parser->current.kind == MINIC_TOKEN_COLON) {
         size_t bit_width;
 
-        if (declaration_alignment != 0U) {
-            minic_parser_error(parser, "GNU alignment on unnamed bit-fields is unsupported");
+        if (declaration_alignment != 0U || declaration_packed) {
+            minic_parser_error(parser,
+                               "GNU layout attributes on unnamed bit-fields are unsupported");
             return false;
         }
         if (!parse_record_bit_field_width(parser, base_type, true, &bit_width) ||
@@ -462,7 +479,8 @@ static bool parse_record_field(MinicParser *parser, MinicRecordId record_id) {
     }
 
     for (;;) {
-        if (!parse_record_field_declarator(parser, record_id, base_type, declaration_alignment)) {
+        if (!parse_record_field_declarator(
+                parser, record_id, base_type, declaration_alignment, declaration_packed)) {
             return false;
         }
         record = minic_c0_program_record(parser->program, record_id);
