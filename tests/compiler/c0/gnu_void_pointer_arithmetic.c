@@ -7,8 +7,19 @@ unsigned long gnu_void_pointer_subtract(void) {
 }
 
 int main(void) {
-    return (gnu_void_pointer_add() == 0x123UL &&
-            gnu_void_pointer_subtract() == 0x160UL)
-               ? 0
-               : 1;
+    return (gnu_void_pointer_add() == 0x123UL && gnu_void_pointer_subtract() == 0x160UL) ? 0 : 1;
+}
+
+long gnu_void_pointer_difference(void *left, void *right) {
+    return left - right;
+}
+
+long linux_void_pointer_difference(void *ptr, unsigned char *data) {
+    return ptr - (void *)data;
+}
+
+typedef int gnu_callback_type(int value);
+
+long gnu_function_pointer_difference(gnu_callback_type *left, gnu_callback_type *right) {
+    return left - right;
 }

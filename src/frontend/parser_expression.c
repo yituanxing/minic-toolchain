@@ -2293,8 +2293,7 @@ pointer_difference_compatible(const MinicC0Program *program, MinicType left, Min
            minic_type_unqualified(left_pointee, &left_unqualified) &&
            minic_type_unqualified(right_pointee, &right_unqualified) &&
            minic_type_equal(left_unqualified, right_unqualified) &&
-           minic_c0_type_is_complete_object(program, left_unqualified) &&
-           minic_c0_type_is_complete_object(program, right_unqualified);
+           minic_c0_pointer_arithmetic_pointee_allowed(program, left_unqualified);
 }
 
 static bool normalize_conditional_null_pointer_arm(MinicParser *parser,
