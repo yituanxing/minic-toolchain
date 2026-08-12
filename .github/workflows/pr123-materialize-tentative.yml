@@ -1,0 +1,36 @@
+name: PR123 Materialize Tentative Definitions
+on:
+  push:
+    branches: [agent/external-tentative-object-v0]
+permissions:
+  contents: write
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Materialize external tentative definitions
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/pr123-materialize.py
+          chmod +x tests/compiler/c0/run-external-tentative-definitions.sh
+          clang-format-18 -i src/frontend/ast.h src/frontend/ast_global.c src/frontend/ast_verifier.c src/frontend/parser_function.c src/target/riscv64/codegen_function.c tests/compiler/c0/external_tentative_definitions.c tests/compiler/c0/invalid_external_tentative_incomplete_array.c tests/compiler/c0/invalid_external_tentative_redeclaration.c
+      - name: Build and validate
+        run: |
+          set -Eeuo pipefail
+          make -j4
+          MINIC="$GITHUB_WORKSPACE/build/debug/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/pr123-focused" HOST_CC=cc sh tests/compiler/c0/run-external-tentative-definitions.sh
+          make check
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+          git diff --check
+      - name: Commit product source
+        run: |
+          set -Eeuo pipefail
+          rm -f tools/dev/pr123-materialize.py .github/workflows/pr123-materialize-tentative.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'feat(frontend): model external tentative definitions'
+          git push origin HEAD:agent/external-tentative-object-v0
