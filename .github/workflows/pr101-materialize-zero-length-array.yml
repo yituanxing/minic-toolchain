@@ -1,0 +1,32 @@
+name: PR101 Materialize GNU Zero Length Array
+on:
+  push:
+    branches: [agent/gnu-zero-length-array-v0]
+permissions:
+  contents: write
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: agent/gnu-zero-length-array-v0, fetch-depth: 0}
+      - name: Materialize GNU zero-length array semantics
+        run: python3 tools/dev/pr101-materialize-zero-length-array.py
+      - name: Build and validate
+        run: |
+          set -Eeuo pipefail
+          chmod +x tests/compiler/c0/run-gnu-zero-length-array.sh
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+          git diff --check
+          make -j4
+          MINIC="$GITHUB_WORKSPACE/build/debug/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/focused" HOST_CC=cc sh tests/compiler/c0/run-gnu-zero-length-array.sh
+          make check
+      - name: Commit product source
+        run: |
+          git rm .github/workflows/pr101-materialize-zero-length-array.yml tools/dev/pr101-materialize-zero-length-array.py
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src tests
+          git diff --cached --check
+          git commit -m 'frontend: model GNU zero-length array types'
+          git push origin HEAD:agent/gnu-zero-length-array-v0
