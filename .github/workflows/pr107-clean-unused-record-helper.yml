@@ -1,0 +1,31 @@
+name: PR107 Clean Record Attribute Helper
+on:
+  push:
+    branches: [agent/record-type-attribute-placement-v0]
+permissions:
+  contents: write
+jobs:
+  clean:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: agent/record-type-attribute-placement-v0, fetch-depth: 0}
+      - name: Remove obsolete helper
+        run: python3 tools/dev/pr107-clean-unused-record-helper.py
+      - name: Validate cleanup
+        run: |
+          set -Eeuo pipefail
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+          git diff --check
+          make -j4
+          MINIC="$GITHUB_WORKSPACE/build/debug/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/focused-packed" HOST_CC=cc sh tests/compiler/c0/run-packed-record-layout.sh
+          MINIC="$GITHUB_WORKSPACE/build/debug/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/focused-record-align" HOST_CC=cc sh tests/compiler/c0/run-gnu-record-alignment.sh
+      - name: Commit cleanup
+        run: |
+          git rm .github/workflows/pr107-clean-unused-record-helper.yml tools/dev/pr107-clean-unused-record-helper.py
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src
+          git diff --cached --check
+          git commit -m 'frontend: remove obsolete record attribute helper'
+          git push origin HEAD:agent/record-type-attribute-placement-v0
