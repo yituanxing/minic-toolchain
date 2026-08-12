@@ -90,3 +90,25 @@ bool minic_target_info_fixed_register_supported(const MinicTargetInfo *target,
     return (name_length == 2U && memcmp(name, "tp", 2U) == 0) ||
            (name_length == 2U && memcmp(name, "sp", 2U) == 0);
 }
+
+bool minic_target_info_inline_asm_register_clobber_supported(const MinicTargetInfo *target,
+                                                             const char *name,
+                                                             size_t name_length) {
+    if (target == NULL || name == NULL) {
+        return false;
+    }
+    /* TargetConstraint v0 exposes the RV64 temporary-register class used by
+     * unchanged Linux. Broader physical-register classes remain fail-closed. */
+    return name_length == 2U && name[0] == 't' && name[1] >= '0' && name[1] <= '6';
+}
+
+bool minic_target_info_inline_asm_immediate_constraint_supported(const MinicTargetInfo *target,
+                                                                 const char *constraint,
+                                                                 size_t constraint_length,
+                                                                 int64_t value) {
+    if (target == NULL || constraint == NULL) {
+        return false;
+    }
+    /* RISC-V GCC constraint I is a signed 12-bit integer immediate. */
+    return constraint_length == 1U && constraint[0] == 'I' && value >= -2048 && value <= 2047;
+}

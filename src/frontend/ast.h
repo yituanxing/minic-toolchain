@@ -261,6 +261,11 @@ typedef struct MinicInlineAsmLabel {
     MinicStatementId target_statement;
 } MinicInlineAsmLabel;
 
+typedef struct MinicInlineAsmRegisterClobber {
+    char *name;
+    size_t name_length;
+} MinicInlineAsmRegisterClobber;
+
 typedef struct MinicInlineAsm {
     char *template_text;
     size_t template_length;
@@ -273,6 +278,9 @@ typedef struct MinicInlineAsm {
     MinicInlineAsmLabel *labels;
     size_t label_count;
     size_t label_capacity;
+    MinicInlineAsmRegisterClobber *register_clobbers;
+    size_t register_clobber_count;
+    size_t register_clobber_capacity;
     size_t clobber_count;
     bool is_volatile;
     bool is_goto;
@@ -523,6 +531,10 @@ bool minic_c0_program_add_inline_asm_input(MinicC0Program *program,
                                            const char *constraint_text,
                                            size_t constraint_length,
                                            MinicExpressionId expression);
+bool minic_c0_program_add_inline_asm_register_clobber(MinicC0Program *program,
+                                                      MinicInlineAsmId inline_asm_id,
+                                                      const char *name,
+                                                      size_t name_length);
 bool minic_c0_program_set_inline_asm_memory_clobber(MinicC0Program *program,
                                                     MinicInlineAsmId inline_asm_id,
                                                     bool has_memory_clobber);

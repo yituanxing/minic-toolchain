@@ -842,6 +842,7 @@ static bool verify_statement(const MinicC0Program *program, const MinicStatement
         return expression != NULL;
     case MINIC_STATEMENT_INLINE_ASM: {
         const MinicInlineAsm *inline_asm;
+        size_t clobber_index;
         size_t operand_index;
 
         inline_asm = minic_c0_program_inline_asm(program, statement->inline_asm_id);
@@ -849,19 +850,29 @@ static bool verify_statement(const MinicC0Program *program, const MinicStatement
             inline_asm->output_count > inline_asm->output_capacity ||
             inline_asm->input_count > inline_asm->input_capacity ||
             inline_asm->label_count > inline_asm->label_capacity ||
+            inline_asm->register_clobber_count > inline_asm->register_clobber_capacity ||
             (inline_asm->output_count != 0U && inline_asm->outputs == NULL) ||
             (inline_asm->input_count != 0U && inline_asm->inputs == NULL) ||
             (inline_asm->label_count != 0U && inline_asm->labels == NULL) ||
-            inline_asm->clobber_count > 1U ||
+            (inline_asm->register_clobber_count != 0U && inline_asm->register_clobbers == NULL) ||
             (inline_asm->is_goto ? (inline_asm->label_count == 0U || inline_asm->output_count != 0U)
                                  : inline_asm->label_count != 0U) ||
-            inline_asm->clobber_count != (inline_asm->has_memory_clobber ? 1U : 0U) ||
+            (inline_asm->has_memory_clobber && inline_asm->register_clobber_count == SIZE_MAX) ||
+            inline_asm->clobber_count !=
+                inline_asm->register_clobber_count + (inline_asm->has_memory_clobber ? 1U : 0U) ||
             statement->target_expression != MINIC_EXPRESSION_INVALID ||
             statement->expression != MINIC_EXPRESSION_INVALID ||
             statement->target_statement != MINIC_STATEMENT_INVALID ||
             statement->then_block != MINIC_BLOCK_INVALID ||
             statement->else_block != MINIC_BLOCK_INVALID) {
             return false;
+        }
+        for (clobber_index = 0U; clobber_index < inline_asm->register_clobber_count;
+             ++clobber_index) {
+            if (inline_asm->register_clobbers[clobber_index].name == NULL ||
+                inline_asm->register_clobbers[clobber_index].name_length == 0U) {
+                return false;
+            }
         }
         for (operand_index = 0U; operand_index < inline_asm->output_count; ++operand_index) {
             const MinicInlineAsmOperand *operand;

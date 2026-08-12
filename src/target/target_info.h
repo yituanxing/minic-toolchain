@@ -5,6 +5,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 typedef struct MinicTargetInfo {
     const MinicDataLayout *data_layout;
@@ -27,6 +28,13 @@ bool minic_target_info_integer_width(const MinicTargetInfo *target,
 bool minic_target_info_fixed_register_supported(const MinicTargetInfo *target,
                                                 const char *name,
                                                 size_t name_length);
+bool minic_target_info_inline_asm_register_clobber_supported(const MinicTargetInfo *target,
+                                                             const char *name,
+                                                             size_t name_length);
+bool minic_target_info_inline_asm_immediate_constraint_supported(const MinicTargetInfo *target,
+                                                                 const char *constraint,
+                                                                 size_t constraint_length,
+                                                                 int64_t value);
 bool minic_target_info_call_frame_address_supported(const MinicTargetInfo *target,
                                                     MinicCallFrameAddressKind kind,
                                                     unsigned int level);

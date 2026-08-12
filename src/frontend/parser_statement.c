@@ -3575,6 +3575,36 @@ static bool parse_gnu_inline_asm_input(MinicParser *parser, MinicInlineAsmId inl
                            "GNU asm input operand currently requires an integer or pointer");
         return false;
     }
+    if (constraint_length == 1U && constraint[0] == 'I') {
+        MinicConstValue constant;
+        MinicExpression folded;
+        MinicSourceSpan operand_span;
+        int64_t immediate_value;
+
+        operand_span = operand_expression->span;
+        if (!minic_const_eval_integer(
+                parser->program, parser->target_info, operand_id, &constant) ||
+            !minic_const_value_as_int64(
+                parser->program, parser->target_info, &constant, &immediate_value) ||
+            !minic_target_info_inline_asm_immediate_constraint_supported(
+                parser->target_info, constraint, constraint_length, immediate_value)) {
+            free(constraint);
+            minic_parser_error(parser,
+                               "GNU asm 'I' input requires a signed 12-bit integer constant");
+            return false;
+        }
+        (void)memset(&folded, 0, sizeof(folded));
+        folded.kind = MINIC_EXPRESSION_INTEGER;
+        folded.span = operand_span;
+        folded.type = constant.type;
+        folded.value_category = MINIC_VALUE_RVALUE;
+        folded.value.integer_value = immediate_value;
+        if (!minic_parser_add_expression(parser, &folded, &operand_id)) {
+            free(constraint);
+            minic_parser_error(parser, "cannot store GNU asm immediate operand");
+            return false;
+        }
+    }
     if (!minic_c0_program_add_inline_asm_input(parser->program,
                                                inline_asm_id,
                                                name,
@@ -3726,10 +3756,15 @@ static bool parse_gnu_inline_asm_statement(MinicParser *parser) {
             }
             if (clobber_length == 6U && memcmp(clobber, "memory", 6U) == 0) {
                 has_memory_clobber = true;
-            } else {
+            } else if (!minic_target_info_inline_asm_register_clobber_supported(
+                           parser->target_info, clobber, clobber_length)) {
                 free(clobber);
-                minic_parser_error(parser,
-                                   "GNU asm register clobbers require TargetConstraint support");
+                minic_parser_error(parser, "unsupported GNU asm register clobber for target");
+                return false;
+            } else if (!minic_c0_program_add_inline_asm_register_clobber(
+                           parser->program, inline_asm_id, clobber, clobber_length)) {
+                free(clobber);
+                minic_parser_error(parser, "cannot store GNU asm register clobber");
                 return false;
             }
             free(clobber);
