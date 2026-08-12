@@ -277,14 +277,22 @@ static bool minic_data_layout_type_depth(const MinicDataLayout *layout,
         size_t element_alignment;
 
         array_type = minic_c0_program_array_type(program, type.array_type_id);
-        if (array_type == NULL || array_type->element_count == 0U ||
+        if (array_type == NULL ||
+            (array_type->element_count == 0U && !array_type->is_zero_length) ||
             !minic_data_layout_type_depth(layout,
                                           program,
                                           array_type->element_type,
                                           depth + 1U,
                                           &element_size,
-                                          &element_alignment) ||
-            element_size > SIZE_MAX / array_type->element_count) {
+                                          &element_alignment)) {
+            return false;
+        }
+        if (array_type->is_zero_length) {
+            *size = 0U;
+            *alignment = element_alignment;
+            return minic_data_layout_apply_explicit_alignment(type, alignment);
+        }
+        if (element_size > SIZE_MAX / array_type->element_count) {
             return false;
         }
         *size = element_size * array_type->element_count;

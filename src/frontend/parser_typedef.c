@@ -149,11 +149,8 @@ bool minic_parser_parse_typedef(MinicParser *parser) {
     MinicSourceSpan name_span;
     MinicType aliased_type;
     MinicTypeAliasId alias_id;
-    size_t bounds[8];
-    size_t bound_count;
     bool is_function_declarator;
 
-    bound_count = 0U;
     is_function_declarator = false;
     if (!minic_parser_expect(parser, MINIC_TOKEN_KW_TYPEDEF, "expected keyword 'typedef'")) {
         return false;
@@ -211,27 +208,19 @@ bool minic_parser_parse_typedef(MinicParser *parser) {
         return false;
     }
 
-    while (parser->current.kind == MINIC_TOKEN_LBRACKET) {
+    if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
+        bool is_array;
+
         if (is_function_declarator) {
             minic_parser_error(parser, "function typedef array declarators are not supported yet");
             return false;
         }
-        if (bound_count >= sizeof(bounds) / sizeof(bounds[0])) {
-            minic_parser_error(parser, "at most eight array dimensions are supported");
-            return false;
-        }
-        if (!minic_parser_advance(parser) ||
-            !minic_parser_parse_fixed_array_bound(parser, &bounds[bound_count])) {
-            return false;
-        }
-        bound_count += 1U;
-    }
-
-    while (bound_count > 0U) {
-        bound_count -= 1U;
-        if (!minic_c0_program_add_array_type(
-                parser->program, aliased_type, bounds[bound_count], &aliased_type)) {
-            minic_parser_error(parser, "out of memory while building typedef array type");
+        if (!minic_parser_parse_array_declarator_suffix(
+                parser, aliased_type, false, &aliased_type, &is_array) ||
+            !is_array) {
+            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                minic_parser_error(parser, "cannot build typedef array declarator type");
+            }
             return false;
         }
     }
