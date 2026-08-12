@@ -20,6 +20,10 @@ static bool constraint_is(const MinicInlineAsmOperand *operand, const char *text
            memcmp(operand->constraint_text, text, length) == 0;
 }
 
+static bool constraint_is_immediate(const MinicInlineAsmOperand *operand) {
+    return constraint_is(operand, "i") || constraint_is(operand, "I");
+}
+
 static const MinicInlineAsmOperand *operand_at(const MinicInlineAsm *inline_asm,
                                                size_t operand_index) {
     if (inline_asm == NULL) {
@@ -94,6 +98,11 @@ static bool validate_output(const MinicC0Program *program, const MinicInlineAsmO
     if (constraint_is(operand, "+A")) {
         return operand->access == MINIC_INLINE_ASM_OPERAND_READ_WRITE;
     }
+    if (constraint_is(operand, "+r")) {
+        return operand->access == MINIC_INLINE_ASM_OPERAND_READ_WRITE &&
+               expression->kind == MINIC_EXPRESSION_LOCAL &&
+               (minic_type_is_integer(expression->type) || minic_type_is_pointer(expression->type));
+    }
     if (constraint_is(operand, "=r") || constraint_is(operand, "=&r")) {
         return operand->access == MINIC_INLINE_ASM_OPERAND_WRITE_ONLY &&
                expression->kind == MINIC_EXPRESSION_LOCAL &&
@@ -108,13 +117,75 @@ static bool validate_input(const MinicInlineAsm *inline_asm,
     const MinicExpression *expression;
 
     if (inline_asm == NULL || program == NULL || operand == NULL ||
-        operand->access != MINIC_INLINE_ASM_OPERAND_READ_ONLY ||
-        (inline_asm->is_goto ? !constraint_is(operand, "i") : !constraint_is(operand, "r"))) {
+        operand->access != MINIC_INLINE_ASM_OPERAND_READ_ONLY) {
+        return false;
+    }
+    if (inline_asm->is_goto) {
+        if (!constraint_is(operand, "i")) {
+            return false;
+        }
+    } else if (!constraint_is(operand, "r") && !constraint_is(operand, "I")) {
         return false;
     }
     expression = minic_c0_program_expression(program, operand->expression);
     return expression != NULL &&
            (minic_type_is_integer(expression->type) || minic_type_is_pointer(expression->type));
+}
+
+static bool inline_asm_clobbers_register(const MinicInlineAsm *inline_asm,
+                                         const char *register_name) {
+    size_t index;
+    size_t register_length;
+
+    if (inline_asm == NULL || register_name == NULL) {
+        return false;
+    }
+    register_length = strlen(register_name);
+    for (index = 0U; index < inline_asm->register_clobber_count; ++index) {
+        const MinicInlineAsmRegisterClobber *clobber;
+
+        clobber = &inline_asm->register_clobbers[index];
+        if (clobber->name != NULL && clobber->name_length == register_length &&
+            memcmp(clobber->name, register_name, register_length) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool assign_operand_registers(const MinicInlineAsm *inline_asm,
+                                     const char **operand_registers,
+                                     size_t operand_count) {
+    size_t candidate_index;
+    size_t operand_index;
+
+    if (inline_asm == NULL || operand_registers == NULL) {
+        return false;
+    }
+    candidate_index = 0U;
+    for (operand_index = 0U; operand_index < operand_count; ++operand_index) {
+        const MinicInlineAsmOperand *operand;
+
+        operand = operand_at(inline_asm, operand_index);
+        if (operand == NULL) {
+            return false;
+        }
+        if (constraint_is_immediate(operand)) {
+            operand_registers[operand_index] = NULL;
+            continue;
+        }
+        while (candidate_index < MINIC_RISCV64_INLINE_ASM_MAX_OPERANDS &&
+               inline_asm_clobbers_register(inline_asm,
+                                            minic_riscv64_inline_asm_registers[candidate_index])) {
+            candidate_index += 1U;
+        }
+        if (candidate_index >= MINIC_RISCV64_INLINE_ASM_MAX_OPERANDS) {
+            return false;
+        }
+        operand_registers[operand_index] = minic_riscv64_inline_asm_registers[candidate_index];
+        candidate_index += 1U;
+    }
+    return true;
 }
 
 static bool resolve_template_reference(const MinicInlineAsm *inline_asm,
@@ -264,7 +335,8 @@ static bool emit_immediate_operand(FILE *file,
 static bool emit_template(FILE *file,
                           const MinicC0Program *program,
                           const MinicInlineAsm *inline_asm,
-                          MinicInlineAsmId inline_asm_id) {
+                          MinicInlineAsmId inline_asm_id,
+                          const char *const *operand_registers) {
     size_t operand_count;
     size_t index;
 
@@ -308,14 +380,16 @@ static bool emit_template(FILE *file,
             const char *register_name;
 
             operand = operand_at(inline_asm, operand_index);
-            register_name = minic_riscv64_inline_asm_registers[operand_index];
             if (operand == NULL) {
                 return false;
             }
-            if (constraint_is(operand, "i")) {
+            register_name = operand_registers[operand_index];
+            if (constraint_is_immediate(operand)) {
                 if (!emit_immediate_operand(file, program, operand, inline_asm_id, operand_index)) {
                     return false;
                 }
+            } else if (register_name == NULL) {
+                return false;
             } else if (constraint_is(operand, "+A")) {
                 if (fprintf(file, "(%s)", register_name) < 0) {
                     return false;
@@ -333,6 +407,7 @@ bool minic_riscv64_emit_inline_asm(FILE *file,
                                    const MinicFunction *function,
                                    const MinicStatement *statement) {
     const MinicInlineAsm *inline_asm;
+    const char *operand_registers[MINIC_RISCV64_INLINE_ASM_MAX_OPERANDS];
     size_t operand_count;
     size_t temporary_size;
     size_t index;
@@ -372,6 +447,9 @@ bool minic_riscv64_emit_inline_asm(FILE *file,
             return false;
         }
     }
+    if (!assign_operand_registers(inline_asm, operand_registers, operand_count)) {
+        return false;
+    }
 
     for (index = 0U; index < inline_asm->input_count; ++index) {
         const MinicInlineAsmOperand *operand;
@@ -379,7 +457,7 @@ bool minic_riscv64_emit_inline_asm(FILE *file,
         size_t operand_index;
 
         operand = &inline_asm->inputs[index];
-        if (!constraint_is(operand, "i")) {
+        if (!constraint_is_immediate(operand)) {
             continue;
         }
         expression = minic_c0_program_expression(program, operand->expression);
@@ -414,6 +492,16 @@ bool minic_riscv64_emit_inline_asm(FILE *file,
                 !minic_riscv64_emit_sp_store64(file, "a0", index * 8U)) {
                 return false;
             }
+        } else if (constraint_is(operand, "+r")) {
+            const MinicExpression *expression;
+
+            expression = minic_c0_program_expression(program, operand->expression);
+            if (expression == NULL || expression->kind != MINIC_EXPRESSION_LOCAL ||
+                !minic_riscv64_emit_object_load(
+                    file, program, function, expression->value.local_id) ||
+                !minic_riscv64_emit_sp_store64(file, "a0", index * 8U)) {
+                return false;
+            }
         }
     }
     for (index = 0U; index < inline_asm->input_count; ++index) {
@@ -422,7 +510,7 @@ bool minic_riscv64_emit_inline_asm(FILE *file,
 
         operand = &inline_asm->inputs[index];
         operand_index = inline_asm->output_count + index;
-        if (constraint_is(operand, "i")) {
+        if (constraint_is_immediate(operand)) {
             continue;
         }
         if (!minic_riscv64_emit_expression(file, program, function, operand->expression) ||
@@ -432,9 +520,9 @@ bool minic_riscv64_emit_inline_asm(FILE *file,
     }
 
     for (index = 0U; index < inline_asm->output_count; ++index) {
-        if (constraint_is(&inline_asm->outputs[index], "+A") &&
-            !minic_riscv64_emit_sp_load64(
-                file, minic_riscv64_inline_asm_registers[index], index * 8U)) {
+        if ((constraint_is(&inline_asm->outputs[index], "+A") ||
+             constraint_is(&inline_asm->outputs[index], "+r")) &&
+            !minic_riscv64_emit_sp_load64(file, operand_registers[index], index * 8U)) {
             return false;
         }
     }
@@ -442,15 +530,15 @@ bool minic_riscv64_emit_inline_asm(FILE *file,
         size_t operand_index;
 
         operand_index = inline_asm->output_count + index;
-        if (constraint_is(&inline_asm->inputs[index], "i")) {
+        if (constraint_is_immediate(&inline_asm->inputs[index])) {
             continue;
         }
         if (!minic_riscv64_emit_sp_load64(
-                file, minic_riscv64_inline_asm_registers[operand_index], operand_index * 8U)) {
+                file, operand_registers[operand_index], operand_index * 8U)) {
             return false;
         }
     }
-    if (!emit_template(file, program, inline_asm, statement->inline_asm_id)) {
+    if (!emit_template(file, program, inline_asm, statement->inline_asm_id, operand_registers)) {
         return false;
     }
 
@@ -459,16 +547,14 @@ bool minic_riscv64_emit_inline_asm(FILE *file,
         const MinicExpression *expression;
 
         operand = &inline_asm->outputs[index];
-        if (!constraint_is(operand, "=r") && !constraint_is(operand, "=&r")) {
+        if (!constraint_is(operand, "=r") && !constraint_is(operand, "=&r") &&
+            !constraint_is(operand, "+r")) {
             continue;
         }
         expression = minic_c0_program_expression(program, operand->expression);
         if (expression == NULL || expression->kind != MINIC_EXPRESSION_LOCAL ||
-            !minic_riscv64_emit_object_store_register(file,
-                                                      program,
-                                                      function,
-                                                      expression->value.local_id,
-                                                      minic_riscv64_inline_asm_registers[index])) {
+            !minic_riscv64_emit_object_store_register(
+                file, program, function, expression->value.local_id, operand_registers[index])) {
             return false;
         }
     }

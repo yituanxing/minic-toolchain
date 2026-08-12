@@ -55,6 +55,7 @@ void minic_c0_program_destroy(MinicC0Program *program) {
         free(program->blocks[index].statements);
     }
     for (index = 0U; index < program->inline_asm_count; ++index) {
+        size_t clobber_index;
         size_t operand_index;
 
         free(program->inline_asms[index].template_text);
@@ -72,9 +73,14 @@ void minic_c0_program_destroy(MinicC0Program *program) {
              ++operand_index) {
             free(program->inline_asms[index].labels[operand_index].name);
         }
+        for (clobber_index = 0U; clobber_index < program->inline_asms[index].register_clobber_count;
+             ++clobber_index) {
+            free(program->inline_asms[index].register_clobbers[clobber_index].name);
+        }
         free(program->inline_asms[index].outputs);
         free(program->inline_asms[index].inputs);
         free(program->inline_asms[index].labels);
+        free(program->inline_asms[index].register_clobbers);
     }
     for (index = 0U; index < program->function_count; ++index) {
         free(program->functions[index].name);
@@ -578,6 +584,45 @@ bool minic_c0_program_add_inline_asm_input(MinicC0Program *program,
     return true;
 }
 
+bool minic_c0_program_add_inline_asm_register_clobber(MinicC0Program *program,
+                                                      MinicInlineAsmId inline_asm_id,
+                                                      const char *name,
+                                                      size_t name_length) {
+    MinicInlineAsm *inline_asm;
+    MinicInlineAsmRegisterClobber clobber;
+    size_t index;
+
+    if (program == NULL || inline_asm_id >= program->inline_asm_count || name == NULL ||
+        name_length == 0U) {
+        return false;
+    }
+    inline_asm = &program->inline_asms[inline_asm_id];
+    for (index = 0U; index < inline_asm->register_clobber_count; ++index) {
+        if (inline_asm->register_clobbers[index].name_length == name_length &&
+            memcmp(inline_asm->register_clobbers[index].name, name, name_length) == 0) {
+            return true;
+        }
+    }
+    if (inline_asm->register_clobber_count == SIZE_MAX ||
+        !minic_grow_array((void **)&inline_asm->register_clobbers,
+                          &inline_asm->register_clobber_capacity,
+                          inline_asm->register_clobber_count,
+                          sizeof(*inline_asm->register_clobbers))) {
+        return false;
+    }
+    (void)memset(&clobber, 0, sizeof(clobber));
+    clobber.name = minic_copy_name(name, name_length);
+    if (clobber.name == NULL) {
+        return false;
+    }
+    clobber.name_length = name_length;
+    inline_asm->register_clobbers[inline_asm->register_clobber_count] = clobber;
+    inline_asm->register_clobber_count += 1U;
+    inline_asm->clobber_count =
+        inline_asm->register_clobber_count + (inline_asm->has_memory_clobber ? 1U : 0U);
+    return true;
+}
+
 bool minic_c0_program_set_inline_asm_memory_clobber(MinicC0Program *program,
                                                     MinicInlineAsmId inline_asm_id,
                                                     bool has_memory_clobber) {
@@ -587,8 +632,11 @@ bool minic_c0_program_set_inline_asm_memory_clobber(MinicC0Program *program,
         return false;
     }
     inline_asm = &program->inline_asms[inline_asm_id];
+    if (has_memory_clobber && inline_asm->register_clobber_count == SIZE_MAX) {
+        return false;
+    }
     inline_asm->has_memory_clobber = has_memory_clobber;
-    inline_asm->clobber_count = has_memory_clobber ? 1U : 0U;
+    inline_asm->clobber_count = inline_asm->register_clobber_count + (has_memory_clobber ? 1U : 0U);
     return true;
 }
 
