@@ -1115,6 +1115,80 @@ static bool parse_declaration_prefix(MinicParser *parser,
     return true;
 }
 
+static bool finish_function_declaration_entity(MinicParser *parser,
+                                               MinicSourceSpan name_span,
+                                               MinicType return_type,
+                                               const MinicType *parameter_types,
+                                               size_t parameter_count,
+                                               bool is_variadic,
+                                               bool is_internal,
+                                               const char *assembler_name,
+                                               size_t assembler_name_length,
+                                               bool has_assembler_name,
+                                               MinicSymbolVisibility visibility,
+                                               bool has_visibility,
+                                               const char *section_name,
+                                               size_t section_name_length,
+                                               bool has_section) {
+    MinicFunctionId function_id;
+    const MinicFunction *existing_function;
+
+    if (parser == NULL || parameter_count > MINIC_MAX_FUNCTION_PARAMETERS ||
+        (parameter_count != 0U && parameter_types == NULL) ||
+        parser->current.kind != MINIC_TOKEN_SEMICOLON) {
+        return false;
+    }
+    function_id = minic_parser_find_function(parser, name_span);
+    if (function_id != MINIC_FUNCTION_INVALID) {
+        existing_function = minic_c0_program_function(parser->program, function_id);
+        if (!minic_parser_function_signature_matches(
+                existing_function, return_type, parameter_types, parameter_count, is_variadic) ||
+            (!existing_function->is_internal && is_internal)) {
+            minic_parser_error(parser, "conflicting function declaration");
+            return false;
+        }
+        if (existing_function->is_internal) {
+            is_internal = true;
+        }
+    } else {
+        if (minic_parser_find_global_object_entity(parser, name_span) !=
+                MINIC_GLOBAL_OBJECT_INVALID ||
+            !minic_c0_program_add_function(parser->program,
+                                           parser->source + name_span.begin.offset,
+                                           minic_parser_span_length(name_span),
+                                           parser->program->local_count,
+                                           0U,
+                                           MINIC_BLOCK_INVALID,
+                                           &function_id) ||
+            !minic_c0_program_set_function_signature(
+                parser->program, function_id, return_type, parameter_types, parameter_count) ||
+            !minic_c0_program_set_function_internal(parser->program, function_id, is_internal) ||
+            !minic_c0_program_set_function_variadic(parser->program, function_id, is_variadic)) {
+            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                minic_parser_error(parser, "cannot declare function entity");
+            }
+            return false;
+        }
+    }
+    if (has_assembler_name &&
+        !minic_c0_program_set_function_assembler_name(
+            parser->program, function_id, assembler_name, assembler_name_length)) {
+        minic_parser_error(parser, "conflicting or invalid GNU function asm label");
+        return false;
+    }
+    if (has_visibility &&
+        !minic_c0_program_set_function_visibility(parser->program, function_id, visibility)) {
+        minic_parser_error(parser, "conflicting GNU function visibility");
+        return false;
+    }
+    if (has_section && !minic_c0_program_set_function_section(
+                           parser->program, function_id, section_name, section_name_length)) {
+        minic_parser_error(parser, "conflicting or invalid GNU function section");
+        return false;
+    }
+    return minic_parser_advance(parser);
+}
+
 static bool parse_function(MinicParser *parser, bool is_internal) {
     MinicSourceSpan name_span;
     MinicSourceSpan parameter_name_spans[MINIC_MAX_FUNCTION_PARAMETERS];
@@ -1277,6 +1351,74 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
         return minic_parser_expect(
             parser, MINIC_TOKEN_SEMICOLON, "expected ';' after fixed register binding");
     }
+    if (!is_function_pointer_object && minic_type_is_function(return_type)) {
+        const MinicFunctionType *function_type;
+        MinicType typed_return_type;
+        MinicType typed_parameter_types[MINIC_MAX_FUNCTION_PARAMETERS];
+        size_t typed_parameter_count;
+        size_t parameter_index;
+
+        if (parser->current.kind == MINIC_TOKEN_LPAREN) {
+            minic_parser_error(parser,
+                               "function-typed declarator cannot add another function suffix");
+            return false;
+        }
+        function_type =
+            minic_c0_program_function_type(parser->program, return_type.function_type_id);
+        if (function_type == NULL ||
+            function_type->parameter_count > MINIC_MAX_FUNCTION_PARAMETERS) {
+            minic_parser_error(parser, "invalid function-typed declarator signature");
+            return false;
+        }
+        /* FunctionType is Program-owned growable storage. Snapshot its canonical
+         * signature before any subsequent semantic operation can grow owner pools. */
+        typed_return_type = function_type->return_type;
+        typed_parameter_count = function_type->parameter_count;
+        for (parameter_index = 0U; parameter_index < typed_parameter_count; ++parameter_index) {
+            typed_parameter_types[parameter_index] =
+                function_type->parameter_types[parameter_index];
+        }
+        if (!apply_function_attribute_list(
+                parser,
+                &deferred_attributes,
+                true,
+                is_internal,
+                is_inline,
+                section_name,
+                sizeof(section_name),
+                &section_name_length,
+                &has_section,
+                "unsupported GNU prefix function attribute; semantic and ABI-affecting attributes "
+                "must be implemented explicitly") ||
+            !parse_gnu_function_asm_label(parser,
+                                          assembler_name,
+                                          sizeof(assembler_name),
+                                          &assembler_name_length,
+                                          &has_assembler_name) ||
+            !minic_parser_parse_gnu_function_attributes(parser)) {
+            return false;
+        }
+        if (parser->current.kind != MINIC_TOKEN_SEMICOLON) {
+            minic_parser_error(parser,
+                               "function-typed declarators currently support declarations only");
+            return false;
+        }
+        return finish_function_declaration_entity(parser,
+                                                  name_span,
+                                                  typed_return_type,
+                                                  typed_parameter_types,
+                                                  typed_parameter_count,
+                                                  false,
+                                                  is_internal,
+                                                  assembler_name,
+                                                  assembler_name_length,
+                                                  has_assembler_name,
+                                                  visibility,
+                                                  has_visibility,
+                                                  section_name,
+                                                  section_name_length,
+                                                  has_section);
+    }
     if (is_static_declaration && parser->current.kind != MINIC_TOKEN_LPAREN) {
         if (is_inline) {
             minic_parser_error(parser, "inline specifier requires a function declarator");
@@ -1396,41 +1538,21 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     }
 
     if (parser->current.kind == MINIC_TOKEN_SEMICOLON) {
-        if (function_id == MINIC_FUNCTION_INVALID) {
-            if (!minic_c0_program_add_function(parser->program,
-                                               parser->source + name_span.begin.offset,
-                                               minic_parser_span_length(name_span),
-                                               parser->program->local_count,
-                                               0U,
-                                               MINIC_BLOCK_INVALID,
-                                               &function_id) ||
-                !minic_c0_program_set_function_signature(
-                    parser->program, function_id, return_type, parameter_types, parameter_count) ||
-                !minic_c0_program_set_function_internal(
-                    parser->program, function_id, is_internal) ||
-                !minic_c0_program_set_function_variadic(
-                    parser->program, function_id, is_variadic)) {
-                minic_parser_error(parser, "out of memory while declaring function");
-                return false;
-            }
-        }
-        if (has_assembler_name &&
-            !minic_c0_program_set_function_assembler_name(
-                parser->program, function_id, assembler_name, assembler_name_length)) {
-            minic_parser_error(parser, "conflicting or invalid GNU function asm label");
-            return false;
-        }
-        if (has_visibility &&
-            !minic_c0_program_set_function_visibility(parser->program, function_id, visibility)) {
-            minic_parser_error(parser, "conflicting GNU function visibility");
-            return false;
-        }
-        if (has_section && !minic_c0_program_set_function_section(
-                               parser->program, function_id, section_name, section_name_length)) {
-            minic_parser_error(parser, "conflicting or invalid GNU function section");
-            return false;
-        }
-        return minic_parser_advance(parser);
+        return finish_function_declaration_entity(parser,
+                                                  name_span,
+                                                  return_type,
+                                                  parameter_types,
+                                                  parameter_count,
+                                                  is_variadic,
+                                                  is_internal,
+                                                  assembler_name,
+                                                  assembler_name_length,
+                                                  has_assembler_name,
+                                                  visibility,
+                                                  has_visibility,
+                                                  section_name,
+                                                  section_name_length,
+                                                  has_section);
     }
     if (!minic_type_is_integer(return_type) && !minic_type_is_void(return_type) &&
         !minic_type_is_pointer(return_type) && !minic_type_is_double(return_type) &&
