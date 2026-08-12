@@ -164,6 +164,36 @@ static bool eval_expression(const MinicC0Program *program,
                             unsigned int depth,
                             MinicConstValue *value);
 
+static bool eval_builtin_unary(const MinicC0Program *program,
+                               const MinicTargetInfo *target,
+                               const MinicExpression *expression,
+                               unsigned int depth,
+                               MinicConstValue *value) {
+    MinicConstValue operand;
+    uint64_t bits;
+    uint64_t count;
+    unsigned int width;
+
+    if (program == NULL || target == NULL || expression == NULL || value == NULL ||
+        expression->kind != MINIC_EXPRESSION_BUILTIN_UNARY ||
+        expression->value.builtin_unary.operator_kind != MINIC_BUILTIN_UNARY_CLZLL ||
+        !eval_expression(
+            program, target, expression->value.builtin_unary.operand, depth + 1U, &operand) ||
+        !minic_type_is_integer(operand.type) ||
+        !integer_width(program, target, operand.type, &width) || width == 0U || width > 64U ||
+        !normalize_bits(program, target, operand.type, operand.bits, &bits) || bits == 0U) {
+        return false;
+    }
+
+    count = 0U;
+    while ((bits & (UINT64_C(1) << (width - 1U))) == 0U) {
+        count += 1U;
+        bits <<= 1U;
+    }
+    value->type = expression->type;
+    return normalize_bits(program, target, value->type, count, &value->bits);
+}
+
 static bool eval_binary(const MinicC0Program *program,
                         const MinicTargetInfo *target,
                         const MinicExpression *expression,
@@ -543,6 +573,8 @@ static bool eval_expression(const MinicC0Program *program,
             return false;
         }
     }
+    case MINIC_EXPRESSION_BUILTIN_UNARY:
+        return eval_builtin_unary(program, target, expression, depth, value);
     case MINIC_EXPRESSION_BINARY:
         return eval_binary(program, target, expression, depth, value);
     case MINIC_EXPRESSION_CONDITIONAL: {
