@@ -818,12 +818,13 @@ parse_local_declarator(MinicParser *parser, MinicType base_type, bool is_registe
         minic_parser_error(parser, "local object cannot have void type");
         return false;
     }
-    if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
-        minic_parser_error(parser, "expected local name");
+    if (!minic_parser_parse_direct_declarator_name(parser, &local.name_span)) {
+        if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+            minic_parser_error(parser, "expected local name");
+        }
         return false;
     }
 
-    local.name_span = parser->current.span;
     local.type = declared_type;
     local.element_count = 1U;
     local.storage_offset = 0U;
@@ -831,9 +832,6 @@ parse_local_declarator(MinicParser *parser, MinicType base_type, bool is_registe
     local.is_register_storage = is_register_storage;
     if (minic_parser_name_bound_in_current_scope(parser, local.name_span)) {
         minic_parser_error(parser, "duplicate local declaration");
-        return false;
-    }
-    if (!minic_parser_advance(parser)) {
         return false;
     }
     if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
@@ -1072,25 +1070,10 @@ static bool parse_block_scope_extern_function_declaration(MinicParser *parser) {
         !minic_parser_parse_gnu_function_attributes(parser)) {
         return false;
     }
-    if (parser->current.kind == MINIC_TOKEN_IDENTIFIER) {
-        name_span = parser->current.span;
-        if (!minic_parser_advance(parser)) {
-            return false;
+    if (!minic_parser_parse_direct_declarator_name(parser, &name_span)) {
+        if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+            minic_parser_error(parser, "expected block-scope extern function name");
         }
-    } else if (parser->current.kind == MINIC_TOKEN_LPAREN) {
-        if (!minic_parser_advance(parser) || parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
-            minic_parser_error(parser, "expected function name in block-scope extern declarator");
-            return false;
-        }
-        name_span = parser->current.span;
-        if (!minic_parser_advance(parser) ||
-            !minic_parser_expect(parser,
-                                 MINIC_TOKEN_RPAREN,
-                                 "expected ')' after block-scope extern function name")) {
-            return false;
-        }
-    } else {
-        minic_parser_error(parser, "expected block-scope extern function name");
         return false;
     }
 

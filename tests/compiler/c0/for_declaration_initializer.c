@@ -1,5 +1,7 @@
 typedef unsigned long size_t;
 
+enum mod_mem_type { MOD_TEXT = 0, MOD_DATA = 1, MOD_MEM_NUM_TYPES = 2 };
+
 int main(void) {
     char etalon[1024 * 1024];
     int sum = 0;
@@ -15,6 +17,13 @@ int main(void) {
         sum += i;
     }
 
+    for (enum mod_mem_type (type) = 0; type < MOD_MEM_NUM_TYPES; type++) {
+        sum += type;
+    }
+
+    int (parenthesized) = 3;
+    sum += parenthesized;
+
     int i = 7;
-    return sum == 10 && i == 7 ? 0 : 1;
+    return sum == 14 && i == 7 ? 0 : 1;
 }
