@@ -424,6 +424,7 @@ typedef struct MinicGlobalObject {
     bool is_read_only;
     bool is_zero_initialized;
     bool is_extern;
+    bool is_block_scope_extern_only;
 } MinicGlobalObject;
 
 typedef struct MinicC0Program {
