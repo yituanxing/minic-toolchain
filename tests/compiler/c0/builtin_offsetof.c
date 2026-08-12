@@ -51,3 +51,45 @@ int main(void) {
                ? 0
                : 1;
 }
+
+struct Flow4 {
+    unsigned short family;
+    unsigned int mark;
+};
+
+struct Flowi {
+    char lead;
+    union {
+        struct Flow4 ip4;
+        unsigned long raw;
+    } u;
+};
+
+_Static_assert(__builtin_offsetof(struct Flowi, u.ip4) == 8, "nested member offsetof Linux shape");
+_Static_assert(__builtin_offsetof(struct Flowi, u.ip4.mark) == 12,
+               "nested member offsetof accumulates record offsets");
+
+struct NestedElement {
+    char lead;
+    unsigned int value;
+};
+
+struct NestedGrid {
+    char lead;
+    struct NestedElement rows[3];
+};
+
+_Static_assert(__builtin_offsetof(struct NestedGrid, rows[2].value) == 24,
+               "array then nested member offsetof");
+
+unsigned long nested_indexed_offset(unsigned int idx) {
+    return __builtin_offsetof(struct NestedGrid, rows[idx].value);
+}
+
+struct MatrixOffset {
+    char lead;
+    unsigned short cell[2][3];
+};
+
+_Static_assert(__builtin_offsetof(struct MatrixOffset, cell[1][2]) == 12,
+               "multidimensional offsetof designator");
