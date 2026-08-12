@@ -1,0 +1,32 @@
+name: PR96 Materialize Runtime Local Array
+on:
+  push:
+    branches: [agent/runtime-local-array-initializer-v0]
+permissions:
+  contents: write
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: agent/runtime-local-array-initializer-v0, fetch-depth: 0}
+      - name: Materialize runtime local array initializer semantics
+        run: python3 tools/dev/pr96-materialize-runtime-local-array.py
+      - name: Build and validate
+        run: |
+          set -Eeuo pipefail
+          chmod +x tests/compiler/c0/run-runtime-local-array-initializer.sh
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh fix
+          git diff --check
+          make -j4
+          MINIC="$GITHUB_WORKSPACE/build/debug/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/focused" HOST_CC=cc sh tests/compiler/c0/run-runtime-local-array-initializer.sh
+          make check
+      - name: Commit product source
+        run: |
+          git rm .github/workflows/pr96-materialize-runtime-local-array.yml tools/dev/pr96-materialize-runtime-local-array.py
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src tests
+          git diff --cached --check
+          git commit -m 'frontend: support runtime local array initializer lists'
+          git push origin HEAD:agent/runtime-local-array-initializer-v0
