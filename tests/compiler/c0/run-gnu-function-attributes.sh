@@ -19,6 +19,8 @@ grep -F 'call_attribute_functions:' "$work/gnu_function_attributes.s" >/dev/null
 grep -F '  call allocate_like' "$work/gnu_function_attributes.s" >/dev/null
 grep -F '  call allocate_sized' "$work/gnu_function_attributes.s" >/dev/null
 grep -F '  call allocate_matrix' "$work/gnu_function_attributes.s" >/dev/null
+grep -F '  call allocate_aligned' "$work/gnu_function_attributes.s" >/dev/null
+grep -F '  call allocate_aligned_offset' "$work/gnu_function_attributes.s" >/dev/null
 grep -F '  call memory_copy' "$work/gnu_function_attributes.s" >/dev/null
 grep -F '  call memory_compare' "$work/gnu_function_attributes.s" >/dev/null
 grep -F '  call stable_transform' "$work/gnu_function_attributes.s" >/dev/null
@@ -54,4 +56,19 @@ for mode in missing too-many; do
         "$work/argument-$mode.stderr" >/dev/null
 done
 
-printf '%s\n' 'PASS compiler/c0/gnu_function_attributes metadata=nothrow,leaf,nonnull,access,pure,malloc,alloc-size,noreturn,deprecated,const-keyword arguments=registry-validated placement=pre-declarator,suffix unknown=reject aligned=not-silently-ignored'
+for mode in missing too-many; do
+    cat >"$work/assume-aligned-$mode.c" <<EOF
+extern void *bad(void) __attribute__((__assume_aligned__($([ "$mode" = too-many ] && printf '8, 0, 1'))));
+EOF
+    "$host_cc" -E -P -x c "$work/assume-aligned-$mode.c" -o "$work/assume-aligned-$mode.i"
+    set +e
+    "$minic" -S "$work/assume-aligned-$mode.i" -o "$work/assume-aligned-$mode.s" \
+        >"$work/assume-aligned-$mode.stdout" 2>"$work/assume-aligned-$mode.stderr"
+    status=$?
+    set -e
+    test "$status" -ne 0
+    grep -F 'GNU attribute has an invalid number of arguments' \
+        "$work/assume-aligned-$mode.stderr" >/dev/null
+done
+
+printf '%s\n' 'PASS compiler/c0/gnu_function_attributes metadata=nothrow,leaf,nonnull,access,pure,malloc,alloc-size,assume-aligned,noreturn,deprecated,const-keyword arguments=registry-validated placement=pre-declarator,suffix optimization-metadata=parse-only unknown=reject aligned=not-silently-ignored'
