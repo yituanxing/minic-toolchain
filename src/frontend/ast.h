@@ -427,6 +427,7 @@ typedef struct MinicGlobalObject {
     bool is_read_only;
     bool is_zero_initialized;
     bool is_extern;
+    bool is_tentative;
     bool is_block_scope_extern_only;
 } MinicGlobalObject;
 
@@ -680,6 +681,17 @@ bool minic_c0_program_add_extern_global_object(MinicC0Program *program,
                                                MinicType type,
                                                bool is_read_only,
                                                MinicGlobalObjectId *global_object_id);
+bool minic_c0_program_add_tentative_global_object(MinicC0Program *program,
+                                                  const char *name,
+                                                  size_t name_length,
+                                                  MinicType type,
+                                                  bool is_internal,
+                                                  bool is_read_only,
+                                                  MinicGlobalObjectId *global_object_id);
+bool minic_c0_global_object_merge_tentative(MinicC0Program *program,
+                                            MinicGlobalObjectId global_object_id);
+bool minic_c0_global_object_begin_definition(MinicC0Program *program,
+                                             MinicGlobalObjectId global_object_id);
 bool minic_c0_global_object_add_initializer(MinicC0Program *program,
                                             MinicGlobalObjectId global_object_id,
                                             int value);

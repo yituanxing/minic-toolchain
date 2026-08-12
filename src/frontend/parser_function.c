@@ -609,6 +609,7 @@ static bool parse_external_integer_array_definition(MinicParser *parser,
     size_t initializer_count;
     bool inferred_bound;
     bool definition_omits_bound;
+    bool reused_existing;
 
     if (parser == NULL ||
         (!minic_type_is_integer(element_type) && !minic_type_is_pointer(element_type)) ||
@@ -621,6 +622,7 @@ static bool parse_external_integer_array_definition(MinicParser *parser,
     element_count = 0U;
     inferred_bound = false;
     definition_omits_bound = false;
+    reused_existing = false;
     if (!minic_parser_advance(parser)) {
         return false;
     }
@@ -658,7 +660,8 @@ static bool parse_external_integer_array_definition(MinicParser *parser,
         }
     } else {
         object = &parser->program->global_objects[object_id];
-        if (!object->is_extern || !minic_type_is_array(object->type)) {
+        reused_existing = true;
+        if ((!object->is_extern && !object->is_tentative) || !minic_type_is_array(object->type)) {
             minic_parser_error(parser, "conflicting external integer array definition");
             return false;
         }
@@ -682,7 +685,8 @@ static bool parse_external_integer_array_definition(MinicParser *parser,
     }
 
     object = &parser->program->global_objects[object_id];
-    if (!minic_parser_expect(parser, MINIC_TOKEN_EQUAL, "expected '=' after external array")) {
+    if ((reused_existing && !minic_c0_global_object_begin_definition(parser->program, object_id)) ||
+        !minic_parser_expect(parser, MINIC_TOKEN_EQUAL, "expected '=' after external array")) {
         return false;
     }
 
@@ -810,7 +814,6 @@ static bool parse_external_integer_array_definition(MinicParser *parser,
                 return false;
             }
         }
-        object->is_extern = false;
         return minic_parser_expect(
             parser, MINIC_TOKEN_SEMICOLON, "expected ';' after external pointer array definition");
     }
@@ -884,21 +887,104 @@ static bool parse_external_integer_array_definition(MinicParser *parser,
         }
     }
 
-    object->is_extern = false;
     return minic_parser_expect(
         parser, MINIC_TOKEN_SEMICOLON, "expected ';' after external array definition");
 }
 
+static bool apply_external_object_metadata(MinicParser *parser,
+                                           MinicGlobalObjectId object_id,
+                                           const char *section_name,
+                                           size_t section_name_length,
+                                           bool has_section,
+                                           size_t explicit_alignment,
+                                           MinicSymbolVisibility visibility,
+                                           bool has_visibility) {
+    if (parser == NULL || object_id == MINIC_GLOBAL_OBJECT_INVALID) {
+        return false;
+    }
+    if ((has_section && !minic_c0_global_object_set_section(
+                            parser->program, object_id, section_name, section_name_length)) ||
+        (explicit_alignment != 0U && !minic_c0_global_object_set_explicit_alignment(
+                                         parser->program, object_id, explicit_alignment)) ||
+        (has_visibility &&
+         !minic_c0_global_object_set_visibility(parser->program, object_id, visibility))) {
+        minic_parser_error(parser, "conflicting external object definition attributes");
+        return false;
+    }
+    return true;
+}
+
+static bool parse_external_tentative_object(MinicParser *parser,
+                                            MinicType object_type,
+                                            MinicSourceSpan name_span,
+                                            const char *section_name,
+                                            size_t section_name_length,
+                                            bool has_section,
+                                            size_t explicit_alignment,
+                                            MinicSymbolVisibility visibility,
+                                            bool has_visibility) {
+    MinicGlobalObjectId object_id;
+    const MinicGlobalObject *existing;
+
+    if (parser == NULL || parser->current.kind != MINIC_TOKEN_SEMICOLON ||
+        !minic_c0_type_is_complete_object(parser->program, object_type)) {
+        if (parser != NULL) {
+            minic_parser_error(parser,
+                               "external tentative definition requires a complete object type");
+        }
+        return false;
+    }
+    object_id = minic_parser_find_global_object_entity(parser, name_span);
+    if (object_id == MINIC_GLOBAL_OBJECT_INVALID) {
+        if (!minic_c0_program_add_tentative_global_object(parser->program,
+                                                          parser->source + name_span.begin.offset,
+                                                          minic_parser_span_length(name_span),
+                                                          object_type,
+                                                          false,
+                                                          minic_type_is_const(object_type),
+                                                          &object_id)) {
+            minic_parser_error(parser, "cannot create external tentative definition");
+            return false;
+        }
+    } else {
+        existing = minic_c0_program_global_object(parser->program, object_id);
+        if (existing == NULL ||
+            !minic_c0_types_compatible(parser->program, existing->type, object_type) ||
+            !minic_c0_global_object_merge_tentative(parser->program, object_id)) {
+            minic_parser_error(parser, "conflicting external tentative definition");
+            return false;
+        }
+    }
+    parser->program->global_objects[object_id].is_block_scope_extern_only = false;
+    if (!apply_external_object_metadata(parser,
+                                        object_id,
+                                        section_name,
+                                        section_name_length,
+                                        has_section,
+                                        explicit_alignment,
+                                        visibility,
+                                        has_visibility)) {
+        return false;
+    }
+    return minic_parser_advance(parser);
+}
+
 static bool parse_external_object_definition(MinicParser *parser,
                                              MinicType object_type,
-                                             MinicSourceSpan name_span) {
+                                             MinicSourceSpan name_span,
+                                             const char *section_name,
+                                             size_t section_name_length,
+                                             bool has_section,
+                                             size_t explicit_alignment,
+                                             MinicSymbolVisibility visibility,
+                                             bool has_visibility) {
     MinicGlobalObjectId object_id;
     MinicGlobalObjectId target_id;
     MinicSourceSpan literal_span;
     MinicType literal_type;
     MinicType literal_pointer_type;
     const MinicArrayType *literal_array;
-    MinicGlobalObject *object;
+    const MinicGlobalObject *existing;
 
     if (parser == NULL || parser->current.kind != MINIC_TOKEN_EQUAL ||
         (!minic_type_is_integer(object_type) && !minic_type_is_pointer(object_type))) {
@@ -906,7 +992,7 @@ static bool parse_external_object_definition(MinicParser *parser,
         return false;
     }
 
-    object_id = minic_parser_find_global_object(parser, name_span);
+    object_id = minic_parser_find_global_object_entity(parser, name_span);
     if (object_id == MINIC_GLOBAL_OBJECT_INVALID) {
         if (!minic_c0_program_add_global_object(parser->program,
                                                 parser->source + name_span.begin.offset,
@@ -919,17 +1005,23 @@ static bool parse_external_object_definition(MinicParser *parser,
             return false;
         }
     } else {
-        object = &parser->program->global_objects[object_id];
-        if (!object->is_extern || !minic_type_equal(object->type, object_type) ||
-            object->initializer_count != 0U || object->function_relocation_count != 0U ||
-            object->object_relocation_count != 0U || object->is_zero_initialized) {
+        existing = minic_c0_program_global_object(parser->program, object_id);
+        if (existing == NULL ||
+            !minic_c0_types_compatible(parser->program, existing->type, object_type) ||
+            !minic_c0_global_object_begin_definition(parser->program, object_id)) {
             minic_parser_error(parser, "conflicting external object definition");
             return false;
         }
-        object->is_extern = false;
     }
-
-    if (!minic_parser_advance(parser)) {
+    if (!apply_external_object_metadata(parser,
+                                        object_id,
+                                        section_name,
+                                        section_name_length,
+                                        has_section,
+                                        explicit_alignment,
+                                        visibility,
+                                        has_visibility) ||
+        !minic_parser_advance(parser)) {
         return false;
     }
     if (minic_type_is_integer(object_type)) {
@@ -972,10 +1064,14 @@ static bool parse_external_object_definition(MinicParser *parser,
 static bool parse_visible_external_array(MinicParser *parser,
                                          MinicType element_type,
                                          MinicSourceSpan name_span,
+                                         const char *section_name,
+                                         size_t section_name_length,
+                                         bool has_section,
+                                         size_t explicit_alignment,
                                          MinicSymbolVisibility visibility,
                                          bool has_visibility) {
     MinicParser probe;
-    bool is_declaration;
+    bool is_tentative;
 
     if (parser == NULL || parser->current.kind != MINIC_TOKEN_LBRACKET) {
         return false;
@@ -993,61 +1089,93 @@ static bool parse_visible_external_array(MinicParser *parser,
     if (probe.current.kind != MINIC_TOKEN_RBRACKET || !minic_parser_advance(&probe)) {
         return false;
     }
-    is_declaration = probe.current.kind == MINIC_TOKEN_SEMICOLON;
+    is_tentative = probe.current.kind == MINIC_TOKEN_SEMICOLON;
 
-    if (is_declaration) {
+    if (is_tentative) {
         MinicGlobalObjectId object_id;
+        MinicGlobalObject *object;
+        const MinicArrayType *existing_array;
         MinicType array_type;
         size_t element_count;
-        bool incomplete;
 
         if (!minic_parser_advance(parser)) {
             return false;
         }
-        incomplete = parser->current.kind == MINIC_TOKEN_RBRACKET;
-        if (incomplete) {
-            if (!minic_c0_program_add_incomplete_array_type(
-                    parser->program, element_type, &array_type) ||
-                !minic_parser_advance(parser)) {
-                minic_parser_error(parser, "cannot declare visible incomplete extern array");
+        if (parser->current.kind == MINIC_TOKEN_RBRACKET) {
+            minic_parser_error(parser,
+                               "incomplete external tentative array is not implemented yet");
+            return false;
+        }
+        if (!minic_parser_parse_fixed_array_bound(parser, &element_count)) {
+            return false;
+        }
+        object_id = minic_parser_find_global_object_entity(parser, name_span);
+        if (object_id == MINIC_GLOBAL_OBJECT_INVALID) {
+            if (!minic_c0_program_add_array_type(
+                    parser->program, element_type, element_count, &array_type) ||
+                !minic_c0_program_add_tentative_global_object(parser->program,
+                                                              parser->source +
+                                                                  name_span.begin.offset,
+                                                              minic_parser_span_length(name_span),
+                                                              array_type,
+                                                              false,
+                                                              minic_type_is_const(element_type),
+                                                              &object_id)) {
+                minic_parser_error(parser, "cannot create fixed external tentative array");
                 return false;
             }
-        } else if (!minic_parser_parse_fixed_array_bound(parser, &element_count) ||
-                   !minic_c0_program_add_array_type(
-                       parser->program, element_type, element_count, &array_type)) {
-            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
-                minic_parser_error(parser, "cannot declare visible fixed extern array");
+        } else {
+            object = &parser->program->global_objects[object_id];
+            existing_array =
+                minic_type_is_array(object->type)
+                    ? minic_c0_program_array_type(parser->program, object->type.array_type_id)
+                    : NULL;
+            if (existing_array == NULL ||
+                !minic_c0_types_compatible(
+                    parser->program, existing_array->element_type, element_type) ||
+                (existing_array->element_count != 0U &&
+                 existing_array->element_count != element_count) ||
+                (existing_array->element_count == 0U &&
+                 !minic_c0_program_complete_array_type(
+                     parser->program, object->type, element_count)) ||
+                !minic_c0_global_object_merge_tentative(parser->program, object_id)) {
+                minic_parser_error(parser, "conflicting fixed external tentative array");
+                return false;
             }
+        }
+        parser->program->global_objects[object_id].is_block_scope_extern_only = false;
+        if (!apply_external_object_metadata(parser,
+                                            object_id,
+                                            section_name,
+                                            section_name_length,
+                                            has_section,
+                                            explicit_alignment,
+                                            visibility,
+                                            has_visibility) ||
+            !minic_parser_expect(
+                parser, MINIC_TOKEN_SEMICOLON, "expected ';' after external tentative array")) {
             return false;
         }
-        if (minic_parser_find_global_object(parser, name_span) != MINIC_GLOBAL_OBJECT_INVALID ||
-            !minic_c0_program_add_global_object(parser->program,
-                                                parser->source + name_span.begin.offset,
-                                                minic_parser_span_length(name_span),
-                                                array_type,
-                                                false,
-                                                minic_type_is_const(element_type),
-                                                &object_id) ||
-            !minic_c0_global_object_set_extern(parser->program, object_id) ||
-            (has_visibility &&
-             !minic_c0_global_object_set_visibility(parser->program, object_id, visibility))) {
-            minic_parser_error(parser, "cannot record visible extern array declaration");
-            return false;
-        }
-        return minic_parser_expect(
-            parser, MINIC_TOKEN_SEMICOLON, "expected ';' after visible extern array declaration");
+        return true;
     }
 
     if (!parse_external_integer_array_definition(parser, element_type, name_span)) {
         return false;
     }
-    if (has_visibility) {
+    {
         MinicGlobalObjectId object_id;
 
-        object_id = minic_parser_find_global_object(parser, name_span);
+        object_id = minic_parser_find_global_object_entity(parser, name_span);
         if (object_id == MINIC_GLOBAL_OBJECT_INVALID ||
-            !minic_c0_global_object_set_visibility(parser->program, object_id, visibility)) {
-            minic_parser_error(parser, "cannot record visible external array definition");
+            !apply_external_object_metadata(parser,
+                                            object_id,
+                                            section_name,
+                                            section_name_length,
+                                            has_section,
+                                            explicit_alignment,
+                                            visibility,
+                                            has_visibility)) {
+            minic_parser_error(parser, "cannot record visible external array definition metadata");
             return false;
         }
     }
@@ -1346,7 +1474,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
         if (!minic_parser_advance(&name_probe)) {
             return false;
         }
-        if (is_extern_declaration && name_probe.current.kind == MINIC_TOKEN_STAR) {
+        if (name_probe.current.kind == MINIC_TOKEN_STAR) {
             MinicParsedFunctionDeclarator declarator;
 
             if (!minic_parser_parse_parenthesized_function_declarator(
@@ -1354,13 +1482,13 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                 return false;
             }
             if (declarator.is_variadic) {
-                minic_parser_error(
-                    parser, "variadic extern function pointer objects are not supported yet");
+                minic_parser_error(parser,
+                                   "variadic function pointer objects are not supported yet");
                 return false;
             }
             if (!minic_parser_build_function_declarator_type(
                     parser, return_type, &declarator, &return_type)) {
-                minic_parser_error(parser, "cannot build extern function pointer object type");
+                minic_parser_error(parser, "cannot build function pointer object type");
                 return false;
             }
             name_span = declarator.name_span;
@@ -1570,16 +1698,45 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                                                                visibility,
                                                                has_visibility);
         }
-        if (object_explicit_alignment != 0U) {
-            minic_parser_error(
-                parser, "GNU object alignment on a definition requires prior extern semantics");
+        if (!minic_parser_parse_gnu_object_attribute_lists(parser,
+                                                           section_name,
+                                                           sizeof(section_name),
+                                                           &section_name_length,
+                                                           &has_section,
+                                                           &object_explicit_alignment)) {
             return false;
         }
         if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
-            return parse_visible_external_array(
-                parser, return_type, name_span, visibility, has_visibility);
+            return parse_visible_external_array(parser,
+                                                return_type,
+                                                name_span,
+                                                section_name,
+                                                section_name_length,
+                                                has_section,
+                                                object_explicit_alignment,
+                                                visibility,
+                                                has_visibility);
         }
-        return parse_external_object_definition(parser, return_type, name_span);
+        if (parser->current.kind == MINIC_TOKEN_SEMICOLON) {
+            return parse_external_tentative_object(parser,
+                                                   return_type,
+                                                   name_span,
+                                                   section_name,
+                                                   section_name_length,
+                                                   has_section,
+                                                   object_explicit_alignment,
+                                                   visibility,
+                                                   has_visibility);
+        }
+        return parse_external_object_definition(parser,
+                                                return_type,
+                                                name_span,
+                                                section_name,
+                                                section_name_length,
+                                                has_section,
+                                                object_explicit_alignment,
+                                                visibility,
+                                                has_visibility);
     }
     if (!apply_function_attribute_list(
             parser,
