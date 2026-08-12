@@ -1141,6 +1141,48 @@ static bool parse_declaration(MinicParser *parser) {
     return minic_parser_expect(parser, MINIC_TOKEN_SEMICOLON, "expected ';'");
 }
 
+static bool declare_block_scope_extern_object_declarator(MinicParser *parser,
+                                                         MinicType base_type,
+                                                         MinicSourceSpan name_span) {
+    MinicGlobalObjectId current_scope_object;
+    MinicGlobalObjectId existing_id;
+    MinicGlobalObjectId object_id;
+    MinicType object_type;
+    size_t array_type_begin;
+    bool is_array;
+
+    existing_id = minic_parser_find_global_object_entity(parser, name_span);
+    array_type_begin = parser->program->array_type_count;
+    object_type = base_type;
+    if (!minic_parser_parse_array_declarator_suffix(
+            parser, object_type, true, &object_type, &is_array)) {
+        return false;
+    }
+    (void)is_array;
+    if (!minic_parser_declare_block_scope_extern_object(
+            parser, name_span, object_type, &object_id)) {
+        return false;
+    }
+    /* Redeclaration parsing may materialize temporary array descriptors.
+     * The entity merge owns any composite-type mutation; descriptors created
+     * only to describe the incoming declarator must not survive ownerless. */
+    if (existing_id != MINIC_GLOBAL_OBJECT_INVALID) {
+        parser->program->array_type_count = array_type_begin;
+    }
+    current_scope_object =
+        minic_parser_find_scoped_global_object_in_current_scope(parser, name_span);
+    if (minic_parser_name_bound_in_current_scope(parser, name_span)) {
+        if (current_scope_object != object_id) {
+            minic_parser_error(parser,
+                               "block-scope extern object conflicts with local declaration");
+            return false;
+        }
+    } else if (!minic_parser_bind_scoped_global_object(parser, name_span, object_id)) {
+        return false;
+    }
+    return true;
+}
+
 static bool parse_block_scope_extern_declaration(MinicParser *parser) {
     MinicSourceSpan name_span;
     MinicType parameter_types[16];
@@ -1168,37 +1210,25 @@ static bool parse_block_scope_extern_declaration(MinicParser *parser) {
     }
 
     if (parser->current.kind != MINIC_TOKEN_LPAREN) {
-        MinicGlobalObjectId current_scope_object;
-        MinicGlobalObjectId object_id;
-        MinicType object_type;
-        bool is_array;
-
-        object_type = return_type;
-        if (!minic_parser_parse_array_declarator_suffix(
-                parser, object_type, true, &object_type, &is_array)) {
-            return false;
-        }
-        (void)is_array;
-        if (parser->current.kind != MINIC_TOKEN_SEMICOLON) {
-            minic_parser_error(parser, "block-scope extern object declaration must end with ';'");
-            return false;
-        }
-        if (!minic_parser_declare_block_scope_extern_object(
-                parser, name_span, object_type, &object_id)) {
-            return false;
-        }
-        current_scope_object =
-            minic_parser_find_scoped_global_object_in_current_scope(parser, name_span);
-        if (minic_parser_name_bound_in_current_scope(parser, name_span)) {
-            if (current_scope_object != object_id) {
-                minic_parser_error(parser,
-                                   "block-scope extern object conflicts with local declaration");
+        for (;;) {
+            if (!declare_block_scope_extern_object_declarator(parser, return_type, name_span)) {
                 return false;
             }
-        } else if (!minic_parser_bind_scoped_global_object(parser, name_span, object_id)) {
-            return false;
+            if (parser->current.kind != MINIC_TOKEN_COMMA) {
+                break;
+            }
+            if (!minic_parser_advance(parser) ||
+                !minic_parser_parse_direct_declarator_name(parser, &name_span)) {
+                if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                    minic_parser_error(parser,
+                                       "expected block-scope extern object declarator name");
+                }
+                return false;
+            }
         }
-        return minic_parser_advance(parser);
+        return minic_parser_expect(parser,
+                                   MINIC_TOKEN_SEMICOLON,
+                                   "expected ';' after block-scope extern object declaration");
     }
 
     if (!minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '('") ||
