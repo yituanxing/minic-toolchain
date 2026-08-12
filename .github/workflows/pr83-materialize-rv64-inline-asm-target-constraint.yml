@@ -22,6 +22,42 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path('tools/dev/pr83-rv64-inline-asm-target-constraint.patch')
+          lines = path.read_text().splitlines(True)
+          header = re.compile(r'^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$')
+          output = []
+          index = 0
+          while index < len(lines):
+              match = header.match(lines[index].rstrip('\n'))
+              if match is None:
+                  output.append(lines[index])
+                  index += 1
+                  continue
+              end = index + 1
+              old_count = 0
+              new_count = 0
+              while end < len(lines) and not lines[end].startswith('@@ ') and not lines[end].startswith('diff --git '):
+                  line = lines[end]
+                  if line.startswith(' '):
+                      old_count += 1
+                      new_count += 1
+                  elif line.startswith('-'):
+                      old_count += 1
+                  elif line.startswith('+'):
+                      new_count += 1
+                  end += 1
+              output.append(
+                  f'@@ -{match.group(1)},{old_count} +{match.group(3)},{new_count} @@{match.group(5)}\n'
+              )
+              output.extend(lines[index + 1:end])
+              index = end
+          path.write_text(''.join(output))
+          PY
+          git apply --numstat tools/dev/pr83-rv64-inline-asm-target-constraint.patch
           git apply --check tools/dev/pr83-rv64-inline-asm-target-constraint.patch
           git apply tools/dev/pr83-rv64-inline-asm-target-constraint.patch
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
