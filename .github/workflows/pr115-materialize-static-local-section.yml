@@ -14,27 +14,7 @@ jobs:
       - name: Materialize static local section attributes
         run: |
           set -Eeuo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('tools/dev/pr115-materialize.py')
-          text = p.read_text()
-          marker = '    "focused-summary",\n)\n'
-          marker_at = text.find(marker)
-          if marker_at < 0:
-              raise SystemExit('focused-summary patch marker missing')
-          block_start = text.rfind('text = replace_once(\n', 0, marker_at)
-          block_end = marker_at + len(marker)
-          replacement = '''text = replace_once(
-    text,
-    "layout-bearing=fail-closed",
-    "section=global-object declaration-wide=2 aligned=fail-closed",
-    "focused-summary",
-)
-'''
-          text = text[:block_start] + replacement + text[block_end:]
-          p.write_text(text)
-          PY
-          python3 tools/dev/pr115-materialize.py 2>&1 | tee /tmp/pr115-materialize.log
+          python3 tools/dev/pr115-run-materializer.py 2>&1 | tee /tmp/pr115-materialize.log
           clang-format-18 -i src/frontend/parser_statement.c tests/compiler/c0/gnu_static_local_interleaved_attribute.c
       - name: Upload materializer diagnostics
         if: always()
@@ -55,7 +35,7 @@ jobs:
       - name: Commit product source
         run: |
           set -Eeuo pipefail
-          rm -f tools/dev/pr115-materialize.py .github/workflows/pr115-materialize-static-local-section.yml
+          rm -f tools/dev/pr115-materialize.py tools/dev/pr115-run-materializer.py .github/workflows/pr115-materialize-static-local-section.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
