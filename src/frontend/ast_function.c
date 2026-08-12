@@ -7,10 +7,22 @@
 bool minic_c0_program_set_function_internal(MinicC0Program *program,
                                             MinicFunctionId function_id,
                                             bool is_internal) {
-    if (program == NULL || function_id >= program->function_count) {
+    if (program == NULL || function_id >= program->function_count ||
+        (is_internal && program->functions[function_id].is_weak)) {
         return false;
     }
     program->functions[function_id].is_internal = is_internal;
+    return true;
+}
+
+bool minic_c0_program_set_function_weak(MinicC0Program *program,
+                                        MinicFunctionId function_id,
+                                        bool is_weak) {
+    if (program == NULL || function_id >= program->function_count ||
+        (is_weak && program->functions[function_id].is_internal)) {
+        return false;
+    }
+    program->functions[function_id].is_weak = is_weak;
     return true;
 }
 

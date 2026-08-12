@@ -24,6 +24,7 @@ typedef struct MinicFunctionAttributeContext {
     size_t section_capacity;
     size_t *section_name_length;
     bool *has_section;
+    bool *is_weak;
     const char *unsupported_message;
 } MinicFunctionAttributeContext;
 
@@ -37,13 +38,13 @@ static bool function_attribute_class_is_parse_only(MinicAttributeClass semantic_
 static bool consume_function_attribute(MinicParser *parser,
                                        const MinicParsedAttribute *attribute,
                                        void *opaque_context) {
-    const MinicFunctionAttributeContext *context;
+    MinicFunctionAttributeContext *context;
     const MinicAttributeDescriptor *descriptor;
 
     if (parser == NULL || attribute == NULL || opaque_context == NULL) {
         return false;
     }
-    context = (const MinicFunctionAttributeContext *)opaque_context;
+    context = (MinicFunctionAttributeContext *)opaque_context;
     descriptor = attribute->descriptor;
     if (descriptor == NULL ||
         !minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_FUNCTION)) {
@@ -65,6 +66,15 @@ static bool consume_function_attribute(MinicParser *parser,
             }
             return false;
         }
+        return true;
+    }
+
+    if (descriptor->kind == MINIC_ATTRIBUTE_WEAK) {
+        if (context->is_weak == NULL || context->is_internal) {
+            minic_parser_error(parser, "GNU weak requires external function linkage");
+            return false;
+        }
+        *context->is_weak = true;
         return true;
     }
 
@@ -95,6 +105,7 @@ static bool parse_function_attribute_lists(MinicParser *parser,
                                            bool allow_gnu_inline,
                                            bool is_internal,
                                            bool is_inline,
+                                           bool *is_weak,
                                            const char *unsupported_message) {
     MinicFunctionAttributeContext context;
 
@@ -105,6 +116,7 @@ static bool parse_function_attribute_lists(MinicParser *parser,
     context.section_capacity = 0U;
     context.section_name_length = NULL;
     context.has_section = NULL;
+    context.is_weak = is_weak;
     context.unsupported_message = unsupported_message;
     return minic_parser_parse_gnu_attribute_lists(parser, consume_function_attribute, &context);
 }
@@ -118,6 +130,7 @@ static bool apply_function_attribute_list(MinicParser *parser,
                                           size_t section_capacity,
                                           size_t *section_name_length,
                                           bool *has_section,
+                                          bool *is_weak,
                                           const char *unsupported_message) {
     MinicFunctionAttributeContext context;
     size_t index;
@@ -132,6 +145,7 @@ static bool apply_function_attribute_list(MinicParser *parser,
     context.section_capacity = section_capacity;
     context.section_name_length = section_name_length;
     context.has_section = has_section;
+    context.is_weak = is_weak;
     context.unsupported_message = unsupported_message;
     for (index = 0U; index < attributes->count; ++index) {
         if (!consume_function_attribute(parser, &attributes->values[index], &context)) {
@@ -246,6 +260,7 @@ bool minic_parser_parse_gnu_function_attributes(MinicParser *parser) {
         false,
         false,
         false,
+        NULL,
         "unsupported GNU function attribute; ABI/layout-affecting and unknown attributes must be "
         "implemented explicitly");
 }
@@ -258,7 +273,20 @@ bool minic_parser_parse_gnu_prefix_function_attributes(MinicParser *parser,
         true,
         is_internal,
         is_inline,
+        NULL,
         "unsupported GNU prefix function attribute; semantic and ABI-affecting attributes must be "
+        "implemented explicitly");
+}
+
+static bool
+parse_persistent_function_attributes(MinicParser *parser, bool is_internal, bool *is_weak) {
+    return parse_function_attribute_lists(
+        parser,
+        false,
+        is_internal,
+        false,
+        is_weak,
+        "unsupported GNU function attribute; ABI/layout-affecting and unknown attributes must be "
         "implemented explicitly");
 }
 
@@ -1122,6 +1150,7 @@ static bool finish_function_declaration_entity(MinicParser *parser,
                                                size_t parameter_count,
                                                bool is_variadic,
                                                bool is_internal,
+                                               bool is_weak,
                                                const char *assembler_name,
                                                size_t assembler_name_length,
                                                bool has_assembler_name,
@@ -1136,6 +1165,10 @@ static bool finish_function_declaration_entity(MinicParser *parser,
     if (parser == NULL || parameter_count > MINIC_MAX_FUNCTION_PARAMETERS ||
         (parameter_count != 0U && parameter_types == NULL) ||
         parser->current.kind != MINIC_TOKEN_SEMICOLON) {
+        return false;
+    }
+    if (is_weak && is_internal) {
+        minic_parser_error(parser, "GNU weak requires external function linkage");
         return false;
     }
     function_id = minic_parser_find_function(parser, name_span);
@@ -1169,6 +1202,10 @@ static bool finish_function_declaration_entity(MinicParser *parser,
             }
             return false;
         }
+    }
+    if (is_weak && !minic_c0_program_set_function_weak(parser->program, function_id, true)) {
+        minic_parser_error(parser, "conflicting GNU weak function linkage");
+        return false;
     }
     if (has_assembler_name &&
         !minic_c0_program_set_function_assembler_name(
@@ -1212,6 +1249,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     bool is_static_declaration;
     bool is_main;
     bool is_variadic;
+    bool is_weak;
     char assembler_name[256];
     size_t assembler_name_length;
     bool has_assembler_name;
@@ -1232,6 +1270,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     (void)memset(&deferred_attributes, 0, sizeof(deferred_attributes));
     (void)memset(&declaration_prefix, 0, sizeof(declaration_prefix));
     is_variadic = false;
+    is_weak = false;
     assembler_name_length = 0U;
     has_assembler_name = false;
     section_name_length = 0U;
@@ -1388,6 +1427,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                 sizeof(section_name),
                 &section_name_length,
                 &has_section,
+                &is_weak,
                 "unsupported GNU prefix function attribute; semantic and ABI-affecting attributes "
                 "must be implemented explicitly") ||
             !parse_gnu_function_asm_label(parser,
@@ -1395,7 +1435,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                                           sizeof(assembler_name),
                                           &assembler_name_length,
                                           &has_assembler_name) ||
-            !minic_parser_parse_gnu_function_attributes(parser)) {
+            !parse_persistent_function_attributes(parser, is_internal, &is_weak)) {
             return false;
         }
         if (parser->current.kind != MINIC_TOKEN_SEMICOLON) {
@@ -1410,6 +1450,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                                                   typed_parameter_count,
                                                   false,
                                                   is_internal,
+                                                  is_weak,
                                                   assembler_name,
                                                   assembler_name_length,
                                                   has_assembler_name,
@@ -1488,6 +1529,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
             sizeof(section_name),
             &section_name_length,
             &has_section,
+            &is_weak,
             "unsupported GNU prefix function attribute; semantic and ABI-affecting attributes must "
             "be implemented explicitly")) {
         return false;
@@ -1516,7 +1558,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                                       sizeof(assembler_name),
                                       &assembler_name_length,
                                       &has_assembler_name) ||
-        !minic_parser_parse_gnu_function_attributes(parser)) {
+        !parse_persistent_function_attributes(parser, is_internal, &is_weak)) {
         return false;
     }
     if (is_main && (parameter_count != 0U || is_variadic)) {
@@ -1545,6 +1587,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                                                   parameter_count,
                                                   is_variadic,
                                                   is_internal,
+                                                  is_weak,
                                                   assembler_name,
                                                   assembler_name_length,
                                                   has_assembler_name,
@@ -1657,6 +1700,10 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     } else if (!minic_c0_program_define_function(
                    parser->program, function_id, local_begin, body_block)) {
         minic_parser_error(parser, "cannot define previously declared function");
+        return false;
+    }
+    if (is_weak && !minic_c0_program_set_function_weak(parser->program, function_id, true)) {
+        minic_parser_error(parser, "conflicting GNU weak function linkage");
         return false;
     }
     if (has_assembler_name &&
