@@ -35,6 +35,7 @@ jobs:
           python3 tools/dev/fix-subxlen-materialization.py
           python3 tools/dev/materialize-aggregate-rvalue-arg.py
           python3 tools/dev/materialize-inline-asm-symbolic-immediate.py
+          python3 tools/dev/materialize-inline-asm-rj-z.py
           python3 tools/dev/materialize-codegen-span-trace.py
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
           make -j4 MODE=release BUILD_DIR=build/static-pointer-array-tail
@@ -97,6 +98,28 @@ jobs:
             exit 1
           fi
           echo 'PASS inline-asm-symbolic-immediate string+function+integer=resolved'
+
+          cat > build/inline-asm-rj-z.c <<'EOF'
+          int atomic_shape(int *p, int old, int new_value) {
+              int result;
+              unsigned int rc;
+              __asm__ __volatile__(
+                  "lr.w %0, %2\n\t"
+                  "bne %0, %z3, 1f\n\t"
+                  "sc.w.rl %1, %z4, %2\n\t"
+                  "1:"
+                  : "=&r" (result), "=&r" (rc), "+A" (*p)
+                  : "rJ" ((long)old), "rJ" (new_value)
+                  : "memory");
+              __asm__ __volatile__("beq zero, %z0, 1f\n\t1:" : : "rJ" (0));
+              return result;
+          }
+          EOF
+          "$minic" -S build/inline-asm-rj-z.c -o build/inline-asm-rj-z.s
+          grep -E 'bne [^,]+, t[0-6], 1f' build/inline-asm-rj-z.s >/dev/null
+          grep -E 'sc\.w\.rl [^,]+, t[0-6],' build/inline-asm-rj-z.s >/dev/null
+          grep -F 'beq zero, zero, 1f' build/inline-asm-rj-z.s >/dev/null
+          echo 'PASS inline-asm-rJ modifier=%z runtime=register zero=zero-register'
 
           MINIC="$minic" \
           BUILD_DIR="$GITHUB_WORKSPACE/build/static-pointer-array-tail-focused" \
