@@ -21,7 +21,7 @@ jobs:
       - name: Format and build release compiler
         run: |
           set -Eeuo pipefail
-          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh apply
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
           make -j4 MODE=release BUILD_DIR=build/discovery-compiler
       - name: Run focused family probe
