@@ -27,8 +27,17 @@ jobs:
         run: |
           set -Eeuo pipefail
           make -j4 MODE=release BUILD_DIR=build/small-aggregate
+          set +e
           MINIC="$GITHUB_WORKSPACE/build/small-aggregate/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/aggregate-focused" HOST_CC=cc \
-            sh tests/compiler/c0/run-rv64-integer-aggregate-return.sh
+            sh -x tests/compiler/c0/run-rv64-integer-aggregate-return.sh
+          status=$?
+          set -e
+          if test "$status" -ne 0; then
+            sed -n '/unwrap_word:/,/\.size unwrap_word/p' build/aggregate-focused/tests/compiler-c0-rv64-integer-aggregate-return/rv64_integer_aggregate_return.s || true
+            sed -n '/return_word:/,/\.size return_word/p' build/aggregate-focused/tests/compiler-c0-rv64-integer-aggregate-return/rv64_integer_aggregate_return.s || true
+            sed -n '/call_unwrap_word:/,/\.size call_unwrap_word/p' build/aggregate-focused/tests/compiler-c0-rv64-integer-aggregate-return/rv64_integer_aggregate_return.s || true
+            exit "$status"
+          fi
           MINIC="$GITHUB_WORKSPACE/build/small-aggregate/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/empty-record-focused" HOST_CC=cc \
             sh tests/compiler/c0/run-gnu-empty-records.sh
           MINIC="$GITHUB_WORKSPACE/build/small-aggregate/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/array-param-focused" HOST_CC=cc \
