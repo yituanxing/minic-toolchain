@@ -1,0 +1,46 @@
+name: Linux tail pointer-array verifier debug
+
+on:
+  push:
+    branches: [probe/linux-tail-pointer-array-verifier]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: linux-tail-pointer-array-verifier-debug
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download frozen authoritative Linux TU
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: 9175731558
+          path: build/frozen-linux
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: yituanxing/minic-toolchain
+          run-id: 31686762133
+      - name: Build instrumented compiler
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/materialize-linux-tail-verifier-debug.py
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+          make -j4 MODE=release BUILD_DIR=build/verifier-debug
+      - name: Run verifier on frozen TU
+        run: |
+          set -Eeuo pipefail
+          input="$GITHUB_WORKSPACE/build/frozen-linux/linux-frontier-31686762133/kbuild/init/main.i"
+          test -s "$input"
+          test "$(wc -l < "$input" | tr -d ' ')" = 90928
+          set +e
+          build/verifier-debug/bin/minic -S "$input" -o build/verifier-debug/main.s \
+            >build/verifier-debug/minic.stdout 2>build/verifier-debug/minic.stderr
+          status=$?
+          set -e
+          cat build/verifier-debug/minic.stderr
+          exit "$status"
