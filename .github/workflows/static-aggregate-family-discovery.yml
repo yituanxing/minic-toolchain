@@ -17,7 +17,9 @@ jobs:
         with:
           fetch-depth: 1
       - name: Materialize current family step
-        run: python3 tools/dev/static-aggregate-family-step4.py
+        run: |
+          python3 tools/dev/static-aggregate-family-step4-prep.py
+          python3 tools/dev/static-aggregate-family-step4.py
       - name: Format and build release compiler
         run: |
           set -Eeuo pipefail
@@ -65,6 +67,7 @@ jobs:
       - name: Commit clean discovery product
         run: |
           set -Eeuo pipefail
+          rm -f tools/dev/static-aggregate-family-step4-prep.py
           rm -f tools/dev/static-aggregate-family-step4.py
           rm -f .github/workflows/static-aggregate-family-discovery.yml
           git config user.name 'github-actions[bot]'
