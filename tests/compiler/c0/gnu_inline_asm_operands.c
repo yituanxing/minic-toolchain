@@ -80,6 +80,13 @@ static void linux_rk_immediate_shape(void) {
     __asm__ __volatile__("csrs 0x100, %0" : : "rK"(value) : "memory");
 }
 
+static unsigned long linux_matching_constraint_shape(void *pointer) {
+    unsigned long result;
+
+    __asm__("" : "=r"(result) : "0"(pointer));
+    return result;
+}
+
 int main(void) {
     int previous;
 
