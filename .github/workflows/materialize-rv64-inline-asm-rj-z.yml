@@ -1,0 +1,48 @@
+name: Materialize RISC-V GNU asm rJ and z modifier
+
+on:
+  push:
+    branches: [agent/linux-tail-pointer-array-v1]
+    paths:
+      - tools/dev/materialize-rv64-inline-asm-rj-z.py
+      - .github/workflows/materialize-rv64-inline-asm-rj-z.yml
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/linux-tail-pointer-array-v1
+          fetch-depth: 0
+      - name: Materialize product code
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/materialize-rv64-inline-asm-rj-z.py
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+      - name: Build and run focused gates
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release BUILD_DIR=build/asm-rj-z
+          MINIC="$GITHUB_WORKSPACE/build/asm-rj-z/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/asm-operands-focused" HOST_CC=cc \
+            sh tests/compiler/c0/run-gnu-inline-asm-operands.sh
+          MINIC="$GITHUB_WORKSPACE/build/asm-rj-z/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/asm-goto-focused" HOST_CC=cc \
+            sh tests/compiler/c0/run-gnu-inline-asm-goto.sh
+          MINIC="$GITHUB_WORKSPACE/build/asm-rj-z/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/aggregate-focused" HOST_CC=cc \
+            sh tests/compiler/c0/run-rv64-integer-aggregate-return.sh
+      - name: Write clean product commit
+        run: |
+          set -Eeuo pipefail
+          git rm tools/dev/materialize-rv64-inline-asm-rj-z.py \
+                 .github/workflows/materialize-rv64-inline-asm-rj-z.yml
+          git add src/target/riscv64/codegen_inline_asm.c \
+                  tests/compiler/c0/gnu_inline_asm_operands.c \
+                  tests/compiler/c0/run-gnu-inline-asm-operands.sh
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix(riscv64): support GNU asm rJ and z modifier'
+          git push origin HEAD:agent/linux-tail-pointer-array-v1
