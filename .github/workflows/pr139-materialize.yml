@@ -1,0 +1,58 @@
+name: PR139 Static Local Object Attribute Discovery
+
+on:
+  push:
+    branches: [agent/static-local-object-attrs-v1]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pr139-static-local-object-attrs
+  cancel-in-progress: true
+
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Materialize product changes
+        run: |
+          set -Eeuo pipefail
+          python3 .github/scripts/pr139-materialize.py
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+          git diff --check
+
+      - name: Build release compiler
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release BUILD_DIR=build/pr139-release
+
+      - name: Run static-local focused gate
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/pr139-release/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/pr139-focused" \
+          HOST_CC=cc \
+            sh tests/compiler/c0/run-static-local-scalars.sh
+
+      - name: Run complete host gate
+        run: |
+          set -Eeuo pipefail
+          make -j4 check
+
+      - name: Write clean product head
+        if: success()
+        run: |
+          set -Eeuo pipefail
+          rm -f .github/scripts/pr139-materialize.py .github/workflows/pr139-materialize.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'feat(frontend): route static-local object suffix attributes'
+          git push origin HEAD:agent/static-local-object-attrs-v1
