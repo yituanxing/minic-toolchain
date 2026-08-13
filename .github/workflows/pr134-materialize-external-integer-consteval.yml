@@ -14,6 +14,7 @@ jobs:
       - name: Materialize typed global integer initializers
         run: |
           set -Eeuo pipefail
+          python3 tools/dev/pr134-fix-materializer.py
           python3 tools/dev/pr134-materialize.py
           clang-format-18 -i \
             src/frontend/parser_internal.h \
@@ -39,6 +40,7 @@ jobs:
           set -Eeuo pipefail
           rm -f \
             tools/dev/pr134-materialize.py \
+            tools/dev/pr134-fix-materializer.py \
             .github/workflows/pr134-materialize-external-integer-consteval.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
