@@ -1,0 +1,66 @@
+name: PR136 Fast Frontier
+on:
+  push:
+    branches: [probe/pr136-fast-frontier]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  frontier:
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch authoritative unchanged init/main.i
+        run: |
+          set -Eeuo pipefail
+          mkdir -p build/prior-frontier
+          gh api repos/$GITHUB_REPOSITORY/actions/artifacts/9165241854/zip > build/prior-frontier.zip
+          unzip -q build/prior-frontier.zip -d build/prior-frontier
+          test -s build/prior-frontier/kbuild/init/main.i
+          test "$(wc -l < build/prior-frontier/kbuild/init/main.i | tr -d ' ')" = 90928
+      - name: Build exact release compiler
+        run: |
+          set -Eeuo pipefail
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+          make -j4 MODE=release BUILD_DIR=build/fast-compiler
+      - name: Verify focused semantics
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/fast-compiler/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/fast-focused" \
+            sh tests/compiler/c0/run-predefined-func-name.sh
+      - name: Compile authoritative unchanged init/main.i
+        run: |
+          set +e
+          "$GITHUB_WORKSPACE/build/fast-compiler/bin/minic" -S build/prior-frontier/kbuild/init/main.i -o build/fast-main.s >build/fast-main.stdout 2>build/fast-main.stderr
+          status=$?
+          set -e
+          cat build/fast-main.stderr
+          exit "$status"
+      - name: Prepare frontier
+        if: always()
+        run: |
+          set -Eeuo pipefail
+          summary=build/fast-frontier.txt
+          : > "$summary"
+          printf '%s\n' 'total_lines=90928' >> "$summary"
+          if test -s build/fast-main.stderr; then
+            frontier_line=$(sed -n 's/.*init\/main\.i:\([0-9][0-9]*\):.*/\1/p' build/fast-main.stderr | head -n 1)
+            printf '%s\n' "frontier_line=${frontier_line:-unknown}" >> "$summary"
+            sed -n '1,80p' build/fast-main.stderr >> "$summary"
+            if test -n "${frontier_line:-}"; then
+              start=$((frontier_line > 10 ? frontier_line - 10 : 1)); end=$((frontier_line + 10))
+              nl -ba build/prior-frontier/kbuild/init/main.i | sed -n "${start},${end}p" >> "$summary"
+            fi
+          else
+            printf '%s\n' 'No MiniC diagnostic; compiler passed authoritative init/main.i.' >> "$summary"
+          fi
+          cat "$summary"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pr136-fast-frontier-${{ github.run_id }}
+          path: build/fast-frontier.txt
+          retention-days: 7
