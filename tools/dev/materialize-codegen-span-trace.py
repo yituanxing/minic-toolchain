@@ -1,6 +1,104 @@
 #!/usr/bin/env python3
 from pathlib import Path
 
+parser_path = Path("src/frontend/parser_function.c")
+text = parser_path.read_text()
+old = r'''static bool adjust_array_parameter_type(MinicParser *parser, MinicType *parameter_type) {
+    const MinicArrayType *outer_array;
+    MinicType adjusted_type;
+    MinicType declared_array_type;
+    MinicType pointee_type;
+    bool is_array;
+
+    if (parser == NULL || parameter_type == NULL || parser->current.kind != MINIC_TOKEN_LBRACKET) {
+        return parser != NULL && parameter_type != NULL;
+    }
+    if (!minic_parser_parse_array_declarator_suffix(
+            parser, *parameter_type, true, &declared_array_type, &is_array) ||
+        !is_array || !minic_type_is_array(declared_array_type)) {
+        if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+            minic_parser_error(parser, "cannot parse array parameter declarator");
+        }
+        return false;
+    }
+    outer_array = minic_c0_program_array_type(parser->program, declared_array_type.array_type_id);
+    if (outer_array == NULL) {
+        minic_parser_error(parser, "cannot resolve array parameter declarator");
+        return false;
+    }
+    pointee_type = outer_array->element_type;
+    if (!minic_type_pointer_to(pointee_type, &adjusted_type) ||
+        !minic_c0_program_discard_last_array_type(parser->program, declared_array_type)) {
+        minic_parser_error(parser, "cannot adjust array parameter to pointer type");
+        return false;
+    }
+    *parameter_type = adjusted_type;
+    return true;
+}
+'''
+new = r'''static bool adjust_array_parameter_type(MinicParser *parser, MinicType *parameter_type) {
+    const MinicArrayType *outer_array;
+    MinicType adjusted_type;
+    MinicType declared_array_type;
+    MinicType pointee_type;
+    bool discard_declared_array;
+    bool is_array;
+
+    if (parser == NULL || parameter_type == NULL) {
+        return false;
+    }
+    discard_declared_array = false;
+    if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
+        if (!minic_parser_parse_array_declarator_suffix(
+                parser, *parameter_type, true, &declared_array_type, &is_array) ||
+            !is_array || !minic_type_is_array(declared_array_type)) {
+            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                minic_parser_error(parser, "cannot parse array parameter declarator");
+            }
+            return false;
+        }
+        discard_declared_array = true;
+    } else if (minic_type_is_array(*parameter_type)) {
+        declared_array_type = *parameter_type;
+    } else {
+        return true;
+    }
+    outer_array = minic_c0_program_array_type(parser->program, declared_array_type.array_type_id);
+    if (outer_array == NULL) {
+        minic_parser_error(parser, "cannot resolve array parameter declarator");
+        return false;
+    }
+    pointee_type = outer_array->element_type;
+    if (!minic_type_pointer_to(pointee_type, &adjusted_type) ||
+        (discard_declared_array &&
+         !minic_c0_program_discard_last_array_type(parser->program, declared_array_type))) {
+        minic_parser_error(parser, "cannot adjust array parameter to pointer type");
+        return false;
+    }
+    *parameter_type = adjusted_type;
+    return true;
+}
+'''
+if old in text:
+    text = text.replace(old, new, 1)
+elif new not in text:
+    raise SystemExit("typedef-array parameter normalization anchor not found")
+old_call = r'''        if (!is_function_pointer_parameter && parser->current.kind == MINIC_TOKEN_LBRACKET &&
+            !adjust_array_parameter_type(parser, &parameter_type)) {
+            return false;
+        }
+'''
+new_call = r'''        if (!is_function_pointer_parameter &&
+            !adjust_array_parameter_type(parser, &parameter_type)) {
+            return false;
+        }
+'''
+if old_call in text:
+    text = text.replace(old_call, new_call, 1)
+elif new_call not in text:
+    raise SystemExit("typedef-array parameter normalization call anchor not found")
+parser_path.write_text(text)
+
 statement_path = Path("src/target/riscv64/codegen_statement.c")
 text = statement_path.read_text()
 old = r'''            fprintf(stderr,
