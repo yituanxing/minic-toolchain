@@ -263,6 +263,71 @@ static bool static_object_address_relocation_target(const MinicC0Program *progra
     return true;
 }
 
+typedef struct MinicStaticObjectRelocationTarget {
+    MinicGlobalObjectId object_id;
+    size_t member_indices[MINIC_GLOBAL_RELOCATION_MAX_MEMBER_DEPTH];
+    size_t member_depth;
+} MinicStaticObjectRelocationTarget;
+
+typedef struct MinicStaticPointerInitializer {
+    bool has_relocation;
+    uint64_t bits;
+    MinicStaticObjectRelocationTarget relocation_target;
+} MinicStaticPointerInitializer;
+
+static bool static_object_address_relocation_path(const MinicC0Program *program,
+                                                  MinicExpressionId expression_id,
+                                                  MinicStaticObjectRelocationTarget *target) {
+    const MinicExpression *expression;
+    const MinicExpression *addressed;
+    size_t reverse_path[MINIC_GLOBAL_RELOCATION_MAX_MEMBER_DEPTH];
+    size_t depth;
+    size_t index;
+
+    if (program == NULL || target == NULL) {
+        return false;
+    }
+    expression = minic_c0_program_expression(program, expression_id);
+    while (expression != NULL && (expression->kind == MINIC_EXPRESSION_CAST ||
+                                  expression->kind == MINIC_EXPRESSION_BITCAST ||
+                                  expression->kind == MINIC_EXPRESSION_CONVERSION)) {
+        expression_id = expression->value.unary.operand;
+        expression = minic_c0_program_expression(program, expression_id);
+    }
+    if (expression == NULL || expression->kind != MINIC_EXPRESSION_ADDRESS_OF) {
+        return false;
+    }
+    addressed = minic_c0_program_expression(program, expression->value.unary.operand);
+    depth = 0U;
+    while (addressed != NULL && addressed->kind == MINIC_EXPRESSION_MEMBER) {
+        const MinicExpression *base;
+
+        if (depth == MINIC_GLOBAL_RELOCATION_MAX_MEMBER_DEPTH) {
+            return false;
+        }
+        reverse_path[depth] = addressed->value.member.field_index;
+        depth += 1U;
+        base = minic_c0_program_expression(program, addressed->value.member.base);
+        if (base != NULL && base->kind == MINIC_EXPRESSION_ADDRESS_OF) {
+            addressed = minic_c0_program_expression(program, base->value.unary.operand);
+        } else {
+            addressed = base;
+        }
+    }
+    if (addressed == NULL || addressed->kind != MINIC_EXPRESSION_GLOBAL_OBJECT) {
+        return false;
+    }
+    target->object_id = addressed->value.global_object_id;
+    if (target->object_id >= program->global_object_count) {
+        return false;
+    }
+    target->member_depth = depth;
+    for (index = 0U; index < depth; ++index) {
+        target->member_indices[index] = reverse_path[depth - index - 1U];
+    }
+    return true;
+}
+
 static bool static_pointer_integer_constant_bits(const MinicParser *parser,
                                                  MinicExpressionId expression_id,
                                                  uint64_t *bits) {
@@ -301,28 +366,36 @@ static bool static_pointer_integer_constant_bits(const MinicParser *parser,
     return true;
 }
 
-static bool
-parse_static_pointer_constant_bits(MinicParser *parser, MinicType target_type, uint64_t *bits) {
+static bool parse_static_pointer_initializer(MinicParser *parser,
+                                             MinicType target_type,
+                                             MinicStaticPointerInitializer *initializer) {
     MinicExpressionId expression_id;
 
-    if (parser == NULL || bits == NULL || !minic_type_is_pointer(target_type) ||
+    if (parser == NULL || initializer == NULL || !minic_type_is_pointer(target_type) ||
         !minic_parser_parse_expression(parser, &expression_id, 0U)) {
         return false;
     }
+    (void)memset(initializer, 0, sizeof(*initializer));
+    initializer->relocation_target.object_id = MINIC_GLOBAL_OBJECT_INVALID;
     if (!minic_c0_assignment_compatible(parser->program, target_type, expression_id)) {
         minic_parser_error(parser, "static pointer initializer type mismatch");
         return false;
     }
     if (minic_c0_expression_is_null_pointer_constant_v0(parser->program, expression_id)) {
-        *bits = 0U;
         return true;
     }
-    if (!static_pointer_integer_constant_bits(parser, expression_id, bits)) {
-        minic_parser_error(
-            parser, "static pointer constant requires null or explicit integer-to-pointer cast");
-        return false;
+    if (static_object_address_relocation_path(
+            parser->program, expression_id, &initializer->relocation_target)) {
+        initializer->has_relocation = true;
+        return true;
     }
-    return true;
+    if (static_pointer_integer_constant_bits(parser, expression_id, &initializer->bits)) {
+        return true;
+    }
+    minic_parser_error(parser,
+                       "static pointer initializer requires null, symbolic address, or explicit "
+                       "integer-to-pointer constant cast");
+    return false;
 }
 
 static bool parse_static_scalar(MinicParser *parser, MinicType type, MinicSourceSpan name_span) {
@@ -528,14 +601,29 @@ parse_static_scalar_constant(MinicParser *parser, MinicGlobalObjectId object_id,
             return false;
         }
     } else if (minic_type_is_pointer(type)) {
-        uint64_t pointer_bits;
+        MinicStaticPointerInitializer initializer;
+        size_t slot_index;
 
-        if (!parse_static_pointer_constant_bits(parser, type, &pointer_bits) ||
-            !minic_c0_global_object_add_initializer_bits(
-                parser->program, object_id, pointer_bits)) {
-            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
-                minic_parser_error(parser, "cannot record static pointer constant bits");
+        slot_index = parser->program->global_objects[object_id].initializer_count;
+        if (!parse_static_pointer_initializer(parser, type, &initializer)) {
+            return false;
+        }
+        if (initializer.has_relocation) {
+            if (!minic_c0_global_object_add_initializer_bits(parser->program, object_id, 0U) ||
+                !minic_c0_global_object_add_object_relocation_path(
+                    parser->program,
+                    object_id,
+                    MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR,
+                    slot_index,
+                    initializer.relocation_target.object_id,
+                    initializer.relocation_target.member_indices,
+                    initializer.relocation_target.member_depth)) {
+                minic_parser_error(parser, "cannot record nested static object relocation");
+                return false;
             }
+        } else if (!minic_c0_global_object_add_initializer_bits(
+                       parser->program, object_id, initializer.bits)) {
+            minic_parser_error(parser, "cannot record static pointer constant bits");
             return false;
         }
     } else {

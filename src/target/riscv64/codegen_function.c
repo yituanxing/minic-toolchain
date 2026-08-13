@@ -133,6 +133,27 @@ minic_riscv64_global_relocation_target_name(const MinicC0Program *program,
     return NULL;
 }
 
+static bool minic_riscv64_emit_symbol_value(FILE *file,
+                                            const MinicC0Program *program,
+                                            const MinicGlobalRelocation *relocation,
+                                            size_t width) {
+    const char *directive;
+    const char *target_name;
+    size_t target_addend;
+
+    directive = minic_riscv64_integer_data_directive(width);
+    target_name = minic_riscv64_global_relocation_target_name(program, relocation);
+    if (file == NULL || directive == NULL || target_name == NULL || target_name[0] == '\0' ||
+        !minic_data_layout_global_relocation_target_addend(
+            minic_default_data_layout(), program, relocation, &target_addend)) {
+        return false;
+    }
+    if (target_addend == 0U) {
+        return fprintf(file, "  %s %s\n", directive, target_name) >= 0;
+    }
+    return fprintf(file, "  %s %s+%zu\n", directive, target_name, target_addend) >= 0;
+}
+
 static bool
 emit_symbol_relocs(FILE *file, const MinicC0Program *program, const MinicGlobalObject *object) {
     MinicType pointer_type;
@@ -153,20 +174,17 @@ emit_symbol_relocs(FILE *file, const MinicC0Program *program, const MinicGlobalO
     cursor = 0U;
     for (relocation_index = 0U; relocation_index < object->relocation_count; ++relocation_index) {
         const MinicGlobalRelocation *relocation;
-        const char *target_name;
         size_t storage_offset;
 
         relocation = &object->relocations[relocation_index];
-        target_name = minic_riscv64_global_relocation_target_name(program, relocation);
         if (!minic_data_layout_global_relocation_offset(
                 minic_default_data_layout(), program, object, relocation, &storage_offset)) {
             return false;
         }
-        if (target_name == NULL || target_name[0] == '\0' || storage_offset < cursor ||
-            storage_offset > object->storage_size ||
+        if (storage_offset < cursor || storage_offset > object->storage_size ||
             pointer_width > object->storage_size - storage_offset ||
             !minic_riscv64_emit_zero_bytes(file, storage_offset - cursor) ||
-            fprintf(file, "  .dword %s\n", target_name) < 0) {
+            !minic_riscv64_emit_symbol_value(file, program, relocation, pointer_width)) {
             return false;
         }
         cursor = storage_offset + pointer_width;
@@ -217,14 +235,8 @@ static bool minic_riscv64_emit_direct_record_values(FILE *file,
         if (relocation != NULL &&
             relocation->location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_RECORD_FIELD &&
             relocation->location_index == field_index) {
-            const char *directive;
-            const char *target_name;
-
-            directive = minic_riscv64_integer_data_directive(field_size);
-            target_name = minic_riscv64_global_relocation_target_name(program, relocation);
-            if (!minic_type_is_pointer(field->type) || value != 0 || directive == NULL ||
-                target_name == NULL || target_name[0] == '\0' ||
-                fprintf(file, "  %s %s\n", directive, target_name) < 0) {
+            if (!minic_type_is_pointer(field->type) || value != 0U ||
+                !minic_riscv64_emit_symbol_value(file, program, relocation, field_size)) {
                 return false;
             }
             relocation_index += 1U;
@@ -249,25 +261,40 @@ static bool minic_riscv64_emit_constant_value(FILE *file,
                                               const MinicGlobalObject *object,
                                               MinicType type,
                                               size_t *initializer_index,
+                                              size_t *relocation_index,
                                               size_t *emitted_size) {
     size_t type_size;
     size_t type_alignment;
 
     if (file == NULL || program == NULL || object == NULL || initializer_index == NULL ||
-        emitted_size == NULL ||
+        relocation_index == NULL || emitted_size == NULL ||
         !minic_riscv64_type_layout(program, type, &type_size, &type_alignment)) {
         return false;
     }
     (void)type_alignment;
     if (minic_type_is_integer(type) || minic_type_is_pointer(type)) {
+        const MinicGlobalRelocation *relocation;
         uint64_t bits;
+        size_t slot_index;
 
         if (*initializer_index >= object->initializer_count) {
             return false;
         }
-        bits = object->initializer_values[*initializer_index];
+        slot_index = *initializer_index;
+        bits = object->initializer_values[slot_index];
         *initializer_index += 1U;
-        if (!minic_riscv64_emit_integer_bits(file, type_size, bits)) {
+        relocation = *relocation_index < object->relocation_count
+                         ? &object->relocations[*relocation_index]
+                         : NULL;
+        if (relocation != NULL &&
+            relocation->location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR &&
+            relocation->location_index == slot_index) {
+            if (!minic_type_is_pointer(type) || bits != 0U ||
+                !minic_riscv64_emit_symbol_value(file, program, relocation, type_size)) {
+                return false;
+            }
+            *relocation_index += 1U;
+        } else if (!minic_riscv64_emit_integer_bits(file, type_size, bits)) {
             return false;
         }
         *emitted_size = type_size;
@@ -291,6 +318,7 @@ static bool minic_riscv64_emit_constant_value(FILE *file,
                                                    object,
                                                    array_type->element_type,
                                                    initializer_index,
+                                                   relocation_index,
                                                    &element_emitted) ||
                 cursor > type_size - element_emitted) {
                 return false;
@@ -333,8 +361,13 @@ static bool minic_riscv64_emit_constant_value(FILE *file,
             for (element_index = 0U; element_index < field->element_count; ++element_index) {
                 size_t element_emitted;
 
-                if (!minic_riscv64_emit_constant_value(
-                        file, program, object, field->type, initializer_index, &element_emitted) ||
+                if (!minic_riscv64_emit_constant_value(file,
+                                                       program,
+                                                       object,
+                                                       field->type,
+                                                       initializer_index,
+                                                       relocation_index,
+                                                       &element_emitted) ||
                     cursor > type_size - element_emitted) {
                     return false;
                 }
@@ -359,6 +392,7 @@ static bool minic_riscv64_emit_record_values(FILE *file,
     const MinicRecord *record;
     size_t emitted_size;
     size_t initializer_index;
+    size_t relocation_index;
 
     if (file == NULL || program == NULL || object == NULL || !minic_type_is_record(object->type) ||
         object->is_zero_initialized) {
@@ -372,10 +406,17 @@ static bool minic_riscv64_emit_record_values(FILE *file,
         return minic_riscv64_emit_direct_record_values(file, program, object, record);
     }
     initializer_index = 0U;
+    relocation_index = 0U;
     emitted_size = 0U;
-    return minic_riscv64_emit_constant_value(
-               file, program, object, object->type, &initializer_index, &emitted_size) &&
-           initializer_index == object->initializer_count && emitted_size == object->storage_size;
+    return minic_riscv64_emit_constant_value(file,
+                                             program,
+                                             object,
+                                             object->type,
+                                             &initializer_index,
+                                             &relocation_index,
+                                             &emitted_size) &&
+           initializer_index == object->initializer_count &&
+           relocation_index == object->relocation_count && emitted_size == object->storage_size;
 }
 
 static bool minic_riscv64_record_array_info(const MinicC0Program *program,
@@ -442,7 +483,7 @@ static bool minic_riscv64_emit_record_array_values(FILE *file,
             size_t field_size;
             size_t field_alignment;
             size_t field_offset;
-            int value;
+            uint64_t value;
 
             field = minic_c0_record_field(record, field_index);
             if (field == NULL || field->element_count != 1U || field->is_flexible_array ||
@@ -464,17 +505,7 @@ static bool minic_riscv64_emit_record_array_values(FILE *file,
 
             value = object->initializer_values[initializer_index++];
             directive = minic_riscv64_integer_data_directive(field_size);
-            if (directive == NULL) {
-                return false;
-            }
-            if (field_size == 1U) {
-                unsigned int byte_value;
-
-                byte_value = (unsigned int)value & 0xffU;
-                if (fprintf(file, "  %s %u\n", directive, byte_value) < 0) {
-                    return false;
-                }
-            } else if (fprintf(file, "  %s %d\n", directive, value) < 0) {
+            if (directive == NULL || !minic_riscv64_emit_integer_bits(file, field_size, value)) {
                 return false;
             }
             cursor = field_offset + field_size;
@@ -607,17 +638,8 @@ static bool minic_riscv64_emit_global_object(FILE *file,
     } else {
         for (initializer_index = 0U; initializer_index < object->initializer_count;
              ++initializer_index) {
-            if (scalar_width == 1U) {
-                unsigned int value;
-
-                value = (unsigned int)object->initializer_values[initializer_index] & 0xffU;
-                if (fprintf(file, "  %s %u\n", directive, value) < 0) {
-                    return false;
-                }
-            } else if (fprintf(file,
-                               "  %s %d\n",
-                               directive,
-                               object->initializer_values[initializer_index]) < 0) {
+            if (!minic_riscv64_emit_integer_bits(
+                    file, scalar_width, object->initializer_values[initializer_index])) {
                 return false;
             }
         }

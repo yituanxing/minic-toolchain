@@ -405,10 +405,13 @@ typedef enum MinicGlobalRelocationTargetKind {
     MINIC_GLOBAL_RELOCATION_FUNCTION
 } MinicGlobalRelocationTargetKind;
 
+#define MINIC_GLOBAL_RELOCATION_MAX_MEMBER_DEPTH 8U
+
 typedef enum MinicGlobalRelocationLocationKind {
     MINIC_GLOBAL_RELOCATION_LOCATION_SCALAR = 0,
     MINIC_GLOBAL_RELOCATION_LOCATION_ARRAY_ELEMENT,
-    MINIC_GLOBAL_RELOCATION_LOCATION_RECORD_FIELD
+    MINIC_GLOBAL_RELOCATION_LOCATION_RECORD_FIELD,
+    MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR
 } MinicGlobalRelocationLocationKind;
 
 typedef struct MinicGlobalRelocation {
@@ -416,6 +419,8 @@ typedef struct MinicGlobalRelocation {
     size_t location_index;
     MinicGlobalRelocationTargetKind target_kind;
     size_t target_id;
+    size_t target_member_indices[MINIC_GLOBAL_RELOCATION_MAX_MEMBER_DEPTH];
+    size_t target_member_depth;
 } MinicGlobalRelocation;
 
 typedef struct MinicGlobalObject {
@@ -724,6 +729,14 @@ bool minic_c0_global_object_add_object_relocation(MinicC0Program *program,
                                                   MinicGlobalRelocationLocationKind location_kind,
                                                   size_t location_index,
                                                   MinicGlobalObjectId target_object_id);
+bool minic_c0_global_object_add_object_relocation_path(
+    MinicC0Program *program,
+    MinicGlobalObjectId global_object_id,
+    MinicGlobalRelocationLocationKind location_kind,
+    size_t location_index,
+    MinicGlobalObjectId target_object_id,
+    const size_t *target_member_indices,
+    size_t target_member_depth);
 bool minic_c0_global_object_set_zero_initialized(MinicC0Program *program,
                                                  MinicGlobalObjectId global_object_id);
 bool minic_c0_global_object_set_extern(MinicC0Program *program,

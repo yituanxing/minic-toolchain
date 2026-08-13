@@ -39,5 +39,9 @@ bool minic_data_layout_global_relocation_offset(const MinicDataLayout *layout,
                                                 const MinicGlobalObject *object,
                                                 const MinicGlobalRelocation *relocation,
                                                 size_t *offset);
+bool minic_data_layout_global_relocation_target_addend(const MinicDataLayout *layout,
+                                                       const MinicC0Program *program,
+                                                       const MinicGlobalRelocation *relocation,
+                                                       size_t *addend);
 
 #endif
