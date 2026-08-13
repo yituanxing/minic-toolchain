@@ -3,6 +3,9 @@
 #include <limits.h>
 #include <string.h>
 
+const char *const minic_riscv64_argument_registers[8] = {
+    "a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7"};
+
 const MinicTargetInfo *minic_default_target_info(void) {
     static MinicTargetInfo target;
 
