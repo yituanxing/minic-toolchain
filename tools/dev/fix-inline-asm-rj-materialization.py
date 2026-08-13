@@ -13,4 +13,5 @@ elif new not in text:
 path.write_text(text)
 
 runpy.run_path("tools/dev/materialize-cleanup-cast-remap.py", run_name="__main__")
+runpy.run_path("tools/dev/materialize-record-return-source.py", run_name="__main__")
 runpy.run_path("tools/dev/materialize-call-trace.py", run_name="__main__")
