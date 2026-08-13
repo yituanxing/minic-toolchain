@@ -66,25 +66,19 @@ jobs:
       - name: Verify production source inventory
         run: sh tools/maintenance/check-production-source-inventory.sh
 
-      - name: Show canonical source formatting diff
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          clang-format-18 -i \
-            src/frontend/ast_traversal.c \
-            src/frontend/ast_traversal.h \
-            src/frontend/cast_normalization.c \
-            tests/frontend/ast_traversal_test.c
-          if ! git diff --exit-code -- \
-              src/frontend/ast_traversal.c \
-              src/frontend/ast_traversal.h \
-              src/frontend/cast_normalization.c \
-              tests/frontend/ast_traversal_test.c; then
-            exit 1
-          fi
+      - name: Check committed source formatting
+        run: CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
 
       - name: Run release host contracts
         run: make -j2 MODE=release BUILD_DIR=build/architecture-host CFLAGS=-Werror check-fast
 
       - name: Run sanitizer AST contracts
         run: make -j2 MODE=sanitize BUILD_DIR=build/architecture-sanitize check-ast-contract
+
+      - name: Run frozen Foundation focused semantics
+        shell: bash
+        env:
+          MINIC: ${{ github.workspace }}/build/architecture-host/bin/minic
+          BUILD_DIR: ${{ github.workspace }}/build/architecture-foundation-focused
+          HOST_CC: cc
+        run: sh tools/dev/pr76-focused.sh
