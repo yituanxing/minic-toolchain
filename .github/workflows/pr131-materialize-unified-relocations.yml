@@ -17,6 +17,7 @@ jobs:
           python3 tools/dev/pr131-materialize.py
           python3 tools/dev/pr131-fix-materializer.py
           python3 tools/dev/pr131-semantic-slot-repair.py
+          python3 tools/dev/pr131-final-producer-repair.py
           clang-format-18 -i \
             src/frontend/ast.h \
             src/frontend/ast.c \
@@ -24,6 +25,7 @@ jobs:
             src/frontend/ast_verifier.c \
             src/frontend/parser_global.c \
             src/frontend/parser_function.c \
+            src/frontend/parser_statement.c \
             src/target/data_layout.h \
             src/target/data_layout.c \
             src/target/riscv64/codegen_function.c \
@@ -47,6 +49,7 @@ jobs:
             tools/dev/pr131-materialize.py \
             tools/dev/pr131-fix-materializer.py \
             tools/dev/pr131-semantic-slot-repair.py \
+            tools/dev/pr131-final-producer-repair.py \
             .github/workflows/pr131-materialize-unified-relocations.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
