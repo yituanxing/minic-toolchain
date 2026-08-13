@@ -53,14 +53,14 @@ if text.count(old) != 1:
     raise SystemExit(f"used descriptor anchor mismatch: {text.count(old)}")
 registry.write_text(text.replace(old, new, 1))
 
-# Extend the existing declarator-attribute fixture with both legal targets and
-# the exact Linux-style object combination of `used` plus `section`.
+# Extend the existing declarator-attribute fixture with both legal targets.
+# Static-object section metadata is a separate semantic owner and is intentionally
+# left for the next Linux-driven slice instead of being mixed into this registry PR.
 fixture = Path("tests/compiler/c0/deferred_declarator_attributes.c")
 text = fixture.read_text()
 append = '''
 
-static int __attribute__((__used__)) __attribute__((__section__(".data.used-shape")))
-    used_object_shape = 7;
+static int __attribute__((__used__)) used_object_shape = 7;
 
 void __attribute__((used)) used_function_shape(void);
 
@@ -86,7 +86,6 @@ old = '''grep -F 'noclone_after_return_pointer:' "$work/deferred_declarator_attr
 if "$minic" -S "$root/tests/compiler/c0/invalid_function_attribute_on_pointer_object.c" \\
 '''
 new = '''grep -F 'noclone_after_return_pointer:' "$work/deferred_declarator_attributes.s" >/dev/null
-grep -F '.section .data.used-shape' "$work/deferred_declarator_attributes.s" >/dev/null
 grep -F 'used_object_shape:' "$work/deferred_declarator_attributes.s" >/dev/null
 grep -F 'used_function_shape:' "$work/deferred_declarator_attributes.s" >/dev/null
 
