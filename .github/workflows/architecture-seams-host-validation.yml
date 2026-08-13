@@ -1,0 +1,51 @@
+name: Architecture Seams Host Validation
+
+on:
+  push:
+    branches:
+      - refactor/architecture-seams-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: architecture-seams-host-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  host-contracts:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Materialize intended source-list integration
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('Makefile')
+          text = path.read_text()
+          needle = '\tsrc/frontend/ast.c \\\n'
+          replacement = needle + '\tsrc/frontend/ast_traversal.c \\\n'
+          if text.count(needle) != 3:
+              raise SystemExit(f'unexpected ast.c source-list count: {text.count(needle)}')
+          first = text.find(needle)
+          second = text.find(needle, first + len(needle))
+          text = text[:first] + replacement + text[first + len(needle):]
+          second += len(replacement) - len(needle)
+          text = text[:second] + replacement + text[second + len(needle):]
+          path.write_text(text)
+          PY
+
+      - name: Verify production source inventory
+        run: sh tools/maintenance/check-production-source-inventory.sh
+
+      - name: Run release host contracts
+        run: make -j2 MODE=release BUILD_DIR=build/architecture-host CFLAGS=-Werror check-fast
+
+      - name: Run sanitizer AST contracts
+        run: make -j2 MODE=sanitize BUILD_DIR=build/architecture-sanitize check-ast-contract
