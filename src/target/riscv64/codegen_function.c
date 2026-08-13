@@ -574,7 +574,8 @@ static bool minic_riscv64_emit_global_object(FILE *file,
     size_t initializer_index;
 
     if (file == NULL || program == NULL || object == NULL || object->name_length == 0U ||
-        object->storage_size == 0U || object->alignment == 0U ||
+        object->alignment == 0U ||
+        (object->storage_size == 0U && !object->is_zero_initialized && !object->is_tentative) ||
         !minic_riscv64_alignment_power(object->alignment, &alignment_power)) {
         return false;
     }

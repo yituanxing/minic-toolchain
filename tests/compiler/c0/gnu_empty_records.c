@@ -26,3 +26,9 @@ unsigned long empty_member_record_size(void) {
 struct EmptyStruct *empty_identity(struct EmptyStruct *value) {
     return value;
 }
+
+static struct EmptyStruct empty_static_global;
+
+int empty_static_global_address(void) {
+    return &empty_static_global != (void *)0;
+}
