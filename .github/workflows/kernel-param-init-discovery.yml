@@ -1,0 +1,47 @@
+name: Kernel Param Init Discovery
+
+on:
+  push:
+    branches: [agent/kernel-param-init-family-v1]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: kernel-param-init-discovery
+  cancel-in-progress: true
+
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Materialize product slice
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/materialize-kernel-param-init-family.py
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+
+      - name: Build and focused validation
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release BUILD_DIR=build/kernel-param-init
+          MINIC="$GITHUB_WORKSPACE/build/kernel-param-init/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/kernel-param-focused" \
+            sh tests/compiler/c0/run-static-aggregate-initializers.sh
+
+      - name: Write product changes back
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src tests
+          if git diff --cached --quiet; then
+            echo 'product already materialized'
+            exit 0
+          fi
+          git commit -m 'feat(frontend): preserve array-decay relocations in recursive static initializers'
+          git push origin HEAD:agent/kernel-param-init-family-v1
