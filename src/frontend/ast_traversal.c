@@ -221,5 +221,6 @@ bool minic_c0_program_remap_external_expression_ids(MinicC0Program *program,
         return false;
     }
 
-    return visit_external_expression_id_refs_unchecked(program, apply_expression_id_remap, &context);
+    return visit_external_expression_id_refs_unchecked(
+        program, apply_expression_id_remap, &context);
 }
