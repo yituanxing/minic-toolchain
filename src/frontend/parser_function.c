@@ -467,12 +467,25 @@ static bool parse_function_pointer_parameter_declarator(MinicParser *parser,
 }
 
 static bool adjust_array_parameter_type(MinicParser *parser, MinicType *parameter_type) {
-    if (parser == NULL || parameter_type == NULL || parser->current.kind != MINIC_TOKEN_LBRACKET) {
-        return parser != NULL && parameter_type != NULL;
-    }
-    if (!minic_parser_parse_array_parameter_suffix(parser, *parameter_type, parameter_type)) {
-        minic_parser_error(parser, "cannot parse adjusted array parameter declarator");
+    if (parser == NULL || parameter_type == NULL) {
         return false;
+    }
+    if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
+        if (!minic_parser_parse_array_parameter_suffix(parser, *parameter_type, parameter_type)) {
+            minic_parser_error(parser, "cannot parse adjusted array parameter declarator");
+            return false;
+        }
+        return true;
+    }
+    if (minic_type_is_array(*parameter_type)) {
+        const MinicArrayType *array_type;
+
+        array_type = minic_c0_program_array_type(parser->program, parameter_type->array_type_id);
+        if (array_type == NULL ||
+            !minic_type_pointer_to(array_type->element_type, parameter_type)) {
+            minic_parser_error(parser, "cannot adjust typedef array parameter to pointer");
+            return false;
+        }
     }
     return true;
 }
@@ -562,7 +575,7 @@ bool minic_parser_parse_parameter_list(MinicParser *parser,
             return false;
         }
 
-        if (!is_function_pointer_parameter && parser->current.kind == MINIC_TOKEN_LBRACKET &&
+        if (!is_function_pointer_parameter &&
             !adjust_array_parameter_type(parser, &parameter_type)) {
             return false;
         }

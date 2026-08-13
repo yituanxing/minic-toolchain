@@ -12,4 +12,6 @@ mkdir -p "$work"
 "$minic" -S "$work/input.i" -o "$work/output.s"
 test -s "$work/output.s"
 grep -F '.globl main' "$work/output.s" >/dev/null
-printf '%s\n' 'PASS compiler/c0/array_parameter_adjustment incomplete=pointer fixed-outer=pointer multidim-inner=retained verifier=no-orphan'
+grep -F 'consume_typedef_vector:' "$work/output.s" >/dev/null
+grep -F 'consume_typedef_matrix:' "$work/output.s" >/dev/null
+printf '%s\n' 'PASS compiler/c0/array_parameter_adjustment explicit=incomplete+fixed+multidim typedef=array+multidim adjusted=pointer verifier=no-orphan'
