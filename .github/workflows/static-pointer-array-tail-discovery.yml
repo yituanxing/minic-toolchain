@@ -20,7 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Materialize tail fixes and run cached full TU
+      - name: Materialize tail fixes and inspect cached full TU
         run: |
           set -Eeuo pipefail
           python3 - <<'PY'
@@ -58,6 +58,12 @@ jobs:
               '''    if (file == NULL || program == NULL || object == NULL || object->name_length == 0U ||\n        object->storage_size == 0U || object->alignment == 0U ||\n        !minic_riscv64_alignment_power(object->alignment, &alignment_power)) {\n        return false;\n    }\n''',
               '''    if (file == NULL || program == NULL || object == NULL || object->name_length == 0U ||\n        object->alignment == 0U ||\n        !minic_riscv64_alignment_power(object->alignment, &alignment_power)) {\n        return false;\n    }\n    if (object->storage_size == 0U &&\n        ((!object->is_zero_initialized && !object->is_tentative) ||\n         object->initializer_count != 0U || object->relocation_count != 0U)) {\n        return false;\n    }\n''',
               'zero-size object emission')
+
+          replace_once(
+              'src/target/riscv64/codegen_function.c',
+              '''        if (!success) {\n            fprintf(stderr,\n                    "CODEGEN_FAIL global=%zu name=%s\\n",\n                    global_index,\n                    program->global_objects[global_index].name);\n        }\n''',
+              '''        if (!success) {\n            const MinicGlobalObject *failed = &program->global_objects[global_index];\n            const MinicArrayType *failed_array =\n                minic_type_is_array(failed->type)\n                    ? minic_c0_program_array_type(program, failed->type.array_type_id)\n                    : NULL;\n            size_t owner_id = SIZE_MAX;\n            const char *owner_name = "-";\n\n            if (sscanf(failed->name, "__minic_static_local_%zu_", &owner_id) == 1 &&\n                owner_id < program->function_count) {\n                owner_name = program->functions[owner_id].name;\n            }\n            fprintf(stderr,\n                    "CODEGEN_FAIL global=%zu name=%s owner=%zu:%s kind=%d ptr=%u array=%d array_count=%zu element_kind=%d element_ptr=%u storage=%zu align=%zu zero=%d tentative=%d init=%zu reloc=%zu readonly=%d section=%s\\n",\n                    global_index, failed->name, owner_id, owner_name,\n                    (int)failed->type.base_kind, failed->type.pointer_depth,\n                    failed_array != NULL ? 1 : 0,\n                    failed_array != NULL ? failed_array->element_count : 0U,\n                    failed_array != NULL ? (int)failed_array->element_type.base_kind : -1,\n                    failed_array != NULL ? failed_array->element_type.pointer_depth : 0U,\n                    failed->storage_size, failed->alignment,\n                    failed->is_zero_initialized ? 1 : 0, failed->is_tentative ? 1 : 0,\n                    failed->initializer_count, failed->relocation_count,\n                    failed->is_read_only ? 1 : 0,\n                    failed->section_name == NULL ? "-" : failed->section_name);\n        }\n''',
+              'codegen failure detail')
           PY
 
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
