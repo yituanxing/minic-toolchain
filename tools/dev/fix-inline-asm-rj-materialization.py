@@ -12,4 +12,5 @@ elif new not in text:
     raise SystemExit("assign_operand_registers call anchor not found")
 path.write_text(text)
 
+runpy.run_path("tools/dev/materialize-cleanup-cast-remap.py", run_name="__main__")
 runpy.run_path("tools/dev/materialize-call-trace.py", run_name="__main__")
