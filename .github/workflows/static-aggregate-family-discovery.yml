@@ -1,0 +1,75 @@
+name: Static Aggregate Family Discovery
+
+on:
+  push:
+    branches:
+      - agent/static-aggregate-init-family-v1
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  discover:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Materialize current family step
+        run: python3 tools/dev/static-aggregate-family-step2.py
+      - name: Format and build release compiler
+        run: |
+          set -Eeuo pipefail
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+          make -j4 MODE=release BUILD_DIR=build/discovery-compiler
+      - name: Run focused family probe
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/discovery-compiler/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/discovery-focused" \
+            sh tests/compiler/c0/run-static-aggregate-family-discovery.sh
+      - name: Fetch authoritative unchanged init main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p build/prior-frontier
+          gh api repos/$GITHUB_REPOSITORY/actions/artifacts/9165241854/zip > build/prior-frontier.zip
+          unzip -q build/prior-frontier.zip -d build/prior-frontier
+          test -s build/prior-frontier/kbuild/init/main.i
+          test "$(wc -l < build/prior-frontier/kbuild/init/main.i | tr -d ' ')" = 90928
+      - name: Compile authoritative unchanged init main
+        run: |
+          set +e
+          build/discovery-compiler/bin/minic -S build/prior-frontier/kbuild/init/main.i \
+            -o build/discovery-main.s >build/discovery-main.stdout 2>build/discovery-main.stderr
+          status=$?
+          set -e
+          cat build/discovery-main.stderr
+          printf 'compile_status=%s\n' "$status" > build/discovery-frontier.txt
+          if test -s build/discovery-main.stderr; then
+            frontier_line=$(sed -n 's/.*init\/main\.i:\([0-9][0-9]*\):.*/\1/p' build/discovery-main.stderr | head -n 1)
+            printf 'frontier_line=%s\n' "${frontier_line:-unknown}" >> build/discovery-frontier.txt
+            sed -n '1,30p' build/discovery-main.stderr >> build/discovery-frontier.txt
+          else
+            printf '%s\n' 'frontier_line=passed' >> build/discovery-frontier.txt
+          fi
+          cat build/discovery-frontier.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: static-aggregate-family-${{ github.run_id }}
+          path: build/discovery-frontier.txt
+          retention-days: 7
+      - name: Commit clean discovery product
+        run: |
+          set -Eeuo pipefail
+          rm -f tools/dev/static-aggregate-family-step2.py
+          rm -f .github/workflows/static-aggregate-family-discovery.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'feat(frontend): widen static aggregate integer constants'
+          git push origin HEAD:agent/static-aggregate-init-family-v1
