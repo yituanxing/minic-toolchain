@@ -61,8 +61,7 @@ static bool remap_non_cast_expression(MinicExpression *expression,
     context.mapping = mapping;
     context.old_expression_count = old_expression_count;
     context.current_old_index = current_old_index;
-    return minic_c0_expression_visit_child_id_refs(
-        expression, remap_child_expression_id, &context);
+    return minic_c0_expression_visit_child_id_refs(expression, remap_child_expression_id, &context);
 }
 
 static bool collect_external_expression_id_ref(MinicExpressionId *expression_id,
@@ -82,7 +81,8 @@ static bool collect_external_expression_id_ref(MinicExpressionId *expression_id,
             return false;
         }
         resized = (MinicExpressionId **)realloc(
-            references->values, new_capacity * sizeof(*references->values));
+            references->values,
+            new_capacity * sizeof(*references->values));
         if (resized == NULL) {
             return false;
         }
