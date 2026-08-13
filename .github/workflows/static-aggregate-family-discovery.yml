@@ -20,6 +20,7 @@ jobs:
         run: |
           python3 tools/dev/static-aggregate-family-step4-prep.py
           python3 tools/dev/static-aggregate-family-step4.py
+          python3 tools/dev/static-aggregate-family-step4-cleanup.py
       - name: Format and build release compiler
         run: |
           set -Eeuo pipefail
@@ -69,6 +70,7 @@ jobs:
           set -Eeuo pipefail
           rm -f tools/dev/static-aggregate-family-step4-prep.py
           rm -f tools/dev/static-aggregate-family-step4.py
+          rm -f tools/dev/static-aggregate-family-step4-cleanup.py
           rm -f .github/workflows/static-aggregate-family-discovery.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
