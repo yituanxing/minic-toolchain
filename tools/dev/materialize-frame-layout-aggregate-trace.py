@@ -53,3 +53,37 @@ if old in text:
 elif new not in text:
     raise SystemExit("frame aggregate trace anchor not found")
 path.write_text(text)
+
+path = Path("src/target/riscv64/codegen_statement.c")
+text = path.read_text()
+old = '''    case MINIC_STATEMENT_EXPRESSION:
+        return statement->expression != MINIC_EXPRESSION_INVALID &&
+               minic_riscv64_emit_expression(file, program, function, statement->expression);
+'''
+new = '''    case MINIC_STATEMENT_EXPRESSION: {
+        const MinicExpression *expression;
+
+        expression = minic_c0_program_expression(program, statement->expression);
+        if (statement->expression == MINIC_EXPRESSION_INVALID || expression == NULL) {
+            return false;
+        }
+        if (!minic_riscv64_emit_expression(file, program, function, statement->expression)) {
+            fprintf(stderr,
+                    "CODEGEN_EXPR_STMT_FAIL expr=%zu kind=%d type=%d/%u vcat=%d line=%zu column=%zu\\n",
+                    (size_t)statement->expression,
+                    (int)expression->kind,
+                    (int)expression->type.base_kind,
+                    expression->type.pointer_depth,
+                    (int)expression->value_category,
+                    expression->span.begin.line,
+                    expression->span.begin.column);
+            return false;
+        }
+        return true;
+    }
+'''
+if old in text:
+    text = text.replace(old, new, 1)
+elif new not in text:
+    raise SystemExit("expression statement trace anchor not found")
+path.write_text(text)
