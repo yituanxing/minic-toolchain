@@ -114,7 +114,7 @@ p.write_text(text)
 p = root / 'tests/compiler/c0/run-static-aggregate-initializers.sh'
 text = p.read_text()
 old = "grep -F '.word -559067475' \"$build_dir/static_record_compound_literal.s\" >/dev/null\n"
-new = "grep -F '.word 3735928557' \"$build_dir/static_record_compound_literal.s\" >/dev/null\n"
+new = "grep -F '.word 3735899821' \"$build_dir/static_record_compound_literal.s\" >/dev/null\n"
 if text.count(old) != 1:
     raise SystemExit(f'aggregate unsigned spelling anchor mismatch: {text.count(old)}')
 p.write_text(text.replace(old, new, 1))
