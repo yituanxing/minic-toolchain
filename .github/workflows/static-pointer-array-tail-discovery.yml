@@ -48,5 +48,6 @@ jobs:
           status=$?
           set -e
           echo "cached_tu_status=$status"
-          tail -n 80 build/linux-artifact/minic.stderr
+          grep 'VERIFY_OBJECT' build/linux-artifact/minic.stderr | tail -n 30 || true
+          tail -n 10 build/linux-artifact/minic.stderr
           test "$status" -ne 0
