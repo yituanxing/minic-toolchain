@@ -53,32 +53,51 @@ static const char *minic_riscv64_integer_data_directive(size_t width) {
                          : NULL;
 }
 
-static bool minic_riscv64_emit_integer_bits(FILE *file, size_t width, uint64_t bits) {
+static bool minic_riscv64_emit_typed_bits(FILE *file,
+                                          const MinicC0Program *program,
+                                          MinicType type,
+                                          uint64_t bits) {
     const char *directive;
+    size_t width;
+    size_t alignment;
     uint64_t mask;
-    int64_t signed_value;
 
-    directive = minic_riscv64_integer_data_directive(width);
-    if (file == NULL || directive == NULL) {
+    if (file == NULL || program == NULL ||
+        (!minic_type_is_integer(type) && !minic_type_is_pointer(type)) ||
+        !minic_riscv64_type_layout(program, type, &width, &alignment) ||
+        (width != 1U && width != 2U && width != 4U && width != 8U)) {
         return false;
     }
-    if (width == 1U) {
-        return fprintf(file, "  %s %u\n", directive, (unsigned int)(bits & UINT64_C(0xff))) >= 0;
+    (void)alignment;
+    directive = minic_riscv64_integer_data_directive(width);
+    if (directive == NULL) {
+        return false;
     }
     if (width < 8U) {
-        unsigned int bit_width;
-        uint64_t sign_bit;
+        const unsigned int bit_width = (unsigned int)(width * 8U);
 
-        bit_width = (unsigned int)(width * 8U);
         mask = (UINT64_C(1) << bit_width) - UINT64_C(1);
         bits &= mask;
-        sign_bit = UINT64_C(1) << (bit_width - 1U);
-        if ((bits & sign_bit) != 0U) {
-            bits |= ~mask;
-        }
     }
-    (void)memcpy(&signed_value, &bits, sizeof(signed_value));
-    return fprintf(file, "  %s %" PRId64 "\n", directive, signed_value) >= 0;
+    /* Preserve the historical byte spelling as an unsigned payload. GNU as
+     * consumes the same low 8 bits, and plain char on this target is unsigned. */
+    if (width == 1U || (minic_type_is_integer(type) && minic_type_is_unsigned_integer(type))) {
+        return fprintf(file, "  %s %" PRIu64 "\n", directive, bits) >= 0;
+    }
+    {
+        int64_t signed_value;
+
+        if (width < 8U) {
+            const unsigned int bit_width = (unsigned int)(width * 8U);
+            const uint64_t sign_bit = UINT64_C(1) << (bit_width - 1U);
+
+            if ((bits & sign_bit) != 0U) {
+                bits |= ~((UINT64_C(1) << bit_width) - UINT64_C(1));
+            }
+        }
+        (void)memcpy(&signed_value, &bits, sizeof(signed_value));
+        return fprintf(file, "  %s %" PRId64 "\n", directive, signed_value) >= 0;
+    }
 }
 
 static bool minic_riscv64_global_scalar_type(const MinicC0Program *program,
@@ -241,7 +260,7 @@ static bool minic_riscv64_emit_direct_record_values(FILE *file,
             }
             relocation_index += 1U;
         } else if (minic_type_is_integer(field->type) || minic_type_is_pointer(field->type)) {
-            if (!minic_riscv64_emit_integer_bits(file, field_size, value)) {
+            if (!minic_riscv64_emit_typed_bits(file, program, field->type, value)) {
                 return false;
             }
         } else {
@@ -294,7 +313,7 @@ static bool minic_riscv64_emit_constant_value(FILE *file,
                 return false;
             }
             *relocation_index += 1U;
-        } else if (!minic_riscv64_emit_integer_bits(file, type_size, bits)) {
+        } else if (!minic_riscv64_emit_typed_bits(file, program, type, bits)) {
             return false;
         }
         *emitted_size = type_size;
@@ -505,7 +524,8 @@ static bool minic_riscv64_emit_record_array_values(FILE *file,
 
             value = object->initializer_values[initializer_index++];
             directive = minic_riscv64_integer_data_directive(field_size);
-            if (directive == NULL || !minic_riscv64_emit_integer_bits(file, field_size, value)) {
+            if (directive == NULL ||
+                !minic_riscv64_emit_typed_bits(file, program, field->type, value)) {
                 return false;
             }
             cursor = field_offset + field_size;
@@ -638,8 +658,8 @@ static bool minic_riscv64_emit_global_object(FILE *file,
     } else {
         for (initializer_index = 0U; initializer_index < object->initializer_count;
              ++initializer_index) {
-            if (!minic_riscv64_emit_integer_bits(
-                    file, scalar_width, object->initializer_values[initializer_index])) {
+            if (!minic_riscv64_emit_typed_bits(
+                    file, program, scalar_type, object->initializer_values[initializer_index])) {
                 return false;
             }
         }

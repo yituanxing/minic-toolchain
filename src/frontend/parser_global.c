@@ -393,8 +393,8 @@ static bool parse_static_pointer_initializer(MinicParser *parser,
         return true;
     }
     minic_parser_error(parser,
-                       "static pointer initializer requires null, symbolic address, or explicit "
-                       "integer-to-pointer constant cast");
+                       "static pointer initializer requires a null or zero-addend object address "
+                       "constant");
     return false;
 }
 
@@ -488,8 +488,8 @@ static bool parse_static_scalar(MinicParser *parser, MinicType type, MinicSource
                         parser->program, object_id, pointer_bits)) {
                     minic_parser_error(
                         parser,
-                        "static pointer initializer requires null, symbolic address, "
-                        "or explicit integer-to-pointer constant cast");
+                        "static pointer initializer requires a null or zero-addend object address "
+                        "constant");
                     return false;
                 }
             }

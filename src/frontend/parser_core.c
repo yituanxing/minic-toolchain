@@ -587,8 +587,7 @@ bool minic_parser_parse_integer_initializer_bits(MinicParser *parser,
     if (!minic_const_eval_integer(parser->program, parser->target_info, expression_id, &constant) ||
         !minic_const_value_convert_integer(
             parser->program, parser->target_info, &constant, target_type, &converted)) {
-        minic_parser_error(parser,
-                           "integer initializer requires a convertible constant expression");
+        minic_parser_error(parser, "integer initializer requires an integer constant expression");
         return false;
     }
     *bits = converted.bits;
@@ -629,7 +628,7 @@ bool minic_parser_parse_integer_initializer_value(MinicParser *parser,
     if (!minic_const_value_as_int64(
             parser->program, parser->target_info, &converted, &signed_value) ||
         signed_value < INT_MIN || signed_value > INT_MAX) {
-        minic_parser_error(parser, "integer initializer exceeds legacy int payload range");
+        minic_parser_error(parser, "integer initializer exceeds current global payload range");
         return false;
     }
     *value = (int)signed_value;

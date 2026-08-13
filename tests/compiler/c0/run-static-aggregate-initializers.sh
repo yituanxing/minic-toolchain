@@ -7,7 +7,7 @@ mkdir -p "$build_dir"
 
 "$minic" -S "$root/tests/programs/c0/static_record_compound_literal.c" \
     -o "$build_dir/static_record_compound_literal.s"
-grep -F '.word -559067475' "$build_dir/static_record_compound_literal.s" >/dev/null
+grep -F '.word 3735899821' "$build_dir/static_record_compound_literal.s" >/dev/null
 grep -F '.dword -1' "$build_dir/static_record_compound_literal.s" >/dev/null
 test "$(grep -c '  .dword value+' "$build_dir/static_record_compound_literal.s")" -eq 2
 if "$minic" -S "$root/tests/compiler/c0/invalid_static_record_compound_literal_type.c" \
