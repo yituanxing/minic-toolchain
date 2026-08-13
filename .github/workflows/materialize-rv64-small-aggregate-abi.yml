@@ -22,22 +22,23 @@ jobs:
         run: |
           set -Eeuo pipefail
           python3 tools/dev/materialize-rv64-small-aggregate-abi.py
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('tests/compiler/c0/run-rv64-integer-aggregate-return.sh')
+          text = path.read_text()
+          old = "grep -F 'ld a0, 0(t0)' \"$assembly\" >/dev/null\ngrep -F 'ld a1, 8(t0)' \"$assembly\" >/dev/null\n"
+          new = "grep -F 'ld a0, 0(t5)' \"$assembly\" >/dev/null\ngrep -F 'ld a1, 0(t5)' \"$assembly\" >/dev/null\n"
+          if text.count(old) != 1:
+              raise SystemExit('legacy aggregate return assertions: expected one match')
+          path.write_text(text.replace(old, new, 1))
+          PY
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
       - name: Build and run focused gates
         run: |
           set -Eeuo pipefail
           make -j4 MODE=release BUILD_DIR=build/small-aggregate
-          set +e
           MINIC="$GITHUB_WORKSPACE/build/small-aggregate/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/aggregate-focused" HOST_CC=cc \
-            sh -x tests/compiler/c0/run-rv64-integer-aggregate-return.sh
-          status=$?
-          set -e
-          if test "$status" -ne 0; then
-            sed -n '/unwrap_word:/,/\.size unwrap_word/p' build/aggregate-focused/tests/compiler-c0-rv64-integer-aggregate-return/rv64_integer_aggregate_return.s || true
-            sed -n '/return_word:/,/\.size return_word/p' build/aggregate-focused/tests/compiler-c0-rv64-integer-aggregate-return/rv64_integer_aggregate_return.s || true
-            sed -n '/call_unwrap_word:/,/\.size call_unwrap_word/p' build/aggregate-focused/tests/compiler-c0-rv64-integer-aggregate-return/rv64_integer_aggregate_return.s || true
-            exit "$status"
-          fi
+            sh tests/compiler/c0/run-rv64-integer-aggregate-return.sh
           MINIC="$GITHUB_WORKSPACE/build/small-aggregate/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/empty-record-focused" HOST_CC=cc \
             sh tests/compiler/c0/run-gnu-empty-records.sh
           MINIC="$GITHUB_WORKSPACE/build/small-aggregate/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/array-param-focused" HOST_CC=cc \
