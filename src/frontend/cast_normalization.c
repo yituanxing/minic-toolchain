@@ -80,9 +80,8 @@ static bool collect_external_expression_id_ref(MinicExpressionId *expression_id,
             new_capacity > SIZE_MAX / sizeof(*references->values)) {
             return false;
         }
-        resized = (MinicExpressionId **)realloc(
-            references->values,
-            new_capacity * sizeof(*references->values));
+        resized = (MinicExpressionId **)realloc(references->values,
+                                                new_capacity * sizeof(*references->values));
         if (resized == NULL) {
             return false;
         }
