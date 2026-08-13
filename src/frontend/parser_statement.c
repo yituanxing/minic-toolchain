@@ -1599,9 +1599,12 @@ static bool parse_inferred_static_local_array(MinicParser *parser,
                         return false;
                     }
                 }
-                if (has_relocation &&
-                    !minic_c0_global_object_add_object_relocation(
-                        parser->program, object_id, initializer_count, target_id)) {
+                if (has_relocation && !minic_c0_global_object_add_object_relocation(
+                                          parser->program,
+                                          object_id,
+                                          MINIC_GLOBAL_RELOCATION_LOCATION_ARRAY_ELEMENT,
+                                          initializer_count,
+                                          target_id)) {
                     minic_parser_error(parser,
                                        "cannot record static local pointer array relocation");
                     return false;

@@ -400,15 +400,23 @@ typedef struct MinicFixedRegisterBinding {
     MinicType type;
 } MinicFixedRegisterBinding;
 
-typedef struct MinicGlobalFunctionRelocation {
-    size_t field_index;
-    MinicFunctionId function_id;
-} MinicGlobalFunctionRelocation;
+typedef enum MinicGlobalRelocationTargetKind {
+    MINIC_GLOBAL_RELOCATION_OBJECT = 0,
+    MINIC_GLOBAL_RELOCATION_FUNCTION
+} MinicGlobalRelocationTargetKind;
 
-typedef struct MinicGlobalObjectRelocation {
-    size_t element_index;
-    MinicGlobalObjectId target_object_id;
-} MinicGlobalObjectRelocation;
+typedef enum MinicGlobalRelocationLocationKind {
+    MINIC_GLOBAL_RELOCATION_LOCATION_SCALAR = 0,
+    MINIC_GLOBAL_RELOCATION_LOCATION_ARRAY_ELEMENT,
+    MINIC_GLOBAL_RELOCATION_LOCATION_RECORD_FIELD
+} MinicGlobalRelocationLocationKind;
+
+typedef struct MinicGlobalRelocation {
+    MinicGlobalRelocationLocationKind location_kind;
+    size_t location_index;
+    MinicGlobalRelocationTargetKind target_kind;
+    size_t target_id;
+} MinicGlobalRelocation;
 
 typedef struct MinicGlobalObject {
     char *name;
@@ -419,11 +427,9 @@ typedef struct MinicGlobalObject {
     int *initializer_values;
     size_t initializer_count;
     size_t initializer_capacity;
-    MinicGlobalFunctionRelocation function_relocations[8];
-    size_t function_relocation_count;
-    MinicGlobalObjectRelocation *object_relocations;
-    size_t object_relocation_count;
-    size_t object_relocation_capacity;
+    MinicGlobalRelocation *relocations;
+    size_t relocation_count;
+    size_t relocation_capacity;
     size_t explicit_alignment;
     size_t storage_size;
     size_t alignment;
@@ -707,11 +713,13 @@ bool minic_c0_global_object_add_initializer(MinicC0Program *program,
                                             int value);
 bool minic_c0_global_object_add_function_relocation(MinicC0Program *program,
                                                     MinicGlobalObjectId global_object_id,
-                                                    size_t field_index,
+                                                    MinicGlobalRelocationLocationKind location_kind,
+                                                    size_t location_index,
                                                     MinicFunctionId function_id);
 bool minic_c0_global_object_add_object_relocation(MinicC0Program *program,
                                                   MinicGlobalObjectId global_object_id,
-                                                  size_t element_index,
+                                                  MinicGlobalRelocationLocationKind location_kind,
+                                                  size_t location_index,
                                                   MinicGlobalObjectId target_object_id);
 bool minic_c0_global_object_set_zero_initialized(MinicC0Program *program,
                                                  MinicGlobalObjectId global_object_id);

@@ -779,7 +779,11 @@ static bool parse_external_integer_array_definition(MinicParser *parser,
                 }
             }
             if (has_relocation && !minic_c0_global_object_add_object_relocation(
-                                      parser->program, object_id, initializer_count, target_id)) {
+                                      parser->program,
+                                      object_id,
+                                      MINIC_GLOBAL_RELOCATION_LOCATION_ARRAY_ELEMENT,
+                                      initializer_count,
+                                      target_id)) {
                 minic_parser_error(parser, "cannot record external pointer array relocation");
                 return false;
             }
@@ -1053,7 +1057,8 @@ static bool parse_external_object_definition(MinicParser *parser,
         !minic_type_pointer_to(literal_array->element_type, &literal_pointer_type) ||
         !minic_type_assignment_compatible(object_type, literal_pointer_type) ||
         !minic_c0_global_object_set_zero_initialized(parser->program, object_id) ||
-        !minic_c0_global_object_add_object_relocation(parser->program, object_id, 0U, target_id)) {
+        !minic_c0_global_object_add_object_relocation(
+            parser->program, object_id, MINIC_GLOBAL_RELOCATION_LOCATION_SCALAR, 0U, target_id)) {
         minic_parser_error(parser, "external pointer initializer type mismatch");
         return false;
     }

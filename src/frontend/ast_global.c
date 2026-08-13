@@ -180,9 +180,8 @@ bool minic_c0_program_add_tentative_global_object(MinicC0Program *program,
 }
 
 static bool global_object_has_definition_payload(const MinicGlobalObject *object) {
-    return object != NULL &&
-           (object->initializer_count != 0U || object->function_relocation_count != 0U ||
-            object->object_relocation_count != 0U || object->is_zero_initialized);
+    return object != NULL && (object->initializer_count != 0U || object->relocation_count != 0U ||
+                              object->is_zero_initialized);
 }
 
 bool minic_c0_global_object_merge_tentative(MinicC0Program *program,
@@ -233,8 +232,7 @@ bool minic_c0_global_object_add_initializer(MinicC0Program *program,
         return false;
     }
     object = &program->global_objects[global_object_id];
-    if (object->is_tentative || object->is_zero_initialized ||
-        object->function_relocation_count != 0U) {
+    if (object->is_tentative || object->is_zero_initialized || object->relocation_count != 0U) {
         return false;
     }
     if (!grow_array((void **)&object->initializer_values,
@@ -248,27 +246,110 @@ bool minic_c0_global_object_add_initializer(MinicC0Program *program,
     return true;
 }
 
-bool minic_c0_global_object_add_function_relocation(MinicC0Program *program,
-                                                    MinicGlobalObjectId global_object_id,
-                                                    size_t field_index,
-                                                    MinicFunctionId function_id) {
+static bool global_relocation_location_type(const MinicC0Program *program,
+                                            const MinicGlobalObject *object,
+                                            MinicGlobalRelocationLocationKind location_kind,
+                                            size_t location_index,
+                                            MinicType *slot_type) {
+    if (program == NULL || object == NULL || slot_type == NULL) {
+        return false;
+    }
+    if (location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_SCALAR) {
+        if (location_index != 0U || !minic_type_is_pointer(object->type)) {
+            return false;
+        }
+        *slot_type = object->type;
+        return true;
+    }
+    if (location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_ARRAY_ELEMENT) {
+        const MinicArrayType *array_type;
+
+        if (!minic_type_is_array(object->type)) {
+            return false;
+        }
+        array_type = minic_c0_program_array_type(program, object->type.array_type_id);
+        if (array_type == NULL || location_index >= array_type->element_count ||
+            !minic_type_is_pointer(array_type->element_type)) {
+            return false;
+        }
+        *slot_type = array_type->element_type;
+        return true;
+    }
+    if (location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_RECORD_FIELD) {
+        const MinicRecord *record;
+        const MinicRecordField *field;
+
+        if (!minic_type_is_record(object->type)) {
+            return false;
+        }
+        record = minic_c0_program_record(program, object->type.record_id);
+        field = record == NULL ? NULL : minic_c0_record_field(record, location_index);
+        if (field == NULL || field->element_count != 1U || field->is_bit_field ||
+            field->is_flexible_array || !minic_type_is_pointer(field->type)) {
+            return false;
+        }
+        *slot_type = field->type;
+        return true;
+    }
+    return false;
+}
+
+static bool add_global_symbol_relocation(MinicC0Program *program,
+                                         MinicGlobalObjectId global_object_id,
+                                         MinicGlobalRelocationLocationKind location_kind,
+                                         size_t location_index,
+                                         MinicGlobalRelocationTargetKind target_kind,
+                                         size_t target_id) {
     MinicGlobalObject *object;
-    MinicGlobalFunctionRelocation *relocation;
+    MinicGlobalRelocation *relocation;
+    MinicType slot_pointee;
+    MinicType slot_type;
 
     if (program == NULL || global_object_id >= program->global_object_count ||
-        function_id >= program->function_count) {
+        (target_kind != MINIC_GLOBAL_RELOCATION_OBJECT &&
+         target_kind != MINIC_GLOBAL_RELOCATION_FUNCTION) ||
+        (target_kind == MINIC_GLOBAL_RELOCATION_OBJECT &&
+         (target_id >= program->global_object_count || global_object_id == target_id)) ||
+        (target_kind == MINIC_GLOBAL_RELOCATION_FUNCTION && target_id >= program->function_count)) {
         return false;
     }
     object = &program->global_objects[global_object_id];
-    if (object->is_tentative || object->initializer_count != 0U ||
-        object->function_relocation_count >= 8U) {
+    if (!global_relocation_location_type(
+            program, object, location_kind, location_index, &slot_type) ||
+        !minic_type_pointee(slot_type, &slot_pointee) ||
+        (target_kind == MINIC_GLOBAL_RELOCATION_FUNCTION &&
+         !minic_type_is_function(slot_pointee)) ||
+        (target_kind == MINIC_GLOBAL_RELOCATION_OBJECT && minic_type_is_function(slot_pointee)) ||
+        object->is_tentative || object->initializer_count != 0U ||
+        (object->relocation_count != 0U &&
+         (object->relocations[object->relocation_count - 1U].location_kind != location_kind ||
+          object->relocations[object->relocation_count - 1U].location_index >= location_index)) ||
+        !grow_array((void **)&object->relocations,
+                    &object->relocation_capacity,
+                    object->relocation_count,
+                    sizeof(*object->relocations))) {
         return false;
     }
-    relocation = &object->function_relocations[object->function_relocation_count];
-    relocation->field_index = field_index;
-    relocation->function_id = function_id;
-    object->function_relocation_count += 1U;
+    relocation = &object->relocations[object->relocation_count];
+    relocation->location_kind = location_kind;
+    relocation->location_index = location_index;
+    relocation->target_kind = target_kind;
+    relocation->target_id = target_id;
+    object->relocation_count += 1U;
     return true;
+}
+
+bool minic_c0_global_object_add_function_relocation(MinicC0Program *program,
+                                                    MinicGlobalObjectId global_object_id,
+                                                    MinicGlobalRelocationLocationKind location_kind,
+                                                    size_t location_index,
+                                                    MinicFunctionId function_id) {
+    return add_global_symbol_relocation(program,
+                                        global_object_id,
+                                        location_kind,
+                                        location_index,
+                                        MINIC_GLOBAL_RELOCATION_FUNCTION,
+                                        function_id);
 }
 
 bool minic_c0_global_object_set_extern(MinicC0Program *program,
@@ -279,8 +360,7 @@ bool minic_c0_global_object_set_extern(MinicC0Program *program,
         return false;
     }
     object = &program->global_objects[global_object_id];
-    if (object->is_tentative || object->initializer_count != 0U ||
-        object->function_relocation_count != 0U || object->object_relocation_count != 0U ||
+    if (object->is_tentative || object->initializer_count != 0U || object->relocation_count != 0U ||
         object->is_zero_initialized || object->is_internal) {
         return false;
     }
@@ -290,29 +370,15 @@ bool minic_c0_global_object_set_extern(MinicC0Program *program,
 
 bool minic_c0_global_object_add_object_relocation(MinicC0Program *program,
                                                   MinicGlobalObjectId global_object_id,
-                                                  size_t element_index,
+                                                  MinicGlobalRelocationLocationKind location_kind,
+                                                  size_t location_index,
                                                   MinicGlobalObjectId target_object_id) {
-    MinicGlobalObject *object;
-    MinicGlobalObjectRelocation *relocation;
-
-    if (program == NULL || global_object_id >= program->global_object_count ||
-        target_object_id >= program->global_object_count || global_object_id == target_object_id) {
-        return false;
-    }
-    object = &program->global_objects[global_object_id];
-    if (object->is_tentative || object->initializer_count != 0U ||
-        object->function_relocation_count != 0U ||
-        !grow_array((void **)&object->object_relocations,
-                    &object->object_relocation_capacity,
-                    object->object_relocation_count,
-                    sizeof(*object->object_relocations))) {
-        return false;
-    }
-    relocation = &object->object_relocations[object->object_relocation_count];
-    relocation->element_index = element_index;
-    relocation->target_object_id = target_object_id;
-    object->object_relocation_count += 1U;
-    return true;
+    return add_global_symbol_relocation(program,
+                                        global_object_id,
+                                        location_kind,
+                                        location_index,
+                                        MINIC_GLOBAL_RELOCATION_OBJECT,
+                                        target_object_id);
 }
 
 bool minic_c0_global_object_set_zero_initialized(MinicC0Program *program,

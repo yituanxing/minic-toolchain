@@ -314,7 +314,11 @@ static bool parse_static_scalar(MinicParser *parser, MinicType type, MinicSource
             }
             if (!minic_parser_advance(parser) ||
                 !minic_c0_global_object_add_function_relocation(
-                    parser->program, object_id, 0U, function_id) ||
+                    parser->program,
+                    object_id,
+                    MINIC_GLOBAL_RELOCATION_LOCATION_SCALAR,
+                    0U,
+                    function_id) ||
                 !minic_c0_global_object_set_zero_initialized(parser->program, object_id)) {
                 minic_parser_error(parser, "cannot record static function pointer initializer");
                 return false;
@@ -339,7 +343,11 @@ static bool parse_static_scalar(MinicParser *parser, MinicType type, MinicSource
                            parser->program, initializer_id, &target_object_id)) {
                 if (!minic_c0_global_object_set_zero_initialized(parser->program, object_id) ||
                     !minic_c0_global_object_add_object_relocation(
-                        parser->program, object_id, 0U, target_object_id)) {
+                        parser->program,
+                        object_id,
+                        MINIC_GLOBAL_RELOCATION_LOCATION_SCALAR,
+                        0U,
+                        target_object_id)) {
                     minic_parser_error(parser, "cannot record static object-address relocation");
                     return false;
                 }
@@ -676,12 +684,47 @@ static bool parse_static_record_field_initializer(MinicParser *parser,
             minic_parser_error(parser, "static function initializer type does not match field");
             return false;
         }
-        if (!minic_parser_advance(parser) ||
-            !minic_c0_global_object_add_function_relocation(
-                parser->program, object_id, field_index, function_id)) {
+        if (!minic_parser_advance(parser) || !minic_c0_global_object_add_function_relocation(
+                                                 parser->program,
+                                                 object_id,
+                                                 MINIC_GLOBAL_RELOCATION_LOCATION_RECORD_FIELD,
+                                                 field_index,
+                                                 function_id)) {
             if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
                 minic_parser_error(parser, "cannot record static function relocation");
             }
+            return false;
+        }
+        return true;
+    }
+    if (minic_type_is_pointer(field->type) && !function_pointer_field) {
+        MinicExpressionId initializer_id;
+        MinicGlobalObjectId target_object_id;
+
+        if (!minic_parser_parse_expression(parser, &initializer_id, 0U)) {
+            return false;
+        }
+        if (!minic_c0_assignment_compatible(parser->program, field->type, initializer_id)) {
+            minic_parser_error(parser, "static record pointer initializer type mismatch");
+            return false;
+        }
+        if (minic_c0_expression_is_null_pointer_constant_v0(parser->program, initializer_id)) {
+            return true;
+        }
+        if (!static_object_address_relocation_target(
+                parser->program, initializer_id, &target_object_id)) {
+            minic_parser_error(parser,
+                               "static record pointer initializer requires a null or zero-addend "
+                               "object address constant");
+            return false;
+        }
+        if (!minic_c0_global_object_add_object_relocation(
+                parser->program,
+                object_id,
+                MINIC_GLOBAL_RELOCATION_LOCATION_RECORD_FIELD,
+                field_index,
+                target_object_id)) {
+            minic_parser_error(parser, "cannot record static record object relocation");
             return false;
         }
         return true;
@@ -1458,7 +1501,11 @@ parse_static_pointer_array(MinicParser *parser, MinicType element_type, MinicSou
         for (index = 0U; index < target_count; ++index) {
             if (targets[index] != MINIC_GLOBAL_OBJECT_INVALID &&
                 !minic_c0_global_object_add_object_relocation(
-                    parser->program, object_id, index, targets[index])) {
+                    parser->program,
+                    object_id,
+                    MINIC_GLOBAL_RELOCATION_LOCATION_ARRAY_ELEMENT,
+                    index,
+                    targets[index])) {
                 minic_parser_error(parser, "cannot record static object relocation");
                 goto done;
             }
