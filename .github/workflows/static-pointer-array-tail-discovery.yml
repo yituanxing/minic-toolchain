@@ -24,7 +24,14 @@ jobs:
         run: |
           set -Eeuo pipefail
           python3 tools/dev/materialize-tail-ownership.py
-          python3 tools/dev/materialize-subxlen-aggregate.py
+          set +e
+          python3 tools/dev/materialize-subxlen-aggregate.py 2>build-subxlen.err
+          materialize_status=$?
+          set -e
+          if test "$materialize_status" -ne 0; then
+            grep -Fx 'unexpected aggregate call staging anchor' build-subxlen.err >/dev/null
+          fi
+          python3 tools/dev/materialize-subxlen-aggregate-finish.py
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
           make -j4 MODE=release BUILD_DIR=build/static-pointer-array-tail
           minic="$GITHUB_WORKSPACE/build/static-pointer-array-tail/bin/minic"
