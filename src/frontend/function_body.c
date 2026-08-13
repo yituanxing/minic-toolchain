@@ -18,6 +18,8 @@ typedef struct MinicFunctionBodyValidation {
     MinicFunctionId *block_owners;
     MinicFunctionId *statement_owners;
     MinicFunctionId *local_owners;
+    MinicFunctionId *cleanup_context_owners;
+    MinicFunctionId *inline_asm_owners;
     size_t *expression_generations;
     MinicBlockId *block_work;
     MinicStatementId *statement_work;
@@ -134,6 +136,8 @@ static void destroy_validation(MinicFunctionBodyValidation *validation) {
     free(validation->block_owners);
     free(validation->statement_owners);
     free(validation->local_owners);
+    free(validation->cleanup_context_owners);
+    free(validation->inline_asm_owners);
     free(validation->expression_generations);
     free(validation->block_work);
     free(validation->statement_work);
@@ -159,6 +163,12 @@ static bool initialize_validation(const MinicC0Program *program,
         !allocate_array((void **)&validation->local_owners,
                         program->local_count,
                         sizeof(*validation->local_owners)) ||
+        !allocate_array((void **)&validation->cleanup_context_owners,
+                        program->cleanup_context_count,
+                        sizeof(*validation->cleanup_context_owners)) ||
+        !allocate_array((void **)&validation->inline_asm_owners,
+                        program->inline_asm_count,
+                        sizeof(*validation->inline_asm_owners)) ||
         !allocate_array((void **)&validation->expression_generations,
                         program->expression_count,
                         sizeof(*validation->expression_generations)) ||
@@ -181,6 +191,12 @@ static bool initialize_validation(const MinicC0Program *program,
     }
     for (index = 0U; index < program->local_count; ++index) {
         validation->local_owners[index] = MINIC_FUNCTION_INVALID;
+    }
+    for (index = 0U; index < program->cleanup_context_count; ++index) {
+        validation->cleanup_context_owners[index] = MINIC_FUNCTION_INVALID;
+    }
+    for (index = 0U; index < program->inline_asm_count; ++index) {
+        validation->inline_asm_owners[index] = MINIC_FUNCTION_INVALID;
     }
     if (program->expression_count != 0U) {
         (void)memset(validation->expression_generations,
@@ -258,6 +274,41 @@ static bool claim_statement(MinicFunctionBodyValidation *validation, MinicStatem
     return true;
 }
 
+static bool claim_cleanup_context(MinicFunctionBodyValidation *validation,
+                                  MinicCleanupContextId cleanup_context_id) {
+    MinicFunctionId *owner;
+
+    if (validation == NULL || validation->program == NULL ||
+        cleanup_context_id > validation->program->cleanup_context_count) {
+        return false;
+    }
+    if (cleanup_context_id == MINIC_CLEANUP_CONTEXT_ROOT) {
+        return true;
+    }
+    owner = &validation->cleanup_context_owners[cleanup_context_id - 1U];
+    if (*owner == MINIC_FUNCTION_INVALID) {
+        *owner = validation->function_id;
+        return true;
+    }
+    return *owner == validation->function_id;
+}
+
+static bool claim_inline_asm(MinicFunctionBodyValidation *validation,
+                             MinicInlineAsmId inline_asm_id) {
+    MinicFunctionId *owner;
+
+    if (validation == NULL || validation->program == NULL ||
+        inline_asm_id >= validation->program->inline_asm_count) {
+        return false;
+    }
+    owner = &validation->inline_asm_owners[inline_asm_id];
+    if (*owner == MINIC_FUNCTION_INVALID) {
+        *owner = validation->function_id;
+        return true;
+    }
+    return *owner == validation->function_id;
+}
+
 static bool enqueue_expression(MinicFunctionBodyValidation *validation,
                                MinicExpressionId expression_id) {
     const MinicC0Program *program;
@@ -301,13 +352,17 @@ static bool enqueue_cleanup_expressions(MinicFunctionBodyValidation *validation,
     if (statement->cleanup_context > program->cleanup_context_count ||
         statement->cleanup_stop_context > program->cleanup_context_count ||
         !minic_c0_cleanup_context_reaches(
-            program, statement->cleanup_context, statement->cleanup_stop_context)) {
+            program, statement->cleanup_context, statement->cleanup_stop_context) ||
+        !claim_cleanup_context(validation, statement->cleanup_stop_context)) {
         return false;
     }
     current = statement->cleanup_context;
     while (current != statement->cleanup_stop_context) {
         const MinicCleanupContext *cleanup;
 
+        if (!claim_cleanup_context(validation, current)) {
+            return false;
+        }
         cleanup = minic_c0_program_cleanup_context(program, current);
         if (cleanup == NULL || !enqueue_expression(validation, cleanup->cleanup_expression)) {
             return false;
@@ -327,7 +382,7 @@ static bool enqueue_inline_asm_expressions(MinicFunctionBodyValidation *validati
         return false;
     }
     program = validation->program;
-    if (statement->inline_asm_id >= program->inline_asm_count) {
+    if (!claim_inline_asm(validation, statement->inline_asm_id)) {
         return false;
     }
     inline_asm = &program->inline_asms[statement->inline_asm_id];
@@ -435,7 +490,8 @@ static bool process_expression(MinicFunctionBodyValidation *validation,
         return false;
     }
 
-    if (expression->kind == MINIC_EXPRESSION_LOCAL && !local_is_owned(validation, expression->value.local_id)) {
+    if (expression->kind == MINIC_EXPRESSION_LOCAL &&
+        !local_is_owned(validation, expression->value.local_id)) {
         return false;
     }
     if (expression->kind == MINIC_EXPRESSION_COMPOUND_LITERAL &&
@@ -479,7 +535,8 @@ static bool validate_semantic_edges(const MinicFunctionBodyValidation *validatio
             const MinicInlineAsm *inline_asm;
             size_t label_index;
 
-            if (statement->inline_asm_id >= program->inline_asm_count) {
+            if (statement->inline_asm_id >= program->inline_asm_count ||
+                validation->inline_asm_owners[statement->inline_asm_id] != validation->function_id) {
                 return false;
             }
             inline_asm = &program->inline_asms[statement->inline_asm_id];
@@ -510,19 +567,34 @@ static bool validate_semantic_edges(const MinicFunctionBodyValidation *validatio
     return true;
 }
 
+static bool next_expression_generation(MinicFunctionBodyValidation *validation) {
+    if (validation == NULL || validation->program == NULL) {
+        return false;
+    }
+    if (validation->expression_generation == SIZE_MAX) {
+        if (validation->program->expression_count != 0U) {
+            (void)memset(validation->expression_generations,
+                         0,
+                         validation->program->expression_count *
+                             sizeof(*validation->expression_generations));
+        }
+        validation->expression_generation = 1U;
+        return true;
+    }
+    validation->expression_generation += 1U;
+    return validation->expression_generation != 0U;
+}
+
 static bool validate_one_function(MinicFunctionBodyValidation *validation,
                                   MinicFunctionId function_id) {
     MinicFunctionBodyView view;
 
     if (validation == NULL || validation->program == NULL || function_id == MINIC_FUNCTION_INVALID ||
-        !minic_c0_function_body_view(validation->program, function_id, &view)) {
+        !minic_c0_function_body_view(validation->program, function_id, &view) ||
+        !next_expression_generation(validation)) {
         return false;
     }
     validation->function_id = function_id;
-    validation->expression_generation = (size_t)function_id + 1U;
-    if (validation->expression_generation == 0U) {
-        return false;
-    }
     validation->block_work_count = 0U;
     validation->block_work_cursor = 0U;
     validation->statement_work_count = 0U;
