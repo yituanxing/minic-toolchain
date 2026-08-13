@@ -1682,6 +1682,17 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                                "static object symbol attributes require explicit object semantics");
             return false;
         }
+        if (parser->current.kind == MINIC_TOKEN_COMMA) {
+            return minic_parser_parse_static_zero_declaration_list_after_head(
+                parser,
+                base_type,
+                return_type,
+                name_span,
+                section_name,
+                section_name_length,
+                has_section,
+                object_explicit_alignment);
+        }
         if (!minic_parser_parse_static_global_after_head(parser,
                                                          return_type,
                                                          name_span,

@@ -199,6 +199,7 @@ linenoise_driven_focused() {
         run-static-pointer-arrays.sh \
         run-pointer-array-typed-null.sh \
         run-static-zero-definitions.sh \
+        run-static-zero-declaration-list.sh \
         run-record-copy-array-members.sh \
         run-zero-aggregate-null.sh \
         run-record-local-initializers.sh \

@@ -314,6 +314,14 @@ bool minic_parser_parse_static_global_after_head(MinicParser *parser,
                                                  size_t *section_name_length,
                                                  bool *has_section,
                                                  size_t *explicit_alignment);
+bool minic_parser_parse_static_zero_declaration_list_after_head(MinicParser *parser,
+                                                                MinicType base_type,
+                                                                MinicType first_object_type,
+                                                                MinicSourceSpan first_name_span,
+                                                                const char *shared_section_name,
+                                                                size_t shared_section_name_length,
+                                                                bool shared_has_section,
+                                                                size_t shared_explicit_alignment);
 bool minic_parser_parse_extern_global(MinicParser *parser);
 bool minic_parser_parse_extern_global_after_head(MinicParser *parser,
                                                  MinicType base_type,
