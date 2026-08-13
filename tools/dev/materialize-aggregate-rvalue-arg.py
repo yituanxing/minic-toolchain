@@ -27,7 +27,7 @@ old = r'''                if (!minic_type_is_record(argument->type) ||
                     return false;
                 }
 '''
-new = r'''                if (!minic_type_is_record(argument->type) ||
+previous = r'''                if (!minic_type_is_record(argument->type) ||
                     argument->type.record_id != abi_parameter_types[argument_index].record_id ||
                     !minic_riscv64_integer_aggregate_abi(program,
                                                          abi_parameter_types[argument_index],
@@ -72,8 +72,28 @@ new = r'''                if (!minic_type_is_record(argument->type) ||
                     return false;
                 }
 '''
-if old not in text:
-    if new in text:
-        raise SystemExit(0)
+new = r'''                if (!minic_type_is_record(argument->type) ||
+                    argument->type.record_id != abi_parameter_types[argument_index].record_id ||
+                    !minic_riscv64_integer_aggregate_abi(program,
+                                                         abi_parameter_types[argument_index],
+                                                         &aggregate_size,
+                                                         &aggregate_chunks) ||
+                    !minic_c0_record_value_is_copy_source(
+                        program, expression->value.call.arguments[argument_index]) ||
+                    !minic_riscv64_emit_record_value_temporary(
+                        file,
+                        program,
+                        function,
+                        expression->value.call.arguments[argument_index],
+                        aggregate_size,
+                        16U)) {
+                    return false;
+                }
+'''
+if previous in text:
+    text = text.replace(previous, new, 1)
+elif old in text:
+    text = text.replace(old, new, 1)
+elif new not in text:
     raise SystemExit("aggregate rvalue argument anchor not found")
-path.write_text(text.replace(old, new, 1))
+path.write_text(text)
