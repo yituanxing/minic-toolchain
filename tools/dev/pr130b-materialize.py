@@ -31,7 +31,7 @@ global_c.write_text(text.replace(old, new, 1))
 fixture = root / 'tests/compiler/c0/static_global_object_section.c'
 text = fixture.read_text()
 anchor = '''static int __attribute__((aligned(16))) aligned_static = 1;
-static const char linux_setup_string[]
+static const char linux_setup_string[] __attribute__((section(".init.rodata")))
 '''
 replacement = '''static int __attribute__((aligned(16))) aligned_static = 1;
 struct static_metadata_record {
@@ -43,7 +43,7 @@ __attribute__((section(".data.static.record")))
 __attribute__((aligned(8))) = {3};
 static int scalar_suffix_metadata __attribute__((section(".data.static.scalar")))
 __attribute__((aligned(8))) = 2;
-static const char linux_setup_string[]
+static const char linux_setup_string[] __attribute__((section(".init.rodata")))
 '''
 if text.count(anchor) != 1:
     raise SystemExit(f'static metadata fixture anchor mismatch: {text.count(anchor)}')
