@@ -1,5 +1,10 @@
 #include "frontend/ast_traversal.h"
 
+typedef struct MinicExpressionIdRemapContext {
+    const MinicExpressionId *mapping;
+    size_t mapping_count;
+} MinicExpressionIdRemapContext;
+
 static bool visit_expression_id(MinicExpressionId *expression_id,
                                 MinicExpressionIdRefVisitor visitor,
                                 void *context) {
@@ -94,13 +99,10 @@ bool minic_c0_expression_visit_child_id_refs(MinicExpression *expression,
     return false;
 }
 
-bool minic_c0_program_visit_external_expression_id_refs(MinicC0Program *program,
-                                                        MinicExpressionIdRefVisitor visitor,
-                                                        void *context) {
+static bool external_expression_ref_storage_is_valid(const MinicC0Program *program) {
     size_t index;
 
-    if (program == NULL || visitor == NULL ||
-        program->statement_count > program->statement_capacity ||
+    if (program == NULL || program->statement_count > program->statement_capacity ||
         program->inline_asm_count > program->inline_asm_capacity ||
         program->cleanup_context_count > program->cleanup_context_capacity ||
         (program->statement_count != 0U && program->statements == NULL) ||
@@ -108,6 +110,25 @@ bool minic_c0_program_visit_external_expression_id_refs(MinicC0Program *program,
         (program->cleanup_context_count != 0U && program->cleanup_contexts == NULL)) {
         return false;
     }
+
+    for (index = 0U; index < program->inline_asm_count; ++index) {
+        const MinicInlineAsm *inline_asm;
+
+        inline_asm = &program->inline_asms[index];
+        if (inline_asm->output_count > inline_asm->output_capacity ||
+            inline_asm->input_count > inline_asm->input_capacity ||
+            (inline_asm->output_count != 0U && inline_asm->outputs == NULL) ||
+            (inline_asm->input_count != 0U && inline_asm->inputs == NULL)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool visit_external_expression_id_refs_unchecked(MinicC0Program *program,
+                                                        MinicExpressionIdRefVisitor visitor,
+                                                        void *context) {
+    size_t index;
 
     for (index = 0U; index < program->statement_count; ++index) {
         MinicStatement *statement;
@@ -128,12 +149,6 @@ bool minic_c0_program_visit_external_expression_id_refs(MinicC0Program *program,
         size_t operand_index;
 
         inline_asm = &program->inline_asms[index];
-        if (inline_asm->output_count > inline_asm->output_capacity ||
-            inline_asm->input_count > inline_asm->input_capacity ||
-            (inline_asm->output_count != 0U && inline_asm->outputs == NULL) ||
-            (inline_asm->input_count != 0U && inline_asm->inputs == NULL)) {
-            return false;
-        }
         for (operand_index = 0U; operand_index < inline_asm->output_count; ++operand_index) {
             if (!visit_expression_id(
                     &inline_asm->outputs[operand_index].expression, visitor, context)) {
@@ -161,4 +176,50 @@ bool minic_c0_program_visit_external_expression_id_refs(MinicC0Program *program,
     }
 
     return true;
+}
+
+bool minic_c0_program_visit_external_expression_id_refs(MinicC0Program *program,
+                                                        MinicExpressionIdRefVisitor visitor,
+                                                        void *context) {
+    return visitor != NULL && external_expression_ref_storage_is_valid(program) &&
+           visit_external_expression_id_refs_unchecked(program, visitor, context);
+}
+
+static bool validate_expression_id_remap(MinicExpressionId *expression_id, void *opaque_context) {
+    MinicExpressionIdRemapContext *context;
+
+    if (expression_id == NULL || opaque_context == NULL) {
+        return false;
+    }
+    context = (MinicExpressionIdRemapContext *)opaque_context;
+    return *expression_id < context->mapping_count && context->mapping != NULL &&
+           context->mapping[*expression_id] != MINIC_EXPRESSION_INVALID;
+}
+
+static bool apply_expression_id_remap(MinicExpressionId *expression_id, void *opaque_context) {
+    const MinicExpressionIdRemapContext *context;
+
+    context = (const MinicExpressionIdRemapContext *)opaque_context;
+    *expression_id = context->mapping[*expression_id];
+    return true;
+}
+
+bool minic_c0_program_remap_external_expression_ids(MinicC0Program *program,
+                                                    const MinicExpressionId *mapping,
+                                                    size_t mapping_count) {
+    MinicExpressionIdRemapContext context;
+
+    if (!external_expression_ref_storage_is_valid(program) ||
+        (mapping_count != 0U && mapping == NULL)) {
+        return false;
+    }
+
+    context.mapping = mapping;
+    context.mapping_count = mapping_count;
+    if (!visit_external_expression_id_refs_unchecked(
+            program, validate_expression_id_remap, &context)) {
+        return false;
+    }
+
+    return visit_external_expression_id_refs_unchecked(program, apply_expression_id_remap, &context);
 }
