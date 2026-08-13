@@ -421,8 +421,22 @@ static bool minic_riscv64_emit_record_values(FILE *file,
     if (record == NULL || !record->is_complete) {
         return false;
     }
-    if (!record->is_union && object->initializer_count == record->field_count) {
-        return minic_riscv64_emit_direct_record_values(file, program, object, record);
+    {
+        bool has_recursive_relocation;
+        size_t index;
+
+        has_recursive_relocation = false;
+        for (index = 0U; index < object->relocation_count; ++index) {
+            if (object->relocations[index].location_kind ==
+                MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR) {
+                has_recursive_relocation = true;
+                break;
+            }
+        }
+        if (!record->is_union && object->initializer_count == record->field_count &&
+            !has_recursive_relocation) {
+            return minic_riscv64_emit_direct_record_values(file, program, object, record);
+        }
     }
     initializer_index = 0U;
     relocation_index = 0U;
