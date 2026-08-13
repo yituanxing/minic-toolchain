@@ -82,6 +82,28 @@ static bool minic_riscv64_emit_zero_bytes(FILE *file, size_t size) {
     return size == 0U || fprintf(file, "  .zero %zu\n", size) >= 0;
 }
 
+static const char *
+minic_riscv64_global_relocation_target_name(const MinicC0Program *program,
+                                            const MinicGlobalRelocation *relocation) {
+    if (program == NULL || relocation == NULL) {
+        return NULL;
+    }
+    if (relocation->target_kind == MINIC_GLOBAL_RELOCATION_OBJECT) {
+        const MinicGlobalObject *target;
+
+        target = minic_c0_program_global_object(program, relocation->target_id);
+        return target != NULL && target->name_length != 0U ? target->name : NULL;
+    }
+    if (relocation->target_kind == MINIC_GLOBAL_RELOCATION_FUNCTION) {
+        const MinicFunction *target;
+
+        target = minic_c0_program_function(program, relocation->target_id);
+        return target != NULL && target->name_length != 0U ? minic_c0_function_symbol_name(target)
+                                                           : NULL;
+    }
+    return NULL;
+}
+
 static bool
 emit_symbol_relocs(FILE *file, const MinicC0Program *program, const MinicGlobalObject *object) {
     MinicType pointer_type;
@@ -106,25 +128,10 @@ emit_symbol_relocs(FILE *file, const MinicC0Program *program, const MinicGlobalO
         size_t storage_offset;
 
         relocation = &object->relocations[relocation_index];
-        target_name = NULL;
+        target_name = minic_riscv64_global_relocation_target_name(program, relocation);
         if (!minic_data_layout_global_relocation_offset(
                 minic_default_data_layout(), program, object, relocation, &storage_offset)) {
             return false;
-        }
-        if (relocation->target_kind == MINIC_GLOBAL_RELOCATION_OBJECT) {
-            const MinicGlobalObject *target;
-
-            target = minic_c0_program_global_object(program, relocation->target_id);
-            if (target != NULL && target->name_length != 0U) {
-                target_name = target->name;
-            }
-        } else if (relocation->target_kind == MINIC_GLOBAL_RELOCATION_FUNCTION) {
-            const MinicFunction *target;
-
-            target = minic_c0_program_function(program, relocation->target_id);
-            if (target != NULL && target->name_length != 0U) {
-                target_name = minic_c0_function_symbol_name(target);
-            }
         }
         if (target_name == NULL || target_name[0] == '\0' || storage_offset < cursor ||
             storage_offset > object->storage_size ||
@@ -145,6 +152,7 @@ static bool minic_riscv64_emit_direct_record_values(FILE *file,
                                                     const MinicRecord *record) {
     size_t cursor;
     size_t field_index;
+    size_t relocation_index;
 
     if (file == NULL || program == NULL || object == NULL || record == NULL ||
         !record->is_complete || record->is_union ||
@@ -152,8 +160,10 @@ static bool minic_riscv64_emit_direct_record_values(FILE *file,
         return false;
     }
     cursor = 0U;
+    relocation_index = 0U;
     for (field_index = 0U; field_index < record->field_count; ++field_index) {
         const MinicRecordField *field;
+        const MinicGlobalRelocation *relocation;
         size_t field_size;
         size_t field_alignment;
         size_t field_offset;
@@ -172,7 +182,24 @@ static bool minic_riscv64_emit_direct_record_values(FILE *file,
             return false;
         }
         value = object->initializer_values[field_index];
-        if (minic_type_is_integer(field->type)) {
+        relocation = relocation_index < object->relocation_count
+                         ? &object->relocations[relocation_index]
+                         : NULL;
+        if (relocation != NULL &&
+            relocation->location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_RECORD_FIELD &&
+            relocation->location_index == field_index) {
+            const char *directive;
+            const char *target_name;
+
+            directive = minic_riscv64_integer_data_directive(field_size);
+            target_name = minic_riscv64_global_relocation_target_name(program, relocation);
+            if (!minic_type_is_pointer(field->type) || value != 0 || directive == NULL ||
+                target_name == NULL || target_name[0] == '\0' ||
+                fprintf(file, "  %s %s\n", directive, target_name) < 0) {
+                return false;
+            }
+            relocation_index += 1U;
+        } else if (minic_type_is_integer(field->type)) {
             const char *directive;
 
             directive = minic_riscv64_integer_data_directive(field_size);
@@ -198,7 +225,7 @@ static bool minic_riscv64_emit_direct_record_values(FILE *file,
         }
         cursor = field_offset + field_size;
     }
-    return cursor <= object->storage_size &&
+    return relocation_index == object->relocation_count && cursor <= object->storage_size &&
            minic_riscv64_emit_zero_bytes(file, object->storage_size - cursor);
 }
 
@@ -345,7 +372,7 @@ static bool minic_riscv64_emit_record_values(FILE *file,
     size_t initializer_index;
 
     if (file == NULL || program == NULL || object == NULL || !minic_type_is_record(object->type) ||
-        object->is_zero_initialized || object->relocation_count != 0U) {
+        object->is_zero_initialized) {
         return false;
     }
     record = minic_c0_program_record(program, object->type.record_id);
@@ -508,8 +535,7 @@ static bool minic_riscv64_emit_global_object(FILE *file,
         const MinicRecord *record;
 
         record = minic_c0_program_record(program, object->type.record_id);
-        if (record == NULL || !record->is_complete || object->relocation_count != 0U ||
-            object->initializer_count == 0U) {
+        if (record == NULL || !record->is_complete || object->initializer_count == 0U) {
             return false;
         }
     } else if (minic_riscv64_record_array_info(program, object->type, NULL, NULL)) {
@@ -569,7 +595,11 @@ static bool minic_riscv64_emit_global_object(FILE *file,
                 object->name) < 0) {
         return false;
     }
-    if (object->relocation_count != 0U) {
+    if (minic_type_is_record(object->type) && object->initializer_count != 0U) {
+        if (!minic_riscv64_emit_record_values(file, program, object)) {
+            return false;
+        }
+    } else if (object->relocation_count != 0U) {
         if (!emit_symbol_relocs(file, program, object)) {
             return false;
         }
