@@ -150,6 +150,12 @@ predefined_func_name_focused() {
         sh tests/compiler/c0/run-predefined-func-name.sh
 }
 
+static_aggregate_initializer_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" \
+    BUILD_DIR="$root/build/ci-static-aggregate-initializers" \
+        sh tests/compiler/c0/run-static-aggregate-initializers.sh
+}
+
 static_nested_record_designator_focused() {
     MINIC="$root/build/ci-debug/bin/minic" \
     BUILD_DIR="$root/build/ci-static-nested-record-designator" \
@@ -324,6 +330,7 @@ printf '%s\n' \
     'Phase 2: focused declaration/static-local/variadic-call/pointer-equality/switch/wide-string/record-array-init/linenoise/SDS/RV64 suites, differential programs, tiny-AES, and cJSON'
 start_gate static-local-focused static_local_focused
 start_gate predefined-func-name-focused predefined_func_name_focused
+start_gate static-aggregate-initializer-focused static_aggregate_initializer_focused
 start_gate static-nested-record-designator-focused static_nested_record_designator_focused
 start_gate variadic-declarations-focused variadic_declaration_focused
 start_gate variadic-call-focused variadic_call_focused

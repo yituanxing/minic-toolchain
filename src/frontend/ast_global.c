@@ -371,11 +371,26 @@ static bool global_object_member_path_type(const MinicC0Program *program,
     return true;
 }
 
-static bool global_relocation_location_type(const MinicC0Program *program,
-                                            const MinicGlobalObject *object,
-                                            MinicGlobalRelocationLocationKind location_kind,
-                                            size_t location_index,
-                                            MinicType *slot_type) {
+bool minic_c0_global_relocation_object_target_type(const MinicC0Program *program,
+                                                   const MinicGlobalRelocation *relocation,
+                                                   MinicType *target_type) {
+    if (program == NULL || relocation == NULL || target_type == NULL ||
+        relocation->target_kind != MINIC_GLOBAL_RELOCATION_OBJECT ||
+        relocation->target_id >= program->global_object_count) {
+        return false;
+    }
+    return global_object_member_path_type(program,
+                                          &program->global_objects[relocation->target_id],
+                                          relocation->target_member_indices,
+                                          relocation->target_member_depth,
+                                          target_type);
+}
+
+bool minic_c0_global_relocation_slot_type(const MinicC0Program *program,
+                                          const MinicGlobalObject *object,
+                                          MinicGlobalRelocationLocationKind location_kind,
+                                          size_t location_index,
+                                          MinicType *slot_type) {
     if (program == NULL || object == NULL || slot_type == NULL) {
         return false;
     }
@@ -442,6 +457,7 @@ static bool add_global_symbol_relocation(MinicC0Program *program,
     MinicGlobalRelocation *relocation;
     MinicType slot_pointee;
     MinicType slot_type;
+    MinicType target_pointer_type;
     MinicType target_type;
     size_t path_index;
 
@@ -457,18 +473,20 @@ static bool add_global_symbol_relocation(MinicC0Program *program,
         return false;
     }
     object = &program->global_objects[global_object_id];
-    if (!global_relocation_location_type(
+    if (!minic_c0_global_relocation_slot_type(
             program, object, location_kind, location_index, &slot_type) ||
         !minic_type_pointee(slot_type, &slot_pointee) ||
         (target_kind == MINIC_GLOBAL_RELOCATION_FUNCTION &&
          !minic_type_is_function(slot_pointee)) ||
         (target_kind == MINIC_GLOBAL_RELOCATION_OBJECT && minic_type_is_function(slot_pointee)) ||
         (target_kind == MINIC_GLOBAL_RELOCATION_OBJECT &&
-         !global_object_member_path_type(program,
-                                         &program->global_objects[target_id],
-                                         target_member_indices,
-                                         target_member_depth,
-                                         &target_type)) ||
+         (!global_object_member_path_type(program,
+                                          &program->global_objects[target_id],
+                                          target_member_indices,
+                                          target_member_depth,
+                                          &target_type) ||
+          !minic_type_pointer_to(target_type, &target_pointer_type) ||
+          !minic_type_assignment_compatible(slot_type, target_pointer_type))) ||
         object->is_tentative ||
         (object->initializer_count != 0U &&
          ((location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_RECORD_FIELD &&
@@ -488,7 +506,6 @@ static bool add_global_symbol_relocation(MinicC0Program *program,
                     sizeof(*object->relocations))) {
         return false;
     }
-    (void)target_type;
     relocation = &object->relocations[object->relocation_count];
     (void)memset(relocation, 0, sizeof(*relocation));
     relocation->location_kind = location_kind;

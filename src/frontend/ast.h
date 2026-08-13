@@ -737,6 +737,14 @@ bool minic_c0_global_object_add_object_relocation_path(
     MinicGlobalObjectId target_object_id,
     const size_t *target_member_indices,
     size_t target_member_depth);
+bool minic_c0_global_relocation_slot_type(const MinicC0Program *program,
+                                          const MinicGlobalObject *object,
+                                          MinicGlobalRelocationLocationKind location_kind,
+                                          size_t location_index,
+                                          MinicType *slot_type);
+bool minic_c0_global_relocation_object_target_type(const MinicC0Program *program,
+                                                   const MinicGlobalRelocation *relocation,
+                                                   MinicType *target_type);
 bool minic_c0_global_object_set_zero_initialized(MinicC0Program *program,
                                                  MinicGlobalObjectId global_object_id);
 bool minic_c0_global_object_set_extern(MinicC0Program *program,

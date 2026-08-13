@@ -1252,58 +1252,11 @@ bool minic_c0_program_verify_target(const MinicC0Program *program,
                 MinicType slot_type;
 
                 relocation = &object->relocations[relocation_index];
-                if (relocation->location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_SCALAR) {
-                    if (relocation->location_index != 0U || !minic_type_is_pointer(object->type)) {
-                        return false;
-                    }
-                    slot_type = object->type;
-                } else if (relocation->location_kind ==
-                           MINIC_GLOBAL_RELOCATION_LOCATION_ARRAY_ELEMENT) {
-                    const MinicArrayType *array_type;
-
-                    array_type =
-                        minic_type_is_array(object->type)
-                            ? minic_c0_program_array_type(program, object->type.array_type_id)
-                            : NULL;
-                    if (array_type == NULL ||
-                        relocation->location_index >= array_type->element_count ||
-                        !minic_type_is_pointer(array_type->element_type)) {
-                        return false;
-                    }
-                    slot_type = array_type->element_type;
-                } else if (relocation->location_kind ==
-                           MINIC_GLOBAL_RELOCATION_LOCATION_RECORD_FIELD) {
-                    const MinicRecord *record;
-                    const MinicRecordField *field;
-
-                    record = minic_type_is_record(object->type)
-                                 ? minic_c0_program_record(program, object->type.record_id)
-                                 : NULL;
-                    field = record == NULL
-                                ? NULL
-                                : minic_c0_record_field(record, relocation->location_index);
-                    if (field == NULL || field->element_count != 1U || field->is_bit_field ||
-                        field->is_flexible_array || !minic_type_is_pointer(field->type)) {
-                        return false;
-                    }
-                    slot_type = field->type;
-                } else if (relocation->location_kind ==
-                           MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR) {
-                    size_t resolved_offset;
-
-                    if (!minic_data_layout_global_relocation_offset(
-                            minic_target_info_data_layout(target),
-                            program,
-                            object,
-                            relocation,
-                            &resolved_offset)) {
-                        return false;
-                    }
-                    (void)resolved_offset;
-                    slot_type = minic_type_pointer_to(minic_type_void(), &slot_type)
-                                    ? slot_type
-                                    : minic_type_void();
-                } else {
+                if (!minic_c0_global_relocation_slot_type(program,
+                                                          object,
+                                                          relocation->location_kind,
+                                                          relocation->location_index,
+                                                          &slot_type)) {
                     return false;
                 }
                 if (!minic_type_pointee(slot_type, &slot_pointee) ||
@@ -1321,6 +1274,17 @@ bool minic_c0_program_verify_target(const MinicC0Program *program,
                     (relocation->target_kind != MINIC_GLOBAL_RELOCATION_OBJECT &&
                      relocation->target_kind != MINIC_GLOBAL_RELOCATION_FUNCTION)) {
                     return false;
+                }
+                if (relocation->target_kind == MINIC_GLOBAL_RELOCATION_OBJECT) {
+                    MinicType target_pointer_type;
+                    MinicType target_type;
+
+                    if (!minic_c0_global_relocation_object_target_type(
+                            program, relocation, &target_type) ||
+                        !minic_type_pointer_to(target_type, &target_pointer_type) ||
+                        !minic_type_assignment_compatible(slot_type, target_pointer_type)) {
+                        return false;
+                    }
                 }
                 {
                     size_t target_addend;
