@@ -48,7 +48,7 @@ new = r'''    if (function == NULL || !function->is_defined || function->name_le
                 function->name,
                 function->parameter_count,
                 (size_t)function->local_begin,
-                (size_t)function->local_end);
+                (size_t)(function->local_begin + function->local_count));
         for (parameter_index = 0U; parameter_index < function->parameter_count; ++parameter_index) {
             MinicLocalId local_id;
             const MinicLocal *parameter;
