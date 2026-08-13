@@ -1,0 +1,38 @@
+name: FunctionBody Compiler Host Gate
+
+on:
+  push:
+    branches:
+      - refactor/function-body-view-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: function-body-compiler-host-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  host:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Materialize staged source-list integration
+        run: python3 tools/dev/materialize-function-body-source-list.py
+
+      - name: Verify production inventory
+        run: sh tools/maintenance/check-production-source-inventory.sh
+
+      - name: Build and run host contracts
+        run: make -j2 MODE=release BUILD_DIR=build/function-body-host CFLAGS=-Werror check-fast
+
+      - name: Run frozen Foundation focused semantics
+        shell: bash
+        env:
+          MINIC: ${{ github.workspace }}/build/function-body-host/bin/minic
+          BUILD_DIR: ${{ github.workspace }}/build/function-body-foundation-focused
+          HOST_CC: cc
+        run: sh tools/dev/pr76-focused.sh
