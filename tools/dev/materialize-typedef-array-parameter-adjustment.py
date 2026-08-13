@@ -40,7 +40,20 @@ new = '''static bool adjust_array_parameter_type(MinicParser *parser, MinicType 
 '''
 if text.count(old) != 1:
     raise SystemExit('array parameter adjustment anchor missing')
-path.write_text(text.replace(old, new, 1))
+text = text.replace(old, new, 1)
+old_call = '''        if (!is_function_pointer_parameter && parser->current.kind == MINIC_TOKEN_LBRACKET &&
+            !adjust_array_parameter_type(parser, &parameter_type)) {
+            return false;
+        }
+'''
+new_call = '''        if (!is_function_pointer_parameter &&
+            !adjust_array_parameter_type(parser, &parameter_type)) {
+            return false;
+        }
+'''
+if text.count(old_call) != 1:
+    raise SystemExit('array parameter adjustment call anchor missing')
+path.write_text(text.replace(old_call, new_call, 1))
 
 source_path = root / 'tests/compiler/c0/array_parameter_adjustment.c'
 source = source_path.read_text()
