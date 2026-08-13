@@ -22,7 +22,7 @@ new_validate = '''    } else if (!constraint_is(operand, "r") && !constraint_is(
         return false;
     }
     if (constraint_is(operand, "rJ")) {
-        return minic_type_is_integer(expression->type);
+        return minic_type_is_integer(expression->type) || minic_type_is_pointer(expression->type);
     }
     return minic_type_is_integer(expression->type) || minic_type_is_pointer(expression->type);
 }
@@ -127,7 +127,6 @@ text = text.replace('''    *literal_percent = false;
     }
     if (ch >= '0' && ch <= '9') {
 ''', 1)
-# %% must initialize modifier as well.
 text = text.replace('''        *literal_percent = true;
         *operand_index = 0U;
 ''', '''        *literal_percent = true;
@@ -135,7 +134,6 @@ text = text.replace('''        *literal_percent = true;
         *operand_index = 0U;
 ''', 1)
 
-# Validator call.
 text = text.replace('''        size_t operand_index;
         bool literal_percent;
 ''', '''        size_t operand_index;
@@ -158,7 +156,6 @@ text = text.replace('''        (void)operand_index;
         (void)zero_modifier;
 ''', 1)
 
-# Emitter call: replace the second declaration occurrence and resolver use.
 emit_decl = '''        size_t operand_index;
         bool literal_percent;
 
@@ -227,7 +224,6 @@ if old_emit_choice in text:
 elif new_emit_choice not in text:
     raise SystemExit("operand emit choice anchor not found")
 
-# rJ zero is a numeric immediate if it reaches ordinary immediate emission.
 old_emit_immediate_symbol = '''    if (constraint_is(operand, "i") &&
         (symbol_name = symbolic_immediate_name(program, operand->expression)) != NULL) {
         return fputs(symbol_name, file) != EOF;
@@ -246,7 +242,6 @@ if old_emit_immediate_symbol in text:
 elif new_emit_immediate_symbol not in text:
     raise SystemExit("rJ immediate emit anchor not found")
 
-# Don't evaluate/stage rJ zero at runtime.
 text = text.replace('''        if (constraint_is_immediate(operand)) {
             continue;
         }
