@@ -1,22 +1,18 @@
-name: Linux 6.6.143 Discovery
+name: Linux 6.6.143 Verifier Debug
 
 on:
   push:
-    branches: [external/linux-6.6.143-discovery-v2]
-  pull_request:
-    branches: [external/lua-discovery, main]
-  workflow_dispatch:
+    branches: [probe/linux-final-verifier-debug]
 
 permissions:
   contents: read
 
 concurrency:
-  group: linux-6.6.143-discovery-${{ github.event.pull_request.number || github.ref }}
+  group: linux-final-verifier-debug
   cancel-in-progress: true
 
 jobs:
   linux-frontier:
-    if: github.event_name == 'workflow_dispatch' || github.ref_name == 'external/linux-6.6.143-discovery-v2' || github.head_ref == 'refactor/foundation-v1'
     name: riscv-defconfig-init-main
     runs-on: ubuntu-24.04
     env:
@@ -32,12 +28,12 @@ jobs:
           path: build/linux-cache/linux-6.6.143.tar.xz
           key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
 
-      - name: Build committed MiniC source
+      - name: Build verifier-instrumented MiniC
         shell: bash
         run: |
           set -Eeuo pipefail
-          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
-          git diff --exit-code -- include src tools/minic
+          python3 tools/dev/materialize-linux-verifier-debug.py
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
           make -j4 MODE=release BUILD_DIR=build/linux-compiler
 
       - name: Verify Linux-specific focused semantics
@@ -68,57 +64,18 @@ jobs:
           CROSS_COMPILE=riscv64-linux-gnu- \
             sh tests/external/linux/probe.sh
           status=$?
+          cat "$GITHUB_WORKSPACE/build/linux-discovery/minic.stderr" || true
           set -e
           exit "$status"
-
-      - name: Prepare compact Linux frontier diagnostics
-        if: always()
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          work="$GITHUB_WORKSPACE/build/linux-discovery"
-          summary="$work/frontier-summary.txt"
-          mkdir -p "$work"
-          : > "$summary"
-          if test -s "$work/kbuild/init/main.i"; then
-            printf '%s\n' "total_lines=$(wc -l < "$work/kbuild/init/main.i" | tr -d ' ')" >> "$summary"
-            printf '%s\n' "total_bytes=$(wc -c < "$work/kbuild/init/main.i" | tr -d ' ')" >> "$summary"
-          fi
-          if test -s "$work/minic.stderr"; then
-            frontier_line=$(sed -n 's/.*init\/main\.i:\([0-9][0-9]*\):.*/\1/p' "$work/minic.stderr" | head -n 1)
-            printf '%s\n' "frontier_line=${frontier_line:-unknown}" >> "$summary"
-            printf '%s\n' 'MiniC diagnostic:' >> "$summary"
-            sed -n '1,80p' "$work/minic.stderr" >> "$summary"
-            if test -n "${frontier_line:-}" && test -s "$work/kbuild/init/main.i"; then
-              start=$((frontier_line > 10 ? frontier_line - 10 : 1))
-              end=$((frontier_line + 10))
-              printf '\n%s\n' "init/main.i lines=$start-$end:" >> "$summary"
-              nl -ba "$work/kbuild/init/main.i" | sed -n "${start},${end}p" >> "$summary"
-            fi
-          else
-            printf '%s\n' 'No MiniC diagnostic; Linux probe may have passed or failed before MiniC.' >> "$summary"
-          fi
-          if test -s "$work/main-i-inventory.txt"; then
-            printf '\n%s\n' 'Full-TU feature inventory:' >> "$summary"
-            cat "$work/main-i-inventory.txt" >> "$summary"
-          fi
-          cat "$summary"
 
       - name: Upload Linux frontier and full translation unit
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: linux-frontier-${{ github.run_id }}
+          name: linux-verifier-debug-${{ github.run_id }}
           path: |
-            build/linux-discovery/frontier-summary.txt
+            build/linux-discovery/minic.stderr
             build/linux-discovery/main-i-inventory.txt
             build/linux-discovery/kbuild/init/main.i
           if-no-files-found: ignore
           retention-days: 7
-
-      - name: Save pinned Linux source archive
-        if: always() && steps.linux-source-cache.outputs.cache-hit != 'true' && hashFiles('build/linux-cache/linux-6.6.143.tar.xz') != ''
-        uses: actions/cache/save@v4
-        with:
-          path: build/linux-cache/linux-6.6.143.tar.xz
-          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
