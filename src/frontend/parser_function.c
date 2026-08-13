@@ -3,6 +3,7 @@
 #include "frontend/parser_internal.h"
 
 #include <limits.h>
+#include <stdlib.h>
 #include <string.h>
 
 static bool function_identifier_is(const MinicParser *parser, const char *name) {
@@ -2071,6 +2072,53 @@ static bool parse_top_level_preprocessor_directive(MinicParser *parser) {
     return minic_parser_advance(parser);
 }
 
+static bool top_level_is_gnu_asm(const MinicParser *parser) {
+    return function_identifier_is(parser, "asm") || function_identifier_is(parser, "__asm") ||
+           function_identifier_is(parser, "__asm__");
+}
+
+static bool parse_top_level_gnu_basic_asm(MinicParser *parser) {
+    char *assembly_text;
+    size_t assembly_length;
+    MinicSourceSpan assembly_span;
+
+    if (parser == NULL || !top_level_is_gnu_asm(parser)) {
+        return false;
+    }
+    assembly_text = NULL;
+    assembly_length = 0U;
+    if (!minic_parser_advance(parser)) {
+        return false;
+    }
+    if (parser->current.kind != MINIC_TOKEN_LPAREN) {
+        minic_parser_error(parser, "file-scope GNU basic asm does not allow qualifiers");
+        return false;
+    }
+    if (!minic_parser_advance(parser) ||
+        !minic_parser_parse_string_text(parser, &assembly_text, &assembly_length, &assembly_span)) {
+        free(assembly_text);
+        return false;
+    }
+    (void)assembly_span;
+    if (parser->current.kind == MINIC_TOKEN_COLON) {
+        free(assembly_text);
+        minic_parser_error(parser, "file-scope GNU basic asm does not support operands");
+        return false;
+    }
+    if (!minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')' after file-scope GNU asm") ||
+        !minic_parser_expect(
+            parser, MINIC_TOKEN_SEMICOLON, "expected ';' after file-scope GNU asm") ||
+        !minic_c0_program_add_file_asm(parser->program, assembly_text, assembly_length)) {
+        free(assembly_text);
+        if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+            minic_parser_error(parser, "cannot store file-scope GNU basic asm");
+        }
+        return false;
+    }
+    free(assembly_text);
+    return true;
+}
+
 static bool top_level_is_gnu_extension_marker(const MinicParser *parser) {
     static const char marker[] = "__extension__";
     size_t length;
@@ -2183,6 +2231,8 @@ bool minic_parse_c0_program(const char *path,
         }
         if (parser.current.kind == MINIC_TOKEN_PREPROCESSOR_DIRECTIVE) {
             success = parse_top_level_preprocessor_directive(&parser);
+        } else if (top_level_is_gnu_asm(&parser)) {
+            success = parse_top_level_gnu_basic_asm(&parser);
         } else if (parser.current.kind == MINIC_TOKEN_SEMICOLON) {
             success = minic_parser_advance(&parser);
         } else if (parser.current.kind == MINIC_TOKEN_KW_STATIC_ASSERT) {

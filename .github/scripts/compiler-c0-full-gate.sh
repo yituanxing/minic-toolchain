@@ -280,6 +280,13 @@ static_object_address_focused() {
         sh tests/compiler/c0/run-static-object-address-relocation.sh
 }
 
+file_scope_basic_asm_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" \
+    BUILD_DIR="$root/build/ci-file-scope-basic-asm" \
+    HOST_CC=cc \
+        sh tests/compiler/c0/run-file-scope-basic-asm.sh
+}
+
 external_cjson_frontier() {
     MINIC="$root/build/ci-release/bin/minic" \
     BUILD_DIR="$root/build/ci-external" \
@@ -309,6 +316,7 @@ start_gate switch-control-flow-focused switch_control_flow_focused
 start_gate external-tentative-focused external_tentative_focused
 start_gate static-global-section-focused static_global_section_focused
 start_gate static-object-address-focused static_object_address_focused
+start_gate file-scope-basic-asm-focused file_scope_basic_asm_focused
 start_gate wide-string-focused wide_string_focused
 start_gate record-array-init-focused runtime_record_array_initializer_focused
 start_gate linenoise-driven-focused linenoise_driven_focused

@@ -267,6 +267,11 @@ typedef struct MinicInlineAsmRegisterClobber {
     size_t name_length;
 } MinicInlineAsmRegisterClobber;
 
+typedef struct MinicFileAsm {
+    char *text;
+    size_t length;
+} MinicFileAsm;
+
 typedef struct MinicInlineAsm {
     char *template_text;
     size_t template_length;
@@ -452,6 +457,10 @@ typedef struct MinicC0Program {
     size_t inline_asm_count;
     size_t inline_asm_capacity;
 
+    MinicFileAsm *file_asms;
+    size_t file_asm_count;
+    size_t file_asm_capacity;
+
     MinicBlock *blocks;
     size_t block_count;
     size_t block_capacity;
@@ -517,6 +526,7 @@ bool minic_c0_program_add_statement(MinicC0Program *program,
                                     const MinicStatement *statement,
                                     MinicStatementId *statement_id);
 bool minic_c0_program_add_block(MinicC0Program *program, MinicBlockId *block_id);
+bool minic_c0_program_add_file_asm(MinicC0Program *program, const char *text, size_t length);
 bool minic_c0_program_add_inline_asm(MinicC0Program *program,
                                      const char *template_text,
                                      size_t template_length,
