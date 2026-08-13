@@ -37,6 +37,7 @@ jobs:
           python3 tools/dev/materialize-inline-asm-symbolic-immediate.py
           python3 tools/dev/materialize-inline-asm-rj-z.py
           python3 tools/dev/fix-inline-asm-rj-materialization.py
+          python3 tools/dev/materialize-inline-asm-rk.py
           python3 tools/dev/materialize-codegen-span-trace.py
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
           make -j4 MODE=release BUILD_DIR=build/static-pointer-array-tail
@@ -122,6 +123,17 @@ jobs:
           grep -F 'beq zero, zero, 1f' build/inline-asm-rj-z.s >/dev/null
           echo 'PASS inline-asm-rJ modifier=%z runtime=register zero=zero-register'
 
+          cat > build/inline-asm-rk.c <<'EOF'
+          void csr_shape(unsigned long runtime_value) {
+              __asm__ __volatile__("csrs 0x100, %0" : : "rK" (2UL) : "memory");
+              __asm__ __volatile__("csrs 0x100, %0" : : "rK" (runtime_value) : "memory");
+          }
+          EOF
+          "$minic" -S build/inline-asm-rk.c -o build/inline-asm-rk.s
+          grep -F 'csrs 0x100, 2' build/inline-asm-rk.s >/dev/null
+          grep -E 'csrs 0x100, t[0-6]' build/inline-asm-rk.s >/dev/null
+          echo 'PASS inline-asm-rK csr-u5=immediate runtime=register'
+
           MINIC="$minic" \
           BUILD_DIR="$GITHUB_WORKSPACE/build/static-pointer-array-tail-focused" \
             sh tests/compiler/c0/run-static-pointer-arrays.sh
@@ -129,6 +141,8 @@ jobs:
           mkdir -p build/linux-artifact
           gh run download 31689171683 -n linux-frontier-31689171683 -D build/linux-artifact
           test -s build/linux-artifact/kbuild/init/main.i
+          echo 'INLINE_ASM_ALT_CONSTRAINTS'
+          grep -o '"r[A-Z]"' build/linux-artifact/kbuild/init/main.i | sort | uniq -c || true
           set +e
           "$minic" -S build/linux-artifact/kbuild/init/main.i -o build/linux-artifact/main.s \
             >build/linux-artifact/minic.stdout 2>build/linux-artifact/minic.stderr
