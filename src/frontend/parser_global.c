@@ -1431,7 +1431,10 @@ parse_static_pointer_array(MinicParser *parser, MinicType element_type, MinicSou
             }
             (void)literal_type;
             (void)literal_span;
-        } else if (!minic_parser_parse_zero_pointer_constant(parser)) {
+        } else if (!minic_parser_parse_null_pointer_constant_expression(parser, element_type)) {
+            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                minic_parser_error(parser, "static pointer array scalar initializer must be null");
+            }
             goto done;
         }
 

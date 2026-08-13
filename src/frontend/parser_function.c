@@ -766,17 +766,12 @@ static bool parse_external_integer_array_definition(MinicParser *parser,
                     return false;
                 }
                 has_relocation = true;
-            } else {
-                int64_t parsed;
-
-                if (!minic_parser_parse_integer_constant_expression(parser, &parsed) ||
-                    parsed != 0) {
-                    if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
-                        minic_parser_error(
-                            parser, "external pointer array scalar initializer must be null");
-                    }
-                    return false;
+            } else if (!minic_parser_parse_null_pointer_constant_expression(parser, element_type)) {
+                if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                    minic_parser_error(parser,
+                                       "external pointer array scalar initializer must be null");
                 }
+                return false;
             }
             if (has_relocation && !minic_c0_global_object_add_object_relocation(
                                       parser->program,
