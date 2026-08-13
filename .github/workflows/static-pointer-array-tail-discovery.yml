@@ -29,9 +29,13 @@ jobs:
         run: |
           set -Eeuo pipefail
           make -j4 MODE=release BUILD_DIR=build/static-pointer-array-tail
-          MINIC="$GITHUB_WORKSPACE/build/static-pointer-array-tail/bin/minic" \
-          BUILD_DIR="$GITHUB_WORKSPACE/build/static-pointer-array-tail-focused" \
-            sh tests/compiler/c0/run-static-pointer-arrays.sh
+          if ! MINIC="$GITHUB_WORKSPACE/build/static-pointer-array-tail/bin/minic" \
+               BUILD_DIR="$GITHUB_WORKSPACE/build/static-pointer-array-tail-focused" \
+                 sh tests/compiler/c0/run-static-pointer-arrays.sh; then
+            echo '--- static_pointer_array.s ---' >&2
+            cat "$GITHUB_WORKSPACE/build/static-pointer-array-tail-focused/tests/compiler-c0-static-pointer-arrays/static_pointer_array.s" >&2 || true
+            exit 1
+          fi
 
       - name: Write product changes back
         run: |
