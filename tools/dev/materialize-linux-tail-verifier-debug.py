@@ -164,5 +164,36 @@ for old, new in repls:
     if old not in text:
         raise SystemExit('debug anchor missing')
     text = text.replace(old, new, 1)
-
 path.write_text(text)
+
+# Trace the exact source location that creates the orphan incomplete array descriptor.
+decl_path = Path('src/frontend/parser_declarator.c')
+decl = decl_path.read_text()
+if '#include <stdio.h>' not in decl:
+    decl = decl.replace('#include <limits.h>\n', '#include <limits.h>\n#include <stdio.h>\n', 1)
+old = """            if (!minic_c0_program_add_incomplete_array_type(parser->program, type, &type)) {
+                minic_parser_error(parser, "cannot build incomplete array declarator type");
+                return false;
+            }
+"""
+new = """            if (!minic_c0_program_add_incomplete_array_type(parser->program, type, &type)) {
+                minic_parser_error(parser, "cannot build incomplete array declarator type");
+                return false;
+            }
+            if (type.array_type_id == 1137U) {
+                const MinicArrayType *created;
+
+                created = minic_c0_program_array_type(parser->program, type.array_type_id);
+                fprintf(stderr,
+                        "ARRAY_CREATE id=%zu next_line=%zu next_col=%zu next_offset=%zu element_base=%d element_ptr=%u\\n",
+                        type.array_type_id,
+                        parser->current.span.begin.line,
+                        parser->current.span.begin.column,
+                        parser->current.span.begin.offset,
+                        created == NULL ? -1 : (int)created->element_type.base_kind,
+                        created == NULL ? 0U : created->element_type.pointer_depth);
+            }
+"""
+if old not in decl:
+    raise SystemExit('incomplete array creation anchor missing')
+decl_path.write_text(decl.replace(old, new, 1))
