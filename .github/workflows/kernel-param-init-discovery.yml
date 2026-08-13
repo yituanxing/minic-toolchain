@@ -29,9 +29,11 @@ jobs:
         run: |
           set -Eeuo pipefail
           make -j4 MODE=release BUILD_DIR=build/kernel-param-init
-          MINIC="$GITHUB_WORKSPACE/build/kernel-param-init/bin/minic" \
-          BUILD_DIR="$GITHUB_WORKSPACE/build/kernel-param-focused" \
-            sh tests/compiler/c0/run-static-aggregate-initializers.sh
+          export MINIC="$GITHUB_WORKSPACE/build/kernel-param-init/bin/minic"
+          export BUILD_DIR="$GITHUB_WORKSPACE/build/kernel-param-focused"
+          sh tests/compiler/c0/run-static-aggregate-initializers.sh
+          sh tests/compiler/c0/run-integer-constant-bitwise.sh
+          sh tests/compiler/c0/run-unnamed-bit-fields.sh
 
       - name: Write product changes back
         run: |
@@ -43,5 +45,5 @@ jobs:
             echo 'product already materialized'
             exit 0
           fi
-          git commit -m 'feat(frontend): preserve array-decay relocations in recursive static initializers'
+          git commit -m 'feat(frontend): preserve C integer literal radix semantics'
           git push origin HEAD:agent/kernel-param-init-family-v1
