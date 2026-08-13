@@ -213,6 +213,8 @@ static bool static_object_address_relocation_target(const MinicC0Program *progra
                                                     MinicExpressionId expression_id,
                                                     MinicGlobalObjectId *target_object_id) {
     const MinicExpression *expression;
+    const MinicExpression *addressed;
+    MinicGlobalObjectId object_id;
 
     if (program == NULL || target_object_id == NULL) {
         return false;
@@ -227,13 +229,37 @@ static bool static_object_address_relocation_target(const MinicC0Program *progra
     if (expression == NULL || expression->kind != MINIC_EXPRESSION_ADDRESS_OF) {
         return false;
     }
-    expression = minic_c0_program_expression(program, expression->value.unary.operand);
-    if (expression == NULL || expression->kind != MINIC_EXPRESSION_GLOBAL_OBJECT ||
-        expression->value.global_object_id == MINIC_GLOBAL_OBJECT_INVALID ||
-        minic_c0_program_global_object(program, expression->value.global_object_id) == NULL) {
+    addressed = minic_c0_program_expression(program, expression->value.unary.operand);
+    if (addressed == NULL) {
         return false;
     }
-    *target_object_id = expression->value.global_object_id;
+    if (addressed->kind == MINIC_EXPRESSION_GLOBAL_OBJECT) {
+        object_id = addressed->value.global_object_id;
+    } else if (addressed->kind == MINIC_EXPRESSION_SUBSCRIPT) {
+        const MinicExpression *base;
+        const MinicExpression *index;
+        const MinicGlobalObject *object;
+
+        base = minic_c0_program_expression(program, addressed->value.subscript.base);
+        index = minic_c0_program_expression(program, addressed->value.subscript.index);
+        if (base == NULL || base->kind != MINIC_EXPRESSION_GLOBAL_OBJECT || index == NULL ||
+            index->kind != MINIC_EXPRESSION_INTEGER || !minic_type_is_integer(index->type) ||
+            index->value.integer_value != 0) {
+            return false;
+        }
+        object_id = base->value.global_object_id;
+        object = minic_c0_program_global_object(program, object_id);
+        if (object == NULL || !minic_type_is_array(object->type)) {
+            return false;
+        }
+    } else {
+        return false;
+    }
+    if (object_id == MINIC_GLOBAL_OBJECT_INVALID ||
+        minic_c0_program_global_object(program, object_id) == NULL) {
+        return false;
+    }
+    *target_object_id = object_id;
     return true;
 }
 
