@@ -34,6 +34,8 @@ jobs:
           sh tests/compiler/c0/run-external-scalar-definitions.sh
           sh tests/compiler/c0/run-short-integers.sh
           sh tests/compiler/c0/run-unsigned-char-layout.sh
+          "$MINIC" -S tests/programs/c0/static_record_compound_literal.c -o build/pr138-aggregate-inspect.s
+          cat build/pr138-aggregate-inspect.s
           sh -x tests/compiler/c0/run-static-aggregate-initializers.sh
           sh tests/compiler/c0/run-static-pointer-arrays.sh
           sh tests/compiler/c0/run-pointer-array-typed-null.sh
