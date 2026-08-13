@@ -41,7 +41,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          input="$GITHUB_WORKSPACE/build/frozen-linux/kbuild/init/main.i"
+          input="$GITHUB_WORKSPACE/build/frozen-linux/linux-frontier-31683780275/kbuild/init/main.i"
           test -s "$input"
           test "$(wc -l < "$input" | tr -d ' ')" = 90928
           mkdir -p build/linux-verifier-result
