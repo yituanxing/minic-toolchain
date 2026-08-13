@@ -17,6 +17,7 @@ jobs:
           python3 tools/dev/pr134-fix-materializer.py
           python3 tools/dev/pr134-materialize.py
           python3 tools/dev/pr134-include-repair.py
+          python3 tools/dev/pr134-static-diagnostic-repair.py
           clang-format-18 -i \
             src/frontend/parser_internal.h \
             src/frontend/parser_core.c \
@@ -43,6 +44,7 @@ jobs:
             tools/dev/pr134-materialize.py \
             tools/dev/pr134-fix-materializer.py \
             tools/dev/pr134-include-repair.py \
+            tools/dev/pr134-static-diagnostic-repair.py \
             .github/workflows/pr134-materialize-external-integer-consteval.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
