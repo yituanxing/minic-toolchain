@@ -101,3 +101,43 @@ static const char *const relocation_names[] = { \"backing\", \"literal\" };
         raise SystemExit("unexpected static aggregate main anchor")
     program = program.replace(old_main, new_main, 1)
     program_path.write_text(program)
+
+constant_path = Path("src/frontend/parser_constant.c")
+constant = constant_path.read_text()
+octal_marker = "base = 8U; /* C integer constants with a leading zero are octal. */"
+if octal_marker not in constant:
+    old = """    if (digit_end - span.begin.offset >= 2U && parser->source[offset] == '0' &&
+        (parser->source[offset + 1U] == 'x' || parser->source[offset + 1U] == 'X')) {
+        base = 16U;
+        offset += 2U;
+    }
+"""
+    new = """    if (digit_end - span.begin.offset >= 2U && parser->source[offset] == '0' &&
+        (parser->source[offset + 1U] == 'x' || parser->source[offset + 1U] == 'X')) {
+        base = 16U;
+        offset += 2U;
+    } else if (digit_end - span.begin.offset > 1U && parser->source[offset] == '0') {
+        base = 8U; /* C integer constants with a leading zero are octal. */
+    }
+"""
+    if constant.count(old) != 2:
+        raise SystemExit(f"unexpected integer-radix anchors: {constant.count(old)}")
+    constant = constant.replace(old, new)
+    constant_path.write_text(constant)
+
+bitwise_path = Path("tests/compiler/c0/integer_constant_bitwise.c")
+bitwise = bitwise_path.read_text()
+if "octal_permission" not in bitwise:
+    bitwise += "\nconst unsigned int octal_permission = 0644;\n"
+    bitwise_path.write_text(bitwise)
+
+run_path = Path("tests/compiler/c0/run-integer-constant-bitwise.sh")
+run = run_path.read_text()
+if "octal_permission" not in run:
+    anchor = "grep -F '  .zero 3' \"$work/integer_constant_bitwise.s\" >/dev/null\n"
+    replacement = anchor + "sed -n '/^octal_permission:/,/^\\.size/p' \"$work/integer_constant_bitwise.s\" | grep -F '  .word 420' >/dev/null\n"
+    if run.count(anchor) != 1:
+        raise SystemExit("unexpected integer bitwise gate anchor")
+    run = run.replace(anchor, replacement, 1)
+    run = run.replace("zero-fill=3'", "zero-fill=3 octal=0644->420'")
+    run_path.write_text(run)
