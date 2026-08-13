@@ -20,7 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Materialize parameter-array ownership fix and inspect cached full TU
+      - name: Materialize tail fixes and run cached full TU
         run: |
           set -Eeuo pipefail
           python3 - <<'PY'
@@ -55,9 +55,9 @@ jobs:
 
           replace_once(
               'src/target/riscv64/codegen_function.c',
-              '''        if (!success) {\n            fprintf(stderr,\n                    "CODEGEN_FAIL global=%zu name=%s\\n",\n                    global_index,\n                    program->global_objects[global_index].name);\n        }\n''',
-              '''        if (!success) {\n            const MinicGlobalObject *failed = &program->global_objects[global_index];\n            const MinicArrayType *failed_array =\n                minic_type_is_array(failed->type)\n                    ? minic_c0_program_array_type(program, failed->type.array_type_id)\n                    : NULL;\n            const char *owner_name = program->function_count > 1910U\n                                         ? program->functions[1910U].name\n                                         : "<missing>";\n\n            fprintf(stderr,\n                    "CODEGEN_FAIL global=%zu name=%s owner1910=%s kind=%d ptr=%u array=%d array_count=%zu element_kind=%d element_ptr=%u storage=%zu align=%zu zero=%d tentative=%d init=%zu reloc=%zu readonly=%d section=%s\\n",\n                    global_index,\n                    failed->name,\n                    owner_name,\n                    (int)failed->type.base_kind,\n                    failed->type.pointer_depth,\n                    failed_array != NULL ? 1 : 0,\n                    failed_array != NULL ? failed_array->element_count : 0U,\n                    failed_array != NULL ? (int)failed_array->element_type.base_kind : -1,\n                    failed_array != NULL ? failed_array->element_type.pointer_depth : 0U,\n                    failed->storage_size,\n                    failed->alignment,\n                    failed->is_zero_initialized ? 1 : 0,\n                    failed->is_tentative ? 1 : 0,\n                    failed->initializer_count,\n                    failed->relocation_count,\n                    failed->is_read_only ? 1 : 0,\n                    failed->section_name == NULL ? "-" : failed->section_name);\n        }\n''',
-              'codegen failure detail')
+              '''    if (file == NULL || program == NULL || object == NULL || object->name_length == 0U ||\n        object->storage_size == 0U || object->alignment == 0U ||\n        !minic_riscv64_alignment_power(object->alignment, &alignment_power)) {\n        return false;\n    }\n''',
+              '''    if (file == NULL || program == NULL || object == NULL || object->name_length == 0U ||\n        object->alignment == 0U ||\n        !minic_riscv64_alignment_power(object->alignment, &alignment_power)) {\n        return false;\n    }\n    if (object->storage_size == 0U &&\n        ((!object->is_zero_initialized && !object->is_tentative) ||\n         object->initializer_count != 0U || object->relocation_count != 0U)) {\n        return false;\n    }\n''',
+              'zero-size object emission')
           PY
 
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
@@ -71,6 +71,14 @@ jobs:
           EOF
           "$minic" -S build/parameter-array-adjustment.c -o build/parameter-array-adjustment.s
           echo 'PASS parameter-array-adjustment record-pointer=[] multidim-inner=[4] verifier=clean'
+
+          cat > build/zero-size-static.c <<'EOF'
+          struct empty {};
+          int zero_size_static(void) { static struct empty value; return sizeof(value); }
+          EOF
+          "$minic" -S build/zero-size-static.c -o build/zero-size-static.s
+          grep -F '.size __minic_static_local_' build/zero-size-static.s | grep -F ', 0' >/dev/null
+          echo 'PASS zero-size-static record=gnu storage=0 symbol=size0'
 
           MINIC="$minic" \
           BUILD_DIR="$GITHUB_WORKSPACE/build/static-pointer-array-tail-focused" \
