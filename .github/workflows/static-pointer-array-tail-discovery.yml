@@ -4,39 +4,25 @@ on:
   push:
     branches: [agent/static-pointer-array-tail-v1]
 
-permissions:
-  contents: write
-
 concurrency:
   group: static-pointer-array-tail-discovery
   cancel-in-progress: true
 
 jobs:
-  materialize:
+  focused:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Materialize product slice
-        run: |
-          set -Eeuo pipefail
-          python3 tools/dev/materialize-static-pointer-array-tail.py
-          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
 
       - name: Build and focused validation
         run: |
           set -Eeuo pipefail
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
           make -j4 MODE=release BUILD_DIR=build/static-pointer-array-tail
           minic="$GITHUB_WORKSPACE/build/static-pointer-array-tail/bin/minic"
-          if ! MINIC="$minic" \
-               BUILD_DIR="$GITHUB_WORKSPACE/build/static-pointer-array-tail-focused" \
-                 sh tests/compiler/c0/run-static-pointer-arrays.sh; then
-            echo '--- static_pointer_array.s ---' >&2
-            cat "$GITHUB_WORKSPACE/build/static-pointer-array-tail-focused/tests/compiler-c0-static-pointer-arrays/static_pointer_array.s" >&2 || true
-            exit 1
-          fi
+          MINIC="$minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/static-pointer-array-tail-focused" \
+            sh tests/compiler/c0/run-static-pointer-arrays.sh
           mkdir -p build/fnptr-array-repro
           cat > build/fnptr-array-repro/repro.c <<'EOF'
           typedef int (*fn_t)(void);
@@ -47,16 +33,3 @@ jobs:
           cc -E -P -x c build/fnptr-array-repro/repro.c -o build/fnptr-array-repro/repro.i
           "$minic" -S build/fnptr-array-repro/repro.i -o build/fnptr-array-repro/repro.s
           cat build/fnptr-array-repro/repro.s
-
-      - name: Write product changes back
-        run: |
-          set -Eeuo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add src tests
-          if git diff --cached --quiet; then
-            echo 'product already materialized'
-            exit 0
-          fi
-          git commit -m 'feat(frontend): converge static pointer-array suffix semantics'
-          git push origin HEAD:agent/static-pointer-array-tail-v1
