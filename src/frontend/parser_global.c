@@ -1603,6 +1603,111 @@ static bool parse_static_inferred_char_array(MinicParser *parser,
         parser, MINIC_TOKEN_SEMICOLON, "expected ';' after static character array");
 }
 
+bool minic_parser_parse_static_zero_declaration_list_after_head(MinicParser *parser,
+                                                                MinicType base_type,
+                                                                MinicType first_object_type,
+                                                                MinicSourceSpan first_name_span,
+                                                                const char *shared_section_name,
+                                                                size_t shared_section_name_length,
+                                                                bool shared_has_section,
+                                                                size_t shared_explicit_alignment) {
+    bool first_declarator;
+
+    if (parser == NULL || parser->current.kind != MINIC_TOKEN_COMMA ||
+        (shared_has_section && (shared_section_name == NULL || shared_section_name_length == 0U ||
+                                shared_section_name_length >= 256U))) {
+        return false;
+    }
+    first_declarator = true;
+    for (;;) {
+        MinicGlobalObjectId object_id;
+        MinicSourceSpan name_span;
+        MinicType object_type;
+        char section_name[256];
+        size_t section_name_length;
+        size_t explicit_alignment;
+        bool has_section;
+
+        section_name_length = shared_section_name_length;
+        explicit_alignment = shared_explicit_alignment;
+        has_section = shared_has_section;
+        (void)memset(section_name, 0, sizeof(section_name));
+        if (shared_has_section) {
+            (void)memcpy(section_name, shared_section_name, shared_section_name_length);
+            section_name[shared_section_name_length] = '\0';
+        }
+
+        if (first_declarator) {
+            object_type = first_object_type;
+            name_span = first_name_span;
+            first_declarator = false;
+        } else {
+            if (!minic_parser_parse_pointer_declarator(parser, base_type, &object_type) ||
+                parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
+                if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                    minic_parser_error(parser, "expected static object declarator after ','");
+                }
+                return false;
+            }
+            name_span = parser->current.span;
+            if (!minic_parser_advance(parser)) {
+                return false;
+            }
+        }
+
+        if (!minic_parser_parse_gnu_object_attribute_lists(parser,
+                                                           section_name,
+                                                           sizeof(section_name),
+                                                           &section_name_length,
+                                                           &has_section,
+                                                           &explicit_alignment)) {
+            return false;
+        }
+        if (parser->current.kind != MINIC_TOKEN_COMMA &&
+            parser->current.kind != MINIC_TOKEN_SEMICOLON) {
+            minic_parser_error(
+                parser,
+                "static zero-definition declaration list currently supports declarations only");
+            return false;
+        }
+        if ((!minic_type_is_integer(object_type) && !minic_type_is_pointer(object_type) &&
+             !minic_type_is_record(object_type)) ||
+            (minic_type_is_record(object_type) &&
+             !minic_parser_require_complete_object_type(
+                 parser, object_type, "static object requires a complete record type"))) {
+            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                minic_parser_error(parser, "unsupported static zero-definition declarator type");
+            }
+            return false;
+        }
+        if (minic_parser_find_global_object(parser, name_span) != MINIC_GLOBAL_OBJECT_INVALID ||
+            !minic_c0_program_add_global_object(parser->program,
+                                                parser->source + name_span.begin.offset,
+                                                minic_parser_span_length(name_span),
+                                                object_type,
+                                                true,
+                                                minic_type_is_const(object_type),
+                                                &object_id) ||
+            !minic_c0_global_object_set_zero_initialized(parser->program, object_id) ||
+            (has_section && !minic_c0_global_object_set_section(
+                                parser->program, object_id, section_name, section_name_length)) ||
+            (explicit_alignment != 0U && !minic_c0_global_object_set_explicit_alignment(
+                                             parser->program, object_id, explicit_alignment))) {
+            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                minic_parser_error(parser, "cannot create static zero-definition declarator");
+            }
+            return false;
+        }
+
+        if (parser->current.kind == MINIC_TOKEN_SEMICOLON) {
+            return minic_parser_advance(parser);
+        }
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
+    }
+}
+
 bool minic_parser_parse_static_global_after_head(MinicParser *parser,
                                                  MinicType element_type,
                                                  MinicSourceSpan name_span,
