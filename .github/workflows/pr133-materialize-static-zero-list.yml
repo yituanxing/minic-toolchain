@@ -14,6 +14,7 @@ jobs:
       - name: Materialize static zero declaration lists
         run: |
           set -Eeuo pipefail
+          python3 tools/dev/pr133-fix-materializer.py
           python3 tools/dev/pr133-materialize.py
           chmod +x tests/compiler/c0/run-static-zero-declaration-list.sh
           clang-format-18 -i \
@@ -37,6 +38,7 @@ jobs:
           set -Eeuo pipefail
           rm -f \
             tools/dev/pr133-materialize.py \
+            tools/dev/pr133-fix-materializer.py \
             .github/workflows/pr133-materialize-static-zero-list.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
