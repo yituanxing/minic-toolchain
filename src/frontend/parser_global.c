@@ -1643,11 +1643,16 @@ bool minic_parser_parse_extern_global(MinicParser *parser) {
                                                        false);
 }
 
-static bool
-parse_static_pointer_array(MinicParser *parser, MinicType element_type, MinicSourceSpan name_span) {
-    MinicGlobalObjectId *targets;
+static bool parse_static_pointer_array(MinicParser *parser,
+                                       MinicType element_type,
+                                       MinicSourceSpan name_span,
+                                       char *section_name,
+                                       size_t section_capacity,
+                                       size_t *section_name_length,
+                                       bool *has_section,
+                                       size_t *explicit_alignment) {
+    MinicStaticPointerInitializer *initializers;
     MinicType object_type;
-    MinicType string_pointer_type;
     MinicGlobalObjectId object_id;
     size_t target_count;
     size_t target_capacity;
@@ -1655,7 +1660,7 @@ parse_static_pointer_array(MinicParser *parser, MinicType element_type, MinicSou
     bool inferred_bound;
     bool success;
 
-    targets = NULL;
+    initializers = NULL;
     target_count = 0U;
     target_capacity = 0U;
     element_count = 0U;
@@ -1677,38 +1682,27 @@ parse_static_pointer_array(MinicParser *parser, MinicType element_type, MinicSou
         minic_parser_error(parser, "multi-dimensional static pointer arrays are not supported yet");
         goto done;
     }
+    if (!minic_parser_parse_gnu_object_attribute_lists(parser,
+                                                       section_name,
+                                                       section_capacity,
+                                                       section_name_length,
+                                                       has_section,
+                                                       explicit_alignment)) {
+        goto done;
+    }
     if (!minic_parser_expect(parser, MINIC_TOKEN_EQUAL, "expected '='") ||
         !minic_parser_expect(parser, MINIC_TOKEN_LBRACE, "expected '{'")) {
         goto done;
     }
-    if (!minic_type_pointer_to(minic_type_char(), &string_pointer_type)) {
-        minic_parser_error(parser, "cannot build string pointer type");
-        goto done;
-    }
-
     while (parser->current.kind != MINIC_TOKEN_RBRACE) {
-        MinicGlobalObjectId target_id;
+        MinicStaticPointerInitializer initializer;
 
-        target_id = MINIC_GLOBAL_OBJECT_INVALID;
-        if (parser->current.kind == MINIC_TOKEN_STRING_LITERAL) {
-            MinicType literal_type;
-            MinicSourceSpan literal_span;
-
-            if (!minic_type_assignment_compatible(element_type, string_pointer_type) ||
-                !minic_parser_create_string_literal_object(
-                    parser, &target_id, &literal_type, &literal_span)) {
-                if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
-                    minic_parser_error(
-                        parser, "string literal does not match static pointer array element");
-                }
-                goto done;
-            }
-            (void)literal_type;
-            (void)literal_span;
-        } else if (!minic_parser_parse_null_pointer_constant_expression(parser, element_type)) {
-            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
-                minic_parser_error(parser, "static pointer array scalar initializer must be null");
-            }
+        if (!parse_static_pointer_initializer(parser, element_type, &initializer)) {
+            goto done;
+        }
+        if (!initializer.has_relocation && initializer.bits != 0U) {
+            minic_parser_error(
+                parser, "static pointer array nonzero integer pointer constants are unsupported");
             goto done;
         }
 
@@ -1718,22 +1712,23 @@ parse_static_pointer_array(MinicParser *parser, MinicType element_type, MinicSou
         }
         if (target_count == target_capacity) {
             size_t new_capacity;
-            MinicGlobalObjectId *resized;
+            MinicStaticPointerInitializer *resized;
 
             new_capacity = target_capacity == 0U ? 8U : target_capacity * 2U;
-            if (new_capacity < target_capacity || new_capacity > SIZE_MAX / sizeof(*targets)) {
+            if (new_capacity < target_capacity || new_capacity > SIZE_MAX / sizeof(*initializers)) {
                 minic_parser_error(parser, "too many static pointer initializers");
                 goto done;
             }
-            resized = (MinicGlobalObjectId *)realloc(targets, new_capacity * sizeof(*targets));
+            resized = (MinicStaticPointerInitializer *)realloc(
+                initializers, new_capacity * sizeof(*initializers));
             if (resized == NULL) {
                 minic_parser_error(parser, "out of memory while recording pointer initializers");
                 goto done;
             }
-            targets = resized;
+            initializers = resized;
             target_capacity = new_capacity;
         }
-        targets[target_count] = target_id;
+        initializers[target_count] = initializer;
         target_count += 1U;
 
         if (parser->current.kind == MINIC_TOKEN_COMMA) {
@@ -1776,14 +1771,18 @@ parse_static_pointer_array(MinicParser *parser, MinicType element_type, MinicSou
         size_t index;
 
         for (index = 0U; index < target_count; ++index) {
-            if (targets[index] != MINIC_GLOBAL_OBJECT_INVALID &&
-                !minic_c0_global_object_add_object_relocation(
-                    parser->program,
-                    object_id,
-                    MINIC_GLOBAL_RELOCATION_LOCATION_ARRAY_ELEMENT,
-                    index,
-                    targets[index])) {
-                minic_parser_error(parser, "cannot record static object relocation");
+            const MinicStaticPointerInitializer *initializer;
+
+            initializer = &initializers[index];
+            if (initializer->has_relocation && !minic_c0_global_object_add_object_relocation_path(
+                                                   parser->program,
+                                                   object_id,
+                                                   MINIC_GLOBAL_RELOCATION_LOCATION_ARRAY_ELEMENT,
+                                                   index,
+                                                   initializer->relocation_target.object_id,
+                                                   initializer->relocation_target.member_indices,
+                                                   initializer->relocation_target.member_depth)) {
+                minic_parser_error(parser, "cannot record static pointer-array relocation");
                 goto done;
             }
         }
@@ -1792,7 +1791,7 @@ parse_static_pointer_array(MinicParser *parser, MinicType element_type, MinicSou
         minic_parser_expect(parser, MINIC_TOKEN_SEMICOLON, "expected ';' after global object");
 
 done:
-    free(targets);
+    free(initializers);
     return success;
 }
 
@@ -2030,7 +2029,14 @@ bool minic_parser_parse_static_global_after_head(MinicParser *parser,
         return parse_static_scalar(parser, element_type, name_span);
     }
     if (minic_type_is_pointer(element_type)) {
-        return parse_static_pointer_array(parser, element_type, name_span);
+        return parse_static_pointer_array(parser,
+                                          element_type,
+                                          name_span,
+                                          section_name,
+                                          section_capacity,
+                                          section_name_length,
+                                          has_section,
+                                          explicit_alignment);
     }
     if (!minic_type_is_integer(element_type) || !minic_type_is_const(element_type)) {
         minic_parser_error(parser, "static global arrays currently require const integer elements");
