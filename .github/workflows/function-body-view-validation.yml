@@ -28,6 +28,7 @@ jobs:
             src/frontend/function_body.c \
             src/frontend/function_body.h \
             tests/frontend/function_body_view_test.c
+          git diff -- src/frontend/function_body.c src/frontend/function_body.h tests/frontend/function_body_view_test.c
 
       - name: Build focused FunctionBody contract
         shell: bash
