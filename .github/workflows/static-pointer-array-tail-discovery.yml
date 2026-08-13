@@ -20,52 +20,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Materialize tail fixes and inspect cached full TU
+      - name: Materialize, validate, and compile cached Linux TU
         run: |
           set -Eeuo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-
-          def replace_once(path, old, new, label):
-              p = Path(path)
-              text = p.read_text()
-              if old not in text:
-                  if new in text:
-                      return
-                  raise SystemExit(f'{label} anchor not found')
-              p.write_text(text.replace(old, new, 1))
-
-          replace_once(
-              'src/frontend/ast.h',
-              '''bool minic_c0_program_complete_array_type(MinicC0Program *program,\n                                          MinicType array_type,\n                                          size_t element_count);\n''',
-              '''bool minic_c0_program_complete_array_type(MinicC0Program *program,\n                                          MinicType array_type,\n                                          size_t element_count);\nbool minic_c0_program_discard_last_array_type(MinicC0Program *program, MinicType array_type);\n''',
-              'ast declaration')
-
-          replace_once(
-              'src/frontend/ast.c',
-              '''bool minic_c0_program_complete_array_type(MinicC0Program *program,\n                                          MinicType array_type,\n                                          size_t element_count) {\n    MinicArrayType *descriptor;\n\n    if (program == NULL || !minic_type_is_array(array_type) || element_count == 0U ||\n        array_type.array_type_id >= program->array_type_count) {\n        return false;\n    }\n    descriptor = &program->array_types[array_type.array_type_id];\n    if (descriptor->is_zero_length) {\n        return false;\n    }\n    if (descriptor->element_count != 0U) {\n        return descriptor->element_count == element_count;\n    }\n    descriptor->element_count = element_count;\n    return true;\n}\n''',
-              '''bool minic_c0_program_complete_array_type(MinicC0Program *program,\n                                          MinicType array_type,\n                                          size_t element_count) {\n    MinicArrayType *descriptor;\n\n    if (program == NULL || !minic_type_is_array(array_type) || element_count == 0U ||\n        array_type.array_type_id >= program->array_type_count) {\n        return false;\n    }\n    descriptor = &program->array_types[array_type.array_type_id];\n    if (descriptor->is_zero_length) {\n        return false;\n    }\n    if (descriptor->element_count != 0U) {\n        return descriptor->element_count == element_count;\n    }\n    descriptor->element_count = element_count;\n    return true;\n}\n\nbool minic_c0_program_discard_last_array_type(MinicC0Program *program, MinicType array_type) {\n    MinicArrayTypeId array_type_id;\n\n    if (program == NULL || !minic_type_is_array(array_type) || program->array_type_count == 0U) {\n        return false;\n    }\n    array_type_id = array_type.array_type_id;\n    if (array_type_id != program->array_type_count - 1U) {\n        return false;\n    }\n    (void)memset(&program->array_types[array_type_id], 0, sizeof(program->array_types[array_type_id]));\n    program->array_type_count -= 1U;\n    return true;\n}\n''',
-              'ast implementation')
-
-          replace_once(
-              'src/frontend/parser_function.c',
-              '''static bool adjust_array_parameter_type(MinicParser *parser, MinicType *parameter_type) {\n    const MinicArrayType *outer_array;\n    MinicType declared_array_type;\n    bool is_array;\n\n    if (parser == NULL || parameter_type == NULL || parser->current.kind != MINIC_TOKEN_LBRACKET) {\n        return parser != NULL && parameter_type != NULL;\n    }\n    if (!minic_parser_parse_array_declarator_suffix(\n            parser, *parameter_type, true, &declared_array_type, &is_array) ||\n        !is_array || !minic_type_is_array(declared_array_type)) {\n        if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\\0') {\n            minic_parser_error(parser, "cannot parse array parameter declarator");\n        }\n        return false;\n    }\n    outer_array = minic_c0_program_array_type(parser->program, declared_array_type.array_type_id);\n    if (outer_array == NULL || !minic_type_pointer_to(outer_array->element_type, parameter_type)) {\n        minic_parser_error(parser, "cannot adjust array parameter to pointer type");\n        return false;\n    }\n    return true;\n}\n''',
-              '''static bool adjust_array_parameter_type(MinicParser *parser, MinicType *parameter_type) {\n    const MinicArrayType *outer_array;\n    MinicType adjusted_type;\n    MinicType declared_array_type;\n    MinicType pointee_type;\n    bool is_array;\n\n    if (parser == NULL || parameter_type == NULL || parser->current.kind != MINIC_TOKEN_LBRACKET) {\n        return parser != NULL && parameter_type != NULL;\n    }\n    if (!minic_parser_parse_array_declarator_suffix(\n            parser, *parameter_type, true, &declared_array_type, &is_array) ||\n        !is_array || !minic_type_is_array(declared_array_type)) {\n        if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\\0') {\n            minic_parser_error(parser, "cannot parse array parameter declarator");\n        }\n        return false;\n    }\n    outer_array = minic_c0_program_array_type(parser->program, declared_array_type.array_type_id);\n    if (outer_array == NULL) {\n        minic_parser_error(parser, "cannot resolve array parameter declarator");\n        return false;\n    }\n    pointee_type = outer_array->element_type;\n    if (!minic_type_pointer_to(pointee_type, &adjusted_type) ||\n        !minic_c0_program_discard_last_array_type(parser->program, declared_array_type)) {\n        minic_parser_error(parser, "cannot adjust array parameter to pointer type");\n        return false;\n    }\n    *parameter_type = adjusted_type;\n    return true;\n}\n''',
-              'parameter adjustment')
-
-          replace_once(
-              'src/target/riscv64/codegen_function.c',
-              '''    if (file == NULL || program == NULL || object == NULL || object->name_length == 0U ||\n        object->storage_size == 0U || object->alignment == 0U ||\n        !minic_riscv64_alignment_power(object->alignment, &alignment_power)) {\n        return false;\n    }\n''',
-              '''    if (file == NULL || program == NULL || object == NULL || object->name_length == 0U ||\n        object->alignment == 0U ||\n        !minic_riscv64_alignment_power(object->alignment, &alignment_power)) {\n        return false;\n    }\n    if (object->storage_size == 0U &&\n        ((!object->is_zero_initialized && !object->is_tentative) ||\n         object->initializer_count != 0U || object->relocation_count != 0U)) {\n        return false;\n    }\n''',
-              'zero-size object emission')
-
-          replace_once(
-              'src/target/riscv64/codegen_function.c',
-              '''        if (!success) {\n            fprintf(stderr,\n                    "CODEGEN_FAIL global=%zu name=%s\\n",\n                    global_index,\n                    program->global_objects[global_index].name);\n        }\n''',
-              '''        if (!success) {\n            const MinicGlobalObject *failed = &program->global_objects[global_index];\n            const MinicArrayType *failed_array =\n                minic_type_is_array(failed->type)\n                    ? minic_c0_program_array_type(program, failed->type.array_type_id)\n                    : NULL;\n            size_t owner_id = SIZE_MAX;\n            const char *owner_name = "-";\n\n            if (sscanf(failed->name, "__minic_static_local_%zu_", &owner_id) == 1 &&\n                owner_id < program->function_count) {\n                owner_name = program->functions[owner_id].name;\n            }\n            fprintf(stderr,\n                    "CODEGEN_FAIL global=%zu name=%s owner=%zu:%s kind=%d ptr=%u array=%d array_count=%zu element_kind=%d element_ptr=%u storage=%zu align=%zu zero=%d tentative=%d init=%zu reloc=%zu readonly=%d section=%s\\n",\n                    global_index, failed->name, owner_id, owner_name,\n                    (int)failed->type.base_kind, failed->type.pointer_depth,\n                    failed_array != NULL ? 1 : 0,\n                    failed_array != NULL ? failed_array->element_count : 0U,\n                    failed_array != NULL ? (int)failed_array->element_type.base_kind : -1,\n                    failed_array != NULL ? failed_array->element_type.pointer_depth : 0U,\n                    failed->storage_size, failed->alignment,\n                    failed->is_zero_initialized ? 1 : 0, failed->is_tentative ? 1 : 0,\n                    failed->initializer_count, failed->relocation_count,\n                    failed->is_read_only ? 1 : 0,\n                    failed->section_name == NULL ? "-" : failed->section_name);\n        }\n''',
-              'codegen failure detail')
-          PY
-
+          python3 tools/dev/materialize-static-pointer-array-tail.py
+          python3 tools/dev/materialize-tail-ownership.py
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
           make -j4 MODE=release BUILD_DIR=build/static-pointer-array-tail
           minic="$GITHUB_WORKSPACE/build/static-pointer-array-tail/bin/minic"
@@ -80,11 +39,16 @@ jobs:
 
           cat > build/zero-size-static.c <<'EOF'
           struct empty {};
-          int zero_size_static(void) { static struct empty value; return sizeof(value); }
+          int zero_size_static(void) {
+              static struct empty implicit;
+              static struct empty explicit = {};
+              return sizeof(implicit) + sizeof(explicit);
+          }
           EOF
           "$minic" -S build/zero-size-static.c -o build/zero-size-static.s
-          grep -F '.size __minic_static_local_' build/zero-size-static.s | grep -F ', 0' >/dev/null
-          echo 'PASS zero-size-static record=gnu storage=0 symbol=size0'
+          size0=$(grep -c '^\.size __minic_static_local_.*,[[:space:]]*0$' build/zero-size-static.s || true)
+          test "$size0" -eq 2
+          echo 'PASS zero-size-static record=gnu implicit+explicit size0=2'
 
           MINIC="$minic" \
           BUILD_DIR="$GITHUB_WORKSPACE/build/static-pointer-array-tail-focused" \
