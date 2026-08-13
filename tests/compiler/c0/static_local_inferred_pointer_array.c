@@ -1,5 +1,4 @@
-static const char *overlay_action_name(int action)
-{
+static const char *overlay_action_name(int action) {
     static const char *const names[] = {
         "init",
         "pre-apply",
@@ -11,7 +10,6 @@ static const char *overlay_action_name(int action)
     return names[action];
 }
 
-int main(void)
-{
+int main(void) {
     return overlay_action_name(2)[0] == 'p' ? 0 : 1;
 }

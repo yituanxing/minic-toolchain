@@ -213,7 +213,8 @@ bool minic_c0_global_object_begin_definition(MinicC0Program *program,
         return false;
     }
     object = &program->global_objects[global_object_id];
-    if ((!object->is_extern && !object->is_tentative) || global_object_has_definition_payload(object)) {
+    if ((!object->is_extern && !object->is_tentative) ||
+        global_object_has_definition_payload(object)) {
         return false;
     }
     object->is_extern = false;
@@ -320,7 +321,8 @@ static bool add_global_symbol_relocation(MinicC0Program *program,
     if (!global_relocation_location_type(
             program, object, location_kind, location_index, &slot_type) ||
         !minic_type_pointee(slot_type, &slot_pointee) ||
-        (target_kind == MINIC_GLOBAL_RELOCATION_FUNCTION && !minic_type_is_function(slot_pointee)) ||
+        (target_kind == MINIC_GLOBAL_RELOCATION_FUNCTION &&
+         !minic_type_is_function(slot_pointee)) ||
         (target_kind == MINIC_GLOBAL_RELOCATION_OBJECT && minic_type_is_function(slot_pointee)) ||
         object->is_tentative || object->initializer_count != 0U ||
         (object->relocation_count != 0U &&
