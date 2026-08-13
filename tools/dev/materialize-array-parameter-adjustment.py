@@ -95,21 +95,22 @@ header_path.write_text(header.replace(old_proto, new_proto, 1))
 
 function_path = root / 'src/frontend/parser_function.c'
 function = function_path.read_text()
-pattern = re.compile(r'''static bool adjust_array_parameter_type\(MinicParser \*parser, MinicType \*parameter_type\) \{.*?\n\}\n\nbool minic_parser_parse_parameter_list''', re.S)
+pattern = re.compile(
+    r'''static bool adjust_array_parameter_type\(MinicParser \*parser, MinicType \*parameter_type\) \{.*?\n\}\n\n(?=static bool adjust_function_parameter_type)''',
+    re.S,
+)
 replacement = '''static bool adjust_array_parameter_type(MinicParser *parser, MinicType *parameter_type) {
     if (parser == NULL || parameter_type == NULL || parser->current.kind != MINIC_TOKEN_LBRACKET) {
         return parser != NULL && parameter_type != NULL;
     }
     if (!minic_parser_parse_array_parameter_suffix(parser, *parameter_type, parameter_type)) {
-        if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\\0') {
-            minic_parser_error(parser, "cannot parse adjusted array parameter declarator");
-        }
+        minic_parser_error(parser, "cannot parse adjusted array parameter declarator");
         return false;
     }
     return true;
 }
 
-bool minic_parser_parse_parameter_list'''
+'''
 function, count = pattern.subn(replacement, function, count=1)
 if count != 1:
     raise SystemExit(f'adjust array parameter function: expected one match, found {count}')
