@@ -115,4 +115,4 @@ elif new not in text:
     raise SystemExit("zero-sized aggregate call anchor not found")
 expr.write_text(text)
 
-runpy.run_path("tools/dev/materialize-indirect-aggregate-abi.py", run_name="__main__")
+runpy.run_path("tools/dev/materialize-indirect-aggregate-abi-v2.py", run_name="__main__")
