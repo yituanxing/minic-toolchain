@@ -1,0 +1,79 @@
+name: Static Aggregate Relocation Compatibility Fix
+
+on:
+  push:
+    branches:
+      - agent/static-aggregate-init-family-v1
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Materialize relocation compatibility fix
+        run: python3 tools/dev/static-aggregate-relocation-compat-fix.py
+      - name: Format and release build
+        run: |
+          set -Eeuo pipefail
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+          make -j4 MODE=release BUILD_DIR=build/compat-release CFLAGS=-Werror
+      - name: Focused static aggregate gate
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/compat-release/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/compat-focused" \
+            sh tests/compiler/c0/run-static-aggregate-initializers.sh
+      - name: Complete host check
+        run: |
+          set -Eeuo pipefail
+          make -j4 BUILD_DIR=build/compat-check check
+      - name: Fetch authoritative unchanged init main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p build/prior-frontier
+          gh api repos/$GITHUB_REPOSITORY/actions/artifacts/9165241854/zip > build/prior-frontier.zip
+          unzip -q build/prior-frontier.zip -d build/prior-frontier
+          test -s build/prior-frontier/kbuild/init/main.i
+          test "$(wc -l < build/prior-frontier/kbuild/init/main.i | tr -d ' ')" = 90928
+      - name: Reconfirm unchanged Linux frontier
+        run: |
+          set +e
+          build/compat-release/bin/minic -S build/prior-frontier/kbuild/init/main.i \
+            -o build/compat-main.s >build/compat-main.stdout 2>build/compat-main.stderr
+          status=$?
+          set -e
+          cat build/compat-main.stderr
+          printf 'compile_status=%s\n' "$status" > build/compat-frontier.txt
+          if test -s build/compat-main.stderr; then
+            frontier_line=$(sed -n 's/.*init\/main\.i:\([0-9][0-9]*\):.*/\1/p' build/compat-main.stderr | head -n 1)
+            printf 'frontier_line=%s\n' "${frontier_line:-unknown}" >> build/compat-frontier.txt
+            sed -n '1,30p' build/compat-main.stderr >> build/compat-frontier.txt
+          else
+            printf '%s\n' 'frontier_line=passed' >> build/compat-frontier.txt
+          fi
+          cat build/compat-frontier.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: static-aggregate-compat-${{ github.run_id }}
+          path: build/compat-frontier.txt
+          retention-days: 7
+      - name: Commit clean product
+        run: |
+          set -Eeuo pipefail
+          rm -f tools/dev/static-aggregate-relocation-compat-fix.py
+          rm -f .github/workflows/static-aggregate-relocation-compat-fix.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'fix(frontend): preserve array-decay relocation compatibility'
+          git push origin HEAD:agent/static-aggregate-init-family-v1
