@@ -228,8 +228,8 @@ bool minic_c0_program_normalize_casts(MinicC0Program *program) {
     }
 
     if (success) {
-        success = minic_c0_program_remap_external_expression_ids(
-            program, mapping, old_expression_count);
+        success =
+            minic_c0_program_remap_external_expression_ids(program, mapping, old_expression_count);
     }
 
     if (success) {
