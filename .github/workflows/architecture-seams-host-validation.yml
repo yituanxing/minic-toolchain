@@ -29,15 +29,37 @@ jobs:
 
           path = Path('Makefile')
           text = path.read_text()
-          needle = '\tsrc/frontend/ast.c \\\n'
-          replacement = needle + '\tsrc/frontend/ast_traversal.c \\\n'
-          if text.count(needle) != 3:
-              raise SystemExit(f'unexpected ast.c source-list count: {text.count(needle)}')
-          first = text.find(needle)
-          second = text.find(needle, first + len(needle))
-          text = text[:first] + replacement + text[first + len(needle):]
-          second += len(replacement) - len(needle)
-          text = text[:second] + replacement + text[second + len(needle):]
+
+          production = (
+              '\tsrc/frontend/ast.c \\\n'
+              '\tsrc/frontend/ast_verifier.c \\\n'
+          )
+          production_replacement = (
+              '\tsrc/frontend/ast.c \\\n'
+              '\tsrc/frontend/ast_traversal.c \\\n'
+              '\tsrc/frontend/ast_verifier.c \\\n'
+          )
+          contract = (
+              'AST_CONTRACT_TEST_SOURCES := \\\n'
+              '\tsrc/frontend/ast.c \\\n'
+              '\tsrc/frontend/ast_global.c \\\n'
+              '\tsrc/frontend/ast_verifier.c \\\n'
+          )
+          contract_replacement = (
+              'AST_CONTRACT_TEST_SOURCES := \\\n'
+              '\tsrc/frontend/ast.c \\\n'
+              '\tsrc/frontend/ast_global.c \\\n'
+              '\tsrc/frontend/ast_traversal.c \\\n'
+              '\tsrc/frontend/ast_verifier.c \\\n'
+          )
+
+          if text.count(production) != 1:
+              raise SystemExit('unexpected production source-list shape')
+          if text.count(contract) != 1:
+              raise SystemExit('unexpected AST contract source-list shape')
+
+          text = text.replace(production, production_replacement, 1)
+          text = text.replace(contract, contract_replacement, 1)
           path.write_text(text)
           PY
 
