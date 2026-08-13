@@ -2800,6 +2800,18 @@ bool minic_parser_parse_expression(MinicParser *parser,
     return parse_expression_internal(parser, expression_id, minimum_precedence, true);
 }
 
+bool minic_parser_parse_null_pointer_constant_expression(MinicParser *parser,
+                                                         MinicType target_type) {
+    MinicExpressionId expression_id;
+
+    if (parser == NULL || !minic_type_is_pointer(target_type) ||
+        !minic_parser_parse_expression(parser, &expression_id, 0U)) {
+        return false;
+    }
+    return minic_c0_assignment_compatible(parser->program, target_type, expression_id) &&
+           minic_c0_expression_is_null_pointer_constant_v0(parser->program, expression_id);
+}
+
 bool minic_parser_parse_full_expression(MinicParser *parser, MinicExpressionId *expression_id) {
     return parse_comma_expression(parser, expression_id, true);
 }
