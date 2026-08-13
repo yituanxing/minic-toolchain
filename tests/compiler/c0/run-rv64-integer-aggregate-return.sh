@@ -22,7 +22,13 @@ grep -F 'sd a0,' "$assembly" >/dev/null
 grep -F 'sd a1,' "$assembly" >/dev/null
 grep -F 'sd a2,' "$assembly" >/dev/null
 grep -F 'sd a3,' "$assembly" >/dev/null
-grep -F 'ld a0, 0(t0)' "$assembly" >/dev/null
-grep -F 'ld a1, 8(t0)' "$assembly" >/dev/null
+grep -F 'ld a0, 0(t5)' "$assembly" >/dev/null
+grep -F 'ld a1, 0(t5)' "$assembly" >/dev/null
 
-printf '%s\n' 'PASS compiler/c0/rv64_integer_aggregate_return size=16 class=integer callee-params=a0-a3 caller-chunks=1 return=a0-a1 record-local=1 record-call=1'
+grep -F 'unwrap_word:' "$assembly" >/dev/null
+grep -F 'return_word:' "$assembly" >/dev/null
+grep -F 'call unwrap_word' "$assembly" >/dev/null
+grep -F '  sw a0,' "$assembly" >/dev/null
+grep -F '  lwu t1, 0(t5)' "$assembly" >/dev/null
+
+printf '%s\n' 'PASS compiler/c0/rv64_integer_aggregate_return sizes=4,16 class=integer callee-partial=exact caller-partial=exact return-partial=exact record-call=1'

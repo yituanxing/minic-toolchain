@@ -18,3 +18,21 @@ static struct pair64 forward_pair(struct pair64 lhs, struct pair64 rhs) {
 int main(void) {
     return 0;
 }
+
+struct word32 {
+    unsigned int value;
+};
+
+static unsigned int unwrap_word(struct word32 input) {
+    return input.value;
+}
+
+static struct word32 return_word(struct word32 input) {
+    return input;
+}
+
+static unsigned int call_unwrap_word(void) {
+    struct word32 input;
+    input.value = 7U;
+    return unwrap_word(input);
+}

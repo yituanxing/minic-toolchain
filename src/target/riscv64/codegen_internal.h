@@ -48,6 +48,11 @@ bool minic_riscv64_integer_aggregate_abi(const MinicC0Program *program,
                                          MinicType type,
                                          size_t *storage_size,
                                          size_t *register_chunks);
+bool minic_riscv64_emit_integer_aggregate_chunk_load(FILE *file,
+                                                     size_t storage_size,
+                                                     size_t chunk_index,
+                                                     const char *destination_register,
+                                                     const char *address_register);
 bool minic_riscv64_emit_integer_aggregate_local_chunk(FILE *file,
                                                       const MinicC0Program *program,
                                                       const MinicFunction *function,

@@ -1845,15 +1845,20 @@ bool minic_riscv64_emit_expression(FILE *file,
                         function,
                         expression->value.call.arguments[argument_index]) ||
                     !minic_riscv64_emit_stack_allocate(file, 16U) ||
-                    fprintf(file,
-                            "  mv t0, a0\n"
-                            "  ld t1, 0(t0)\n"
-                            "  sd t1, 0(sp)\n") < 0 ||
-                    (aggregate_chunks == 2U &&
-                     fprintf(file, "  ld t1, 8(t0)\n  sd t1, 8(sp)\n") < 0)) {
+                    fprintf(file, "  mv t0, a0\n") < 0) {
                     return false;
                 }
-                (void)aggregate_size;
+                {
+                    size_t chunk_index;
+
+                    for (chunk_index = 0U; chunk_index < aggregate_chunks; ++chunk_index) {
+                        if (!minic_riscv64_emit_integer_aggregate_chunk_load(
+                                file, aggregate_size, chunk_index, "t1", "t0") ||
+                            fprintf(file, "  sd t1, %zu(sp)\n", chunk_index * 8U) < 0) {
+                            return false;
+                        }
+                    }
+                }
                 continue;
             }
             if (!minic_riscv64_emit_expression(

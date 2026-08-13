@@ -164,8 +164,11 @@ static bool minic_riscv64_emit_return(FILE *file,
             if (value->value_category == MINIC_VALUE_LVALUE) {
                 if (!minic_riscv64_emit_lvalue_address(
                         file, program, function, statement->expression) ||
-                    fprintf(file, "  mv t0, a0\n  ld a0, 0(t0)\n") < 0 ||
-                    (aggregate_chunks == 2U && fprintf(file, "  ld a1, 8(t0)\n") < 0)) {
+                    fprintf(file, "  mv t0, a0\n") < 0 ||
+                    !minic_riscv64_emit_integer_aggregate_chunk_load(
+                        file, aggregate_size, 0U, "a0", "t0") ||
+                    (aggregate_chunks == 2U && !minic_riscv64_emit_integer_aggregate_chunk_load(
+                                                   file, aggregate_size, 1U, "a1", "t0"))) {
                     return false;
                 }
             } else if (value->kind != MINIC_EXPRESSION_CALL ||
