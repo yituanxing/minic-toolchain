@@ -12,12 +12,6 @@ typedef struct MinicExpressionRemapContext {
     size_t current_old_index;
 } MinicExpressionRemapContext;
 
-typedef struct MinicExpressionIdRefSet {
-    MinicExpressionId **values;
-    size_t count;
-    size_t capacity;
-} MinicExpressionIdRefSet;
-
 static bool remap_expression_id(const MinicExpressionId *mapping,
                                 size_t old_expression_count,
                                 size_t current_old_index,
@@ -62,70 +56,6 @@ static bool remap_non_cast_expression(MinicExpression *expression,
     context.old_expression_count = old_expression_count;
     context.current_old_index = current_old_index;
     return minic_c0_expression_visit_child_id_refs(expression, remap_child_expression_id, &context);
-}
-
-static bool collect_external_expression_id_ref(MinicExpressionId *expression_id,
-                                               void *opaque_context) {
-    MinicExpressionIdRefSet *references;
-    MinicExpressionId **resized;
-    size_t new_capacity;
-
-    if (expression_id == NULL || opaque_context == NULL) {
-        return false;
-    }
-    references = (MinicExpressionIdRefSet *)opaque_context;
-    if (references->count == references->capacity) {
-        new_capacity = references->capacity == 0U ? 16U : references->capacity * 2U;
-        if (new_capacity < references->capacity ||
-            new_capacity > SIZE_MAX / sizeof(*references->values)) {
-            return false;
-        }
-        resized = (MinicExpressionId **)realloc(references->values,
-                                                new_capacity * sizeof(*references->values));
-        if (resized == NULL) {
-            return false;
-        }
-        references->values = resized;
-        references->capacity = new_capacity;
-    }
-    references->values[references->count] = expression_id;
-    references->count += 1U;
-    return true;
-}
-
-static bool validate_external_expression_id_refs(const MinicExpressionIdRefSet *references,
-                                                 const MinicExpressionId *mapping,
-                                                 size_t old_expression_count) {
-    size_t index;
-
-    if (references == NULL) {
-        return false;
-    }
-    for (index = 0U; index < references->count; ++index) {
-        MinicExpressionId old_id;
-
-        if (references->values[index] == NULL) {
-            return false;
-        }
-        old_id = *references->values[index];
-        if (mapping == NULL || old_id >= old_expression_count ||
-            mapping[old_id] == MINIC_EXPRESSION_INVALID) {
-            return false;
-        }
-    }
-    return true;
-}
-
-static void apply_external_expression_id_refs(const MinicExpressionIdRefSet *references,
-                                              const MinicExpressionId *mapping) {
-    size_t index;
-
-    for (index = 0U; index < references->count; ++index) {
-        MinicExpressionId *expression_id;
-
-        expression_id = references->values[index];
-        *expression_id = mapping[*expression_id];
-    }
 }
 
 static bool append_normalized_bitcast(MinicC0Program *rewritten,
@@ -246,7 +176,6 @@ static bool append_normalized_cast(MinicC0Program *rewritten,
 bool minic_c0_program_normalize_casts(MinicC0Program *program) {
     MinicC0Program rewritten;
     MinicExpressionId *mapping;
-    MinicExpressionIdRefSet external_references;
     size_t old_expression_count;
     size_t expression_index;
     bool success;
@@ -256,19 +185,11 @@ bool minic_c0_program_normalize_casts(MinicC0Program *program) {
         return false;
     }
 
-    (void)memset(&external_references, 0, sizeof(external_references));
-    if (!minic_c0_program_visit_external_expression_id_refs(
-            program, collect_external_expression_id_ref, &external_references)) {
-        free(external_references.values);
-        return false;
-    }
-
     old_expression_count = program->expression_count;
     mapping = NULL;
     if (old_expression_count != 0U) {
         mapping = (MinicExpressionId *)malloc(old_expression_count * sizeof(*mapping));
         if (mapping == NULL) {
-            free(external_references.values);
             return false;
         }
         for (expression_index = 0U; expression_index < old_expression_count; ++expression_index) {
@@ -307,12 +228,11 @@ bool minic_c0_program_normalize_casts(MinicC0Program *program) {
     }
 
     if (success) {
-        success = validate_external_expression_id_refs(
-            &external_references, mapping, old_expression_count);
+        success = minic_c0_program_remap_external_expression_ids(
+            program, mapping, old_expression_count);
     }
 
     if (success) {
-        apply_external_expression_id_refs(&external_references, mapping);
         free(program->expressions);
         program->expressions = rewritten.expressions;
         program->expression_count = rewritten.expression_count;
@@ -324,6 +244,5 @@ bool minic_c0_program_normalize_casts(MinicC0Program *program) {
 
     free(rewritten.expressions);
     free(mapping);
-    free(external_references.values);
     return success;
 }
