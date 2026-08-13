@@ -120,6 +120,9 @@ bool minic_parser_parse_parenthesized_function_declarator(
         minic_parser_error(parser, "function declarator requires pointer indirection");
         return false;
     }
+    if (!minic_parser_collect_gnu_attribute_lists(parser, &declarator->attributes)) {
+        return false;
+    }
 
     if (parser->current.kind == MINIC_TOKEN_IDENTIFIER) {
         declarator->name_span = parser->current.span;

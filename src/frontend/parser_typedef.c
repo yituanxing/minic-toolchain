@@ -40,6 +40,12 @@ static bool parse_parenthesized_function_typedef(MinicParser *parser,
         minic_parser_error(parser, "variadic function pointer typedefs are not supported yet");
         return false;
     }
+    if (declarator.attributes.count != 0U) {
+        minic_parser_error(
+            parser,
+            "GNU attributes inside function pointer typedef declarators are not implemented yet");
+        return false;
+    }
     if (!minic_parser_build_function_declarator_type(
             parser, return_type, &declarator, aliased_type)) {
         minic_parser_error(parser, "cannot build function pointer typedef type");

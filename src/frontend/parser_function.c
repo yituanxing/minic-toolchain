@@ -1399,6 +1399,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     MinicType base_type;
     MinicType return_type;
     MinicParsedAttributeList deferred_attributes;
+    MinicParsedAttributeList declarator_attributes;
     MinicParsedDeclarationPrefix declaration_prefix;
     MinicBlockId body_block;
     MinicFunctionId function_id;
@@ -1434,6 +1435,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     is_register_declaration = false;
     is_static_declaration = false;
     (void)memset(&deferred_attributes, 0, sizeof(deferred_attributes));
+    (void)memset(&declarator_attributes, 0, sizeof(declarator_attributes));
     (void)memset(&declaration_prefix, 0, sizeof(declaration_prefix));
     is_variadic = false;
     is_weak = false;
@@ -1493,6 +1495,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                 return false;
             }
             name_span = declarator.name_span;
+            declarator_attributes = declarator.attributes;
             is_function_pointer_object = true;
         } else {
             if (!minic_parser_advance(parser)) {
@@ -1664,6 +1667,13 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                                                       sizeof(section_name),
                                                       &section_name_length,
                                                       &has_section,
+                                                      &object_explicit_alignment) ||
+            !minic_parser_apply_object_attribute_list(parser,
+                                                      &declarator_attributes,
+                                                      section_name,
+                                                      sizeof(section_name),
+                                                      &section_name_length,
+                                                      &has_section,
                                                       &object_explicit_alignment)) {
             return false;
         }
@@ -1692,6 +1702,13 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
         }
         if (!minic_parser_apply_object_attribute_list(parser,
                                                       &deferred_attributes,
+                                                      section_name,
+                                                      sizeof(section_name),
+                                                      &section_name_length,
+                                                      &has_section,
+                                                      &object_explicit_alignment) ||
+            !minic_parser_apply_object_attribute_list(parser,
+                                                      &declarator_attributes,
                                                       section_name,
                                                       sizeof(section_name),
                                                       &section_name_length,

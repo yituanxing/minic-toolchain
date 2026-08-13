@@ -36,3 +36,5 @@ void __attribute__((used)) used_function_shape(void);
 void used_function_shape(void) {
     (void)used_object_shape;
 }
+
+void (*__attribute__((__section__(".init.fp-object"))) late_time_init_shape)(void);

@@ -125,6 +125,7 @@ typedef bool (*MinicParsedAttributeConsumer)(MinicParser *parser,
 
 typedef struct MinicParsedFunctionDeclarator {
     MinicSourceSpan name_span;
+    MinicParsedAttributeList attributes;
     MinicType parameter_types[MINIC_MAX_FUNCTION_PARAMETERS];
     size_t parameter_count;
     size_t pointer_depth;
