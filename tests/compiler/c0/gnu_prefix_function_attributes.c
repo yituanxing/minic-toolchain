@@ -19,6 +19,7 @@ void externally_visible_decl(int value);
 
 __attribute__((__externally_visible__)) __attribute__((__cold__))
 __attribute__((__section__(".probe.externally-visible.text")))
+__attribute__((__no_sanitize_address__)) __attribute__((__no_stack_protector__))
 void externally_visible_decl(int value)
 {
     (void)value;
@@ -29,4 +30,10 @@ extern __attribute__((__externally_visible__)) int externally_visible_object;
 int *externally_visible_object_address(void)
 {
     return &externally_visible_object;
+}
+
+
+__attribute__((no_sanitize_address)) __attribute__((no_stack_protector))
+void instrumentation_policy_aliases(void)
+{
 }

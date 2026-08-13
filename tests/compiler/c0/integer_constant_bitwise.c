@@ -10,3 +10,5 @@ const unsigned char bitwise_table[(1 << 3)] = {
     (!0 << 1),
     (32 >> 2)
 };
+
+const unsigned int octal_permission = 0644;

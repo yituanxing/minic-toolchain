@@ -287,6 +287,10 @@ static bool static_object_address_relocation_path(const MinicC0Program *program,
     if (program == NULL || target == NULL) {
         return false;
     }
+    if (static_object_address_relocation_target(program, expression_id, &target->object_id)) {
+        target->member_depth = 0U;
+        return true;
+    }
     expression = minic_c0_program_expression(program, expression_id);
     while (expression != NULL && (expression->kind == MINIC_EXPRESSION_CAST ||
                                   expression->kind == MINIC_EXPRESSION_BITCAST ||

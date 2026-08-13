@@ -16,6 +16,12 @@ typedef struct Outer {
     Inner inner;
 } Outer;
 
+typedef struct NameHolder {
+    const char *name;
+} NameHolder;
+
+static const char backing_name[] = "backing";
+static NameHolder name_holder = { backing_name };
 
 static const char *const relocation_names[] = { "backing", "literal" };
 
@@ -34,7 +40,7 @@ int main(void)
     return value.tag == 3 && value.inner.first == 0 && value.inner.magic == 0xdead4eadU &&
                    value.inner.second == 7 && value.inner.owner == (void *)-1L &&
                    value.inner.link.next == &value.inner.link &&
-                   value.inner.link.prev == &value.inner.link &&
+                   value.inner.link.prev == &value.inner.link && name_holder.name[0] == 'b' &&
                    relocation_names[0][0] == 'b' && relocation_names[1][0] == 'l'
                ? 0
                : 1;

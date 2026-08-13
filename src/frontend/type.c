@@ -78,16 +78,26 @@ static bool minic_type_same_unqualified_identity(MinicType left, MinicType right
 }
 
 static bool minic_type_pointer_qualification_compatible(MinicType target, MinicType source) {
-    MinicType unqualified_target;
-    MinicType unqualified_source;
+    MinicType target_pointee;
+    MinicType source_pointee;
+    MinicType unqualified_target_pointee;
+    MinicType unqualified_source_pointee;
 
-    if (!minic_type_unqualified(target, &unqualified_target) ||
-        !minic_type_unqualified(source, &unqualified_source) ||
-        unqualified_target.pointer_depth != 1U || unqualified_source.pointer_depth != 1U ||
-        !minic_type_same_unqualified_identity(unqualified_target, unqualified_source)) {
+    if (!minic_type_is_pointer(target) || !minic_type_is_pointer(source) ||
+        !minic_type_pointee(target, &target_pointee) ||
+        !minic_type_pointee(source, &source_pointee) ||
+        !minic_type_unqualified(target_pointee, &unqualified_target_pointee) ||
+        !minic_type_unqualified(source_pointee, &unqualified_source_pointee) ||
+        !minic_type_equal(unqualified_target_pointee, unqualified_source_pointee)) {
         return false;
     }
-    return (unqualified_source.base_qualifiers & ~unqualified_target.base_qualifiers) == 0U;
+    if (minic_type_is_const(source_pointee) && !minic_type_is_const(target_pointee)) {
+        return false;
+    }
+    if (minic_type_is_volatile(source_pointee) && !minic_type_is_volatile(target_pointee)) {
+        return false;
+    }
+    return true;
 }
 
 static bool minic_type_plain_char_identity_is_valid(MinicType type) {
