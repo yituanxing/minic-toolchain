@@ -17,7 +17,9 @@ jobs:
         with:
           fetch-depth: 1
       - name: Materialize relocation compatibility fix
-        run: python3 tools/dev/static-aggregate-relocation-compat-fix.py
+        run: |
+          python3 tools/dev/static-aggregate-relocation-compat-fix.py
+          python3 tools/dev/static-aggregate-relocation-testfix.py
       - name: Format and release build
         run: |
           set -Eeuo pipefail
@@ -70,6 +72,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           rm -f tools/dev/static-aggregate-relocation-compat-fix.py
+          rm -f tools/dev/static-aggregate-relocation-testfix.py
           rm -f .github/workflows/static-aggregate-relocation-compat-fix.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
