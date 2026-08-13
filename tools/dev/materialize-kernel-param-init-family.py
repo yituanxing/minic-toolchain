@@ -141,3 +141,93 @@ if "octal_permission" not in run:
     run = run.replace(anchor, replacement, 1)
     run = run.replace("zero-fill=3'", "zero-fill=3 octal=0644->420'")
     run_path.write_text(run)
+
+type_path = Path("src/frontend/type.c")
+type_text = type_path.read_text()
+qualification_marker = "MinicType unqualified_target_pointee;"
+if qualification_marker not in type_text:
+    old = """static bool minic_type_pointer_qualification_compatible(MinicType target, MinicType source) {
+    MinicType unqualified_target;
+    MinicType unqualified_source;
+
+    if (!minic_type_unqualified(target, &unqualified_target) ||
+        !minic_type_unqualified(source, &unqualified_source) ||
+        unqualified_target.pointer_depth != 1U || unqualified_source.pointer_depth != 1U ||
+        !minic_type_same_unqualified_identity(unqualified_target, unqualified_source)) {
+        return false;
+    }
+    return (unqualified_source.base_qualifiers & ~unqualified_target.base_qualifiers) == 0U;
+}
+"""
+    new = """static bool minic_type_pointer_qualification_compatible(MinicType target, MinicType source) {
+    MinicType target_pointee;
+    MinicType source_pointee;
+    MinicType unqualified_target_pointee;
+    MinicType unqualified_source_pointee;
+
+    if (!minic_type_is_pointer(target) || !minic_type_is_pointer(source) ||
+        !minic_type_pointee(target, &target_pointee) ||
+        !minic_type_pointee(source, &source_pointee) ||
+        !minic_type_unqualified(target_pointee, &unqualified_target_pointee) ||
+        !minic_type_unqualified(source_pointee, &unqualified_source_pointee) ||
+        !minic_type_equal(unqualified_target_pointee, unqualified_source_pointee)) {
+        return false;
+    }
+    if (minic_type_is_const(source_pointee) && !minic_type_is_const(target_pointee)) {
+        return false;
+    }
+    if (minic_type_is_volatile(source_pointee) && !minic_type_is_volatile(target_pointee)) {
+        return false;
+    }
+    return true;
+}
+"""
+    if type_text.count(old) != 1:
+        raise SystemExit("unexpected pointer qualification helper anchor")
+    type_text = type_text.replace(old, new, 1)
+    type_path.write_text(type_text)
+
+qualifier_path = Path("tests/compiler/c0/conditional_pointer_qualifiers.c")
+qualifier = qualifier_path.read_text()
+if "add_intermediate_const" not in qualifier:
+    qualifier += """
+
+const char *const *add_intermediate_const(const char **value) {
+    const char *const *result;
+    result = value;
+    return result;
+}
+"""
+    qualifier_path.write_text(qualifier)
+
+invalid_path = Path("tests/compiler/c0/invalid_deep_pointer_qualification.c")
+if not invalid_path.exists():
+    invalid_path.write_text("""void reject_deep_qualification(char **source) {
+    const char **target;
+    target = source;
+    (void)target;
+}
+""")
+
+qualifier_run_path = Path("tests/compiler/c0/run-conditional-pointer-qualifiers.sh")
+qualifier_run = qualifier_run_path.read_text()
+if "add_intermediate_const" not in qualifier_run:
+    qualifier_run = qualifier_run.replace(
+        "grep -F 'choose_const_void:' \"$work/conditional_pointer_qualifiers.s\" >/dev/null\n",
+        "grep -F 'choose_const_void:' \"$work/conditional_pointer_qualifiers.s\" >/dev/null\n"
+        "grep -F 'add_intermediate_const:' \"$work/conditional_pointer_qualifiers.s\" >/dev/null\n"
+        "\n"
+        "\"$host_cc\" -E -P -x c \"$root/tests/compiler/c0/invalid_deep_pointer_qualification.c\" \\\n"
+        "    -o \"$work/invalid_deep_pointer_qualification.i\"\n"
+        "if \"$minic\" -S \"$work/invalid_deep_pointer_qualification.i\" \\\n"
+        "    -o \"$work/invalid_deep_pointer_qualification.s\" >\"$work/invalid.out\" 2>\"$work/invalid.err\"; then\n"
+        "    echo 'expected deep pointer qualification conversion to fail' >&2\n"
+        "    exit 1\n"
+        "fi\n"
+        "grep -F 'assignment expression type does not match target type' \"$work/invalid.err\" >/dev/null\n"
+    )
+    qualifier_run = qualifier_run.replace(
+        "void-object=qualified-void'",
+        "void-object=qualified-void immediate-pointee-cv=add deeper-pointee-cv=reject'"
+    )
+    qualifier_run_path.write_text(qualifier_run)
