@@ -17,6 +17,15 @@ require_fixed() {
     fi
 }
 
+require_null_pointer_slot() {
+    if grep -F '  .zero 8' "$asm" >/dev/null || grep -F '  .dword 0' "$asm" >/dev/null; then
+        return 0
+    fi
+    echo 'FAIL static_nested_record_initializer missing=leading-null-union semantic-zero-width=8' >&2
+    cat "$asm" >&2
+    exit 1
+}
+
 rm -rf "$work"
 mkdir -p "$work"
 
@@ -30,7 +39,7 @@ if ! test -s "$asm"; then
 fi
 require_fixed '.section .rodata' 'rodata-section'
 require_fixed '.type dummy, @object' 'object-type'
-require_fixed '  .zero 8' 'leading-null-union'
+require_null_pointer_slot
 require_fixed '  .byte 16' 'tag-field'
 require_fixed '  .zero 3' 'rv64-padding'
 require_fixed '  .word 7' 'next-field'
