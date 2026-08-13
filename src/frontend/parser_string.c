@@ -290,6 +290,69 @@ bool minic_parser_add_string_literal_initializer(MinicParser *parser,
     return true;
 }
 
+bool minic_parser_get_predefined_function_name_object(MinicParser *parser,
+                                                      MinicGlobalObjectId *object_id) {
+    const MinicFunction *function;
+    MinicGlobalObjectId created_id;
+    MinicType array_type;
+    MinicType const_char_type;
+    char object_name[64];
+    int object_name_length;
+    size_t index;
+
+    if (parser == NULL || object_id == NULL || parser->current_function == MINIC_FUNCTION_INVALID) {
+        if (parser != NULL) {
+            minic_parser_error(parser, "__func__ is only available inside a function");
+        }
+        return false;
+    }
+    if (parser->current_function_name_object != MINIC_GLOBAL_OBJECT_INVALID) {
+        *object_id = parser->current_function_name_object;
+        return true;
+    }
+    function = minic_c0_program_function(parser->program, parser->current_function);
+    if (function == NULL || function->name == NULL || function->name_length == 0U ||
+        function->name_length == SIZE_MAX) {
+        minic_parser_error(parser, "cannot determine predefined function name");
+        return false;
+    }
+    if (!minic_type_add_const(minic_type_char(), &const_char_type) ||
+        !minic_c0_program_add_array_type(
+            parser->program, const_char_type, function->name_length + 1U, &array_type)) {
+        minic_parser_error(parser, "cannot build __func__ array type");
+        return false;
+    }
+    object_name_length = snprintf(object_name,
+                                  sizeof(object_name),
+                                  ".Lminic_func_name_%zu",
+                                  (size_t)parser->current_function);
+    if (object_name_length <= 0 || (size_t)object_name_length >= sizeof(object_name) ||
+        !minic_c0_program_add_global_object(parser->program,
+                                            object_name,
+                                            (size_t)object_name_length,
+                                            array_type,
+                                            true,
+                                            true,
+                                            &created_id)) {
+        minic_parser_error(parser, "cannot create __func__ backing object");
+        return false;
+    }
+    for (index = 0U; index < function->name_length; ++index) {
+        if (!minic_c0_global_object_add_initializer(
+                parser->program, created_id, (int)(unsigned char)function->name[index])) {
+            minic_parser_error(parser, "cannot store __func__ name bytes");
+            return false;
+        }
+    }
+    if (!minic_c0_global_object_add_initializer(parser->program, created_id, 0)) {
+        minic_parser_error(parser, "cannot terminate __func__ name object");
+        return false;
+    }
+    parser->current_function_name_object = created_id;
+    *object_id = created_id;
+    return true;
+}
+
 bool minic_parser_create_string_literal_object(MinicParser *parser,
                                                MinicGlobalObjectId *object_id,
                                                MinicType *array_type,

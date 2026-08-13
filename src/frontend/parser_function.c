@@ -1993,6 +1993,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
         return false;
     }
     parser->current_function = function_id;
+    parser->current_function_name_object = MINIC_GLOBAL_OBJECT_INVALID;
     if (is_main) {
         parser->program->entry_function = function_id;
         parser->program->body_block = body_block;
@@ -2022,6 +2023,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     }
     minic_parser_end_scope(parser);
     parser->current_function = MINIC_FUNCTION_INVALID;
+    parser->current_function_name_object = MINIC_GLOBAL_OBJECT_INVALID;
     return true;
 }
 
@@ -2258,6 +2260,7 @@ bool minic_parse_c0_program(const char *path,
     parser.target_info = minic_default_target_info();
     parser.current_block = MINIC_BLOCK_INVALID;
     parser.current_function = MINIC_FUNCTION_INVALID;
+    parser.current_function_name_object = MINIC_GLOBAL_OBJECT_INVALID;
     parser.continue_target_statement = MINIC_STATEMENT_INVALID;
     minic_lexer_initialize(&parser.lexer, path, source, length);
 
