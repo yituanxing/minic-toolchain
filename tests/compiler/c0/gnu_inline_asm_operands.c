@@ -40,6 +40,25 @@ static int clobber_reservation(int left, int right) {
     return result;
 }
 
+static void linux_bug_immediate_shape(void) {
+    __asm__ __volatile__(
+        "1:\n\t"
+        "ebreak\n"
+        ".pushsection __bug_table,\"aw\"\n\t"
+        "2:\n\t"
+        ".word 1b - .\n\t"
+        ".word %0 - .\n\t"
+        ".half %1\n\t"
+        ".half %2\n\t"
+        ".org 2b + %3\n\t"
+        ".popsection"
+        :
+        : "i"("init/main.c"),
+          "i"(1262),
+          "i"((1 << 0) | ((1 << 3) | (9 << 8))),
+          "i"(sizeof(AtomicLike)));
+}
+
 int main(void) {
     int previous;
 

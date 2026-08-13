@@ -1,5 +1,7 @@
 #include "target/riscv64/codegen_internal.h"
 
+#include "frontend/const_eval.h"
+
 #include <inttypes.h>
 #include <stdint.h>
 #include <string.h>
@@ -22,6 +24,71 @@ static bool constraint_is(const MinicInlineAsmOperand *operand, const char *text
 
 static bool constraint_is_immediate(const MinicInlineAsmOperand *operand) {
     return constraint_is(operand, "i") || constraint_is(operand, "I");
+}
+
+static bool inline_asm_integer_immediate_value(const MinicC0Program *program,
+                                               MinicExpressionId expression_id,
+                                               int64_t *value) {
+    const MinicTargetInfo *target;
+    MinicConstValue constant;
+
+    if (program == NULL || value == NULL) {
+        return false;
+    }
+    target = minic_default_target_info();
+    return target != NULL && minic_const_eval_integer(program, target, expression_id, &constant) &&
+           minic_const_value_as_int64(program, target, &constant, value);
+}
+
+static const MinicGlobalObject *
+inline_asm_symbolic_object_immediate(const MinicC0Program *program,
+                                     MinicExpressionId expression_id) {
+    const MinicExpression *expression;
+    const MinicExpression *addressed;
+    MinicGlobalObjectId object_id;
+
+    if (program == NULL) {
+        return NULL;
+    }
+    expression = minic_c0_program_expression(program, expression_id);
+    while (expression != NULL && (expression->kind == MINIC_EXPRESSION_CAST ||
+                                  expression->kind == MINIC_EXPRESSION_BITCAST ||
+                                  expression->kind == MINIC_EXPRESSION_CONVERSION)) {
+        expression_id = expression->value.unary.operand;
+        expression = minic_c0_program_expression(program, expression_id);
+    }
+    if (expression == NULL || expression->kind != MINIC_EXPRESSION_ADDRESS_OF) {
+        return NULL;
+    }
+    addressed = minic_c0_program_expression(program, expression->value.unary.operand);
+    if (addressed == NULL) {
+        return NULL;
+    }
+    if (addressed->kind == MINIC_EXPRESSION_GLOBAL_OBJECT) {
+        object_id = addressed->value.global_object_id;
+    } else if (addressed->kind == MINIC_EXPRESSION_SUBSCRIPT) {
+        const MinicExpression *base;
+        const MinicExpression *index;
+        const MinicGlobalObject *object;
+
+        base = minic_c0_program_expression(program, addressed->value.subscript.base);
+        index = minic_c0_program_expression(program, addressed->value.subscript.index);
+        if (base == NULL || base->kind != MINIC_EXPRESSION_GLOBAL_OBJECT || index == NULL ||
+            index->kind != MINIC_EXPRESSION_INTEGER || !minic_type_is_integer(index->type) ||
+            index->value.integer_value != 0) {
+            return NULL;
+        }
+        object_id = base->value.global_object_id;
+        object = minic_c0_program_global_object(program, object_id);
+        if (object == NULL || !minic_type_is_array(object->type)) {
+            return NULL;
+        }
+    } else {
+        return NULL;
+    }
+    return object_id < program->global_object_count
+               ? minic_c0_program_global_object(program, object_id)
+               : NULL;
 }
 
 static const MinicInlineAsmOperand *operand_at(const MinicInlineAsm *inline_asm,
@@ -124,12 +191,24 @@ static bool validate_input(const MinicInlineAsm *inline_asm,
         if (!constraint_is(operand, "i")) {
             return false;
         }
-    } else if (!constraint_is(operand, "r") && !constraint_is(operand, "I")) {
+    } else if (!constraint_is(operand, "r") && !constraint_is(operand, "I") &&
+               !constraint_is(operand, "i")) {
         return false;
     }
     expression = minic_c0_program_expression(program, operand->expression);
-    return expression != NULL &&
-           (minic_type_is_integer(expression->type) || minic_type_is_pointer(expression->type));
+    if (expression == NULL ||
+        (!minic_type_is_integer(expression->type) && !minic_type_is_pointer(expression->type))) {
+        return false;
+    }
+    if (!constraint_is(operand, "i") || inline_asm->is_goto) {
+        return true;
+    }
+    if (minic_type_is_integer(expression->type)) {
+        int64_t immediate_value;
+
+        return inline_asm_integer_immediate_value(program, operand->expression, &immediate_value);
+    }
+    return inline_asm_symbolic_object_immediate(program, operand->expression) != NULL;
 }
 
 static bool inline_asm_clobbers_register(const MinicInlineAsm *inline_asm,
@@ -323,8 +402,20 @@ static bool emit_immediate_operand(FILE *file,
     if (expression == NULL) {
         return false;
     }
-    if (expression->kind == MINIC_EXPRESSION_INTEGER && minic_type_is_integer(expression->type)) {
-        return fprintf(file, "%" PRId64, expression->value.integer_value) >= 0;
+    if (minic_type_is_integer(expression->type)) {
+        int64_t immediate_value;
+
+        if (inline_asm_integer_immediate_value(program, operand->expression, &immediate_value)) {
+            return fprintf(file, "%" PRId64, immediate_value) >= 0;
+        }
+    }
+    if (constraint_is(operand, "i") && minic_type_is_pointer(expression->type)) {
+        const MinicGlobalObject *object;
+
+        object = inline_asm_symbolic_object_immediate(program, operand->expression);
+        if (object != NULL && object->name != NULL && object->name_length != 0U) {
+            return fprintf(file, "%.*s", (int)object->name_length, object->name) >= 0;
+        }
     }
     return fprintf(file,
                    "__minic_deferred_asm_immediate_%zu_%zu",

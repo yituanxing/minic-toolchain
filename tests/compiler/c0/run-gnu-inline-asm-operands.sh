@@ -19,6 +19,10 @@ grep -F 'amoadd.w t1, t3, (t0)' "$assembly" >/dev/null
 grep -F 'addi t3, zero, 7' "$assembly" >/dev/null
 grep -F 'add t0, t0, t3' "$assembly" >/dev/null
 grep -F 'add t0, t1, t4' "$assembly" >/dev/null
+grep -E '\.word \.Lminic_string_[0-9]+ - \.' "$assembly" >/dev/null
+grep -F '.half 1262' "$assembly" >/dev/null
+grep -F '.half 2313' "$assembly" >/dev/null
+grep -F '.org 2b + 4' "$assembly" >/dev/null
 if grep -E '\+A|"r"|=r' "$assembly" >/dev/null; then
     printf '%s\n' 'unexpected raw GNU asm constraints in emitted assembly' >&2
     exit 1
@@ -55,4 +59,4 @@ grep -F "GNU asm 'I' input requires a signed 12-bit integer constant" \
     "$work/out-of-range-I.stderr" >/dev/null
 
 printf '%s\n' \
-    'PASS compiler/c0/gnu_inline_asm_operands outputs=+A,=r,+r inputs=r,I clobber=memory,t3 reservation=t3->t4 immediates=rv64-I placeholders=0,1,2 staging=stack target=RV64'
+    'PASS compiler/c0/gnu_inline_asm_operands outputs=+A,=r,+r inputs=r,I,i clobber=memory,t3 symbolic-i=global-string const-i=typed-consteval staging=stack target=RV64'
