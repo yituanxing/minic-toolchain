@@ -147,23 +147,22 @@ if text.count(old_percent) != 1:
     raise SystemExit('template modifier anchor missing')
 text = text.replace(old_percent, new_percent, 1)
 
-# Both validation and emission call the resolver.
-old_validation_local = '''        size_t operand_index;
+old_local = '''        size_t operand_index;
         bool literal_percent;
 '''
-new_validation_local = '''        size_t operand_index;
+new_local = '''        size_t operand_index;
         bool literal_percent;
         char modifier;
 '''
-if text.count(old_validation_local) < 2:
+if text.count(old_local) < 2:
     raise SystemExit('template local anchors missing')
-text = text.replace(old_validation_local, new_validation_local, 2)
-old_resolve_call = '''        if (!resolve_template_reference(
+text = text.replace(old_local, new_local, 2)
+old_call = '''        if (!resolve_template_reference(
                 inline_asm, operand_count, &index, &operand_index, &literal_percent)) {
             return false;
         }
 '''
-new_resolve_call = '''        if (!resolve_template_reference(inline_asm,
+new_call = '''        if (!resolve_template_reference(inline_asm,
                                         operand_count,
                                         &index,
                                         &operand_index,
@@ -172,30 +171,30 @@ new_resolve_call = '''        if (!resolve_template_reference(inline_asm,
             return false;
         }
 '''
-if text.count(old_resolve_call) != 2:
-    raise SystemExit(f'template resolver call anchors={text.count(old_resolve_call)}')
-text = text.replace(old_resolve_call, new_resolve_call, 2)
-old_validation_voids = '''        (void)operand_index;
+if text.count(old_call) != 2:
+    raise SystemExit(f'template resolver call anchors={text.count(old_call)}')
+text = text.replace(old_call, new_call, 2)
+old_voids = '''        (void)operand_index;
         (void)literal_percent;
 '''
-new_validation_voids = '''        (void)operand_index;
+new_voids = '''        (void)operand_index;
         (void)literal_percent;
         if (modifier != '\\0' && modifier != 'z') {
             return false;
         }
 '''
-if text.count(old_validation_voids) != 1:
+if text.count(old_voids) != 1:
     raise SystemExit('template validation modifier anchor missing')
-text = text.replace(old_validation_voids, new_validation_voids, 1)
+text = text.replace(old_voids, new_voids, 1)
 
-old_emit_branch = '''            register_name = operand_registers[operand_index];
+old_emit = '''            register_name = operand_registers[operand_index];
             if (constraint_is_immediate(operand)) {
                 if (!emit_immediate_operand(file, program, operand, inline_asm_id, operand_index)) {
                     return false;
                 }
             } else if (register_name == NULL) {
 '''
-new_emit_branch = '''            register_name = operand_registers[operand_index];
+new_emit = '''            register_name = operand_registers[operand_index];
             if (modifier == 'z') {
                 int64_t immediate_value;
 
@@ -214,9 +213,9 @@ new_emit_branch = '''            register_name = operand_registers[operand_index
                 }
             } else if (register_name == NULL) {
 '''
-if text.count(old_emit_branch) != 1:
+if text.count(old_emit) != 1:
     raise SystemExit('template emission branch anchor missing')
-text = text.replace(old_emit_branch, new_emit_branch, 1)
+text = text.replace(old_emit, new_emit, 1)
 
 old_assign_call = '''    if (!assign_operand_registers(inline_asm, operand_registers, operand_count)) {
         return false;
@@ -230,19 +229,29 @@ if text.count(old_assign_call) != 1:
     raise SystemExit('register assignment call anchor missing')
 text = text.replace(old_assign_call, new_assign_call, 1)
 
-# Deferred-symbol emission remains only for unresolved pure-immediate operands, never rJ.
-old_stage_skip = '''        if (constraint_is_immediate(operand)) {
+old_stage = '''        if (constraint_is_immediate(operand)) {
             continue;
         }
 '''
-new_stage_skip = '''        if (inline_asm_operand_uses_immediate(program, operand)) {
+new_stage = '''        if (inline_asm_operand_uses_immediate(program, operand)) {
             continue;
         }
 '''
-# Two loops: input staging and input reload.
-if text.count(old_stage_skip) != 2:
-    raise SystemExit(f'input stage/reload anchors={text.count(old_stage_skip)}')
-text = text.replace(old_stage_skip, new_stage_skip, 2)
+if text.count(old_stage) != 1:
+    raise SystemExit(f'input staging anchor count={text.count(old_stage)}')
+text = text.replace(old_stage, new_stage, 1)
+
+old_reload = '''        if (constraint_is_immediate(&inline_asm->inputs[index])) {
+            continue;
+        }
+'''
+new_reload = '''        if (inline_asm_operand_uses_immediate(program, &inline_asm->inputs[index])) {
+            continue;
+        }
+'''
+if text.count(old_reload) != 1:
+    raise SystemExit(f'input reload anchor count={text.count(old_reload)}')
+text = text.replace(old_reload, new_reload, 1)
 
 path.write_text(text)
 
