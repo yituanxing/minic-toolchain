@@ -32,3 +32,8 @@ static struct EmptyStruct empty_static_global;
 int empty_static_global_address(void) {
     return &empty_static_global != (void *)0;
 }
+
+int empty_static_initialized_address(void) {
+    static struct EmptyStruct value = {};
+    return &value != (void *)0;
+}

@@ -23,5 +23,6 @@ test "$size0" -ge 2
 grep -F '  li a0, 8' "$assembly" >/dev/null
 grep -F 'empty_static_global:' "$assembly" >/dev/null
 grep -F '.size empty_static_global, 0' "$assembly" >/dev/null
+grep -E '\.size __minic_static_local_[0-9]+_[0-9]+, 0' "$assembly" >/dev/null
 
-printf '%s\n' 'PASS compiler/c0/gnu_empty_records struct-size=0 union-size=0 empty-member-declaration=ignored member-record-size=8 complete=1 zero-sized-global=1 layout-sentinel=alignment'
+printf '%s\n' 'PASS compiler/c0/gnu_empty_records struct-size=0 union-size=0 empty-member-declaration=ignored member-record-size=8 complete=1 zero-sized-global=implicit+explicit layout-sentinel=alignment'
