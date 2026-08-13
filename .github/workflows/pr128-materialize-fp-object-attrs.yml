@@ -14,6 +14,7 @@ jobs:
       - name: Materialize declarator attribute carrier
         run: |
           set -Eeuo pipefail
+          python3 tools/dev/pr128-fix-materializer.py
           python3 tools/dev/pr128-materialize.py
           clang-format-18 -i \
             src/frontend/parser_internal.h \
@@ -36,7 +37,7 @@ jobs:
       - name: Commit product source
         run: |
           set -Eeuo pipefail
-          rm -f tools/dev/pr128-materialize.py .github/workflows/pr128-materialize-fp-object-attrs.yml
+          rm -f tools/dev/pr128-materialize.py tools/dev/pr128-fix-materializer.py .github/workflows/pr128-materialize-fp-object-attrs.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
