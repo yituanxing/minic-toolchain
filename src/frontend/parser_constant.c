@@ -170,6 +170,8 @@ bool minic_parser_parse_unsigned_integer_value64(MinicParser *parser, uint64_t *
         (parser->source[offset + 1U] == 'x' || parser->source[offset + 1U] == 'X')) {
         base = 16U;
         offset += 2U;
+    } else if (digit_end - span.begin.offset > 1U && parser->source[offset] == '0') {
+        base = 8U; /* C integer constants with a leading zero are octal. */
     }
 
     parsed = 0U;
@@ -212,6 +214,8 @@ bool minic_parser_parse_integer_value64(MinicParser *parser, int64_t *value) {
         (parser->source[offset + 1U] == 'x' || parser->source[offset + 1U] == 'X')) {
         base = 16U;
         offset += 2U;
+    } else if (digit_end - span.begin.offset > 1U && parser->source[offset] == '0') {
+        base = 8U; /* C integer constants with a leading zero are octal. */
     }
 
     parsed = 0U;

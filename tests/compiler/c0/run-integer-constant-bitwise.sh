@@ -21,4 +21,5 @@ grep -F '  .byte 255' "$work/integer_constant_bitwise.s" >/dev/null
 grep -F '  .byte 2' "$work/integer_constant_bitwise.s" >/dev/null
 grep -F '  .byte 8' "$work/integer_constant_bitwise.s" >/dev/null
 grep -F '  .zero 3' "$work/integer_constant_bitwise.s" >/dev/null
-printf '%s\n' 'PASS compiler/c0/integer_constant_bitwise shifts=<<,>> bitwise=&,^,| unary=~,! bound=8 zero-fill=3'
+sed -n '/^octal_permission:/,/^\.size/p' "$work/integer_constant_bitwise.s" | grep -F '  .word 420' >/dev/null
+printf '%s\n' 'PASS compiler/c0/integer_constant_bitwise shifts=<<,>> bitwise=&,^,| unary=~,! bound=8 zero-fill=3 octal=0644->420'
