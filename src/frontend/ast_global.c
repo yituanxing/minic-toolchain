@@ -223,9 +223,9 @@ bool minic_c0_global_object_begin_definition(MinicC0Program *program,
     return true;
 }
 
-bool minic_c0_global_object_add_initializer(MinicC0Program *program,
-                                            MinicGlobalObjectId global_object_id,
-                                            int value) {
+bool minic_c0_global_object_add_initializer_bits(MinicC0Program *program,
+                                                 MinicGlobalObjectId global_object_id,
+                                                 uint64_t bits) {
     MinicGlobalObject *object;
 
     if (program == NULL || global_object_id >= program->global_object_count) {
@@ -247,7 +247,7 @@ bool minic_c0_global_object_add_initializer(MinicC0Program *program,
 
             relocation = &object->relocations[relocation_index];
             if (relocation->location_kind != MINIC_GLOBAL_RELOCATION_LOCATION_RECORD_FIELD ||
-                (relocation->location_index == object->initializer_count && value != 0)) {
+                (relocation->location_index == object->initializer_count && bits != 0U)) {
                 return false;
             }
         }
@@ -258,9 +258,16 @@ bool minic_c0_global_object_add_initializer(MinicC0Program *program,
                     sizeof(*object->initializer_values))) {
         return false;
     }
-    object->initializer_values[object->initializer_count] = value;
+    object->initializer_values[object->initializer_count] = bits;
     object->initializer_count += 1U;
     return true;
+}
+
+bool minic_c0_global_object_add_initializer(MinicC0Program *program,
+                                            MinicGlobalObjectId global_object_id,
+                                            int value) {
+    return minic_c0_global_object_add_initializer_bits(
+        program, global_object_id, (uint64_t)(int64_t)value);
 }
 
 static bool global_relocation_location_type(const MinicC0Program *program,

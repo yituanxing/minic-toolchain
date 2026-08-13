@@ -8,6 +8,7 @@ mkdir -p "$build_dir"
 "$minic" -S "$root/tests/compiler/c0/static_record_compound_literal.c" \
     -o "$build_dir/static_record_compound_literal.s"
 grep -F '.word -559067475' "$build_dir/static_record_compound_literal.s" >/dev/null
+grep -F '.dword -1' "$build_dir/static_record_compound_literal.s" >/dev/null
 if "$minic" -S "$root/tests/compiler/c0/invalid_static_record_compound_literal_type.c" \
     -o "$build_dir/invalid.s" >"$build_dir/invalid.stdout" 2>"$build_dir/invalid.stderr"; then
     echo 'FAIL static aggregate discovery: mismatched record compound literal accepted' >&2

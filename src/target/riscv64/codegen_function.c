@@ -3,6 +3,7 @@
 #include "target/data_layout.h"
 
 #include <errno.h>
+#include <inttypes.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -50,6 +51,34 @@ static const char *minic_riscv64_integer_data_directive(size_t width) {
            : width == 4U ? ".word"
            : width == 8U ? ".dword"
                          : NULL;
+}
+
+static bool minic_riscv64_emit_integer_bits(FILE *file, size_t width, uint64_t bits) {
+    const char *directive;
+    uint64_t mask;
+    int64_t signed_value;
+
+    directive = minic_riscv64_integer_data_directive(width);
+    if (file == NULL || directive == NULL) {
+        return false;
+    }
+    if (width == 1U) {
+        return fprintf(file, "  %s %u\n", directive, (unsigned int)(bits & UINT64_C(0xff))) >= 0;
+    }
+    if (width < 8U) {
+        unsigned int bit_width;
+        uint64_t sign_bit;
+
+        bit_width = (unsigned int)(width * 8U);
+        mask = (UINT64_C(1) << bit_width) - UINT64_C(1);
+        bits &= mask;
+        sign_bit = UINT64_C(1) << (bit_width - 1U);
+        if ((bits & sign_bit) != 0U) {
+            bits |= ~mask;
+        }
+    }
+    (void)memcpy(&signed_value, &bits, sizeof(signed_value));
+    return fprintf(file, "  %s %" PRId64 "\n", directive, signed_value) >= 0;
 }
 
 static bool minic_riscv64_global_scalar_type(const MinicC0Program *program,
@@ -167,7 +196,7 @@ static bool minic_riscv64_emit_direct_record_values(FILE *file,
         size_t field_size;
         size_t field_alignment;
         size_t field_offset;
-        int value;
+        uint64_t value;
 
         field = minic_c0_record_field(record, field_index);
         if (field == NULL || field->element_count != 1U || field->is_flexible_array ||
@@ -199,26 +228,12 @@ static bool minic_riscv64_emit_direct_record_values(FILE *file,
                 return false;
             }
             relocation_index += 1U;
-        } else if (minic_type_is_integer(field->type)) {
-            const char *directive;
-
-            directive = minic_riscv64_integer_data_directive(field_size);
-            if (directive == NULL) {
-                return false;
-            }
-            if (field_size == 1U) {
-                unsigned int byte_value;
-
-                byte_value = (unsigned int)value & 0xffU;
-                if (fprintf(file, "  %s %u\n", directive, byte_value) < 0) {
-                    return false;
-                }
-            } else if (fprintf(file, "  %s %d\n", directive, value) < 0) {
+        } else if (minic_type_is_integer(field->type) || minic_type_is_pointer(field->type)) {
+            if (!minic_riscv64_emit_integer_bits(file, field_size, value)) {
                 return false;
             }
         } else {
-            if (value != 0 ||
-                (!minic_type_is_record(field->type) && !minic_type_is_pointer(field->type)) ||
+            if (value != 0U || !minic_type_is_record(field->type) ||
                 !minic_riscv64_emit_zero_bytes(file, field_size)) {
                 return false;
             }
@@ -244,41 +259,15 @@ static bool minic_riscv64_emit_constant_value(FILE *file,
         return false;
     }
     (void)type_alignment;
-    if (minic_type_is_integer(type)) {
-        const char *directive;
-        int value;
+    if (minic_type_is_integer(type) || minic_type_is_pointer(type)) {
+        uint64_t bits;
 
         if (*initializer_index >= object->initializer_count) {
             return false;
         }
-        value = object->initializer_values[*initializer_index];
+        bits = object->initializer_values[*initializer_index];
         *initializer_index += 1U;
-        directive = minic_riscv64_integer_data_directive(type_size);
-        if (directive == NULL) {
-            return false;
-        }
-        if (type_size == 1U) {
-            unsigned int byte_value;
-
-            byte_value = (unsigned int)value & 0xffU;
-            if (fprintf(file, "  %s %u\n", directive, byte_value) < 0) {
-                return false;
-            }
-        } else if (fprintf(file, "  %s %d\n", directive, value) < 0) {
-            return false;
-        }
-        *emitted_size = type_size;
-        return true;
-    }
-    if (minic_type_is_pointer(type)) {
-        int value;
-
-        if (*initializer_index >= object->initializer_count) {
-            return false;
-        }
-        value = object->initializer_values[*initializer_index];
-        *initializer_index += 1U;
-        if (value != 0 || !minic_riscv64_emit_zero_bytes(file, type_size)) {
+        if (!minic_riscv64_emit_integer_bits(file, type_size, bits)) {
             return false;
         }
         *emitted_size = type_size;

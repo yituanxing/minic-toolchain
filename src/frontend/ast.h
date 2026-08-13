@@ -424,7 +424,7 @@ typedef struct MinicGlobalObject {
     char *section_name;
     size_t section_name_length;
     MinicType type;
-    int *initializer_values;
+    uint64_t *initializer_values;
     size_t initializer_count;
     size_t initializer_capacity;
     MinicGlobalRelocation *relocations;
@@ -711,6 +711,9 @@ bool minic_c0_global_object_begin_definition(MinicC0Program *program,
 bool minic_c0_global_object_add_initializer(MinicC0Program *program,
                                             MinicGlobalObjectId global_object_id,
                                             int value);
+bool minic_c0_global_object_add_initializer_bits(MinicC0Program *program,
+                                                 MinicGlobalObjectId global_object_id,
+                                                 uint64_t bits);
 bool minic_c0_global_object_add_function_relocation(MinicC0Program *program,
                                                     MinicGlobalObjectId global_object_id,
                                                     MinicGlobalRelocationLocationKind location_kind,
