@@ -124,6 +124,103 @@ if old in text:
     text = text.replace(old, new, 1)
 elif new not in text:
     raise SystemExit("statement codegen trace anchor not found")
+
+old_assignment = r'''    if (target == NULL || value == NULL || target->value_category != MINIC_VALUE_LVALUE ||
+        !minic_c0_assignment_compatible(program, target->type, statement->expression)) {
+        return false;
+    }
+'''
+new_assignment = r'''    if (target == NULL || value == NULL || target->value_category != MINIC_VALUE_LVALUE ||
+        !minic_c0_assignment_compatible(program, target->type, statement->expression)) {
+        fprintf(stderr,
+                "CODEGEN_ASSIGN_REJECT target_expr=%zu value_expr=%zu target_kind=%d value_kind=%d target_type=%d/%u target_vcat=%d value_type=%d/%u value_vcat=%d compatible=%d\n",
+                (size_t)statement->target_expression,
+                (size_t)statement->expression,
+                target == NULL ? -1 : (int)target->kind,
+                value == NULL ? -1 : (int)value->kind,
+                target == NULL ? -1 : (int)target->type.base_kind,
+                target == NULL ? 0U : target->type.pointer_depth,
+                target == NULL ? -1 : (int)target->value_category,
+                value == NULL ? -1 : (int)value->type.base_kind,
+                value == NULL ? 0U : value->type.pointer_depth,
+                value == NULL ? -1 : (int)value->value_category,
+                target != NULL && value != NULL
+                    ? (minic_c0_assignment_compatible(program, target->type, statement->expression) ? 1 : 0)
+                    : 0);
+        return false;
+    }
+'''
+if old_assignment in text:
+    text = text.replace(old_assignment, new_assignment, 1)
+elif new_assignment not in text:
+    raise SystemExit("assignment rejection trace anchor not found")
+
+old_emit = r'''    return minic_riscv64_emit_expression(file, program, function, statement->expression) &&
+           fprintf(file, "  addi sp, sp, -16\n  sd a0, 0(sp)\n") >= 0 &&
+           minic_riscv64_emit_lvalue_address(
+               file, program, function, statement->target_expression) &&
+           fprintf(file, "  ld t0, 0(sp)\n  addi sp, sp, 16\n") >= 0 &&
+           (!minic_type_is_integer(target->type) ||
+            minic_riscv64_emit_integer_conversion(file, target->type, "t0")) &&
+           minic_riscv64_emit_scalar_store(file, target->type, "t0", "a0");
+'''
+new_emit = r'''    if (!minic_riscv64_emit_expression(file, program, function, statement->expression)) {
+        fprintf(stderr,
+                "CODEGEN_ASSIGN_STAGE value target_expr=%zu value_expr=%zu target_kind=%d value_kind=%d target_type=%d/%u value_type=%d/%u\n",
+                (size_t)statement->target_expression,
+                (size_t)statement->expression,
+                (int)target->kind,
+                (int)value->kind,
+                (int)target->type.base_kind,
+                target->type.pointer_depth,
+                (int)value->type.base_kind,
+                value->type.pointer_depth);
+        return false;
+    }
+    if (fprintf(file, "  addi sp, sp, -16\n  sd a0, 0(sp)\n") < 0) {
+        return false;
+    }
+    if (!minic_riscv64_emit_lvalue_address(file, program, function, statement->target_expression)) {
+        fprintf(stderr,
+                "CODEGEN_ASSIGN_STAGE lvalue target_expr=%zu value_expr=%zu target_kind=%d value_kind=%d target_type=%d/%u value_type=%d/%u\n",
+                (size_t)statement->target_expression,
+                (size_t)statement->expression,
+                (int)target->kind,
+                (int)value->kind,
+                (int)target->type.base_kind,
+                target->type.pointer_depth,
+                (int)value->type.base_kind,
+                value->type.pointer_depth);
+        return false;
+    }
+    if (fprintf(file, "  ld t0, 0(sp)\n  addi sp, sp, 16\n") < 0) {
+        return false;
+    }
+    if (minic_type_is_integer(target->type) &&
+        !minic_riscv64_emit_integer_conversion(file, target->type, "t0")) {
+        fprintf(stderr, "CODEGEN_ASSIGN_STAGE integer-conversion target_type=%d/%u\n",
+                (int)target->type.base_kind, target->type.pointer_depth);
+        return false;
+    }
+    if (!minic_riscv64_emit_scalar_store(file, target->type, "t0", "a0")) {
+        fprintf(stderr,
+                "CODEGEN_ASSIGN_STAGE store target_expr=%zu value_expr=%zu target_kind=%d value_kind=%d target_type=%d/%u value_type=%d/%u\n",
+                (size_t)statement->target_expression,
+                (size_t)statement->expression,
+                (int)target->kind,
+                (int)value->kind,
+                (int)target->type.base_kind,
+                target->type.pointer_depth,
+                (int)value->type.base_kind,
+                value->type.pointer_depth);
+        return false;
+    }
+    return true;
+'''
+if old_emit in text:
+    text = text.replace(old_emit, new_emit, 1)
+elif new_emit not in text:
+    raise SystemExit("assignment emission trace anchor not found")
 statement_path.write_text(text)
 
 function_path = Path("src/target/riscv64/codegen_function.c")
