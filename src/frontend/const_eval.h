@@ -16,6 +16,11 @@ bool minic_const_eval_integer(const MinicC0Program *program,
                               const MinicTargetInfo *target,
                               MinicExpressionId expression_id,
                               MinicConstValue *value);
+bool minic_const_value_convert_integer(const MinicC0Program *program,
+                                       const MinicTargetInfo *target,
+                                       const MinicConstValue *source,
+                                       MinicType type,
+                                       MinicConstValue *result);
 bool minic_const_value_is_zero(const MinicC0Program *program,
                                const MinicTargetInfo *target,
                                const MinicConstValue *value,

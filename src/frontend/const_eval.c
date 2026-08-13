@@ -83,6 +83,14 @@ static bool convert_value(const MinicC0Program *program,
     return normalize_bits(program, target, type, bits, &result->bits);
 }
 
+bool minic_const_value_convert_integer(const MinicC0Program *program,
+                                       const MinicTargetInfo *target,
+                                       const MinicConstValue *source,
+                                       MinicType type,
+                                       MinicConstValue *result) {
+    return convert_value(program, target, source, type, result);
+}
+
 static bool value_truthy(const MinicC0Program *program,
                          const MinicTargetInfo *target,
                          const MinicConstValue *value,

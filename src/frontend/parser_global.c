@@ -449,13 +449,12 @@ parse_static_scalar_constant(MinicParser *parser, MinicGlobalObjectId object_id,
         return false;
     }
     if (minic_type_is_integer(type)) {
-        int64_t parsed;
+        int parsed;
 
-        if (!minic_parser_parse_integer_constant_expression(parser, &parsed) || parsed < INT_MIN ||
-            parsed > INT_MAX ||
-            !minic_c0_global_object_add_initializer(parser->program, object_id, (int)parsed)) {
+        if (!minic_parser_parse_integer_initializer_value(parser, type, &parsed) ||
+            !minic_c0_global_object_add_initializer(parser->program, object_id, parsed)) {
             if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
-                minic_parser_error(parser, "static aggregate integer initializer is out of range");
+                minic_parser_error(parser, "cannot record static aggregate integer initializer");
             }
             return false;
         }
