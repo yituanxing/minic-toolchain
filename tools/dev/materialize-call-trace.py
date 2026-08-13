@@ -88,4 +88,41 @@ if old in text:
     text = text.replace(old, new, 1)
 elif new not in text:
     raise SystemExit("return cleanup trace anchor not found")
+
+old = r'''        context = minic_c0_program_cleanup_context(program, current);
+        if (context == NULL ||
+            !minic_riscv64_emit_expression(file, program, function, context->cleanup_expression)) {
+            return false;
+        }
+        current = context->parent;
+'''
+new = r'''        context = minic_c0_program_cleanup_context(program, current);
+        if (context == NULL) {
+            fprintf(stderr,
+                    "CODEGEN_CLEANUP_FAIL function=%s context=%zu missing=1\n",
+                    function != NULL ? function->name : "<null>",
+                    (size_t)current);
+            return false;
+        }
+        if (!minic_riscv64_emit_expression(file, program, function, context->cleanup_expression)) {
+            const MinicExpression *cleanup =
+                minic_c0_program_expression(program, context->cleanup_expression);
+            fprintf(stderr,
+                    "CODEGEN_CLEANUP_FAIL function=%s context=%zu expr=%zu kind=%d type=%d/%u vcat=%d parent=%zu\n",
+                    function != NULL ? function->name : "<null>",
+                    (size_t)current,
+                    (size_t)context->cleanup_expression,
+                    cleanup == NULL ? -1 : (int)cleanup->kind,
+                    cleanup == NULL ? -1 : (int)cleanup->type.base_kind,
+                    cleanup == NULL ? 0U : cleanup->type.pointer_depth,
+                    cleanup == NULL ? -1 : (int)cleanup->value_category,
+                    (size_t)context->parent);
+            return false;
+        }
+        current = context->parent;
+'''
+if old in text:
+    text = text.replace(old, new, 1)
+elif new not in text:
+    raise SystemExit("cleanup expression trace anchor not found")
 path.write_text(text)
