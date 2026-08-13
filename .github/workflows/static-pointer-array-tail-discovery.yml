@@ -45,7 +45,7 @@ jobs:
               'enumerator phase')
           replace_once(
               '''    for (index = 0U; index < program->array_type_count; ++index) {\n        const MinicArrayType *array_type;\n\n        array_type = &program->array_types[index];\n        if ((array_type->element_count == 0U &&\n             !incomplete_array_has_semantic_owner(program, index)) ||''',
-              '''    fprintf(stderr, "VERIFY_PHASE arrays count=%zu\\n", program->array_type_count);\n    for (index = 0U; index < program->array_type_count; ++index) {\n        const MinicArrayType *array_type;\n        const MinicRecord *element_record;\n        bool owner;\n\n        array_type = &program->array_types[index];\n        owner = array_type->element_count != 0U || incomplete_array_has_semantic_owner(program, index);\n        element_record = minic_type_is_record(array_type->element_type)\n                             ? minic_c0_program_record(program, array_type->element_type.record_id)\n                             : NULL;\n        fprintf(stderr,\n                "VERIFY_ARRAY index=%zu count=%zu owner=%d element_kind=%d record_id=%zu record=%s function=%d\\n",\n                index, array_type->element_count, owner ? 1 : 0,\n                (int)array_type->element_type.base_kind,\n                element_record == NULL ? SIZE_MAX : array_type->element_type.record_id,\n                element_record == NULL ? "-" : element_record->name,\n                minic_type_is_function(array_type->element_type) ? 1 : 0);\n        if ((array_type->element_count == 0U && !owner) ||''',
+              '''    fprintf(stderr, "VERIFY_PHASE arrays count=%zu\\n", program->array_type_count);\n    for (index = 0U; index < program->array_type_count; ++index) {\n        const MinicArrayType *array_type;\n        const MinicRecord *element_record;\n        bool owner;\n\n        array_type = &program->array_types[index];\n        owner = array_type->element_count != 0U || incomplete_array_has_semantic_owner(program, index);\n        element_record = array_type->element_type.base_kind == MINIC_TYPE_BASE_RECORD\n                             ? minic_c0_program_record(program, array_type->element_type.record_id)\n                             : NULL;\n        fprintf(stderr,\n                "VERIFY_ARRAY index=%zu count=%zu owner=%d element_kind=%d ptr=%u record_id=%zu record=%s function=%d\\n",\n                index, array_type->element_count, owner ? 1 : 0,\n                (int)array_type->element_type.base_kind,\n                array_type->element_type.pointer_depth,\n                element_record == NULL ? SIZE_MAX : array_type->element_type.record_id,\n                element_record == NULL ? "-" : element_record->name,\n                minic_type_is_function(array_type->element_type) ? 1 : 0);\n        if ((array_type->element_count == 0U && !owner) ||''',
               'array phase')
           replace_once(
               '''    for (index = 0U; index < program->function_type_count; ++index) {\n''',
@@ -92,5 +92,10 @@ jobs:
           set -e
           echo "cached_tu_status=$status"
           grep '^VERIFY_' build/linux-artifact/minic.stderr | tail -n 60 || true
+          bad_record=$(grep 'VERIFY_ARRAY.*owner=0.*record=' build/linux-artifact/minic.stderr | tail -n 1 | sed -n 's/.* record=\([^ ]*\).*/\1/p')
+          if test -n "$bad_record" && test "$bad_record" != '-'; then
+            echo "VERIFY_SOURCE record=$bad_record"
+            grep -n -F "$bad_record" build/linux-artifact/kbuild/init/main.i | tail -n 30 || true
+          fi
           tail -n 10 build/linux-artifact/minic.stderr
           test "$status" -ne 0
