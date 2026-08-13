@@ -15,3 +15,10 @@ const volatile int *choose_const_volatile(int condition,
 const void *choose_const_void(int condition, const void *opaque, int *object) {
     return condition ? opaque : object;
 }
+
+
+const char *const *add_intermediate_const(const char **value) {
+    const char *const *result;
+    result = value;
+    return result;
+}
