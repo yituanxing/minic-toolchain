@@ -91,6 +91,8 @@ The v1 validator uses temporary dense scratch storage:
 block owner map
 statement owner map
 local owner map
+cleanup-context owner map
+inline-asm owner map
 expression seen-generation table
 block worklist
 statement worklist
@@ -102,6 +104,8 @@ This is an implementation strategy, not an API contract.
 It is appropriate today because the Program representation is dense, traversal is sequential, and temporary arrays make ownership checks simple and cache-friendly. If profiling later shows another representation is better, FunctionBody callers should not change.
 
 当前使用数组不是“MiniC 永远选择数组树”，而只是现阶段最适合 ownership validator 的算法实现。
+
+The expression seen-generation counter is independent of `FunctionId` encoding. It advances as scratch state and clears the generation table only on wraparound, so even the validator's internal algorithm does not need to assume that a FunctionId can double as a traversal generation.
 
 ## 6. Ownership rules frozen by v1 / v1 已冻结的 ownership 规则
 
@@ -115,17 +119,30 @@ For a defined function:
 - a compound literal's backing LocalId must belong to the same function;
 - statement-expression and compound-literal nested blocks remain in the same FunctionBody;
 - goto, inline-asm goto and label-address targets must resolve inside the same FunctionBody;
+- a non-root cleanup context referenced by a reachable statement belongs to one FunctionBody; the same context may be reused inside that function, but not by another function;
+- a reachable inline-asm object belongs to one FunctionBody; the same object may be reused inside that function, but not by another function;
 - expression nodes are traversed by reachability, but are not globally required to have one permanent function owner.
 
 The final point intentionally keeps room for future expression sharing/interning and parser-time transient expressions.
 
 ## 7. Cleanup and inline-asm auxiliary ownership / Cleanup 与 inline asm 辅助 ownership
 
-Cleanup contexts and inline-asm objects are also logically function-local semantic state even though they currently live in Program-wide arrays.
+Cleanup contexts and inline-asm objects are logically function-local semantic state even though they currently live in Program-wide arrays. Direct owner identity is now part of the v1 validator rather than a deferred follow-up.
 
-The current v1 traversal already follows cleanup expressions and inline-asm operands/labels when they are referenced by a reachable statement. A follow-up within the FunctionBody consolidation should additionally freeze direct owner identity for the auxiliary `CleanupContextId` and `MinicInlineAsmId` objects themselves, so an otherwise self-contained object cannot be silently reused across functions.
+Cleanup validation reuses the existing canonical lifetime rule:
 
-This must reuse the existing FunctionBody traversal rather than add another independent block/statement walker.
+```text
+current cleanup context
+    -> parent
+    -> ...
+    -> stop context
+```
+
+The validator calls `minic_c0_cleanup_context_reaches()` rather than reimplementing cleanup reachability. Every non-root context encountered along the referenced lifetime chain is claimed by the current FunctionBody, and its cleanup expression is traversed as a reachable expression.
+
+Inline-asm validation claims the referenced `MinicInlineAsmId` for the current FunctionBody, traverses its input/output expressions, and requires every asm-goto label target to resolve to a Statement owned by the same function.
+
+This auxiliary ownership is implemented through the same FunctionBody walk; no second block/statement walker was added.
 
 ## 8. Compiler pipeline position / 在编译管线中的位置
 
@@ -160,14 +177,16 @@ Focused tests prove:
 - cross-function goto is rejected even though the old global verifier accepts it;
 - orphan parse-time-style constant expressions remain legal.
 
-Compiler-path host validation with the ownership checks enabled has passed:
+Compiler-path host validation with the ownership checks enabled has passed after direct cleanup-context and inline-asm ownership were added:
 
 - production source inventory with staged source-list materialization;
 - release build with `-Werror`;
 - existing `check-fast` compiler contracts;
 - frozen Foundation focused semantics (`tools/dev/pr76-focused.sh`).
 
-The permanent Makefile source-list update and the full RV64/real-program/Linux gates remain separate acceptance items; do not claim the slice frozen until those are complete.
+The code-bearing auxiliary-ownership head `746013742210dc5c8d69a35bb6a7e6833cd7afa7` passed both the FunctionBody focused workflow and the compiler-path host/frozen-Foundation workflow.
+
+The permanent Makefile source-list update, dedicated malformed auxiliary-owner unit cases, the full RV64/real-program gate, and the unchanged Linux 90,928-line gate remain separate acceptance items. Do not claim the slice frozen until those are complete or explicitly superseded by an equivalent canonical gate.
 
 ## 10. Relationship to future Core IR / 与未来 IR 的关系
 
