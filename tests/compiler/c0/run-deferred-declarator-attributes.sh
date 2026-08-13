@@ -18,6 +18,8 @@ grep -F 'call map_before_pointer' "$work/deferred_declarator_attributes.s" >/dev
 grep -F 'call map_after_pointer' "$work/deferred_declarator_attributes.s" >/dev/null
 grep -F 'kfree_skb_reason_shape:' "$work/deferred_declarator_attributes.s" >/dev/null
 grep -F 'noclone_after_return_pointer:' "$work/deferred_declarator_attributes.s" >/dev/null
+grep -F 'used_object_shape:' "$work/deferred_declarator_attributes.s" >/dev/null
+grep -F 'used_function_shape:' "$work/deferred_declarator_attributes.s" >/dev/null
 
 if "$minic" -S "$root/tests/compiler/c0/invalid_function_attribute_on_pointer_object.c" \
     -o "$work/invalid-object.s" >"$work/invalid-object.stdout" 2>"$work/invalid-object.stderr"; then
@@ -47,4 +49,18 @@ if "$minic" -S "$root/tests/compiler/c0/invalid_noclone_object.c" \
 fi
 grep -F 'unsupported GNU object attribute' "$work/invalid-noclone-object.stderr" >/dev/null
 
-printf '%s\n' 'PASS compiler/c0/deferred_declarator_attributes pre-pointer=generic post-pointer=generic function-target=late object-target=late section=preserved noinline=parse-only noclone=parse-only+function-only+zero-arg'
+if "$minic" -S "$root/tests/compiler/c0/invalid_used_argument.c" \
+    -o "$work/invalid-used-argument.s" >"$work/invalid-used-argument.stdout" 2>"$work/invalid-used-argument.stderr"; then
+    printf '%s\n' 'FAIL compiler/c0/deferred_declarator_attributes: used accepted an argument' >&2
+    exit 1
+fi
+grep -F 'GNU attribute has an invalid number of arguments' "$work/invalid-used-argument.stderr" >/dev/null
+
+if "$minic" -S "$root/tests/compiler/c0/invalid_used_field.c" \
+    -o "$work/invalid-used-field.s" >"$work/invalid-used-field.stdout" 2>"$work/invalid-used-field.stderr"; then
+    printf '%s\n' 'FAIL compiler/c0/deferred_declarator_attributes: used leaked onto record field' >&2
+    exit 1
+fi
+grep -F 'unsupported GNU record field attribute' "$work/invalid-used-field.stderr" >/dev/null
+
+printf '%s\n' 'PASS compiler/c0/deferred_declarator_attributes pre-pointer=generic post-pointer=generic function-target=late object-target=late section=preserved noinline=parse-only noclone=parse-only+function-only+zero-arg used=parse-only+function-object+zero-arg'

@@ -28,3 +28,11 @@ void __attribute__((noclone)) * noclone_after_return_pointer(int value);
 void *noclone_after_return_pointer(int value) {
     return value ? (void *)0 : (void *)0;
 }
+
+static int __attribute__((__used__)) used_object_shape = 7;
+
+void __attribute__((used)) used_function_shape(void);
+
+void used_function_shape(void) {
+    (void)used_object_shape;
+}
