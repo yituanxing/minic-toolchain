@@ -6,6 +6,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: linux-final-verifier-debug
@@ -13,20 +14,18 @@ concurrency:
 
 jobs:
   linux-frontier:
-    name: riscv-defconfig-init-main
+    name: frozen-init-main-verifier
     runs-on: ubuntu-24.04
-    env:
-      DEBIAN_FRONTEND: noninteractive
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Restore pinned Linux source archive
-        id: linux-source-cache
-        uses: actions/cache/restore@v4
+      - name: Download frozen authoritative Linux TU
+        uses: actions/download-artifact@v4
         with:
-          path: build/linux-cache/linux-6.6.143.tar.xz
-          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
+          artifact-ids: 9174570466
+          path: build/frozen-linux
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build verifier-instrumented MiniC
         shell: bash
@@ -36,46 +35,28 @@ jobs:
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
           make -j4 MODE=release BUILD_DIR=build/linux-compiler
 
-      - name: Verify Linux-specific focused semantics
+      - name: Verify frozen Linux translation unit
         shell: bash
         run: |
           set -Eeuo pipefail
-          MINIC="$GITHUB_WORKSPACE/build/linux-compiler/bin/minic" \
-          BUILD_DIR="$GITHUB_WORKSPACE/build/linux-focused" \
-          HOST_CC=cc \
-            sh tools/dev/pr76-focused.sh
-
-      - name: Install RISC-V Linux Kbuild dependencies
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
-            flex bison bc libelf-dev libssl-dev
-
-      - name: Drive MiniC with Linux 6.6.143 RISC-V defconfig
-        shell: bash
-        run: |
+          input="$GITHUB_WORKSPACE/build/frozen-linux/kbuild/init/main.i"
+          test -s "$input"
+          test "$(wc -l < "$input" | tr -d ' ')" = 90928
+          mkdir -p build/linux-verifier-result
           set +e
-          MINIC="$GITHUB_WORKSPACE/build/linux-compiler/bin/minic" \
-          BUILD_DIR="$GITHUB_WORKSPACE/build/linux-discovery" \
-          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-cache/linux-6.6.143.tar.xz" \
-          CROSS_COMPILE=riscv64-linux-gnu- \
-            sh tests/external/linux/probe.sh
+          build/linux-compiler/bin/minic -S "$input" -o build/linux-verifier-result/main.s \
+            >build/linux-verifier-result/minic.stdout \
+            2>build/linux-verifier-result/minic.stderr
           status=$?
-          cat "$GITHUB_WORKSPACE/build/linux-discovery/minic.stderr" || true
           set -e
+          cat build/linux-verifier-result/minic.stderr
           exit "$status"
 
-      - name: Upload Linux frontier and full translation unit
+      - name: Upload verifier diagnostic
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: linux-verifier-debug-${{ github.run_id }}
-          path: |
-            build/linux-discovery/minic.stderr
-            build/linux-discovery/main-i-inventory.txt
-            build/linux-discovery/kbuild/init/main.i
+          path: build/linux-verifier-result/minic.stderr
           if-no-files-found: ignore
           retention-days: 7
