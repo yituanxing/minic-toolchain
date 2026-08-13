@@ -36,6 +36,7 @@ jobs:
           python3 tools/dev/materialize-aggregate-rvalue-arg.py
           python3 tools/dev/materialize-inline-asm-symbolic-immediate.py
           python3 tools/dev/materialize-inline-asm-rj-z.py
+          python3 tools/dev/fix-inline-asm-rj-materialization.py
           python3 tools/dev/materialize-codegen-span-trace.py
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
           make -j4 MODE=release BUILD_DIR=build/static-pointer-array-tail
