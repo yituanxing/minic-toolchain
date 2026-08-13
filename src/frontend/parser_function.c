@@ -1677,19 +1677,29 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                                                       &object_explicit_alignment)) {
             return false;
         }
-        if (has_visibility || object_explicit_alignment != 0U) {
-            minic_parser_error(
-                parser, "static object symbol/layout attributes require explicit object semantics");
+        if (has_visibility) {
+            minic_parser_error(parser,
+                               "static object symbol attributes require explicit object semantics");
             return false;
         }
-        if (!minic_parser_parse_static_global_after_head(parser, return_type, name_span)) {
+        if (!minic_parser_parse_static_global_after_head(parser,
+                                                         return_type,
+                                                         name_span,
+                                                         section_name,
+                                                         sizeof(section_name),
+                                                         &section_name_length,
+                                                         &has_section,
+                                                         &object_explicit_alignment)) {
             return false;
         }
         object_id = minic_parser_find_global_object_entity(parser, name_span);
         if (object_id == MINIC_GLOBAL_OBJECT_INVALID ||
             (has_section && !minic_c0_global_object_set_section(
-                                parser->program, object_id, section_name, section_name_length))) {
-            minic_parser_error(parser, "cannot persist static object section metadata");
+                                parser->program, object_id, section_name, section_name_length)) ||
+            (object_explicit_alignment != 0U &&
+             !minic_c0_global_object_set_explicit_alignment(
+                 parser->program, object_id, object_explicit_alignment))) {
+            minic_parser_error(parser, "cannot persist static object metadata");
             return false;
         }
         return true;

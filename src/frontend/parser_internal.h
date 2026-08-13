@@ -306,7 +306,12 @@ bool minic_parser_parse_typedef(MinicParser *parser);
 bool minic_parser_parse_static_global(MinicParser *parser);
 bool minic_parser_parse_static_global_after_head(MinicParser *parser,
                                                  MinicType object_type,
-                                                 MinicSourceSpan name_span);
+                                                 MinicSourceSpan name_span,
+                                                 char *section_name,
+                                                 size_t section_capacity,
+                                                 size_t *section_name_length,
+                                                 bool *has_section,
+                                                 size_t *explicit_alignment);
 bool minic_parser_parse_extern_global(MinicParser *parser);
 bool minic_parser_parse_extern_global_after_head(MinicParser *parser,
                                                  MinicType base_type,
