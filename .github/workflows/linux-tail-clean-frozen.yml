@@ -1,0 +1,43 @@
+name: Linux tail clean frozen TU
+
+on:
+  push:
+    branches: [probe/linux-tail-clean-frozen]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download authoritative frozen Linux TU
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: 9175731558
+          path: build/frozen-linux
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: yituanxing/minic-toolchain
+          run-id: 31686762133
+      - name: Build instrumented compiler
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/materialize-assignment-debug.py
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+          make -j4 MODE=release BUILD_DIR=build/linux-tail-clean
+      - name: Compile full frozen TU
+        run: |
+          set -Eeuo pipefail
+          input="$GITHUB_WORKSPACE/build/frozen-linux/linux-frontier-31686762133/kbuild/init/main.i"
+          test -s "$input"
+          test "$(wc -l < "$input" | tr -d ' ')" = 90928
+          mkdir -p build/linux-tail-result
+          set +e
+          build/linux-tail-clean/bin/minic -S "$input" -o build/linux-tail-result/main.s \
+            >build/linux-tail-result/minic.stdout 2>build/linux-tail-result/minic.stderr
+          status=$?
+          set -e
+          tail -n 120 build/linux-tail-result/minic.stderr
+          exit "$status"
