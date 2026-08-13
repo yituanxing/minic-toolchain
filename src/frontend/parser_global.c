@@ -1582,6 +1582,14 @@ bool minic_parser_parse_static_global_after_head(MinicParser *parser,
         minic_parser_error(parser, "duplicate global object");
         return false;
     }
+    if (!minic_parser_parse_gnu_object_attribute_lists(parser,
+                                                       section_name,
+                                                       section_capacity,
+                                                       section_name_length,
+                                                       has_section,
+                                                       explicit_alignment)) {
+        return false;
+    }
 
     if (parser->current.kind == MINIC_TOKEN_SEMICOLON) {
         return parse_static_zero_definition(parser, element_type, name_span);

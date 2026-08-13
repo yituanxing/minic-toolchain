@@ -20,10 +20,20 @@ grep -F 'addressable_shape:' "$work/static_global_object_section.s" >/dev/null
 grep -F '.section .init.rodata' "$work/static_global_object_section.s" >/dev/null
 grep -F 'linux_setup_string:' "$work/static_global_object_section.s" >/dev/null
 grep -F 'aligned_static:' "$work/static_global_object_section.s" >/dev/null
+grep -F '.section .data.static.record' "$work/static_global_object_section.s" >/dev/null
+grep -F 'record_suffix_metadata:' "$work/static_global_object_section.s" >/dev/null
+grep -F '.section .data.static.scalar' "$work/static_global_object_section.s" >/dev/null
+grep -F 'scalar_suffix_metadata:' "$work/static_global_object_section.s" >/dev/null
 awk '
     /[.]type aligned_static, @object/ { seen = 1; next }
     seen && /[.]align 4/ { aligned = 1; next }
     seen && /aligned_static:/ { exit(aligned ? 0 : 1) }
+    END { if (!seen || !aligned) exit 1 }
+' "$work/static_global_object_section.s"
+awk '
+    /[.]type record_suffix_metadata, @object/ { seen = 1; next }
+    seen && /[.]align 3/ { aligned = 1; next }
+    seen && /record_suffix_metadata:/ { exit(aligned ? 0 : 1) }
     END { if (!seen || !aligned) exit 1 }
 ' "$work/static_global_object_section.s"
 
