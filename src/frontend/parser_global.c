@@ -664,6 +664,26 @@ parse_static_constant_value(MinicParser *parser, MinicGlobalObjectId object_id, 
             parser, object_id, minic_c0_program_array_type(parser->program, type.array_type_id));
     }
     if (minic_type_is_record(type)) {
+        if (parser->current.kind == MINIC_TOKEN_LPAREN) {
+            MinicType explicit_type;
+
+            if (!minic_parser_advance(parser) ||
+                !minic_parser_parse_type_name(parser, &explicit_type) ||
+                !minic_parser_expect(parser,
+                                     MINIC_TOKEN_RPAREN,
+                                     "expected ')' after static compound literal type")) {
+                return false;
+            }
+            if (!minic_type_equal(type, explicit_type)) {
+                minic_parser_error(parser, "static record compound literal type mismatch");
+                return false;
+            }
+            if (parser->current.kind != MINIC_TOKEN_LBRACE) {
+                minic_parser_error(parser,
+                                   "static record compound literal requires initializer list");
+                return false;
+            }
+        }
         return parse_static_record_constant(
             parser, object_id, minic_c0_program_record(parser->program, type.record_id));
     }
