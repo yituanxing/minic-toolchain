@@ -23,6 +23,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           python3 tools/dev/materialize-kernel-param-init-family.py
+          python3 tools/dev/materialize-start-kernel-policy-attrs.py
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
 
       - name: Build and focused validation
@@ -35,6 +36,7 @@ jobs:
           sh tests/compiler/c0/run-integer-constant-bitwise.sh
           sh tests/compiler/c0/run-unnamed-bit-fields.sh
           sh tests/compiler/c0/run-conditional-pointer-qualifiers.sh
+          sh tests/compiler/c0/run-gnu-prefix-function-attributes.sh
 
       - name: Write product changes back
         run: |
@@ -46,5 +48,5 @@ jobs:
             echo 'product already materialized'
             exit 0
           fi
-          git commit -m 'feat(frontend): preserve immediate pointee qualification conversions'
+          git commit -m 'feat(frontend): model function instrumentation opt-out attributes'
           git push origin HEAD:agent/kernel-param-init-family-v1
