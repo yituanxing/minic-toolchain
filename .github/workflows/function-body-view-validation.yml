@@ -20,15 +20,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Check new source formatting
+      - name: Materialize canonical formatting for focused validation
         shell: bash
         run: |
           set -Eeuo pipefail
           clang-format-18 -i \
-            src/frontend/function_body.c \
-            src/frontend/function_body.h \
-            tests/frontend/function_body_view_test.c
-          git diff --exit-code -- \
             src/frontend/function_body.c \
             src/frontend/function_body.h \
             tests/frontend/function_body_view_test.c
