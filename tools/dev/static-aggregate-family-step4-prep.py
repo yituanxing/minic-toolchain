@@ -2,7 +2,7 @@ from pathlib import Path
 
 p = Path('src/frontend/parser_global.c')
 text = p.read_text()
-old = '''    } else if (minic_type_is_pointer(type)) {
+old = r'''    } else if (minic_type_is_pointer(type)) {
         uint64_t pointer_bits;
 
         if (!parse_static_pointer_constant_bits(parser, type, &pointer_bits) ||
@@ -14,7 +14,7 @@ old = '''    } else if (minic_type_is_pointer(type)) {
             return false;
         }
 '''
-new = '''    } else if (minic_type_is_pointer(type)) {
+new = r'''    } else if (minic_type_is_pointer(type)) {
         uint64_t pointer_bits;
 
         if (!parse_static_pointer_constant_bits(parser, type, &pointer_bits) ||
