@@ -162,11 +162,12 @@ static bool parse_array_bound_allow_zero(MinicParser *parser, size_t *element_co
     return true;
 }
 
-bool minic_parser_parse_array_declarator_suffix(MinicParser *parser,
-                                                MinicType element_type,
-                                                bool allow_incomplete_outermost,
-                                                MinicType *declarator_type,
-                                                bool *is_array) {
+static bool parse_array_declarator_suffix_impl(MinicParser *parser,
+                                               MinicType element_type,
+                                               bool allow_incomplete_outermost,
+                                               bool adjust_outermost_to_pointer,
+                                               MinicType *declarator_type,
+                                               bool *is_array) {
     size_t bounds[8];
     size_t bound_count;
     size_t dimension;
@@ -216,7 +217,12 @@ bool minic_parser_parse_array_declarator_suffix(MinicParser *parser,
     dimension = bound_count;
     while (dimension > 0U) {
         dimension -= 1U;
-        if (dimension == 0U && outermost_incomplete) {
+        if (dimension == 0U && adjust_outermost_to_pointer) {
+            if (!minic_type_pointer_to(type, &type)) {
+                minic_parser_error(parser, "cannot adjust array parameter declarator to pointer");
+                return false;
+            }
+        } else if (dimension == 0U && outermost_incomplete) {
             if (!minic_c0_program_add_incomplete_array_type(parser->program, type, &type)) {
                 minic_parser_error(parser, "cannot build incomplete array declarator type");
                 return false;
@@ -235,6 +241,29 @@ bool minic_parser_parse_array_declarator_suffix(MinicParser *parser,
     *declarator_type = type;
     *is_array = true;
     return true;
+}
+
+bool minic_parser_parse_array_declarator_suffix(MinicParser *parser,
+                                                MinicType element_type,
+                                                bool allow_incomplete_outermost,
+                                                MinicType *declarator_type,
+                                                bool *is_array) {
+    return parse_array_declarator_suffix_impl(
+        parser, element_type, allow_incomplete_outermost, false, declarator_type, is_array);
+}
+
+bool minic_parser_parse_array_parameter_suffix(MinicParser *parser,
+                                               MinicType element_type,
+                                               MinicType *adjusted_type) {
+    bool is_array;
+
+    if (parser == NULL || adjusted_type == NULL || parser->current.kind != MINIC_TOKEN_LBRACKET) {
+        return false;
+    }
+    is_array = false;
+    return parse_array_declarator_suffix_impl(
+               parser, element_type, true, true, adjusted_type, &is_array) &&
+           is_array;
 }
 
 bool minic_parser_build_function_declarator_type(MinicParser *parser,
