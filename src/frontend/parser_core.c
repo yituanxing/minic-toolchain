@@ -1,5 +1,6 @@
 #include "frontend/parser_internal.h"
 
+#include <limits.h>
 #include <stdint.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -560,6 +561,40 @@ static bool minic_parser_parse_typed_integer_constant_expression(MinicParser *pa
         minic_parser_error(parser, "integer constant expression exceeds supported 64-bit range");
         return false;
     }
+    return true;
+}
+
+bool minic_parser_parse_integer_initializer_value(MinicParser *parser,
+                                                  MinicType target_type,
+                                                  int *value) {
+    MinicConstValue constant;
+    MinicExpressionId expression_id;
+    int64_t signed_value;
+
+    if (parser == NULL || value == NULL || !minic_type_is_integer(target_type)) {
+        if (parser != NULL) {
+            minic_parser_error(parser, "integer initializer requires an integer target type");
+        }
+        return false;
+    }
+    if (!minic_parser_parse_expression(parser, &expression_id, 0U)) {
+        return false;
+    }
+    if (!minic_c0_assignment_compatible(parser->program, target_type, expression_id)) {
+        minic_parser_error(parser, "integer initializer type mismatch");
+        return false;
+    }
+    if (!minic_const_eval_integer(parser->program, parser->target_info, expression_id, &constant)) {
+        minic_parser_error(parser, "integer initializer requires an integer constant expression");
+        return false;
+    }
+    if (!minic_const_value_as_int64(
+            parser->program, parser->target_info, &constant, &signed_value) ||
+        signed_value < INT_MIN || signed_value > INT_MAX) {
+        minic_parser_error(parser, "integer initializer exceeds current global payload range");
+        return false;
+    }
+    *value = (int)signed_value;
     return true;
 }
 

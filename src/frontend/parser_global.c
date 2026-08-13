@@ -281,23 +281,17 @@ static bool parse_static_scalar(MinicParser *parser, MinicType type, MinicSource
     }
 
     if (minic_type_is_integer(type)) {
-        int64_t constant_value;
         int value;
 
-        if (!minic_parser_parse_integer_constant_expression(parser, &constant_value)) {
+        if (parser->current.kind == MINIC_TOKEN_LBRACE) {
+            minic_parser_error(parser, "expected integer constant expression");
+            return false;
+        }
+        if (!minic_parser_parse_integer_initializer_value(parser, type, &value) ||
+            !minic_c0_global_object_add_initializer(parser->program, object_id, value)) {
             if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
-                minic_parser_error(
-                    parser, "static integer initializer requires an integer constant expression");
+                minic_parser_error(parser, "cannot record static integer initializer");
             }
-            return false;
-        }
-        if (constant_value < INT_MIN || constant_value > INT_MAX) {
-            minic_parser_error(parser, "static integer initializer is out of supported range");
-            return false;
-        }
-        value = (int)constant_value;
-        if (!minic_c0_global_object_add_initializer(parser->program, object_id, value)) {
-            minic_parser_error(parser, "cannot record static integer initializer");
             return false;
         }
     } else if (minic_type_is_pointer(type)) {
