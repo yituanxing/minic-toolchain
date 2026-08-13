@@ -1503,16 +1503,28 @@ static bool parse_static_zero_definition(MinicParser *parser,
 
 static bool parse_static_inferred_char_array(MinicParser *parser,
                                              MinicType element_type,
-                                             MinicSourceSpan name_span) {
+                                             MinicSourceSpan name_span,
+                                             char *section_name,
+                                             size_t section_capacity,
+                                             size_t *section_name_length,
+                                             bool *has_section,
+                                             size_t *explicit_alignment) {
     MinicType object_type;
     MinicGlobalObjectId object_id;
     size_t element_count;
 
-    if (parser == NULL || !minic_type_is_char_integer(element_type) ||
-        !minic_type_is_const(element_type) || parser->current.kind != MINIC_TOKEN_LBRACKET ||
-        !minic_parser_advance(parser) ||
+    if (parser == NULL || section_name == NULL || section_capacity == 0U ||
+        section_name_length == NULL || has_section == NULL || explicit_alignment == NULL ||
+        !minic_type_is_char_integer(element_type) || !minic_type_is_const(element_type) ||
+        parser->current.kind != MINIC_TOKEN_LBRACKET || !minic_parser_advance(parser) ||
         !minic_parser_expect(
             parser, MINIC_TOKEN_RBRACKET, "expected ']' in inferred static character array") ||
+        !minic_parser_parse_gnu_object_attribute_lists(parser,
+                                                       section_name,
+                                                       section_capacity,
+                                                       section_name_length,
+                                                       has_section,
+                                                       explicit_alignment) ||
         !minic_c0_program_add_incomplete_array_type(parser->program, element_type, &object_type) ||
         !minic_c0_program_add_global_object(parser->program,
                                             parser->source + name_span.begin.offset,
@@ -1543,7 +1555,12 @@ static bool parse_static_inferred_char_array(MinicParser *parser,
 
 bool minic_parser_parse_static_global_after_head(MinicParser *parser,
                                                  MinicType element_type,
-                                                 MinicSourceSpan name_span) {
+                                                 MinicSourceSpan name_span,
+                                                 char *section_name,
+                                                 size_t section_capacity,
+                                                 size_t *section_name_length,
+                                                 bool *has_section,
+                                                 size_t *explicit_alignment) {
     MinicType object_type;
     MinicGlobalObjectId object_id;
     size_t bounds[8];
@@ -1590,7 +1607,14 @@ bool minic_parser_parse_static_global_after_head(MinicParser *parser,
             return false;
         }
         if (probe.current.kind == MINIC_TOKEN_RBRACKET) {
-            return parse_static_inferred_char_array(parser, element_type, name_span);
+            return parse_static_inferred_char_array(parser,
+                                                    element_type,
+                                                    name_span,
+                                                    section_name,
+                                                    section_capacity,
+                                                    section_name_length,
+                                                    has_section,
+                                                    explicit_alignment);
         }
     }
 
@@ -1688,7 +1712,16 @@ bool minic_parser_parse_static_global_after_head(MinicParser *parser,
 bool minic_parser_parse_static_global(MinicParser *parser) {
     MinicSourceSpan name_span;
     MinicType object_type;
+    MinicGlobalObjectId object_id;
+    char section_name[256];
+    size_t section_name_length;
+    size_t explicit_alignment;
+    bool has_section;
 
+    section_name_length = 0U;
+    explicit_alignment = 0U;
+    has_section = false;
+    (void)memset(section_name, 0, sizeof(section_name));
     if (parser == NULL ||
         !minic_parser_expect(parser, MINIC_TOKEN_KW_STATIC, "expected keyword 'static'") ||
         !minic_parser_parse_type_name(parser, &object_type)) {
@@ -1702,5 +1735,24 @@ bool minic_parser_parse_static_global(MinicParser *parser) {
     if (!minic_parser_advance(parser)) {
         return false;
     }
-    return minic_parser_parse_static_global_after_head(parser, object_type, name_span);
+    if (!minic_parser_parse_static_global_after_head(parser,
+                                                     object_type,
+                                                     name_span,
+                                                     section_name,
+                                                     sizeof(section_name),
+                                                     &section_name_length,
+                                                     &has_section,
+                                                     &explicit_alignment)) {
+        return false;
+    }
+    object_id = minic_parser_find_global_object_entity(parser, name_span);
+    if (object_id == MINIC_GLOBAL_OBJECT_INVALID ||
+        (has_section && !minic_c0_global_object_set_section(
+                            parser->program, object_id, section_name, section_name_length)) ||
+        (explicit_alignment != 0U && !minic_c0_global_object_set_explicit_alignment(
+                                         parser->program, object_id, explicit_alignment))) {
+        minic_parser_error(parser, "cannot persist static object metadata");
+        return false;
+    }
+    return true;
 }
