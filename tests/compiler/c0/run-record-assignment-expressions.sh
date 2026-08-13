@@ -15,6 +15,7 @@ mkdir -p "$work"
     -o "$work/record_assignment_expression.s"
 
 grep -F 'main:' "$work/record_assignment_expression.s" >/dev/null
+grep -F 'initialize_through_pointer:' "$work/record_assignment_expression.s" >/dev/null
 test "$(grep -c -F '  lbu t0, 0(t2)' "$work/record_assignment_expression.s")" -ge 2
 test "$(grep -c -F '  sb t0, 0(t3)' "$work/record_assignment_expression.s")" -ge 2
-printf '%s\n' 'PASS compiler/c0/record_assignment_expression whole-object-copy=1 comma-discard=1 alias-safe-temp=1'
+printf '%s\n' 'PASS compiler/c0/record_assignment_expression whole-object-copy=1 pointer-target-compound-literal=1 comma-discard=1 alias-safe-temp=1'

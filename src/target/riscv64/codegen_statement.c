@@ -47,6 +47,17 @@ static bool minic_riscv64_emit_assignment(FILE *file,
         !minic_c0_assignment_compatible(program, target->type, statement->expression)) {
         return false;
     }
+    if (minic_type_is_record(target->type)) {
+        return minic_type_is_record(value->type) &&
+               target->type.record_id == value->type.record_id &&
+               minic_c0_record_value_is_copy_source(program, statement->expression) &&
+               minic_riscv64_emit_record_copy_value(file,
+                                                    program,
+                                                    function,
+                                                    statement->target_expression,
+                                                    statement->expression,
+                                                    false);
+    }
     return minic_riscv64_emit_expression(file, program, function, statement->expression) &&
            fprintf(file, "  addi sp, sp, -16\n  sd a0, 0(sp)\n") >= 0 &&
            minic_riscv64_emit_lvalue_address(
