@@ -23,6 +23,16 @@ jobs:
         run: |
           set -Eeuo pipefail
           python3 tools/dev/materialize-linux-tail-pointer-array.py
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('tests/compiler/c0/run-static-pointer-arrays.sh')
+          text = path.read_text()
+          old = "grep -F '  .dword .Lminic_string_0' \"$work/static_pointer_array.s\" >/dev/null\ngrep -F '  .dword .Lminic_string_1' \"$work/static_pointer_array.s\" >/dev/null\n"
+          new = "test \"$(grep -Fc '  .dword .Lminic_string_' \"$work/static_pointer_array.s\")\" -eq 2\n"
+          if text.count(old) != 1:
+              raise SystemExit('string relocation assertions: expected one match')
+          path.write_text(text.replace(old, new, 1))
+          PY
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
       - name: Build and run focused gate
         run: |
