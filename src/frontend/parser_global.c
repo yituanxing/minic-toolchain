@@ -209,6 +209,34 @@ static bool type_is_function_pointer(MinicType type) {
     return minic_type_pointee(type, &pointee) && minic_type_is_function(pointee);
 }
 
+static bool static_object_address_relocation_target(const MinicC0Program *program,
+                                                    MinicExpressionId expression_id,
+                                                    MinicGlobalObjectId *target_object_id) {
+    const MinicExpression *expression;
+
+    if (program == NULL || target_object_id == NULL) {
+        return false;
+    }
+    expression = minic_c0_program_expression(program, expression_id);
+    while (expression != NULL && (expression->kind == MINIC_EXPRESSION_CAST ||
+                                  expression->kind == MINIC_EXPRESSION_BITCAST ||
+                                  expression->kind == MINIC_EXPRESSION_CONVERSION)) {
+        expression_id = expression->value.unary.operand;
+        expression = minic_c0_program_expression(program, expression_id);
+    }
+    if (expression == NULL || expression->kind != MINIC_EXPRESSION_ADDRESS_OF) {
+        return false;
+    }
+    expression = minic_c0_program_expression(program, expression->value.unary.operand);
+    if (expression == NULL || expression->kind != MINIC_EXPRESSION_GLOBAL_OBJECT ||
+        expression->value.global_object_id == MINIC_GLOBAL_OBJECT_INVALID ||
+        minic_c0_program_global_object(program, expression->value.global_object_id) == NULL) {
+        return false;
+    }
+    *target_object_id = expression->value.global_object_id;
+    return true;
+}
+
 static bool parse_static_scalar(MinicParser *parser, MinicType type, MinicSourceSpan name_span) {
     MinicGlobalObjectId object_id;
 
@@ -265,9 +293,36 @@ static bool parse_static_scalar(MinicParser *parser, MinicType type, MinicSource
                 minic_parser_error(parser, "cannot record static function pointer initializer");
                 return false;
             }
-        } else if (!minic_parser_parse_zero_pointer_constant(parser) ||
-                   !minic_c0_global_object_set_zero_initialized(parser->program, object_id)) {
-            return false;
+        } else {
+            MinicExpressionId initializer_id;
+            MinicGlobalObjectId target_object_id;
+
+            if (!minic_parser_parse_expression(parser, &initializer_id, 0U)) {
+                return false;
+            }
+            if (!minic_c0_assignment_compatible(parser->program, type, initializer_id)) {
+                minic_parser_error(parser, "static pointer initializer type mismatch");
+                return false;
+            }
+            if (minic_c0_expression_is_null_pointer_constant_v0(parser->program, initializer_id)) {
+                if (!minic_c0_global_object_set_zero_initialized(parser->program, object_id)) {
+                    minic_parser_error(parser, "cannot record static null-pointer initializer");
+                    return false;
+                }
+            } else if (static_object_address_relocation_target(
+                           parser->program, initializer_id, &target_object_id)) {
+                if (!minic_c0_global_object_set_zero_initialized(parser->program, object_id) ||
+                    !minic_c0_global_object_add_object_relocation(
+                        parser->program, object_id, 0U, target_object_id)) {
+                    minic_parser_error(parser, "cannot record static object-address relocation");
+                    return false;
+                }
+            } else {
+                minic_parser_error(parser,
+                                   "static pointer initializer requires a null or zero-addend "
+                                   "object address constant");
+                return false;
+            }
         }
     } else {
         minic_parser_error(parser, "unsupported static scalar type");

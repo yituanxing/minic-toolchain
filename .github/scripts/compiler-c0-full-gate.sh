@@ -274,6 +274,12 @@ static_global_section_focused() {
         sh tests/compiler/c0/run-static-global-object-section.sh
 }
 
+static_object_address_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" \
+    BUILD_DIR="$root/build/ci-static-object-address" \
+        sh tests/compiler/c0/run-static-object-address-relocation.sh
+}
+
 external_cjson_frontier() {
     MINIC="$root/build/ci-release/bin/minic" \
     BUILD_DIR="$root/build/ci-external" \
@@ -302,6 +308,7 @@ start_gate pointer-equality-focused pointer_equality_focused
 start_gate switch-control-flow-focused switch_control_flow_focused
 start_gate external-tentative-focused external_tentative_focused
 start_gate static-global-section-focused static_global_section_focused
+start_gate static-object-address-focused static_object_address_focused
 start_gate wide-string-focused wide_string_focused
 start_gate record-array-init-focused runtime_record_array_initializer_focused
 start_gate linenoise-driven-focused linenoise_driven_focused
