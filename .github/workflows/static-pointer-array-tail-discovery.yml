@@ -8,28 +8,45 @@ concurrency:
   group: static-pointer-array-tail-discovery
   cancel-in-progress: true
 
+permissions:
+  actions: read
+  contents: read
+
 jobs:
   focused:
     runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build and focused validation
+      - name: Build, focused validation, and cached full-TU trace
         run: |
           set -Eeuo pipefail
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('src/frontend/ast_verifier.c')
+          text = path.read_text()
+          old = '''        object = &program->global_objects[index];\n        if (object->name == NULL || !type_is_valid(program, object->type) ||'''
+          new = '''        object = &program->global_objects[index];\n        fprintf(stderr,\n                "VERIFY_OBJECT index=%zu name=%s kind=%d array=%d extern=%d zero=%d tentative=%d init=%zu reloc=%zu\\n",\n                index,\n                object->name == NULL ? "<null>" : object->name,\n                (int)object->type.base_kind,\n                minic_type_is_array(object->type) ? 1 : 0,\n                object->is_extern ? 1 : 0,\n                object->is_zero_initialized ? 1 : 0,\n                object->is_tentative ? 1 : 0,\n                object->initializer_count,\n                object->relocation_count);\n        if (object->name == NULL || !type_is_valid(program, object->type) ||'''
+          if old not in text:
+              raise SystemExit('verifier trace anchor not found')
+          path.write_text(text.replace(old, new, 1))
+          PY
           make -j4 MODE=release BUILD_DIR=build/static-pointer-array-tail
           minic="$GITHUB_WORKSPACE/build/static-pointer-array-tail/bin/minic"
           MINIC="$minic" \
           BUILD_DIR="$GITHUB_WORKSPACE/build/static-pointer-array-tail-focused" \
             sh tests/compiler/c0/run-static-pointer-arrays.sh
-          mkdir -p build/fnptr-array-repro
-          cat > build/fnptr-array-repro/repro.c <<'EOF'
-          typedef int (*fn_t)(void);
-          extern fn_t start[];
-          static fn_t *levels[] = { start };
-          int main(void) { return levels != (fn_t **)0; }
-          EOF
-          cc -E -P -x c build/fnptr-array-repro/repro.c -o build/fnptr-array-repro/repro.i
-          "$minic" -S build/fnptr-array-repro/repro.i -o build/fnptr-array-repro/repro.s
-          cat build/fnptr-array-repro/repro.s
+          mkdir -p build/linux-artifact
+          gh run download 31689171683 -n linux-frontier-31689171683 -D build/linux-artifact
+          test -s build/linux-artifact/kbuild/init/main.i
+          set +e
+          "$minic" -S build/linux-artifact/kbuild/init/main.i -o build/linux-artifact/main.s \
+            >build/linux-artifact/minic.stdout 2>build/linux-artifact/minic.stderr
+          status=$?
+          set -e
+          echo "cached_tu_status=$status"
+          tail -n 80 build/linux-artifact/minic.stderr
+          test "$status" -ne 0
