@@ -25,6 +25,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           python3 tools/dev/materialize-assignment-debug.py
+          python3 tools/dev/materialize-call-debug.py
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
           make -j4 MODE=release BUILD_DIR=build/linux-tail-clean
       - name: Compile full frozen TU
@@ -39,5 +40,5 @@ jobs:
             >build/linux-tail-result/minic.stdout 2>build/linux-tail-result/minic.stderr
           status=$?
           set -e
-          tail -n 120 build/linux-tail-result/minic.stderr
+          tail -n 160 build/linux-tail-result/minic.stderr
           exit "$status"
