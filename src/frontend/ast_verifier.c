@@ -1275,16 +1275,10 @@ bool minic_c0_program_verify_target(const MinicC0Program *program,
                      relocation->target_kind != MINIC_GLOBAL_RELOCATION_FUNCTION)) {
                     return false;
                 }
-                if (relocation->target_kind == MINIC_GLOBAL_RELOCATION_OBJECT) {
-                    MinicType target_pointer_type;
-                    MinicType target_type;
-
-                    if (!minic_c0_global_relocation_object_target_type(
-                            program, relocation, &target_type) ||
-                        !minic_type_pointer_to(target_type, &target_pointer_type) ||
-                        !minic_type_assignment_compatible(slot_type, target_pointer_type)) {
-                        return false;
-                    }
+                if (relocation->target_kind == MINIC_GLOBAL_RELOCATION_OBJECT &&
+                    !minic_c0_global_relocation_object_target_compatible(
+                        program, relocation, slot_type)) {
+                    return false;
                 }
                 {
                     size_t target_addend;

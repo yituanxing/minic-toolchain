@@ -386,6 +386,44 @@ bool minic_c0_global_relocation_object_target_type(const MinicC0Program *program
                                           target_type);
 }
 
+static bool global_relocation_object_target_type_compatible(const MinicC0Program *program,
+                                                            MinicType slot_type,
+                                                            MinicType target_type) {
+    MinicType source_pointer_type;
+
+    if (program == NULL || !minic_type_is_pointer(slot_type)) {
+        return false;
+    }
+    /* A symbolic object address can denote the object itself (`&object`). */
+    if (minic_type_pointer_to(target_type, &source_pointer_type) &&
+        minic_type_assignment_compatible(slot_type, source_pointer_type)) {
+        return true;
+    }
+    /* Array-to-pointer decay and `&array[0]` have the same symbol/addend as
+     * `&array`, but their C type is pointer-to-element rather than pointer-to-array.
+     * Preserve that semantic alternative in the persisted relocation contract. */
+    if (minic_type_is_array(target_type)) {
+        const MinicArrayType *array_type;
+
+        array_type = minic_c0_program_array_type(program, target_type.array_type_id);
+        if (array_type != NULL &&
+            minic_type_pointer_to(array_type->element_type, &source_pointer_type) &&
+            minic_type_assignment_compatible(slot_type, source_pointer_type)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool minic_c0_global_relocation_object_target_compatible(const MinicC0Program *program,
+                                                         const MinicGlobalRelocation *relocation,
+                                                         MinicType slot_type) {
+    MinicType target_type;
+
+    return minic_c0_global_relocation_object_target_type(program, relocation, &target_type) &&
+           global_relocation_object_target_type_compatible(program, slot_type, target_type);
+}
+
 bool minic_c0_global_relocation_slot_type(const MinicC0Program *program,
                                           const MinicGlobalObject *object,
                                           MinicGlobalRelocationLocationKind location_kind,
@@ -457,7 +495,6 @@ static bool add_global_symbol_relocation(MinicC0Program *program,
     MinicGlobalRelocation *relocation;
     MinicType slot_pointee;
     MinicType slot_type;
-    MinicType target_pointer_type;
     MinicType target_type;
     size_t path_index;
 
@@ -485,8 +522,7 @@ static bool add_global_symbol_relocation(MinicC0Program *program,
                                           target_member_indices,
                                           target_member_depth,
                                           &target_type) ||
-          !minic_type_pointer_to(target_type, &target_pointer_type) ||
-          !minic_type_assignment_compatible(slot_type, target_pointer_type))) ||
+          !global_relocation_object_target_type_compatible(program, slot_type, target_type))) ||
         object->is_tentative ||
         (object->initializer_count != 0U &&
          ((location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_RECORD_FIELD &&

@@ -745,6 +745,9 @@ bool minic_c0_global_relocation_slot_type(const MinicC0Program *program,
 bool minic_c0_global_relocation_object_target_type(const MinicC0Program *program,
                                                    const MinicGlobalRelocation *relocation,
                                                    MinicType *target_type);
+bool minic_c0_global_relocation_object_target_compatible(const MinicC0Program *program,
+                                                         const MinicGlobalRelocation *relocation,
+                                                         MinicType slot_type);
 bool minic_c0_global_object_set_zero_initialized(MinicC0Program *program,
                                                  MinicGlobalObjectId global_object_id);
 bool minic_c0_global_object_set_extern(MinicC0Program *program,
