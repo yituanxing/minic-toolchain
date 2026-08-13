@@ -3,6 +3,7 @@
 #include "frontend/ast.h"
 #include "frontend/ast_verifier.h"
 #include "frontend/cast_normalization.h"
+#include "frontend/function_body.h"
 #include "frontend/parser.h"
 #include "target/riscv64/codegen.h"
 #include "target/target_info.h"
@@ -122,6 +123,11 @@ int minic_compile_preprocessed_file(const char *input_path,
             diagnostic, input_path, 1U, 1U, "parsed AST violates compiler contracts");
         success = false;
     }
+    if (success && !minic_c0_program_validate_function_body_ownership(&program)) {
+        minic_set_diagnostic(
+            diagnostic, input_path, 1U, 1U, "parsed FunctionBody ownership is invalid");
+        success = false;
+    }
     if (success && !minic_c0_program_normalize_casts(&program)) {
         minic_set_diagnostic(diagnostic, input_path, 1U, 1U, "cannot normalize cast expressions");
         success = false;
@@ -130,6 +136,11 @@ int minic_compile_preprocessed_file(const char *input_path,
         !minic_c0_program_verify_target(&program, MINIC_C0_AST_NORMALIZED, target_info)) {
         minic_set_diagnostic(
             diagnostic, input_path, 1U, 1U, "normalized AST violates backend contracts");
+        success = false;
+    }
+    if (success && !minic_c0_program_validate_function_body_ownership(&program)) {
+        minic_set_diagnostic(
+            diagnostic, input_path, 1U, 1U, "normalized FunctionBody ownership is invalid");
         success = false;
     }
     if (success) {
