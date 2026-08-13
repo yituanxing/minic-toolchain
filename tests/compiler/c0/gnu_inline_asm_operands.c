@@ -59,6 +59,20 @@ static void linux_bug_immediate_shape(void) {
           "i"(sizeof(AtomicLike)));
 }
 
+static int linux_rj_runtime_shape(int value) {
+    int result;
+
+    __asm__ __volatile__("add %0, zero, %z1" : "=r"(result) : "rJ"(value));
+    return result;
+}
+
+static int linux_rj_zero_shape(void) {
+    int result;
+
+    __asm__ __volatile__("add %0, zero, %z1" : "=r"(result) : "rJ"(0));
+    return result;
+}
+
 int main(void) {
     int previous;
 
