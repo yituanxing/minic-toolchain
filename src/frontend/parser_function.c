@@ -1651,6 +1651,8 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
         }
     }
     if (is_static_declaration && parser->current.kind != MINIC_TOKEN_LPAREN) {
+        MinicGlobalObjectId object_id;
+
         if (is_inline) {
             minic_parser_error(parser, "inline specifier requires a function declarator");
             return false;
@@ -1664,12 +1666,22 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                                                       &object_explicit_alignment)) {
             return false;
         }
-        if (has_section || has_visibility || object_explicit_alignment != 0U) {
+        if (has_visibility || object_explicit_alignment != 0U) {
             minic_parser_error(
                 parser, "static object symbol/layout attributes require explicit object semantics");
             return false;
         }
-        return minic_parser_parse_static_global_after_head(parser, return_type, name_span);
+        if (!minic_parser_parse_static_global_after_head(parser, return_type, name_span)) {
+            return false;
+        }
+        object_id = minic_parser_find_global_object_entity(parser, name_span);
+        if (object_id == MINIC_GLOBAL_OBJECT_INVALID ||
+            (has_section && !minic_c0_global_object_set_section(
+                                parser->program, object_id, section_name, section_name_length))) {
+            minic_parser_error(parser, "cannot persist static object section metadata");
+            return false;
+        }
+        return true;
     }
     if (!is_internal &&
         (is_function_pointer_object || parser->current.kind != MINIC_TOKEN_LPAREN)) {
