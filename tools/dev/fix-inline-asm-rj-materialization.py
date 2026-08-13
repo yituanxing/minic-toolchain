@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from pathlib import Path
+import runpy
 
 path = Path("src/target/riscv64/codegen_inline_asm.c")
 text = path.read_text()
@@ -10,3 +11,5 @@ if old in text:
 elif new not in text:
     raise SystemExit("assign_operand_registers call anchor not found")
 path.write_text(text)
+
+runpy.run_path("tools/dev/materialize-call-trace.py", run_name="__main__")
