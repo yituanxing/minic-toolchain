@@ -73,6 +73,13 @@ static int linux_rj_zero_shape(void) {
     return result;
 }
 
+static void linux_rk_immediate_shape(void) {
+    unsigned long value = 2UL;
+
+    __asm__ __volatile__("csrs 0x100, %0" : : "rK"(2UL) : "memory");
+    __asm__ __volatile__("csrs 0x100, %0" : : "rK"(value) : "memory");
+}
+
 int main(void) {
     int previous;
 

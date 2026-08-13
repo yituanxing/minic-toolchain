@@ -26,8 +26,8 @@ static bool constraint_is_immediate(const MinicInlineAsmOperand *operand) {
     return constraint_is(operand, "i") || constraint_is(operand, "I");
 }
 
-static bool constraint_is_register_or_zero(const MinicInlineAsmOperand *operand) {
-    return constraint_is(operand, "rJ");
+static bool constraint_is_register_or_target_immediate(const MinicInlineAsmOperand *operand) {
+    return constraint_is(operand, "rJ") || constraint_is(operand, "rK");
 }
 
 static bool inline_asm_integer_immediate_value(const MinicC0Program *program,
@@ -44,18 +44,37 @@ static bool inline_asm_integer_immediate_value(const MinicC0Program *program,
            minic_const_value_as_int64(program, target, &constant, value);
 }
 
-static bool inline_asm_operand_is_zero_immediate(const MinicC0Program *program,
-                                                 const MinicInlineAsmOperand *operand) {
-    int64_t value;
+static bool inline_asm_operand_target_immediate(const MinicC0Program *program,
+                                                const MinicInlineAsmOperand *operand,
+                                                int64_t *value) {
+    int64_t parsed;
 
-    return program != NULL && operand != NULL && constraint_is_register_or_zero(operand) &&
-           inline_asm_integer_immediate_value(program, operand->expression, &value) && value == 0;
+    if (program == NULL || operand == NULL || value == NULL ||
+        !constraint_is_register_or_target_immediate(operand) ||
+        !inline_asm_integer_immediate_value(program, operand->expression, &parsed)) {
+        return false;
+    }
+    if (constraint_is(operand, "rJ")) {
+        if (parsed != 0) {
+            return false;
+        }
+    } else if (constraint_is(operand, "rK")) {
+        if (parsed < 0 || parsed > 31) {
+            return false;
+        }
+    } else {
+        return false;
+    }
+    *value = parsed;
+    return true;
 }
 
 static bool inline_asm_operand_uses_immediate(const MinicC0Program *program,
                                               const MinicInlineAsmOperand *operand) {
+    int64_t value;
+
     return constraint_is_immediate(operand) ||
-           inline_asm_operand_is_zero_immediate(program, operand);
+           inline_asm_operand_target_immediate(program, operand, &value);
 }
 
 static const MinicGlobalObject *
@@ -210,7 +229,8 @@ static bool validate_input(const MinicInlineAsm *inline_asm,
             return false;
         }
     } else if (!constraint_is(operand, "r") && !constraint_is(operand, "I") &&
-               !constraint_is(operand, "i") && !constraint_is_register_or_zero(operand)) {
+               !constraint_is(operand, "i") &&
+               !constraint_is_register_or_target_immediate(operand)) {
         return false;
     }
     expression = minic_c0_program_expression(program, operand->expression);

@@ -25,6 +25,8 @@ grep -F '.half 2313' "$assembly" >/dev/null
 grep -F '.org 2b + 4' "$assembly" >/dev/null
 grep -F 'add t0, zero, t1' "$assembly" >/dev/null
 grep -F 'add t0, zero, zero' "$assembly" >/dev/null
+grep -F 'csrs 0x100, 2' "$assembly" >/dev/null
+grep -F 'csrs 0x100, t0' "$assembly" >/dev/null
 if grep -E '\+A|"r"|=r' "$assembly" >/dev/null; then
     printf '%s\n' 'unexpected raw GNU asm constraints in emitted assembly' >&2
     exit 1
@@ -61,4 +63,4 @@ grep -F "GNU asm 'I' input requires a signed 12-bit integer constant" \
     "$work/out-of-range-I.stderr" >/dev/null
 
 printf '%s\n' \
-    'PASS compiler/c0/gnu_inline_asm_operands outputs=+A,=r,+r inputs=r,I,i,rJ modifiers=z clobber=memory,t3 symbolic-i=global-string rJ=runtime+zero target=RV64'
+    'PASS compiler/c0/gnu_inline_asm_operands outputs=+A,=r,+r inputs=r,I,i,rJ,rK modifiers=z clobber=memory,t3 alternatives=rJ-zero+rK-u5 target=RV64'
