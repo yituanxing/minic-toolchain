@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from pathlib import Path
+import runpy
 
 makefile = Path("Makefile")
 text = makefile.read_text()
@@ -113,3 +114,5 @@ if old in text:
 elif new not in text:
     raise SystemExit("zero-sized aggregate call anchor not found")
 expr.write_text(text)
+
+runpy.run_path("tools/dev/materialize-indirect-aggregate-abi.py", run_name="__main__")
