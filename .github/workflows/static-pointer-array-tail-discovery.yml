@@ -34,6 +34,7 @@ jobs:
           python3 tools/dev/materialize-subxlen-aggregate-finish.py
           python3 tools/dev/fix-subxlen-materialization.py
           python3 tools/dev/materialize-aggregate-rvalue-arg.py
+          python3 tools/dev/materialize-codegen-span-trace.py
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
           make -j4 MODE=release BUILD_DIR=build/static-pointer-array-tail
           minic="$GITHUB_WORKSPACE/build/static-pointer-array-tail/bin/minic"
@@ -87,6 +88,13 @@ jobs:
           echo "cached_tu_status=$status"
           if test -s build/linux-artifact/minic.stderr; then
             tail -n 40 build/linux-artifact/minic.stderr
+            fail_line=$(sed -n 's/.*CODEGEN_FAIL statement .* kind=4 line=\([0-9][0-9]*\).*/\1/p' build/linux-artifact/minic.stderr | head -n 1)
+            if test -n "$fail_line"; then
+              start=$((fail_line > 6 ? fail_line - 6 : 1))
+              end=$((fail_line + 6))
+              echo "CODEGEN_SOURCE lines=${start}-${end}"
+              nl -ba build/linux-artifact/kbuild/init/main.i | sed -n "${start},${end}p"
+            fi
           fi
           if test "$status" -eq 0; then
             echo 'FULL_TU_PASS lines=90928'
