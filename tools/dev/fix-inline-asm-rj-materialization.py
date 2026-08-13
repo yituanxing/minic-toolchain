@@ -16,4 +16,3 @@ runpy.run_path("tools/dev/materialize-cleanup-cast-remap.py", run_name="__main__
 runpy.run_path("tools/dev/materialize-record-return-source.py", run_name="__main__")
 runpy.run_path("tools/dev/materialize-zero-sized-aggregate-abi.py", run_name="__main__")
 runpy.run_path("tools/dev/materialize-call-trace.py", run_name="__main__")
-runpy.run_path("tools/dev/materialize-frame-layout-aggregate-trace.py", run_name="__main__")
