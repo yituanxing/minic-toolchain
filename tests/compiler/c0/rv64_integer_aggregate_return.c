@@ -36,3 +36,21 @@ static unsigned int call_unwrap_word(void) {
     input.value = 7U;
     return unwrap_word(input);
 }
+
+struct nested_word {
+    unsigned long value;
+};
+
+static struct nested_word nested_identity(struct nested_word value) {
+    return value;
+}
+
+static struct nested_word nested_combine(struct nested_word left, struct nested_word right) {
+    struct nested_word result;
+    result.value = left.value | right.value;
+    return result;
+}
+
+static struct nested_word nested_call_argument(struct nested_word left, struct nested_word right) {
+    return nested_combine(left, nested_identity(right));
+}

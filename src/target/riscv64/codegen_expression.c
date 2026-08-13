@@ -1834,30 +1834,46 @@ bool minic_riscv64_emit_expression(FILE *file,
 
                 if (!minic_type_is_record(argument->type) ||
                     argument->type.record_id != abi_parameter_types[argument_index].record_id ||
-                    argument->value_category != MINIC_VALUE_LVALUE ||
                     !minic_riscv64_integer_aggregate_abi(program,
                                                          abi_parameter_types[argument_index],
                                                          &aggregate_size,
-                                                         &aggregate_chunks) ||
-                    !minic_riscv64_emit_lvalue_address(
-                        file,
-                        program,
-                        function,
-                        expression->value.call.arguments[argument_index]) ||
-                    !minic_riscv64_emit_stack_allocate(file, 16U) ||
-                    fprintf(file, "  mv t0, a0\n") < 0) {
+                                                         &aggregate_chunks)) {
                     return false;
                 }
-                {
-                    size_t chunk_index;
+                if (argument->value_category == MINIC_VALUE_LVALUE) {
+                    if (!minic_riscv64_emit_lvalue_address(
+                            file,
+                            program,
+                            function,
+                            expression->value.call.arguments[argument_index]) ||
+                        !minic_riscv64_emit_stack_allocate(file, 16U) ||
+                        fprintf(file, "  mv t0, a0\n") < 0) {
+                        return false;
+                    }
+                    {
+                        size_t chunk_index;
 
-                    for (chunk_index = 0U; chunk_index < aggregate_chunks; ++chunk_index) {
-                        if (!minic_riscv64_emit_integer_aggregate_chunk_load(
-                                file, aggregate_size, chunk_index, "t1", "t0") ||
-                            fprintf(file, "  sd t1, %zu(sp)\n", chunk_index * 8U) < 0) {
-                            return false;
+                        for (chunk_index = 0U; chunk_index < aggregate_chunks; ++chunk_index) {
+                            if (!minic_riscv64_emit_integer_aggregate_chunk_load(
+                                    file, aggregate_size, chunk_index, "t1", "t0") ||
+                                fprintf(file, "  sd t1, %zu(sp)\n", chunk_index * 8U) < 0) {
+                                return false;
+                            }
                         }
                     }
+                } else if (argument->kind == MINIC_EXPRESSION_CALL) {
+                    if (!minic_riscv64_emit_expression(
+                            file,
+                            program,
+                            function,
+                            expression->value.call.arguments[argument_index]) ||
+                        !minic_riscv64_emit_stack_allocate(file, 16U) ||
+                        fprintf(file, "  sd a0, 0(sp)\n") < 0 ||
+                        (aggregate_chunks == 2U && fprintf(file, "  sd a1, 8(sp)\n") < 0)) {
+                        return false;
+                    }
+                } else {
+                    return false;
                 }
                 continue;
             }

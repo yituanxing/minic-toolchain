@@ -28,7 +28,9 @@ grep -F 'ld a1, 0(t5)' "$assembly" >/dev/null
 grep -F 'unwrap_word:' "$assembly" >/dev/null
 grep -F 'return_word:' "$assembly" >/dev/null
 grep -F 'call unwrap_word' "$assembly" >/dev/null
+grep -F 'call nested_identity' "$assembly" >/dev/null
+grep -F 'call nested_combine' "$assembly" >/dev/null
 grep -F '  sw a0,' "$assembly" >/dev/null
 grep -F '  lwu t1, 0(t5)' "$assembly" >/dev/null
 
-printf '%s\n' 'PASS compiler/c0/rv64_integer_aggregate_return sizes=4,16 class=integer callee-partial=exact caller-partial=exact return-partial=exact record-call=1'
+printf '%s\n' 'PASS compiler/c0/rv64_integer_aggregate_return sizes=4,8,16 class=integer callee-partial=exact caller-partial=exact nested-call-argument=1 return-partial=exact'
