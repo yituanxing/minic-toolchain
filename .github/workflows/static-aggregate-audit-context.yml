@@ -1,0 +1,26 @@
+name: Static Aggregate Audit Context
+
+on:
+  push:
+    branches:
+      - probe/static-aggregate-audit-context
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  context:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch authoritative unchanged init main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p build/prior-frontier
+          gh api repos/$GITHUB_REPOSITORY/actions/artifacts/9165241854/zip > build/prior-frontier.zip
+          unzip -q build/prior-frontier.zip -d build/prior-frontier
+          test "$(wc -l < build/prior-frontier/kbuild/init/main.i | tr -d ' ')" = 90928
+          nl -ba build/prior-frontier/kbuild/init/main.i | sed -n '55745,55760p'
