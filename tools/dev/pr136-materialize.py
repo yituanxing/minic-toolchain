@@ -258,7 +258,7 @@ expect_failure() {
 }
 
 expect_failure invalid_predefined_func_name_write \
-    'assignment target must be a modifiable lvalue'
+    'assignment expression requires a modifiable object lvalue'
 expect_failure invalid_predefined_func_name_file_scope \
     '__func__ is only available inside a function'
 
