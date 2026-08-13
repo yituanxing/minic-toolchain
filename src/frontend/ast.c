@@ -54,6 +54,9 @@ void minic_c0_program_destroy(MinicC0Program *program) {
     for (index = 0U; index < program->block_count; ++index) {
         free(program->blocks[index].statements);
     }
+    for (index = 0U; index < program->file_asm_count; ++index) {
+        free(program->file_asms[index].text);
+    }
     for (index = 0U; index < program->inline_asm_count; ++index) {
         size_t clobber_index;
         size_t operand_index;
@@ -122,6 +125,7 @@ void minic_c0_program_destroy(MinicC0Program *program) {
     free(program->cleanup_contexts);
     free(program->statements);
     free(program->inline_asms);
+    free(program->file_asms);
     free(program->blocks);
     free(program->functions);
     free(program->records);
@@ -420,6 +424,28 @@ bool minic_c0_program_add_statement(MinicC0Program *program,
     *statement_id = program->statement_count;
     program->statements[program->statement_count] = *statement;
     program->statement_count += 1U;
+    return true;
+}
+
+bool minic_c0_program_add_file_asm(MinicC0Program *program, const char *text, size_t length) {
+    MinicFileAsm file_asm;
+
+    if (program == NULL || text == NULL || length == SIZE_MAX ||
+        memchr(text, '\0', length) != NULL ||
+        !minic_grow_array((void **)&program->file_asms,
+                          &program->file_asm_capacity,
+                          program->file_asm_count,
+                          sizeof(*program->file_asms))) {
+        return false;
+    }
+    (void)memset(&file_asm, 0, sizeof(file_asm));
+    file_asm.text = minic_copy_name(text, length);
+    if (file_asm.text == NULL) {
+        return false;
+    }
+    file_asm.length = length;
+    program->file_asms[program->file_asm_count] = file_asm;
+    program->file_asm_count += 1U;
     return true;
 }
 

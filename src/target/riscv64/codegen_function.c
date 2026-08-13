@@ -530,6 +530,17 @@ static bool minic_riscv64_emit_record_array_values(FILE *file,
     return initializer_index == object->initializer_count && cursor == object->storage_size;
 }
 
+static bool minic_riscv64_emit_file_asm(FILE *file, const MinicFileAsm *file_asm) {
+    if (file == NULL || file_asm == NULL || file_asm->text == NULL) {
+        return false;
+    }
+    if (file_asm->length != 0U &&
+        fwrite(file_asm->text, 1U, file_asm->length, file) != file_asm->length) {
+        return false;
+    }
+    return fputc('\n', file) != EOF;
+}
+
 static bool minic_riscv64_emit_global_object(FILE *file,
                                              const MinicC0Program *program,
                                              const MinicGlobalObject *object) {
@@ -881,6 +892,15 @@ bool minic_riscv64_write_c0_program(const char *path,
                     "CODEGEN_FAIL global=%zu name=%s\n",
                     global_index,
                     program->global_objects[global_index].name);
+        }
+    }
+    if (success && program->file_asm_count != 0U) {
+        size_t file_asm_index;
+
+        success = fprintf(file, ".text\n") >= 0;
+        for (file_asm_index = 0U; success && file_asm_index < program->file_asm_count;
+             ++file_asm_index) {
+            success = minic_riscv64_emit_file_asm(file, &program->file_asms[file_asm_index]);
         }
     }
     if (success) {

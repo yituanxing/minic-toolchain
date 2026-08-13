@@ -2,6 +2,7 @@
 
 #include <limits.h>
 #include <stdio.h>
+#include <string.h>
 
 static bool storage_is_valid(const void *data, size_t count, size_t capacity) {
     return count <= capacity && (count == 0U || data != NULL);
@@ -1226,6 +1227,18 @@ bool minic_c0_program_verify_target(const MinicC0Program *program,
                     return false;
                 }
             }
+        }
+    }
+    if (!storage_is_valid(
+            program->file_asms, program->file_asm_count, program->file_asm_capacity)) {
+        return false;
+    }
+    for (index = 0U; index < program->file_asm_count; ++index) {
+        const MinicFileAsm *file_asm;
+
+        file_asm = &program->file_asms[index];
+        if (file_asm->text == NULL || strlen(file_asm->text) != file_asm->length) {
+            return false;
         }
     }
     for (index = 0U; index < program->expression_count; ++index) {
