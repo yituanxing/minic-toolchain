@@ -1027,7 +1027,7 @@ static bool parse_external_object_definition(MinicParser *parser,
     if (minic_type_is_integer(object_type)) {
         int value;
 
-        if (!minic_parser_parse_integer_value(parser, &value) ||
+        if (!minic_parser_parse_integer_initializer_value(parser, object_type, &value) ||
             !minic_c0_global_object_add_initializer(parser->program, object_id, value)) {
             if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
                 minic_parser_error(parser, "cannot record external integer initializer");

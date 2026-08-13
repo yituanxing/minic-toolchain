@@ -145,6 +145,9 @@ bool minic_parser_parse_null_pointer_constant_expression(MinicParser *parser,
                                                          MinicType target_type);
 bool minic_parser_parse_unsigned_integer_value64(MinicParser *parser, uint64_t *value);
 bool minic_parser_parse_integer_constant_expression(MinicParser *parser, int64_t *value);
+bool minic_parser_parse_integer_initializer_value(MinicParser *parser,
+                                                  MinicType target_type,
+                                                  int *value);
 bool minic_parser_parse_alignof_type_value(MinicParser *parser,
                                            int64_t *value,
                                            MinicSourceSpan *span);
