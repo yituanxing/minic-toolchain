@@ -1215,23 +1215,30 @@ bool minic_c0_program_verify_target(const MinicC0Program *program,
             return false;
         }
         if (object->relocation_count != 0U && !object->is_zero_initialized) {
-            const MinicRecord *record;
             size_t relocation_index;
 
-            record = minic_c0_program_record(program, object->type.record_id);
-            if (record == NULL || !record->is_complete || record->is_union ||
-                object->initializer_count != record->field_count) {
-                return false;
-            }
             for (relocation_index = 0U; relocation_index < object->relocation_count;
                  ++relocation_index) {
                 const MinicGlobalRelocation *relocation;
 
                 relocation = &object->relocations[relocation_index];
-                if (relocation->location_kind != MINIC_GLOBAL_RELOCATION_LOCATION_RECORD_FIELD ||
+                if ((relocation->location_kind != MINIC_GLOBAL_RELOCATION_LOCATION_RECORD_FIELD &&
+                     relocation->location_kind !=
+                         MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR) ||
                     relocation->location_index >= object->initializer_count ||
-                    object->initializer_values[relocation->location_index] != 0) {
+                    object->initializer_values[relocation->location_index] != 0U) {
                     return false;
+                }
+                if (relocation->location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_RECORD_FIELD) {
+                    const MinicRecord *record;
+
+                    record = minic_type_is_record(object->type)
+                                 ? minic_c0_program_record(program, object->type.record_id)
+                                 : NULL;
+                    if (record == NULL || !record->is_complete || record->is_union ||
+                        object->initializer_count != record->field_count) {
+                        return false;
+                    }
                 }
             }
         }
@@ -1245,42 +1252,11 @@ bool minic_c0_program_verify_target(const MinicC0Program *program,
                 MinicType slot_type;
 
                 relocation = &object->relocations[relocation_index];
-                if (relocation->location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_SCALAR) {
-                    if (relocation->location_index != 0U || !minic_type_is_pointer(object->type)) {
-                        return false;
-                    }
-                    slot_type = object->type;
-                } else if (relocation->location_kind ==
-                           MINIC_GLOBAL_RELOCATION_LOCATION_ARRAY_ELEMENT) {
-                    const MinicArrayType *array_type;
-
-                    array_type =
-                        minic_type_is_array(object->type)
-                            ? minic_c0_program_array_type(program, object->type.array_type_id)
-                            : NULL;
-                    if (array_type == NULL ||
-                        relocation->location_index >= array_type->element_count ||
-                        !minic_type_is_pointer(array_type->element_type)) {
-                        return false;
-                    }
-                    slot_type = array_type->element_type;
-                } else if (relocation->location_kind ==
-                           MINIC_GLOBAL_RELOCATION_LOCATION_RECORD_FIELD) {
-                    const MinicRecord *record;
-                    const MinicRecordField *field;
-
-                    record = minic_type_is_record(object->type)
-                                 ? minic_c0_program_record(program, object->type.record_id)
-                                 : NULL;
-                    field = record == NULL
-                                ? NULL
-                                : minic_c0_record_field(record, relocation->location_index);
-                    if (field == NULL || field->element_count != 1U || field->is_bit_field ||
-                        field->is_flexible_array || !minic_type_is_pointer(field->type)) {
-                        return false;
-                    }
-                    slot_type = field->type;
-                } else {
+                if (!minic_c0_global_relocation_slot_type(program,
+                                                          object,
+                                                          relocation->location_kind,
+                                                          relocation->location_index,
+                                                          &slot_type)) {
                     return false;
                 }
                 if (!minic_type_pointee(slot_type, &slot_pointee) ||
@@ -1291,13 +1267,30 @@ bool minic_c0_program_verify_target(const MinicC0Program *program,
                           relocation->location_index)) ||
                     (relocation->target_kind == MINIC_GLOBAL_RELOCATION_OBJECT &&
                      (relocation->target_id >= program->global_object_count ||
-                      relocation->target_id == index || minic_type_is_function(slot_pointee))) ||
+                      minic_type_is_function(slot_pointee))) ||
                     (relocation->target_kind == MINIC_GLOBAL_RELOCATION_FUNCTION &&
                      (relocation->target_id >= program->function_count ||
                       !minic_type_is_function(slot_pointee))) ||
                     (relocation->target_kind != MINIC_GLOBAL_RELOCATION_OBJECT &&
                      relocation->target_kind != MINIC_GLOBAL_RELOCATION_FUNCTION)) {
                     return false;
+                }
+                if (relocation->target_kind == MINIC_GLOBAL_RELOCATION_OBJECT &&
+                    !minic_c0_global_relocation_object_target_compatible(
+                        program, relocation, slot_type)) {
+                    return false;
+                }
+                {
+                    size_t target_addend;
+
+                    if (!minic_data_layout_global_relocation_target_addend(
+                            minic_target_info_data_layout(target),
+                            program,
+                            relocation,
+                            &target_addend)) {
+                        return false;
+                    }
+                    (void)target_addend;
                 }
             }
         }

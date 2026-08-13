@@ -263,6 +263,141 @@ static bool static_object_address_relocation_target(const MinicC0Program *progra
     return true;
 }
 
+typedef struct MinicStaticObjectRelocationTarget {
+    MinicGlobalObjectId object_id;
+    size_t member_indices[MINIC_GLOBAL_RELOCATION_MAX_MEMBER_DEPTH];
+    size_t member_depth;
+} MinicStaticObjectRelocationTarget;
+
+typedef struct MinicStaticPointerInitializer {
+    bool has_relocation;
+    uint64_t bits;
+    MinicStaticObjectRelocationTarget relocation_target;
+} MinicStaticPointerInitializer;
+
+static bool static_object_address_relocation_path(const MinicC0Program *program,
+                                                  MinicExpressionId expression_id,
+                                                  MinicStaticObjectRelocationTarget *target) {
+    const MinicExpression *expression;
+    const MinicExpression *addressed;
+    size_t reverse_path[MINIC_GLOBAL_RELOCATION_MAX_MEMBER_DEPTH];
+    size_t depth;
+    size_t index;
+
+    if (program == NULL || target == NULL) {
+        return false;
+    }
+    expression = minic_c0_program_expression(program, expression_id);
+    while (expression != NULL && (expression->kind == MINIC_EXPRESSION_CAST ||
+                                  expression->kind == MINIC_EXPRESSION_BITCAST ||
+                                  expression->kind == MINIC_EXPRESSION_CONVERSION)) {
+        expression_id = expression->value.unary.operand;
+        expression = minic_c0_program_expression(program, expression_id);
+    }
+    if (expression == NULL || expression->kind != MINIC_EXPRESSION_ADDRESS_OF) {
+        return false;
+    }
+    addressed = minic_c0_program_expression(program, expression->value.unary.operand);
+    depth = 0U;
+    while (addressed != NULL && addressed->kind == MINIC_EXPRESSION_MEMBER) {
+        const MinicExpression *base;
+
+        if (depth == MINIC_GLOBAL_RELOCATION_MAX_MEMBER_DEPTH) {
+            return false;
+        }
+        reverse_path[depth] = addressed->value.member.field_index;
+        depth += 1U;
+        base = minic_c0_program_expression(program, addressed->value.member.base);
+        if (base != NULL && base->kind == MINIC_EXPRESSION_ADDRESS_OF) {
+            addressed = minic_c0_program_expression(program, base->value.unary.operand);
+        } else {
+            addressed = base;
+        }
+    }
+    if (addressed == NULL || addressed->kind != MINIC_EXPRESSION_GLOBAL_OBJECT) {
+        return false;
+    }
+    target->object_id = addressed->value.global_object_id;
+    if (target->object_id >= program->global_object_count) {
+        return false;
+    }
+    target->member_depth = depth;
+    for (index = 0U; index < depth; ++index) {
+        target->member_indices[index] = reverse_path[depth - index - 1U];
+    }
+    return true;
+}
+
+static bool static_pointer_integer_constant_bits(const MinicParser *parser,
+                                                 MinicExpressionId expression_id,
+                                                 uint64_t *bits) {
+    const MinicExpression *expression;
+    const MinicExpression *operand;
+    MinicConstValue constant;
+    int64_t signed_value;
+    const MinicDataLayout *layout;
+    unsigned int pointer_bits;
+
+    if (parser == NULL || bits == NULL) {
+        return false;
+    }
+    expression = minic_c0_program_expression(parser->program, expression_id);
+    if (expression == NULL || expression->kind != MINIC_EXPRESSION_CAST ||
+        !minic_type_is_pointer(expression->type)) {
+        return false;
+    }
+    operand = minic_c0_program_expression(parser->program, expression->value.unary.operand);
+    if (operand == NULL || !minic_type_is_integer(operand->type) ||
+        !minic_const_eval_integer(
+            parser->program, parser->target_info, expression->value.unary.operand, &constant) ||
+        !minic_const_value_as_int64(
+            parser->program, parser->target_info, &constant, &signed_value)) {
+        return false;
+    }
+    layout = minic_target_info_data_layout(parser->target_info);
+    if (layout == NULL || layout->pointer_size == 0U || layout->pointer_size > 8U) {
+        return false;
+    }
+    pointer_bits = (unsigned int)(layout->pointer_size * 8U);
+    *bits = (uint64_t)signed_value;
+    if (pointer_bits < 64U) {
+        *bits &= (UINT64_C(1) << pointer_bits) - UINT64_C(1);
+    }
+    return true;
+}
+
+static bool parse_static_pointer_initializer(MinicParser *parser,
+                                             MinicType target_type,
+                                             MinicStaticPointerInitializer *initializer) {
+    MinicExpressionId expression_id;
+
+    if (parser == NULL || initializer == NULL || !minic_type_is_pointer(target_type) ||
+        !minic_parser_parse_expression(parser, &expression_id, 0U)) {
+        return false;
+    }
+    (void)memset(initializer, 0, sizeof(*initializer));
+    initializer->relocation_target.object_id = MINIC_GLOBAL_OBJECT_INVALID;
+    if (!minic_c0_assignment_compatible(parser->program, target_type, expression_id)) {
+        minic_parser_error(parser, "static pointer initializer type mismatch");
+        return false;
+    }
+    if (minic_c0_expression_is_null_pointer_constant_v0(parser->program, expression_id)) {
+        return true;
+    }
+    if (static_object_address_relocation_path(
+            parser->program, expression_id, &initializer->relocation_target)) {
+        initializer->has_relocation = true;
+        return true;
+    }
+    if (static_pointer_integer_constant_bits(parser, expression_id, &initializer->bits)) {
+        return true;
+    }
+    minic_parser_error(parser,
+                       "static pointer initializer requires a null or zero-addend object address "
+                       "constant");
+    return false;
+}
+
 static bool parse_static_scalar(MinicParser *parser, MinicType type, MinicSourceSpan name_span) {
     MinicGlobalObjectId object_id;
 
@@ -346,10 +481,17 @@ static bool parse_static_scalar(MinicParser *parser, MinicType type, MinicSource
                     return false;
                 }
             } else {
-                minic_parser_error(parser,
-                                   "static pointer initializer requires a null or zero-addend "
-                                   "object address constant");
-                return false;
+                uint64_t pointer_bits;
+
+                if (!static_pointer_integer_constant_bits(parser, initializer_id, &pointer_bits) ||
+                    !minic_c0_global_object_add_initializer_bits(
+                        parser->program, object_id, pointer_bits)) {
+                    minic_parser_error(
+                        parser,
+                        "static pointer initializer requires a null or zero-addend object address "
+                        "constant");
+                    return false;
+                }
             }
         }
     } else {
@@ -449,22 +591,39 @@ parse_static_scalar_constant(MinicParser *parser, MinicGlobalObjectId object_id,
         return false;
     }
     if (minic_type_is_integer(type)) {
-        int64_t parsed;
+        uint64_t parsed_bits;
 
-        if (!minic_parser_parse_integer_constant_expression(parser, &parsed) || parsed < INT_MIN ||
-            parsed > INT_MAX ||
-            !minic_c0_global_object_add_initializer(parser->program, object_id, (int)parsed)) {
+        if (!minic_parser_parse_integer_initializer_bits(parser, type, &parsed_bits) ||
+            !minic_c0_global_object_add_initializer_bits(parser->program, object_id, parsed_bits)) {
             if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
-                minic_parser_error(parser, "static aggregate integer initializer is out of range");
+                minic_parser_error(parser, "cannot record static aggregate integer initializer");
             }
             return false;
         }
     } else if (minic_type_is_pointer(type)) {
-        if (!minic_parser_parse_zero_pointer_constant(parser) ||
-            !minic_c0_global_object_add_initializer(parser->program, object_id, 0)) {
-            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
-                minic_parser_error(parser, "cannot record static null-pointer initializer");
+        MinicStaticPointerInitializer initializer;
+        size_t slot_index;
+
+        slot_index = parser->program->global_objects[object_id].initializer_count;
+        if (!parse_static_pointer_initializer(parser, type, &initializer)) {
+            return false;
+        }
+        if (initializer.has_relocation) {
+            if (!minic_c0_global_object_add_initializer_bits(parser->program, object_id, 0U) ||
+                !minic_c0_global_object_add_object_relocation_path(
+                    parser->program,
+                    object_id,
+                    MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR,
+                    slot_index,
+                    initializer.relocation_target.object_id,
+                    initializer.relocation_target.member_indices,
+                    initializer.relocation_target.member_depth)) {
+                minic_parser_error(parser, "cannot record nested static object relocation");
+                return false;
             }
+        } else if (!minic_c0_global_object_add_initializer_bits(
+                       parser->program, object_id, initializer.bits)) {
+            minic_parser_error(parser, "cannot record static pointer constant bits");
             return false;
         }
     } else {
@@ -664,6 +823,26 @@ parse_static_constant_value(MinicParser *parser, MinicGlobalObjectId object_id, 
             parser, object_id, minic_c0_program_array_type(parser->program, type.array_type_id));
     }
     if (minic_type_is_record(type)) {
+        if (parser->current.kind == MINIC_TOKEN_LPAREN) {
+            MinicType explicit_type;
+
+            if (!minic_parser_advance(parser) ||
+                !minic_parser_parse_type_name(parser, &explicit_type) ||
+                !minic_parser_expect(parser,
+                                     MINIC_TOKEN_RPAREN,
+                                     "expected ')' after static compound literal type")) {
+                return false;
+            }
+            if (!minic_type_equal(type, explicit_type)) {
+                minic_parser_error(parser, "static record compound literal type mismatch");
+                return false;
+            }
+            if (parser->current.kind != MINIC_TOKEN_LBRACE) {
+                minic_parser_error(parser,
+                                   "static record compound literal requires initializer list");
+                return false;
+            }
+        }
         return parse_static_record_constant(
             parser, object_id, minic_c0_program_record(parser->program, type.record_id));
     }
