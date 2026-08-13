@@ -536,6 +536,48 @@ static bool parse_static_record_constant(MinicParser *parser,
         const MinicRecordField *field;
         size_t element_index;
 
+        if (parser->current.kind == MINIC_TOKEN_DOT) {
+            MinicRecordFieldPath field_path;
+            MinicSourceSpan designator_span;
+            size_t designator_index;
+
+            if (record->is_union) {
+                minic_parser_error(parser, "nested static union designators are not supported yet");
+                return false;
+            }
+            if (!minic_parser_advance(parser) || parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
+                if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                    minic_parser_error(parser, "expected member name after '.' in initializer");
+                }
+                return false;
+            }
+            designator_span = parser->current.span;
+            if (!minic_parser_find_record_field_path(
+                    parser, record, designator_span, &field_path) ||
+                !field_path.found || field_path.ambiguous || field_path.depth != 1U) {
+                minic_parser_error(parser,
+                                   "static record designator requires a direct unambiguous member");
+                return false;
+            }
+            designator_index = field_path.field_indices[0];
+            if (designator_index < field_index) {
+                minic_parser_error(parser, "static record designator cannot move backward in v0");
+                return false;
+            }
+            while (field_index < designator_index) {
+                if (!append_static_field_zeros(parser, object_id, &record->fields[field_index])) {
+                    minic_parser_error(parser,
+                                       "cannot zero-fill skipped static record designator fields");
+                    return false;
+                }
+                field_index += 1U;
+            }
+            if (!minic_parser_advance(parser) ||
+                !minic_parser_expect(
+                    parser, MINIC_TOKEN_EQUAL, "expected '=' after static record designator")) {
+                return false;
+            }
+        }
         if (field_index >= field_limit) {
             minic_parser_error(parser, "too many nested static record initializers");
             return false;
