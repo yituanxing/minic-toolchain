@@ -1413,6 +1413,16 @@ static bool parse_block_scope_extern_declaration(MinicParser *parser) {
     return minic_parser_advance(parser);
 }
 
+typedef struct MinicStaticLocalAttributeContext {
+    char section_name[256];
+    size_t section_name_length;
+    bool has_section;
+} MinicStaticLocalAttributeContext;
+
+static bool consume_static_local_interleaved_attribute(MinicParser *parser,
+                                                       const MinicParsedAttribute *attribute,
+                                                       void *opaque_context);
+
 static bool
 parse_static_local_integer_constant(MinicParser *parser, const char *range_message, int *value) {
     int64_t parsed;
@@ -1432,6 +1442,7 @@ parse_static_local_integer_constant(MinicParser *parser, const char *range_messa
 static bool parse_inferred_static_local_array(MinicParser *parser,
                                               MinicType element_type,
                                               MinicSourceSpan name_span,
+                                              MinicStaticLocalAttributeContext *attributes,
                                               MinicGlobalObjectId *out_object_id) {
     const MinicArrayType *literal_array;
     MinicGlobalObjectId object_id;
@@ -1439,11 +1450,13 @@ static bool parse_inferred_static_local_array(MinicParser *parser,
     MinicType literal_type;
     MinicType object_type;
 
-    if (parser == NULL || parser->current.kind != MINIC_TOKEN_LBRACKET) {
+    if (parser == NULL || attributes == NULL || parser->current.kind != MINIC_TOKEN_LBRACKET) {
         return false;
     }
     if (!minic_parser_advance(parser) ||
         !minic_parser_expect(parser, MINIC_TOKEN_RBRACKET, "expected ']'") ||
+        !minic_parser_parse_gnu_attribute_lists(
+            parser, consume_static_local_interleaved_attribute, attributes) ||
         !minic_parser_expect(parser, MINIC_TOKEN_EQUAL, "expected '=' after inferred array")) {
         return false;
     }
@@ -1810,6 +1823,7 @@ static bool add_implicitly_zero_initialized_static_local(MinicParser *parser,
 
 static bool parse_static_local_array_declarator(MinicParser *parser,
                                                 MinicType base_type,
+                                                MinicStaticLocalAttributeContext *attributes,
                                                 MinicGlobalObjectId *out_object_id) {
     char symbol_name[96];
     MinicSourceSpan name_span;
@@ -1821,7 +1835,7 @@ static bool parse_static_local_array_declarator(MinicParser *parser,
     size_t index;
     int symbol_length;
 
-    if (out_object_id == NULL) {
+    if (attributes == NULL || out_object_id == NULL) {
         return false;
     }
     *out_object_id = MINIC_GLOBAL_OBJECT_INVALID;
@@ -1837,7 +1851,9 @@ static bool parse_static_local_array_declarator(MinicParser *parser,
         minic_parser_error(parser, "duplicate local declaration");
         return false;
     }
-    if (!minic_parser_advance(parser)) {
+    if (!minic_parser_advance(parser) ||
+        !minic_parser_parse_gnu_attribute_lists(
+            parser, consume_static_local_interleaved_attribute, attributes)) {
         return false;
     }
 
@@ -1851,7 +1867,7 @@ static bool parse_static_local_array_declarator(MinicParser *parser,
         }
         if (probe.current.kind == MINIC_TOKEN_RBRACKET) {
             return parse_inferred_static_local_array(
-                parser, declared_type, name_span, out_object_id);
+                parser, declared_type, name_span, attributes, out_object_id);
         }
     }
     while (parser->current.kind == MINIC_TOKEN_LBRACKET) {
@@ -1864,6 +1880,10 @@ static bool parse_static_local_array_declarator(MinicParser *parser,
             return false;
         }
         bound_count += 1U;
+    }
+    if (!minic_parser_parse_gnu_attribute_lists(
+            parser, consume_static_local_interleaved_attribute, attributes)) {
+        return false;
     }
     if (bound_count == 0U) {
         char scalar_symbol_name[96];
@@ -2041,12 +2061,6 @@ static bool parse_static_local_array_declarator(MinicParser *parser,
     return true;
 }
 
-typedef struct MinicStaticLocalAttributeContext {
-    char section_name[256];
-    size_t section_name_length;
-    bool has_section;
-} MinicStaticLocalAttributeContext;
-
 static bool consume_static_local_interleaved_attribute(MinicParser *parser,
                                                        const MinicParsedAttribute *attribute,
                                                        void *opaque_context) {
@@ -2085,15 +2099,15 @@ static bool consume_static_local_interleaved_attribute(MinicParser *parser,
 }
 
 static bool parse_static_local_declaration(MinicParser *parser) {
-    MinicStaticLocalAttributeContext attributes;
+    MinicStaticLocalAttributeContext declaration_attributes;
     MinicType base_type;
 
-    (void)memset(&attributes, 0, sizeof(attributes));
+    (void)memset(&declaration_attributes, 0, sizeof(declaration_attributes));
     if (parser->current_function == MINIC_FUNCTION_INVALID ||
         !minic_parser_expect(parser, MINIC_TOKEN_KW_STATIC, "expected keyword 'static'") ||
         !minic_parser_parse_type_specifiers(parser, &base_type) ||
         !minic_parser_parse_gnu_attribute_lists(
-            parser, consume_static_local_interleaved_attribute, &attributes)) {
+            parser, consume_static_local_interleaved_attribute, &declaration_attributes)) {
         return false;
     }
     if (minic_type_is_void(base_type)) {
@@ -2102,9 +2116,11 @@ static bool parse_static_local_declaration(MinicParser *parser) {
     }
 
     for (;;) {
+        MinicStaticLocalAttributeContext attributes;
         MinicGlobalObjectId object_id;
 
-        if (!parse_static_local_array_declarator(parser, base_type, &object_id)) {
+        attributes = declaration_attributes;
+        if (!parse_static_local_array_declarator(parser, base_type, &attributes, &object_id)) {
             return false;
         }
         if (attributes.has_section &&
