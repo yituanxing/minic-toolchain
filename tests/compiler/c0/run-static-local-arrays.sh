@@ -23,6 +23,22 @@ if grep -F ".globl __minic_static_local_" "$work/static_local_array.s" >/dev/nul
 fi
 printf '%s\n' "PASS compiler/c0/static_local_array"
 
+# Inferred pointer arrays record relocation slots before their final array bound is
+# known. The entity layer must accept those semantic slots while final verification
+# and DataLayout still enforce the completed bound.
+"$minic" -S \
+    "$root/tests/compiler/c0/static_local_inferred_pointer_array.c" \
+    -o "$work/static_local_inferred_pointer_array.s"
+grep -F "__minic_static_local_" "$work/static_local_inferred_pointer_array.s" >/dev/null
+relocation_count=$(grep -c '^  \.dword ' "$work/static_local_inferred_pointer_array.s")
+if [ "$relocation_count" -lt 5 ]; then
+    printf '%s\n' \
+        "FAIL compiler/c0/static_local_inferred_pointer_array: expected five relocations" >&2
+    exit 1
+fi
+printf '%s\n' \
+    "PASS compiler/c0/static_local_inferred_pointer_array lifecycle=incomplete-to-complete relocations=$relocation_count"
+
 MINIC="$minic" \
 HOST_CC="$host_cc" \
 BUILD_DIR="$build_dir" \

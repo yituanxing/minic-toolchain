@@ -34,5 +34,10 @@ bool minic_data_layout_record_field_offset(const MinicDataLayout *layout,
                                            const MinicRecord *record,
                                            size_t field_index,
                                            size_t *offset);
+bool minic_data_layout_global_relocation_offset(const MinicDataLayout *layout,
+                                                const MinicC0Program *program,
+                                                const MinicGlobalObject *object,
+                                                const MinicGlobalRelocation *relocation,
+                                                size_t *offset);
 
 #endif

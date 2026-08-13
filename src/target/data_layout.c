@@ -347,3 +347,66 @@ bool minic_data_layout_record_field_offset(const MinicDataLayout *layout,
     return minic_data_layout_record_field_layout(
         layout, program, record, field_index, offset, &bit_offset);
 }
+
+bool minic_data_layout_global_relocation_offset(const MinicDataLayout *layout,
+                                                const MinicC0Program *program,
+                                                const MinicGlobalObject *object,
+                                                const MinicGlobalRelocation *relocation,
+                                                size_t *offset) {
+    size_t object_alignment;
+    size_t object_size;
+    size_t resolved_offset;
+
+    if (layout == NULL || program == NULL || object == NULL || relocation == NULL ||
+        offset == NULL ||
+        !minic_data_layout_type(layout, program, object->type, &object_size, &object_alignment)) {
+        return false;
+    }
+    (void)object_alignment;
+    if (relocation->location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_SCALAR) {
+        if (relocation->location_index != 0U || !minic_type_is_pointer(object->type)) {
+            return false;
+        }
+        resolved_offset = 0U;
+    } else if (relocation->location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_ARRAY_ELEMENT) {
+        const MinicArrayType *array_type;
+        size_t element_alignment;
+        size_t element_size;
+
+        if (!minic_type_is_array(object->type)) {
+            return false;
+        }
+        array_type = minic_c0_program_array_type(program, object->type.array_type_id);
+        if (array_type == NULL || relocation->location_index >= array_type->element_count ||
+            !minic_type_is_pointer(array_type->element_type) ||
+            !minic_data_layout_type(
+                layout, program, array_type->element_type, &element_size, &element_alignment) ||
+            element_size == 0U || relocation->location_index > SIZE_MAX / element_size) {
+            return false;
+        }
+        (void)element_alignment;
+        resolved_offset = relocation->location_index * element_size;
+    } else if (relocation->location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_RECORD_FIELD) {
+        const MinicRecord *record;
+        const MinicRecordField *field;
+
+        if (!minic_type_is_record(object->type)) {
+            return false;
+        }
+        record = minic_c0_program_record(program, object->type.record_id);
+        field = record == NULL ? NULL : minic_c0_record_field(record, relocation->location_index);
+        if (field == NULL || field->element_count != 1U || field->is_bit_field ||
+            field->is_flexible_array || !minic_type_is_pointer(field->type) ||
+            !minic_data_layout_record_field_offset(
+                layout, program, record, relocation->location_index, &resolved_offset)) {
+            return false;
+        }
+    } else {
+        return false;
+    }
+    if (resolved_offset > object_size || layout->pointer_size > object_size - resolved_offset) {
+        return false;
+    }
+    *offset = resolved_offset;
+    return true;
+}

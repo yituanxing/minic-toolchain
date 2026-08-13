@@ -1200,30 +1200,82 @@ bool minic_c0_program_verify_target(const MinicC0Program *program,
             (minic_type_is_void(object->type) && !object->is_extern) ||
             (object->is_extern &&
              (object->is_tentative || object->is_internal || object->is_zero_initialized ||
-              object->initializer_count != 0U || object->function_relocation_count != 0U ||
-              object->object_relocation_count != 0U)) ||
+              object->initializer_count != 0U || object->relocation_count != 0U)) ||
             (object->is_tentative &&
              (object->is_extern || object->is_zero_initialized || object->initializer_count != 0U ||
-              object->function_relocation_count != 0U || object->object_relocation_count != 0U)) ||
+              object->relocation_count != 0U)) ||
             (object->is_zero_initialized && object->initializer_count != 0U) ||
-            (object->object_relocation_count != 0U &&
-             (!object->is_zero_initialized || object->function_relocation_count != 0U ||
-              object->initializer_count != 0U)) ||
+            (object->relocation_count != 0U &&
+             (!object->is_zero_initialized || object->initializer_count != 0U)) ||
             !storage_is_valid(object->initializer_values,
                               object->initializer_count,
                               object->initializer_capacity) ||
-            !storage_is_valid(object->object_relocations,
-                              object->object_relocation_count,
-                              object->object_relocation_capacity)) {
+            !storage_is_valid(
+                object->relocations, object->relocation_count, object->relocation_capacity)) {
             return false;
         }
         {
             size_t relocation_index;
 
-            for (relocation_index = 0U; relocation_index < object->object_relocation_count;
+            for (relocation_index = 0U; relocation_index < object->relocation_count;
                  ++relocation_index) {
-                if (object->object_relocations[relocation_index].target_object_id >=
-                    program->global_object_count) {
+                const MinicGlobalRelocation *relocation;
+                MinicType slot_pointee;
+                MinicType slot_type;
+
+                relocation = &object->relocations[relocation_index];
+                if (relocation->location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_SCALAR) {
+                    if (relocation->location_index != 0U || !minic_type_is_pointer(object->type)) {
+                        return false;
+                    }
+                    slot_type = object->type;
+                } else if (relocation->location_kind ==
+                           MINIC_GLOBAL_RELOCATION_LOCATION_ARRAY_ELEMENT) {
+                    const MinicArrayType *array_type;
+
+                    array_type =
+                        minic_type_is_array(object->type)
+                            ? minic_c0_program_array_type(program, object->type.array_type_id)
+                            : NULL;
+                    if (array_type == NULL ||
+                        relocation->location_index >= array_type->element_count ||
+                        !minic_type_is_pointer(array_type->element_type)) {
+                        return false;
+                    }
+                    slot_type = array_type->element_type;
+                } else if (relocation->location_kind ==
+                           MINIC_GLOBAL_RELOCATION_LOCATION_RECORD_FIELD) {
+                    const MinicRecord *record;
+                    const MinicRecordField *field;
+
+                    record = minic_type_is_record(object->type)
+                                 ? minic_c0_program_record(program, object->type.record_id)
+                                 : NULL;
+                    field = record == NULL
+                                ? NULL
+                                : minic_c0_record_field(record, relocation->location_index);
+                    if (field == NULL || field->element_count != 1U || field->is_bit_field ||
+                        field->is_flexible_array || !minic_type_is_pointer(field->type)) {
+                        return false;
+                    }
+                    slot_type = field->type;
+                } else {
+                    return false;
+                }
+                if (!minic_type_pointee(slot_type, &slot_pointee) ||
+                    (relocation_index != 0U &&
+                     (object->relocations[relocation_index - 1U].location_kind !=
+                          relocation->location_kind ||
+                      object->relocations[relocation_index - 1U].location_index >=
+                          relocation->location_index)) ||
+                    (relocation->target_kind == MINIC_GLOBAL_RELOCATION_OBJECT &&
+                     (relocation->target_id >= program->global_object_count ||
+                      relocation->target_id == index || minic_type_is_function(slot_pointee))) ||
+                    (relocation->target_kind == MINIC_GLOBAL_RELOCATION_FUNCTION &&
+                     (relocation->target_id >= program->function_count ||
+                      !minic_type_is_function(slot_pointee))) ||
+                    (relocation->target_kind != MINIC_GLOBAL_RELOCATION_OBJECT &&
+                     relocation->target_kind != MINIC_GLOBAL_RELOCATION_FUNCTION)) {
                     return false;
                 }
             }
