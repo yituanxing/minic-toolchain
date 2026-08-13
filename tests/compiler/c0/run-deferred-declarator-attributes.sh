@@ -20,6 +20,8 @@ grep -F 'kfree_skb_reason_shape:' "$work/deferred_declarator_attributes.s" >/dev
 grep -F 'noclone_after_return_pointer:' "$work/deferred_declarator_attributes.s" >/dev/null
 grep -F 'used_object_shape:' "$work/deferred_declarator_attributes.s" >/dev/null
 grep -F 'used_function_shape:' "$work/deferred_declarator_attributes.s" >/dev/null
+grep -F '.section .init.fp-object' "$work/deferred_declarator_attributes.s" >/dev/null
+grep -F 'late_time_init_shape:' "$work/deferred_declarator_attributes.s" >/dev/null
 
 if "$minic" -S "$root/tests/compiler/c0/invalid_function_attribute_on_pointer_object.c" \
     -o "$work/invalid-object.s" >"$work/invalid-object.stdout" 2>"$work/invalid-object.stderr"; then
@@ -63,4 +65,22 @@ if "$minic" -S "$root/tests/compiler/c0/invalid_used_field.c" \
 fi
 grep -F 'unsupported GNU record field attribute' "$work/invalid-used-field.stderr" >/dev/null
 
-printf '%s\n' 'PASS compiler/c0/deferred_declarator_attributes pre-pointer=generic post-pointer=generic function-target=late object-target=late section=preserved noinline=parse-only noclone=parse-only+function-only+zero-arg used=parse-only+function-object+zero-arg'
+if "$minic" -S "$root/tests/compiler/c0/invalid_function_pointer_object_function_attribute.c" \
+    -o "$work/invalid-fp-object-function-attr.s" \
+    >"$work/invalid-fp-object-function-attr.stdout" \
+    2>"$work/invalid-fp-object-function-attr.stderr"; then
+    printf '%s\n' 'FAIL compiler/c0/deferred_declarator_attributes: function attribute leaked through function-pointer object declarator' >&2
+    exit 1
+fi
+grep -F 'unsupported GNU object attribute' "$work/invalid-fp-object-function-attr.stderr" >/dev/null
+
+if "$minic" -S "$root/tests/compiler/c0/invalid_function_pointer_typedef_interleaved_attribute.c" \
+    -o "$work/invalid-fp-typedef-attr.s" \
+    >"$work/invalid-fp-typedef-attr.stdout" 2>"$work/invalid-fp-typedef-attr.stderr"; then
+    printf '%s\n' 'FAIL compiler/c0/deferred_declarator_attributes: interleaved function-pointer typedef attribute widened silently' >&2
+    exit 1
+fi
+grep -F 'GNU attributes inside function pointer typedef declarators are not implemented yet' \
+    "$work/invalid-fp-typedef-attr.stderr" >/dev/null
+
+printf '%s\n' 'PASS compiler/c0/deferred_declarator_attributes pre-pointer=generic post-pointer=generic function-target=late object-target=late section=preserved noinline=parse-only noclone=parse-only+function-only+zero-arg used=parse-only+function-object+zero-arg fp-object-interleaved=collected+object-routed typedef-interleaved=fail-closed'
