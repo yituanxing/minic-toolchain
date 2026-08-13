@@ -32,6 +32,7 @@ jobs:
             grep -Fx 'unexpected aggregate call staging anchor' build-subxlen.err >/dev/null
           fi
           python3 tools/dev/materialize-subxlen-aggregate-finish.py
+          python3 tools/dev/fix-subxlen-materialization.py
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
           make -j4 MODE=release BUILD_DIR=build/static-pointer-array-tail
           minic="$GITHUB_WORKSPACE/build/static-pointer-array-tail/bin/minic"
