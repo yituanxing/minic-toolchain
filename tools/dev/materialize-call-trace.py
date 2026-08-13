@@ -31,5 +31,61 @@ if old in text:
     text = text.replace(old, new, 1)
 elif new not in text:
     raise SystemExit("scalar call argument trace anchor not found")
+path.write_text(text)
 
+path = Path("src/target/riscv64/codegen_statement.c")
+text = path.read_text()
+old = r'''        } else if (!minic_riscv64_emit_expression(file, program, function, statement->expression)) {
+            return false;
+        }
+        if (minic_type_is_integer(function->return_type) &&
+'''
+new = r'''        } else if (!minic_riscv64_emit_expression(file, program, function, statement->expression)) {
+            const MinicExpression *failed_value =
+                minic_c0_program_expression(program, statement->expression);
+            fprintf(stderr,
+                    "CODEGEN_RETURN_STAGE value function=%s expr=%zu kind=%d type=%d/%u vcat=%d cleanup=%zu->%zu\n",
+                    function != NULL ? function->name : "<null>",
+                    (size_t)statement->expression,
+                    failed_value == NULL ? -1 : (int)failed_value->kind,
+                    failed_value == NULL ? -1 : (int)failed_value->type.base_kind,
+                    failed_value == NULL ? 0U : failed_value->type.pointer_depth,
+                    failed_value == NULL ? -1 : (int)failed_value->value_category,
+                    (size_t)statement->cleanup_context,
+                    (size_t)statement->cleanup_stop_context);
+            return false;
+        }
+        if (minic_type_is_integer(function->return_type) &&
+'''
+if old in text:
+    text = text.replace(old, new, 1)
+elif new not in text:
+    raise SystemExit("return value trace anchor not found")
+
+old = r'''        if (!minic_riscv64_emit_cleanup_contexts(file,
+                                                 program,
+                                                 function,
+                                                 statement->cleanup_context,
+                                                 statement->cleanup_stop_context)) {
+            return false;
+        }
+'''
+new = r'''        if (!minic_riscv64_emit_cleanup_contexts(file,
+                                                 program,
+                                                 function,
+                                                 statement->cleanup_context,
+                                                 statement->cleanup_stop_context)) {
+            fprintf(stderr,
+                    "CODEGEN_RETURN_STAGE cleanup function=%s expr=%zu cleanup=%zu->%zu\n",
+                    function != NULL ? function->name : "<null>",
+                    (size_t)statement->expression,
+                    (size_t)statement->cleanup_context,
+                    (size_t)statement->cleanup_stop_context);
+            return false;
+        }
+'''
+if old in text:
+    text = text.replace(old, new, 1)
+elif new not in text:
+    raise SystemExit("return cleanup trace anchor not found")
 path.write_text(text)
