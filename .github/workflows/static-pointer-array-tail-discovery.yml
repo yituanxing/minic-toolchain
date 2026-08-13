@@ -23,7 +23,6 @@ jobs:
       - name: Materialize, validate, and compile cached Linux TU
         run: |
           set -Eeuo pipefail
-          python3 tools/dev/materialize-static-pointer-array-tail.py
           python3 tools/dev/materialize-tail-ownership.py
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
           make -j4 MODE=release BUILD_DIR=build/static-pointer-array-tail
