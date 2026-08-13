@@ -66,6 +66,9 @@ jobs:
       - name: Verify production source inventory
         run: sh tools/maintenance/check-production-source-inventory.sh
 
+      - name: Check committed source formatting
+        run: CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+
       - name: Run release host contracts
         run: make -j2 MODE=release BUILD_DIR=build/architecture-host CFLAGS=-Werror check-fast
 
