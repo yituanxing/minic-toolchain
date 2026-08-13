@@ -24,6 +24,45 @@ if marker not in text:
     text = text.replace(old, new, 1)
     parser_path.write_text(text)
 
+codegen_path = Path("src/target/riscv64/codegen_function.c")
+codegen = codegen_path.read_text()
+dispatch_marker = "has_recursive_relocation"
+if dispatch_marker not in codegen:
+    old = """    record = minic_c0_program_record(program, object->type.record_id);
+    if (record == NULL || !record->is_complete) {
+        return false;
+    }
+    if (!record->is_union && object->initializer_count == record->field_count) {
+        return minic_riscv64_emit_direct_record_values(file, program, object, record);
+    }
+"""
+    new = """    record = minic_c0_program_record(program, object->type.record_id);
+    if (record == NULL || !record->is_complete) {
+        return false;
+    }
+    {
+        bool has_recursive_relocation;
+        size_t index;
+
+        has_recursive_relocation = false;
+        for (index = 0U; index < object->relocation_count; ++index) {
+            if (object->relocations[index].location_kind ==
+                MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR) {
+                has_recursive_relocation = true;
+                break;
+            }
+        }
+        if (!record->is_union && object->initializer_count == record->field_count &&
+            !has_recursive_relocation) {
+            return minic_riscv64_emit_direct_record_values(file, program, object, record);
+        }
+    }
+"""
+    if codegen.count(old) != 1:
+        raise SystemExit("unexpected record emitter dispatch anchor")
+    codegen = codegen.replace(old, new, 1)
+    codegen_path.write_text(codegen)
+
 program_path = Path("tests/programs/c0/static_record_compound_literal.c")
 program = program_path.read_text()
 if "typedef struct NameHolder" not in program:
