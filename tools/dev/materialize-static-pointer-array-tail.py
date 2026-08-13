@@ -186,4 +186,19 @@ grep -F '.size levels, 16' "$work/static_pointer_array.s" >/dev/null
         "inferred-bound=3 object-relocations=2 null-tail=1'",
         "inferred-bound=3 object-relocations=2 null-tail=1 suffix-section=1 extern-array-decay=2'",
     )
-    run.write_text(script)
+
+legacy_strings = """grep -F '  .dword .Lminic_string_0' "$work/static_pointer_array.s" >/dev/null
+grep -F '  .dword .Lminic_string_1' "$work/static_pointer_array.s" >/dev/null
+"""
+semantic_strings = """string_relocations=$(grep -c '^  \\.dword \\.Lminic_string_' "$work/static_pointer_array.s")
+if test "$string_relocations" -ne 2; then
+    echo "FAIL static_pointer_array string-relocations=$string_relocations expected=2" >&2
+    cat "$work/static_pointer_array.s" >&2
+    exit 1
+fi
+"""
+if legacy_strings in script:
+    script = script.replace(legacy_strings, semantic_strings, 1)
+elif semantic_strings not in script:
+    raise SystemExit("unexpected string relocation gate shape")
+run.write_text(script)
