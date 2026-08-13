@@ -71,6 +71,7 @@ typedef struct MinicParser {
     const MinicTargetInfo *target_info;
     MinicBlockId current_block;
     MinicFunctionId current_function;
+    MinicGlobalObjectId current_function_name_object;
     size_t local_begin;
     size_t loop_depth;
     MinicStatementId continue_target_statement;
@@ -358,6 +359,8 @@ bool minic_parser_create_string_literal_object(MinicParser *parser,
                                                MinicGlobalObjectId *object_id,
                                                MinicType *array_type,
                                                MinicSourceSpan *span);
+bool minic_parser_get_predefined_function_name_object(MinicParser *parser,
+                                                      MinicGlobalObjectId *object_id);
 bool minic_parser_parse_string_literal_size(MinicParser *parser, uint64_t *size);
 bool minic_parser_add_string_literal_initializer(MinicParser *parser,
                                                  MinicGlobalObjectId object_id,

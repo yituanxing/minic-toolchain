@@ -144,6 +144,12 @@ static_local_focused() {
         sh tests/compiler/c0/run-static-local-arrays.sh
 }
 
+predefined_func_name_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" \
+    BUILD_DIR="$root/build/ci-predefined-func-name" \
+        sh tests/compiler/c0/run-predefined-func-name.sh
+}
+
 variadic_declaration_focused() {
     MINIC="$root/build/ci-debug/bin/minic" \
     HOST_CC=cc \
@@ -311,6 +317,7 @@ fi
 printf '%s\n' \
     'Phase 2: focused declaration/static-local/variadic-call/pointer-equality/switch/wide-string/record-array-init/linenoise/SDS/RV64 suites, differential programs, tiny-AES, and cJSON'
 start_gate static-local-focused static_local_focused
+start_gate predefined-func-name-focused predefined_func_name_focused
 start_gate variadic-declarations-focused variadic_declaration_focused
 start_gate variadic-call-focused variadic_call_focused
 start_gate pointer-equality-focused pointer_equality_focused
