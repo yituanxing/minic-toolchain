@@ -34,6 +34,7 @@ jobs:
           sh tests/compiler/c0/run-static-aggregate-initializers.sh
           sh tests/compiler/c0/run-integer-constant-bitwise.sh
           sh tests/compiler/c0/run-unnamed-bit-fields.sh
+          sh tests/compiler/c0/run-conditional-pointer-qualifiers.sh
 
       - name: Write product changes back
         run: |
@@ -45,5 +46,5 @@ jobs:
             echo 'product already materialized'
             exit 0
           fi
-          git commit -m 'feat(frontend): preserve C integer literal radix semantics'
+          git commit -m 'feat(frontend): preserve immediate pointee qualification conversions'
           git push origin HEAD:agent/kernel-param-init-family-v1
