@@ -26,6 +26,8 @@ jobs:
           artifact-ids: 9174570466
           path: build/frozen-linux
           github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: yituanxing/minic-toolchain
+          run-id: 31683780275
 
       - name: Build verifier-instrumented MiniC
         shell: bash
