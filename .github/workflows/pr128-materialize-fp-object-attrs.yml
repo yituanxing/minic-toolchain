@@ -1,0 +1,44 @@
+name: PR128 Materialize Function Pointer Object Attributes
+on:
+  push:
+    branches: [agent/function-pointer-object-attributes-v0]
+permissions:
+  contents: write
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Materialize declarator attribute carrier
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/pr128-materialize.py
+          clang-format-18 -i \
+            src/frontend/parser_internal.h \
+            src/frontend/parser_declarator.c \
+            src/frontend/parser_function.c \
+            src/frontend/parser_typedef.c \
+            tests/compiler/c0/deferred_declarator_attributes.c \
+            tests/compiler/c0/invalid_function_pointer_object_function_attribute.c \
+            tests/compiler/c0/invalid_function_pointer_typedef_interleaved_attribute.c
+      - name: Build and validate
+        run: |
+          set -Eeuo pipefail
+          make -j4
+          MINIC="$GITHUB_WORKSPACE/build/debug/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/pr128-focused" \
+            sh tests/compiler/c0/run-deferred-declarator-attributes.sh
+          make check
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+          git diff --check
+      - name: Commit product source
+        run: |
+          set -Eeuo pipefail
+          rm -f tools/dev/pr128-materialize.py .github/workflows/pr128-materialize-fp-object-attrs.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'feat(frontend): route function pointer object declarator attributes'
+          git push origin HEAD:agent/function-pointer-object-attributes-v0
