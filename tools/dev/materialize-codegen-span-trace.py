@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 from pathlib import Path
+import runpy
+
+runpy.run_path("tools/dev/materialize-inline-asm-matching.py", run_name="__main__")
 
 parser_path = Path("src/frontend/parser_function.c")
 text = parser_path.read_text()
