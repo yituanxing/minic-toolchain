@@ -1,4 +1,4 @@
-name: PR138 Diagnostic Compatibility
+name: PR138 Product Finalization
 
 on:
   push:
@@ -13,65 +13,45 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Materialize diagnostic compatibility
-        run: python3 tools/dev/pr138-diagnostic-compat.py
-      - name: Build debug compiler
+      - name: Materialize final product fixes
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/pr138-diagnostic-compat.py
+          python3 tools/dev/pr138-typed-bits-emission.py
+      - name: Build release compiler
         run: |
           set -Eeuo pipefail
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
-          make -j4 BUILD_DIR=build/diag-debug
-      - name: Recheck prior focused contracts
+          make -j4 BUILD_DIR=build/final-release CFLAGS='-std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -Werror -O2 -DNDEBUG'
+      - name: Recheck affected semantic contracts
         run: |
           set -Eeuo pipefail
-          export MINIC="$GITHUB_WORKSPACE/build/diag-debug/bin/minic"
+          export MINIC="$GITHUB_WORKSPACE/build/final-release/bin/minic"
           export HOST_CC=cc
-          export BUILD_DIR="$GITHUB_WORKSPACE/build/diag-focused"
+          export BUILD_DIR="$GITHUB_WORKSPACE/build/final-focused"
           sh tests/compiler/c0/run-static-object-address-relocation.sh
           sh tests/compiler/c0/run-external-scalar-definitions.sh
-          for script in \
-            run-short-integers.sh \
-            run-function-pointer-parameters.sh \
-            run-extern-objects.sh \
-            run-function-type-typedefs.sh \
-            run-unnamed-prototype-parameters.sh \
-            run-static-pointer-arrays.sh \
-            run-pointer-array-typed-null.sh \
-            run-static-zero-definitions.sh \
-            run-static-zero-declaration-list.sh \
-            run-record-copy-array-members.sh \
-            run-zero-aggregate-null.sh \
-            run-record-local-initializers.sh \
-            run-multiply-assignment.sh \
-            run-static-local-string-arrays.sh \
-            run-external-pointer-definitions.sh \
-            run-adjacent-string-literals.sh \
-            run-global-pointer-subscripts.sh; do
-            sh "tests/compiler/c0/$script"
-          done
-          for script in \
-            run-packed-record-layout.sh \
-            run-flexible-array-members.sh \
-            run-inline-functions.sh \
-            run-postfix-const.sh \
-            run-long-long-types.sh \
-            run-wide-integer-literals.sh \
-            run-array-bound-constant-expressions.sh \
-            run-for-declaration-initializers.sh \
-            run-void-pointer-locals.sh \
-            run-compound-assignment-expressions.sh \
-            run-void-casts.sh \
-            run-external-scalar-definitions.sh; do
-            sh "tests/compiler/c0/$script"
-          done
+          sh tests/compiler/c0/run-short-integers.sh
+          sh tests/compiler/c0/run-unsigned-char-layout.sh
+          sh tests/compiler/c0/run-static-aggregate-initializers.sh
+          sh tests/compiler/c0/run-static-pointer-arrays.sh
+          sh tests/compiler/c0/run-pointer-array-typed-null.sh
+          sh tests/compiler/c0/run-static-zero-definitions.sh
+          sh tests/compiler/c0/run-record-copy-array-members.sh
+      - name: Run complete host checks
+        run: |
+          set -Eeuo pipefail
+          make -j4 check
       - name: Commit clean product
         run: |
           set -Eeuo pipefail
           rm -f tools/dev/pr138-diagnostic-compat.py
+          rm -f tools/dev/pr138-typed-bits-emission.py
           rm -f .github/workflows/pr138-diagnostic-compat.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
           git diff --cached --check
-          git commit -m 'fix(frontend): preserve initializer diagnostics'
+          git commit -m 'fix(frontend): preserve scalar initializer semantics'
           git push origin HEAD:agent/static-aggregate-init-family-v1
