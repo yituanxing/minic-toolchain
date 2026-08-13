@@ -1205,14 +1205,35 @@ bool minic_c0_program_verify_target(const MinicC0Program *program,
              (object->is_extern || object->is_zero_initialized || object->initializer_count != 0U ||
               object->relocation_count != 0U)) ||
             (object->is_zero_initialized && object->initializer_count != 0U) ||
-            (object->relocation_count != 0U &&
-             (!object->is_zero_initialized || object->initializer_count != 0U)) ||
+            (object->relocation_count != 0U && !object->is_zero_initialized &&
+             (!minic_type_is_record(object->type) || object->initializer_count == 0U)) ||
             !storage_is_valid(object->initializer_values,
                               object->initializer_count,
                               object->initializer_capacity) ||
             !storage_is_valid(
                 object->relocations, object->relocation_count, object->relocation_capacity)) {
             return false;
+        }
+        if (object->relocation_count != 0U && !object->is_zero_initialized) {
+            const MinicRecord *record;
+            size_t relocation_index;
+
+            record = minic_c0_program_record(program, object->type.record_id);
+            if (record == NULL || !record->is_complete || record->is_union ||
+                object->initializer_count != record->field_count) {
+                return false;
+            }
+            for (relocation_index = 0U; relocation_index < object->relocation_count;
+                 ++relocation_index) {
+                const MinicGlobalRelocation *relocation;
+
+                relocation = &object->relocations[relocation_index];
+                if (relocation->location_kind != MINIC_GLOBAL_RELOCATION_LOCATION_RECORD_FIELD ||
+                    relocation->location_index >= object->initializer_count ||
+                    object->initializer_values[relocation->location_index] != 0) {
+                    return false;
+                }
+            }
         }
         {
             size_t relocation_index;

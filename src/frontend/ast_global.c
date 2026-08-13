@@ -232,8 +232,25 @@ bool minic_c0_global_object_add_initializer(MinicC0Program *program,
         return false;
     }
     object = &program->global_objects[global_object_id];
-    if (object->is_tentative || object->is_zero_initialized || object->relocation_count != 0U) {
+    if (object->is_tentative || object->is_zero_initialized) {
         return false;
+    }
+    if (object->relocation_count != 0U) {
+        size_t relocation_index;
+
+        if (!minic_type_is_record(object->type)) {
+            return false;
+        }
+        for (relocation_index = 0U; relocation_index < object->relocation_count;
+             ++relocation_index) {
+            const MinicGlobalRelocation *relocation;
+
+            relocation = &object->relocations[relocation_index];
+            if (relocation->location_kind != MINIC_GLOBAL_RELOCATION_LOCATION_RECORD_FIELD ||
+                (relocation->location_index == object->initializer_count && value != 0)) {
+                return false;
+            }
+        }
     }
     if (!grow_array((void **)&object->initializer_values,
                     &object->initializer_capacity,
@@ -324,7 +341,11 @@ static bool add_global_symbol_relocation(MinicC0Program *program,
         (target_kind == MINIC_GLOBAL_RELOCATION_FUNCTION &&
          !minic_type_is_function(slot_pointee)) ||
         (target_kind == MINIC_GLOBAL_RELOCATION_OBJECT && minic_type_is_function(slot_pointee)) ||
-        object->is_tentative || object->initializer_count != 0U ||
+        object->is_tentative ||
+        (object->initializer_count != 0U &&
+         (location_kind != MINIC_GLOBAL_RELOCATION_LOCATION_RECORD_FIELD ||
+          !minic_type_is_record(object->type) || location_index >= object->initializer_count ||
+          object->initializer_values[location_index] != 0)) ||
         (object->relocation_count != 0U &&
          (object->relocations[object->relocation_count - 1U].location_kind != location_kind ||
           object->relocations[object->relocation_count - 1U].location_index >= location_index)) ||
