@@ -1,0 +1,47 @@
+name: PR134 Materialize Typed Global Integer Initializers
+on:
+  push:
+    branches: [agent/external-integer-constant-expression-v0]
+permissions:
+  contents: write
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Materialize typed global integer initializers
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/pr134-materialize.py
+          clang-format-18 -i \
+            src/frontend/parser_internal.h \
+            src/frontend/parser_core.c \
+            src/frontend/parser_function.c \
+            src/frontend/parser_global.c \
+            tests/compiler/c0/external_scalar_definition.c \
+            tests/compiler/c0/invalid_external_integer_nonconstant.c \
+            tests/compiler/c0/invalid_external_integer_payload_range.c
+      - name: Build and validate
+        run: |
+          set -Eeuo pipefail
+          make -j4
+          MINIC="$GITHUB_WORKSPACE/build/debug/bin/minic" \
+          HOST_CC=cc \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/pr134-focused" \
+            sh tests/compiler/c0/run-external-scalar-definitions.sh
+          make check
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+          git diff --check
+      - name: Commit clean product
+        run: |
+          set -Eeuo pipefail
+          rm -f \
+            tools/dev/pr134-materialize.py \
+            .github/workflows/pr134-materialize-external-integer-consteval.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'feat(frontend): fold global integer initializers'
+          git push origin HEAD:agent/external-integer-constant-expression-v0
