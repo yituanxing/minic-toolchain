@@ -24,6 +24,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           python3 tools/dev/materialize-tail-ownership.py
+          python3 tools/dev/materialize-subxlen-aggregate.py
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
           make -j4 MODE=release BUILD_DIR=build/static-pointer-array-tail
           minic="$GITHUB_WORKSPACE/build/static-pointer-array-tail/bin/minic"
@@ -48,6 +49,19 @@ jobs:
           size0=$(grep -c '^\.size __minic_static_local_.*,[[:space:]]*0$' build/zero-size-static.s || true)
           test "$size0" -eq 2
           echo 'PASS zero-size-static record=gnu implicit+explicit size0=2'
+
+          cat > build/subxlen-aggregate.c <<'EOF'
+          struct kuid { unsigned int val; };
+          static unsigned int unwrap(struct kuid uid) { return uid.val; }
+          static struct kuid forward(struct kuid uid) { return uid; }
+          int subxlen_test(void) {
+              struct kuid value = { 7 };
+              return unwrap(forward(value)) != 7;
+          }
+          EOF
+          "$minic" -S build/subxlen-aggregate.c -o build/subxlen-aggregate.s
+          grep -F 'sw a0' build/subxlen-aggregate.s >/dev/null
+          echo 'PASS subxlen-aggregate size=4 chunks=1 parameter+return=1'
 
           MINIC="$minic" \
           BUILD_DIR="$GITHUB_WORKSPACE/build/static-pointer-array-tail-focused" \
