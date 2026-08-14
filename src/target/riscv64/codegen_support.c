@@ -376,8 +376,11 @@ bool minic_riscv64_frame_layout(const MinicC0Program *program,
 
         parameter = minic_c0_program_local(program, function->local_begin + parameter_index);
         if (parameter == NULL ||
-            !minic_riscv64_abi_place_argument(
-                program, parameter->type, true, &abi_cursor, &location)) {
+            !minic_riscv64_abi_place_argument(program,
+                                               parameter->type,
+                                               true,
+                                               &abi_cursor,
+                                               &location)) {
             return false;
         }
     }
@@ -385,8 +388,7 @@ bool minic_riscv64_frame_layout(const MinicC0Program *program,
         return false;
     }
 
-    varargs_size =
-        function->is_variadic ? (8U - abi_cursor.integer_register_count) * 8U : 0U;
+    varargs_size = function->is_variadic ? (8U - abi_cursor.integer_register_count) * 8U : 0U;
     if (function->local_storage_size > SIZE_MAX - 16U ||
         function->local_storage_size + 16U > SIZE_MAX - varargs_size) {
         return false;
