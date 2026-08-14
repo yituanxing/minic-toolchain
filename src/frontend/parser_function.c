@@ -1015,7 +1015,8 @@ static bool parse_external_object_definition(MinicParser *parser,
     const MinicGlobalObject *existing;
 
     if (parser == NULL || parser->current.kind != MINIC_TOKEN_EQUAL ||
-        (!minic_type_is_integer(object_type) && !minic_type_is_pointer(object_type))) {
+        (!minic_type_is_integer(object_type) && !minic_type_is_pointer(object_type) &&
+         !minic_type_is_record(object_type))) {
         minic_parser_error(parser, "unsupported external object definition");
         return false;
     }
@@ -1059,6 +1060,16 @@ static bool parse_external_object_definition(MinicParser *parser,
             !minic_c0_global_object_add_initializer(parser->program, object_id, value)) {
             if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
                 minic_parser_error(parser, "cannot record external integer initializer");
+            }
+            return false;
+        }
+        return minic_parser_expect(
+            parser, MINIC_TOKEN_SEMICOLON, "expected ';' after external object definition");
+    }
+    if (minic_type_is_record(object_type)) {
+        if (!minic_parser_parse_static_storage_initializer_value(parser, object_id, object_type)) {
+            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                minic_parser_error(parser, "cannot record external record initializer");
             }
             return false;
         }
