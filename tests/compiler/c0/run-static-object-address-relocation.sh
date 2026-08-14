@@ -20,6 +20,10 @@ array_count=$(grep -F -c '.dword global_address_array' "$work/static_object_addr
 test "$array_count" -eq 2
 grep -F 'string_literal_address:' "$work/static_object_address_relocation.s" >/dev/null
 grep -F '.dword .Lminic_string_' "$work/static_object_address_relocation.s" >/dev/null
+function_count=$(grep -F -c '.dword function_address_target' "$work/static_object_address_relocation.s")
+test "$function_count" -eq 2
+external_count=$(grep -F -c '.dword external_address_target' "$work/static_object_address_relocation.s")
+test "$external_count" -eq 2
 
 if "$minic" -S "$root/tests/compiler/c0/invalid_static_object_address_type.c" \
     -o "$work/invalid-type.s" >"$work/invalid-type.stdout" 2>"$work/invalid-type.stderr"; then
@@ -33,7 +37,7 @@ if "$minic" -S "$root/tests/compiler/c0/invalid_static_object_address_addend.c" 
     printf '%s\n' 'FAIL compiler/c0/static-object-address: relocation addend accepted without schema support' >&2
     exit 1
 fi
-grep -F 'static pointer initializer requires a null or zero-addend object address constant' \
+grep -F 'static pointer initializer requires a null or zero-addend symbol address constant' \
     "$work/invalid-addend.stderr" >/dev/null
 
 if "$minic" -S "$root/tests/compiler/c0/invalid_static_pointer_subscript_relocation.c" \
@@ -42,7 +46,7 @@ if "$minic" -S "$root/tests/compiler/c0/invalid_static_pointer_subscript_relocat
     printf '%s\n' 'FAIL compiler/c0/static-object-address: runtime pointer subscript accepted as link-time relocation' >&2
     exit 1
 fi
-grep -F 'static pointer initializer requires a null or zero-addend object address constant' \
+grep -F 'static pointer initializer requires a null or zero-addend symbol address constant' \
     "$work/invalid-pointer-subscript.stderr" >/dev/null
 
-printf '%s\n' 'PASS compiler/c0/static-object-address relocation=scalar-global-address+zero-offset-array-decay+string-literal cast+direct+parenthesized null=shared addend=fail-closed pointer-subscript=fail-closed type=checked'
+printf '%s\n' 'PASS compiler/c0/static-object-address relocation=symbolic-object+function explicit-pointer-cast=preserved scalar+aggregate=1 zero-offset-array-decay+string-literal null=shared addend=fail-closed pointer-subscript=fail-closed type=checked'
