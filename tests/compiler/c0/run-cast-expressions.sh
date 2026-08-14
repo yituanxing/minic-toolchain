@@ -42,6 +42,15 @@ grep -F "  srli a0, a0, 32" "$work/cast_expressions.s" >/dev/null
 grep -F "  addw a0, t0, a0" "$work/cast_expressions.s" >/dev/null
 printf '%s\n' "PASS compiler/c0/cast_integer_lowering"
 
+compile_success cast_integer_conversion
+grep -F "  addiw a0, a0, 0" "$work/cast_integer_conversion.s" >/dev/null
+if grep -F "  addw a0, t0, a0" "$work/cast_integer_conversion.s" >/dev/null; then
+    printf '%s\n' \
+        "FAIL compiler/c0/cast_integer_conversion: integer cast lowered as synthetic addition" >&2
+    exit 1
+fi
+printf '%s\n' "PASS compiler/c0/cast_integer_conversion normalized=conversion"
+
 compile_success cast_typedef_shadow
 compile_success cast_plain_char
 compile_success cast_integer_to_double
@@ -60,18 +69,17 @@ grep -F "  li a0, 0" "$work/null_pointer_constant.s" >/dev/null
 grep -F "  j .Lmake_null_return" "$work/null_pointer_constant.s" >/dev/null
 printf '%s\n' "PASS compiler/c0/null_pointer_constant"
 
-expect_failure \
-    invalid_cast_pointer_to_integer \
-    "unsupported cast between these types"
-expect_failure \
-    invalid_cast_integer_to_pointer \
-    "unsupported cast between these types"
+MINIC="$minic" \
+HOST_CC="$host_cc" \
+BUILD_DIR="$build_dir" \
+sh "$root/tests/compiler/c0/run-pointer-integer-casts.sh"
+
 expect_failure \
     invalid_cast_integer_to_float \
     "unsupported cast between these types"
 expect_failure \
     invalid_cast_assignment_target \
-    "assignment expression requires a modifiable scalar lvalue"
+    "assignment expression requires a modifiable object lvalue"
 
 MINIC="$minic" \
 HOST_CC="$host_cc" \

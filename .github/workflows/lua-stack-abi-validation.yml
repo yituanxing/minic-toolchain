@@ -1,0 +1,86 @@
+name: RV64 Stack ABI Regression
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rv64-stack-abi-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  stack-abi:
+    runs-on: ubuntu-24.04
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build committed MiniC source
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+          git diff --exit-code -- include src tools/minic
+          make -j4 MODE=release BUILD_DIR=build/rv64-stack-abi-compiler
+
+      - name: Restore RISC-V package archives
+        id: rv64-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/minic-apt/archives
+          key: rv64-apt-${{ runner.os }}-${{ runner.arch }}-noble-${{ hashFiles('tools/ci/ubuntu-24.04-packages.txt') }}
+
+      - name: Install RISC-V runtime tools
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          apt_cache="$HOME/.cache/minic-apt/archives"
+          mkdir -p "$apt_cache/partial"
+          mapfile -t packages < <(grep -Ev '^[[:space:]]*(#|$)' tools/ci/ubuntu-24.04-packages.txt)
+          mapfile -d '' -t cached < <(find "$apt_cache" -maxdepth 1 -type f -name '*.deb' -print0 | sort -z)
+          if (( ${#cached[@]} > 0 )); then
+            sudo apt-get install -y --no-install-recommends "${cached[@]}"
+          else
+            sudo apt-get update
+            sudo apt-get \
+              -o Dir::Cache::archives="$apt_cache" \
+              -o APT::Keep-Downloaded-Packages=true \
+              install -y --no-install-recommends "${packages[@]}"
+          fi
+          sudo chown -R "$USER:$USER" "$(dirname "$apt_cache")"
+          sh tools/ci/verify-validation-tools.sh
+
+      - name: Run GCC-MiniC fixed stack-argument differential
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/rv64-stack-abi-compiler/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/rv64-stack-abi" \
+          RISCV_CC=riscv64-linux-gnu-gcc \
+          QEMU_RISCV64=qemu-riscv64 \
+            sh tests/compiler/c0/run-stack-fixed-arguments-rv64.sh
+
+      - name: Run GCC-MiniC named GNU asm operand differential
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/rv64-stack-abi-compiler/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/rv64-named-asm" \
+          RISCV_CC=riscv64-linux-gnu-gcc \
+          QEMU_RISCV64=qemu-riscv64 \
+            sh tests/compiler/c0/run-gnu-inline-asm-named-operands-rv64.sh
+
+      - name: Run GCC-MiniC builtin clzll differential
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/rv64-stack-abi-compiler/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/rv64-builtin-clzll" \
+          RISCV_CC=riscv64-linux-gnu-gcc \
+          QEMU_RISCV64=qemu-riscv64 \
+            sh tests/compiler/c0/run-builtin-clzll-rv64.sh

@@ -13,7 +13,7 @@ mkdir -p "$work"
     -o "$work/for_declaration_initializer.i"
 "$minic" -S "$work/for_declaration_initializer.i" \
     -o "$work/for_declaration_initializer.s"
-printf '%s\n' 'PASS compiler/c0/for_declaration_initializer scope=condition,update,body redeclare-after-loop=1'
+printf '%s\n' 'PASS compiler/c0/for_declaration_initializer scope=condition,update,body redeclare-after-loop=1 parenthesized-local=block+for shared-direct-declarator=1'
 
 "$host_cc" -E -P -x c "$root/tests/compiler/c0/invalid_for_declaration_scope.c" \
     -o "$work/invalid_for_declaration_scope.i"

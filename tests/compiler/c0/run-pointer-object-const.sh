@@ -32,13 +32,17 @@ expect_failure() {
             "FAIL compiler/c0/$name: compilation unexpectedly succeeded" >&2
         exit 1
     fi
-    grep -F "$diagnostic" "$work/$name.stderr" >/dev/null
+    if ! grep -F "$diagnostic" "$work/$name.stderr" >/dev/null; then
+        printf '%s\n' "FAIL compiler/c0/$name: diagnostic mismatch" >&2
+        cat "$work/$name.stderr" >&2
+        exit 1
+    fi
     printf '%s\n' "PASS compiler/c0/$name"
 }
 
 expect_failure \
     invalid_const_pointer_reassignment \
-    "assignment expression requires a modifiable scalar lvalue"
+    "assignment expression requires a modifiable object lvalue"
 expect_failure \
     invalid_const_pointer_parameter_reassignment \
-    "assignment expression requires a modifiable scalar lvalue"
+    "assignment expression requires a modifiable object lvalue"

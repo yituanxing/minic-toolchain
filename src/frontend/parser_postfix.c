@@ -6,67 +6,51 @@ static bool postfix_element_type(const MinicParser *parser,
                                  MinicExpressionId base_id,
                                  MinicType *element_type) {
     const MinicExpression *base;
+    MinicArrayObjectInfo array_info;
 
-    if (element_type == NULL) {
+    if (parser == NULL || element_type == NULL) {
         return false;
     }
     base = minic_c0_program_expression(parser->program, base_id);
     if (base == NULL) {
         return false;
     }
-    if (base->kind == MINIC_EXPRESSION_LOCAL) {
-        const MinicLocal *local;
-
-        local = minic_c0_program_local(parser->program, base->value.local_id);
-        if (local != NULL && local->is_array) {
-            *element_type = local->type;
-            return true;
-        }
-    }
-    if (minic_type_is_array(base->type)) {
-        const MinicArrayType *array_type;
-
-        array_type = minic_c0_program_array_type(parser->program, base->type.array_type_id);
-        if (array_type == NULL) {
-            return false;
-        }
-        *element_type = array_type->element_type;
+    if (minic_c0_expression_array_object_info(parser->program, base, &array_info)) {
+        *element_type = array_info.element_type;
         return true;
     }
     return minic_type_pointee(base->type, element_type);
 }
 
-static bool array_object_element_type(const MinicParser *parser,
-                                      MinicExpressionId expression_id,
-                                      MinicType *element_type) {
+bool minic_parser_materialize_array_object_type(MinicParser *parser,
+                                                MinicExpressionId expression_id,
+                                                MinicType *array_type) {
     const MinicExpression *expression;
+    MinicArrayObjectInfo info;
 
-    if (element_type == NULL) {
+    if (parser == NULL || array_type == NULL) {
         return false;
     }
     expression = minic_c0_program_expression(parser->program, expression_id);
-    if (expression == NULL || expression->value_category != MINIC_VALUE_LVALUE) {
+    if (expression == NULL ||
+        !minic_c0_expression_array_object_info(parser->program, expression, &info)) {
         return false;
     }
-    if (expression->kind == MINIC_EXPRESSION_LOCAL) {
-        const MinicLocal *local;
-
-        local = minic_c0_program_local(parser->program, expression->value.local_id);
-        if (local != NULL && local->is_array) {
-            *element_type = local->type;
-            return true;
-        }
+    if (info.has_materialized_type) {
+        *array_type = expression->type;
+        return true;
     }
-    if (minic_type_is_array(expression->type)) {
-        const MinicArrayType *array_type;
-
-        array_type = minic_c0_program_array_type(parser->program, expression->type.array_type_id);
-        if (array_type != NULL) {
-            *element_type = array_type->element_type;
-            return true;
-        }
+    if (info.is_zero_length) {
+        minic_parser_error(parser, "zero-length legacy array type materialization is unsupported");
+        return false;
     }
-    return false;
+    if (info.is_incomplete) {
+        return minic_c0_program_add_incomplete_array_type(
+            parser->program, info.element_type, array_type);
+    }
+    return info.element_count != 0U &&
+           minic_c0_program_add_array_type(
+               parser->program, info.element_type, info.element_count, array_type);
 }
 
 bool minic_parser_apply_array_decay(MinicParser *parser,
@@ -80,6 +64,7 @@ bool minic_parser_apply_array_decay(MinicParser *parser,
     MinicExpressionId zero_id;
     MinicExpressionId subscript_id;
     MinicType element_type;
+    MinicArrayObjectInfo array_info;
 
     base = minic_c0_program_expression(parser->program, input_id);
     if (base == NULL) {
@@ -87,10 +72,11 @@ bool minic_parser_apply_array_decay(MinicParser *parser,
         return false;
     }
     base_span = base->span;
-    if (!array_object_element_type(parser, input_id, &element_type)) {
+    if (!minic_c0_expression_array_object_info(parser->program, base, &array_info)) {
         *expression_id = input_id;
         return true;
     }
+    element_type = array_info.element_type;
 
     (void)memset(&zero, 0, sizeof(zero));
     zero.kind = MINIC_EXPRESSION_INTEGER;
@@ -176,8 +162,13 @@ static const MinicFunctionType *indirect_callee_type(const MinicParser *parser,
     MinicType function_type;
 
     callee = minic_c0_program_expression(parser->program, callee_id);
-    if (callee == NULL || !minic_type_pointee(callee->type, &function_type) ||
-        !minic_type_is_function(function_type)) {
+    if (callee == NULL) {
+        return NULL;
+    }
+    function_type = callee->type;
+    if (!minic_type_is_function(function_type) &&
+        (!minic_type_pointee(callee->type, &function_type) ||
+         !minic_type_is_function(function_type))) {
         return NULL;
     }
     return minic_c0_program_function_type(parser->program, function_type.function_type_id);
@@ -192,7 +183,7 @@ static bool parse_indirect_arguments(MinicParser *parser,
                                      const MinicFunctionType *function_type) {
     size_t argument_index;
 
-    if (function_type == NULL || function_type->parameter_count > 8U ||
+    if (function_type == NULL || function_type->parameter_count > MINIC_MAX_FUNCTION_PARAMETERS ||
         !minic_parser_advance(parser)) {
         return false;
     }
@@ -200,14 +191,18 @@ static bool parse_indirect_arguments(MinicParser *parser,
         const MinicExpression *argument;
         MinicExpressionId argument_id;
 
-        if (parser->current.kind == MINIC_TOKEN_RPAREN ||
-            !minic_parser_parse_expression(parser, &argument_id, 0U)) {
+        if (parser->current.kind == MINIC_TOKEN_RPAREN) {
             indirect_argument_count_error(parser);
+            return false;
+        }
+        if (!minic_parser_parse_expression(parser, &argument_id, 0U)) {
             return false;
         }
         argument = minic_c0_program_expression(parser->program, argument_id);
         if (argument == NULL ||
-            !minic_c0_assignment_compatible(
+            !minic_parser_apply_fixed_call_argument_conversion(
+                parser, function_type->parameter_types[argument_index], &argument_id) ||
+            !minic_c0_fixed_call_argument_compatible(
                 parser->program, function_type->parameter_types[argument_index], argument_id)) {
             minic_parser_error(parser, "indirect call argument type does not match declaration");
             return false;
@@ -233,6 +228,7 @@ static bool parse_one_indirect_call(MinicParser *parser,
                                     MinicExpressionId *expression_id) {
     const MinicExpression *callee;
     const MinicFunctionType *function_type;
+    MinicFunctionType function_type_snapshot;
     MinicExpression call;
     MinicSourcePosition call_end;
 
@@ -242,15 +238,16 @@ static bool parse_one_indirect_call(MinicParser *parser,
         minic_parser_error(parser, "called expression must have function-pointer type");
         return false;
     }
+    function_type_snapshot = *function_type;
 
     (void)memset(&call, 0, sizeof(call));
     call.kind = MINIC_EXPRESSION_CALL;
     call.span.begin = callee->span.begin;
-    call.type = function_type->return_type;
+    call.type = function_type_snapshot.return_type;
     call.value_category = MINIC_VALUE_RVALUE;
     call.value.call.function_id = MINIC_FUNCTION_INVALID;
     call.value.call.callee = callee_id;
-    if (!parse_indirect_arguments(parser, &call, function_type)) {
+    if (!parse_indirect_arguments(parser, &call, &function_type_snapshot)) {
         return false;
     }
     call_end = parser->current.span.end;
@@ -269,7 +266,7 @@ static bool parse_one_postfix_update(MinicParser *parser,
     MinicSourceSpan operand_span;
     MinicSourcePosition update_end;
     MinicType operand_type;
-    MinicType array_element_type;
+    MinicArrayObjectInfo array_info;
     MinicType pointee_type;
     MinicUnaryOperator operator_kind;
 
@@ -281,7 +278,7 @@ static bool parse_one_postfix_update(MinicParser *parser,
     operand_span = operand->span;
     operand_type = operand->type;
     if (operand->value_category != MINIC_VALUE_LVALUE || minic_type_is_const(operand_type) ||
-        array_object_element_type(parser, operand_id, &array_element_type)) {
+        minic_c0_expression_array_object_info(parser->program, operand, &array_info)) {
         minic_parser_error(parser, "postfix update requires a modifiable scalar lvalue");
         return false;
     }

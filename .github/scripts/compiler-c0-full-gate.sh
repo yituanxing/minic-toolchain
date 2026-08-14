@@ -144,6 +144,24 @@ static_local_focused() {
         sh tests/compiler/c0/run-static-local-arrays.sh
 }
 
+predefined_func_name_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" \
+    BUILD_DIR="$root/build/ci-predefined-func-name" \
+        sh tests/compiler/c0/run-predefined-func-name.sh
+}
+
+static_aggregate_initializer_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" \
+    BUILD_DIR="$root/build/ci-static-aggregate-initializers" \
+        sh tests/compiler/c0/run-static-aggregate-initializers.sh
+}
+
+static_nested_record_designator_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" \
+    BUILD_DIR="$root/build/ci-static-nested-record-designator" \
+        sh tests/compiler/c0/run-static-nested-record-designator.sh
+}
+
 variadic_declaration_focused() {
     MINIC="$root/build/ci-debug/bin/minic" \
     HOST_CC=cc \
@@ -174,6 +192,20 @@ switch_control_flow_focused() {
         sh tests/compiler/c0/run-switch-control-flow.sh
 }
 
+wide_string_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" \
+    HOST_CC=cc \
+    BUILD_DIR="$root/build/ci-wide-string" \
+        sh tests/compiler/c0/run-wide-string-literal.sh
+}
+
+runtime_record_array_initializer_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" \
+    HOST_CC=cc \
+    BUILD_DIR="$root/build/ci-runtime-record-array-initializer" \
+        sh tests/compiler/c0/run-runtime-record-array-initializers.sh
+}
+
 linenoise_driven_focused() {
     local script
     for script in \
@@ -183,7 +215,9 @@ linenoise_driven_focused() {
         run-function-type-typedefs.sh \
         run-unnamed-prototype-parameters.sh \
         run-static-pointer-arrays.sh \
+        run-pointer-array-typed-null.sh \
         run-static-zero-definitions.sh \
+        run-static-zero-declaration-list.sh \
         run-record-copy-array-members.sh \
         run-zero-aggregate-null.sh \
         run-record-local-initializers.sh \
@@ -247,6 +281,32 @@ external_tiny_aes() {
         sh tests/external/tiny-aes-c/probe.sh
 }
 
+external_tentative_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" \
+    HOST_CC=cc \
+    BUILD_DIR="$root/build/ci-external-tentative" \
+        sh tests/compiler/c0/run-external-tentative-definitions.sh
+}
+
+static_global_section_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" \
+    BUILD_DIR="$root/build/ci-static-global-section" \
+        sh tests/compiler/c0/run-static-global-object-section.sh
+}
+
+static_object_address_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" \
+    BUILD_DIR="$root/build/ci-static-object-address" \
+        sh tests/compiler/c0/run-static-object-address-relocation.sh
+}
+
+file_scope_basic_asm_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" \
+    BUILD_DIR="$root/build/ci-file-scope-basic-asm" \
+    HOST_CC=cc \
+        sh tests/compiler/c0/run-file-scope-basic-asm.sh
+}
+
 external_cjson_frontier() {
     MINIC="$root/build/ci-release/bin/minic" \
     BUILD_DIR="$root/build/ci-external" \
@@ -267,12 +327,21 @@ if ! wait_phase; then
 fi
 
 printf '%s\n' \
-    'Phase 2: focused declaration/static-local/variadic-call/pointer-equality/switch/linenoise/SDS/RV64 suites, differential programs, tiny-AES, and cJSON'
+    'Phase 2: focused declaration/static-local/variadic-call/pointer-equality/switch/wide-string/record-array-init/linenoise/SDS/RV64 suites, differential programs, tiny-AES, and cJSON'
 start_gate static-local-focused static_local_focused
+start_gate predefined-func-name-focused predefined_func_name_focused
+start_gate static-aggregate-initializer-focused static_aggregate_initializer_focused
+start_gate static-nested-record-designator-focused static_nested_record_designator_focused
 start_gate variadic-declarations-focused variadic_declaration_focused
 start_gate variadic-call-focused variadic_call_focused
 start_gate pointer-equality-focused pointer_equality_focused
 start_gate switch-control-flow-focused switch_control_flow_focused
+start_gate external-tentative-focused external_tentative_focused
+start_gate static-global-section-focused static_global_section_focused
+start_gate static-object-address-focused static_object_address_focused
+start_gate file-scope-basic-asm-focused file_scope_basic_asm_focused
+start_gate wide-string-focused wide_string_focused
+start_gate record-array-init-focused runtime_record_array_initializer_focused
 start_gate linenoise-driven-focused linenoise_driven_focused
 start_gate sds-driven-focused sds_driven_focused
 start_gate rv64-focused rv64_focused

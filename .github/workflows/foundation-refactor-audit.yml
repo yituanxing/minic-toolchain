@@ -1,0 +1,59 @@
+name: Foundation Refactor Validation
+
+on:
+  push:
+    branches:
+      - refactor/foundation-v1
+  pull_request:
+    branches:
+      - main
+      - refactor/foundation-v1
+
+permissions:
+  contents: read
+
+concurrency:
+  group: foundation-refactor-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  committed-source:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify committed source is canonical
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+          git diff --exit-code -- include src tools/minic
+
+      - name: Build committed compiler
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release BUILD_DIR=build/foundation-compiler
+
+      - name: Run fast compiler contracts
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release BUILD_DIR=build/foundation-compiler check-fast
+
+      - name: Run Foundation focused semantics
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/foundation-compiler/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/foundation-focused" \
+          HOST_CC=cc \
+            sh tests/compiler/c0/run-foundation-focused.sh
+
+      - name: Recheck source-of-truth invariant
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git diff --exit-code -- include src tools/minic
+          printf '%s\n' 'PASS foundation/source-of-truth committed-source-only=1'

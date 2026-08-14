@@ -124,7 +124,7 @@ static int test_operator_sequence(void)
 
 static int test_comparison_operators(void)
 {
-    static const char source[] = "= == ! != < << <= > >> >=";
+    static const char source[] = "= == ! != < << <<= <= > >> >>= >=";
     static const struct {
         MinicTokenKind kind;
         size_t column;
@@ -135,11 +135,13 @@ static int test_comparison_operators(void)
         {MINIC_TOKEN_BANG_EQUAL, 8U},
         {MINIC_TOKEN_LESS, 11U},
         {MINIC_TOKEN_LESS_LESS, 13U},
-        {MINIC_TOKEN_LESS_EQUAL, 16U},
-        {MINIC_TOKEN_GREATER, 19U},
-        {MINIC_TOKEN_GREATER_GREATER, 21U},
-        {MINIC_TOKEN_GREATER_EQUAL, 24U},
-        {MINIC_TOKEN_EOF, 26U}
+        {MINIC_TOKEN_LESS_LESS_EQUAL, 16U},
+        {MINIC_TOKEN_LESS_EQUAL, 20U},
+        {MINIC_TOKEN_GREATER, 23U},
+        {MINIC_TOKEN_GREATER_GREATER, 25U},
+        {MINIC_TOKEN_GREATER_GREATER_EQUAL, 28U},
+        {MINIC_TOKEN_GREATER_EQUAL, 32U},
+        {MINIC_TOKEN_EOF, 34U}
     };
     MinicLexer lexer;
     size_t index;
@@ -157,6 +159,36 @@ static int test_comparison_operators(void)
                 expected[index].column) != 0) {
             return 1;
         }
+    }
+    return 0;
+}
+
+static int test_alignof_keyword_boundaries(void)
+{
+    static const char source[] = "_Alignof __alignof__ __alignof alignof";
+    MinicLexer lexer;
+
+    minic_lexer_initialize(&lexer, "alignof.c", source, sizeof(source) - 1U);
+    if (expect_token(&lexer, MINIC_TOKEN_KW_ALIGNOF, 1U, 1U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_KW_ALIGNOF, 1U, 10U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_KW_ALIGNOF, 1U, 22U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_IDENTIFIER, 1U, 32U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_EOF, 1U, 39U) != 0) {
+        return 1;
+    }
+    return 0;
+}
+
+static int test_static_assert_keyword_boundaries(void)
+{
+    static const char source[] = "_Static_assert _Static_assertion";
+    MinicLexer lexer;
+
+    minic_lexer_initialize(&lexer, "static-assert.c", source, sizeof(source) - 1U);
+    if (expect_token(&lexer, MINIC_TOKEN_KW_STATIC_ASSERT, 1U, 1U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_IDENTIFIER, 1U, 16U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_EOF, 1U, 33U) != 0) {
+        return 1;
     }
     return 0;
 }
@@ -357,6 +389,20 @@ static int test_string_literals(void)
     return 0;
 }
 
+static int test_wide_string_literals(void)
+{
+    static const char source[] = "L\"SecureBoot\" Lvalue";
+    MinicLexer lexer;
+
+    minic_lexer_initialize(&lexer, "wide-strings.c", source, sizeof(source) - 1U);
+    if (expect_token(&lexer, MINIC_TOKEN_WIDE_STRING_LITERAL, 1U, 1U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_IDENTIFIER, 1U, 15U) != 0 ||
+        expect_token(&lexer, MINIC_TOKEN_EOF, 1U, 21U) != 0) {
+        return 1;
+    }
+    return 0;
+}
+
 static int test_invalid_string_literals(void)
 {
     static const char unterminated[] = "\"abc";
@@ -451,6 +497,8 @@ int main(void)
     if (test_c0_sequence() != 0 ||
         test_operator_sequence() != 0 ||
         test_comparison_operators() != 0 ||
+        test_alignof_keyword_boundaries() != 0 ||
+        test_static_assert_keyword_boundaries() != 0 ||
         test_control_keyword_boundaries() != 0 ||
         test_for_keyword_boundaries() != 0 ||
         test_break_keyword_boundaries() != 0 ||
@@ -463,6 +511,7 @@ int main(void)
         test_keyword_boundaries() != 0 ||
         test_floating_constants() != 0 ||
         test_string_literals() != 0 ||
+        test_wide_string_literals() != 0 ||
         test_invalid_string_literals() != 0 ||
         test_invalid_floating_exponent() != 0 ||
         test_invalid_character() != 0) {

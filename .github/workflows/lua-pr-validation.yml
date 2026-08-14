@@ -1,0 +1,95 @@
+name: Lua PR Validation
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lua-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  lua-compile:
+    name: lua-compile
+    runs-on: ubuntu-24.04
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build committed MiniC source
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+          git diff --exit-code -- include src tools/minic
+          make -j4 MODE=release BUILD_DIR=build/lua-compiler
+
+      - name: Verify focused Lua-driven semantics
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/lua-compiler/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/lua-focused" \
+          HOST_CC=cc \
+            sh tests/compiler/c0/run-foundation-focused.sh
+
+      - name: Upload nested aggregate diagnostic
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lua-nested-aggregate-diagnostic
+          path: build/lua-focused/tests/compiler-c0-static-nested-record-initializer/static_nested_record_initializer.s
+          if-no-files-found: ignore
+          retention-days: 1
+
+      - name: Restore RISC-V package archives
+        id: rv64-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/minic-apt/archives
+          key: rv64-apt-${{ runner.os }}-${{ runner.arch }}-noble-${{ hashFiles('tools/ci/ubuntu-24.04-packages.txt') }}
+
+      - name: Install real RISC-V Linux headers and toolchain
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          apt_cache="$HOME/.cache/minic-apt/archives"
+          mkdir -p "$apt_cache/partial"
+          mapfile -t packages < <(grep -Ev '^[[:space:]]*(#|$)' tools/ci/ubuntu-24.04-packages.txt)
+          mapfile -d '' -t cached < <(find "$apt_cache" -maxdepth 1 -type f -name '*.deb' -print0 | sort -z)
+          if (( ${#cached[@]} > 0 )); then
+            sudo apt-get install -y --no-install-recommends "${cached[@]}"
+          else
+            sudo apt-get update
+            sudo apt-get \
+              -o Dir::Cache::archives="$apt_cache" \
+              -o APT::Keep-Downloaded-Packages=true \
+              install -y --no-install-recommends "${packages[@]}"
+          fi
+          sudo chown -R "$USER:$USER" "$(dirname "$apt_cache")"
+          sh tools/ci/verify-validation-tools.sh
+
+      - name: Validate official Lua 5.5.0 frontier
+        shell: bash
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          set -Eeuo pipefail
+          export MINIC="$GITHUB_WORKSPACE/build/lua-compiler/bin/minic"
+          export BUILD_DIR="$GITHUB_WORKSPACE/build/lua-discovery"
+          export HOST_CC=cc
+          export TARGET_CC=riscv64-linux-gnu-gcc
+
+          if test "$HEAD_REF" = "external/lua-discovery"; then
+            sh tests/external/lua/probe.sh
+          else
+            LUA_FRONTIER_MIN_PASSED=0 \
+            LUA_FRONTIER_FIRST_SOURCE=lapi.c \
+            LUA_FRONTIER_MIN_FIRST_LINE=1650 \
+              sh tests/external/lua/frontier-regression.sh
+          fi

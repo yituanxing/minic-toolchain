@@ -22,7 +22,7 @@ if test "$call_count" -ne 1; then
     exit 1
 fi
 grep -F "  xor a0, t0, a0" "$work/compound_xor_assignment.s" >/dev/null
-grep -F "  sw a0, 0(t0)" "$work/compound_xor_assignment.s" >/dev/null
+grep -F "  sw t0, 0(t1)" "$work/compound_xor_assignment.s" >/dev/null
 printf '%s\n' "PASS compiler/c0/compound_xor_assignment"
 
 check_invalid() {
@@ -38,16 +38,20 @@ check_invalid() {
             "FAIL compiler/c0/$name: compilation unexpectedly succeeded" >&2
         exit 1
     fi
-    grep -F "$diagnostic" "$work/$name.stderr" >/dev/null
+    if ! grep -F "$diagnostic" "$work/$name.stderr" >/dev/null; then
+        printf '%s\n' "FAIL compiler/c0/$name: diagnostic mismatch" >&2
+        cat "$work/$name.stderr" >&2
+        exit 1
+    fi
     printf '%s\n' "PASS compiler/c0/$name"
 }
 
 check_invalid \
     invalid_compound_xor_pointer_target \
-    "compound XOR assignment requires integer operands"
+    "pointer compound assignment expression requires += or -= with an integer"
 check_invalid \
     invalid_compound_xor_pointer_rhs \
-    "compound XOR assignment requires integer operands"
+    "compound assignment expression requires integer operands"
 check_invalid \
     invalid_const_compound_xor \
-    "assignment target must be a modifiable lvalue"
+    "compound assignment expression requires a modifiable scalar lvalue"

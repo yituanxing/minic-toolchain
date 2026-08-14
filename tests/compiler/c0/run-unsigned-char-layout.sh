@@ -54,6 +54,11 @@ printf '%s\n' "PASS compiler/c0/plain_char_semantics"
 grep -F "  li a0, 77" "$work/hexadecimal_expression.s" >/dev/null
 printf '%s\n' "PASS compiler/c0/hexadecimal_expression"
 
+MINIC="$minic" \
+HOST_CC="$host_cc" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+sh "$root/tests/compiler/c0/run-signed-char-semantics.sh"
+
 expect_failure() {
     name=$1
     expected=$2
@@ -74,6 +79,5 @@ expect_failure() {
     printf '%s\n' "PASS compiler/c0/$name"
 }
 
-expect_failure invalid_signed_char "signed char is not supported"
 expect_failure invalid_plain_unsigned_char_pointer_assignment \
     "assignment expression type does not match target type"

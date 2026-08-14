@@ -5,8 +5,7 @@
 #include <stdbool.h>
 #include <string.h>
 
-static MinicSourceSpan test_span(size_t offset)
-{
+static MinicSourceSpan test_span(size_t offset) {
     MinicSourceSpan span;
 
     (void)memset(&span, 0, sizeof(span));
@@ -19,11 +18,7 @@ static MinicSourceSpan test_span(size_t offset)
     return span;
 }
 
-static bool add_integer(
-    MinicC0Program *program,
-    int value,
-    MinicExpressionId *expression_id)
-{
+static bool add_integer(MinicC0Program *program, int value, MinicExpressionId *expression_id) {
     MinicExpression expression;
 
     (void)memset(&expression, 0, sizeof(expression));
@@ -35,12 +30,10 @@ static bool add_integer(
     return minic_c0_program_add_expression(program, &expression, expression_id);
 }
 
-static bool add_cast(
-    MinicC0Program *program,
-    MinicExpressionId operand,
-    MinicType target_type,
-    MinicExpressionId *expression_id)
-{
+static bool add_cast(MinicC0Program *program,
+                     MinicExpressionId operand,
+                     MinicType target_type,
+                     MinicExpressionId *expression_id) {
     MinicExpression expression;
 
     (void)memset(&expression, 0, sizeof(expression));
@@ -52,11 +45,9 @@ static bool add_cast(
     return minic_c0_program_add_expression(program, &expression, expression_id);
 }
 
-static bool add_expression_statement(
-    MinicC0Program *program,
-    MinicExpressionId expression_id,
-    MinicStatementId *statement_id)
-{
+static bool add_expression_statement(MinicC0Program *program,
+                                     MinicExpressionId expression_id,
+                                     MinicStatementId *statement_id) {
     MinicStatement statement;
 
     (void)memset(&statement, 0, sizeof(statement));
@@ -69,8 +60,7 @@ static bool add_expression_statement(
     return minic_c0_program_add_statement(program, &statement, statement_id);
 }
 
-static int test_integer_cast_topology(void)
-{
+static int test_integer_cast_topology(void) {
     MinicC0Program program;
     MinicExpressionId integer_id;
     MinicExpressionId cast_id;
@@ -91,14 +81,12 @@ static int test_integer_cast_topology(void)
     }
 
     statement = minic_c0_program_statement(&program, statement_id);
-    normalized = statement == NULL
-        ? NULL
-        : minic_c0_program_expression(&program, statement->expression);
-    if (program.expression_count != 3U || statement == NULL || normalized == NULL ||
-        normalized->kind != MINIC_EXPRESSION_BINARY ||
-        normalized->value.binary.operator_kind != MINIC_BINARY_ADD ||
-        normalized->value.binary.left >= statement->expression ||
-        normalized->value.binary.right >= statement->expression ||
+    normalized =
+        statement == NULL ? NULL : minic_c0_program_expression(&program, statement->expression);
+    if (program.expression_count != 2U || statement == NULL || normalized == NULL ||
+        normalized->kind != MINIC_EXPRESSION_CONVERSION ||
+        normalized->value.unary.operand >= statement->expression ||
+        normalized->value.unary.operand != integer_id ||
         !minic_type_equal(normalized->type, minic_type_unsigned_char())) {
         minic_c0_program_destroy(&program);
         return 2;
@@ -108,8 +96,7 @@ static int test_integer_cast_topology(void)
     return 0;
 }
 
-static int test_pointer_bitcast_identity(void)
-{
+static int test_pointer_bitcast_identity(void) {
     MinicC0Program program;
     MinicLocal local;
     MinicLocalId local_id;
@@ -156,17 +143,14 @@ static int test_pointer_bitcast_identity(void)
     }
 
     statement = minic_c0_program_statement(&program, statement_id);
-    bitcast = statement == NULL
-        ? NULL
-        : minic_c0_program_expression(&program, statement->expression);
-    operand = bitcast == NULL
-        ? NULL
-        : minic_c0_program_expression(&program, bitcast->value.unary.operand);
+    bitcast =
+        statement == NULL ? NULL : minic_c0_program_expression(&program, statement->expression);
+    operand = bitcast == NULL ? NULL
+                              : minic_c0_program_expression(&program, bitcast->value.unary.operand);
     if (statement == NULL || bitcast == NULL || operand == NULL ||
         bitcast->kind != MINIC_EXPRESSION_BITCAST ||
         bitcast->value.unary.operand >= statement->expression ||
-        !minic_type_equal(bitcast->type, void_pointer) ||
-        operand->kind != MINIC_EXPRESSION_LOCAL ||
+        !minic_type_equal(bitcast->type, void_pointer) || operand->kind != MINIC_EXPRESSION_LOCAL ||
         !minic_type_equal(operand->type, int_pointer) || operand->value.local_id != local_id) {
         minic_c0_program_destroy(&program);
         return 6;
@@ -176,8 +160,7 @@ static int test_pointer_bitcast_identity(void)
     return 0;
 }
 
-static int test_malformed_contracts(void)
-{
+static int test_malformed_contracts(void) {
     MinicC0Program program;
     MinicExpression expression;
     MinicExpressionId integer_id;
@@ -267,8 +250,7 @@ static int test_malformed_contracts(void)
     return 0;
 }
 
-static int test_normalization_transaction(void)
-{
+static int test_normalization_transaction(void) {
     MinicC0Program program;
     MinicExpressionId integer_id;
     MinicExpressionId cast_id;
@@ -288,8 +270,7 @@ static int test_normalization_transaction(void)
     original_expressions = program.expressions;
     original_expression_count = program.expression_count;
     original_statement_expression = program.statements[statement_id].expression;
-    if (minic_c0_program_normalize_casts(&program) ||
-        program.expressions != original_expressions ||
+    if (minic_c0_program_normalize_casts(&program) || program.expressions != original_expressions ||
         program.expression_count != original_expression_count ||
         program.statements[statement_id].expression != original_statement_expression ||
         program.expressions[cast_id].kind != MINIC_EXPRESSION_CAST) {
@@ -301,8 +282,7 @@ static int test_normalization_transaction(void)
     return 0;
 }
 
-int main(void)
-{
+int main(void) {
     int status;
 
     status = test_integer_cast_topology();

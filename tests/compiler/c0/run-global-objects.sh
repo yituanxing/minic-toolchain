@@ -29,7 +29,11 @@ expect_failure() {
             "FAIL compiler/c0/$name: compilation unexpectedly succeeded" >&2
         exit 1
     fi
-    grep -F "$expected" "$work/$name.stderr" >/dev/null
+    if ! grep -F "$expected" "$work/$name.stderr" >/dev/null; then
+        printf '%s\n' "FAIL compiler/c0/$name: diagnostic mismatch" >&2
+        cat "$work/$name.stderr" >&2
+        exit 1
+    fi
     printf '%s\n' "PASS compiler/c0/$name"
 }
 
@@ -47,7 +51,7 @@ printf '%s\n' "PASS compiler/c0/global_array_read"
 
 expect_failure \
     invalid_global_array_assignment \
-    "assignment expression requires a modifiable scalar lvalue"
+    "assignment expression requires a modifiable object lvalue"
 expect_failure \
     invalid_bare_global_array \
     "return expression does not match function return type"

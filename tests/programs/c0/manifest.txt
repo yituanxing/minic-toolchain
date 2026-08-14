@@ -67,3 +67,7 @@ conditional_expression
 global_record_address
 local_array_zero_initializer
 continue_control_flow
+runtime_record_array_initializer
+predefined_func_name
+static_nested_record_designator
+static_record_compound_literal

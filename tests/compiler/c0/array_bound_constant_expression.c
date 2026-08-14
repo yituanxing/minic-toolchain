@@ -13,6 +13,23 @@ int divided_size(void) {
     return (int)sizeof(divided);
 }
 
+int linux_siginfo_bound(void) {
+    char dummy[(__alignof__(void *) < sizeof(short) ? sizeof(short) : __alignof__(void *))];
+    return (int)sizeof(dummy);
+}
+
+struct RecordBound {
+    char dummy[(__alignof__(void *) < sizeof(short) ? sizeof(short) : __alignof__(void *))];
+    int tail;
+};
+
+int linux_siginfo_record_bound(void) {
+    return (int)sizeof(((struct RecordBound *)0)->dummy);
+}
+
 int main(void) {
-    return multiplied_size() == 1048576 && grouped_size() == 35 && divided_size() == 44 ? 0 : 1;
+    return multiplied_size() == 1048576 && grouped_size() == 35 && divided_size() == 44 &&
+                   linux_siginfo_bound() == 8 && linux_siginfo_record_bound() == 8
+               ? 0
+               : 1;
 }
