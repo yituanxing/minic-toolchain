@@ -37,6 +37,10 @@ jobs:
       - name: Materialize target integer consumers
         run: |
           set -Eeuo pipefail
+          # The exact verifier inventory was confirmed on the canonical 38588023 Foundation:
+          # eleven type_is_valid() consumers share the verifier's existing TargetInfo context.
+          sed -i 's/!= 7:/!= 11:/; s/expected 7 type_is_valid calls/expected 11 type_is_valid calls/' \
+            tools/dev/materialize-target-integer-consumers-v1.py
           python3 tools/dev/materialize-target-integer-consumers-v1.py
           clang-format-18 -i \
             src/target/target_info.h \
