@@ -1,0 +1,62 @@
+name: Agent Static Inferred Integer Array
+
+on:
+  push:
+    branches:
+      - compiler/static-inferred-integer-array-v1
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: agent-static-inferred-integer-array-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout staging branch
+        uses: actions/checkout@v4
+        with:
+          ref: compiler/static-inferred-integer-array-v1
+          fetch-depth: 0
+
+      - name: Materialize narrow parser cut
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/agent_static_inferred_integer_array_patch.py
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+          git diff --check
+
+      - name: Build and run focused gate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release BUILD_DIR=build/static-inferred-integer-array
+          MINIC="$GITHUB_WORKSPACE/build/static-inferred-integer-array/bin/minic" \
+          HOST_CC=cc \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/static-inferred-integer-array-focused" \
+            sh tests/compiler/c0/run-static-inferred-integer-array.sh
+          make -j4 MODE=release BUILD_DIR=build/static-inferred-integer-array check-fast
+
+      - name: Publish generated product commit
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git add \
+            src/frontend/parser_global.c \
+            tests/compiler/c0/run-foundation-focused.sh
+          git diff --cached --check
+          if git diff --cached --quiet; then
+            printf '%s\n' 'PASS static inferred integer array staging already materialized'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'feat: infer static integer array bounds' \
+            -m 'Complete an internal-linkage const integer ArrayType from its brace initializer count when the outer bound is omitted. Preserve GNU object suffix attributes and keep the representation on the existing incomplete-array lifecycle.'
+          git push origin HEAD:compiler/static-inferred-integer-array-v1
