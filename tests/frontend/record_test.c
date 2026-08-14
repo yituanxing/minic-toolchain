@@ -147,8 +147,7 @@ int main(void)
 
     record = minic_c0_program_record(&program, record_id);
     if (record == NULL || strcmp(record->name, "AES_ctx") != 0 ||
-        !record->is_complete || record->field_count != 2U ||
-        record->storage_size != 0U || record->alignment != 0U) {
+        !record->is_complete || record->field_count != 2U) {
         minic_c0_program_destroy(&program);
         return fail("record metadata");
     }

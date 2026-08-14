@@ -1,5 +1,6 @@
 #include "frontend/ast.h"
 #include "frontend/type.h"
+#include "target/data_layout.h"
 #include "target/riscv64/layout.h"
 
 #include <stdint.h>
@@ -280,28 +281,69 @@ int main(void)
     }
 
     hooks_record = minic_c0_program_record(&program, hooks_record_id);
-    if (hooks_record == NULL || hooks_record->storage_size != 16U ||
-        hooks_record->alignment != 8U || hooks_record->fields[0].storage_offset != 0U ||
-        hooks_record->fields[1].storage_offset != 8U) {
-        minic_c0_program_destroy(&program);
-        return fail("function pointer record field layout");
+    {
+        size_t size;
+        size_t alignment;
+        size_t offset0;
+        size_t offset1;
+
+        if (hooks_record == NULL ||
+            !minic_riscv64_type_layout(
+                &program, minic_type_record(hooks_record_id), &size, &alignment) ||
+            !minic_data_layout_record_field_offset(
+                minic_default_data_layout(), &program, hooks_record, 0U, &offset0) ||
+            !minic_data_layout_record_field_offset(
+                minic_default_data_layout(), &program, hooks_record, 1U, &offset1) ||
+            size != 16U || alignment != 8U || offset0 != 0U || offset1 != 8U) {
+            minic_c0_program_destroy(&program);
+            return fail("function pointer record field layout");
+        }
     }
 
     floating_record = minic_c0_program_record(&program, floating_record_id);
-    if (floating_record == NULL || floating_record->storage_size != 24U ||
-        floating_record->alignment != 8U || floating_record->fields[0].storage_offset != 0U ||
-        floating_record->fields[1].storage_offset != 8U ||
-        floating_record->fields[2].storage_offset != 16U) {
-        minic_c0_program_destroy(&program);
-        return fail("double record field layout");
+    {
+        size_t size;
+        size_t alignment;
+        size_t offset0;
+        size_t offset1;
+        size_t offset2;
+
+        if (floating_record == NULL ||
+            !minic_riscv64_type_layout(
+                &program, minic_type_record(floating_record_id), &size, &alignment) ||
+            !minic_data_layout_record_field_offset(
+                minic_default_data_layout(), &program, floating_record, 0U, &offset0) ||
+            !minic_data_layout_record_field_offset(
+                minic_default_data_layout(), &program, floating_record, 1U, &offset1) ||
+            !minic_data_layout_record_field_offset(
+                minic_default_data_layout(), &program, floating_record, 2U, &offset2) ||
+            size != 24U || alignment != 8U || offset0 != 0U || offset1 != 8U || offset2 != 16U) {
+            minic_c0_program_destroy(&program);
+            return fail("double record field layout");
+        }
     }
 
     record = minic_c0_program_record(&program, record_id);
-    if (record == NULL || record->storage_size != 24U || record->alignment != 4U ||
-        record->fields[0].storage_offset != 0U || record->fields[1].storage_offset != 4U ||
-        record->fields[2].storage_offset != 20U) {
-        minic_c0_program_destroy(&program);
-        return fail("record field layout");
+    {
+        size_t size;
+        size_t alignment;
+        size_t offset0;
+        size_t offset1;
+        size_t offset2;
+
+        if (record == NULL ||
+            !minic_riscv64_type_layout(
+                &program, minic_type_record(record_id), &size, &alignment) ||
+            !minic_data_layout_record_field_offset(
+                minic_default_data_layout(), &program, record, 0U, &offset0) ||
+            !minic_data_layout_record_field_offset(
+                minic_default_data_layout(), &program, record, 1U, &offset1) ||
+            !minic_data_layout_record_field_offset(
+                minic_default_data_layout(), &program, record, 2U, &offset2) ||
+            size != 24U || alignment != 4U || offset0 != 0U || offset1 != 4U || offset2 != 20U) {
+            minic_c0_program_destroy(&program);
+            return fail("record field layout");
+        }
     }
 
     function = minic_c0_program_function(&program, function_id);

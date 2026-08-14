@@ -238,11 +238,12 @@ static bool minic_riscv64_emit_direct_record_values(FILE *file,
 
         field = minic_c0_record_field(record, field_index);
         if (field == NULL || field->element_count != 1U || field->is_flexible_array ||
-            !minic_riscv64_type_layout(program, field->type, &field_size, &field_alignment)) {
+            !minic_riscv64_type_layout(program, field->type, &field_size, &field_alignment) ||
+            !minic_data_layout_record_field_offset(
+                minic_default_data_layout(), program, record, field_index, &field_offset)) {
             return false;
         }
         (void)field_alignment;
-        field_offset = field->storage_offset;
         if (field_offset < cursor || field_offset > object->storage_size ||
             field_size > object->storage_size - field_offset ||
             !minic_riscv64_emit_zero_bytes(file, field_offset - cursor)) {
@@ -372,7 +373,15 @@ static bool minic_riscv64_emit_constant_value(FILE *file,
             if (field == NULL || field->element_count == 0U || field->is_flexible_array) {
                 return false;
             }
-            field_offset = record->is_union ? 0U : field->storage_offset;
+            if (record->is_union) {
+                field_offset = 0U;
+            } else if (!minic_data_layout_record_field_offset(minic_default_data_layout(),
+                                                              program,
+                                                              record,
+                                                              field_index,
+                                                              &field_offset)) {
+                return false;
+            }
             if (field_offset < cursor || field_offset > type_size ||
                 !minic_riscv64_emit_zero_bytes(file, field_offset - cursor)) {
                 return false;
@@ -526,11 +535,12 @@ static bool minic_riscv64_emit_record_array_values(FILE *file,
                 return false;
             }
             (void)field_alignment;
-            if (field->storage_offset > element_size ||
-                field_size > element_size - field->storage_offset) {
+            if (!minic_data_layout_record_field_offset(
+                    minic_default_data_layout(), program, record, field_index, &field_offset) ||
+                field_offset > element_size || field_size > element_size - field_offset) {
                 return false;
             }
-            field_offset = element_base + field->storage_offset;
+            field_offset = element_base + field_offset;
             if (field_offset < cursor || field_offset > object->storage_size ||
                 field_size > object->storage_size - field_offset ||
                 !minic_riscv64_emit_zero_bytes(file, field_offset - cursor)) {
