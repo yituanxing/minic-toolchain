@@ -1,0 +1,56 @@
+name: Initializer ConstEval Zero v1 Validation
+
+on:
+  push:
+    branches: [refactor/initializer-consteval-zero-v1]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: initializer-consteval-zero-v1-validation
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Materialize initializer ConstEval candidate
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/materialize-initializer-consteval-zero-v1.py
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+          git diff --check
+
+      - name: Assert integer zero semantics use ConstEval
+        run: |
+          set -Eeuo pipefail
+          grep -F 'minic_const_eval_integer(' src/frontend/parser_statement.c >/dev/null
+          grep -F 'minic_const_value_is_zero(' src/frontend/parser_statement.c >/dev/null
+          if grep -F 'expression->value.integer_value == 0' src/frontend/parser_statement.c >/dev/null; then
+            echo 'initializer still owns literal-only zero semantics' >&2
+            exit 1
+          fi
+          grep -F '1 - 1' tests/compiler/c0/zero_aggregate_null.c >/dev/null
+          grep -F '2 - 2' tests/compiler/c0/zero_aggregate_null.c >/dev/null
+
+      - name: Production source inventory
+        run: sh tools/maintenance/check-production-source-inventory.sh
+
+      - name: Focused zero-aggregate gate
+        run: |
+          make -j2 BUILD_DIR=build/initializer-consteval-debug check-fast
+          MINIC="$GITHUB_WORKSPACE/build/initializer-consteval-debug/bin/minic" \
+          HOST_CC=cc \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/initializer-consteval-focused" \
+            sh tests/compiler/c0/run-zero-aggregate-null.sh
+
+      - name: Release compiler gate
+        run: make -j2 MODE=release BUILD_DIR=build/initializer-consteval-release CFLAGS=-Werror check-fast
+
+      - name: Sanitized AST gate
+        run: make -j2 MODE=sanitize BUILD_DIR=build/initializer-consteval-sanitize check-ast-contract
