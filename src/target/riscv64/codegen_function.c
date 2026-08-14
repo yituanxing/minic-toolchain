@@ -610,6 +610,20 @@ static bool minic_riscv64_emit_file_asm(FILE *file, const MinicFileAsm *file_asm
     return fputc('\n', file) != EOF;
 }
 
+static bool minic_riscv64_zero_size_record_definition(const MinicC0Program *program,
+                                                      const MinicGlobalObject *object,
+                                                      size_t storage_size) {
+    const MinicRecord *record;
+
+    if (program == NULL || object == NULL || storage_size != 0U ||
+        !minic_type_is_record(object->type) || object->initializer_count != 0U ||
+        object->relocation_count != 0U) {
+        return false;
+    }
+    record = minic_c0_program_record(program, object->type.record_id);
+    return record != NULL && record->is_complete && record->field_count == 0U;
+}
+
 static bool minic_riscv64_emit_global_object(FILE *file,
                                              const MinicC0Program *program,
                                              const MinicGlobalObject *object) {
@@ -621,6 +635,7 @@ static bool minic_riscv64_emit_global_object(FILE *file,
     unsigned int alignment_power;
     size_t scalar_width;
     size_t initializer_index;
+    bool zero_size_record_definition;
 
     if (!minic_data_layout_global_object(
             minic_default_data_layout(), program, object, &storage_size, &object_alignment)) {
@@ -632,8 +647,9 @@ static bool minic_riscv64_emit_global_object(FILE *file,
         !minic_riscv64_alignment_power(object_alignment, &alignment_power)) {
         return false;
     }
-    if (storage_size == 0U && ((!object->is_zero_initialized && !object->is_tentative) ||
-                               object->initializer_count != 0U || object->relocation_count != 0U)) {
+    zero_size_record_definition =
+        minic_riscv64_zero_size_record_definition(program, object, storage_size);
+    if (storage_size == 0U && !zero_size_record_definition) {
         return false;
     }
 
@@ -647,7 +663,8 @@ static bool minic_riscv64_emit_global_object(FILE *file,
         const MinicRecord *record;
 
         record = minic_c0_program_record(program, object->type.record_id);
-        if (record == NULL || !record->is_complete || object->initializer_count == 0U) {
+        if (record == NULL || !record->is_complete ||
+            (object->initializer_count == 0U && !zero_size_record_definition)) {
             return false;
         }
     } else if (minic_riscv64_record_array_info(program, object->type, NULL, NULL)) {
