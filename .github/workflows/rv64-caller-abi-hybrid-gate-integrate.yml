@@ -15,9 +15,13 @@ concurrency:
 jobs:
   gate-and-integrate:
     runs-on: ubuntu-24.04
+    timeout-minutes: 25
     env:
       GH_TOKEN: ${{ github.token }}
       FEATURE_BRANCH: refactor/rv64-caller-abi-location-v1
+      FOUNDATION_BRANCH: refactor/foundation-v1
+      EXPECTED_FEATURE_HEAD: ca7dd00a080f018574ebe5e51220fb519f29adcd
+      EXPECTED_FOUNDATION_HEAD: 7bbefb7252a6ba52541478a0412a22dc4701334c
     steps:
       - uses: actions/checkout@v4
         with:
@@ -29,6 +33,10 @@ jobs:
         run: |
           set -Eeuo pipefail
           grep -F 'argument_index >= parameter_count' \
+            tools/dev/materialize-rv64-caller-abi-location-hybrid.py >/dev/null
+          grep -F 'MINIC_RISCV64_ABI_VALUE_INDIRECT' \
+            tools/dev/materialize-rv64-caller-abi-location-hybrid.py >/dev/null
+          grep -F 'value->storage_size != 8U && value->storage_size != 16U' \
             tools/dev/materialize-rv64-caller-abi-location-hybrid.py >/dev/null
 
       - name: Wait for same-head authoritative hybrid Linux gate
@@ -73,19 +81,21 @@ jobs:
           echo 'hybrid Linux gate did not complete within polling budget' >&2
           exit 1
 
-      - name: Fold proven caller location consumer into feature branch
+      - name: Fold, validate and publish canonical caller slice
         shell: bash
         env:
           LINUX_RUN_ID: ${{ steps.hybrid.outputs.run_id }}
         run: |
           set -Eeuo pipefail
-          git fetch --no-tags origin "$FEATURE_BRANCH"
+
+          git fetch --no-tags origin "$FEATURE_BRANCH" "$FOUNDATION_BRANCH"
+          test "$(git rev-parse "origin/$FEATURE_BRANCH")" = "$EXPECTED_FEATURE_HEAD"
+          test "$(git rev-parse "origin/$FOUNDATION_BRANCH")" = "$EXPECTED_FOUNDATION_HEAD"
           git checkout -B "$FEATURE_BRANCH" "origin/$FEATURE_BRANCH"
           test -f tools/dev/materialize-rv64-caller-abi-location-v1.py
 
           python3 tools/dev/materialize-rv64-caller-abi-location-v1.py
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
-          git diff --check
           grep -F 'MinicRiscv64AbiArgumentLocation argument_locations' \
             src/target/riscv64/codegen_expression.c >/dev/null
           grep -F 'stack_argument_count = abi_cursor.stack_slot_count;' \
@@ -95,101 +105,62 @@ jobs:
             exit 1
           fi
 
-          cat > .github/workflows/rv64-caller-abi-location-validation.yml <<'YAML'
-          name: RV64 Caller ABI Location Validation
+          mkdir -p docs/architecture
+          cat > docs/architecture/rv64-caller-abi-location-v1.md <<DOC
+          # RV64 caller ABI location ownership v1
 
-          on:
-            push:
-              branches:
-                - refactor/rv64-caller-abi-location-v1
-            workflow_dispatch:
+          This slice makes the checked-in RV64 call emitter consume the canonical
+          \\`MinicRiscv64AbiCursor\\` / \\`MinicRiscv64AbiArgumentLocation\\` result once per
+          call instead of independently recomputing integer-register, floating-register,
+          and stack placement in two backend passes.
 
-          permissions:
-            contents: read
+          The C evaluation contract is intentionally unchanged: arguments are still
+          evaluated in source order and staged before physical placement. The slice only
+          changes ownership of the later ABI placement decision.
 
-          concurrency:
-            group: rv64-caller-abi-location-${{ github.ref }}
-            cancel-in-progress: true
+          Formal v1 remains deliberately bounded. It covers the already-frozen scalar,
+          fixed floating-point, and fixed 8/16-byte integer-aggregate cases. Zero-sized
+          aggregates, sub-XLEN aggregate extensions, variadic aggregate placement, and
+          greater-than-16-byte indirect aggregate passing remain outside this formal slice
+          until their psABI semantics are promoted deliberately.
 
-          jobs:
-            host:
-              runs-on: ubuntu-24.04
-              steps:
-                - uses: actions/checkout@v4
+          Frozen Linux 6.6.143 \\`init/main.i\\` was revalidated with a hybrid pressure
+          harness: formal-v1-compatible calls use the new location consumer, while
+          discovery-only ABI shapes retain the already-proven discovery emission. The
+          exact hybrid run for this checked-in fold is \\`$LINUX_RUN_ID\\` and completed
+          with the 90,928-line full-TU gate.
 
-                - name: Verify canonical caller location consumer
-                  shell: bash
-                  run: |
-                    set -Eeuo pipefail
-                    grep -F 'MinicRiscv64AbiArgumentLocation argument_locations' \
-                      src/target/riscv64/codegen_expression.c >/dev/null
-                    grep -F 'stack_argument_count = abi_cursor.stack_slot_count;' \
-                      src/target/riscv64/codegen_expression.c >/dev/null
-                    if grep -F 'size_t stack_argument_index;' src/target/riscv64/codegen_expression.c >/dev/null; then
-                      echo 'legacy caller stack placement cursor remains' >&2
-                      exit 1
-                    fi
+          This preserves the future Core IR seam: target-neutral call semantics stay above
+          the seam; TargetABI owns abstract locations; the RV64 emitter alone maps those
+          locations to textual registers and stack operations.
+          DOC
+          sed -i 's/^          //' docs/architecture/rv64-caller-abi-location-v1.md
 
-                - name: Verify production source inventory
-                  run: sh tools/maintenance/check-production-source-inventory.sh
+          git rm tools/dev/materialize-rv64-caller-abi-location-v1.py
+          git diff --check
+          sh tools/maintenance/check-production-source-inventory.sh
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
 
-                - name: Check committed source formatting
-                  run: CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
-
-                - name: Run release host contracts
-                  run: make -j2 MODE=release BUILD_DIR=build/rv64-caller-abi-host CFLAGS=-Werror check-fast
-
-                - name: Run sanitizer AST contracts
-                  run: make -j2 MODE=sanitize BUILD_DIR=build/rv64-caller-abi-sanitize check-ast-contract
-
-                - name: Run frozen Foundation focused semantics
-                  shell: bash
-                  env:
-                    MINIC: ${{ github.workspace }}/build/rv64-caller-abi-host/bin/minic
-                    BUILD_DIR: ${{ github.workspace }}/build/rv64-caller-abi-foundation-focused
-                    HOST_CC: cc
-                  run: sh tools/dev/pr76-focused.sh
-
-            full:
-              runs-on: ubuntu-24.04
-              timeout-minutes: 20
-              env:
-                DEBIAN_FRONTEND: noninteractive
-              steps:
-                - uses: actions/checkout@v4
-
-                - name: Verify canonical caller location consumer
-                  shell: bash
-                  run: |
-                    set -Eeuo pipefail
-                    grep -F 'MinicRiscv64AbiArgumentLocation argument_locations' \
-                      src/target/riscv64/codegen_expression.c >/dev/null
-                    grep -F 'stack_argument_count = abi_cursor.stack_slot_count;' \
-                      src/target/riscv64/codegen_expression.c >/dev/null
-                    if grep -F 'size_t stack_argument_index;' src/target/riscv64/codegen_expression.c >/dev/null; then
-                      echo 'legacy caller stack placement cursor remains' >&2
-                      exit 1
-                    fi
-
-                - name: Restore RISC-V package archives
-                  id: rv64-cache
-                  uses: actions/cache@v4
-                  with:
-                    path: ~/.cache/minic-apt/archives
-                    key: rv64-apt-${{ runner.os }}-${{ runner.arch }}-noble-${{ hashFiles('tools/ci/ubuntu-24.04-packages.txt') }}
-
-                - name: Run complete compiler gate
-                  env:
-                    RV64_CACHE_HIT: ${{ steps.rv64-cache.outputs.cache-hit }}
-                  run: bash .github/scripts/compiler-c0-full-gate.sh
-          YAML
+          make -j2 MODE=release BUILD_DIR=build/rv64-caller-abi-host CFLAGS=-Werror check-fast
+          make -j2 MODE=sanitize BUILD_DIR=build/rv64-caller-abi-sanitize check-ast-contract
+          MINIC="$GITHUB_WORKSPACE/build/rv64-caller-abi-host/bin/minic" \
+            BUILD_DIR="$GITHUB_WORKSPACE/build/rv64-caller-abi-foundation-focused" \
+            HOST_CC=cc sh tools/dev/pr76-focused.sh
+          bash .github/scripts/compiler-c0-full-gate.sh
 
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add src/target/riscv64/codegen_expression.c \
-            .github/workflows/rv64-caller-abi-location-validation.yml
-          git rm tools/dev/materialize-rv64-caller-abi-location-v1.py
+            docs/architecture/rv64-caller-abi-location-v1.md \
+            tools/dev/materialize-rv64-caller-abi-location-v1.py
           git diff --cached --check
+
+          changed=$(git diff --cached --name-only "$EXPECTED_FOUNDATION_HEAD" | sort)
+          expected=$(printf '%s\n' \
+            docs/architecture/rv64-caller-abi-location-v1.md \
+            src/target/riscv64/codegen_expression.c | sort)
+          test "$changed" = "$expected"
+
           git commit \
             -m 'refactor(abi): consume abstract locations at RV64 caller' \
             -m "Frozen Linux formal-compatible hybrid run: $LINUX_RUN_ID"
