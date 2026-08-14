@@ -37,13 +37,6 @@ def function_region(text, start_marker):
     return start, min(ends)
 
 
-def replace_in_region(text, start_marker, old, new, expected, label):
-    start, end = function_region(text, start_marker)
-    region = text[start:end]
-    region = replace_exact(region, old, new, expected, label)
-    return text[:start] + region + text[end:]
-
-
 # Intrinsic MinicType remains target-independent. Remove the two helpers whose
 # answers depend on target integer ranges; TargetInfo is now their sole owner.
 path = "src/frontend/type.h"
@@ -93,71 +86,125 @@ text = replace_regex(
 )
 write(path, text)
 
-# A conditional expression's arithmetic common type is target-dependent.
-# Keep the AST helper small, but make that dependency explicit at its API seam.
+# Conditional-expression result typing is an expression-semantic operation:
+# it needs both the semantic AST (for null-pointer constants) and TargetInfo
+# (for integer usual arithmetic conversions). Keep that dependency out of the
+# AST storage/ownership module so small AST-only tests remain target-independent.
 path = "src/frontend/ast.h"
 text = read(path)
 text = replace_exact(
     text,
-    "#include <stdint.h>\n\ntypedef size_t MinicExpressionId;",
-    "#include <stdint.h>\n\nstruct MinicTargetInfo;\n\ntypedef size_t MinicExpressionId;",
-    label="forward declare target info",
-)
-text = replace_exact(
-    text,
     "bool minic_c0_conditional_result_type(const MinicC0Program *program,\n"
-    "                                      MinicExpressionId when_true_expression_id,",
-    "bool minic_c0_conditional_result_type(const MinicC0Program *program,\n"
-    "                                      const struct MinicTargetInfo *target,\n"
-    "                                      MinicExpressionId when_true_expression_id,",
-    label="make conditional result target-aware",
+    "                                      MinicExpressionId when_true_expression_id,\n"
+    "                                      MinicExpressionId when_false_expression_id,\n"
+    "                                      MinicType *result);\n",
+    "",
+    label="move conditional result declaration out of ast",
 )
 write(path, text)
 
 path = "src/frontend/ast.c"
 text = read(path)
-text = replace_exact(
+text = replace_regex(
     text,
-    '#include "frontend/ast.h"\n\n',
-    '#include "frontend/ast.h"\n#include "target/target_info.h"\n\n',
-    label="include target info in semantic AST helpers",
+    r"\nstatic bool\nminic_c0_conditional_type_only\(.*?"
+    r"\n\}\n\nbool minic_c0_assignment_compatible",
+    "\nbool minic_c0_assignment_compatible",
+    label="move conditional result implementation out of ast",
 )
-text = replace_exact(
-    text,
-    "static bool\n"
-    "minic_c0_conditional_type_only(MinicType when_true, MinicType when_false, MinicType *result) {",
-    "static bool minic_c0_conditional_type_only(const MinicTargetInfo *target,\n"
-    "                                           MinicType when_true,\n"
-    "                                           MinicType when_false,\n"
-    "                                           MinicType *result) {",
-    label="target-aware conditional type helper",
-)
-text = replace_exact(
-    text,
-    "        return minic_type_integer_common(when_true, when_false, result);",
-    "        return minic_target_info_integer_common(target, when_true, when_false, result);",
-    label="conditional integer common type",
-)
-text = replace_exact(
-    text,
-    "bool minic_c0_conditional_result_type(const MinicC0Program *program,\n"
-    "                                      MinicExpressionId when_true_expression_id,",
+write(path, text)
+
+write(
+    "src/frontend/expression_semantics.h",
+    """#ifndef MINIC_FRONTEND_EXPRESSION_SEMANTICS_H\n"
+    "#define MINIC_FRONTEND_EXPRESSION_SEMANTICS_H\n\n"
+    "#include \"frontend/ast.h\"\n"
+    "#include \"target/target_info.h\"\n\n"
     "bool minic_c0_conditional_result_type(const MinicC0Program *program,\n"
     "                                      const MinicTargetInfo *target,\n"
-    "                                      MinicExpressionId when_true_expression_id,",
-    label="conditional result definition target",
+    "                                      MinicExpressionId when_true_expression_id,\n"
+    "                                      MinicExpressionId when_false_expression_id,\n"
+    "                                      MinicType *result);\n\n"
+    "#endif\n""".replace('"\n    "', ""),
+)
+
+write(
+    "src/frontend/expression_semantics.c",
+    """#include \"frontend/expression_semantics.h\"\n\n"
+    "static bool conditional_type_only(const MinicTargetInfo *target,\n"
+    "                                  MinicType when_true,\n"
+    "                                  MinicType when_false,\n"
+    "                                  MinicType *result) {\n"
+    "    bool has_double_operand;\n"
+    "    bool has_numeric_operands;\n\n"
+    "    if (target == NULL || result == NULL) {\n"
+    "        return false;\n"
+    "    }\n"
+    "    if (minic_type_equal(when_true, when_false)) {\n"
+    "        *result = when_true;\n"
+    "        return true;\n"
+    "    }\n"
+    "    if (minic_type_conditional_pointer_common(when_true, when_false, result)) {\n"
+    "        return true;\n"
+    "    }\n"
+    "    if (minic_type_is_integer(when_true) && minic_type_is_integer(when_false)) {\n"
+    "        return minic_target_info_integer_common(target, when_true, when_false, result);\n"
+    "    }\n"
+    "    has_double_operand = minic_type_is_double(when_true) || minic_type_is_double(when_false);\n"
+    "    has_numeric_operands =\n"
+    "        (minic_type_is_double(when_true) || minic_type_is_integer(when_true)) &&\n"
+    "        (minic_type_is_double(when_false) || minic_type_is_integer(when_false));\n"
+    "    if (has_double_operand && has_numeric_operands) {\n"
+    "        *result = minic_type_double();\n"
+    "        return true;\n"
+    "    }\n"
+    "    return false;\n"
+    "}\n\n"
+    "bool minic_c0_conditional_result_type(const MinicC0Program *program,\n"
+    "                                      const MinicTargetInfo *target,\n"
+    "                                      MinicExpressionId when_true_expression_id,\n"
+    "                                      MinicExpressionId when_false_expression_id,\n"
+    "                                      MinicType *result) {\n"
+    "    const MinicExpression *when_true;\n"
+    "    const MinicExpression *when_false;\n\n"
+    "    if (program == NULL || target == NULL || result == NULL) {\n"
+    "        return false;\n"
+    "    }\n"
+    "    when_true = minic_c0_program_expression(program, when_true_expression_id);\n"
+    "    when_false = minic_c0_program_expression(program, when_false_expression_id);\n"
+    "    if (when_true == NULL || when_false == NULL) {\n"
+    "        return false;\n"
+    "    }\n"
+    "    if (minic_type_is_pointer(when_true->type) &&\n"
+    "        minic_c0_expression_is_null_pointer_constant_v0(program, when_false_expression_id)) {\n"
+    "        *result = when_true->type;\n"
+    "        return true;\n"
+    "    }\n"
+    "    if (minic_c0_expression_is_null_pointer_constant_v0(program, when_true_expression_id) &&\n"
+    "        minic_type_is_pointer(when_false->type)) {\n"
+    "        *result = when_false->type;\n"
+    "        return true;\n"
+    "    }\n"
+    "    return conditional_type_only(target, when_true->type, when_false->type, result);\n"
+    "}\n""".replace('"\n    "', ""),
+)
+
+# Build topology mirrors the semantic boundary: AST-only ownership tests keep
+# linking ast.c alone, while the compiler and AST contract verifier link the
+# target-aware expression-semantics module.
+path = "Makefile"
+text = read(path)
+text = replace_exact(
+    text,
+    "\tsrc/frontend/ast.c \\\n\tsrc/frontend/ast_traversal.c \\\n",
+    "\tsrc/frontend/ast.c \\\n\tsrc/frontend/expression_semantics.c \\\n\tsrc/frontend/ast_traversal.c \\\n",
+    label="add expression semantics to compiler sources",
 )
 text = replace_exact(
     text,
-    "    if (program == NULL || result == NULL) {",
-    "    if (program == NULL || target == NULL || result == NULL) {",
-    label="conditional result validates target",
-)
-text = replace_exact(
-    text,
-    "    return minic_c0_conditional_type_only(when_true->type, when_false->type, result);",
-    "    return minic_c0_conditional_type_only(target, when_true->type, when_false->type, result);",
-    label="conditional result forwards target",
+    "AST_CONTRACT_TEST_SOURCES := \\\n\tsrc/frontend/ast.c \\\n\tsrc/frontend/ast_global.c \\\n",
+    "AST_CONTRACT_TEST_SOURCES := \\\n\tsrc/frontend/ast.c \\\n\tsrc/frontend/expression_semantics.c \\\n\tsrc/frontend/ast_global.c \\\n",
+    label="add expression semantics to AST contract test",
 )
 write(path, text)
 
@@ -165,6 +212,12 @@ write(path, text)
 # the one targetless helper and use the model everywhere else in this file.
 path = "src/frontend/parser_expression.c"
 text = read(path)
+text = replace_exact(
+    text,
+    '#include "frontend/parser_internal.h"\n\n',
+    '#include "frontend/parser_internal.h"\n#include "frontend/expression_semantics.h"\n\n',
+    label="parser expression includes semantic helper",
+)
 text = replace_exact(
     text,
     "static bool binary_result_type(const MinicC0Program *program,\n",
@@ -183,7 +236,7 @@ region = region.replace(
 text = text[:start] + region + text[end:]
 outside_count = text.count("minic_type_integer_common(")
 if outside_count == 0:
-    raise RuntimeError("parser_expression: expected target-aware consumer sites outside binary_result_type")
+    raise RuntimeError("parser_expression: expected common-type consumers outside binary_result_type")
 text = text.replace(
     "minic_type_integer_common(",
     "minic_target_info_integer_common(parser->target_info, ",
@@ -220,6 +273,12 @@ write(path, text)
 # verifier already receives TargetInfo; thread it into the two local helpers.
 path = "src/frontend/ast_verifier.c"
 text = read(path)
+text = replace_exact(
+    text,
+    '#include "frontend/ast_verifier.h"\n\n',
+    '#include "frontend/ast_verifier.h"\n#include "frontend/expression_semantics.h"\n\n',
+    label="verifier includes expression semantics",
+)
 text = replace_exact(
     text,
     "static bool verify_binary_type(const MinicC0Program *program,\n"
