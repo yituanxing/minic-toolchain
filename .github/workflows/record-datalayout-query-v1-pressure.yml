@@ -42,4 +42,4 @@ jobs:
           fetch-depth: 0
 
       - name: Rebuild proven Linux hybrid and overlay record DataLayout ownership
-        run: bash tools/dev/run-record-datalayout-linux-pressure.sh
+        run: bash tools/dev/run-record-datalayout-linux-pressure-v2.sh
