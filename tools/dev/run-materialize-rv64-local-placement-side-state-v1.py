@@ -15,3 +15,18 @@ if source.count(old) != 1:
     raise SystemExit("FrameLayout wrapper staging guard anchor changed")
 source = source.replace(old, new, 1)
 exec(compile(source, str(path), "exec"), {"__name__": "__main__", "__file__": str(path)})
+
+for frontend_path, line, expected_count in (
+    ("src/frontend/parser_function.c", "            parameter_local.storage_offset = 0U;\n", 1),
+    ("src/frontend/parser_statement.c", "    local.storage_offset = 0U;\n", 2),
+):
+    target = Path(frontend_path)
+    text = target.read_text(encoding="utf-8")
+    count = text.count(line)
+    if count != expected_count:
+        raise SystemExit(
+            f"{frontend_path}: expected {expected_count} local placement mirror initializers, found {count}"
+        )
+    target.write_text(text.replace(line, ""), encoding="utf-8")
+
+print("REMOVED frontend local placement mirror initializers=3")
