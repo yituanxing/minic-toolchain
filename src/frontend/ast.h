@@ -414,6 +414,7 @@ typedef struct MinicGlobalRelocation {
     size_t target_id;
     size_t target_member_indices[MINIC_GLOBAL_RELOCATION_MAX_MEMBER_DEPTH];
     size_t target_member_depth;
+    bool has_explicit_pointer_cast;
 } MinicGlobalRelocation;
 
 typedef struct MinicGlobalObject {
@@ -716,12 +717,26 @@ bool minic_c0_global_object_add_function_relocation(MinicC0Program *program,
                                                     MinicGlobalRelocationLocationKind location_kind,
                                                     size_t location_index,
                                                     MinicFunctionId function_id);
+bool minic_c0_global_object_add_function_relocation_cast(
+    MinicC0Program *program,
+    MinicGlobalObjectId global_object_id,
+    MinicGlobalRelocationLocationKind location_kind,
+    size_t location_index,
+    MinicFunctionId function_id);
 bool minic_c0_global_object_add_object_relocation(MinicC0Program *program,
                                                   MinicGlobalObjectId global_object_id,
                                                   MinicGlobalRelocationLocationKind location_kind,
                                                   size_t location_index,
                                                   MinicGlobalObjectId target_object_id);
 bool minic_c0_global_object_add_object_relocation_path(
+    MinicC0Program *program,
+    MinicGlobalObjectId global_object_id,
+    MinicGlobalRelocationLocationKind location_kind,
+    size_t location_index,
+    MinicGlobalObjectId target_object_id,
+    const size_t *target_member_indices,
+    size_t target_member_depth);
+bool minic_c0_global_object_add_object_relocation_path_cast(
     MinicC0Program *program,
     MinicGlobalObjectId global_object_id,
     MinicGlobalRelocationLocationKind location_kind,

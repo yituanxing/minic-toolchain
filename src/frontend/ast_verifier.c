@@ -1267,10 +1267,12 @@ bool minic_c0_program_verify_target(const MinicC0Program *program,
                           relocation->location_index)) ||
                     (relocation->target_kind == MINIC_GLOBAL_RELOCATION_OBJECT &&
                      (relocation->target_id >= program->global_object_count ||
-                      minic_type_is_function(slot_pointee))) ||
+                      (minic_type_is_function(slot_pointee) &&
+                       !relocation->has_explicit_pointer_cast))) ||
                     (relocation->target_kind == MINIC_GLOBAL_RELOCATION_FUNCTION &&
                      (relocation->target_id >= program->function_count ||
-                      !minic_type_is_function(slot_pointee))) ||
+                      (!minic_type_is_function(slot_pointee) &&
+                       !relocation->has_explicit_pointer_cast))) ||
                     (relocation->target_kind != MINIC_GLOBAL_RELOCATION_OBJECT &&
                      relocation->target_kind != MINIC_GLOBAL_RELOCATION_FUNCTION)) {
                     return false;
