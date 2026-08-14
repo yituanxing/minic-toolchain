@@ -1,0 +1,9 @@
+RV64 caller ABI hybrid selector boundary ready.
+
+Formal-v1-compatible path excludes:
+- discovery-only IGNORE values
+- discovery-only INDIRECT aggregate values
+- non-fixed/variadic aggregate arguments
+- aggregate storage sizes other than 8 or 16 bytes
+
+This file is staging-only and exists solely to trigger the exact-head hybrid Linux and integration gates after the selector-tightening bot commit.
