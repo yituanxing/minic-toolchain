@@ -77,10 +77,9 @@ static int test_cleanup_expression_remap(void)
         ? NULL
         : minic_c0_program_expression(&program, cleanup_context->cleanup_expression);
     if (cleanup_context == NULL || normalized == NULL ||
-        cleanup_context->cleanup_expression == cast_id ||
-        cleanup_context->cleanup_expression != 2U ||
-        normalized->kind != MINIC_EXPRESSION_BINARY ||
-        normalized->value.binary.operator_kind != MINIC_BINARY_ADD ||
+        cleanup_context->cleanup_expression >= program.expression_count ||
+        normalized->kind != MINIC_EXPRESSION_CONVERSION ||
+        normalized->value.unary.operand != integer_id ||
         !minic_type_equal(normalized->type, minic_type_unsigned_char())) {
         minic_c0_program_destroy(&program);
         return 2;
