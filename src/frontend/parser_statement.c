@@ -4206,6 +4206,49 @@ static bool token_starts_local_declaration(const MinicParser *parser) {
            minic_parser_token_starts_declaration_specifiers(parser, parser->current);
 }
 
+static bool block_record_starts_standalone_declaration(MinicParser *parser, bool *is_standalone) {
+    MinicParser probe;
+    size_t brace_depth;
+
+    if (parser == NULL || is_standalone == NULL ||
+        (parser->current.kind != MINIC_TOKEN_KW_STRUCT &&
+         parser->current.kind != MINIC_TOKEN_KW_UNION)) {
+        return false;
+    }
+    probe = *parser;
+    if (!minic_parser_advance(&probe)) {
+        return false;
+    }
+    if (probe.current.kind == MINIC_TOKEN_IDENTIFIER && !minic_parser_advance(&probe)) {
+        return false;
+    }
+    if (probe.current.kind == MINIC_TOKEN_SEMICOLON) {
+        *is_standalone = true;
+        return true;
+    }
+    if (probe.current.kind != MINIC_TOKEN_LBRACE) {
+        *is_standalone = false;
+        return true;
+    }
+
+    brace_depth = 0U;
+    do {
+        if (probe.current.kind == MINIC_TOKEN_LBRACE) {
+            brace_depth += 1U;
+        } else if (probe.current.kind == MINIC_TOKEN_RBRACE) {
+            if (brace_depth == 0U) {
+                return false;
+            }
+            brace_depth -= 1U;
+        }
+        if (!minic_parser_advance(&probe)) {
+            return false;
+        }
+    } while (brace_depth != 0U);
+    *is_standalone = probe.current.kind == MINIC_TOKEN_SEMICOLON;
+    return true;
+}
+
 bool minic_parser_parse_statement(MinicParser *parser, bool allow_declaration) {
     if (!ensure_function_label_context(parser)) {
         return false;
@@ -4291,6 +4334,21 @@ bool minic_parser_parse_statement(MinicParser *parser, bool allow_declaration) {
             return false;
         }
         return parse_auto_type_local_declaration(parser);
+    }
+    if (parser->current.kind == MINIC_TOKEN_KW_STRUCT ||
+        parser->current.kind == MINIC_TOKEN_KW_UNION) {
+        bool is_standalone;
+
+        if (!block_record_starts_standalone_declaration(parser, &is_standalone)) {
+            return false;
+        }
+        if (is_standalone) {
+            if (!allow_declaration) {
+                minic_parser_error(parser, "a declaration requires a compound statement scope");
+                return false;
+            }
+            return minic_parser_parse_record_definition(parser);
+        }
     }
     if (token_starts_local_declaration(parser)) {
         if (!allow_declaration) {
