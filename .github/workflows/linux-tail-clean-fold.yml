@@ -1,0 +1,98 @@
+name: Clean Linux Tail Fold
+
+on:
+  push:
+    branches: [refactor/linux-tail-convergence-v1]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: clean-linux-tail-fold
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Strip discovery-only codegen traces
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/strip-linux-discovery-codegen-trace.py
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+          git diff --check
+          if grep -R -n --include='*.c' --include='*.h' 'CODEGEN_' src/target/riscv64; then
+            echo 'discovery-only CODEGEN trace remains' >&2
+            exit 1
+          fi
+
+      - name: Full compiler C0 gate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+          BUILD_DIR="$GITHUB_WORKSPACE/build/clean-tail-full" \
+            bash .github/scripts/compiler-c0-full-gate.sh
+
+      - name: Restore pinned Linux source archive
+        id: linux-source-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-cache/linux-6.6.143.tar.xz
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
+
+      - name: Install Linux Kbuild dependencies
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            flex bison bc libelf-dev libssl-dev
+
+      - name: Drive unchanged Linux init main TU
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release BUILD_DIR=build/clean-tail-compiler
+          MINIC="$GITHUB_WORKSPACE/build/clean-tail-compiler/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/linux-clean-tail" \
+          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-cache/linux-6.6.143.tar.xz" \
+          CROSS_COMPILE=riscv64-linux-gnu- \
+            sh tests/external/linux/probe.sh
+          test "$(wc -l < build/linux-clean-tail/kbuild/init/main.i | tr -d ' ')" = 90928
+          echo 'CLEAN_FOLD_LINUX_PASS lines=90928'
+
+      - name: Publish trace-free product files
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            src/target/riscv64/codegen_expression.c \
+            src/target/riscv64/codegen_function.c \
+            src/target/riscv64/codegen_statement.c
+          if git diff --cached --quiet; then
+            echo 'product files already trace-free'
+            exit 0
+          fi
+          git diff --cached --check
+          git commit -m 'chore(riscv64): remove Linux discovery codegen traces'
+          git push origin HEAD:refactor/linux-tail-convergence-v1
+
+      - name: Save pinned Linux source archive
+        if: always() && steps.linux-source-cache.outputs.cache-hit != 'true' && hashFiles('build/linux-cache/linux-6.6.143.tar.xz') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: build/linux-cache/linux-6.6.143.tar.xz
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
