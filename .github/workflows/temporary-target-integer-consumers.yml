@@ -3,14 +3,13 @@ name: Temporary Target Integer Consumer Migration
 on:
   push:
     branches:
-      - refactor/target-integer-consumers
+      - 'refactor/target-integer-consumers'
 
 permissions:
   contents: write
 
 jobs:
   apply:
-    if: github.event.head_commit.message == 'chore: run target integer consumer migration'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
