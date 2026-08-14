@@ -1,0 +1,112 @@
+name: Target Integer Consumers v1 Staging
+
+on:
+  push:
+    branches:
+      - refactor/target-integer-consumers-v1-staging
+
+permissions:
+  contents: write
+
+concurrency:
+  group: target-integer-consumers-v1-staging
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    if: ${{ !contains(github.event.head_commit.message, '[skip ci]') }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Restore RISC-V package archives
+        id: rv64-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/minic-apt/archives
+          key: rv64-apt-${{ runner.os }}-${{ runner.arch }}-noble-04c72dc79c8fe80e89688b7f28f9d47ca006d2c8010871449e857f7427c57c50
+
+      - name: Restore pinned Linux source archive
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-cache/linux-6.6.143.tar.xz
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
+
+      - name: Materialize target integer consumers
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/materialize-target-integer-consumers-v1.py
+          clang-format-18 -i \
+            src/target/target_info.h \
+            src/target/target_info.c \
+            src/frontend/type.c \
+            src/frontend/parser_type.c \
+            src/frontend/parser_string.c \
+            src/frontend/parser_global.c \
+            src/frontend/parser_internal.h \
+            src/frontend/parser_constant.c \
+            src/frontend/parser_expression.c \
+            src/frontend/parser_statement.c \
+            src/frontend/ast.h \
+            src/frontend/ast.c \
+            src/frontend/ast_verifier.c \
+            src/target/riscv64/codegen_expression.c \
+            src/target/riscv64/codegen_statement.c \
+            tests/target/riscv64/layout_test.c
+          git diff --check
+          if grep -R --line-number --include='*.c' \
+              -e 'minic_type_integer_common(' \
+              -e 'minic_type_integer_promotion(' \
+              src --exclude='type.c'; then
+            echo 'legacy integer semantic helper remains in production'
+            exit 1
+          fi
+
+      - name: Run complete compiler gate
+        run: bash .github/scripts/compiler-c0-full-gate.sh
+
+      - name: Install Linux Kbuild dependencies
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            flex bison bc libelf-dev libssl-dev
+
+      - name: Drive unchanged Linux 6.6.143 init/main.i
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release BUILD_DIR=build/consumer-linux-compiler
+          MINIC="$GITHUB_WORKSPACE/build/consumer-linux-compiler/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/consumer-linux" \
+          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-cache/linux-6.6.143.tar.xz" \
+          CROSS_COMPILE=riscv64-linux-gnu- \
+            sh tests/external/linux/probe.sh
+
+      - name: Publish validated product files
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- \
+            src/target/target_info.h \
+            src/target/target_info.c \
+            src/frontend/type.c \
+            src/frontend/parser_type.c \
+            src/frontend/parser_string.c \
+            src/frontend/parser_global.c \
+            src/frontend/parser_internal.h \
+            src/frontend/parser_constant.c \
+            src/frontend/parser_expression.c \
+            src/frontend/parser_statement.c \
+            src/frontend/ast.h \
+            src/frontend/ast.c \
+            src/frontend/ast_verifier.c \
+            src/target/riscv64/codegen_expression.c \
+            src/target/riscv64/codegen_statement.c \
+            tests/compiler/c0/unsigned_64_literals.c \
+            tests/target/riscv64/layout_test.c
+          git commit -m 'refactor(frontend): route integer semantics through TargetInfo [skip ci]'
+          git push origin HEAD:refactor/target-integer-consumers-v1-staging
