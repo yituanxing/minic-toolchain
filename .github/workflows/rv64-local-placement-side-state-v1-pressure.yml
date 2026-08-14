@@ -182,7 +182,20 @@ jobs:
         run: |
           set -Eeuo pipefail
           git add -A
+          set +e
           git apply --3way --index /tmp/formal-local-placement.patch
+          apply_status=$?
+          set -e
+          if test "$apply_status" -ne 0; then
+            echo 'FUNCTION_LAYOUT_3WAY_CONFLICTS_BEGIN'
+            git status --short
+            for path in $(git diff --name-only --diff-filter=U); do
+              echo "--- conflict:$path ---"
+              grep -n -B 8 -A 24 -E '^(<<<<<<<|=======|>>>>>>>)' "$path" || true
+            done
+            echo 'FUNCTION_LAYOUT_3WAY_CONFLICTS_END'
+            exit 1
+          fi
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
           git add -A
           git diff --cached --check
