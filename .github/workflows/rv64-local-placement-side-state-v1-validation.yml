@@ -22,7 +22,7 @@ jobs:
       - name: Materialize local placement migration
         run: |
           set -Eeuo pipefail
-          python3 tools/dev/materialize-rv64-local-placement-side-state-v1.py
+          python3 tools/dev/run-materialize-rv64-local-placement-side-state-v1.py
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
           git diff --check
 
