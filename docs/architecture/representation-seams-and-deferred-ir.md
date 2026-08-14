@@ -71,10 +71,13 @@ Required invariants:
 
 - Do not create a second mutable pointer AST that must stay synchronized with the ID arenas.
 - Tree View / NodeRef is a view over the canonical semantic representation, not another source of truth.
-- Long-lived compiler state stores stable IDs/handles; raw pointers into reallocatable storage are short-lived implementation details.
+- Long-lived compiler state stores handles rather than raw pointers into reallocatable storage.
+- An `ExpressionId` is stable within one AST representation snapshot. A structural rewrite may deliberately replace IDs, but it must publish and apply an explicit mapping transactionally so no old reference silently changes meaning.
+- The current implementation may use `id == dense array index`; higher layers must not turn that physical relationship into a permanent semantic contract.
 - Passes should progressively stop depending on `program->expressions[id]`-style storage details when a small accessor/visitor boundary can express the semantic operation.
-- `ExpressionId` is semantic identity/handle. The current implementation may use `id == dense array index`, but higher layers must not require that representation forever.
 - Node-kind-specific child relationships remain explicit (`lhs/rhs`, `condition/then/else`, arguments, etc.); do not force every AST node into one generic linked-tree container.
+
+This distinction matters because cast normalization currently rebuilds the expression arena. “Stable ID” therefore means a reliable handle inside a representation version, not an immutable identity that survives every compiler transformation without remapping.
 
 ## 4. FunctionBody as the future ownership seam / FunctionBody 作为未来 ownership 边界
 
@@ -98,9 +101,7 @@ The first step does not need to move storage. A lightweight `FunctionBodyView` c
 
 第一步不必移动任何存储。可以先用轻量 `FunctionBodyView` 定义函数体 ownership 与遍历边界，底层仍使用当前 Program-wide arenas。
 
-This seam should immediately serve real problems, especially expression-reference enumeration and normalization remapping. It is not justified if it only makes AST dumps prettier.
-
-这个边界必须立即服务真实问题，首要是 ExpressionId 外部引用枚举和 normalization remap；如果它只让 dump 更好看，就不足以成为结构调整理由。
+The ExpressionId traversal/remap seam and FunctionBody ownership seam are related but distinct: traversal owns expression-reference relationships, while FunctionBody owns which reachable structural and semantic graph nodes belong to one function.
 
 A later storage migration is allowed only after callers depend on the FunctionBody interface rather than raw global arenas.
 
@@ -197,26 +198,22 @@ Real workloads drive representation choices just as real workloads drive languag
 
 真实软件不仅驱动语言能力，也驱动数据结构和算法选择。
 
-## 10. Immediate migration rule / 当前迁移规则
+## 10. Current migration rule / 当前迁移规则
 
-The next structural slice should be small and must solve an already observed defect while opening a future seam.
-
-Preferred first candidate:
+The first representation slice is now intentionally bounded to two cooperating seams:
 
 ```text
-FunctionBody View / expression-reference visitor
+canonical ExpressionId child/external traversal
         ↓
-one canonical external ExpressionId traversal
+transactional cast-normalization remap
+        +
+FunctionBody logical ownership view
         ↓
-cast-normalization remap
+focused + host + full real-program gates
         ↓
-verifier / focused regression
-        ↓
-full real-program gates
-        ↓
-unchanged Linux init/main.i 90928/90928
+frozen Linux init/main.i 90928/90928
 ```
 
-Do not move FunctionBody storage, introduce Core IR, or redesign all AST containers in the same slice.
+It does not move FunctionBody storage, introduce Core IR, or redesign all AST containers.
 
-After the slice passes all frozen gates, re-read the affected code and the surrounding compiler globally before deciding whether the next step remains FunctionBody storage ownership, DataLayout/BackendLayout separation, or TargetABI consolidation.
+After a structural slice passes all frozen gates, re-read the affected code and the surrounding compiler globally before choosing the next boundary. DataLayout/BackendLayout separation and TargetABI consolidation remain candidates, not a mechanical checklist.
