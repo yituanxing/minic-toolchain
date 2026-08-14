@@ -1,0 +1,197 @@
+name: Gate and Integrate Record DataLayout Query v1
+
+on:
+  push:
+    branches: [refactor/record-datalayout-query-v1]
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: record-datalayout-query-v1-integrate
+  cancel-in-progress: true
+
+jobs:
+  integrate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      GH_TOKEN: ${{ github.token }}
+      FEATURE_BRANCH: refactor/record-datalayout-query-v1
+      FOUNDATION_BRANCH: refactor/foundation-v1
+      EXPECTED_FOUNDATION_HEAD: b47e67c45405c0e71dd0ce9a6e01aef68f65f718
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Wait for same-head full and Linux pressure gate
+        id: pressure
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          run_id=''
+          for attempt in $(seq 1 60); do
+            run_id=$(gh run list \
+              --repo "$GITHUB_REPOSITORY" \
+              --workflow record-datalayout-query-v1-pressure.yml \
+              --commit "$GITHUB_SHA" \
+              --limit 1 \
+              --json databaseId \
+              --jq '.[0].databaseId // empty')
+            if test -n "$run_id"; then
+              break
+            fi
+            sleep 5
+          done
+          test -n "$run_id"
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+
+          for attempt in $(seq 1 180); do
+            state=$(gh run view "$run_id" \
+              --repo "$GITHUB_REPOSITORY" \
+              --json status,conclusion \
+              --jq '.status + ":" + (.conclusion // "")')
+            echo "pressure_run=$run_id state=$state"
+            case "$state" in
+              completed:success)
+                log=$(mktemp)
+                gh run view "$run_id" --repo "$GITHUB_REPOSITORY" --log > "$log"
+                grep -F 'RECORD_DATALAYOUT_HYBRID=1' "$log" >/dev/null
+                grep -F 'cached_tu_status=0' "$log" >/dev/null
+                grep -F 'FULL_TU_PASS lines=90928' "$log" >/dev/null
+                exit 0
+                ;;
+              completed:*)
+                gh run view "$run_id" --repo "$GITHUB_REPOSITORY" --log-failed || true
+                exit 1
+                ;;
+            esac
+            sleep 5
+          done
+          echo 'record DataLayout pressure gate did not complete within polling budget' >&2
+          exit 1
+
+      - name: Materialize and validate canonical record DataLayout slice
+        shell: bash
+        env:
+          PRESSURE_RUN_ID: ${{ steps.pressure.outputs.run_id }}
+        run: |
+          set -Eeuo pipefail
+
+          git fetch --no-tags origin "$FEATURE_BRANCH" "$FOUNDATION_BRANCH"
+          test "$(git rev-parse "origin/$FEATURE_BRANCH")" = "$GITHUB_SHA"
+          test "$(git rev-parse "origin/$FOUNDATION_BRANCH")" = "$EXPECTED_FOUNDATION_HEAD"
+          git checkout -B "$FEATURE_BRANCH" "origin/$FEATURE_BRANCH"
+
+          python3 tools/dev/run-materialize-record-datalayout-query-v1.py
+          python3 tools/dev/materialize-record-datalayout-cache-removal.py
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+
+          if grep -R -n --include='*.c' --include='*.h' \
+              'field->storage_offset\|field->bit_offset\|record->storage_size\|record->alignment' src; then
+            echo 'derived record layout cache reference remains' >&2
+            exit 1
+          fi
+          if grep -n 'size_t storage_offset;\|size_t bit_offset;' src/frontend/ast.h; then
+            echo 'derived record field layout remains in semantic AST' >&2
+            exit 1
+          fi
+          grep -F 'size_t bit_width;' src/frontend/ast.h >/dev/null
+          grep -F 'size_t explicit_alignment;' src/frontend/ast.h >/dev/null
+          grep -F 'minic_data_layout_record_field_offset' \
+            src/target/riscv64/codegen_expression.c >/dev/null
+          grep -F 'minic_data_layout_record_field_layout' \
+            src/target/riscv64/codegen_expression.c >/dev/null
+          grep -F 'minic_data_layout_record_field_offset' \
+            src/target/riscv64/codegen_function.c >/dev/null
+
+          mkdir -p docs/architecture
+          cat > docs/architecture/record-datalayout-query-v1.md <<'DOC'
+          # Record DataLayout query ownership v1
+
+          This slice makes `MinicDataLayout` the single owner of derived record object
+          layout. Semantic record nodes retain the inputs required by the C type model:
+          field types and element counts, bit-field width, explicit alignment, packed
+          state, union/record identity, and completeness. They no longer cache target
+          layout outputs.
+
+          The removed derived fields are `MinicRecordField.storage_offset`,
+          `MinicRecordField.bit_offset`, `MinicRecord.storage_size`, and
+          `MinicRecord.alignment`. RV64 member addressing, bit-field lowering, record
+          temporaries, record copies, `offsetof` emission, and static record emission now
+          obtain offsets, bit offsets, size, and alignment through DataLayout queries.
+
+          `minic_riscv64_layout_records()` is consequently only a validation pass: for
+          complete records it verifies that DataLayout can compute the record type and
+          each field layout, but it does not write target-derived facts back into the AST.
+
+          This distinction is intentional. `bit_width`, `explicit_alignment`, packed
+          attributes, and similar properties are semantic inputs and remain in the AST;
+          byte/bit offsets and final size/alignment are target-derived answers and belong
+          to DataLayout.
+
+          Global-object `storage_size` and `alignment` are not changed here. Their
+          ownership includes object-level explicit alignment plus special extern/incomplete
+          cases, so they require a canonical global-object layout query before their cache
+          can be removed. Keeping that work separate avoids conflating type layout with
+          object-definition policy.
+
+          This also preserves the deferred Core IR seam: target-neutral record semantics
+          remain in the semantic model, while concrete object layout is queried from the
+          target DataLayout service wherever lowering needs it.
+
+          The candidate passed the official full compiler gate and frozen Linux 6.6.143
+          hybrid pressure run `@PRESSURE_RUN_ID@`. That Linux run rebuilt the proven
+          discovery semantic/ABI/FunctionLayout environment, applied this same record
+          ownership patch cleanly, and completed with `cached_tu_status=0` and
+          `FULL_TU_PASS lines=90928`.
+          DOC
+          sed -i "s/@PRESSURE_RUN_ID@/$PRESSURE_RUN_ID/" \
+            docs/architecture/record-datalayout-query-v1.md
+
+          rm -f \
+            tools/dev/materialize-record-datalayout-query-v1.py \
+            tools/dev/run-materialize-record-datalayout-query-v1.py \
+            tools/dev/materialize-record-datalayout-cache-removal.py \
+            tools/dev/run-record-datalayout-linux-pressure.sh \
+            tools/dev/run-record-datalayout-linux-pressure-v2.sh \
+            .github/workflows/record-datalayout-query-v1-validation.yml \
+            .github/workflows/record-datalayout-query-v1-pressure.yml \
+            .github/workflows/record-datalayout-query-v1-integrate.yml
+
+          git diff --check
+          sh tools/maintenance/check-production-source-inventory.sh
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+
+          make -j2 MODE=release BUILD_DIR=build/record-datalayout-final-release CFLAGS=-Werror check-fast
+          make -j2 BUILD_DIR=build/record-datalayout-final-debug check-layout
+          make -j2 MODE=sanitize BUILD_DIR=build/record-datalayout-final-sanitize check-ast-contract
+          bash .github/scripts/compiler-c0-full-gate.sh
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+
+          changed=$(git diff --cached --name-only "$EXPECTED_FOUNDATION_HEAD" | sort)
+          expected=$(printf '%s\n' \
+            docs/architecture/record-datalayout-query-v1.md \
+            src/frontend/ast.c \
+            src/frontend/ast.h \
+            src/target/riscv64/codegen_expression.c \
+            src/target/riscv64/codegen_function.c \
+            src/target/riscv64/layout.c \
+            tests/frontend/record_test.c \
+            tests/target/riscv64/layout_test.c | sort)
+          if test "$changed" != "$expected"; then
+            echo 'unexpected final record DataLayout diff:' >&2
+            printf '%s\n' "$changed" >&2
+            exit 1
+          fi
+
+          git commit \
+            -m 'refactor(layout): make DataLayout own record placement' \
+            -m "Frozen Linux record DataLayout pressure run: $PRESSURE_RUN_ID"
+          git push origin HEAD:"$FEATURE_BRANCH"
