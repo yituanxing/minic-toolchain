@@ -742,13 +742,9 @@ static bool parse_offsetof_member_segment(MinicParser *parser,
                                           MinicType record_type,
                                           MinicOffsetofDesignatorState *state) {
     const MinicRecord *record;
-    const MinicRecord *final_record;
     const MinicRecordField *final_field;
     MinicRecordFieldPath path;
     MinicSourceSpan field_span;
-    MinicExpression segment;
-    MinicExpressionId segment_id;
-    size_t anonymous_prefix_offset;
     size_t path_index;
 
     if (parser == NULL || state == NULL || !minic_type_is_record(record_type) ||
@@ -773,45 +769,42 @@ static bool parse_offsetof_member_segment(MinicParser *parser,
         minic_parser_error(parser, "empty record field path in __builtin_offsetof");
         return false;
     }
-    final_record = minic_c0_program_record(parser->program, path.record_ids[path.depth - 1U]);
-    final_field = minic_c0_record_field(final_record, path.field_indices[path.depth - 1U]);
-    if (final_field == NULL || final_field->is_bit_field) {
-        minic_parser_error(parser, "__builtin_offsetof cannot name a bit-field");
-        return false;
-    }
 
-    anonymous_prefix_offset = 0U;
-    for (path_index = 0U; path_index + 1U < path.depth; ++path_index) {
+    final_field = NULL;
+    for (path_index = 0U; path_index < path.depth; ++path_index) {
         const MinicRecord *path_record;
-        size_t field_offset;
+        const MinicRecordField *path_field;
+        MinicExpression segment;
+        MinicExpressionId segment_id;
 
         path_record = minic_c0_program_record(parser->program, path.record_ids[path_index]);
-        if (path_record == NULL ||
-            !minic_data_layout_record_field_offset(
-                minic_target_info_data_layout(parser->target_info),
-                parser->program,
-                path_record,
-                path.field_indices[path_index],
-                &field_offset) ||
-            anonymous_prefix_offset > SIZE_MAX - field_offset) {
-            minic_parser_error(parser,
-                               "cannot lay out anonymous member path in __builtin_offsetof");
+        path_field = minic_c0_record_field(path_record, path.field_indices[path_index]);
+        if (path_record == NULL || path_field == NULL) {
+            minic_parser_error(parser, "invalid record field path in __builtin_offsetof");
             return false;
         }
-        anonymous_prefix_offset += field_offset;
-    }
+        if (path_index + 1U == path.depth) {
+            if (path_field->is_bit_field) {
+                minic_parser_error(parser, "__builtin_offsetof cannot name a bit-field");
+                return false;
+            }
+            final_field = path_field;
+        }
 
-    (void)memset(&segment, 0, sizeof(segment));
-    segment.kind = MINIC_EXPRESSION_OFFSETOF;
-    segment.span.begin = begin;
-    segment.span.end = field_span.end;
-    segment.type = minic_type_unsigned_long();
-    segment.value_category = MINIC_VALUE_RVALUE;
-    segment.value.offsetof_value.record_id = path.record_ids[path.depth - 1U];
-    segment.value.offsetof_value.field_index = path.field_indices[path.depth - 1U];
-    segment.value.offsetof_value.anonymous_prefix_offset = anonymous_prefix_offset;
-    if (!minic_parser_add_expression(parser, &segment, &segment_id) ||
-        !append_offsetof_term(parser, begin, segment_id, state) || !minic_parser_advance(parser)) {
+        (void)memset(&segment, 0, sizeof(segment));
+        segment.kind = MINIC_EXPRESSION_OFFSETOF;
+        segment.span.begin = begin;
+        segment.span.end = field_span.end;
+        segment.type = minic_type_unsigned_long();
+        segment.value_category = MINIC_VALUE_RVALUE;
+        segment.value.offsetof_value.record_id = path.record_ids[path_index];
+        segment.value.offsetof_value.field_index = path.field_indices[path_index];
+        if (!minic_parser_add_expression(parser, &segment, &segment_id) ||
+            !append_offsetof_term(parser, begin, segment_id, state)) {
+            return false;
+        }
+    }
+    if (final_field == NULL || !minic_parser_advance(parser)) {
         return false;
     }
     state->type = final_field->type;
@@ -833,7 +826,6 @@ static bool parse_offsetof_array_segment(MinicParser *parser,
     MinicType index_type;
     MinicType selected_type;
     MinicType scaled_type;
-    size_t element_size;
 
     if (parser == NULL || state == NULL || parser->current.kind != MINIC_TOKEN_LBRACKET) {
         return false;
@@ -859,19 +851,13 @@ static bool parse_offsetof_array_segment(MinicParser *parser,
         minic_parser_error(parser, "expected ']' in __builtin_offsetof array designator");
         return false;
     }
-    if (!minic_target_info_sizeof_type(
-            parser->target_info, parser->program, selected_type, &element_size) ||
-        element_size > (size_t)INT64_MAX) {
-        minic_parser_error(parser, "cannot lay out __builtin_offsetof array element");
-        return false;
-    }
 
     (void)memset(&stride, 0, sizeof(stride));
-    stride.kind = MINIC_EXPRESSION_INTEGER;
+    stride.kind = MINIC_EXPRESSION_SIZEOF;
     stride.span = parser->current.span;
     stride.type = minic_type_unsigned_long();
     stride.value_category = MINIC_VALUE_RVALUE;
-    stride.value.integer_value = (int64_t)element_size;
+    stride.value.sizeof_type = selected_type;
     if (!minic_parser_add_expression(parser, &stride, &stride_id) ||
         !minic_target_info_integer_common(
             parser->target_info, index_type, stride.type, &scaled_type)) {

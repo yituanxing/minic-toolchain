@@ -1234,11 +1234,9 @@ bool minic_riscv64_emit_expression(FILE *file,
                                                    program,
                                                    record,
                                                    expression->value.offsetof_value.field_index,
-                                                   &offset) ||
-            expression->value.offsetof_value.anonymous_prefix_offset > SIZE_MAX - offset) {
+                                                   &offset)) {
             return false;
         }
-        offset = expression->value.offsetof_value.anonymous_prefix_offset + offset;
         return fprintf(file, "  li a0, %zu\n", offset) >= 0;
     }
     case MINIC_EXPRESSION_CAST:
