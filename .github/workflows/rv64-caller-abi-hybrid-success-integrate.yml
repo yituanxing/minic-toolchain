@@ -1,0 +1,144 @@
+name: Integrate RV64 Caller ABI After Linux Hybrid
+
+on:
+  workflow_run:
+    workflows: ["RV64 Caller ABI Hybrid Linux Revalidation"]
+    types: [completed]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: rv64-caller-abi-hybrid-success-integrate
+  cancel-in-progress: false
+
+jobs:
+  integrate:
+    if: >-
+      ${{ github.event.workflow_run.head_branch == 'agent/rv64-caller-abi-linux-v1' &&
+          github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-24.04
+    env:
+      LINUX_RUN_ID: ${{ github.event.workflow_run.id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/rv64-caller-abi-location-v1
+          fetch-depth: 0
+
+      - name: Fold proven formal caller location consumer into canonical source
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -f tools/dev/materialize-rv64-caller-abi-location-v1.py
+          python3 tools/dev/materialize-rv64-caller-abi-location-v1.py
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+          git diff --check
+          grep -F 'MinicRiscv64AbiArgumentLocation argument_locations' \
+            src/target/riscv64/codegen_expression.c >/dev/null
+          grep -F 'stack_argument_count = abi_cursor.stack_slot_count;' \
+            src/target/riscv64/codegen_expression.c >/dev/null
+          if grep -F 'size_t stack_argument_index;' src/target/riscv64/codegen_expression.c >/dev/null; then
+            echo 'legacy caller stack placement cursor remains' >&2
+            exit 1
+          fi
+
+          cat > .github/workflows/rv64-caller-abi-location-validation.yml <<'YAML'
+          name: RV64 Caller ABI Location Validation
+
+          on:
+            push:
+              branches:
+                - refactor/rv64-caller-abi-location-v1
+            workflow_dispatch:
+
+          permissions:
+            contents: read
+
+          concurrency:
+            group: rv64-caller-abi-location-${{ github.ref }}
+            cancel-in-progress: true
+
+          jobs:
+            host:
+              runs-on: ubuntu-24.04
+              steps:
+                - uses: actions/checkout@v4
+
+                - name: Verify canonical caller location consumer
+                  shell: bash
+                  run: |
+                    set -Eeuo pipefail
+                    grep -F 'MinicRiscv64AbiArgumentLocation argument_locations' \
+                      src/target/riscv64/codegen_expression.c >/dev/null
+                    grep -F 'stack_argument_count = abi_cursor.stack_slot_count;' \
+                      src/target/riscv64/codegen_expression.c >/dev/null
+                    if grep -F 'size_t stack_argument_index;' src/target/riscv64/codegen_expression.c >/dev/null; then
+                      echo 'legacy caller stack placement cursor remains' >&2
+                      exit 1
+                    fi
+
+                - name: Verify production source inventory
+                  run: sh tools/maintenance/check-production-source-inventory.sh
+
+                - name: Check committed source formatting
+                  run: CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+
+                - name: Run release host contracts
+                  run: make -j2 MODE=release BUILD_DIR=build/rv64-caller-abi-host CFLAGS=-Werror check-fast
+
+                - name: Run sanitizer AST contracts
+                  run: make -j2 MODE=sanitize BUILD_DIR=build/rv64-caller-abi-sanitize check-ast-contract
+
+                - name: Run frozen Foundation focused semantics
+                  shell: bash
+                  env:
+                    MINIC: ${{ github.workspace }}/build/rv64-caller-abi-host/bin/minic
+                    BUILD_DIR: ${{ github.workspace }}/build/rv64-caller-abi-foundation-focused
+                    HOST_CC: cc
+                  run: sh tools/dev/pr76-focused.sh
+
+            full:
+              runs-on: ubuntu-24.04
+              timeout-minutes: 20
+              env:
+                DEBIAN_FRONTEND: noninteractive
+              steps:
+                - uses: actions/checkout@v4
+
+                - name: Verify canonical caller location consumer
+                  shell: bash
+                  run: |
+                    set -Eeuo pipefail
+                    grep -F 'MinicRiscv64AbiArgumentLocation argument_locations' \
+                      src/target/riscv64/codegen_expression.c >/dev/null
+                    grep -F 'stack_argument_count = abi_cursor.stack_slot_count;' \
+                      src/target/riscv64/codegen_expression.c >/dev/null
+                    if grep -F 'size_t stack_argument_index;' src/target/riscv64/codegen_expression.c >/dev/null; then
+                      echo 'legacy caller stack placement cursor remains' >&2
+                      exit 1
+                    fi
+
+                - name: Restore RISC-V package archives
+                  id: rv64-cache
+                  uses: actions/cache@v4
+                  with:
+                    path: ~/.cache/minic-apt/archives
+                    key: rv64-apt-${{ runner.os }}-${{ runner.arch }}-noble-${{ hashFiles('tools/ci/ubuntu-24.04-packages.txt') }}
+
+                - name: Run complete compiler gate
+                  env:
+                    RV64_CACHE_HIT: ${{ steps.rv64-cache.outputs.cache-hit }}
+                  run: bash .github/scripts/compiler-c0-full-gate.sh
+          YAML
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/target/riscv64/codegen_expression.c \
+            .github/workflows/rv64-caller-abi-location-validation.yml
+          git rm tools/dev/materialize-rv64-caller-abi-location-v1.py
+          git diff --cached --check
+          git commit \
+            -m 'refactor(abi): consume abstract locations at RV64 caller' \
+            -m "Frozen Linux hybrid revalidation run: $LINUX_RUN_ID"
+          git push origin HEAD:refactor/rv64-caller-abi-location-v1
