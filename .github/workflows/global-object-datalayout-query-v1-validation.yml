@@ -19,26 +19,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Materialize global-object DataLayout candidate
+      - name: Materialize global-object DataLayout ownership candidate
         run: |
           set -Eeuo pipefail
           python3 tools/dev/run-materialize-global-object-datalayout-query-v1.py
+          python3 tools/dev/materialize-global-object-datalayout-cache-removal.py
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
           git diff --check
 
-      - name: Assert object policy has one query owner
+      - name: Assert global-object layout has one owner
         run: |
           set -Eeuo pipefail
           grep -F 'bool minic_data_layout_global_object' src/target/data_layout.c >/dev/null
-          grep -F 'minic_data_layout_global_object(' src/target/riscv64/layout.c >/dev/null
-          if grep -F 'object->is_extern && minic_type_is_void' src/target/riscv64/layout.c >/dev/null; then
-            echo 'RV64 layout still owns extern-object layout policy' >&2
+          if grep -R -n --include='*.c' --include='*.h' 'object->storage_size\|object->alignment' src; then
+            echo 'global-object derived layout cache consumer remains' >&2
             exit 1
           fi
-          if grep -F 'object->explicit_alignment > alignment' src/target/riscv64/layout.c >/dev/null; then
-            echo 'RV64 layout still owns object explicit-alignment policy' >&2
+          if grep -n 'size_t storage_size;\|size_t alignment;' src/frontend/ast.h | grep -A1 'MinicGlobalObject' >/dev/null; then
+            echo 'global-object derived layout fields remain in AST' >&2
             exit 1
           fi
+          grep -F 'minic_data_layout_global_object' src/target/riscv64/codegen_function.c >/dev/null
+          grep -F 'minic_data_layout_global_object' src/target/riscv64/layout.c >/dev/null
 
       - name: Production source inventory
         run: sh tools/maintenance/check-production-source-inventory.sh
