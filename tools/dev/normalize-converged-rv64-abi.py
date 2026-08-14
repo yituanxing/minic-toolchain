@@ -184,7 +184,21 @@ for old, new in replace.items():
     if old not in text:
         raise SystemExit("ABI test migration anchor not found")
     text = text.replace(old, new, 1)
-text = text.replace("    MinicRiscv64AbiValue value;\n", "", 1)
+old = """    MinicType record_fp;
+    MinicType pointer_type;
+    MinicRiscv64AbiValue value;
+
+    minic_c0_program_initialize(&program);
+"""
+new = """    MinicType record_fp;
+    MinicType pointer_type;
+
+    minic_c0_program_initialize(&program);
+"""
+if new not in text:
+    if old not in text:
+        raise SystemExit("ABI test unused local anchor not found")
+    text = text.replace(old, new, 1)
 p.write_text(text)
 
 print("NORMALIZED converged RV64 ABI contract")
