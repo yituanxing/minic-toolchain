@@ -1,0 +1,40 @@
+name: RV64 ABI Classification Validation
+
+on:
+  push:
+    branches:
+      - refactor/rv64-abi-classification-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rv64-abi-classification-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  focused:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build focused RV64 ABI contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p build/rv64-abi
+          cc -std=c11 \
+            -Wall -Wextra -Wpedantic -Wconversion -Wshadow \
+            -Wstrict-prototypes -Wmissing-prototypes -Werror \
+            -Iinclude -Isrc \
+            src/frontend/ast.c \
+            src/frontend/ast_global.c \
+            src/frontend/type.c \
+            src/target/data_layout.c \
+            src/target/riscv64/abi.c \
+            tests/target/riscv64/abi_test.c \
+            -o build/rv64-abi/abi-test
+
+      - name: Run focused RV64 ABI contract
+        run: build/rv64-abi/abi-test
