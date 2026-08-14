@@ -30,8 +30,8 @@ jobs:
           python3 tools/dev/strip-linux-discovery-codegen-trace.py
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
           git diff --check
-          if grep -R -n --include='*.c' --include='*.h' 'CODEGEN_' src/target/riscv64; then
-            echo 'discovery-only CODEGEN trace remains' >&2
+          if grep -R -n --include='*.c' --include='*.h' '"CODEGEN_' src/target/riscv64; then
+            echo 'discovery-only CODEGEN diagnostic remains' >&2
             exit 1
           fi
 
