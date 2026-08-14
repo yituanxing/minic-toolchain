@@ -17,7 +17,7 @@ jobs:
         with:
           fetch-depth: 0
       - name: Materialize narrow product delta
-        run: python3 tools/dev/stage-static-function-address-relocation-v1.py
+        run: python3 tools/dev/run-stage-static-function-address-relocation-v1.py
       - name: Format and inspect product delta
         run: |
           clang-format-18 -i src/frontend/ast.h src/frontend/ast_global.c src/frontend/ast_verifier.c src/frontend/parser_global.c
