@@ -17,9 +17,8 @@ static const MinicTargetIntegerModel minic_rv64_integer_model = {
 const char *const minic_riscv64_argument_registers[8] = {
     "a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7"};
 
-static bool integer_type_with_rank(MinicIntegerSign sign,
-                                   MinicIntegerRank rank,
-                                   MinicType *result) {
+static bool
+integer_type_with_rank(MinicIntegerSign sign, MinicIntegerRank rank, MinicType *result) {
     if (result == NULL) {
         return false;
     }
@@ -111,9 +110,8 @@ static bool signed_type_represents_unsigned(const MinicTargetIntegerModel *model
            signed_bits > unsigned_bits;
 }
 
-static bool integer_literal_fits(const MinicTargetIntegerModel *model,
-                                 MinicType type,
-                                 uint64_t value) {
+static bool
+integer_literal_fits(const MinicTargetIntegerModel *model, MinicType type, uint64_t value) {
     unsigned int bits;
     MinicIntegerSign sign;
 
@@ -206,8 +204,7 @@ bool minic_target_info_sizeof_type(const MinicTargetInfo *target,
 bool minic_target_info_integer_value_width(const MinicTargetInfo *target,
                                            MinicType type,
                                            unsigned int *bits) {
-    return target != NULL &&
-           integer_model_value_width(target->integer_model, type, bits);
+    return target != NULL && integer_model_value_width(target->integer_model, type, bits);
 }
 
 bool minic_target_info_integer_width(const MinicTargetInfo *target,
@@ -290,8 +287,7 @@ bool minic_target_info_integer_common(const MinicTargetInfo *target,
         *result = signed_type;
         return true;
     }
-    return integer_type_with_rank(
-        MINIC_INTEGER_SIGN_UNSIGNED, signed_type.integer_rank, result);
+    return integer_type_with_rank(MINIC_INTEGER_SIGN_UNSIGNED, signed_type.integer_rank, result);
 }
 
 bool minic_target_info_integer_literal_type(const MinicTargetInfo *target,
