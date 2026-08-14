@@ -145,29 +145,8 @@ static bool append_normalized_cast(MinicC0Program *rewritten,
 
     if (minic_type_is_integer(cast_expression->type) &&
         minic_type_is_integer(operand_expression->type)) {
-        MinicExpression zero_expression;
-        MinicExpression normalized_expression;
-        MinicExpressionId zero_id;
-
-        (void)memset(&zero_expression, 0, sizeof(zero_expression));
-        zero_expression.kind = MINIC_EXPRESSION_INTEGER;
-        zero_expression.span = cast_expression->span;
-        zero_expression.type = minic_type_int();
-        zero_expression.value_category = MINIC_VALUE_RVALUE;
-        zero_expression.value.integer_value = 0;
-        if (!minic_c0_program_add_expression(rewritten, &zero_expression, &zero_id)) {
-            return false;
-        }
-
-        (void)memset(&normalized_expression, 0, sizeof(normalized_expression));
-        normalized_expression.kind = MINIC_EXPRESSION_BINARY;
-        normalized_expression.span = cast_expression->span;
-        normalized_expression.type = cast_expression->type;
-        normalized_expression.value_category = MINIC_VALUE_RVALUE;
-        normalized_expression.value.binary.operator_kind = MINIC_BINARY_ADD;
-        normalized_expression.value.binary.left = mapped_operand;
-        normalized_expression.value.binary.right = zero_id;
-        return minic_c0_program_add_expression(rewritten, &normalized_expression, normalized_id);
+        return append_normalized_conversion(
+            rewritten, cast_expression, mapped_operand, normalized_id);
     }
 
     return false;

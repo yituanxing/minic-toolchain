@@ -42,6 +42,15 @@ grep -F "  srli a0, a0, 32" "$work/cast_expressions.s" >/dev/null
 grep -F "  addw a0, t0, a0" "$work/cast_expressions.s" >/dev/null
 printf '%s\n' "PASS compiler/c0/cast_integer_lowering"
 
+compile_success cast_integer_conversion
+grep -F "  addiw a0, a0, 0" "$work/cast_integer_conversion.s" >/dev/null
+if grep -F "  addw a0, t0, a0" "$work/cast_integer_conversion.s" >/dev/null; then
+    printf '%s\n' \
+        "FAIL compiler/c0/cast_integer_conversion: integer cast lowered as synthetic addition" >&2
+    exit 1
+fi
+printf '%s\n' "PASS compiler/c0/cast_integer_conversion normalized=conversion"
+
 compile_success cast_typedef_shadow
 compile_success cast_plain_char
 compile_success cast_integer_to_double
