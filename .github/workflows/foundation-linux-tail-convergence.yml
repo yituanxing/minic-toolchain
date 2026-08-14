@@ -67,9 +67,9 @@ jobs:
           make -j4 MODE=release BUILD_DIR=build/tail-compiler
           cat > build/zero-size-static.c <<'EOF'
           struct empty {};
-          static struct empty file_empty = {};
+          static struct empty file_empty;
           int zero_size_static(void) {
-              static struct empty local_empty = {};
+              static struct empty local_empty;
               return sizeof(file_empty) + sizeof(local_empty);
           }
           EOF
