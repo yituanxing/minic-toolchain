@@ -1,0 +1,202 @@
+name: Stage GNU inline linkage v0
+
+on:
+  push:
+    branches:
+      - staging/gnu-inline-linkage-v0
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    if: github.event.head_commit.message != 'stage: materialize GNU inline linkage v0'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Materialize narrow product delta
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          parser_path = Path('src/frontend/parser_function.c')
+          text = parser_path.read_text()
+
+          old = '''typedef struct MinicFunctionAttributeContext {
+              bool allow_gnu_inline;
+              bool is_internal;
+              bool is_inline;
+          '''
+          new = '''typedef struct MinicFunctionAttributeContext {
+              bool allow_gnu_inline;
+              bool is_internal;
+              bool is_inline;
+              bool is_extern;
+          '''
+          assert text.count(old) == 1
+          text = text.replace(old, new, 1)
+
+          old = '''        /* GNU inline changes external-inline linkage semantics. Linux's current
+                   * accepted placement is static inline, where this parse-only attribute
+                   * does not change externally visible linkage. */
+                  if (!context->is_internal || !context->is_inline) {
+                      minic_parser_error(parser,
+                                         "GNU gnu_inline requires explicit non-static inline semantics");
+                      return false;
+                  }
+                  return true;
+          '''
+          new = '''        /* GNU inline changes C linkage/emission semantics. Static inline and
+                   * non-extern inline definitions match MiniC's existing standalone emission
+                   * model. Extern inline requires an inline-only body model, which is not yet
+                   * represented, so keep that case fail-closed. */
+                  if (!context->is_inline) {
+                      minic_parser_error(parser, "GNU gnu_inline requires an inline declaration");
+                      return false;
+                  }
+                  if (context->is_extern) {
+                      minic_parser_error(
+                          parser,
+                          "GNU extern inline gnu_inline requires inline-only emission semantics");
+                      return false;
+                  }
+                  return true;
+          '''
+          assert text.count(old) == 1
+          text = text.replace(old, new, 1)
+
+          old = '''                                          bool is_internal,
+                                                    bool is_inline,
+                                                    char *section_name,
+          '''
+          new = '''                                          bool is_internal,
+                                                    bool is_inline,
+                                                    bool is_extern,
+                                                    char *section_name,
+          '''
+          assert text.count(old) == 1
+          text = text.replace(old, new, 1)
+
+          old = '''    context.is_inline = is_inline;
+              context.section_name = NULL;
+          '''
+          new = '''    context.is_inline = is_inline;
+              context.is_extern = false;
+              context.section_name = NULL;
+          '''
+          assert text.count(old) == 1
+          text = text.replace(old, new, 1)
+
+          old = '''    context.is_inline = is_inline;
+              context.section_name = section_name;
+          '''
+          new = '''    context.is_inline = is_inline;
+              context.is_extern = is_extern;
+              context.section_name = section_name;
+          '''
+          assert text.count(old) == 1
+          text = text.replace(old, new, 1)
+
+          old = '''                is_inline,
+                          section_name,
+          '''
+          new = '''                is_inline,
+                          is_extern_declaration,
+                          section_name,
+          '''
+          assert text.count(old) == 2
+          text = text.replace(old, new)
+          parser_path.write_text(text)
+
+          fixture_path = Path('tests/compiler/c0/gnu_prefix_function_attributes.c')
+          fixture = fixture_path.read_text()
+          anchor = '''const int *call_prefix_attribute_identity(const int *value)
+          {
+              return prefix_attribute_identity(value);
+          }
+          '''
+          addition = '''const int *call_prefix_attribute_identity(const int *value)
+          {
+              return prefix_attribute_identity(value);
+          }
+
+          inline __attribute__((__gnu_inline__)) __attribute__((__unused__))
+              __attribute__((__no_instrument_function__)) int prefix_external_identity(int value)
+          {
+              return value;
+          }
+          '''
+          assert fixture.count(anchor) == 1
+          fixture_path.write_text(fixture.replace(anchor, addition, 1))
+
+          Path('tests/compiler/c0/gnu_extern_inline_attribute.c').write_text('''extern inline __attribute__((__gnu_inline__)) int prefix_extern_inline_identity(int value)
+          {
+              return value;
+          }
+          ''')
+
+          runner_path = Path('tests/compiler/c0/run-gnu-prefix-function-attributes.sh')
+          runner = runner_path.read_text()
+          old = '''grep -F 'prefix_attribute_identity:' "$assembly" >/dev/null
+          grep -F 'call_prefix_attribute_identity:' "$assembly" >/dev/null
+          grep -F 'externally_visible_decl:' "$assembly" >/dev/null
+          '''
+          new = '''grep -F 'prefix_attribute_identity:' "$assembly" >/dev/null
+          grep -F 'call_prefix_attribute_identity:' "$assembly" >/dev/null
+          grep -F 'prefix_external_identity:' "$assembly" >/dev/null
+          grep -F '.globl prefix_external_identity' "$assembly" >/dev/null
+          grep -F 'externally_visible_decl:' "$assembly" >/dev/null
+          '''
+          assert runner.count(old) == 1
+          runner = runner.replace(old, new, 1)
+
+          old = '''if grep -F '.hidden externally_visible_decl' "$assembly" >/dev/null; then
+              printf '%s\\n' 'FAIL compiler/c0/gnu_prefix_function_attributes: externally_visible was mapped to ELF hidden visibility' >&2
+              exit 1
+          fi
+
+          printf '%s\\n' 'PASS compiler/c0/gnu_prefix_function_attributes prefix=1 metadata=unused,no-instrument,externally-visible function+object=1 reachability=parse-only public-linkage=preserved gnu-inline=static-only no-sanitize-address=parse-only no-stack-protector=parse-only'
+          '''
+          new = '''if grep -F '.hidden externally_visible_decl' "$assembly" >/dev/null; then
+              printf '%s\\n' 'FAIL compiler/c0/gnu_prefix_function_attributes: externally_visible was mapped to ELF hidden visibility' >&2
+              exit 1
+          fi
+
+          "$host_cc" -E -P -std=gnu11 -x c "$root/tests/compiler/c0/gnu_extern_inline_attribute.c" \\
+              -o "$work/gnu_extern_inline_attribute.i"
+          if "$minic" -S "$work/gnu_extern_inline_attribute.i" \\
+              -o "$work/gnu_extern_inline_attribute.s" \\
+              >"$work/gnu_extern_inline_attribute.out" 2>"$work/gnu_extern_inline_attribute.err"; then
+              printf '%s\\n' 'FAIL compiler/c0/gnu_prefix_function_attributes: extern inline gnu_inline unexpectedly emitted a standalone definition' >&2
+              exit 1
+          fi
+          grep -F 'GNU extern inline gnu_inline requires inline-only emission semantics' \\
+              "$work/gnu_extern_inline_attribute.err" >/dev/null
+
+          printf '%s\\n' 'PASS compiler/c0/gnu_prefix_function_attributes prefix=1 metadata=unused,no-instrument,externally-visible function+object=1 reachability=parse-only public-linkage=preserved gnu-inline=static+bare extern-inline=fail-closed no-sanitize-address=parse-only no-stack-protector=parse-only'
+          '''
+          assert runner.count(old) == 1
+          runner_path.write_text(runner.replace(old, new, 1))
+          PY
+
+          git diff --check
+          git diff -- src/frontend/parser_function.c \
+            tests/compiler/c0/gnu_prefix_function_attributes.c \
+            tests/compiler/c0/gnu_extern_inline_attribute.c \
+            tests/compiler/c0/run-gnu-prefix-function-attributes.sh
+
+      - name: Commit staged product delta
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/frontend/parser_function.c \
+            tests/compiler/c0/gnu_prefix_function_attributes.c \
+            tests/compiler/c0/gnu_extern_inline_attribute.c \
+            tests/compiler/c0/run-gnu-prefix-function-attributes.sh
+          git commit -m 'stage: materialize GNU inline linkage v0'
+          git push origin HEAD:staging/gnu-inline-linkage-v0
