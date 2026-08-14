@@ -20,15 +20,21 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Materialize FunctionLayout candidate
-        run: python3 tools/dev/materialize-rv64-function-layout-v1.py
+        run: |
+          python3 tools/dev/materialize-rv64-function-layout-v1.py
+          python3 tools/dev/materialize-rv64-function-layout-v1-frame-fix.py
 
       - name: Check staged diff
         run: |
           set -Eeuo pipefail
           git diff --check
           grep -F 'typedef struct MinicRiscv64FunctionLayout' src/target/riscv64/layout.h >/dev/null
-          grep -F 'const MinicRiscv64FunctionLayout *function_layout' src/target/riscv64/codegen_support.c >/dev/null
+          grep -F 'minic_riscv64_frame_layout_from_function_layout' src/target/riscv64/codegen_support.c >/dev/null
           grep -F 'minic_riscv64_layout_function(NULL, program, function, &function_layout, NULL)' src/target/riscv64/codegen_function.c >/dev/null
+          if grep -F 'function->local_storage_size' src/target/riscv64/codegen_support.c | grep -F 'frame' >/dev/null; then
+            echo 'FrameLayout still consumes AST local storage state' >&2
+            exit 1
+          fi
 
       - name: Production source inventory
         run: sh tools/maintenance/check-production-source-inventory.sh
