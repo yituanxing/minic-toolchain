@@ -20,6 +20,7 @@ jobs:
         run: |
           python3 tools/dev/stage-scoped-record-tags-v1.py
           python3 tools/dev/stage-scoped-record-entity-identity-v1.py
+          python3 tools/dev/stage-record-entity-test-contract-v1.py
           chmod +x tests/compiler/c0/run-block-scope-record-tags.sh
       - name: Format and inspect product delta
         run: |
@@ -40,6 +41,7 @@ jobs:
             src/frontend/parser_record.c \
             src/frontend/parser_type.c \
             src/frontend/parser_statement.c \
+            tests/frontend/record_test.c \
             tests/compiler/c0/block_scope_record_tags.c \
             tests/compiler/c0/run-block-scope-record-tags.sh \
             tests/compiler/c0/run-foundation-focused.sh
@@ -67,6 +69,7 @@ jobs:
             src/frontend/parser_record.c \
             src/frontend/parser_type.c \
             src/frontend/parser_statement.c \
+            tests/frontend/record_test.c \
             tests/compiler/c0/block_scope_record_tags.c \
             tests/compiler/c0/run-block-scope-record-tags.sh \
             tests/compiler/c0/run-foundation-focused.sh
