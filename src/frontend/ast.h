@@ -201,7 +201,6 @@ typedef struct MinicLocal {
     MinicSourceSpan name_span;
     MinicType type;
     size_t element_count;
-    size_t storage_offset;
     bool is_array;
     bool is_register_storage;
 } MinicLocal;
@@ -319,7 +318,6 @@ typedef struct MinicFunction {
     size_t parameter_count;
     size_t local_begin;
     size_t local_count;
-    size_t local_storage_size;
     MinicBlockId body_block;
     bool is_defined;
     bool is_internal;

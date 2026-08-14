@@ -791,7 +791,6 @@ bool minic_c0_program_add_function(MinicC0Program *program,
     }
     function.local_begin = local_begin;
     function.local_count = local_count;
-    function.local_storage_size = 0U;
     function.parameter_count = 0U;
     function.body_block = body_block;
     function.is_defined = body_block != MINIC_BLOCK_INVALID;
@@ -874,7 +873,6 @@ bool minic_c0_program_define_function(MinicC0Program *program,
     }
     function->local_begin = local_begin;
     function->local_count = 0U;
-    function->local_storage_size = 0U;
     function->body_block = body_block;
     function->is_defined = true;
     return true;
@@ -895,7 +893,6 @@ bool minic_c0_program_finish_function(MinicC0Program *program,
         return false;
     }
     function->local_count = local_count;
-    function->local_storage_size = 0U;
     return true;
 }
 

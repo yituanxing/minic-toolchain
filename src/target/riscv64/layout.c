@@ -240,8 +240,6 @@ bool minic_riscv64_layout_function(const char *path,
 bool minic_riscv64_layout_program(const char *path,
                                   MinicC0Program *program,
                                   MinicDiagnostic *diagnostic) {
-    size_t function_index;
-
     if (program == NULL) {
         minic_riscv64_layout_error(diagnostic, path, "cannot layout a null program");
         return false;
@@ -254,25 +252,6 @@ bool minic_riscv64_layout_program(const char *path,
         minic_riscv64_layout_error(
             diagnostic, path, "global object size is invalid for the RV64 target");
         return false;
-    }
-
-    for (function_index = 0U; function_index < program->function_count; ++function_index) {
-        MinicRiscv64FunctionLayout function_layout;
-        MinicFunction *function;
-        size_t local_index;
-
-        function = &program->functions[function_index];
-        minic_riscv64_function_layout_initialize(&function_layout);
-        if (!minic_riscv64_layout_function(path, program, function, &function_layout, diagnostic)) {
-            minic_riscv64_function_layout_destroy(&function_layout);
-            return false;
-        }
-        for (local_index = 0U; local_index < function_layout.local_count; ++local_index) {
-            program->locals[function->local_begin + local_index].storage_offset =
-                function_layout.local_offsets[local_index];
-        }
-        function->local_storage_size = function_layout.local_storage_size;
-        minic_riscv64_function_layout_destroy(&function_layout);
     }
     return true;
 }
