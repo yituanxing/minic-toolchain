@@ -41,6 +41,7 @@ jobs:
             src/frontend/cast_normalization.c \
             src/frontend/ast_verifier.c \
             src/target/riscv64/codegen_expression.c \
+            tests/frontend/ast_contract_test.c \
             tests/compiler/c0/cast_integer_conversion.c
           git diff --check
           if grep -R --line-number 'is_normalized_integer_cast_add' src; then
@@ -83,6 +84,7 @@ jobs:
             src/frontend/cast_normalization.c \
             src/frontend/ast_verifier.c \
             src/target/riscv64/codegen_expression.c \
+            tests/frontend/ast_contract_test.c \
             tests/compiler/c0/run-cast-expressions.sh \
             tests/compiler/c0/cast_integer_conversion.c
           git commit -m 'refactor(frontend): normalize integer casts as conversions [skip ci]'
