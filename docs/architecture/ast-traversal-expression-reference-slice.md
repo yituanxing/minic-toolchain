@@ -12,17 +12,15 @@ This slice does **not** move FunctionBody storage, add Core IR, redesign the par
 
 ## Evidence / 证据
 
-The current normalized-expression rewrite rebuilds the translation-unit expression arena and maps old ExpressionId values to new values. It already remaps expression children, statement roots, the legacy program return root, and inline-asm operands, but formal Foundation does not remap `MinicCleanupContext.cleanup_expression`.
+The normalized-expression rewrite rebuilds the translation-unit expression arena and maps old ExpressionId values to new values. The historical implementation manually remapped expression children, statement roots, the legacy program return root, and inline-asm operands, but omitted `MinicCleanupContext.cleanup_expression`.
 
-当前 normalization 会重建整个 TU 的 expression arena，并建立 old ExpressionId -> new ExpressionId 映射。formal Foundation 已经手工 remap expression child、statement root、legacy program return root、inline-asm operand，但没有 remap `MinicCleanupContext.cleanup_expression`。
+当前 normalization 会重建整个 TU 的 expression arena，并建立 old ExpressionId -> new ExpressionId 映射。历史实现曾手工 remap expression child、statement root、legacy program return root、inline-asm operand，却遗漏了 `MinicCleanupContext.cleanup_expression`。
 
 Unchanged Linux exposed the concrete failure: after expression reindexing, a cleanup expression retained an old ID that was still numerically in range but referred to a different expression. Range-only verification therefore could not detect stale identity.
 
 unchanged Linux 已经暴露真实后果：重编号后 cleanup expression 保留旧 ID；该数字仍在合法范围内，却指向了另一表达式，因此仅靠范围验证无法发现 stale identity。
 
-The verifier also does not currently include `cleanup_contexts` in its program-storage invariant, confirming that external ExpressionId ownership is not represented canonically.
-
-Verifier 当前也没有把 `cleanup_contexts` 纳入 program-storage invariant，进一步证明 external ExpressionId ownership 尚无 canonical owner。
+The architecture defect was not merely one missing assignment. External ExpressionId ownership had no canonical enumerator, so every structural rewrite could silently grow another incomplete hand-written remap list.
 
 ## Architecture distinction / 架构区分
 
@@ -46,9 +44,9 @@ Do not represent these as one generic untyped edge list. Tree edges and semantic
 
 不要把两者塞进一个无类型 generic edge list。即使今天物理上都保存 `ExpressionId`，逻辑树边与语义/root 引用的含义仍然不同。
 
-## Proposed API seam / 建议 API 边界
+## Canonical API seam / Canonical API 边界
 
-Introduce a small `src/frontend/ast_traversal.[ch]` module. The exact spelling may change during implementation, but the semantic contract is:
+The checked-in `src/frontend/ast_traversal.[ch]` module owns the current relationship API:
 
 ```c
 typedef bool (*MinicExpressionIdRefVisitor)(MinicExpressionId *id, void *context);
@@ -62,15 +60,20 @@ bool minic_c0_program_visit_external_expression_id_refs(
     MinicC0Program *program,
     MinicExpressionIdRefVisitor visitor,
     void *context);
+
+bool minic_c0_program_remap_external_expression_ids(
+    MinicC0Program *program,
+    const MinicExpressionId *mapping,
+    size_t mapping_count);
 ```
 
-The API expresses relationships, not storage. Callers must not rely on `ExpressionId == dense array index` beyond the current storage implementation.
+The API expresses relationships, not storage. Callers must not depend on `ExpressionId == dense array index` as a permanent representation rule.
 
-该 API 表达的是节点关系，不是数组布局。调用者不得把 `ExpressionId == dense array index` 当成长期语义契约。
+An `ExpressionId` is a stable handle inside one AST representation snapshot. A structural rewrite such as cast normalization may replace handles, but only through an explicit validated mapping; old handles must never silently acquire a different meaning.
 
 ## Normalization migration / Normalization 迁移
 
-`cast_normalization.c` should stop owning a second node-kind child map.
+`cast_normalization.c` no longer owns a second node-kind child map.
 
 For every non-cast expression:
 
@@ -81,43 +84,36 @@ copy node
   -> append rewritten node
 ```
 
-Cast elimination still owns the semantic rewrite itself, but operand identity lookup uses the same mapping rules.
+Cast elimination still owns the semantic rewrite itself, but operand identity lookup follows the same old-to-new mapping discipline.
 
 External references use one canonical traversal rather than independent statement / inline-asm / cleanup loops.
 
 ## Transactionality / 事务性
 
-Preserve the current contract: failed normalization must leave the original program unchanged.
+The normalization contract remains transactional: failed normalization leaves the original program unchanged.
 
-Recommended sequence:
+Current sequence:
 
 ```text
 1. build rewritten expression arena + mapping
 2. validate every external ExpressionId against the complete mapping without mutation
-3. only after all validation succeeds, commit the new expression arena
-4. remap the already-validated external references through the same traversal
+3. remap the already validated external references through the same canonical traversal
+4. only then replace the expression arena
 ```
 
-The validation pass must guarantee that the final remap cannot fail midway. Do not trade the current transactional property for a simpler loop.
+The validation pass guarantees that the remap phase cannot discover a missing mapping halfway through. The focused regression freezes this property by deliberately corrupting an external cleanup reference and requiring normalization to fail without replacing the original arena or partially changing the cleanup reference.
 
-保持现有契约：normalization 失败时原 Program 必须完全不变。不能为了简化 remap 而引入半更新状态。
+## Relationship validation / 关系验证
 
-## Verifier strengthening / Verifier 加强
+The traversal module validates the storage it must enumerate before visiting external ExpressionId references, including statement, inline-asm and cleanup-context backing arrays and inline-asm operand arrays. It also validates every referenced ID against the complete remap before mutation.
 
-At minimum add invariants for cleanup storage and identity:
+Function-local semantic ownership is a separate layer. `minic_c0_program_validate_function_body_ownership()` follows reachable cleanup chains, inline-asm operands, nested blocks, local references and label targets and rejects cross-function semantic edges.
 
-- `cleanup_contexts/count/capacity` obey normal storage invariants;
-- every cleanup context refers only to an earlier valid parent or root;
-- every cleanup expression is a valid ExpressionId;
-- statement cleanup/stop contexts are valid and their reachability relationship is well formed where required.
-
-The verifier should progressively consume the same relationship model instead of creating another independent list of ExpressionId owners.
-
-Verifier 后续应逐步消费同一 relationship model，避免再形成第二份 ExpressionId owner 清单。
+The general AST verifier remains a separate structural/type verifier today. Long term it should consume the same canonical relationship APIs where useful instead of growing another hand-written ExpressionId-owner list. Do not duplicate traversal logic merely to make the verifier look more centralized before that convergence has a concrete use.
 
 ## Focused regression / 聚焦回归
 
-Extend `tests/frontend/ast_contract_test.c` with a case that creates:
+`tests/frontend/ast_traversal_test.c` freezes the Linux-discovered defect with:
 
 ```text
 integer expression
@@ -125,50 +121,44 @@ integer expression
       -> CleanupContext.cleanup_expression
 ```
 
-The integer cast normalization currently expands the expression topology. The test must prove that after normalization the cleanup context points to the newly mapped expression, not merely to an in-range ID.
+The integer cast normalization expands the expression topology. The test proves that after normalization the cleanup context points to the newly mapped expression, not merely to an in-range ID.
 
-Required sequence:
+A second case corrupts the cleanup ExpressionId before normalization and proves failure is transactional: the original expression arena, count, cast node and cleanup reference remain unchanged.
 
-```text
-parsed verifier PASS
-normalize PASS
-cleanup ExpressionId changed to mapped normalized node
-normalized verifier PASS
-```
-
-Also add malformed cleanup-context verifier cases so storage/parent/expression ownership cannot silently regress.
+FunctionBody-focused tests separately freeze cross-function ownership failures and the fact that parse-time/orphan expressions do not have to belong to a function body.
 
 ## Build and validation / 构建与验收
 
-Add the traversal implementation to both normal production sources and the AST-contract test source set.
+`ast_traversal.c` and `function_body.c` are checked-in production sources in the real Makefile; the temporary source-list materializer used during discovery has been removed.
 
-Validation order:
+Validation completed in the intended order:
 
 ```text
-focused AST contract
--> host debug/release/sanitize gates
--> frozen frontend/C0 gates
--> tiny-AES / cJSON / Parson / linenoise / SDS / Lua
--> unchanged Linux 6.6.143 init/main.i
+focused traversal / FunctionBody contracts
+-> host compiler-path gates
+-> frozen Foundation semantics
+-> official full compiler gate
+-> RV64 and unchanged real-program regressions
+-> frozen Linux 6.6.143 init/main.i
 ```
 
-The final Linux acceptance remains:
+The final independent Linux revalidation overlaid the architecture delta onto the previously proven discovery semantic tail and hard-asserted:
 
 ```text
 cached_tu_status=0
 FULL_TU_PASS lines=90928
 ```
 
-If any existing gate moves backward, stop and inspect ownership rather than adding a compatibility special case.
+The generated `main.s` was also required to be non-empty.
 
 ## What follows / 后续
 
-After this slice is green, re-read the affected AST/parser/normalization/verifier code globally.
+This slice is now an input to the next global reread, not a reason to continue mechanically expanding AST framework APIs.
 
-Only then decide whether the next step is:
+Possible next boundaries include:
 
-1. a lightweight FunctionBody View built from `function.body_block` and the canonical traversal relationships;
-2. DataLayout vs backend placement separation; or
-3. another ownership defect exposed by the refactor.
+1. DataLayout vs backend placement separation;
+2. canonical TargetABI ownership; or
+3. another ownership defect exposed by the reread.
 
-Do not add `expression_begin/count` or similar range fields merely to make FunctionBody traversal easy. Function ownership should be defined by semantic roots/relationships, not by permanently promising that current global arrays remain contiguous ranges.
+Do not add `expression_begin/count` or similar range fields merely to make FunctionBody traversal easy. Function ownership is defined by semantic roots/relationships, not by permanently promising that current global arrays remain contiguous ranges.
