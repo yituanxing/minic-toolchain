@@ -1,0 +1,60 @@
+name: Extract RV64 Caller ABI Linux Failure
+
+on:
+  push:
+    branches: [agent/rv64-caller-abi-linux-v1]
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: rv64-caller-abi-log-extract
+  cancel-in-progress: true
+
+jobs:
+  extract:
+    if: ${{ !contains(github.event.head_commit.message, '[skip ci]') }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/rv64-caller-abi-linux-v1
+          fetch-depth: 0
+
+      - name: Extract latest completed caller Linux failure
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          run_id=$(gh run list \
+            --repo "$GITHUB_REPOSITORY" \
+            --workflow rv64-caller-abi-linux-revalidation.yml \
+            --branch agent/rv64-caller-abi-linux-v1 \
+            --status completed \
+            --limit 1 \
+            --json databaseId \
+            --jq '.[0].databaseId')
+          test -n "$run_id"
+
+          gh run view "$run_id" --repo "$GITHUB_REPOSITORY" --log-failed > /tmp/caller.log
+          trace=$(grep 'CALLER_ABI_LOC_FAIL' /tmp/caller.log | tail -n 1 || true)
+          diagnostic=$(grep -E 'cannot write RISC-V assembly|error:' /tmp/caller.log | tail -n 1 || true)
+
+          mkdir -p tools/dev
+          {
+            echo "run_id=$run_id"
+            echo "trace=$trace"
+            echo "diagnostic=$diagnostic"
+          } > tools/dev/rv64-caller-abi-linux-last-result.txt
+          cat tools/dev/rv64-caller-abi-linux-last-result.txt
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add tools/dev/rv64-caller-abi-linux-last-result.txt
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m 'dev: capture caller ABI Linux failure [skip ci]'
+          git push origin HEAD:agent/rv64-caller-abi-linux-v1
