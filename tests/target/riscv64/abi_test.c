@@ -55,7 +55,6 @@ static bool test_value_classification(void) {
     MinicType record4;
     MinicType record_fp;
     MinicType pointer_type;
-    MinicRiscv64AbiValue value;
 
     minic_c0_program_initialize(&program);
     record16_fields[0] = minic_type_long();
@@ -76,8 +75,8 @@ static bool test_value_classification(void) {
     CHECK(expect_value(&program, minic_type_void(), MINIC_RISCV64_ABI_VALUE_VOID, 0U, 0U));
     CHECK(expect_value(&program, record16, MINIC_RISCV64_ABI_VALUE_AGGREGATE, 16U, 2U));
 
-    CHECK(!minic_riscv64_abi_classify_value(&program, record4, &value));
-    CHECK(!minic_riscv64_abi_classify_value(&program, record_fp, &value));
+    CHECK(expect_value(&program, record4, MINIC_RISCV64_ABI_VALUE_AGGREGATE, 4U, 1U));
+    CHECK(expect_value(&program, record_fp, MINIC_RISCV64_ABI_VALUE_INDIRECT, 8U, 1U));
 
     minic_c0_program_destroy(&program);
     return true;
@@ -155,21 +154,18 @@ static bool test_argument_placement(void) {
 
 static bool test_unsupported_argument_is_transactional(void) {
     MinicC0Program program;
-    MinicType field_type;
-    MinicType record4;
     MinicRiscv64AbiCursor cursor;
     MinicRiscv64AbiCursor before_failure;
     MinicRiscv64AbiArgumentLocation location;
 
     minic_c0_program_initialize(&program);
-    field_type = minic_type_int();
-    CHECK(add_record(&program, &field_type, 1U, &record4));
 
     minic_riscv64_abi_cursor_initialize(&cursor);
     CHECK(minic_riscv64_abi_place_argument(
         &program, minic_type_long(), true, &cursor, &location));
     before_failure = cursor;
-    CHECK(!minic_riscv64_abi_place_argument(&program, record4, true, &cursor, &location));
+    CHECK(!minic_riscv64_abi_place_argument(
+        &program, minic_type_void(), true, &cursor, &location));
     CHECK(cursor.integer_register_count == before_failure.integer_register_count);
     CHECK(cursor.floating_register_count == before_failure.floating_register_count);
     CHECK(cursor.stack_slot_count == before_failure.stack_slot_count);

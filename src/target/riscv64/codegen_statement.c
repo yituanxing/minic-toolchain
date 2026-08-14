@@ -48,17 +48,85 @@ static bool minic_riscv64_emit_assignment(FILE *file,
     value = minic_c0_program_expression(program, statement->expression);
     if (target == NULL || value == NULL || target->value_category != MINIC_VALUE_LVALUE ||
         !minic_c0_assignment_compatible(program, target->type, statement->expression)) {
+        fprintf(stderr,
+                "CODEGEN_ASSIGN_REJECT target_expr=%zu value_expr=%zu target_kind=%d value_kind=%d "
+                "target_type=%d/%u target_vcat=%d value_type=%d/%u value_vcat=%d compatible=%d\n",
+                (size_t)statement->target_expression,
+                (size_t)statement->expression,
+                target == NULL ? -1 : (int)target->kind,
+                value == NULL ? -1 : (int)value->kind,
+                target == NULL ? -1 : (int)target->type.base_kind,
+                target == NULL ? 0U : target->type.pointer_depth,
+                target == NULL ? -1 : (int)target->value_category,
+                value == NULL ? -1 : (int)value->type.base_kind,
+                value == NULL ? 0U : value->type.pointer_depth,
+                value == NULL ? -1 : (int)value->value_category,
+                target != NULL && value != NULL
+                    ? (minic_c0_assignment_compatible(program, target->type, statement->expression)
+                           ? 1
+                           : 0)
+                    : 0);
         return false;
     }
-    return minic_riscv64_emit_expression(
-               file, program, function, function_layout, statement->expression) &&
-           fprintf(file, "  addi sp, sp, -16\n  sd a0, 0(sp)\n") >= 0 &&
-           minic_riscv64_emit_lvalue_address(
-               file, program, function, function_layout, statement->target_expression) &&
-           fprintf(file, "  ld t0, 0(sp)\n  addi sp, sp, 16\n") >= 0 &&
-           (!minic_type_is_integer(target->type) ||
-            minic_riscv64_emit_integer_conversion(file, target->type, "t0")) &&
-           minic_riscv64_emit_scalar_store(file, target->type, "t0", "a0");
+    if (!minic_riscv64_emit_expression(
+            file, program, function, function_layout, statement->expression)) {
+        fprintf(stderr,
+                "CODEGEN_ASSIGN_STAGE value target_expr=%zu value_expr=%zu target_kind=%d "
+                "value_kind=%d target_type=%d/%u value_type=%d/%u\n",
+                (size_t)statement->target_expression,
+                (size_t)statement->expression,
+                (int)target->kind,
+                (int)value->kind,
+                (int)target->type.base_kind,
+                target->type.pointer_depth,
+                (int)value->type.base_kind,
+                value->type.pointer_depth);
+        return false;
+    }
+    if (fprintf(file, "  addi sp, sp, -16\n  sd a0, 0(sp)\n") < 0) {
+        return false;
+    }
+    if (!minic_riscv64_emit_lvalue_address(
+            file, program, function, function_layout, statement->target_expression)) {
+        fprintf(stderr,
+                "CODEGEN_ASSIGN_STAGE lvalue target_expr=%zu value_expr=%zu target_kind=%d "
+                "value_kind=%d target_type=%d/%u value_type=%d/%u\n",
+                (size_t)statement->target_expression,
+                (size_t)statement->expression,
+                (int)target->kind,
+                (int)value->kind,
+                (int)target->type.base_kind,
+                target->type.pointer_depth,
+                (int)value->type.base_kind,
+                value->type.pointer_depth);
+        return false;
+    }
+    if (fprintf(file, "  ld t0, 0(sp)\n  addi sp, sp, 16\n") < 0) {
+        return false;
+    }
+    if (minic_type_is_integer(target->type) &&
+        !minic_riscv64_emit_integer_conversion(file, target->type, "t0")) {
+        fprintf(stderr,
+                "CODEGEN_ASSIGN_STAGE integer-conversion target_type=%d/%u\n",
+                (int)target->type.base_kind,
+                target->type.pointer_depth);
+        return false;
+    }
+    if (!minic_riscv64_emit_scalar_store(file, target->type, "t0", "a0")) {
+        fprintf(stderr,
+                "CODEGEN_ASSIGN_STAGE store target_expr=%zu value_expr=%zu target_kind=%d "
+                "value_kind=%d target_type=%d/%u value_type=%d/%u\n",
+                (size_t)statement->target_expression,
+                (size_t)statement->expression,
+                (int)target->kind,
+                (int)value->kind,
+                (int)target->type.base_kind,
+                target->type.pointer_depth,
+                (int)value->type.base_kind,
+                value->type.pointer_depth);
+        return false;
+    }
+    return true;
 }
 
 static bool minic_riscv64_emit_record_copy(FILE *file,
@@ -124,9 +192,28 @@ static bool minic_riscv64_emit_cleanup_contexts(FILE *file,
         const MinicCleanupContext *context;
 
         context = minic_c0_program_cleanup_context(program, current);
-        if (context == NULL ||
-            !minic_riscv64_emit_expression(
+        if (context == NULL) {
+            fprintf(stderr,
+                    "CODEGEN_CLEANUP_FAIL function=%s context=%zu missing=1\n",
+                    function != NULL ? function->name : "<null>",
+                    (size_t)current);
+            return false;
+        }
+        if (!minic_riscv64_emit_expression(
                 file, program, function, function_layout, context->cleanup_expression)) {
+            const MinicExpression *cleanup =
+                minic_c0_program_expression(program, context->cleanup_expression);
+            fprintf(stderr,
+                    "CODEGEN_CLEANUP_FAIL function=%s context=%zu expr=%zu kind=%d type=%d/%u "
+                    "vcat=%d parent=%zu\n",
+                    function != NULL ? function->name : "<null>",
+                    (size_t)current,
+                    (size_t)context->cleanup_expression,
+                    cleanup == NULL ? -1 : (int)cleanup->kind,
+                    cleanup == NULL ? -1 : (int)cleanup->type.base_kind,
+                    cleanup == NULL ? 0U : cleanup->type.pointer_depth,
+                    cleanup == NULL ? -1 : (int)cleanup->value_category,
+                    (size_t)context->parent);
             return false;
         }
         current = context->parent;
@@ -177,11 +264,15 @@ static bool minic_riscv64_emit_return(FILE *file,
                 return false;
             }
             (void)aggregate_size;
-            if (value->value_category == MINIC_VALUE_LVALUE) {
-                if (!minic_riscv64_emit_lvalue_address(
+            if (minic_c0_record_value_is_address_backed(program, statement->expression)) {
+                if (!minic_riscv64_emit_address_backed_record_value(
                         file, program, function, function_layout, statement->expression) ||
-                    fprintf(file, "  mv t0, a0\n  ld a0, 0(t0)\n") < 0 ||
-                    (aggregate_chunks == 2U && fprintf(file, "  ld a1, 8(t0)\n") < 0)) {
+                    fprintf(file, "  mv t0, a0\n") < 0 ||
+                    !minic_riscv64_emit_integer_aggregate_load_chunk(
+                        file, program, function->return_type, 0U, "a0", "t0") ||
+                    (aggregate_chunks == 2U &&
+                     !minic_riscv64_emit_integer_aggregate_load_chunk(
+                         file, program, function->return_type, 1U, "a1", "t0"))) {
                     return false;
                 }
             } else if (value->kind != MINIC_EXPRESSION_CALL ||
@@ -191,6 +282,19 @@ static bool minic_riscv64_emit_return(FILE *file,
             }
         } else if (!minic_riscv64_emit_expression(
                        file, program, function, function_layout, statement->expression)) {
+            const MinicExpression *failed_value =
+                minic_c0_program_expression(program, statement->expression);
+            fprintf(stderr,
+                    "CODEGEN_RETURN_STAGE value function=%s expr=%zu kind=%d type=%d/%u vcat=%d "
+                    "cleanup=%zu->%zu\n",
+                    function != NULL ? function->name : "<null>",
+                    (size_t)statement->expression,
+                    failed_value == NULL ? -1 : (int)failed_value->kind,
+                    failed_value == NULL ? -1 : (int)failed_value->type.base_kind,
+                    failed_value == NULL ? 0U : failed_value->type.pointer_depth,
+                    failed_value == NULL ? -1 : (int)failed_value->value_category,
+                    (size_t)statement->cleanup_context,
+                    (size_t)statement->cleanup_stop_context);
             return false;
         }
         if (minic_type_is_integer(function->return_type) &&
@@ -210,6 +314,12 @@ static bool minic_riscv64_emit_return(FILE *file,
                                                  function_layout,
                                                  statement->cleanup_context,
                                                  statement->cleanup_stop_context)) {
+            fprintf(stderr,
+                    "CODEGEN_RETURN_STAGE cleanup function=%s expr=%zu cleanup=%zu->%zu\n",
+                    function != NULL ? function->name : "<null>",
+                    (size_t)statement->expression,
+                    (size_t)statement->cleanup_context,
+                    (size_t)statement->cleanup_stop_context);
             return false;
         }
         if (has_value && fprintf(file, "  ld a0, 0(sp)\n  ld a1, 8(sp)\n  addi sp, sp, 16\n") < 0) {
@@ -532,11 +642,14 @@ minic_riscv64_emit_block_with_break_target(FILE *file,
                                           label_counter,
                                           break_target)) {
             fprintf(stderr,
-                    "CODEGEN_FAIL statement function=%s block=%zu statement=%zu kind=%d\n",
+                    "CODEGEN_FAIL statement function=%s block=%zu statement=%zu kind=%d line=%zu "
+                    "column=%zu\n",
                     function != NULL ? function->name : "<null>",
                     (size_t)block_id,
                     (size_t)statement_id,
-                    statement != NULL ? (int)statement->kind : -1);
+                    statement != NULL ? (int)statement->kind : -1,
+                    statement != NULL ? statement->span.begin.line : 0U,
+                    statement != NULL ? statement->span.begin.column : 0U);
             return false;
         }
     }
