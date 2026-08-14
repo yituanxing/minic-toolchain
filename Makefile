@@ -74,6 +74,7 @@ MINIC_SOURCES := \
 	src/frontend/type.c \
 	src/target/data_layout.c \
 	src/target/target_info.c \
+	src/target/riscv64/abi.c \
 	src/target/riscv64/layout.c \
 	src/target/riscv64/codegen_support.c \
 	src/target/riscv64/codegen_expression.c \
