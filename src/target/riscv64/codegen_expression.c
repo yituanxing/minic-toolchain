@@ -2004,24 +2004,6 @@ bool minic_riscv64_emit_expression(FILE *file,
                                                function,
                                                function_layout,
                                                expression->value.call.arguments[argument_index])) {
-                fprintf(stderr,
-                        "CODEGEN_CALL_ARG scalar caller=%s callee=%s arg=%zu expr=%zu kind=%d "
-                        "type=%d/%u vcat=%d fixed=%d abi_type=%d/%u\n",
-                        function != NULL ? function->name : "<null>",
-                        direct_callee != NULL ? direct_callee->name : "<indirect>",
-                        argument_index,
-                        (size_t)expression->value.call.arguments[argument_index],
-                        (int)argument->kind,
-                        (int)argument->type.base_kind,
-                        argument->type.pointer_depth,
-                        (int)argument->value_category,
-                        argument_index < parameter_count ? 1 : 0,
-                        argument_index < parameter_count
-                            ? (int)abi_parameter_types[argument_index].base_kind
-                            : -1,
-                        argument_index < parameter_count
-                            ? abi_parameter_types[argument_index].pointer_depth
-                            : 0U);
                 return false;
             }
             if (argument_index < parameter_count) {

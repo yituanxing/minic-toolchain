@@ -779,43 +779,14 @@ static bool minic_riscv64_emit_function(FILE *file,
 
     if (function == NULL || !function->is_defined || function->name_length == 0U ||
         function->body_block >= program->block_count) {
-        fprintf(stderr,
-                "CODEGEN_FUNCTION_ENTRY invalid-metadata name=%s\n",
-                function == NULL ? "<null>" : function->name);
         return false;
     }
     minic_riscv64_function_layout_initialize(&function_layout);
     if (!minic_riscv64_layout_function(NULL, program, function, &function_layout, NULL)) {
-        fprintf(stderr, "CODEGEN_FUNCTION_ENTRY function-layout name=%s\n", function->name);
         return false;
     }
     if (!minic_riscv64_frame_layout_from_function_layout(
             program, function, &function_layout, &frame_layout)) {
-        size_t parameter_index;
-
-        fprintf(stderr,
-                "CODEGEN_FUNCTION_ENTRY frame-layout name=%s params=%zu locals=%zu..%zu\n",
-                function->name,
-                function->parameter_count,
-                (size_t)function->local_begin,
-                (size_t)(function->local_begin + function->local_count));
-        for (parameter_index = 0U; parameter_index < function->parameter_count; ++parameter_index) {
-            MinicLocalId local_id;
-            const MinicLocal *parameter;
-
-            local_id = function->local_begin + parameter_index;
-            parameter = minic_c0_program_local(program, local_id);
-            fprintf(stderr,
-                    "CODEGEN_FUNCTION_PARAM index=%zu local=%zu kind=%d ptr=%u array=%d "
-                    "array_id=%zu record=%zu\n",
-                    parameter_index,
-                    (size_t)local_id,
-                    parameter == NULL ? -1 : (int)parameter->type.base_kind,
-                    parameter == NULL ? 0U : parameter->type.pointer_depth,
-                    parameter != NULL && minic_type_is_array(parameter->type) ? 1 : 0,
-                    parameter == NULL ? SIZE_MAX : parameter->type.array_type_id,
-                    parameter == NULL ? SIZE_MAX : parameter->type.record_id);
-        }
         minic_riscv64_function_layout_destroy(&function_layout);
         return false;
     }
@@ -1099,10 +1070,6 @@ bool minic_riscv64_write_c0_program(const char *path,
         success =
             minic_riscv64_emit_global_object(file, program, &program->global_objects[global_index]);
         if (!success) {
-            fprintf(stderr,
-                    "CODEGEN_FAIL global=%zu name=%s\n",
-                    global_index,
-                    program->global_objects[global_index].name);
         }
     }
     if (success && program->file_asm_count != 0U) {
@@ -1136,11 +1103,6 @@ bool minic_riscv64_write_c0_program(const char *path,
         }
         success = minic_riscv64_emit_function(file, program, function, &label_counter);
         if (!success) {
-            fprintf(stderr,
-                    "CODEGEN_FAIL function=%zu name=%s body=%zu\n",
-                    function_index,
-                    function->name,
-                    (size_t)function->body_block);
         }
     }
 
