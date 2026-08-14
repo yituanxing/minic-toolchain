@@ -8,7 +8,7 @@ def read(path: str) -> str:
 
 
 def write(path: str, text: str) -> None:
-    Path(path).write_text(text, encoding="utf-8")
+    Path(path).write_text(text.rstrip() + "\n", encoding="utf-8")
 
 
 def replace_once(text: str, old: str, new: str, label: str) -> str:
