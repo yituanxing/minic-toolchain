@@ -1,0 +1,53 @@
+name: Global Object DataLayout Query v1 Validation
+
+on:
+  push:
+    branches: [refactor/global-object-datalayout-query-v1]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: global-object-datalayout-query-v1-validation
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Materialize global-object DataLayout candidate
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/materialize-global-object-datalayout-query-v1.py
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+          git diff --check
+
+      - name: Assert object policy has one query owner
+        run: |
+          set -Eeuo pipefail
+          grep -F 'bool minic_data_layout_global_object' src/target/data_layout.c >/dev/null
+          grep -F 'minic_data_layout_global_object(' src/target/riscv64/layout.c >/dev/null
+          if grep -F 'object->is_extern && minic_type_is_void' src/target/riscv64/layout.c >/dev/null; then
+            echo 'RV64 layout still owns extern-object layout policy' >&2
+            exit 1
+          fi
+          if grep -F 'object->explicit_alignment > alignment' src/target/riscv64/layout.c >/dev/null; then
+            echo 'RV64 layout still owns object explicit-alignment policy' >&2
+            exit 1
+          fi
+
+      - name: Production source inventory
+        run: sh tools/maintenance/check-production-source-inventory.sh
+
+      - name: Focused layout gate
+        run: make -j2 BUILD_DIR=build/global-object-layout-debug check-layout
+
+      - name: Release compiler gate
+        run: make -j2 MODE=release BUILD_DIR=build/global-object-layout-release CFLAGS=-Werror check-fast
+
+      - name: Sanitized AST gate
+        run: make -j2 MODE=sanitize BUILD_DIR=build/global-object-layout-sanitize check-ast-contract
