@@ -1,0 +1,31 @@
+name: Format GNU inline product blob
+
+on:
+  push:
+    branches:
+      - staging/gnu-inline-linkage-v0
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    if: github.event.head_commit.message != 'format GNU inline product blob'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Format parser product file
+        run: clang-format-18 -i src/frontend/parser_function.c
+      - name: Verify formatter fixed point
+        run: |
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+          git diff --check
+      - name: Commit formatted product blob
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/frontend/parser_function.c
+          git commit -m 'format GNU inline product blob'
+          git push origin HEAD:staging/gnu-inline-linkage-v0
