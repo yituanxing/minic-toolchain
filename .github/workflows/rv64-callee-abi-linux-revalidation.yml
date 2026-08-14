@@ -1,0 +1,182 @@
+name: RV64 Callee ABI Linux Revalidation
+
+on:
+  push:
+    branches: [agent/rv64-callee-abi-linux-v1]
+
+concurrency:
+  group: rv64-callee-abi-linux-v1
+  cancel-in-progress: true
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  revalidate:
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      DISCOVERY_BASE: 4a4893dc1f306cb082ceb7ea086bf93c4f11790b
+      FORMAL_FOUNDATION: c60828f883639a06409b33e1890ef08b15bad688
+      ABI_HEAD: dcc47c80bf8b00caf1b1098654015ccf1d86cca3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Preserve this revalidation's runner-only adapters
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cp tools/dev/materialize-rv64-abi-location-compat.py /tmp/rv64-abi-location-compat.py
+          cp tools/dev/materialize-rv64-callee-abi-location-linux.py /tmp/rv64-callee-abi-location-linux.py
+
+      - name: Overlay formal FunctionBody architecture on proven discovery base
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags origin refactor/foundation-v1
+          git checkout --detach "$DISCOVERY_BASE"
+          merge_base=$(git merge-base "$DISCOVERY_BASE" "$FORMAL_FOUNDATION")
+          echo "merge_base=$merge_base"
+          git diff --binary "$merge_base" "$FORMAL_FOUNDATION" -- . ':(exclude).github/workflows/*' \
+            > /tmp/formal-foundation.patch
+          git apply --3way --index /tmp/formal-foundation.patch
+          git diff --cached --check
+
+          grep -F 'minic_c0_program_remap_external_expression_ids' src/frontend/ast_traversal.h >/dev/null
+          cat > tools/dev/materialize-cleanup-cast-remap.py <<'PY'
+          #!/usr/bin/env python3
+          from pathlib import Path
+
+          traversal = Path("src/frontend/ast_traversal.h").read_text()
+          normalization = Path("src/frontend/cast_normalization.c").read_text()
+          if "minic_c0_program_remap_external_expression_ids" not in traversal:
+              raise SystemExit("canonical external ExpressionId remap API missing")
+          if "minic_c0_program_remap_external_expression_ids" not in normalization:
+              raise SystemExit("cast normalization is not using canonical external ExpressionId remap")
+          print("SKIP legacy cleanup remap materializer: canonical traversal owner present")
+          PY
+
+      - name: Materialize the already-proven Linux semantic tail
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/materialize-tail-ownership.py
+          set +e
+          python3 tools/dev/materialize-subxlen-aggregate.py 2>build-subxlen.err
+          materialize_status=$?
+          set -e
+          if test "$materialize_status" -ne 0; then
+            grep -Fx 'unexpected aggregate call staging anchor' build-subxlen.err >/dev/null
+          fi
+          python3 tools/dev/materialize-subxlen-aggregate-finish.py
+          python3 tools/dev/fix-subxlen-materialization.py
+          python3 tools/dev/materialize-aggregate-rvalue-arg.py
+          python3 tools/dev/materialize-inline-asm-symbolic-immediate.py
+          python3 tools/dev/materialize-inline-asm-rj-z.py
+          python3 tools/dev/fix-inline-asm-rj-materialization.py
+          python3 tools/dev/materialize-inline-asm-rk.py
+          python3 tools/dev/materialize-codegen-span-trace.py
+          git diff --check
+
+      - name: Extend proven discovery ABI with formal location seam
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 /tmp/rv64-abi-location-compat.py
+
+          python3 - <<'PY'
+          import os
+          import subprocess
+          from pathlib import Path
+
+          abi_head = os.environ["ABI_HEAD"]
+          path = Path("src/target/riscv64/codegen_support.c")
+          target = path.read_text()
+          formal = subprocess.check_output(
+              ["git", "show", f"{abi_head}:src/target/riscv64/codegen_support.c"], text=True
+          )
+
+          def function_span(text: str, name: str) -> tuple[int, int]:
+              marker = name + "("
+              marker_index = text.index(marker)
+              start = text.rfind("\n", 0, marker_index) + 1
+              brace = text.index("{", marker_index)
+              depth = 0
+              for index in range(brace, len(text)):
+                  if text[index] == "{":
+                      depth += 1
+                  elif text[index] == "}":
+                      depth -= 1
+                      if depth == 0:
+                          return start, index + 1
+              raise RuntimeError(f"unterminated function: {name}")
+
+          def extract(text: str, name: str) -> str:
+              start, end = function_span(text, name)
+              return text[start:end]
+
+          def replace(text: str, name: str, replacement: str) -> str:
+              start, end = function_span(text, name)
+              return text[:start] + replacement + text[end:]
+
+          for function_name in (
+              "minic_riscv64_integer_aggregate_abi",
+              "minic_riscv64_frame_layout",
+          ):
+              target = replace(target, function_name, extract(formal, function_name))
+
+          include = '#include "target/riscv64/abi.h"\n'
+          if include not in target:
+              anchor = '#include "target/riscv64/codegen_internal.h"\n'
+              if anchor not in target:
+                  raise SystemExit("codegen support include anchor missing")
+              target = target.replace(anchor, anchor + "\n" + include, 1)
+
+          path.write_text(target)
+          print("ABI_FORMAL_CONSUMERS_OVERLAID=2")
+          PY
+
+          python3 /tmp/rv64-callee-abi-location-linux.py
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+          git diff --check
+          grep -F 'MinicRiscv64AbiCursor abi_cursor;' src/target/riscv64/codegen_function.c >/dev/null
+          grep -F 'MINIC_RISCV64_ABI_VALUE_INDIRECT' src/target/riscv64/codegen_function.c >/dev/null
+          if grep -F 'size_t stack_parameter_index;' src/target/riscv64/codegen_function.c >/dev/null; then
+            echo 'legacy callee stack cursor remains' >&2
+            exit 1
+          fi
+          echo 'CALLEE_ABI_LOCATION_EXTENDED=1'
+
+      - name: Build location-driven discovery compiler
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release BUILD_DIR=build/rv64-callee-abi-linux
+
+      - name: Revalidate frozen Linux init main TU
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          minic="$GITHUB_WORKSPACE/build/rv64-callee-abi-linux/bin/minic"
+          mkdir -p build/linux-artifact
+          gh run download 31689171683 -n linux-frontier-31689171683 -D build/linux-artifact
+          test -s build/linux-artifact/kbuild/init/main.i
+          lines=$(wc -l < build/linux-artifact/kbuild/init/main.i)
+          test "$lines" -eq 90928
+
+          set +e
+          "$minic" -S build/linux-artifact/kbuild/init/main.i -o build/linux-artifact/main.s \
+            >build/linux-artifact/minic.stdout 2>build/linux-artifact/minic.stderr
+          status=$?
+          set -e
+
+          echo "cached_tu_status=$status"
+          if test -s build/linux-artifact/minic.stderr; then
+            tail -n 100 build/linux-artifact/minic.stderr
+          fi
+          test "$status" -eq 0
+          test -s build/linux-artifact/main.s
+          echo "FULL_TU_PASS lines=$lines"
