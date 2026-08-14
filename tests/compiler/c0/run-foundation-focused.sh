@@ -82,6 +82,7 @@ for test_script in \
     run-gnu-top-level-empty-declaration.sh \
     run-gnu-object-alignment-attribute.sh \
     run-gnu-auto-type-local.sh \
+    run-gnu-local-interleaved-informational-attribute.sh \
     run-gnu-array-object-identity.sh \
     run-gnu-local-label-address.sh \
     run-gnu-inline-asm-fence.sh \
