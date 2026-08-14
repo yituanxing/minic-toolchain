@@ -22,7 +22,7 @@ jobs:
       - name: Materialize global-object DataLayout candidate
         run: |
           set -Eeuo pipefail
-          python3 tools/dev/materialize-global-object-datalayout-query-v1.py
+          python3 tools/dev/run-materialize-global-object-datalayout-query-v1.py
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
           git diff --check
 
