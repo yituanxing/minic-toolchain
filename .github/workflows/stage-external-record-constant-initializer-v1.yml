@@ -18,7 +18,7 @@ jobs:
           fetch-depth: 0
       - name: Materialize narrow product delta
         run: |
-          python3 tools/dev/stage-external-record-constant-initializer-v1.py
+          python3 tools/dev/run-stage-external-record-constant-initializer-v1.py
           chmod +x tests/compiler/c0/run-external-record-compound-literal.sh
       - name: Format and inspect product delta
         run: |
