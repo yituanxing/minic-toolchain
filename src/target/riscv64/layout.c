@@ -79,50 +79,19 @@ static bool minic_riscv64_layout_records(MinicC0Program *program) {
 static bool minic_riscv64_layout_globals(MinicC0Program *program) {
     size_t object_index;
 
+    if (program == NULL) {
+        return false;
+    }
     for (object_index = 0U; object_index < program->global_object_count; ++object_index) {
         MinicGlobalObject *object;
         size_t storage_size;
         size_t alignment;
 
         object = &program->global_objects[object_index];
-        if (object->is_extern && minic_type_is_void(object->type)) {
-            object->storage_size = 0U;
-            object->alignment = 0U;
-            continue;
-        }
-        if (object->is_extern && minic_type_is_record(object->type)) {
-            const MinicRecord *record;
-
-            record = minic_c0_program_record(program, object->type.record_id);
-            if (record != NULL && !record->is_complete) {
-                object->storage_size = 0U;
-                object->alignment = 0U;
-                continue;
-            }
-        }
-        if (object->is_extern && minic_type_is_array(object->type)) {
-            const MinicArrayType *array_type;
-
-            array_type = minic_c0_program_array_type(program, object->type.array_type_id);
-            if (array_type != NULL && array_type->element_count == 0U) {
-                object->storage_size = 0U;
-                object->alignment = 0U;
-                continue;
-            }
-        }
-        if (!minic_riscv64_type_layout(program, object->type, &storage_size, &alignment)) {
+        if (!minic_data_layout_global_object(
+                minic_default_data_layout(), program, object, &storage_size, &alignment)) {
             return false;
         }
-        if (object->explicit_alignment != 0U) {
-            if ((object->explicit_alignment & (object->explicit_alignment - 1U)) != 0U) {
-                return false;
-            }
-            if (object->explicit_alignment > alignment) {
-                alignment = object->explicit_alignment;
-            }
-        }
-        object->storage_size = storage_size;
-        object->alignment = alignment;
     }
     return true;
 }

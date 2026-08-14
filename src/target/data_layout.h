@@ -23,6 +23,11 @@ bool minic_data_layout_type(const MinicDataLayout *layout,
                             MinicType type,
                             size_t *size,
                             size_t *alignment);
+bool minic_data_layout_global_object(const MinicDataLayout *layout,
+                                     const MinicC0Program *program,
+                                     const MinicGlobalObject *object,
+                                     size_t *size,
+                                     size_t *alignment);
 bool minic_data_layout_record_field_layout(const MinicDataLayout *layout,
                                            const MinicC0Program *program,
                                            const MinicRecord *record,
