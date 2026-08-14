@@ -1,5 +1,6 @@
 #include "target/riscv64/codegen.h"
 #include "target/riscv64/codegen_internal.h"
+#include "target/riscv64/abi.h"
 #include "target/data_layout.h"
 
 #include <errno.h>
@@ -749,68 +750,72 @@ static bool minic_riscv64_emit_function(FILE *file,
         }
     }
     if (success) {
+        MinicRiscv64AbiCursor abi_cursor;
         size_t parameter_index;
-        size_t integer_register_index;
-        size_t floating_register_index;
-        size_t stack_parameter_index;
 
-        integer_register_index = 0U;
-        floating_register_index = 0U;
-        stack_parameter_index = 0U;
-
+        minic_riscv64_abi_cursor_initialize(&abi_cursor);
         for (parameter_index = 0U; success && parameter_index < function->parameter_count;
              ++parameter_index) {
             const MinicLocal *parameter;
             MinicLocalId local_id;
+            MinicRiscv64AbiArgumentLocation location;
 
             local_id = function->local_begin + parameter_index;
             parameter = minic_c0_program_local(program, local_id);
-            if (parameter == NULL) {
+            if (parameter == NULL || !minic_riscv64_abi_place_argument(
+                                         program, parameter->type, true, &abi_cursor, &location)) {
                 success = false;
                 break;
             }
-            if (minic_type_is_double(parameter->type) || minic_type_is_float(parameter->type)) {
-                if (floating_register_index >= 8U) {
+
+            if (location.value.kind == MINIC_RISCV64_ABI_VALUE_FLOAT) {
+                if (location.floating_register_count != 1U ||
+                    location.floating_register_begin >= 8U ||
+                    location.integer_register_count != 0U || location.stack_slot_count != 0U) {
                     success = false;
                     break;
                 }
                 success = fprintf(file,
                                   minic_type_is_double(parameter->type) ? "  fmv.x.d t0, fa%zu\n"
                                                                         : "  fmv.x.w t0, fa%zu\n",
-                                  floating_register_index) >= 0 &&
+                                  location.floating_register_begin) >= 0 &&
                           minic_riscv64_emit_object_store_register(
                               file, program, function, local_id, "t0");
-                floating_register_index += 1U;
                 continue;
             }
-            if (minic_type_is_record(parameter->type)) {
-                size_t aggregate_size;
-                size_t aggregate_chunks;
+
+            if (location.value.kind == MINIC_RISCV64_ABI_VALUE_AGGREGATE) {
                 size_t chunk_index;
 
-                if (!minic_riscv64_integer_aggregate_abi(
-                        program, parameter->type, &aggregate_size, &aggregate_chunks)) {
+                if (location.value.slot_count == 0U ||
+                    location.value.slot_count !=
+                        location.integer_register_count + location.stack_slot_count ||
+                    location.integer_register_begin > 8U ||
+                    location.integer_register_count > 8U - location.integer_register_begin) {
                     success = false;
                     break;
                 }
-                (void)aggregate_size;
-                for (chunk_index = 0U; success && chunk_index < aggregate_chunks; ++chunk_index) {
+                for (chunk_index = 0U; success && chunk_index < location.value.slot_count;
+                     ++chunk_index) {
                     const char *source_register;
 
                     source_register = "t0";
-                    if (integer_register_index < 8U) {
-                        source_register = minic_riscv64_argument_registers[integer_register_index];
-                        integer_register_index += 1U;
+                    if (chunk_index < location.integer_register_count) {
+                        source_register =
+                            minic_riscv64_argument_registers[location.integer_register_begin +
+                                                             chunk_index];
                     } else {
                         size_t incoming_offset;
+                        size_t stack_slot;
 
-                        if (stack_parameter_index > (SIZE_MAX - frame_size) / 8U) {
+                        stack_slot = location.stack_slot_begin +
+                                     (chunk_index - location.integer_register_count);
+                        if (stack_slot > (SIZE_MAX - frame_size) / 8U) {
                             success = false;
                             break;
                         }
-                        incoming_offset = frame_size + stack_parameter_index * 8U;
+                        incoming_offset = frame_size + stack_slot * 8U;
                         success = minic_riscv64_emit_sp_load64(file, "t0", incoming_offset);
-                        stack_parameter_index += 1U;
                     }
                     if (success) {
                         success = minic_riscv64_emit_integer_aggregate_local_chunk(
@@ -819,27 +824,36 @@ static bool minic_riscv64_emit_function(FILE *file,
                 }
                 continue;
             }
-            if (integer_register_index < 8U) {
+
+            if (location.value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER ||
+                location.floating_register_count != 0U) {
+                success = false;
+                break;
+            }
+            if (location.integer_register_count == 1U && location.stack_slot_count == 0U &&
+                location.integer_register_begin < 8U) {
                 success = minic_riscv64_emit_object_store_register(
                     file,
                     program,
                     function,
                     local_id,
-                    minic_riscv64_argument_registers[integer_register_index]);
-                integer_register_index += 1U;
-            } else {
+                    minic_riscv64_argument_registers[location.integer_register_begin]);
+                continue;
+            }
+            if (location.integer_register_count == 0U && location.stack_slot_count == 1U) {
                 size_t incoming_offset;
 
-                if (stack_parameter_index > (SIZE_MAX - frame_size) / 8U) {
+                if (location.stack_slot_begin > (SIZE_MAX - frame_size) / 8U) {
                     success = false;
                     break;
                 }
-                incoming_offset = frame_size + stack_parameter_index * 8U;
+                incoming_offset = frame_size + location.stack_slot_begin * 8U;
                 success = minic_riscv64_emit_sp_load64(file, "t0", incoming_offset) &&
                           minic_riscv64_emit_object_store_register(
                               file, program, function, local_id, "t0");
-                stack_parameter_index += 1U;
+                continue;
             }
+            success = false;
         }
     }
     if (success) {
