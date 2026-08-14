@@ -5,13 +5,13 @@
 
 static const MinicTargetIntegerModel minic_rv64_integer_model = {
     .plain_char_sign = MINIC_INTEGER_SIGN_UNSIGNED,
-    .value_bits = {[MINIC_INTEGER_RANK_BOOL] = 1U,
-                   [MINIC_INTEGER_RANK_CHAR] = 8U,
-                   [MINIC_INTEGER_RANK_SHORT] = 16U,
-                   [MINIC_INTEGER_RANK_INT] = 32U,
-                   [MINIC_INTEGER_RANK_LONG] = 64U,
-                   [MINIC_INTEGER_RANK_LONG_LONG] = 64U,
-                   [MINIC_INTEGER_RANK_INT128] = 128U},
+    .semantic_width_bits = {[MINIC_INTEGER_RANK_BOOL] = 1U,
+                            [MINIC_INTEGER_RANK_CHAR] = 8U,
+                            [MINIC_INTEGER_RANK_SHORT] = 16U,
+                            [MINIC_INTEGER_RANK_INT] = 32U,
+                            [MINIC_INTEGER_RANK_LONG] = 64U,
+                            [MINIC_INTEGER_RANK_LONG_LONG] = 64U,
+                            [MINIC_INTEGER_RANK_INT128] = 128U},
 };
 
 const char *const minic_riscv64_argument_registers[8] = {
@@ -65,9 +65,9 @@ integer_type_with_rank(MinicIntegerSign sign, MinicIntegerRank rank, MinicType *
     return false;
 }
 
-static bool integer_model_value_width(const MinicTargetIntegerModel *model,
-                                      MinicType type,
-                                      unsigned int *bits) {
+static bool integer_model_semantic_width(const MinicTargetIntegerModel *model,
+                                         MinicType type,
+                                         unsigned int *bits) {
     size_t rank;
 
     if (model == NULL || bits == NULL || !minic_type_is_integer(type) ||
@@ -76,10 +76,10 @@ static bool integer_model_value_width(const MinicTargetIntegerModel *model,
         return false;
     }
     rank = (size_t)type.integer_rank;
-    if (model->value_bits[rank] == 0U) {
+    if (model->semantic_width_bits[rank] == 0U) {
         return false;
     }
-    *bits = model->value_bits[rank];
+    *bits = model->semantic_width_bits[rank];
     return true;
 }
 
@@ -105,8 +105,8 @@ static bool signed_type_represents_unsigned(const MinicTargetIntegerModel *model
            integer_model_effective_sign(model, unsigned_type, &unsigned_sign) &&
            signed_sign == MINIC_INTEGER_SIGN_SIGNED &&
            unsigned_sign == MINIC_INTEGER_SIGN_UNSIGNED &&
-           integer_model_value_width(model, signed_type, &signed_bits) &&
-           integer_model_value_width(model, unsigned_type, &unsigned_bits) &&
+           integer_model_semantic_width(model, signed_type, &signed_bits) &&
+           integer_model_semantic_width(model, unsigned_type, &unsigned_bits) &&
            signed_bits > unsigned_bits;
 }
 
@@ -115,7 +115,7 @@ integer_literal_fits(const MinicTargetIntegerModel *model, MinicType type, uint6
     unsigned int bits;
     MinicIntegerSign sign;
 
-    if (!integer_model_value_width(model, type, &bits) ||
+    if (!integer_model_semantic_width(model, type, &bits) ||
         !integer_model_effective_sign(model, type, &sign) || bits == 0U) {
         return false;
     }
@@ -201,20 +201,14 @@ bool minic_target_info_sizeof_type(const MinicTargetInfo *target,
     return minic_data_layout_type(target->data_layout, program, type, size, &alignment);
 }
 
-bool minic_target_info_integer_value_width(const MinicTargetInfo *target,
-                                           MinicType type,
-                                           unsigned int *bits) {
-    return target != NULL && integer_model_value_width(target->integer_model, type, bits);
-}
-
 bool minic_target_info_integer_width(const MinicTargetInfo *target,
                                      const MinicC0Program *program,
                                      MinicType type,
                                      unsigned int *bits) {
-    if (program == NULL) {
+    if (target == NULL || program == NULL) {
         return false;
     }
-    return minic_target_info_integer_value_width(target, type, bits);
+    return integer_model_semantic_width(target->integer_model, type, bits);
 }
 
 bool minic_target_info_integer_promotion(const MinicTargetInfo *target,
@@ -230,8 +224,8 @@ bool minic_target_info_integer_promotion(const MinicTargetInfo *target,
     }
     model = target->integer_model;
     if (!integer_model_effective_sign(model, type, &sign) ||
-        !integer_model_value_width(model, type, &source_bits) ||
-        !integer_model_value_width(model, minic_type_int(), &int_bits)) {
+        !integer_model_semantic_width(model, type, &source_bits) ||
+        !integer_model_semantic_width(model, minic_type_int(), &int_bits)) {
         return false;
     }
     if (type.integer_rank < MINIC_INTEGER_RANK_INT) {

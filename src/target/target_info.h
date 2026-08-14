@@ -15,7 +15,10 @@ typedef enum MinicIntegerLiteralBase {
 
 typedef struct MinicTargetIntegerModel {
     MinicIntegerSign plain_char_sign;
-    unsigned int value_bits[MINIC_INTEGER_RANK_INT128 + 1];
+    /* Target semantic width used for integer ranges and conversions. Signed
+       widths include the sign bit; this is intentionally independent of object
+       storage size/alignment and therefore _Bool is one semantic bit on RV64. */
+    unsigned int semantic_width_bits[MINIC_INTEGER_RANK_INT128 + 1];
 } MinicTargetIntegerModel;
 
 typedef struct MinicTargetInfo {
@@ -39,9 +42,6 @@ bool minic_target_info_sizeof_type(const MinicTargetInfo *target,
                                    const MinicC0Program *program,
                                    MinicType type,
                                    size_t *size);
-bool minic_target_info_integer_value_width(const MinicTargetInfo *target,
-                                           MinicType type,
-                                           unsigned int *bits);
 bool minic_target_info_integer_width(const MinicTargetInfo *target,
                                      const MinicC0Program *program,
                                      MinicType type,

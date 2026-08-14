@@ -60,28 +60,29 @@ int main(void)
         MinicType promoted_type;
         MinicType common_type;
         MinicType literal_type;
-        unsigned int value_bits;
+        unsigned int semantic_bits;
 
         target = minic_default_target_info();
         if (target == NULL || minic_target_info_integer_model(target) == NULL ||
             !minic_target_info_plain_char_sign(target, &plain_char_sign) ||
             plain_char_sign != MINIC_INTEGER_SIGN_UNSIGNED ||
-            !minic_target_info_integer_value_width(target, minic_type_bool(), &value_bits) ||
-            value_bits != 1U ||
-            !minic_target_info_integer_value_width(target, minic_type_char(), &value_bits) ||
-            value_bits != 8U ||
-            !minic_target_info_integer_value_width(target, minic_type_short(), &value_bits) ||
-            value_bits != 16U ||
-            !minic_target_info_integer_width(target, &program, minic_type_int(), &value_bits) ||
-            value_bits != 32U ||
-            !minic_target_info_integer_value_width(target, minic_type_long(), &value_bits) ||
-            value_bits != 64U ||
-            !minic_target_info_integer_value_width(target, minic_type_long_long(), &value_bits) ||
-            value_bits != 64U ||
-            !minic_target_info_integer_value_width(target, minic_type_int128(), &value_bits) ||
-            value_bits != 128U) {
+            !minic_target_info_integer_width(target, &program, minic_type_bool(), &semantic_bits) ||
+            semantic_bits != 1U ||
+            !minic_target_info_integer_width(target, &program, minic_type_char(), &semantic_bits) ||
+            semantic_bits != 8U ||
+            !minic_target_info_integer_width(target, &program, minic_type_short(), &semantic_bits) ||
+            semantic_bits != 16U ||
+            !minic_target_info_integer_width(target, &program, minic_type_int(), &semantic_bits) ||
+            semantic_bits != 32U ||
+            !minic_target_info_integer_width(target, &program, minic_type_long(), &semantic_bits) ||
+            semantic_bits != 64U ||
+            !minic_target_info_integer_width(
+                target, &program, minic_type_long_long(), &semantic_bits) ||
+            semantic_bits != 64U ||
+            !minic_target_info_integer_width(target, &program, minic_type_int128(), &semantic_bits) ||
+            semantic_bits != 128U) {
             minic_c0_program_destroy(&program);
-            return fail("RV64 target integer value model");
+            return fail("RV64 target integer semantic model");
         }
 
         if (!minic_target_info_integer_promotion(
@@ -155,6 +156,56 @@ int main(void)
             !minic_type_equal(literal_type, minic_type_unsigned_long())) {
             minic_c0_program_destroy(&program);
             return fail("RV64 integer literal candidate selection");
+        }
+    }
+
+    {
+        MinicTargetIntegerModel model;
+        MinicTargetInfo target;
+        MinicIntegerSign plain_char_sign;
+        MinicType promoted_type;
+        MinicType common_type;
+        MinicType literal_type;
+
+        (void)memset(&model, 0, sizeof(model));
+        (void)memset(&target, 0, sizeof(target));
+        model.plain_char_sign = MINIC_INTEGER_SIGN_SIGNED;
+        model.semantic_width_bits[MINIC_INTEGER_RANK_BOOL] = 1U;
+        model.semantic_width_bits[MINIC_INTEGER_RANK_CHAR] = 8U;
+        model.semantic_width_bits[MINIC_INTEGER_RANK_SHORT] = 16U;
+        model.semantic_width_bits[MINIC_INTEGER_RANK_INT] = 16U;
+        model.semantic_width_bits[MINIC_INTEGER_RANK_LONG] = 32U;
+        model.semantic_width_bits[MINIC_INTEGER_RANK_LONG_LONG] = 64U;
+        model.semantic_width_bits[MINIC_INTEGER_RANK_INT128] = 128U;
+        target.integer_model = &model;
+
+        if (!minic_target_info_plain_char_sign(&target, &plain_char_sign) ||
+            plain_char_sign != MINIC_INTEGER_SIGN_SIGNED ||
+            !minic_target_info_integer_promotion(
+                &target, minic_type_signed_short(), &promoted_type) ||
+            !minic_type_equal(promoted_type, minic_type_int()) ||
+            !minic_target_info_integer_promotion(
+                &target, minic_type_unsigned_short(), &promoted_type) ||
+            !minic_type_equal(promoted_type, minic_type_unsigned_int()) ||
+            !minic_target_info_integer_common(
+                &target, minic_type_unsigned_int(), minic_type_long(), &common_type) ||
+            !minic_type_equal(common_type, minic_type_long()) ||
+            !minic_target_info_integer_literal_type(&target,
+                                                    MINIC_INTEGER_LITERAL_BASE_DECIMAL,
+                                                    false,
+                                                    0U,
+                                                    UINT64_C(32768),
+                                                    &literal_type) ||
+            !minic_type_equal(literal_type, minic_type_long()) ||
+            !minic_target_info_integer_literal_type(&target,
+                                                    MINIC_INTEGER_LITERAL_BASE_HEXADECIMAL,
+                                                    false,
+                                                    0U,
+                                                    UINT64_C(65535),
+                                                    &literal_type) ||
+            !minic_type_equal(literal_type, minic_type_unsigned_int())) {
+            minic_c0_program_destroy(&program);
+            return fail("synthetic target integer model is not data-driven");
         }
     }
 
