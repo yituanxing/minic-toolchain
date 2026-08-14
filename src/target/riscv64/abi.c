@@ -143,15 +143,13 @@ bool minic_riscv64_abi_place_argument(const MinicC0Program *program,
         return false;
     }
 
-    integer_slots = result.value.kind == MINIC_RISCV64_ABI_VALUE_AGGREGATE
-                        ? result.value.slot_count
-                        : 1U;
+    integer_slots = result.value.kind == MINIC_RISCV64_ABI_VALUE_AGGREGATE ? result.value.slot_count
+                                                                           : 1U;
     available_integer_registers =
         MINIC_RISCV64_ABI_ARGUMENT_REGISTER_COUNT - next.integer_register_count;
     result.integer_register_begin = next.integer_register_count;
-    result.integer_register_count = integer_slots < available_integer_registers
-                                        ? integer_slots
-                                        : available_integer_registers;
+    result.integer_register_count =
+        integer_slots < available_integer_registers ? integer_slots : available_integer_registers;
     result.stack_slot_begin = next.stack_slot_count;
     result.stack_slot_count = integer_slots - result.integer_register_count;
 
