@@ -1269,12 +1269,17 @@ static bool parse_auto_type_local_declaration(MinicParser *parser) {
         parser, MINIC_TOKEN_SEMICOLON, "expected ';' after GNU __auto_type declaration");
 }
 
+static bool parse_local_declaration_head_attributes(MinicParser *parser) {
+    return minic_parser_parse_gnu_attribute_lists(parser, consume_local_object_attribute, NULL);
+}
+
 static bool parse_declaration(MinicParser *parser) {
     MinicType base_type;
     bool is_register_storage;
 
     if (!minic_parser_parse_local_storage_class(parser, &is_register_storage) ||
-        !minic_parser_parse_type_specifiers(parser, &base_type)) {
+        !minic_parser_parse_type_specifiers(parser, &base_type) ||
+        !parse_local_declaration_head_attributes(parser)) {
         return false;
     }
 
