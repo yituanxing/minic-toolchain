@@ -63,6 +63,11 @@ typedef struct MinicRiscv64FrameLayout {
     size_t integer_parameter_count;
 } MinicRiscv64FrameLayout;
 
+bool minic_riscv64_frame_layout_from_function_layout(
+    const MinicC0Program *program,
+    const MinicFunction *function,
+    const MinicRiscv64FunctionLayout *function_layout,
+    MinicRiscv64FrameLayout *layout);
 bool minic_riscv64_frame_layout(const MinicC0Program *program,
                                 const MinicFunction *function,
                                 MinicRiscv64FrameLayout *layout);

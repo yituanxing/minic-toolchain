@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 static void
 minic_riscv64_layout_error(MinicDiagnostic *diagnostic, const char *path, const char *message) {
@@ -134,6 +135,108 @@ static bool minic_riscv64_layout_globals(MinicC0Program *program) {
     return true;
 }
 
+void minic_riscv64_function_layout_initialize(MinicRiscv64FunctionLayout *layout) {
+    if (layout == NULL) {
+        return;
+    }
+    layout->local_offsets = NULL;
+    layout->local_count = 0U;
+    layout->local_storage_size = 0U;
+}
+
+void minic_riscv64_function_layout_destroy(MinicRiscv64FunctionLayout *layout) {
+    if (layout == NULL) {
+        return;
+    }
+    free(layout->local_offsets);
+    minic_riscv64_function_layout_initialize(layout);
+}
+
+bool minic_riscv64_function_layout_local_offset(const MinicRiscv64FunctionLayout *layout,
+                                                const MinicFunction *function,
+                                                MinicLocalId local_id,
+                                                size_t *offset) {
+    size_t local_index;
+
+    if (layout == NULL || function == NULL || offset == NULL ||
+        layout->local_count != function->local_count || local_id < function->local_begin) {
+        return false;
+    }
+    local_index = local_id - function->local_begin;
+    if (local_index >= layout->local_count ||
+        (layout->local_count != 0U && layout->local_offsets == NULL)) {
+        return false;
+    }
+    *offset = layout->local_offsets[local_index];
+    return true;
+}
+
+bool minic_riscv64_layout_function(const char *path,
+                                   const MinicC0Program *program,
+                                   const MinicFunction *function,
+                                   MinicRiscv64FunctionLayout *layout,
+                                   MinicDiagnostic *diagnostic) {
+    MinicRiscv64FunctionLayout result;
+    size_t local_index;
+    size_t storage_size;
+
+    if (program == NULL || function == NULL || layout == NULL) {
+        minic_riscv64_layout_error(diagnostic, path, "function layout inputs are invalid");
+        return false;
+    }
+    minic_riscv64_function_layout_initialize(&result);
+    if (!function->is_defined) {
+        *layout = result;
+        return true;
+    }
+    if (function->local_begin > program->local_count ||
+        function->local_count > program->local_count - function->local_begin) {
+        minic_riscv64_layout_error(diagnostic, path, "function local range is invalid");
+        return false;
+    }
+
+    result.local_count = function->local_count;
+    if (result.local_count != 0U) {
+        result.local_offsets = (size_t *)calloc(result.local_count, sizeof(*result.local_offsets));
+        if (result.local_offsets == NULL) {
+            minic_riscv64_layout_error(
+                diagnostic, path, "out of memory while laying out RV64 function");
+            return false;
+        }
+    }
+
+    storage_size = 0U;
+    for (local_index = 0U; local_index < function->local_count; ++local_index) {
+        const MinicLocal *local;
+        size_t element_size;
+        size_t object_size;
+        size_t object_alignment;
+        size_t object_offset;
+
+        local = &program->locals[function->local_begin + local_index];
+        if (!minic_riscv64_type_layout(program, local->type, &element_size, &object_alignment) ||
+            local->element_count == 0U || element_size > SIZE_MAX / local->element_count) {
+            minic_riscv64_layout_error(
+                diagnostic, path, "local object size is invalid for the RV64 target");
+            minic_riscv64_function_layout_destroy(&result);
+            return false;
+        }
+        object_size = element_size * local->element_count;
+        if (!minic_riscv64_align_up(storage_size, object_alignment, &object_offset) ||
+            object_offset > SIZE_MAX - object_size) {
+            minic_riscv64_layout_error(
+                diagnostic, path, "local object layout exceeds the RV64 target range");
+            minic_riscv64_function_layout_destroy(&result);
+            return false;
+        }
+        result.local_offsets[local_index] = object_offset;
+        storage_size = object_offset + object_size;
+    }
+    result.local_storage_size = storage_size;
+    *layout = result;
+    return true;
+}
+
 bool minic_riscv64_layout_program(const char *path,
                                   MinicC0Program *program,
                                   MinicDiagnostic *diagnostic) {
@@ -154,48 +257,22 @@ bool minic_riscv64_layout_program(const char *path,
     }
 
     for (function_index = 0U; function_index < program->function_count; ++function_index) {
+        MinicRiscv64FunctionLayout function_layout;
         MinicFunction *function;
         size_t local_index;
-        size_t storage_size;
 
         function = &program->functions[function_index];
-        if (!function->is_defined) {
-            function->local_storage_size = 0U;
-            continue;
-        }
-        if (function->local_begin > program->local_count ||
-            function->local_count > program->local_count - function->local_begin) {
-            minic_riscv64_layout_error(diagnostic, path, "function local range is invalid");
+        minic_riscv64_function_layout_initialize(&function_layout);
+        if (!minic_riscv64_layout_function(path, program, function, &function_layout, diagnostic)) {
+            minic_riscv64_function_layout_destroy(&function_layout);
             return false;
         }
-
-        storage_size = 0U;
-        for (local_index = 0U; local_index < function->local_count; ++local_index) {
-            MinicLocal *local;
-            size_t element_size;
-            size_t object_size;
-            size_t object_alignment;
-            size_t object_offset;
-
-            local = &program->locals[function->local_begin + local_index];
-            if (!minic_riscv64_type_layout(
-                    program, local->type, &element_size, &object_alignment) ||
-                local->element_count == 0U || element_size > SIZE_MAX / local->element_count) {
-                minic_riscv64_layout_error(
-                    diagnostic, path, "local object size is invalid for the RV64 target");
-                return false;
-            }
-            object_size = element_size * local->element_count;
-            if (!minic_riscv64_align_up(storage_size, object_alignment, &object_offset) ||
-                object_offset > SIZE_MAX - object_size) {
-                minic_riscv64_layout_error(
-                    diagnostic, path, "local object layout exceeds the RV64 target range");
-                return false;
-            }
-            local->storage_offset = object_offset;
-            storage_size = object_offset + object_size;
+        for (local_index = 0U; local_index < function_layout.local_count; ++local_index) {
+            program->locals[function->local_begin + local_index].storage_offset =
+                function_layout.local_offsets[local_index];
         }
-        function->local_storage_size = storage_size;
+        function->local_storage_size = function_layout.local_storage_size;
+        minic_riscv64_function_layout_destroy(&function_layout);
     }
     return true;
 }
