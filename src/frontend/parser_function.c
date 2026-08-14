@@ -21,6 +21,7 @@ typedef struct MinicFunctionAttributeContext {
     bool allow_gnu_inline;
     bool is_internal;
     bool is_inline;
+    bool is_extern;
     char *section_name;
     size_t section_capacity;
     size_t *section_name_length;
@@ -84,12 +85,18 @@ static bool consume_function_attribute(MinicParser *parser,
             minic_parser_error(parser, "%s", context->unsupported_message);
             return false;
         }
-        /* GNU inline changes external-inline linkage semantics. Linux's current
-         * accepted placement is static inline, where this parse-only attribute
-         * does not change externally visible linkage. */
-        if (!context->is_internal || !context->is_inline) {
-            minic_parser_error(parser,
-                               "GNU gnu_inline requires explicit non-static inline semantics");
+        /* GNU inline changes C linkage/emission semantics. Static inline and
+         * non-extern inline definitions match MiniC's existing standalone emission
+         * model. Extern inline requires an inline-only body model, which is not yet
+         * represented, so keep that case fail-closed. */
+        if (!context->is_inline) {
+            minic_parser_error(parser, "GNU gnu_inline requires an inline declaration");
+            return false;
+        }
+        if (context->is_extern) {
+            minic_parser_error(
+                parser,
+                "GNU extern inline gnu_inline requires inline-only emission semantics");
             return false;
         }
         return true;
@@ -113,6 +120,7 @@ static bool parse_function_attribute_lists(MinicParser *parser,
     context.allow_gnu_inline = allow_gnu_inline;
     context.is_internal = is_internal;
     context.is_inline = is_inline;
+    context.is_extern = false;
     context.section_name = NULL;
     context.section_capacity = 0U;
     context.section_name_length = NULL;
@@ -127,6 +135,7 @@ static bool apply_function_attribute_list(MinicParser *parser,
                                           bool allow_gnu_inline,
                                           bool is_internal,
                                           bool is_inline,
+                                          bool is_extern,
                                           char *section_name,
                                           size_t section_capacity,
                                           size_t *section_name_length,
@@ -142,6 +151,7 @@ static bool apply_function_attribute_list(MinicParser *parser,
     context.allow_gnu_inline = allow_gnu_inline;
     context.is_internal = is_internal;
     context.is_inline = is_inline;
+    context.is_extern = is_extern;
     context.section_name = section_name;
     context.section_capacity = section_capacity;
     context.section_name_length = section_name_length;
@@ -1609,6 +1619,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                 true,
                 is_internal,
                 is_inline,
+                is_extern_declaration,
                 section_name,
                 sizeof(section_name),
                 &section_name_length,
@@ -1814,6 +1825,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
             true,
             is_internal,
             is_inline,
+            is_extern_declaration,
             section_name,
             sizeof(section_name),
             &section_name_length,

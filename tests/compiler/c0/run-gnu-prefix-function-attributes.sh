@@ -17,6 +17,8 @@ mkdir -p "$work"
 test -s "$assembly"
 grep -F 'prefix_attribute_identity:' "$assembly" >/dev/null
 grep -F 'call_prefix_attribute_identity:' "$assembly" >/dev/null
+grep -F 'prefix_external_identity:' "$assembly" >/dev/null
+grep -F '.globl prefix_external_identity' "$assembly" >/dev/null
 grep -F 'externally_visible_decl:' "$assembly" >/dev/null
 grep -F 'instrumentation_policy_aliases:' "$assembly" >/dev/null
 grep -F '.globl externally_visible_decl' "$assembly" >/dev/null
@@ -27,4 +29,15 @@ if grep -F '.hidden externally_visible_decl' "$assembly" >/dev/null; then
     exit 1
 fi
 
-printf '%s\n' 'PASS compiler/c0/gnu_prefix_function_attributes prefix=1 metadata=unused,no-instrument,externally-visible function+object=1 reachability=parse-only public-linkage=preserved gnu-inline=static-only no-sanitize-address=parse-only no-stack-protector=parse-only'
+"$host_cc" -E -P -std=gnu11 -x c "$root/tests/compiler/c0/gnu_extern_inline_attribute.c" \
+    -o "$work/gnu_extern_inline_attribute.i"
+if "$minic" -S "$work/gnu_extern_inline_attribute.i" \
+    -o "$work/gnu_extern_inline_attribute.s" \
+    >"$work/gnu_extern_inline_attribute.out" 2>"$work/gnu_extern_inline_attribute.err"; then
+    printf '%s\n' 'FAIL compiler/c0/gnu_prefix_function_attributes: extern inline gnu_inline unexpectedly emitted a standalone definition' >&2
+    exit 1
+fi
+grep -F 'GNU extern inline gnu_inline requires inline-only emission semantics' \
+    "$work/gnu_extern_inline_attribute.err" >/dev/null
+
+printf '%s\n' 'PASS compiler/c0/gnu_prefix_function_attributes prefix=1 metadata=unused,no-instrument,externally-visible function+object=1 reachability=parse-only public-linkage=preserved gnu-inline=static+bare extern-inline=fail-closed no-sanitize-address=parse-only no-stack-protector=parse-only'
