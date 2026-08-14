@@ -95,8 +95,7 @@ static bool consume_function_attribute(MinicParser *parser,
         }
         if (context->is_extern) {
             minic_parser_error(
-                parser,
-                "GNU extern inline gnu_inline requires inline-only emission semantics");
+                parser, "GNU extern inline gnu_inline requires inline-only emission semantics");
             return false;
         }
         return true;
