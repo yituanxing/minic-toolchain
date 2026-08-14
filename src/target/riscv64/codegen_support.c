@@ -1,5 +1,4 @@
 #include "target/riscv64/codegen_internal.h"
-
 #include "target/riscv64/abi.h"
 
 #include <stdint.h>
@@ -81,6 +80,69 @@ bool minic_riscv64_integer_aggregate_abi(const MinicC0Program *program,
     }
     *storage_size = value.storage_size;
     *register_chunks = value.slot_count;
+    return true;
+}
+
+bool minic_riscv64_emit_integer_aggregate_load_chunk(FILE *file,
+                                                     const MinicC0Program *program,
+                                                     MinicType type,
+                                                     size_t chunk_index,
+                                                     const char *destination_register,
+                                                     const char *address_register) {
+    size_t chunk_count;
+    size_t chunk_offset;
+    size_t chunk_size;
+    size_t index;
+    size_t storage_size;
+
+    if (file == NULL || destination_register == NULL || address_register == NULL ||
+        !minic_riscv64_integer_aggregate_abi(program, type, &storage_size, &chunk_count) ||
+        chunk_index >= chunk_count || chunk_index > SIZE_MAX / 8U) {
+        return false;
+    }
+    chunk_offset = chunk_index * 8U;
+    chunk_size = storage_size - chunk_offset;
+    if (chunk_size > 8U) {
+        chunk_size = 8U;
+    }
+    if (chunk_size == 8U) {
+        return fprintf(file,
+                       "  ld %s, %zu(%s)\n",
+                       destination_register,
+                       chunk_offset,
+                       address_register) >= 0;
+    }
+    if (chunk_size == 4U) {
+        return fprintf(file,
+                       "  lwu %s, %zu(%s)\n",
+                       destination_register,
+                       chunk_offset,
+                       address_register) >= 0;
+    }
+    if (chunk_size == 2U) {
+        return fprintf(file,
+                       "  lhu %s, %zu(%s)\n",
+                       destination_register,
+                       chunk_offset,
+                       address_register) >= 0;
+    }
+    if (chunk_size == 1U) {
+        return fprintf(file,
+                       "  lbu %s, %zu(%s)\n",
+                       destination_register,
+                       chunk_offset,
+                       address_register) >= 0;
+    }
+    if (fprintf(file, "  li %s, 0\n", destination_register) < 0) {
+        return false;
+    }
+    for (index = 0U; index < chunk_size; ++index) {
+        if (fprintf(file, "  lbu t6, %zu(%s)\n", chunk_offset + index, address_register) < 0 ||
+            (index != 0U && fprintf(file, "  slli t6, t6, %zu\n", index * 8U) < 0) ||
+            fprintf(file, "  or %s, %s, t6\n", destination_register, destination_register) < 0) {
+            return false;
+        }
+    }
     return true;
 }
 
@@ -358,24 +420,48 @@ bool minic_riscv64_emit_integer_aggregate_local_chunk(
     size_t chunk_index,
     const char *register_name) {
     const MinicLocal *local;
-    size_t chunks;
-    size_t storage_size;
-    size_t local_offset;
+    const char *instruction;
+    size_t chunk_count;
     size_t chunk_offset;
+    size_t chunk_size;
+    size_t index;
+    size_t local_offset;
+    size_t storage_size;
 
     if (register_name == NULL ||
         !minic_riscv64_local_object(
             program, function, function_layout, local_id, &local, &local_offset) ||
-        !minic_riscv64_integer_aggregate_abi(program, local->type, &storage_size, &chunks) ||
-        chunk_index >= chunks || chunk_index > (SIZE_MAX - local_offset) / 8U) {
+        !minic_riscv64_integer_aggregate_abi(program, local->type, &storage_size, &chunk_count) ||
+        chunk_index >= chunk_count || chunk_index > (SIZE_MAX - local_offset) / 8U) {
         return false;
     }
     chunk_offset = local_offset + chunk_index * 8U;
+    chunk_size = storage_size - chunk_index * 8U;
+    if (chunk_size > 8U) {
+        chunk_size = 8U;
+    }
     if (chunk_offset > function_layout->local_storage_size ||
-        function_layout->local_storage_size - chunk_offset < 8U) {
+        chunk_size > function_layout->local_storage_size - chunk_offset) {
         return false;
     }
-    return minic_riscv64_emit_s0_access(file, "sd", register_name, chunk_offset);
+    instruction = chunk_size == 8U   ? "sd"
+                  : chunk_size == 4U ? "sw"
+                  : chunk_size == 2U ? "sh"
+                  : chunk_size == 1U ? "sb"
+                                     : NULL;
+    if (instruction != NULL) {
+        return minic_riscv64_emit_s0_access(file, instruction, register_name, chunk_offset);
+    }
+    if (fprintf(file, "  mv t1, %s\n", register_name) < 0) {
+        return false;
+    }
+    for (index = 0U; index < chunk_size; ++index) {
+        if (!minic_riscv64_emit_s0_access(file, "sb", "t1", chunk_offset + index) ||
+            (index + 1U < chunk_size && fprintf(file, "  srli t1, t1, 8\n") < 0)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 bool minic_riscv64_emit_object_store(FILE *file,

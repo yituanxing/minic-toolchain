@@ -617,6 +617,16 @@ static bool add_runtime_record_member_assignment(MinicParser *parser,
         return false;
     }
 
+    if (minic_type_is_record(member_type)) {
+        if (!minic_type_is_record(value->type) || value->type.record_id != member_type.record_id ||
+            !minic_c0_record_value_is_copy_source(parser->program, value_id)) {
+            minic_parser_error(parser,
+                               "record initializer member requires a matching record copy source");
+            return false;
+        }
+        return add_record_copy_assignments(parser, member_id, value_id, value->span);
+    }
+
     (void)memset(&statement, 0, sizeof(statement));
     statement.kind = MINIC_STATEMENT_ASSIGN;
     statement.span.begin = member_span.begin;
