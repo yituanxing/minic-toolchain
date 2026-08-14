@@ -1,0 +1,59 @@
+name: Fix RV64 Caller Hybrid Selector Once
+
+on:
+  push:
+    branches: [agent/rv64-caller-abi-linux-v1]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: rv64-caller-fix-hybrid-selector-once
+  cancel-in-progress: true
+
+jobs:
+  fix:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/rv64-caller-abi-linux-v1
+          fetch-depth: 0
+
+      - name: Tighten hybrid selector to formal ABI v1 boundary
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('tools/dev/materialize-rv64-caller-abi-location-hybrid.py')
+          text = path.read_text()
+          old = '''            if (value->kind == MINIC_RISCV64_ABI_VALUE_IGNORE ||\n                value->kind == MINIC_RISCV64_ABI_VALUE_INDIRECT ||\n                (value->kind == MINIC_RISCV64_ABI_VALUE_AGGREGATE &&\n                 value->storage_size != 8U && value->storage_size != 16U)) {\n'''
+          new = '''            if (value->kind == MINIC_RISCV64_ABI_VALUE_IGNORE ||\n                value->kind == MINIC_RISCV64_ABI_VALUE_INDIRECT ||\n                (value->kind == MINIC_RISCV64_ABI_VALUE_AGGREGATE &&\n                 (argument_index >= parameter_count ||\n                  (value->storage_size != 8U && value->storage_size != 16U)))) {\n'''
+          if old not in text:
+              if 'argument_index >= parameter_count' in text:
+                  print('selector already tightened')
+              else:
+                  raise SystemExit('hybrid selector anchor missing')
+          else:
+              text = text.replace(old, new, 1)
+              path.write_text(text)
+          PY
+
+          grep -F 'argument_index >= parameter_count' \
+            tools/dev/materialize-rv64-caller-abi-location-hybrid.py >/dev/null
+          git diff --check
+
+      - name: Commit selector fix and retire one-shot workflow
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add tools/dev/materialize-rv64-caller-abi-location-hybrid.py
+          git rm .github/workflows/rv64-caller-fix-hybrid-selector-once.yml
+          git diff --cached --check
+          git commit -m 'ci: align caller hybrid selector with formal ABI v1'
+          git push origin HEAD:agent/rv64-caller-abi-linux-v1
