@@ -9,22 +9,24 @@ formal_function_body=c60828f883639a06409b33e1890ef08b15bad688
 formal_abi_head=dcc47c80bf8b00caf1b1098654015ccf1d86cca3
 local_placement_staging=18d052ab
 
-# Preserve this slice's materializers and build its exact product patch.
+# Preserve this slice's materializers and build its exact clean architecture patch.
 cp tools/dev/materialize-global-object-datalayout-query-v1.py /tmp/global-object-query.py
 cp tools/dev/run-materialize-global-object-datalayout-query-v1.py /tmp/global-object-query-runner.py
 cp tools/dev/materialize-global-object-datalayout-cache-removal.py /tmp/global-object-cache-removal.py
+cp tools/dev/materialize-global-object-datalayout-hybrid.py /tmp/global-object-hybrid.py
 python3 tools/dev/run-materialize-global-object-datalayout-query-v1.py
 python3 tools/dev/materialize-global-object-datalayout-cache-removal.py
 CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
 git diff --check
+# The discovery codegen_function contains extra zero-sized-record semantics. Apply
+# the non-conflicting product files directly and bridge only that emitter later.
 git diff --binary "$record_datalayout_formal" -- \
   src/frontend/ast.h \
   src/target/data_layout.c \
   src/target/data_layout.h \
   src/target/riscv64/layout.c \
-  src/target/riscv64/codegen_function.c \
-  > /tmp/global-object-datalayout.patch
-test -s /tmp/global-object-datalayout.patch
+  > /tmp/global-object-datalayout-clean.patch
+test -s /tmp/global-object-datalayout-clean.patch
 git reset --hard HEAD
 git clean -fd
 
@@ -171,21 +173,10 @@ fi
 
 echo 'PROVEN_RECORD_DATALAYOUT_BASE=1'
 
-# Overlay the current global-object ownership patch. Conflicts are seam evidence.
-set +e
-git apply --3way --index /tmp/global-object-datalayout.patch
-apply_status=$?
-set -e
-if test "$apply_status" -ne 0; then
-  echo 'GLOBAL_OBJECT_DATALAYOUT_3WAY_CONFLICTS_BEGIN'
-  git status --short
-  for path in $(git diff --name-only --diff-filter=U); do
-    echo "--- conflict:$path ---"
-    grep -n -B 8 -A 24 -E '^(<<<<<<<|=======|>>>>>>>)' "$path" || true
-  done
-  echo 'GLOBAL_OBJECT_DATALAYOUT_3WAY_CONFLICTS_END'
-  exit 1
-fi
+# Apply the conflict-free object-query owner files, then adapt only discovery's
+# global emitter so zero-sized-record behavior is preserved unchanged.
+git apply --3way --index /tmp/global-object-datalayout-clean.patch
+python3 /tmp/global-object-hybrid.py
 CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
 git add -A
 git diff --cached --check
@@ -194,6 +185,7 @@ if grep -R -n --include='*.c' --include='*.h' 'object->storage_size\|object->ali
   exit 1
 fi
 grep -F 'minic_data_layout_global_object' src/target/riscv64/codegen_function.c >/dev/null
+grep -F 'zero_size_record_definition' src/target/riscv64/codegen_function.c >/dev/null
 echo 'GLOBAL_OBJECT_DATALAYOUT_HYBRID=1'
 
 make -j4 MODE=release BUILD_DIR=build/global-object-datalayout-hybrid-linux
