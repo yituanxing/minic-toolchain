@@ -100,8 +100,7 @@ static bool string_literal_element_type(MinicParser *parser, MinicTokenKind kind
         return false;
     }
     if (kind == MINIC_TOKEN_STRING_LITERAL) {
-        *type = minic_type_char();
-        return true;
+        return minic_target_info_plain_char_type(parser->target_info, type);
     }
     return kind == MINIC_TOKEN_WIDE_STRING_LITERAL &&
            minic_target_info_wide_character_type(parser->target_info, type);
@@ -295,6 +294,7 @@ bool minic_parser_get_predefined_function_name_object(MinicParser *parser,
     const MinicFunction *function;
     MinicGlobalObjectId created_id;
     MinicType array_type;
+    MinicType char_type;
     MinicType const_char_type;
     char object_name[64];
     int object_name_length;
@@ -316,7 +316,8 @@ bool minic_parser_get_predefined_function_name_object(MinicParser *parser,
         minic_parser_error(parser, "cannot determine predefined function name");
         return false;
     }
-    if (!minic_type_add_const(minic_type_char(), &const_char_type) ||
+    if (!minic_target_info_plain_char_type(parser->target_info, &char_type) ||
+        !minic_type_add_const(char_type, &const_char_type) ||
         !minic_c0_program_add_array_type(
             parser->program, const_char_type, function->name_length + 1U, &array_type)) {
         minic_parser_error(parser, "cannot build __func__ array type");

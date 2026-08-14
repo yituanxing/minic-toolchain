@@ -52,36 +52,6 @@ static bool finish_value_expression(MinicParser *parser,
     return minic_parser_apply_array_decay(parser, input_id, expression_id);
 }
 
-static MinicType integer_literal_type(const MinicParser *parser, MinicSourceSpan span) {
-    unsigned int long_count;
-    bool saw_unsigned;
-    size_t offset;
-
-    long_count = 0U;
-    saw_unsigned = false;
-    offset = span.end.offset;
-    while (offset > span.begin.offset) {
-        char character;
-
-        character = parser->source[offset - 1U];
-        if (character == 'l' || character == 'L') {
-            long_count += 1U;
-        } else if (character == 'u' || character == 'U') {
-            saw_unsigned = true;
-        } else {
-            break;
-        }
-        offset -= 1U;
-    }
-    if (long_count >= 2U) {
-        return saw_unsigned ? minic_type_unsigned_long_long() : minic_type_long_long();
-    }
-    if (long_count == 1U) {
-        return saw_unsigned ? minic_type_unsigned_long() : minic_type_long();
-    }
-    return saw_unsigned ? minic_type_unsigned_int() : minic_type_int();
-}
-
 static bool parse_integer(MinicParser *parser, MinicExpressionId *expression_id) {
     MinicExpression expression;
     MinicSourceSpan span;
@@ -89,31 +59,42 @@ static bool parse_integer(MinicParser *parser, MinicExpressionId *expression_id)
     int64_t value;
 
     span = parser->current.span;
-    literal_type = parser->current.kind == MINIC_TOKEN_CHARACTER_CONSTANT
-                       ? minic_type_int()
-                       : integer_literal_type(parser, span);
+    if (parser->current.kind == MINIC_TOKEN_CHARACTER_CONSTANT) {
+        int character_value;
+
+        literal_type = minic_type_int();
+        if (!minic_parser_parse_integer_value(parser, &character_value)) {
+            return false;
+        }
+        value = (int64_t)character_value;
+    } else {
+        MinicIntegerLiteralBase base;
+        uint64_t unsigned_value;
+        unsigned int long_count;
+        bool has_unsigned_suffix;
+
+        if (!minic_parser_current_integer_literal_syntax(
+                parser, &base, &has_unsigned_suffix, &long_count) ||
+            !minic_parser_parse_unsigned_integer_value64(parser, &unsigned_value) ||
+            !minic_target_info_integer_literal_type(parser->target_info,
+                                                    base,
+                                                    has_unsigned_suffix,
+                                                    long_count,
+                                                    unsigned_value,
+                                                    &literal_type)) {
+            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                minic_parser_error(parser, "integer constant has no representable target type");
+            }
+            return false;
+        }
+        (void)memcpy(&value, &unsigned_value, sizeof(value));
+    }
+
     (void)memset(&expression, 0, sizeof(expression));
     expression.kind = MINIC_EXPRESSION_INTEGER;
     expression.span = span;
     expression.type = literal_type;
     expression.value_category = MINIC_VALUE_RVALUE;
-    if (parser->current.kind == MINIC_TOKEN_CHARACTER_CONSTANT) {
-        int character_value;
-
-        if (!minic_parser_parse_integer_value(parser, &character_value)) {
-            return false;
-        }
-        value = (int64_t)character_value;
-    } else if (minic_type_is_unsigned_integer(literal_type)) {
-        uint64_t unsigned_value;
-
-        if (!minic_parser_parse_unsigned_integer_value64(parser, &unsigned_value)) {
-            return false;
-        }
-        (void)memcpy(&value, &unsigned_value, sizeof(value));
-    } else if (!minic_parser_parse_integer_value64(parser, &value)) {
-        return false;
-    }
     expression.value.integer_value = value;
     return minic_parser_add_expression(parser, &expression, expression_id);
 }

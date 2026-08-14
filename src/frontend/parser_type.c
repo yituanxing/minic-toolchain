@@ -389,9 +389,14 @@ bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type) {
                 minic_parser_error(parser, "char cannot be combined with short, int, or long");
                 return false;
             }
-            parsed_type = saw_signed     ? minic_type_signed_char()
-                          : saw_unsigned ? minic_type_unsigned_char()
-                                         : minic_type_char();
+            if (saw_signed) {
+                parsed_type = minic_type_signed_char();
+            } else if (saw_unsigned) {
+                parsed_type = minic_type_unsigned_char();
+            } else if (!minic_target_info_plain_char_type(parser->target_info, &parsed_type)) {
+                minic_parser_error(parser, "cannot resolve target plain char type");
+                return false;
+            }
         } else if (saw_short) {
             parsed_type = saw_unsigned ? minic_type_unsigned_short() : minic_type_short();
         } else if (long_count == 2U) {
