@@ -1,0 +1,87 @@
+name: Linux 6.6.143 Six-TU Discovery
+
+on:
+  push:
+    branches:
+      - external/linux-6.6.143-six-tu-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-6.6.143-six-tu-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  six-tu-frontier:
+    name: riscv-defconfig-six-tu
+    runs-on: ubuntu-24.04
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Restore pinned Linux source archive
+        id: linux-source-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-cache/linux-6.6.143.tar.xz
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
+
+      - name: Build committed MiniC source
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+          git diff --exit-code -- include src tools/minic
+          make -j4 MODE=release BUILD_DIR=build/linux-six-compiler
+
+      - name: Verify canonical focused semantics
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/linux-six-compiler/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/linux-six-focused" \
+          HOST_CC=cc \
+            sh tests/compiler/c0/run-foundation-focused.sh
+
+      - name: Install RISC-V Linux Kbuild dependencies
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            flex bison bc libelf-dev libssl-dev
+
+      - name: Drive six unchanged Linux translation units
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/linux-six-compiler/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/linux-six-tu" \
+          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-cache/linux-6.6.143.tar.xz" \
+          CROSS_COMPILE=riscv64-linux-gnu- \
+            sh tests/external/linux/probe-six-tu.sh
+
+      - name: Upload six-TU frontier evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-six-tu-frontier-${{ github.run_id }}
+          path: |
+            build/linux-six-tu/six-tu-summary.txt
+            build/linux-six-tu/blocker.txt
+            build/linux-six-tu/blocker.i
+            build/linux-six-tu/logs
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Save pinned Linux source archive
+        if: always() && steps.linux-source-cache.outputs.cache-hit != 'true' && hashFiles('build/linux-cache/linux-6.6.143.tar.xz') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: build/linux-cache/linux-6.6.143.tar.xz
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
