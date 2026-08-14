@@ -1,0 +1,90 @@
+name: FunctionBody Linux Revalidation
+
+on:
+  push:
+    branches: [agent/static-pointer-array-tail-v1]
+
+concurrency:
+  group: function-body-linux-revalidation
+  cancel-in-progress: true
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  revalidate:
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      DISCOVERY_BASE: 4a4893dc1f306cb082ceb7ea086bf93c4f11790b
+      FUNCTION_BODY_HEAD: 2306b3a00f2b9444e3e7fd68e089c913063a249b
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Overlay FunctionBody architecture on proven Linux tail
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags origin refactor/function-body-view-v1 agent/static-pointer-array-tail-v1
+          git checkout --detach "$DISCOVERY_BASE"
+          merge_base=$(git merge-base "$DISCOVERY_BASE" "$FUNCTION_BODY_HEAD")
+          echo "merge_base=$merge_base"
+          git diff --binary "$merge_base" "$FUNCTION_BODY_HEAD" -- . ':(exclude).github/workflows/*' \
+            > /tmp/function-body.patch
+          echo 'FUNCTION_BODY_OVERLAY_FILES'
+          git diff --name-only "$merge_base" "$FUNCTION_BODY_HEAD" -- . ':(exclude).github/workflows/*'
+          git apply --3way --index /tmp/function-body.patch
+          git diff --cached --check
+
+      - name: Materialize proven Linux tail semantics
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/materialize-tail-ownership.py
+          set +e
+          python3 tools/dev/materialize-subxlen-aggregate.py 2>build-subxlen.err
+          materialize_status=$?
+          set -e
+          if test "$materialize_status" -ne 0; then
+            grep -Fx 'unexpected aggregate call staging anchor' build-subxlen.err >/dev/null
+          fi
+          python3 tools/dev/materialize-subxlen-aggregate-finish.py
+          python3 tools/dev/fix-subxlen-materialization.py
+          python3 tools/dev/materialize-aggregate-rvalue-arg.py
+          python3 tools/dev/materialize-inline-asm-symbolic-immediate.py
+          python3 tools/dev/materialize-inline-asm-rj-z.py
+          python3 tools/dev/fix-inline-asm-rj-materialization.py
+          python3 tools/dev/materialize-inline-asm-rk.py
+          python3 tools/dev/materialize-codegen-span-trace.py
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+          git diff --check
+
+      - name: Build overlaid compiler
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release BUILD_DIR=build/function-body-linux-revalidation
+
+      - name: Revalidate frozen Linux init main TU
+        run: |
+          set -Eeuo pipefail
+          minic="$GITHUB_WORKSPACE/build/function-body-linux-revalidation/bin/minic"
+          mkdir -p build/linux-artifact
+          gh run download 31689171683 -n linux-frontier-31689171683 -D build/linux-artifact
+          test -s build/linux-artifact/kbuild/init/main.i
+          lines=$(wc -l < build/linux-artifact/kbuild/init/main.i)
+          test "$lines" -eq 90928
+
+          set +e
+          "$minic" -S build/linux-artifact/kbuild/init/main.i -o build/linux-artifact/main.s \
+            >build/linux-artifact/minic.stdout 2>build/linux-artifact/minic.stderr
+          status=$?
+          set -e
+
+          echo "cached_tu_status=$status"
+          if test -s build/linux-artifact/minic.stderr; then
+            tail -n 80 build/linux-artifact/minic.stderr
+          fi
+          test "$status" -eq 0
+          test -s build/linux-artifact/main.s
+          echo "FULL_TU_PASS lines=$lines"
