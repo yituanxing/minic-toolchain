@@ -168,25 +168,32 @@ Running the ownership check on both sides of normalization also checks that a st
 
 Long term this contract should converge with the AST verifier rather than create two conceptual verification systems. The current separate call is a bounded migration seam.
 
-## 9. Current evidence / 当前证据
+## 9. Frozen evidence / 已冻结证据
 
 Focused tests prove:
 
-- valid two-function ownership passes;
-- same-type cross-function LocalId reference is rejected even though the old global verifier accepts it;
-- cross-function goto is rejected even though the old global verifier accepts it;
-- orphan parse-time-style constant expressions remain legal.
+- valid multi-function ownership passes;
+- same-type cross-function `LocalId` references are rejected even though the older global verifier can accept them;
+- cross-function goto targets are rejected;
+- orphan parse-time-style constant expressions remain legal;
+- cleanup and inline-asm auxiliary state stays within the reachable FunctionBody graph.
 
-Compiler-path host validation with the ownership checks enabled has passed after direct cleanup-context and inline-asm ownership were added:
+The production integration is no longer staged. `ast_traversal.c` and `function_body.c` are listed directly in the checked-in Makefile, the temporary source-list materializer has been removed, and the host source-inventory gate validates the real repository source list.
 
-- production source inventory with staged source-list materialization;
-- release build with `-Werror`;
-- existing `check-fast` compiler contracts;
-- frozen Foundation focused semantics (`tools/dev/pr76-focused.sh`).
+The clean FunctionBody head `2306b3a00f2b9444e3e7fd68e089c913063a249b` passed:
 
-The code-bearing auxiliary-ownership head `746013742210dc5c8d69a35bb6a7e6833cd7afa7` passed both the FunctionBody focused workflow and the compiler-path host/frozen-Foundation workflow.
+- dedicated FunctionBody focused validation;
+- compiler-path host validation and frozen Foundation checks;
+- the official full compiler gate, including RV64 and unchanged real-program regressions.
 
-The permanent Makefile source-list update, dedicated malformed auxiliary-owner unit cases, the full RV64/real-program gate, and the unchanged Linux 90,928-line gate remain separate acceptance items. Do not claim the slice frozen until those are complete or explicitly superseded by an equivalent canonical gate.
+The final large pressure check overlaid the FunctionBody architecture delta onto the previously proven Linux semantic tail without merging discovery staging into the product branch. Run `31764081317` hard-asserted both compiler status and non-empty assembly output and completed with:
+
+```text
+cached_tu_status=0
+FULL_TU_PASS lines=90928
+```
+
+During this revalidation the legacy discovery-only cleanup-remap materializer was intentionally retired in the runner workspace because `cast_normalization.c` now consumes the canonical external-ExpressionId remap API. Reintroducing the old hand-written remap path would create a second owner rather than add coverage.
 
 ## 10. Relationship to future Core IR / 与未来 IR 的关系
 
