@@ -151,6 +151,59 @@ static size_t integer_digit_end(const MinicParser *parser, MinicSourceSpan span)
     return end;
 }
 
+bool minic_parser_current_integer_literal_syntax(const MinicParser *parser,
+                                                 MinicIntegerLiteralBase *base,
+                                                 bool *has_unsigned_suffix,
+                                                 unsigned int *long_count) {
+    MinicSourceSpan span;
+    size_t digit_end;
+    size_t offset;
+    unsigned int parsed_long_count;
+    bool saw_unsigned;
+
+    if (parser == NULL || base == NULL || has_unsigned_suffix == NULL || long_count == NULL ||
+        parser->current.kind != MINIC_TOKEN_INTEGER_CONSTANT) {
+        return false;
+    }
+    span = parser->current.span;
+    digit_end = integer_digit_end(parser, span);
+    if (digit_end <= span.begin.offset) {
+        return false;
+    }
+    parsed_long_count = 0U;
+    saw_unsigned = false;
+    for (offset = digit_end; offset < span.end.offset; ++offset) {
+        char character;
+
+        character = parser->source[offset];
+        if (character == 'u' || character == 'U') {
+            if (saw_unsigned) {
+                return false;
+            }
+            saw_unsigned = true;
+        } else if (character == 'l' || character == 'L') {
+            parsed_long_count += 1U;
+            if (parsed_long_count > 2U) {
+                return false;
+            }
+        } else {
+            return false;
+        }
+    }
+    if (digit_end - span.begin.offset >= 2U && parser->source[span.begin.offset] == '0' &&
+        (parser->source[span.begin.offset + 1U] == 'x' ||
+         parser->source[span.begin.offset + 1U] == 'X')) {
+        *base = MINIC_INTEGER_LITERAL_BASE_HEXADECIMAL;
+    } else if (parser->source[span.begin.offset] == '0') {
+        *base = MINIC_INTEGER_LITERAL_BASE_OCTAL;
+    } else {
+        *base = MINIC_INTEGER_LITERAL_BASE_DECIMAL;
+    }
+    *has_unsigned_suffix = saw_unsigned;
+    *long_count = parsed_long_count;
+    return true;
+}
+
 bool minic_parser_parse_unsigned_integer_value64(MinicParser *parser, uint64_t *value) {
     MinicSourceSpan span;
     size_t digit_end;

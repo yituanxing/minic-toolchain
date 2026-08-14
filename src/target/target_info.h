@@ -37,6 +37,7 @@ const MinicTargetInfo *minic_default_target_info(void);
 const MinicDataLayout *minic_target_info_data_layout(const MinicTargetInfo *target);
 const MinicTargetIntegerModel *minic_target_info_integer_model(const MinicTargetInfo *target);
 bool minic_target_info_plain_char_sign(const MinicTargetInfo *target, MinicIntegerSign *sign);
+bool minic_target_info_plain_char_type(const MinicTargetInfo *target, MinicType *type);
 bool minic_target_info_wide_character_type(const MinicTargetInfo *target, MinicType *type);
 bool minic_target_info_sizeof_type(const MinicTargetInfo *target,
                                    const MinicC0Program *program,
