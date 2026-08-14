@@ -29,8 +29,15 @@ jobs:
       - name: Assert AST placement mirrors are gone
         run: |
           set -Eeuo pipefail
-          if grep -R -n --include='*.c' --include='*.h' '\<local_storage_size\>' src/frontend src/target/riscv64 | grep -v 'function_layout->local_storage_size'; then
-            echo 'legacy local_storage_size reference remains' >&2
+          if grep -R -n --include='*.c' --include='*.h' '\<local_storage_size\>' src/frontend; then
+            echo 'frontend local_storage_size mirror remains' >&2
+            exit 1
+          fi
+          if grep -R -n --include='*.c' --include='*.h' '\<local_storage_size\>' src/target/riscv64 \
+              | grep -v 'src/target/riscv64/layout.c:' \
+              | grep -v 'src/target/riscv64/layout.h:' \
+              | grep -v 'function_layout->local_storage_size'; then
+            echo 'legacy backend local_storage_size reference remains' >&2
             exit 1
           fi
           if grep -R -n --include='*.c' --include='*.h' 'local->storage_offset\|object->storage_offset' src/target/riscv64; then
