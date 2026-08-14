@@ -468,7 +468,9 @@ static bool parse_function_pointer_parameter_declarator(MinicParser *parser,
 
 static bool adjust_array_parameter_type(MinicParser *parser, MinicType *parameter_type) {
     const MinicArrayType *outer_array;
+    MinicType adjusted_type;
     MinicType declared_array_type;
+    MinicType pointee_type;
     bool is_array;
 
     if (parser == NULL || parameter_type == NULL || parser->current.kind != MINIC_TOKEN_LBRACKET) {
@@ -483,10 +485,17 @@ static bool adjust_array_parameter_type(MinicParser *parser, MinicType *paramete
         return false;
     }
     outer_array = minic_c0_program_array_type(parser->program, declared_array_type.array_type_id);
-    if (outer_array == NULL || !minic_type_pointer_to(outer_array->element_type, parameter_type)) {
+    if (outer_array == NULL) {
+        minic_parser_error(parser, "cannot resolve array parameter declarator");
+        return false;
+    }
+    pointee_type = outer_array->element_type;
+    if (!minic_type_pointer_to(pointee_type, &adjusted_type) ||
+        !minic_c0_program_discard_last_array_type(parser->program, declared_array_type)) {
         minic_parser_error(parser, "cannot adjust array parameter to pointer type");
         return false;
     }
+    *parameter_type = adjusted_type;
     return true;
 }
 

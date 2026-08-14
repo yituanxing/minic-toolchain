@@ -649,6 +649,7 @@ bool minic_c0_program_complete_zero_length_array_type(MinicC0Program *program,
 bool minic_c0_program_complete_array_type(MinicC0Program *program,
                                           MinicType array_type,
                                           size_t element_count);
+bool minic_c0_program_discard_last_array_type(MinicC0Program *program, MinicType array_type);
 bool minic_c0_program_add_function_type(MinicC0Program *program,
                                         MinicType return_type,
                                         const MinicType *parameter_types,
