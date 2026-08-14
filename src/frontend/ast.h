@@ -430,8 +430,6 @@ typedef struct MinicGlobalObject {
     size_t relocation_count;
     size_t relocation_capacity;
     size_t explicit_alignment;
-    size_t storage_size;
-    size_t alignment;
     MinicSymbolVisibility visibility;
     bool is_internal;
     bool is_read_only;

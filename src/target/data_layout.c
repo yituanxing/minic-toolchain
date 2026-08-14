@@ -320,6 +320,58 @@ bool minic_data_layout_type(const MinicDataLayout *layout,
     return minic_data_layout_type_depth(layout, program, type, 0U, size, alignment);
 }
 
+bool minic_data_layout_global_object(const MinicDataLayout *layout,
+                                     const MinicC0Program *program,
+                                     const MinicGlobalObject *object,
+                                     size_t *size,
+                                     size_t *alignment) {
+    size_t object_size;
+    size_t object_alignment;
+
+    if (layout == NULL || program == NULL || object == NULL || size == NULL || alignment == NULL) {
+        return false;
+    }
+    if (object->is_extern && minic_type_is_void(object->type)) {
+        *size = 0U;
+        *alignment = 0U;
+        return true;
+    }
+    if (object->is_extern && minic_type_is_record(object->type)) {
+        const MinicRecord *record;
+
+        record = minic_c0_program_record(program, object->type.record_id);
+        if (record != NULL && !record->is_complete) {
+            *size = 0U;
+            *alignment = 0U;
+            return true;
+        }
+    }
+    if (object->is_extern && minic_type_is_array(object->type)) {
+        const MinicArrayType *array_type;
+
+        array_type = minic_c0_program_array_type(program, object->type.array_type_id);
+        if (array_type != NULL && array_type->element_count == 0U) {
+            *size = 0U;
+            *alignment = 0U;
+            return true;
+        }
+    }
+    if (!minic_data_layout_type(layout, program, object->type, &object_size, &object_alignment)) {
+        return false;
+    }
+    if (object->explicit_alignment != 0U) {
+        if ((object->explicit_alignment & (object->explicit_alignment - 1U)) != 0U) {
+            return false;
+        }
+        if (object->explicit_alignment > object_alignment) {
+            object_alignment = object->explicit_alignment;
+        }
+    }
+    *size = object_size;
+    *alignment = object_alignment;
+    return true;
+}
+
 bool minic_data_layout_record_field_layout(const MinicDataLayout *layout,
                                            const MinicC0Program *program,
                                            const MinicRecord *record,
