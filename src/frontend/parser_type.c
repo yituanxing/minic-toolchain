@@ -465,10 +465,13 @@ bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type) {
             }
             record_id = minic_parser_find_record(parser, parser->current.span);
             if (record_id == MINIC_RECORD_INVALID) {
+                const MinicSourceSpan name_span = parser->current.span;
+
                 if (!minic_c0_program_add_record(parser->program,
-                                                 parser->source + parser->current.span.begin.offset,
-                                                 minic_parser_span_length(parser->current.span),
-                                                 &record_id)) {
+                                                 parser->source + name_span.begin.offset,
+                                                 minic_parser_span_length(name_span),
+                                                 &record_id) ||
+                    !minic_parser_bind_record_tag(parser, name_span, record_id)) {
                     minic_parser_error(parser, "out of memory while declaring record tag");
                     return false;
                 }
