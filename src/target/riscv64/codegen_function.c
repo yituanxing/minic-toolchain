@@ -628,8 +628,12 @@ static bool minic_riscv64_emit_global_object(FILE *file,
     }
 
     if (file == NULL || program == NULL || object == NULL || object->name_length == 0U ||
-        storage_size == 0U || object_alignment == 0U ||
+        object_alignment == 0U ||
         !minic_riscv64_alignment_power(object_alignment, &alignment_power)) {
+        return false;
+    }
+    if (storage_size == 0U && ((!object->is_zero_initialized && !object->is_tentative) ||
+                               object->initializer_count != 0U || object->relocation_count != 0U)) {
         return false;
     }
 
