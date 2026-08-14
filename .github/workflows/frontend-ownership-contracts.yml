@@ -1,0 +1,78 @@
+name: Frontend Ownership Contracts
+
+on:
+  pull_request:
+    paths:
+      - 'src/frontend/**'
+      - 'src/target/data_layout.c'
+      - 'src/target/data_layout.h'
+      - 'src/target/target_info.c'
+      - 'src/target/target_info.h'
+      - 'tests/frontend/ast_traversal_test.c'
+      - 'tests/frontend/function_body_view_test.c'
+      - '.github/workflows/frontend-ownership-contracts.yml'
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: frontend-ownership-contracts-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contracts:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build AST traversal ownership contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p build/frontend-ownership
+          cc -std=c11 \
+            -Wall -Wextra -Wpedantic -Wconversion -Wshadow \
+            -Wstrict-prototypes -Wmissing-prototypes \
+            -Iinclude -Isrc \
+            src/frontend/ast.c \
+            src/frontend/expression_semantics.c \
+            src/frontend/ast_global.c \
+            src/frontend/ast_traversal.c \
+            src/frontend/ast_verifier.c \
+            src/frontend/cast_normalization.c \
+            src/frontend/type.c \
+            src/target/data_layout.c \
+            src/target/target_info.c \
+            tests/frontend/ast_traversal_test.c \
+            -o build/frontend-ownership/ast-traversal-test
+
+      - name: Run AST traversal ownership contract
+        run: build/frontend-ownership/ast-traversal-test
+
+      - name: Build FunctionBody ownership contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cc -std=c11 \
+            -Wall -Wextra -Wpedantic -Wconversion -Wshadow \
+            -Wstrict-prototypes -Wmissing-prototypes -Werror \
+            -Iinclude -Isrc \
+            src/frontend/ast.c \
+            src/frontend/expression_semantics.c \
+            src/frontend/ast_global.c \
+            src/frontend/ast_traversal.c \
+            src/frontend/ast_verifier.c \
+            src/frontend/function_body.c \
+            src/frontend/type.c \
+            src/target/data_layout.c \
+            src/target/target_info.c \
+            tests/frontend/function_body_view_test.c \
+            -o build/frontend-ownership/function-body-view-test
+
+      - name: Run FunctionBody ownership contract
+        run: build/frontend-ownership/function-body-view-test
