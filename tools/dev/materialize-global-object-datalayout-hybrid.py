@@ -67,6 +67,32 @@ for name in (
     block = block.replace("object->alignment", "object_alignment")
     text = text[:start] + block + text[end:]
 
+# Discovery adds a helper that recognizes GNU zero-sized record definitions.
+# Preserve that exact predicate, but derive the zero-size fact from DataLayout
+# rather than a field that no longer exists in the semantic object.
+start, end = function_span(text, "minic_riscv64_zero_size_record_definition")
+block = text[start:end]
+if "object->storage_size" not in block:
+    raise SystemExit("zero-size record helper no longer has expected cache read")
+brace = block.index("{") + 1
+query = """
+    size_t object_alignment;
+    size_t storage_size;
+
+    if (program == NULL || object == NULL ||
+        !minic_data_layout_global_object(minic_default_data_layout(),
+                                         program,
+                                         object,
+                                         &storage_size,
+                                         &object_alignment)) {
+        return false;
+    }
+    (void)object_alignment;
+"""
+block = block[:brace] + query + block[brace:]
+block = block.replace("program == NULL || object == NULL || object->storage_size != 0U ||", "storage_size != 0U ||", 1)
+text = text[:start] + block + text[end:]
+
 if "object->storage_size" in text or "object->alignment" in text:
     raise SystemExit("discovery global-object layout cache consumer remains")
 if "zero_size_record_definition" not in text:
