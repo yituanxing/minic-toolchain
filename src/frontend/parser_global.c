@@ -1903,10 +1903,10 @@ static bool parse_static_inferred_integer_array(MinicParser *parser,
 
     initializer_count = 0U;
     while (parser->current.kind != MINIC_TOKEN_RBRACE) {
-        int value;
+        uint64_t bits;
 
-        if (!minic_parser_parse_integer_value(parser, &value) ||
-            !minic_c0_global_object_add_initializer(parser->program, object_id, value)) {
+        if (!minic_parser_parse_integer_initializer_bits(parser, element_type, &bits) ||
+            !minic_c0_global_object_add_initializer_bits(parser->program, object_id, bits)) {
             if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
                 minic_parser_error(parser, "cannot record inferred static integer initializer");
             }
