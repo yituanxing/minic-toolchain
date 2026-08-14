@@ -1,0 +1,43 @@
+name: RV64 FunctionLayout v1 Validation
+
+on:
+  push:
+    branches: [refactor/rv64-function-layout-v1]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rv64-function-layout-v1-validation
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Materialize FunctionLayout candidate
+        run: python3 tools/dev/materialize-rv64-function-layout-v1.py
+
+      - name: Check staged diff
+        run: |
+          set -Eeuo pipefail
+          git diff --check
+          grep -F 'typedef struct MinicRiscv64FunctionLayout' src/target/riscv64/layout.h >/dev/null
+          grep -F 'const MinicRiscv64FunctionLayout *function_layout' src/target/riscv64/codegen_support.c >/dev/null
+          grep -F 'minic_riscv64_layout_function(NULL, program, function, &function_layout, NULL)' src/target/riscv64/codegen_function.c >/dev/null
+
+      - name: Production source inventory
+        run: sh tools/maintenance/check-production-source-inventory.sh
+
+      - name: Focused RV64 layout gate
+        run: make -j2 BUILD_DIR=build/function-layout-debug check-layout
+
+      - name: Release host gate
+        run: make -j2 MODE=release BUILD_DIR=build/function-layout-release CFLAGS=-Werror check-fast
+
+      - name: Sanitized layout gate
+        run: make -j2 MODE=sanitize BUILD_DIR=build/function-layout-sanitize check-layout
