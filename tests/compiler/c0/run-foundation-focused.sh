@@ -1,0 +1,124 @@
+#!/bin/sh
+set -eu
+
+run_focused() {
+    sh "tests/compiler/c0/$1"
+}
+
+# Permanent focused semantic coverage accumulated during the Foundation line.
+# Keep this runner named by its long-term ownership rather than by historical PRs.
+for test_script in \
+    run-signed-char-semantics.sh \
+    run-extern-incomplete-arrays.sh \
+    run-extern-fixed-integer-arrays.sh \
+    run-external-pointer-arrays.sh \
+    run-extern-parenthesized-functions.sh \
+    run-anonymous-record-field-types.sh \
+    run-typedef-enum-definitions.sh \
+    run-enum-constant-expressions.sh \
+    run-integer-constant-bitwise.sh \
+    run-unsigned-64-literals.sh \
+    run-builtin-va-list.sh \
+    run-restrict-qualifiers.sh \
+    run-gnu-extension-declaration.sh \
+    run-builtin-expect.sh \
+    run-gnu-function-attributes.sh \
+    run-gnu-function-asm-labels.sh \
+    run-gnu-function-visibility.sh \
+    run-gnu-visible-extern-arrays.sh \
+    run-gnu-aligned-record-fields.sh \
+    run-gnu-zero-length-record-arrays.sh \
+    run-record-forward-declarations.sh \
+    run-record-multi-declarators.sh \
+    run-record-typedef-array-fields.sh \
+    run-volatile-qualifiers.sh \
+    run-array-bound-sizeof.sh \
+    run-array-bound-integer-casts.sh \
+    run-record-multidimensional-arrays.sh \
+    run-record-length-one-arrays.sh \
+    run-pointer-compound-subtraction.sh \
+    run-builtin-offsetof.sh \
+    run-pointer-integer-casts.sh \
+    run-record-assignment-expressions.sh \
+    run-bitwise-and-assignment-expressions.sh \
+    run-compound-assignment-full.sh \
+    run-for-expression-initializers.sh \
+    run-mixed-double-arithmetic.sh \
+    run-conditional-pointer-qualifiers.sh \
+    run-comma-operator.sh \
+    run-top-level-comma-conditions.sh \
+    run-cast-type-classification.sh \
+    run-stack-fixed-arguments.sh \
+    run-static-local-record-initializers.sh \
+    run-static-record-arrays.sh \
+    run-static-nested-record-initializers.sh \
+    run-static-local-scalars.sh \
+    run-static-local-inferred-arrays.sh \
+    run-static-local-pointer-arrays.sh \
+    run-static-local-fixed-arrays.sh \
+    run-static-inferred-char-arrays.sh \
+    run-prefix-update-expressions.sh \
+    run-function-designator-calls.sh \
+    run-function-address-expressions.sh \
+    run-preprocessed-line-markers.sh \
+    run-gnu-signed-keyword.sh \
+    run-gnu-int128-type.sh \
+    run-bool-semantics.sh \
+    run-typeof-generic.sh \
+    run-gnu-typedef-redundant-aligned.sh \
+    run-gnu-record-alignment.sh \
+    run-gnu-empty-records.sh \
+    run-gnu-extension-prefix-declarations.sh \
+    run-gnu-prefix-function-attributes.sh \
+    run-gnu-format-cold-attributes.sh \
+    run-anonymous-record-members.sh \
+    run-block-scope-extern-function-attributes.sh \
+    run-gnu-void-pointer-arithmetic.sh \
+    run-gnu-statement-expression.sh \
+    run-gnu-statement-record-value.sh \
+    run-gnu-record-compound-literal.sh \
+    run-gnu-static-local-implicit-zero.sh \
+    run-gnu-top-level-empty-declaration.sh \
+    run-gnu-object-alignment-attribute.sh \
+    run-gnu-auto-type-local.sh \
+    run-gnu-array-object-identity.sh \
+    run-gnu-local-label-address.sh \
+    run-gnu-inline-asm-fence.sh \
+    run-gnu-typeof-local-declaration.sh \
+    run-gnu-inline-asm-readwrite-output.sh \
+    run-gnu-inline-asm-operands.sh \
+    run-gnu-inline-asm-named-operands.sh \
+    run-gnu-inline-asm-goto.sh \
+    run-gnu-fixed-register-bindings.sh \
+    run-gnu-compiletime-selection-builtins.sh \
+    run-gnu-builtin-constant-p.sh \
+    run-gnu-builtin-object-size.sh \
+    run-gnu-call-frame-address.sh \
+    run-gnu-builtin-unreachable.sh \
+    run-gnu-pointer-sign-call-conversion.sh \
+    run-static-assert-declaration.sh \
+    run-gnu-choose-expr-bitfield.sh \
+    run-builtin-clzll.sh \
+    run-alignof-type-query.sh \
+    run-rv64-integer-aggregate-return.sh \
+    run-unnamed-bit-fields.sh \
+    run-gnu-overflow-builtins.sh \
+    run-gnu-register-inline-asm-output.sh \
+    run-function-linkage-inheritance.sh \
+    run-static-prefix-object-attributes.sh \
+    run-extern-incomplete-record-object.sh \
+    run-extern-function-pointer-object.sh \
+    run-extern-interleaved-function-attributes.sh \
+    run-shared-function-declarator.sh \
+    run-gnu-incomplete-record-function-signature.sh \
+    run-enum-tag-type-references.sh \
+    run-gnu-enum-entity.sh \
+    run-extern-multi-declarators.sh \
+    run-extern-multidimensional-array.sh \
+    run-gnu-extern-object-redeclaration.sh \
+    run-gnu-section-symbol-attribute.sh \
+    run-gnu-const-function-attribute.sh \
+    run-gnu-octal-character-case-range.sh
+do
+    run_focused "$test_script"
+done
