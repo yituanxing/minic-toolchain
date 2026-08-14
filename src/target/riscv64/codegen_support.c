@@ -1,5 +1,7 @@
 #include "target/riscv64/codegen_internal.h"
 
+#include "target/riscv64/abi.h"
+
 #include <stdint.h>
 #include <stdio.h>
 
@@ -66,57 +68,19 @@ static const char *minic_riscv64_store_instruction(MinicType type) {
                                                                                   : "sw";
 }
 
-static bool minic_riscv64_integer_aggregate_member_type(const MinicC0Program *program,
-                                                        MinicType type) {
-    if (minic_type_is_integer(type) || minic_type_is_pointer(type)) {
-        return true;
-    }
-    if (minic_type_is_array(type)) {
-        const MinicArrayType *array_type;
-
-        array_type = minic_c0_program_array_type(program, type.array_type_id);
-        return array_type != NULL &&
-               minic_riscv64_integer_aggregate_member_type(program, array_type->element_type);
-    }
-    if (minic_type_is_record(type)) {
-        const MinicRecord *record;
-        size_t field_index;
-
-        record = minic_c0_program_record(program, type.record_id);
-        if (record == NULL || !record->is_complete) {
-            return false;
-        }
-        for (field_index = 0U; field_index < record->field_count; ++field_index) {
-            const MinicRecordField *field;
-
-            field = minic_c0_record_field(record, field_index);
-            if (field == NULL ||
-                !minic_riscv64_integer_aggregate_member_type(program, field->type)) {
-                return false;
-            }
-        }
-        return true;
-    }
-    return false;
-}
-
 bool minic_riscv64_integer_aggregate_abi(const MinicC0Program *program,
                                          MinicType type,
                                          size_t *storage_size,
                                          size_t *register_chunks) {
-    size_t alignment;
-    size_t size;
+    MinicRiscv64AbiValue value;
 
-    if (program == NULL || storage_size == NULL || register_chunks == NULL ||
-        !minic_type_is_record(type) ||
-        !minic_riscv64_integer_aggregate_member_type(program, type) ||
-        !minic_riscv64_type_layout(program, type, &size, &alignment) ||
-        (size != 8U && size != 16U)) {
+    if (storage_size == NULL || register_chunks == NULL ||
+        !minic_riscv64_abi_classify_value(program, type, &value) ||
+        value.kind != MINIC_RISCV64_ABI_VALUE_AGGREGATE) {
         return false;
     }
-    (void)alignment;
-    *storage_size = size;
-    *register_chunks = size / 8U;
+    *storage_size = value.storage_size;
+    *register_chunks = value.slot_count;
     return true;
 }
 
@@ -395,7 +359,7 @@ bool minic_riscv64_emit_object_store(FILE *file,
 bool minic_riscv64_frame_layout(const MinicC0Program *program,
                                 const MinicFunction *function,
                                 MinicRiscv64FrameLayout *layout) {
-    size_t integer_parameter_count;
+    MinicRiscv64AbiCursor abi_cursor;
     size_t parameter_index;
     size_t required_bytes;
     size_t varargs_size;
@@ -405,40 +369,22 @@ bool minic_riscv64_frame_layout(const MinicC0Program *program,
         return false;
     }
 
-    integer_parameter_count = 0U;
+    minic_riscv64_abi_cursor_initialize(&abi_cursor);
     for (parameter_index = 0U; parameter_index < function->parameter_count; ++parameter_index) {
         const MinicLocal *parameter;
+        MinicRiscv64AbiArgumentLocation location;
 
         parameter = minic_c0_program_local(program, function->local_begin + parameter_index);
-        if (parameter == NULL) {
+        if (parameter == NULL || !minic_riscv64_abi_place_argument(
+                                     program, parameter->type, true, &abi_cursor, &location)) {
             return false;
         }
-        if (minic_type_is_double(parameter->type) || minic_type_is_float(parameter->type)) {
-            continue;
-        }
-        if (minic_type_is_record(parameter->type)) {
-            size_t aggregate_size;
-            size_t aggregate_chunks;
-
-            if (!minic_riscv64_integer_aggregate_abi(
-                    program, parameter->type, &aggregate_size, &aggregate_chunks) ||
-                integer_parameter_count > SIZE_MAX - aggregate_chunks) {
-                return false;
-            }
-            (void)aggregate_size;
-            integer_parameter_count += aggregate_chunks;
-            continue;
-        }
-        if (!minic_type_is_integer(parameter->type) && !minic_type_is_pointer(parameter->type)) {
-            return false;
-        }
-        integer_parameter_count += 1U;
     }
-    if (function->is_variadic && integer_parameter_count > 8U) {
+    if (function->is_variadic && abi_cursor.stack_slot_count != 0U) {
         return false;
     }
 
-    varargs_size = function->is_variadic ? (8U - integer_parameter_count) * 8U : 0U;
+    varargs_size = function->is_variadic ? (8U - abi_cursor.integer_register_count) * 8U : 0U;
     if (function->local_storage_size > SIZE_MAX - 16U ||
         function->local_storage_size + 16U > SIZE_MAX - varargs_size) {
         return false;
@@ -457,6 +403,6 @@ bool minic_riscv64_frame_layout(const MinicC0Program *program,
     }
     layout->saved_ra_offset = layout->varargs_offset - 8U;
     layout->saved_s0_offset = layout->varargs_offset - 16U;
-    layout->integer_parameter_count = integer_parameter_count;
+    layout->integer_parameter_count = abi_cursor.integer_register_count;
     return true;
 }
