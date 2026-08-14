@@ -1643,8 +1643,14 @@ bool minic_parser_parse_extern_global(MinicParser *parser) {
                                                        false);
 }
 
-static bool
-parse_static_pointer_array(MinicParser *parser, MinicType element_type, MinicSourceSpan name_span) {
+static bool parse_static_pointer_array(MinicParser *parser,
+                                       MinicType element_type,
+                                       MinicSourceSpan name_span,
+                                       char *section_name,
+                                       size_t section_capacity,
+                                       size_t *section_name_length,
+                                       bool *has_section,
+                                       size_t *explicit_alignment) {
     MinicGlobalObjectId *targets;
     MinicType object_type;
     MinicType string_pointer_type;
@@ -1677,7 +1683,13 @@ parse_static_pointer_array(MinicParser *parser, MinicType element_type, MinicSou
         minic_parser_error(parser, "multi-dimensional static pointer arrays are not supported yet");
         goto done;
     }
-    if (!minic_parser_expect(parser, MINIC_TOKEN_EQUAL, "expected '='") ||
+    if (!minic_parser_parse_gnu_object_attribute_lists(parser,
+                                                       section_name,
+                                                       section_capacity,
+                                                       section_name_length,
+                                                       has_section,
+                                                       explicit_alignment) ||
+        !minic_parser_expect(parser, MINIC_TOKEN_EQUAL, "expected '='") ||
         !minic_parser_expect(parser, MINIC_TOKEN_LBRACE, "expected '{'")) {
         goto done;
     }
@@ -1705,6 +1717,19 @@ parse_static_pointer_array(MinicParser *parser, MinicType element_type, MinicSou
             }
             (void)literal_type;
             (void)literal_span;
+        } else if (parser->current.kind == MINIC_TOKEN_IDENTIFIER) {
+            MinicExpressionId value_id;
+
+            if (!minic_parser_parse_expression(parser, &value_id, 0U) ||
+                !minic_c0_assignment_compatible(parser->program, element_type, value_id) ||
+                !static_object_address_relocation_target(parser->program, value_id, &target_id)) {
+                if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                    minic_parser_error(parser,
+                                       "static pointer array object initializer requires a "
+                                       "compatible zero-addend object address");
+                }
+                goto done;
+            }
         } else if (!minic_parser_parse_null_pointer_constant_expression(parser, element_type)) {
             if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
                 minic_parser_error(parser, "static pointer array scalar initializer must be null");
@@ -1768,7 +1793,11 @@ parse_static_pointer_array(MinicParser *parser, MinicType element_type, MinicSou
                                             true,
                                             minic_type_is_const(element_type),
                                             &object_id) ||
-        !minic_c0_global_object_set_zero_initialized(parser->program, object_id)) {
+        !minic_c0_global_object_set_zero_initialized(parser->program, object_id) ||
+        (*has_section && !minic_c0_global_object_set_section(
+                             parser->program, object_id, section_name, *section_name_length)) ||
+        (*explicit_alignment != 0U && !minic_c0_global_object_set_explicit_alignment(
+                                          parser->program, object_id, *explicit_alignment))) {
         minic_parser_error(parser, "cannot create static pointer array object");
         goto done;
     }
@@ -2030,7 +2059,14 @@ bool minic_parser_parse_static_global_after_head(MinicParser *parser,
         return parse_static_scalar(parser, element_type, name_span);
     }
     if (minic_type_is_pointer(element_type)) {
-        return parse_static_pointer_array(parser, element_type, name_span);
+        return parse_static_pointer_array(parser,
+                                          element_type,
+                                          name_span,
+                                          section_name,
+                                          section_capacity,
+                                          section_name_length,
+                                          has_section,
+                                          explicit_alignment);
     }
     if (!minic_type_is_integer(element_type) || !minic_type_is_const(element_type)) {
         minic_parser_error(parser, "static global arrays currently require const integer elements");

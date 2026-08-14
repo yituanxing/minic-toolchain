@@ -50,15 +50,28 @@ static bool minic_riscv64_emit_assignment(FILE *file,
         !minic_c0_assignment_compatible(program, target->type, statement->expression)) {
         return false;
     }
-    return minic_riscv64_emit_expression(
-               file, program, function, function_layout, statement->expression) &&
-           fprintf(file, "  addi sp, sp, -16\n  sd a0, 0(sp)\n") >= 0 &&
-           minic_riscv64_emit_lvalue_address(
-               file, program, function, function_layout, statement->target_expression) &&
-           fprintf(file, "  ld t0, 0(sp)\n  addi sp, sp, 16\n") >= 0 &&
-           (!minic_type_is_integer(target->type) ||
-            minic_riscv64_emit_integer_conversion(file, target->type, "t0")) &&
-           minic_riscv64_emit_scalar_store(file, target->type, "t0", "a0");
+    if (!minic_riscv64_emit_expression(
+            file, program, function, function_layout, statement->expression)) {
+        return false;
+    }
+    if (fprintf(file, "  addi sp, sp, -16\n  sd a0, 0(sp)\n") < 0) {
+        return false;
+    }
+    if (!minic_riscv64_emit_lvalue_address(
+            file, program, function, function_layout, statement->target_expression)) {
+        return false;
+    }
+    if (fprintf(file, "  ld t0, 0(sp)\n  addi sp, sp, 16\n") < 0) {
+        return false;
+    }
+    if (minic_type_is_integer(target->type) &&
+        !minic_riscv64_emit_integer_conversion(file, target->type, "t0")) {
+        return false;
+    }
+    if (!minic_riscv64_emit_scalar_store(file, target->type, "t0", "a0")) {
+        return false;
+    }
+    return true;
 }
 
 static bool minic_riscv64_emit_record_copy(FILE *file,
@@ -124,8 +137,10 @@ static bool minic_riscv64_emit_cleanup_contexts(FILE *file,
         const MinicCleanupContext *context;
 
         context = minic_c0_program_cleanup_context(program, current);
-        if (context == NULL ||
-            !minic_riscv64_emit_expression(
+        if (context == NULL) {
+            return false;
+        }
+        if (!minic_riscv64_emit_expression(
                 file, program, function, function_layout, context->cleanup_expression)) {
             return false;
         }
@@ -177,11 +192,15 @@ static bool minic_riscv64_emit_return(FILE *file,
                 return false;
             }
             (void)aggregate_size;
-            if (value->value_category == MINIC_VALUE_LVALUE) {
-                if (!minic_riscv64_emit_lvalue_address(
+            if (minic_c0_record_value_is_address_backed(program, statement->expression)) {
+                if (!minic_riscv64_emit_address_backed_record_value(
                         file, program, function, function_layout, statement->expression) ||
-                    fprintf(file, "  mv t0, a0\n  ld a0, 0(t0)\n") < 0 ||
-                    (aggregate_chunks == 2U && fprintf(file, "  ld a1, 8(t0)\n") < 0)) {
+                    fprintf(file, "  mv t0, a0\n") < 0 ||
+                    !minic_riscv64_emit_integer_aggregate_load_chunk(
+                        file, program, function->return_type, 0U, "a0", "t0") ||
+                    (aggregate_chunks == 2U &&
+                     !minic_riscv64_emit_integer_aggregate_load_chunk(
+                         file, program, function->return_type, 1U, "a1", "t0"))) {
                     return false;
                 }
             } else if (value->kind != MINIC_EXPRESSION_CALL ||
@@ -531,12 +550,6 @@ minic_riscv64_emit_block_with_break_target(FILE *file,
                                           statement,
                                           label_counter,
                                           break_target)) {
-            fprintf(stderr,
-                    "CODEGEN_FAIL statement function=%s block=%zu statement=%zu kind=%d\n",
-                    function != NULL ? function->name : "<null>",
-                    (size_t)block_id,
-                    (size_t)statement_id,
-                    statement != NULL ? (int)statement->kind : -1);
             return false;
         }
     }

@@ -1,6 +1,6 @@
 #include "target/riscv64/codegen.h"
-#include "target/riscv64/codegen_internal.h"
 #include "target/riscv64/abi.h"
+#include "target/riscv64/codegen_internal.h"
 #include "target/data_layout.h"
 
 #include <errno.h>
@@ -610,26 +610,53 @@ static bool minic_riscv64_emit_file_asm(FILE *file, const MinicFileAsm *file_asm
     return fputc('\n', file) != EOF;
 }
 
+static bool minic_riscv64_zero_size_record_definition(const MinicC0Program *program,
+                                                      const MinicGlobalObject *object) {
+    size_t object_alignment;
+    size_t storage_size;
+
+    if (program == NULL || object == NULL ||
+        !minic_data_layout_global_object(
+            minic_default_data_layout(), program, object, &storage_size, &object_alignment)) {
+        return false;
+    }
+    (void)object_alignment;
+
+    const MinicRecord *record;
+
+    if (storage_size != 0U || !minic_type_is_record(object->type) ||
+        object->initializer_count != 0U || object->relocation_count != 0U) {
+        return false;
+    }
+    record = minic_c0_program_record(program, object->type.record_id);
+    return record != NULL && record->is_complete && record->field_count == 0U;
+}
+
 static bool minic_riscv64_emit_global_object(FILE *file,
                                              const MinicC0Program *program,
                                              const MinicGlobalObject *object) {
     size_t object_alignment;
     size_t storage_size;
 
-    MinicType scalar_type;
-    const char *directive;
-    unsigned int alignment_power;
-    size_t scalar_width;
-    size_t initializer_index;
-
     if (!minic_data_layout_global_object(
             minic_default_data_layout(), program, object, &storage_size, &object_alignment)) {
         return false;
     }
 
+    MinicType scalar_type;
+    const char *directive;
+    unsigned int alignment_power;
+    size_t scalar_width;
+    size_t initializer_index;
+    bool zero_size_record_definition;
+
     if (file == NULL || program == NULL || object == NULL || object->name_length == 0U ||
-        storage_size == 0U || object_alignment == 0U ||
+        object_alignment == 0U ||
         !minic_riscv64_alignment_power(object_alignment, &alignment_power)) {
+        return false;
+    }
+    zero_size_record_definition = minic_riscv64_zero_size_record_definition(program, object);
+    if (storage_size == 0U && !zero_size_record_definition) {
         return false;
     }
 
@@ -643,7 +670,8 @@ static bool minic_riscv64_emit_global_object(FILE *file,
         const MinicRecord *record;
 
         record = minic_c0_program_record(program, object->type.record_id);
-        if (record == NULL || !record->is_complete || object->initializer_count == 0U) {
+        if (record == NULL || !record->is_complete ||
+            (object->initializer_count == 0U && !zero_size_record_definition)) {
             return false;
         }
     } else if (minic_riscv64_record_array_info(program, object->type, NULL, NULL)) {
@@ -749,11 +777,15 @@ static bool minic_riscv64_emit_function(FILE *file,
     bool success;
     const char *symbol_name;
 
-    minic_riscv64_function_layout_initialize(&function_layout);
     if (function == NULL || !function->is_defined || function->name_length == 0U ||
-        function->body_block >= program->block_count ||
-        !minic_riscv64_layout_function(NULL, program, function, &function_layout, NULL) ||
-        !minic_riscv64_frame_layout_from_function_layout(
+        function->body_block >= program->block_count) {
+        return false;
+    }
+    minic_riscv64_function_layout_initialize(&function_layout);
+    if (!minic_riscv64_layout_function(NULL, program, function, &function_layout, NULL)) {
+        return false;
+    }
+    if (!minic_riscv64_frame_layout_from_function_layout(
             program, function, &function_layout, &frame_layout)) {
         minic_riscv64_function_layout_destroy(&function_layout);
         return false;
@@ -827,6 +859,14 @@ static bool minic_riscv64_emit_function(FILE *file,
                 break;
             }
 
+            if (location.value.kind == MINIC_RISCV64_ABI_VALUE_IGNORE) {
+                if (location.integer_register_count != 0U ||
+                    location.floating_register_count != 0U || location.stack_slot_count != 0U) {
+                    success = false;
+                }
+                continue;
+            }
+
             if (location.value.kind == MINIC_RISCV64_ABI_VALUE_FLOAT) {
                 if (location.floating_register_count != 1U ||
                     location.floating_register_begin >= 8U ||
@@ -843,10 +883,59 @@ static bool minic_riscv64_emit_function(FILE *file,
                 continue;
             }
 
+            if (location.value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) {
+                size_t byte_index;
+
+                if (location.integer_register_count == 1U && location.stack_slot_count == 0U &&
+                    location.integer_register_begin < 8U) {
+                    success =
+                        fprintf(
+                            file,
+                            "  mv t0, %s\n",
+                            minic_riscv64_argument_registers[location.integer_register_begin]) >= 0;
+                } else if (location.integer_register_count == 0U &&
+                           location.stack_slot_count == 1U) {
+                    size_t incoming_offset;
+
+                    if (location.stack_slot_begin > (SIZE_MAX - frame_size) / 8U) {
+                        success = false;
+                        break;
+                    }
+                    incoming_offset = frame_size + location.stack_slot_begin * 8U;
+                    success = minic_riscv64_emit_sp_load64(file, "t0", incoming_offset);
+                } else {
+                    success = false;
+                }
+                if (!success || !minic_riscv64_emit_object_address(
+                                    file, program, function, &function_layout, local_id)) {
+                    success = false;
+                    break;
+                }
+                for (byte_index = 0U; success && byte_index < location.value.storage_size;
+                     ++byte_index) {
+                    if (byte_index <= 2047U) {
+                        success = fprintf(file,
+                                          "  lbu t1, %zu(t0)\n  sb t1, %zu(a0)\n",
+                                          byte_index,
+                                          byte_index) >= 0;
+                    } else {
+                        success = fprintf(file,
+                                          "  li t2, %zu\n"
+                                          "  add t3, t0, t2\n"
+                                          "  lbu t1, 0(t3)\n"
+                                          "  add t3, a0, t2\n"
+                                          "  sb t1, 0(t3)\n",
+                                          byte_index) >= 0;
+                    }
+                }
+                continue;
+            }
+
             if (location.value.kind == MINIC_RISCV64_ABI_VALUE_AGGREGATE) {
                 size_t chunk_index;
 
                 if (location.value.slot_count == 0U ||
+                    location.value.slot_count != location.value.register_chunks ||
                     location.value.slot_count !=
                         location.integer_register_count + location.stack_slot_count ||
                     location.integer_register_begin > 8U ||
@@ -981,10 +1070,6 @@ bool minic_riscv64_write_c0_program(const char *path,
         success =
             minic_riscv64_emit_global_object(file, program, &program->global_objects[global_index]);
         if (!success) {
-            fprintf(stderr,
-                    "CODEGEN_FAIL global=%zu name=%s\n",
-                    global_index,
-                    program->global_objects[global_index].name);
         }
     }
     if (success && program->file_asm_count != 0U) {
@@ -1018,11 +1103,6 @@ bool minic_riscv64_write_c0_program(const char *path,
         }
         success = minic_riscv64_emit_function(file, program, function, &label_counter);
         if (!success) {
-            fprintf(stderr,
-                    "CODEGEN_FAIL function=%zu name=%s body=%zu\n",
-                    function_index,
-                    function->name,
-                    (size_t)function->body_block);
         }
     }
 

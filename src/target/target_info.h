@@ -16,6 +16,8 @@ typedef struct MinicTargetInfo {
     bool call_frame_frame_address_level0;
 } MinicTargetInfo;
 
+extern const char *const minic_riscv64_argument_registers[8];
+
 const MinicTargetInfo *minic_default_target_info(void);
 const MinicDataLayout *minic_target_info_data_layout(const MinicTargetInfo *target);
 bool minic_target_info_wide_character_type(const MinicTargetInfo *target, MinicType *type);
