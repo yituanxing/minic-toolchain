@@ -19,18 +19,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Materialize record DataLayout query candidate
+      - name: Materialize record DataLayout ownership candidate
         run: |
           set -Eeuo pipefail
           python3 tools/dev/run-materialize-record-datalayout-query-v1.py
+          python3 tools/dev/materialize-record-datalayout-cache-removal.py
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
           git diff --check
 
-      - name: Assert backend record layout reads are query-based
+      - name: Assert record layout has one owner
         run: |
           set -Eeuo pipefail
-          if grep -R -n --include='codegen_*.c' 'field->storage_offset\|field->bit_offset\|record->storage_size\|record->alignment' src/target/riscv64; then
-            echo 'RV64 codegen still consumes record layout cache fields' >&2
+          if grep -R -n --include='*.c' --include='*.h' 'field->storage_offset\|field->bit_offset\|record->storage_size\|record->alignment' src; then
+            echo 'derived record layout cache reference remains' >&2
+            exit 1
+          fi
+          if grep -n 'size_t storage_offset;\|size_t bit_offset;' src/frontend/ast.h; then
+            echo 'derived record field layout remains in AST' >&2
             exit 1
           fi
           grep -F 'minic_data_layout_record_field_offset' src/target/riscv64/codegen_expression.c >/dev/null
