@@ -32,8 +32,14 @@ typedef struct MinicParserLocalBinding {
     MinicGlobalObjectId global_object_id;
 } MinicParserLocalBinding;
 
+typedef struct MinicParserRecordTag {
+    MinicSourceSpan name_span;
+    MinicRecordId record_id;
+} MinicParserRecordTag;
+
 typedef struct MinicParserScopeFrame {
     size_t binding_begin;
+    size_t record_tag_begin;
     MinicCleanupContextId cleanup_context;
 } MinicParserScopeFrame;
 
@@ -94,6 +100,10 @@ typedef struct MinicParser {
     MinicParserLocalBinding *local_bindings;
     size_t local_binding_count;
     size_t local_binding_capacity;
+
+    MinicParserRecordTag *record_tags;
+    size_t record_tag_count;
+    size_t record_tag_capacity;
 
     MinicParserScopeFrame *scopes;
     size_t scope_count;
@@ -309,6 +319,11 @@ bool minic_parser_declare_block_scope_extern_object(MinicParser *parser,
 MinicFixedRegisterBindingId minic_parser_find_fixed_register_binding(const MinicParser *parser,
                                                                      MinicSourceSpan name_span);
 MinicRecordId minic_parser_find_record(const MinicParser *parser, MinicSourceSpan name_span);
+MinicRecordId minic_parser_find_record_in_current_scope(const MinicParser *parser,
+                                                        MinicSourceSpan name_span);
+bool minic_parser_bind_record_tag(MinicParser *parser,
+                                  MinicSourceSpan name_span,
+                                  MinicRecordId record_id);
 MinicTypeAliasId minic_parser_find_type_alias(const MinicParser *parser, MinicSourceSpan name_span);
 
 bool minic_parser_parse_type_name_preserving_incomplete(MinicParser *parser, MinicType *type);

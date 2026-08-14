@@ -73,6 +73,7 @@ for test_script in \
     run-gnu-prefix-function-attributes.sh \
     run-gnu-format-cold-attributes.sh \
     run-anonymous-record-members.sh \
+    run-block-scope-record-tags.sh \
     run-block-scope-extern-function-attributes.sh \
     run-gnu-void-pointer-arithmetic.sh \
     run-gnu-statement-expression.sh \
