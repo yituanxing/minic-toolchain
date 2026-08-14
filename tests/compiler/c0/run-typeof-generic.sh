@@ -17,7 +17,7 @@ mkdir -p "$work"
 test -s "$assembly"
 for symbol in generic_selected_value generic_default_value generic_controlling_is_unevaluated \
               typeof_expression_size typeof_type_name_size typeof_generic_pointer_size \
-              typeof_incomplete_object_address; do
+              typeof_incomplete_object_address typeof_function_redeclaration; do
     grep -F "$symbol:" "$assembly" >/dev/null
 done
 # Selected/default generic values must survive frontend selection lowering.
@@ -33,6 +33,10 @@ fi
 size8=$(grep -c '  li a0, 8' "$assembly" || true)
 test "$size8" -ge 3
 grep -F 'typeof_pending_object' "$assembly" >/dev/null
+# GNU typeof of a function designator preserves the function type rather than
+# the execution-time function-pointer representation used by ordinary expressions.
+test "$(grep -c '^typeof_function_redeclaration:$' "$assembly")" -eq 1
+grep -F '.globl typeof_function_redeclaration' "$assembly" >/dev/null
 
 cat >"$work/incomplete-sizeof.c" <<'EOF'
 struct StillPending;
@@ -46,4 +50,4 @@ if "$minic" -S "$work/incomplete-sizeof.i" -o "$work/incomplete-sizeof.s" \
 fi
 grep -F 'incomplete record type requires pointer declarator' "$work/incomplete-sizeof.stderr" >/dev/null
 
-printf '%s\n' 'PASS compiler/c0/typeof_generic typeof=expression,type-name,incomplete-type-preserved generic=typed,default controlling=unevaluated linux-shape=1 completeness=consumer-owned'
+printf '%s\n' 'PASS compiler/c0/typeof_generic typeof=expression,type-name,incomplete-type-preserved,function-designator-preserved generic=typed,default controlling=unevaluated linux-shape=1 completeness=consumer-owned'
