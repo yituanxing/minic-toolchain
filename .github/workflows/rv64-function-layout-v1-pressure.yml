@@ -50,6 +50,25 @@ jobs:
           set -Eeuo pipefail
           cp tools/dev/materialize-rv64-function-layout-v1.py /tmp/function-layout-v1.py
           cp tools/dev/materialize-rv64-function-layout-v1-frame-fix.py /tmp/function-layout-frame-fix.py
+          python3 - <<'PY'
+          from pathlib import Path
+
+          primary = Path('/tmp/function-layout-v1.py').read_text()
+          marker = '# codegen_function.c: construct the per-function side state once and use it for frame placement.'
+          if primary.count(marker) != 1:
+              raise SystemExit('FunctionLayout core split marker missing')
+          primary = primary.split(marker, 1)[0]
+          primary += 'print("MATERIALIZED rv64-function-layout-v1-core-only")\n'
+          Path('/tmp/function-layout-core-only.py').write_text(primary)
+
+          frame_fix = Path('/tmp/function-layout-frame-fix.py').read_text()
+          marker = 'path = "src/target/riscv64/codegen_function.c"'
+          if frame_fix.count(marker) != 1:
+              raise SystemExit('FrameLayout core split marker missing')
+          frame_fix = frame_fix.split(marker, 1)[0]
+          frame_fix += 'print("MATERIALIZED rv64-function-layout-v1-frame-core-only")\n'
+          Path('/tmp/function-layout-frame-core-only.py').write_text(frame_fix)
+          PY
           git fetch --no-tags origin \
             agent/rv64-caller-abi-linux-v1 \
             agent/rv64-callee-abi-linux-v1 \
@@ -155,17 +174,19 @@ jobs:
           grep -F 'use_formal_location_path' src/target/riscv64/codegen_expression.c >/dev/null
           echo 'CALLER_ABI_LOCATION_HYBRID=1'
 
-      - name: Overlay FunctionLayout candidate
+      - name: Overlay FunctionLayout core candidate
         shell: bash
         run: |
           set -Eeuo pipefail
-          python3 /tmp/function-layout-v1.py
-          python3 /tmp/function-layout-frame-fix.py
+          python3 /tmp/function-layout-core-only.py
+          python3 /tmp/function-layout-frame-core-only.py
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
           git diff --check
           grep -F 'typedef struct MinicRiscv64FunctionLayout' src/target/riscv64/layout.h >/dev/null
           grep -F 'minic_riscv64_frame_layout_from_function_layout' src/target/riscv64/codegen_support.c >/dev/null
-          echo 'FUNCTION_LAYOUT_HYBRID=1'
+          grep -F 'minic_riscv64_layout_function(NULL, program, function, &function_layout, NULL)' \
+            src/target/riscv64/codegen_support.c >/dev/null
+          echo 'FUNCTION_LAYOUT_CORE_HYBRID=1'
 
       - name: Build hybrid discovery compiler
         shell: bash
