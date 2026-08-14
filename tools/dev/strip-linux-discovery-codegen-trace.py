@@ -76,12 +76,26 @@ def simplify_frame_layout_failure(text: str) -> str:
     return text[:body_start] + tail + text[tail_at + len(tail):]
 
 
+def strip_statement_diagnostic_locals(text: str) -> str:
+    snippets = (
+        "            const MinicExpression *cleanup =\n"
+        "                minic_c0_program_expression(program, context->cleanup_expression);\n",
+        "            const MinicExpression *failed_value =\n"
+        "                minic_c0_program_expression(program, statement->expression);\n",
+    )
+    for snippet in snippets:
+        text = text.replace(snippet, "")
+    return text
+
+
 total = 0
 for path in FILES:
     text = path.read_text()
     text, removed = strip_codegen_fprintf(text)
     if path.name == "codegen_function.c":
         text = simplify_frame_layout_failure(text)
+    if path.name == "codegen_statement.c":
+        text = strip_statement_diagnostic_locals(text)
     if "CODEGEN_" in text:
         raise SystemExit(f"CODEGEN trace remains in {path}")
     path.write_text(text)
