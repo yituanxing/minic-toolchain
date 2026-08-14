@@ -295,6 +295,12 @@ bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type) {
                 return false;
             }
             parsed_type = operand->type;
+            if (operand->kind == MINIC_EXPRESSION_FUNCTION &&
+                (!minic_type_pointee(operand->type, &parsed_type) ||
+                 !minic_type_is_function(parsed_type))) {
+                minic_parser_error(parser, "cannot preserve GNU typeof function designator");
+                return false;
+            }
             if (minic_c0_expression_array_object_info(parser->program, operand, NULL) &&
                 !minic_parser_materialize_array_object_type(parser, operand_id, &parsed_type)) {
                 if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
