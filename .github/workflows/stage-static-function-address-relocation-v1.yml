@@ -20,10 +20,16 @@ jobs:
         run: python3 tools/dev/stage-static-function-address-relocation-v1.py
       - name: Format and inspect product delta
         run: |
-          clang-format-18 -i src/frontend/parser_global.c
+          clang-format-18 -i src/frontend/ast.h src/frontend/ast_global.c src/frontend/ast_verifier.c src/frontend/parser_global.c
           git diff --check
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
-          git diff -- src/frontend/parser_global.c tests/compiler/c0/static_object_address_relocation.c tests/compiler/c0/run-static-object-address-relocation.sh
+          git diff -- \
+            src/frontend/ast.h \
+            src/frontend/ast_global.c \
+            src/frontend/ast_verifier.c \
+            src/frontend/parser_global.c \
+            tests/compiler/c0/static_object_address_relocation.c \
+            tests/compiler/c0/run-static-object-address-relocation.sh
       - name: Build release compiler
         run: make -j4 MODE=release BUILD_DIR=build/static-function-address-stage
       - name: Run focused relocation regression
@@ -35,6 +41,12 @@ jobs:
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add src/frontend/parser_global.c tests/compiler/c0/static_object_address_relocation.c tests/compiler/c0/run-static-object-address-relocation.sh
+          git add \
+            src/frontend/ast.h \
+            src/frontend/ast_global.c \
+            src/frontend/ast_verifier.c \
+            src/frontend/parser_global.c \
+            tests/compiler/c0/static_object_address_relocation.c \
+            tests/compiler/c0/run-static-object-address-relocation.sh
           git commit -m 'materialize static function-address relocation v1'
           git push origin HEAD:staging/static-function-address-relocation-v1
