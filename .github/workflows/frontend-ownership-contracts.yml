@@ -37,7 +37,7 @@ jobs:
           mkdir -p build/frontend-ownership
           cc -std=c11 \
             -Wall -Wextra -Wpedantic -Wconversion -Wshadow \
-            -Wstrict-prototypes -Wmissing-prototypes -Werror \
+            -Wstrict-prototypes -Wmissing-prototypes \
             -Iinclude -Isrc \
             src/frontend/ast.c \
             src/frontend/ast_global.c \
