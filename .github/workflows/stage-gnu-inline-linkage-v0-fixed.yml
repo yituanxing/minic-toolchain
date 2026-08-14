@@ -1,0 +1,37 @@
+name: Stage GNU inline linkage v0 fixed
+
+on:
+  push:
+    branches:
+      - staging/gnu-inline-linkage-v0
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    if: github.event.head_commit.message != 'materialize GNU inline linkage v0'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Materialize product delta
+        run: python3 tools/dev/stage-gnu-inline-linkage-v0.py
+      - name: Check staged diff
+        run: |
+          git diff --check
+          git diff -- src/frontend/parser_function.c \
+            tests/compiler/c0/gnu_prefix_function_attributes.c \
+            tests/compiler/c0/gnu_extern_inline_attribute.c \
+            tests/compiler/c0/run-gnu-prefix-function-attributes.sh
+      - name: Commit staged product delta
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/frontend/parser_function.c \
+            tests/compiler/c0/gnu_prefix_function_attributes.c \
+            tests/compiler/c0/gnu_extern_inline_attribute.c \
+            tests/compiler/c0/run-gnu-prefix-function-attributes.sh
+          git commit -m 'materialize GNU inline linkage v0'
+          git push origin HEAD:staging/gnu-inline-linkage-v0
