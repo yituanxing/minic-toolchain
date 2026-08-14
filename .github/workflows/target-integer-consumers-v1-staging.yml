@@ -37,11 +37,53 @@ jobs:
       - name: Materialize target integer consumers
         run: |
           set -Eeuo pipefail
-          # The exact verifier inventory was confirmed on the canonical 38588023 Foundation:
-          # eleven type_is_valid() consumers share the verifier's existing TargetInfo context.
-          sed -i 's/!= 7:/!= 11:/; s/expected 7 type_is_valid calls/expected 11 type_is_valid calls/' \
+          sed -i \
+            -e 's/!= 7:/!= 11:/' \
+            -e 's/expected 7 type_is_valid calls/expected 11 type_is_valid calls/' \
+            -e '/require_absent("src\/frontend\/ast_verifier.c", "minic_type_integer_common(")/d' \
+            -e '/require_absent("src\/frontend\/ast_verifier.c", "minic_type_integer_promotion(")/d' \
             tools/dev/materialize-target-integer-consumers-v1.py
           python3 tools/dev/materialize-target-integer-consumers-v1.py
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/frontend/ast_verifier.c')
+          text = path.read_text()
+
+          replacements = [
+              (
+                  '!minic_type_integer_promotion(operand->type, &expected_type)',
+                  '!minic_target_info_integer_promotion(target, operand->type, &expected_type)',
+              ),
+              (
+                  'minic_type_integer_common(left->type, right->type, &common_type)',
+                  'minic_target_info_integer_common(target, left->type, right->type, &common_type)',
+              ),
+              (
+                  'static bool verify_statement(const MinicC0Program *program, const MinicStatement *statement) {',
+                  'static bool verify_statement(const MinicC0Program *program,\n'
+                  '                             const MinicTargetInfo *target_info,\n'
+                  '                             const MinicStatement *statement) {',
+              ),
+              (
+                  'minic_type_integer_common(target->type, expression->type, &common_type)',
+                  'minic_target_info_integer_common(\n'
+                  '                   target_info, target->type, expression->type, &common_type)',
+              ),
+              (
+                  'if (!verify_statement(program, &program->statements[index])) {',
+                  'if (!verify_statement(program, target, &program->statements[index])) {',
+              ),
+          ]
+          for old, new in replacements:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'ast_verifier.c: expected one occurrence, found {count}: {old}')
+              text = text.replace(old, new)
+          if 'minic_type_integer_common(' in text or 'minic_type_integer_promotion(' in text:
+              raise SystemExit('ast_verifier.c: legacy integer semantic helper remains')
+          path.write_text(text)
+          PY
           clang-format-18 -i \
             src/target/target_info.h \
             src/target/target_info.c \
