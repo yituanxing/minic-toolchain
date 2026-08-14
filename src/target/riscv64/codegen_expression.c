@@ -1,4 +1,5 @@
 #include "target/riscv64/codegen_internal.h"
+#include "target/riscv64/abi.h"
 #include "target/riscv64/layout.h"
 #include "target/target_info.h"
 
@@ -1732,6 +1733,7 @@ bool minic_riscv64_emit_expression(FILE *file,
         const MinicExpression *indirect_callee;
         const MinicType *parameter_types;
         MinicType abi_parameter_types[MINIC_MAX_FUNCTION_PARAMETERS];
+        MinicRiscv64AbiArgumentLocation argument_locations[MINIC_MAX_FUNCTION_PARAMETERS];
         size_t parameter_count;
         size_t argument_count;
         size_t argument_index;
@@ -1876,48 +1878,31 @@ bool minic_riscv64_emit_expression(FILE *file,
             }
         }
         {
-            size_t integer_register_index;
-            size_t floating_register_index;
+            MinicRiscv64AbiCursor abi_cursor;
 
-            integer_register_index = 0U;
-            floating_register_index = 0U;
+            minic_riscv64_abi_cursor_initialize(&abi_cursor);
             for (argument_index = 0U; argument_index < argument_count; ++argument_index) {
-                bool fixed_floating;
+                const MinicExpression *argument;
+                MinicType placement_type;
+                bool is_fixed_parameter;
 
-                fixed_floating = argument_index < parameter_count &&
-                                 (minic_type_is_double(abi_parameter_types[argument_index]) ||
-                                  minic_type_is_float(abi_parameter_types[argument_index]));
-                if (fixed_floating) {
-                    if (floating_register_index >= 8U) {
-                        return false;
-                    }
-                    floating_register_index += 1U;
-                } else if (argument_index < parameter_count &&
-                           minic_type_is_record(abi_parameter_types[argument_index])) {
-                    size_t aggregate_size;
-                    size_t aggregate_chunks;
-                    size_t chunk_index;
-
-                    if (!minic_riscv64_integer_aggregate_abi(program,
-                                                             abi_parameter_types[argument_index],
-                                                             &aggregate_size,
-                                                             &aggregate_chunks)) {
-                        return false;
-                    }
-                    (void)aggregate_size;
-                    for (chunk_index = 0U; chunk_index < aggregate_chunks; ++chunk_index) {
-                        if (integer_register_index < 8U) {
-                            integer_register_index += 1U;
-                        } else {
-                            stack_argument_count += 1U;
-                        }
-                    }
-                } else if (integer_register_index < 8U) {
-                    integer_register_index += 1U;
-                } else {
-                    stack_argument_count += 1U;
+                argument = minic_c0_program_expression(
+                    program, expression->value.call.arguments[argument_index]);
+                if (argument == NULL) {
+                    return false;
+                }
+                is_fixed_parameter = argument_index < parameter_count;
+                placement_type =
+                    is_fixed_parameter ? abi_parameter_types[argument_index] : argument->type;
+                if (!minic_riscv64_abi_place_argument(program,
+                                                      placement_type,
+                                                      is_fixed_parameter,
+                                                      &abi_cursor,
+                                                      &argument_locations[argument_index])) {
+                    return false;
                 }
             }
+            stack_argument_count = abi_cursor.stack_slot_count;
         }
         if (stack_argument_count > (SIZE_MAX - 15U) / 8U) {
             return false;
@@ -1928,78 +1913,94 @@ bool minic_riscv64_emit_expression(FILE *file,
             return false;
         }
         {
-            size_t integer_register_index;
-            size_t floating_register_index;
-            size_t stack_argument_index;
-
-            integer_register_index = 0U;
-            floating_register_index = 0U;
-            stack_argument_index = 0U;
             for (argument_index = 0U; argument_index < argument_count; ++argument_index) {
+                const MinicRiscv64AbiArgumentLocation *location;
                 size_t offset;
-                bool fixed_floating;
+                bool is_fixed_parameter;
 
+                location = &argument_locations[argument_index];
                 offset = outgoing_stack_bytes + (argument_count - 1U - argument_index) * 16U;
-                fixed_floating = argument_index < parameter_count &&
-                                 (minic_type_is_double(abi_parameter_types[argument_index]) ||
-                                  minic_type_is_float(abi_parameter_types[argument_index]));
-                if (fixed_floating) {
-                    if (floating_register_index >= 8U ||
+                is_fixed_parameter = argument_index < parameter_count;
+
+                if (location->floating_register_count == 1U) {
+                    if (!is_fixed_parameter ||
+                        location->value.kind != MINIC_RISCV64_ABI_VALUE_FLOAT ||
+                        location->floating_register_begin >= 8U ||
+                        location->integer_register_count != 0U ||
+                        location->stack_slot_count != 0U ||
                         fprintf(file,
                                 minic_type_is_double(abi_parameter_types[argument_index])
                                     ? "  ld t0, %zu(sp)\n  fmv.d.x fa%zu, t0\n"
                                     : "  ld t0, %zu(sp)\n  fmv.w.x fa%zu, t0\n",
                                 offset,
-                                floating_register_index) < 0) {
+                                location->floating_register_begin) < 0) {
                         return false;
                     }
-                    floating_register_index += 1U;
-                } else if (argument_index < parameter_count &&
-                           minic_type_is_record(abi_parameter_types[argument_index])) {
-                    size_t aggregate_size;
-                    size_t aggregate_chunks;
+                    continue;
+                }
+
+                if (location->value.kind == MINIC_RISCV64_ABI_VALUE_AGGREGATE) {
                     size_t chunk_index;
 
-                    if (!minic_riscv64_integer_aggregate_abi(program,
-                                                             abi_parameter_types[argument_index],
-                                                             &aggregate_size,
-                                                             &aggregate_chunks)) {
+                    if (!is_fixed_parameter || location->value.slot_count == 0U ||
+                        location->value.slot_count !=
+                            location->integer_register_count + location->stack_slot_count ||
+                        location->integer_register_begin > 8U ||
+                        location->integer_register_count > 8U - location->integer_register_begin) {
                         return false;
                     }
-                    (void)aggregate_size;
-                    for (chunk_index = 0U; chunk_index < aggregate_chunks; ++chunk_index) {
+                    for (chunk_index = 0U; chunk_index < location->value.slot_count;
+                         ++chunk_index) {
                         size_t chunk_offset;
 
                         chunk_offset = offset + chunk_index * 8U;
-                        if (integer_register_index < 8U) {
-                            if (fprintf(file,
-                                        "  ld a%zu, %zu(sp)\n",
-                                        integer_register_index,
-                                        chunk_offset) < 0) {
+                        if (chunk_index < location->integer_register_count) {
+                            size_t register_index;
+
+                            register_index = location->integer_register_begin + chunk_index;
+                            if (fprintf(
+                                    file, "  ld a%zu, %zu(sp)\n", register_index, chunk_offset) <
+                                0) {
                                 return false;
                             }
-                            integer_register_index += 1U;
                         } else {
+                            size_t stack_slot;
+
+                            stack_slot = location->stack_slot_begin +
+                                         (chunk_index - location->integer_register_count);
                             if (!minic_riscv64_emit_sp_load64(file, "t0", chunk_offset) ||
-                                !minic_riscv64_emit_sp_store64(
-                                    file, "t0", stack_argument_index * 8U)) {
+                                !minic_riscv64_emit_sp_store64(file, "t0", stack_slot * 8U)) {
                                 return false;
                             }
-                            stack_argument_index += 1U;
                         }
                     }
-                } else if (integer_register_index < 8U) {
-                    if (fprintf(file, "  ld a%zu, %zu(sp)\n", integer_register_index, offset) < 0) {
-                        return false;
-                    }
-                    integer_register_index += 1U;
-                } else {
-                    if (!minic_riscv64_emit_sp_load64(file, "t0", offset) ||
-                        !minic_riscv64_emit_sp_store64(file, "t0", stack_argument_index * 8U)) {
-                        return false;
-                    }
-                    stack_argument_index += 1U;
+                    continue;
                 }
+
+                if (location->floating_register_count != 0U ||
+                    (location->value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER &&
+                     location->value.kind != MINIC_RISCV64_ABI_VALUE_FLOAT)) {
+                    return false;
+                }
+                if (location->integer_register_count == 1U && location->stack_slot_count == 0U &&
+                    location->integer_register_begin < 8U) {
+                    if (fprintf(file,
+                                "  ld a%zu, %zu(sp)\n",
+                                location->integer_register_begin,
+                                offset) < 0) {
+                        return false;
+                    }
+                    continue;
+                }
+                if (location->integer_register_count == 0U && location->stack_slot_count == 1U) {
+                    if (!minic_riscv64_emit_sp_load64(file, "t0", offset) ||
+                        !minic_riscv64_emit_sp_store64(
+                            file, "t0", location->stack_slot_begin * 8U)) {
+                        return false;
+                    }
+                    continue;
+                }
+                return false;
             }
         }
 
