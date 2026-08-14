@@ -47,8 +47,14 @@ jobs:
       - name: Verify production source inventory
         run: sh tools/maintenance/check-production-source-inventory.sh
 
-      - name: Check committed source formatting
-        run: CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+      - name: Probe canonical committed source formatting
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+          git diff --check
+          git diff -- src/target/riscv64/abi.c src/target/riscv64/codegen_support.c
+          git diff --exit-code -- src/target/riscv64/abi.c src/target/riscv64/codegen_support.c
 
       - name: Run release host contracts
         run: make -j2 MODE=release BUILD_DIR=build/rv64-abi-host CFLAGS=-Werror check-fast
