@@ -138,6 +138,7 @@ jobs:
           sed -i "s/@LINUX_RUN_ID@/$LINUX_RUN_ID/" docs/architecture/rv64-caller-abi-location-v1.md
 
           git rm tools/dev/materialize-rv64-caller-abi-location-v1.py
+          git rm .github/workflows/rv64-caller-abi-location-validation.yml
           git diff --check
           sh tools/maintenance/check-production-source-inventory.sh
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
