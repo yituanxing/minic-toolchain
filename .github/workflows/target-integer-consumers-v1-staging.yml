@@ -42,6 +42,7 @@ jobs:
             -e 's/expected 7 type_is_valid calls/expected 11 type_is_valid calls/' \
             -e '/require_absent("src\/frontend\/ast_verifier.c", "minic_type_integer_common(")/d' \
             -e '/require_absent("src\/frontend\/ast_verifier.c", "minic_type_integer_promotion(")/d' \
+            -e 's/if path.as_posix() == "src\/frontend\/type.c":/if path.as_posix() in ("src\/frontend\/type.c", "src\/frontend\/const_eval.c"):/' \
             -e 's/if "minic_type_char()" in text:/if path.as_posix() != "src\/target\/target_info.c" and "minic_type_char()" in text:/' \
             tools/dev/materialize-target-integer-consumers-v1.py
           python3 - <<'PY'
@@ -105,11 +106,33 @@ jobs:
           if 'minic_type_integer_common(' in text or 'minic_type_integer_promotion(' in text:
               raise SystemExit('ast_verifier.c: legacy integer semantic helper remains')
           path.write_text(text)
+
+          path = Path('src/frontend/const_eval.c')
+          text = path.read_text()
+          replacements = [
+              (
+                  'minic_type_integer_common(left.type, right.type, &operation_type)',
+                  'minic_target_info_integer_common(target, left.type, right.type, &operation_type)',
+              ),
+              (
+                  'minic_type_integer_common(left.type, left.type, &operation_type)',
+                  'minic_target_info_integer_promotion(target, left.type, &operation_type)',
+              ),
+          ]
+          for old_text, new_text in replacements:
+              count = text.count(old_text)
+              if count != 1:
+                  raise SystemExit(f'const_eval.c: expected one occurrence, found {count}: {old_text}')
+              text = text.replace(old_text, new_text)
+          if 'minic_type_integer_common(' in text or 'minic_type_integer_promotion(' in text:
+              raise SystemExit('const_eval.c: legacy integer semantic helper remains')
+          path.write_text(text)
           PY
           clang-format-18 -i \
             src/target/target_info.h \
             src/target/target_info.c \
             src/frontend/type.c \
+            src/frontend/const_eval.c \
             src/frontend/parser_type.c \
             src/frontend/parser_string.c \
             src/frontend/parser_global.c \
@@ -162,6 +185,7 @@ jobs:
             src/target/target_info.h \
             src/target/target_info.c \
             src/frontend/type.c \
+            src/frontend/const_eval.c \
             src/frontend/parser_type.c \
             src/frontend/parser_string.c \
             src/frontend/parser_global.c \
