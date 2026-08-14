@@ -181,8 +181,7 @@ int main(void)
 
         if (!minic_target_info_plain_char_sign(&target, &plain_char_sign) ||
             plain_char_sign != MINIC_INTEGER_SIGN_SIGNED ||
-            !minic_target_info_integer_promotion(
-                &target, minic_type_signed_short(), &promoted_type) ||
+            !minic_target_info_integer_promotion(&target, minic_type_short(), &promoted_type) ||
             !minic_type_equal(promoted_type, minic_type_int()) ||
             !minic_target_info_integer_promotion(
                 &target, minic_type_unsigned_short(), &promoted_type) ||
