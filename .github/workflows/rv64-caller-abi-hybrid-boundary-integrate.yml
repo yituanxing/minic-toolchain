@@ -1,0 +1,57 @@
+name: Integrate RV64 Caller ABI Hybrid Boundary
+
+on:
+  push:
+    branches: [agent/rv64-caller-abi-linux-v1]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: rv64-caller-abi-hybrid-boundary-integrate
+  cancel-in-progress: false
+
+jobs:
+  integrate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/rv64-caller-abi-linux-v1
+          fetch-depth: 0
+
+      - name: Fold formal-v1 selector into hybrid materializer
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("tools/dev/materialize-rv64-caller-abi-location-hybrid.py")
+          source = path.read_text()
+          old = '''            if (value->kind == MINIC_RISCV64_ABI_VALUE_IGNORE ||
+                      value->kind == MINIC_RISCV64_ABI_VALUE_INDIRECT ||
+                      (value->kind == MINIC_RISCV64_ABI_VALUE_AGGREGATE &&
+                       value->storage_size != 8U && value->storage_size != 16U)) {
+          '''
+          new = '''            if (value->kind == MINIC_RISCV64_ABI_VALUE_IGNORE ||
+                      value->kind == MINIC_RISCV64_ABI_VALUE_INDIRECT ||
+                      (value->kind == MINIC_RISCV64_ABI_VALUE_AGGREGATE &&
+                       (argument_index >= parameter_count ||
+                        (value->storage_size != 8U && value->storage_size != 16U)))) {
+          '''
+          if source.count(old) != 1:
+              raise SystemExit("hybrid selector anchor missing/non-unique")
+          path.write_text(source.replace(old, new, 1))
+          PY
+          grep -F 'argument_index >= parameter_count' \
+            tools/dev/materialize-rv64-caller-abi-location-hybrid.py >/dev/null
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add tools/dev/materialize-rv64-caller-abi-location-hybrid.py
+          git rm -f tools/dev/materialize-rv64-caller-abi-hybrid-formal-boundary.py
+          git rm .github/workflows/rv64-caller-abi-hybrid-boundary-integrate.yml
+          git diff --cached --check
+          git commit -m 'dev: align caller hybrid path with formal ABI v1'
+          git push origin HEAD:agent/rv64-caller-abi-linux-v1
