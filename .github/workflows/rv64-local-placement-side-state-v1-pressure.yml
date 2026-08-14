@@ -48,6 +48,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
+          cp tools/dev/materialize-rv64-local-placement-hybrid.py /tmp/rv64-local-placement-hybrid.py
           python3 tools/dev/run-materialize-rv64-local-placement-side-state-v1.py
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
           git diff --check
@@ -58,14 +59,9 @@ jobs:
             src/frontend/parser_statement.c \
             src/target/riscv64/layout.c \
             src/target/riscv64/layout.h \
-            src/target/riscv64/codegen_internal.h \
-            src/target/riscv64/codegen_support.c \
-            src/target/riscv64/codegen_expression.c \
-            src/target/riscv64/codegen_statement.c \
             src/target/riscv64/codegen_inline_asm.c \
-            src/target/riscv64/codegen_function.c \
-            > /tmp/formal-local-placement.patch
-          test -s /tmp/formal-local-placement.patch
+            > /tmp/formal-local-placement-clean.patch
+          test -s /tmp/formal-local-placement-clean.patch
           git reset --hard HEAD
           git clean -fd
 
@@ -177,25 +173,13 @@ jobs:
           grep -F 'use_formal_location_path' src/target/riscv64/codegen_expression.c >/dev/null
           echo 'CALLER_ABI_LOCATION_HYBRID=1'
 
-      - name: Overlay cumulative FunctionLayout architecture
+      - name: Overlay FunctionLayout ownership without replacing discovery semantics
         shell: bash
         run: |
           set -Eeuo pipefail
           git add -A
-          set +e
-          git apply --3way --index /tmp/formal-local-placement.patch
-          apply_status=$?
-          set -e
-          if test "$apply_status" -ne 0; then
-            echo 'FUNCTION_LAYOUT_3WAY_CONFLICTS_BEGIN'
-            git status --short
-            for path in $(git diff --name-only --diff-filter=U); do
-              echo "--- conflict:$path ---"
-              grep -n -B 8 -A 24 -E '^(<<<<<<<|=======|>>>>>>>)' "$path" || true
-            done
-            echo 'FUNCTION_LAYOUT_3WAY_CONFLICTS_END'
-            exit 1
-          fi
+          git apply --3way --index /tmp/formal-local-placement-clean.patch
+          python3 /tmp/rv64-local-placement-hybrid.py
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
           git add -A
           git diff --cached --check
@@ -207,8 +191,14 @@ jobs:
             echo 'hybrid local storage_offset consumer remains' >&2
             exit 1
           fi
+          if grep -R -n --include='*.c' --include='*.h' 'function->local_storage_size' src/target/riscv64; then
+            echo 'hybrid function local_storage_size consumer remains' >&2
+            exit 1
+          fi
           grep -F 'const MinicRiscv64FunctionLayout *function_layout' \
             src/target/riscv64/codegen_expression.c >/dev/null
+          grep -F 'minic_riscv64_emit_integer_aggregate_load_chunk' \
+            src/target/riscv64/codegen_support.c >/dev/null
           echo 'LOCAL_PLACEMENT_SIDE_STATE_HYBRID=1'
 
       - name: Build hybrid discovery compiler
