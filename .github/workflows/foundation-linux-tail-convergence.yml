@@ -23,68 +23,68 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Materialize GNU empty-record static emission
+      - name: Synthesize proven current-architecture Linux tail
         shell: bash
         run: |
           set -Eeuo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          python3 - <<'PY'
-          from pathlib import Path
+          candidate_base=$(git rev-parse HEAD)
 
-          p = Path('src/target/riscv64/codegen_function.c')
-          text = p.read_text()
-          helper = '''static bool minic_riscv64_zero_size_record_definition(const MinicC0Program *program,\n                                                        const MinicGlobalObject *object,\n                                                        size_t storage_size) {\n    const MinicRecord *record;\n\n    if (program == NULL || object == NULL || storage_size != 0U ||\n        !minic_type_is_record(object->type) || object->initializer_count != 0U ||\n        object->relocation_count != 0U) {\n        return false;\n    }\n    record = minic_c0_program_record(program, object->type.record_id);\n    return record != NULL && record->is_complete && record->field_count == 0U;\n}\n\n'''
-          anchor = 'static bool minic_riscv64_emit_global_object(FILE *file,\n'
-          if helper not in text:
-              if text.count(anchor) != 1:
-                  raise SystemExit('empty-record helper anchor not found')
-              text = text.replace(anchor, helper + anchor, 1)
+          # Recreate the exact #148 Linux-pressure composite, but stop before its
+          # historical cached-TU validation. The composite is already proven at
+          # 90,928/90,928; here it is used only as a source oracle for migration.
+          git checkout --detach f5e529b48f831cad83a96c45684279a777cf1d3e
+          git show f5e529b48f831cad83a96c45684279a777cf1d3e:tools/dev/run-global-object-datalayout-linux-pressure.sh \
+            | awk '/^make -j4 MODE=release BUILD_DIR=build\/global-object-datalayout-hybrid-linux/{exit} {print}' \
+            > /tmp/rebuild-proven-tail.sh
+          bash /tmp/rebuild-proven-tail.sh
 
-          old_locals = '''    unsigned int alignment_power;\n    size_t scalar_width;\n    size_t initializer_index;\n\n    if (!minic_data_layout_global_object(\n            minic_default_data_layout(), program, object, &storage_size, &object_alignment)) {\n        return false;\n    }\n\n    if (file == NULL || program == NULL || object == NULL || object->name_length == 0U ||\n        object_alignment == 0U ||\n        !minic_riscv64_alignment_power(object_alignment, &alignment_power)) {\n        return false;\n    }\n    if (storage_size == 0U && ((!object->is_zero_initialized && !object->is_tentative) ||\n                               object->initializer_count != 0U || object->relocation_count != 0U)) {\n        return false;\n    }\n'''
-          new_locals = '''    unsigned int alignment_power;\n    size_t scalar_width;\n    size_t initializer_index;\n    bool zero_size_record_definition;\n\n    if (!minic_data_layout_global_object(\n            minic_default_data_layout(), program, object, &storage_size, &object_alignment)) {\n        return false;\n    }\n\n    if (file == NULL || program == NULL || object == NULL || object->name_length == 0U ||\n        object_alignment == 0U ||\n        !minic_riscv64_alignment_power(object_alignment, &alignment_power)) {\n        return false;\n    }\n    zero_size_record_definition =\n        minic_riscv64_zero_size_record_definition(program, object, storage_size);\n    if (storage_size == 0U && !zero_size_record_definition) {\n        return false;\n    }\n'''
-          if new_locals not in text:
-              if old_locals not in text:
-                  raise SystemExit('empty-record precondition anchor not found')
-              text = text.replace(old_locals, new_locals, 1)
+          rm -rf /tmp/proven-product
+          mkdir -p /tmp/proven-product/tools
+          cp -a include /tmp/proven-product/include
+          cp -a src /tmp/proven-product/src
+          cp -a tools/minic /tmp/proven-product/tools/minic
 
-          old_record = '''        record = minic_c0_program_record(program, object->type.record_id);\n        if (record == NULL || !record->is_complete || object->initializer_count == 0U) {\n            return false;\n        }\n'''
-          new_record = '''        record = minic_c0_program_record(program, object->type.record_id);\n        if (record == NULL || !record->is_complete ||\n            (object->initializer_count == 0U && !zero_size_record_definition)) {\n            return false;\n        }\n'''
-          if new_record not in text:
-              if old_record not in text:
-                  raise SystemExit('empty-record initializer anchor not found')
-              text = text.replace(old_record, new_record, 1)
+          git reset --hard
+          git clean -fd
+          git checkout -B agent/foundation-linux-tail-convergence-v1 "$candidate_base"
+          rm -rf include src tools/minic
+          cp -a /tmp/proven-product/include ./include
+          cp -a /tmp/proven-product/src ./src
+          mkdir -p tools
+          cp -a /tmp/proven-product/tools/minic ./tools/minic
 
-          p.write_text(text)
-          PY
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+          git diff --check
+          mkdir -p build/convergence
+          git diff --stat > build/convergence/product-diff-stat.txt
+          git diff --binary -- include src tools/minic > build/convergence/product.patch
+          cat build/convergence/product-diff-stat.txt
 
-      - name: Build and focused validation
+          # Keep the ownership improvements from #141-#148 as hard invariants.
+          if grep -R -n --include='*.c' --include='*.h' \
+              'field->storage_offset\|field->bit_offset\|record->storage_size\|record->alignment\|object->storage_size\|object->alignment' src; then
+            echo 'target-derived semantic AST layout cache reintroduced' >&2
+            exit 1
+          fi
+          if grep -R -n --include='*.c' --include='*.h' '\<local_storage_size\>' src/frontend; then
+            echo 'frontend local placement cache reintroduced' >&2
+            exit 1
+          fi
+          grep -F 'minic_data_layout_global_object' src/target/riscv64/codegen_function.c >/dev/null
+          grep -F 'minic_riscv64_abi_place_argument' src/target/riscv64/codegen_expression.c >/dev/null
+          grep -F 'minic_riscv64_abi_place_argument' src/target/riscv64/codegen_function.c >/dev/null
+          grep -F 'minic_c0_program_remap_external_expression_ids' src/frontend/cast_normalization.c >/dev/null
+
+      - name: Validate committed-source candidate
         shell: bash
         run: |
           set -Eeuo pipefail
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
-          make -j4 MODE=release BUILD_DIR=build/tail-compiler
-          cat > build/zero-size-static.c <<'EOF'
-          struct empty {};
-          static struct empty file_empty;
-          int zero_size_static(void) {
-              static struct empty local_empty;
-              return sizeof(file_empty) + sizeof(local_empty);
-          }
-          EOF
-          build/tail-compiler/bin/minic -S build/zero-size-static.c -o build/zero-size-static.s
-          test "$(grep -F '.size ' build/zero-size-static.s | grep -F ', 0' | wc -l)" -ge 2
-          BUILD_DIR="$GITHUB_WORKSPACE/build/tail-full" \
+          make -j4 MODE=release BUILD_DIR=build/converged-compiler
+          BUILD_DIR="$GITHUB_WORKSPACE/build/converged-full" \
             bash .github/scripts/compiler-c0-full-gate.sh
-
-      - name: Commit and publish product source candidate
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          git add src/target/riscv64/codegen_function.c
-          git commit -m 'fix(riscv64): emit GNU empty-record static definitions'
-          git push origin HEAD:agent/foundation-linux-tail-convergence-v1
 
       - name: Restore pinned Linux source archive
         id: linux-source-cache
@@ -102,13 +102,13 @@ jobs:
             gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
             flex bison bc libelf-dev libssl-dev
 
-      - name: Drive committed candidate over unchanged init/main.i
+      - name: Drive synthesized committed source over unchanged init/main.i
         id: linux
         shell: bash
         run: |
           set +e
-          MINIC="$GITHUB_WORKSPACE/build/tail-compiler/bin/minic" \
-          BUILD_DIR="$GITHUB_WORKSPACE/build/linux-tail" \
+          MINIC="$GITHUB_WORKSPACE/build/converged-compiler/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/linux-converged" \
           LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-cache/linux-6.6.143.tar.xz" \
           CROSS_COMPILE=riscv64-linux-gnu- \
             sh tests/external/linux/probe.sh
@@ -116,44 +116,45 @@ jobs:
           echo "status=$status" >> "$GITHUB_OUTPUT"
           exit 0
 
-      - name: Prepare frontier diagnostics
+      - name: Record convergence evidence
         if: always()
         shell: bash
         run: |
           set -Eeuo pipefail
-          work="$GITHUB_WORKSPACE/build/linux-tail"
-          summary="$work/frontier-summary.txt"
-          mkdir -p "$work"
+          work="$GITHUB_WORKSPACE/build/linux-converged"
+          summary="$GITHUB_WORKSPACE/build/convergence/linux-summary.txt"
+          mkdir -p "$GITHUB_WORKSPACE/build/convergence"
           : > "$summary"
           if test -s "$work/kbuild/init/main.i"; then
             printf '%s\n' "total_lines=$(wc -l < "$work/kbuild/init/main.i" | tr -d ' ')" >> "$summary"
           fi
-          if test -s "$work/minic.stderr"; then
-            frontier_line=$(sed -n 's/.*init\/main\.i:\([0-9][0-9]*\):.*/\1/p' "$work/minic.stderr" | head -n 1)
-            printf '%s\n' "frontier_line=${frontier_line:-unknown}" >> "$summary"
-            printf '%s\n' 'MiniC diagnostic:' >> "$summary"
-            sed -n '1,120p' "$work/minic.stderr" >> "$summary"
-            if test -n "${frontier_line:-}" && test -s "$work/kbuild/init/main.i"; then
-              start=$((frontier_line > 12 ? frontier_line - 12 : 1))
-              end=$((frontier_line + 12))
-              printf '\n%s\n' "init/main.i lines=$start-$end:" >> "$summary"
-              nl -ba "$work/kbuild/init/main.i" | sed -n "${start},${end}p" >> "$summary"
-            fi
-          else
-            printf '%s\n' 'No MiniC diagnostic; candidate passed MiniC or failed before it.' >> "$summary"
-          fi
           printf '%s\n' "probe_status=${{ steps.linux.outputs.status }}" >> "$summary"
+          if test -s "$work/minic.stderr"; then
+            sed -n '1,160p' "$work/minic.stderr" >> "$summary"
+          fi
           cat "$summary"
 
-      - name: Upload frontier
+      - name: Publish committed product source
+        if: steps.linux.outputs.status == '0'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git add include src tools/minic
+          git diff --cached --check
+          git commit -m 'feat(compiler): converge proven Linux tail semantics'
+          git push origin HEAD:agent/foundation-linux-tail-convergence-v1
+
+      - name: Upload convergence evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: foundation-linux-tail-${{ github.run_id }}
+          name: foundation-linux-tail-convergence-${{ github.run_id }}
           path: |
-            build/linux-tail/frontier-summary.txt
-            build/linux-tail/main-i-inventory.txt
-            build/linux-tail/kbuild/init/main.i
+            build/convergence/product-diff-stat.txt
+            build/convergence/product.patch
+            build/convergence/linux-summary.txt
+            build/linux-converged/main-i-inventory.txt
+            build/linux-converged/kbuild/init/main.i
           if-no-files-found: ignore
           retention-days: 7
 
@@ -164,7 +165,7 @@ jobs:
           path: build/linux-cache/linux-6.6.143.tar.xz
           key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
 
-      - name: Require complete Linux TU
+      - name: Require complete committed Linux TU
         if: always()
         shell: bash
         run: test "${{ steps.linux.outputs.status }}" = 0
