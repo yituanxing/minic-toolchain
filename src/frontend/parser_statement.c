@@ -2366,7 +2366,8 @@ static bool parse_expression_or_assignment_statement(MinicParser *parser,
         right_expression = minic_c0_program_expression(parser->program, right_id);
         if (right_expression == NULL || !minic_type_is_integer(first_type) ||
             !minic_type_is_integer(right_expression->type) ||
-            !minic_type_integer_common(first_type, right_expression->type, &common_type)) {
+            !minic_target_info_integer_common(
+                parser->target_info, first_type, right_expression->type, &common_type)) {
             minic_parser_error(parser, "compound bitwise assignment requires integer operands");
             return false;
         }
@@ -2421,7 +2422,8 @@ static bool parse_expression_or_assignment_statement(MinicParser *parser,
             }
             common_type = first_type;
         } else if (!minic_type_is_integer(first_type) ||
-                   !minic_type_integer_common(first_type, right_expression->type, &common_type)) {
+                   !minic_target_info_integer_common(
+                       parser->target_info, first_type, right_expression->type, &common_type)) {
             minic_parser_error(
                 parser,
                 "compound addition assignment requires pointer/integer or integer operands");
@@ -2466,7 +2468,8 @@ static bool parse_expression_or_assignment_statement(MinicParser *parser,
             }
             common_type = first_type;
         } else if (!minic_type_is_integer(first_type) ||
-                   !minic_type_integer_common(first_type, right_expression->type, &common_type)) {
+                   !minic_target_info_integer_common(
+                       parser->target_info, first_type, right_expression->type, &common_type)) {
             minic_parser_error(parser,
                                assignment_token == MINIC_TOKEN_STAR_EQUAL
                                    ? "compound multiplication assignment requires integer operands"
@@ -2508,7 +2511,8 @@ static bool parse_expression_or_assignment_statement(MinicParser *parser,
         shift.value.binary.operator_kind = MINIC_BINARY_SHIFT_RIGHT;
         shift.value.binary.left = statement.target_expression;
         shift.value.binary.right = right_id;
-        if (!minic_type_integer_common(first_type, first_type, &shift.type) ||
+        if (!minic_target_info_integer_common(
+                parser->target_info, first_type, first_type, &shift.type) ||
             !minic_parser_add_expression(parser, &shift, &statement.expression)) {
             return false;
         }
@@ -2526,7 +2530,8 @@ static bool parse_expression_or_assignment_statement(MinicParser *parser,
 
             if (assigned_expression == NULL || !minic_type_is_integer(first_type) ||
                 !minic_type_is_integer(assigned_expression->type) ||
-                !minic_type_integer_common(first_type, assigned_expression->type, &common_type)) {
+                !minic_target_info_integer_common(
+                    parser->target_info, first_type, assigned_expression->type, &common_type)) {
                 minic_parser_error(parser, "compound XOR assignment requires integer operands");
                 return false;
             }

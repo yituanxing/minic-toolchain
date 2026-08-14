@@ -772,10 +772,6 @@ bool minic_c0_record_value_is_copy_source(const MinicC0Program *program,
                                           MinicExpressionId expression_id);
 bool minic_c0_expression_is_null_pointer_constant_v0(const MinicC0Program *program,
                                                      MinicExpressionId expression_id);
-bool minic_c0_conditional_result_type(const MinicC0Program *program,
-                                      MinicExpressionId when_true_expression_id,
-                                      MinicExpressionId when_false_expression_id,
-                                      MinicType *result);
 bool minic_c0_assignment_compatible(const MinicC0Program *program,
                                     MinicType target_type,
                                     MinicExpressionId source_expression_id);

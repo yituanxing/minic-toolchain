@@ -1432,7 +1432,8 @@ bool minic_riscv64_emit_expression(FILE *file,
             const char *opcode;
 
             if (!minic_type_is_integer(target->type) || !minic_type_is_integer(value->type) ||
-                !minic_type_integer_common(target->type, value->type, &common_type) ||
+                !minic_target_info_integer_common(
+                    minic_default_target_info(), target->type, value->type, &common_type) ||
                 !minic_riscv64_emit_normalize_integer(file, common_type, "a0") ||
                 fprintf(file, "  sd a0, 8(sp)\n") < 0 ||
                 !minic_riscv64_emit_expression(
@@ -1562,7 +1563,8 @@ bool minic_riscv64_emit_expression(FILE *file,
         right = minic_c0_program_expression(program, expression->value.binary.right);
         has_integer_common_type =
             left != NULL && right != NULL &&
-            minic_type_integer_common(left->type, right->type, &common_integer_type);
+            minic_target_info_integer_common(
+                minic_default_target_info(), left->type, right->type, &common_integer_type);
         has_pointer_equality = minic_c0_pointer_equality_compatible(
             program, expression->value.binary.left, expression->value.binary.right);
         has_pointer_relational = left != NULL && right != NULL &&

@@ -1,4 +1,5 @@
 #include "target/riscv64/codegen_internal.h"
+#include "target/target_info.h"
 
 #include <inttypes.h>
 #include <string.h>
@@ -101,7 +102,8 @@ static bool minic_riscv64_emit_xor_assignment(FILE *file,
     value = minic_c0_program_expression(program, statement->expression);
     if (target == NULL || value == NULL || target->value_category != MINIC_VALUE_LVALUE ||
         !minic_type_is_integer(target->type) || !minic_type_is_integer(value->type) ||
-        !minic_type_integer_common(target->type, value->type, &common_type) ||
+        !minic_target_info_integer_common(
+            minic_default_target_info(), target->type, value->type, &common_type) ||
         !minic_riscv64_emit_lvalue_address(
             file, program, function, function_layout, statement->target_expression) ||
         fprintf(file, "  addi sp, sp, -16\n  sd a0, 0(sp)\n") < 0 ||
