@@ -10,6 +10,12 @@ const int *call_prefix_attribute_identity(const int *value)
     return prefix_attribute_identity(value);
 }
 
+inline __attribute__((__gnu_inline__)) __attribute__((__unused__))
+    __attribute__((__no_instrument_function__)) int prefix_external_identity(int value)
+{
+    return value;
+}
+
 
 /* Linux signal/start_kernel shapes: externally_visible preserves public reachability
  * under whole-program optimization. MiniC never internalizes public symbols, so the
