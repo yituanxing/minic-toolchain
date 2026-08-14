@@ -71,6 +71,29 @@ jobs:
               raise SystemExit('layout_test.c: RV64 staging sentinel missing')
           path.write_text(text.replace(sentinel, old, 1))
 
+          path = Path('src/frontend/ast.c')
+          text = path.read_text()
+          replacements = [
+              (
+                  'static bool\nminic_c0_conditional_type_only(MinicType when_true, MinicType when_false, MinicType *result) {',
+                  'static bool minic_c0_conditional_type_only(const MinicTargetInfo *target,\n'
+                  '                                           MinicType when_true,\n'
+                  '                                           MinicType when_false,\n'
+                  '                                           MinicType *result) {',
+              ),
+              (
+                  'return minic_c0_conditional_type_only(when_true->type, when_false->type, result);',
+                  'return minic_c0_conditional_type_only(\n'
+                  '        target, when_true->type, when_false->type, result);',
+              ),
+          ]
+          for old_text, new_text in replacements:
+              count = text.count(old_text)
+              if count != 1:
+                  raise SystemExit(f'ast.c: expected one occurrence, found {count}: {old_text}')
+              text = text.replace(old_text, new_text)
+          path.write_text(text)
+
           path = Path('src/frontend/ast_verifier.c')
           text = path.read_text()
           replacements = [
