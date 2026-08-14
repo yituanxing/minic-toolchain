@@ -23,7 +23,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Materialize zero-size static storage emission
+      - name: Materialize GNU empty-record static emission
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -31,14 +31,31 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           python3 - <<'PY'
           from pathlib import Path
+
           p = Path('src/target/riscv64/codegen_function.c')
           text = p.read_text()
-          old = '''    if (file == NULL || program == NULL || object == NULL || object->name_length == 0U ||\n        storage_size == 0U || object_alignment == 0U ||\n        !minic_riscv64_alignment_power(object_alignment, &alignment_power)) {\n        return false;\n    }\n'''
-          new = '''    if (file == NULL || program == NULL || object == NULL || object->name_length == 0U ||\n        object_alignment == 0U ||\n        !minic_riscv64_alignment_power(object_alignment, &alignment_power)) {\n        return false;\n    }\n    if (storage_size == 0U &&\n        ((!object->is_zero_initialized && !object->is_tentative) ||\n         object->initializer_count != 0U || object->relocation_count != 0U)) {\n        return false;\n    }\n'''
-          if new not in text:
-              if old not in text:
-                  raise SystemExit('zero-size emission anchor not found')
-              p.write_text(text.replace(old, new, 1))
+          helper = '''static bool minic_riscv64_zero_size_record_definition(const MinicC0Program *program,\n                                                        const MinicGlobalObject *object,\n                                                        size_t storage_size) {\n    const MinicRecord *record;\n\n    if (program == NULL || object == NULL || storage_size != 0U ||\n        !minic_type_is_record(object->type) || object->initializer_count != 0U ||\n        object->relocation_count != 0U) {\n        return false;\n    }\n    record = minic_c0_program_record(program, object->type.record_id);\n    return record != NULL && record->is_complete && record->field_count == 0U;\n}\n\n'''
+          anchor = 'static bool minic_riscv64_emit_global_object(FILE *file,\n'
+          if helper not in text:
+              if text.count(anchor) != 1:
+                  raise SystemExit('empty-record helper anchor not found')
+              text = text.replace(anchor, helper + anchor, 1)
+
+          old_locals = '''    unsigned int alignment_power;\n    size_t scalar_width;\n    size_t initializer_index;\n\n    if (!minic_data_layout_global_object(\n            minic_default_data_layout(), program, object, &storage_size, &object_alignment)) {\n        return false;\n    }\n\n    if (file == NULL || program == NULL || object == NULL || object->name_length == 0U ||\n        object_alignment == 0U ||\n        !minic_riscv64_alignment_power(object_alignment, &alignment_power)) {\n        return false;\n    }\n    if (storage_size == 0U && ((!object->is_zero_initialized && !object->is_tentative) ||\n                               object->initializer_count != 0U || object->relocation_count != 0U)) {\n        return false;\n    }\n'''
+          new_locals = '''    unsigned int alignment_power;\n    size_t scalar_width;\n    size_t initializer_index;\n    bool zero_size_record_definition;\n\n    if (!minic_data_layout_global_object(\n            minic_default_data_layout(), program, object, &storage_size, &object_alignment)) {\n        return false;\n    }\n\n    if (file == NULL || program == NULL || object == NULL || object->name_length == 0U ||\n        object_alignment == 0U ||\n        !minic_riscv64_alignment_power(object_alignment, &alignment_power)) {\n        return false;\n    }\n    zero_size_record_definition =\n        minic_riscv64_zero_size_record_definition(program, object, storage_size);\n    if (storage_size == 0U && !zero_size_record_definition) {\n        return false;\n    }\n'''
+          if new_locals not in text:
+              if old_locals not in text:
+                  raise SystemExit('empty-record precondition anchor not found')
+              text = text.replace(old_locals, new_locals, 1)
+
+          old_record = '''        record = minic_c0_program_record(program, object->type.record_id);\n        if (record == NULL || !record->is_complete || object->initializer_count == 0U) {\n            return false;\n        }\n'''
+          new_record = '''        record = minic_c0_program_record(program, object->type.record_id);\n        if (record == NULL || !record->is_complete ||\n            (object->initializer_count == 0U && !zero_size_record_definition)) {\n            return false;\n        }\n'''
+          if new_record not in text:
+              if old_record not in text:
+                  raise SystemExit('empty-record initializer anchor not found')
+              text = text.replace(old_record, new_record, 1)
+
+          p.write_text(text)
           PY
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
 
@@ -50,10 +67,14 @@ jobs:
           make -j4 MODE=release BUILD_DIR=build/tail-compiler
           cat > build/zero-size-static.c <<'EOF'
           struct empty {};
-          int zero_size_static(void) { static struct empty value; return sizeof(value); }
+          static struct empty file_empty = {};
+          int zero_size_static(void) {
+              static struct empty local_empty = {};
+              return sizeof(file_empty) + sizeof(local_empty);
+          }
           EOF
           build/tail-compiler/bin/minic -S build/zero-size-static.c -o build/zero-size-static.s
-          grep -F '.size __minic_static_local_' build/zero-size-static.s | grep -F ', 0' >/dev/null
+          test "$(grep -F '.size ' build/zero-size-static.s | grep -F ', 0' | wc -l)" -ge 2
           BUILD_DIR="$GITHUB_WORKSPACE/build/tail-full" \
             bash .github/scripts/compiler-c0-full-gate.sh
 
@@ -62,7 +83,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           git add src/target/riscv64/codegen_function.c
-          git commit -m 'fix(riscv64): emit valid zero-size static objects'
+          git commit -m 'fix(riscv64): emit GNU empty-record static definitions'
           git push origin HEAD:agent/foundation-linux-tail-convergence-v1
 
       - name: Restore pinned Linux source archive
@@ -111,7 +132,7 @@ jobs:
             frontier_line=$(sed -n 's/.*init\/main\.i:\([0-9][0-9]*\):.*/\1/p' "$work/minic.stderr" | head -n 1)
             printf '%s\n' "frontier_line=${frontier_line:-unknown}" >> "$summary"
             printf '%s\n' 'MiniC diagnostic:' >> "$summary"
-            sed -n '1,100p' "$work/minic.stderr" >> "$summary"
+            sed -n '1,120p' "$work/minic.stderr" >> "$summary"
             if test -n "${frontier_line:-}" && test -s "$work/kbuild/init/main.i"; then
               start=$((frontier_line > 12 ? frontier_line - 12 : 1))
               end=$((frontier_line + 12))
