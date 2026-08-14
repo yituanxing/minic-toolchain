@@ -56,4 +56,14 @@ jobs:
           git rm .github/workflows/rv64-caller-fix-hybrid-selector-once.yml
           git diff --cached --check
           git commit -m 'ci: align caller hybrid selector with formal ABI v1'
-          git push origin HEAD:agent/rv64-caller-abi-linux-v1
+          for attempt in $(seq 1 5); do
+            git fetch origin agent/rv64-caller-abi-linux-v1
+            if git rebase origin/agent/rv64-caller-abi-linux-v1 && \
+               git push origin HEAD:agent/rv64-caller-abi-linux-v1; then
+              exit 0
+            fi
+            git rebase --abort || true
+            sleep 2
+          done
+          echo 'failed to publish selector fix after retries' >&2
+          exit 1
