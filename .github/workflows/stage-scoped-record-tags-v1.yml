@@ -19,10 +19,12 @@ jobs:
       - name: Materialize narrow product delta
         run: |
           python3 tools/dev/stage-scoped-record-tags-v1.py
+          python3 tools/dev/stage-scoped-record-entity-identity-v1.py
           chmod +x tests/compiler/c0/run-block-scope-record-tags.sh
       - name: Format and inspect product delta
         run: |
           clang-format-18 -i \
+            src/frontend/ast.c \
             src/frontend/parser_internal.h \
             src/frontend/parser_core.c \
             src/frontend/parser_record.c \
@@ -32,6 +34,7 @@ jobs:
           git diff --check
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
           git diff -- \
+            src/frontend/ast.c \
             src/frontend/parser_internal.h \
             src/frontend/parser_core.c \
             src/frontend/parser_record.c \
@@ -58,6 +61,7 @@ jobs:
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add \
+            src/frontend/ast.c \
             src/frontend/parser_internal.h \
             src/frontend/parser_core.c \
             src/frontend/parser_record.c \
