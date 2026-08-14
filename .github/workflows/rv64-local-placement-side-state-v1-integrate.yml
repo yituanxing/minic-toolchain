@@ -1,0 +1,203 @@
+name: Gate and Integrate RV64 Local Placement Side-State v1
+
+on:
+  push:
+    branches: [refactor/rv64-local-placement-side-state-v1]
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: rv64-local-placement-side-state-v1-integrate
+  cancel-in-progress: true
+
+jobs:
+  integrate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      GH_TOKEN: ${{ github.token }}
+      FEATURE_BRANCH: refactor/rv64-local-placement-side-state-v1
+      FOUNDATION_BRANCH: refactor/foundation-v1
+      EXPECTED_FOUNDATION_HEAD: b24d6132b78aa2ac844f3465f0dc7bf6d543b82f
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Wait for same-head full and Linux pressure gate
+        id: pressure
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          run_id=''
+          for attempt in $(seq 1 60); do
+            run_id=$(gh run list \
+              --repo "$GITHUB_REPOSITORY" \
+              --workflow rv64-local-placement-side-state-v1-pressure.yml \
+              --commit "$GITHUB_SHA" \
+              --limit 1 \
+              --json databaseId \
+              --jq '.[0].databaseId // empty')
+            if test -n "$run_id"; then
+              break
+            fi
+            sleep 5
+          done
+          test -n "$run_id"
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+
+          for attempt in $(seq 1 180); do
+            state=$(gh run view "$run_id" \
+              --repo "$GITHUB_REPOSITORY" \
+              --json status,conclusion \
+              --jq '.status + ":" + (.conclusion // "")')
+            echo "pressure_run=$run_id state=$state"
+            case "$state" in
+              completed:success)
+                log=$(mktemp)
+                gh run view "$run_id" --repo "$GITHUB_REPOSITORY" --log > "$log"
+                grep -F 'cached_tu_status=0' "$log" >/dev/null
+                grep -F 'FULL_TU_PASS lines=90928' "$log" >/dev/null
+                exit 0
+                ;;
+              completed:*)
+                gh run view "$run_id" --repo "$GITHUB_REPOSITORY" --log-failed || true
+                exit 1
+                ;;
+            esac
+            sleep 5
+          done
+          echo 'local-placement pressure gate did not complete within polling budget' >&2
+          exit 1
+
+      - name: Materialize and validate canonical local-placement slice
+        shell: bash
+        env:
+          PRESSURE_RUN_ID: ${{ steps.pressure.outputs.run_id }}
+        run: |
+          set -Eeuo pipefail
+
+          git fetch --no-tags origin "$FEATURE_BRANCH" "$FOUNDATION_BRANCH"
+          test "$(git rev-parse "origin/$FEATURE_BRANCH")" = "$GITHUB_SHA"
+          test "$(git rev-parse "origin/$FOUNDATION_BRANCH")" = "$EXPECTED_FOUNDATION_HEAD"
+          git checkout -B "$FEATURE_BRANCH" "origin/$FEATURE_BRANCH"
+
+          python3 tools/dev/run-materialize-rv64-local-placement-side-state-v1.py
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+
+          if grep -R -n --include='*.c' --include='*.h' '\<local_storage_size\>' src/frontend; then
+            echo 'frontend local_storage_size mirror remains' >&2
+            exit 1
+          fi
+          if grep -R -n --include='*.c' --include='*.h' 'local->storage_offset\|object->storage_offset' src/target/riscv64; then
+            echo 'local storage_offset consumer remains' >&2
+            exit 1
+          fi
+          if grep -R -n --include='*.c' --include='*.h' 'function->local_storage_size' src/target/riscv64; then
+            echo 'function local_storage_size consumer remains' >&2
+            exit 1
+          fi
+          if grep -R -n --include='*.c' --include='*.h' 'minic_riscv64_frame_layout(program' src/target/riscv64; then
+            echo 'legacy FrameLayout compatibility call remains' >&2
+            exit 1
+          fi
+          grep -F 'const MinicRiscv64FunctionLayout *function_layout' \
+            src/target/riscv64/codegen_expression.c >/dev/null
+          grep -F 'const MinicRiscv64FunctionLayout *function_layout' \
+            src/target/riscv64/codegen_statement.c >/dev/null
+          grep -F 'const MinicRiscv64FunctionLayout *function_layout' \
+            src/target/riscv64/codegen_inline_asm.c >/dev/null
+          grep -F 'minic_riscv64_frame_layout_from_function_layout' \
+            src/target/riscv64/codegen_expression.c >/dev/null
+
+          mkdir -p docs/architecture
+          cat > docs/architecture/rv64-local-placement-side-state-v1.md <<'DOC'
+          # RV64 local placement side-state v1
+
+          This slice completes the ownership move started by RV64 FunctionLayout v1.
+          Concrete local-object offsets and total local storage are no longer mirrored
+          into semantic AST nodes. `MinicLocal.storage_offset` and
+          `MinicFunction.local_storage_size` are removed.
+
+          `MinicRiscv64FunctionLayout` is now the only owner of per-function local
+          placement. Object address/load/store helpers resolve a `MinicLocalId` through
+          `minic_riscv64_function_layout_local_offset()` and range-check against the
+          FunctionLayout local-storage extent. `MinicRiscv64FrameLayout` consumes the
+          same FunctionLayout through its core API; the temporary three-argument frame
+          compatibility wrapper is removed.
+
+          Function emission owns one FunctionLayout for the lifetime of lowering a
+          function. Expression, statement, block, record-value, and inline-asm lowering
+          receive it explicitly as a read-only parameter. This is deliberate: the
+          existing backend call stack already passes `FILE *`, Program, and Function,
+          while the intermediate statement/inline-asm layers mostly forward data. A
+          codegen context would therefore broaden this ownership migration into an API
+          rewrite without demonstrated benefit. A context can be reconsidered later if
+          additional per-function backend state creates real parameter pressure.
+
+          `minic_riscv64_layout_program()` now owns only record/global object layout.
+          Record-field and global-object size/alignment remain part of the C object
+          DataLayout boundary and are intentionally not moved by this slice.
+
+          The result also sharpens the deferred Core IR seam: semantic AST nodes contain
+          language facts, while target-local placement and frame construction remain in
+          backend side state below the seam.
+
+          The canonical candidate passed the official full compiler gate and frozen
+          Linux 6.6.143 hybrid pressure run `@PRESSURE_RUN_ID@`. The Linux run preserved
+          discovery-only aggregate/ABI semantics while injecting the same FunctionLayout
+          ownership and completed with `cached_tu_status=0` and
+          `FULL_TU_PASS lines=90928`.
+          DOC
+          sed -i "s/@PRESSURE_RUN_ID@/$PRESSURE_RUN_ID/" \
+            docs/architecture/rv64-local-placement-side-state-v1.md
+
+          rm -f \
+            tools/dev/materialize-rv64-local-placement-side-state-v1.py \
+            tools/dev/run-materialize-rv64-local-placement-side-state-v1.py \
+            tools/dev/materialize-rv64-local-placement-hybrid.py \
+            .github/workflows/rv64-local-placement-side-state-v1-validation.yml \
+            .github/workflows/rv64-local-placement-side-state-v1-pressure.yml \
+            .github/workflows/rv64-local-placement-side-state-v1-integrate.yml
+
+          git diff --check
+          sh tools/maintenance/check-production-source-inventory.sh
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+
+          make -j2 BUILD_DIR=build/local-placement-final-debug check-layout
+          make -j2 MODE=release BUILD_DIR=build/local-placement-final-release CFLAGS=-Werror check-fast
+          make -j2 MODE=sanitize BUILD_DIR=build/local-placement-final-sanitize check-ast-contract
+          bash .github/scripts/compiler-c0-full-gate.sh
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+
+          changed=$(git diff --cached --name-only "$EXPECTED_FOUNDATION_HEAD" | sort)
+          expected=$(printf '%s\n' \
+            docs/architecture/rv64-local-placement-side-state-v1.md \
+            src/frontend/ast.c \
+            src/frontend/ast.h \
+            src/frontend/parser_function.c \
+            src/frontend/parser_statement.c \
+            src/target/riscv64/codegen_expression.c \
+            src/target/riscv64/codegen_function.c \
+            src/target/riscv64/codegen_inline_asm.c \
+            src/target/riscv64/codegen_internal.h \
+            src/target/riscv64/codegen_statement.c \
+            src/target/riscv64/codegen_support.c \
+            src/target/riscv64/layout.c \
+            tests/target/riscv64/layout_test.c | sort)
+          if test "$changed" != "$expected"; then
+            echo 'unexpected final local-placement diff:' >&2
+            printf '%s\n' "$changed" >&2
+            exit 1
+          fi
+
+          git commit \
+            -m 'refactor(layout): move RV64 local placement out of AST' \
+            -m "Frozen Linux local-placement pressure run: $PRESSURE_RUN_ID"
+          git push origin HEAD:"$FEATURE_BRANCH"
