@@ -302,8 +302,7 @@ bool minic_target_info_integer_literal_type(const MinicTargetInfo *target,
     bool decimal;
 
     if (target == NULL || target->integer_model == NULL || result == NULL || long_count > 2U ||
-        (base != MINIC_INTEGER_LITERAL_BASE_DECIMAL &&
-         base != MINIC_INTEGER_LITERAL_BASE_OCTAL &&
+        (base != MINIC_INTEGER_LITERAL_BASE_DECIMAL && base != MINIC_INTEGER_LITERAL_BASE_OCTAL &&
          base != MINIC_INTEGER_LITERAL_BASE_HEXADECIMAL)) {
         return false;
     }
