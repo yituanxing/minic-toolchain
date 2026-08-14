@@ -689,8 +689,9 @@ append_static_constant_zero(MinicParser *parser, MinicGlobalObjectId object_id, 
     return false;
 }
 
-static bool
-parse_static_constant_value(MinicParser *parser, MinicGlobalObjectId object_id, MinicType type);
+bool minic_parser_parse_static_storage_initializer_value(MinicParser *parser,
+                                                         MinicGlobalObjectId object_id,
+                                                         MinicType type);
 
 static bool
 parse_static_scalar_constant(MinicParser *parser, MinicGlobalObjectId object_id, MinicType type) {
@@ -794,7 +795,8 @@ static bool parse_static_array_constant(MinicParser *parser,
             minic_parser_error(parser, "too many nested static array initializers");
             return false;
         }
-        if (!parse_static_constant_value(parser, object_id, array_type->element_type)) {
+        if (!minic_parser_parse_static_storage_initializer_value(
+                parser, object_id, array_type->element_type)) {
             return false;
         }
         element_index += 1U;
@@ -841,10 +843,6 @@ static bool parse_static_record_constant(MinicParser *parser,
             MinicSourceSpan designator_span;
             size_t designator_index;
 
-            if (record->is_union) {
-                minic_parser_error(parser, "nested static union designators are not supported yet");
-                return false;
-            }
             if (!minic_parser_advance(parser) || parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
                 if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
                     minic_parser_error(parser, "expected member name after '.' in initializer");
@@ -860,6 +858,12 @@ static bool parse_static_record_constant(MinicParser *parser,
                 return false;
             }
             designator_index = field_path.field_indices[0];
+            if (record->is_union && designator_index != 0U) {
+                minic_parser_error(
+                    parser,
+                    "nested static union designator requires the representable first member");
+                return false;
+            }
             if (designator_index < field_index) {
                 minic_parser_error(parser, "static record designator cannot move backward in v0");
                 return false;
@@ -888,7 +892,8 @@ static bool parse_static_record_constant(MinicParser *parser,
             return false;
         }
         if (field->element_count == 1U) {
-            if (!parse_static_constant_value(parser, object_id, field->type)) {
+            if (!minic_parser_parse_static_storage_initializer_value(
+                    parser, object_id, field->type)) {
                 return false;
             }
         } else {
@@ -899,7 +904,8 @@ static bool parse_static_record_constant(MinicParser *parser,
             element_index = 0U;
             while (parser->current.kind != MINIC_TOKEN_RBRACE) {
                 if (element_index >= field->element_count ||
-                    !parse_static_constant_value(parser, object_id, field->type)) {
+                    !minic_parser_parse_static_storage_initializer_value(
+                        parser, object_id, field->type)) {
                     if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
                         minic_parser_error(parser, "too many record field array initializers");
                     }
@@ -954,8 +960,9 @@ static bool parse_static_record_constant(MinicParser *parser,
     return minic_parser_expect(parser, MINIC_TOKEN_RBRACE, "expected '}' after record initializer");
 }
 
-static bool
-parse_static_constant_value(MinicParser *parser, MinicGlobalObjectId object_id, MinicType type) {
+bool minic_parser_parse_static_storage_initializer_value(MinicParser *parser,
+                                                         MinicGlobalObjectId object_id,
+                                                         MinicType type) {
     if (minic_type_is_integer(type) || minic_type_is_pointer(type)) {
         return parse_static_scalar_constant(parser, object_id, type);
     }
@@ -1003,7 +1010,7 @@ parse_static_nested_record_object(MinicParser *parser, MinicType type, MinicSour
                                             minic_type_is_const(type),
                                             &object_id) ||
         !minic_parser_expect(parser, MINIC_TOKEN_EQUAL, "expected '='") ||
-        !parse_static_constant_value(parser, object_id, type)) {
+        !minic_parser_parse_static_storage_initializer_value(parser, object_id, type)) {
         if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
             minic_parser_error(parser, "cannot parse nested static record initializer");
         }
