@@ -150,6 +150,29 @@ jobs:
           if 'minic_type_integer_common(' in text or 'minic_type_integer_promotion(' in text:
               raise SystemExit('const_eval.c: legacy integer semantic helper remains')
           path.write_text(text)
+
+          path = Path('Makefile')
+          text = path.read_text()
+          replacements = [
+              (
+                  'RECORD_TEST_SOURCES := \\\n\tsrc/frontend/ast.c \\\n\tsrc/frontend/type.c \\\n\ttests/frontend/record_test.c',
+                  'RECORD_TEST_SOURCES := \\\n\tsrc/frontend/ast.c \\\n\tsrc/frontend/type.c \\\n\tsrc/target/data_layout.c \\\n\tsrc/target/target_info.c \\\n\ttests/frontend/record_test.c',
+              ),
+              (
+                  'TYPE_ALIAS_TEST_SOURCES := \\\n\tsrc/frontend/ast.c \\\n\tsrc/frontend/type.c \\\n\ttests/frontend/type_alias_test.c',
+                  'TYPE_ALIAS_TEST_SOURCES := \\\n\tsrc/frontend/ast.c \\\n\tsrc/frontend/type.c \\\n\tsrc/target/data_layout.c \\\n\tsrc/target/target_info.c \\\n\ttests/frontend/type_alias_test.c',
+              ),
+              (
+                  'RV64_ABI_TEST_SOURCES := \\\n\tsrc/frontend/ast.c \\\n\tsrc/frontend/ast_global.c \\\n\tsrc/frontend/type.c \\\n\tsrc/target/data_layout.c \\\n\tsrc/target/riscv64/abi.c',
+                  'RV64_ABI_TEST_SOURCES := \\\n\tsrc/frontend/ast.c \\\n\tsrc/frontend/ast_global.c \\\n\tsrc/frontend/type.c \\\n\tsrc/target/data_layout.c \\\n\tsrc/target/target_info.c \\\n\tsrc/target/riscv64/abi.c',
+              ),
+          ]
+          for old_text, new_text in replacements:
+              count = text.count(old_text)
+              if count != 1:
+                  raise SystemExit(f'Makefile: expected one occurrence, found {count}: {old_text[:60]}')
+              text = text.replace(old_text, new_text)
+          path.write_text(text)
           PY
           clang-format-18 -i \
             src/target/target_info.h \
@@ -205,6 +228,7 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -- \
+            Makefile \
             src/target/target_info.h \
             src/target/target_info.c \
             src/frontend/type.c \
