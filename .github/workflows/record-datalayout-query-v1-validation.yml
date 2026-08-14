@@ -1,0 +1,49 @@
+name: Record DataLayout Query v1 Validation
+
+on:
+  push:
+    branches: [refactor/record-datalayout-query-v1]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: record-datalayout-query-v1-validation
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Materialize record DataLayout query candidate
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/run-materialize-record-datalayout-query-v1.py
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+          git diff --check
+
+      - name: Assert backend record layout reads are query-based
+        run: |
+          set -Eeuo pipefail
+          if grep -R -n --include='codegen_*.c' 'field->storage_offset\|field->bit_offset\|record->storage_size\|record->alignment' src/target/riscv64; then
+            echo 'RV64 codegen still consumes record layout cache fields' >&2
+            exit 1
+          fi
+          grep -F 'minic_data_layout_record_field_offset' src/target/riscv64/codegen_expression.c >/dev/null
+          grep -F 'minic_data_layout_record_field_layout' src/target/riscv64/codegen_expression.c >/dev/null
+          grep -F 'minic_data_layout_record_field_offset' src/target/riscv64/codegen_function.c >/dev/null
+
+      - name: Production source inventory
+        run: sh tools/maintenance/check-production-source-inventory.sh
+
+      - name: Release compiler build
+        run: make -j2 MODE=release BUILD_DIR=build/record-datalayout-release CFLAGS=-Werror check-fast
+
+      - name: Focused layout and AST gates
+        run: |
+          make -j2 BUILD_DIR=build/record-datalayout-debug check-layout
+          make -j2 MODE=sanitize BUILD_DIR=build/record-datalayout-sanitize check-ast-contract
