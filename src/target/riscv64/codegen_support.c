@@ -375,13 +375,11 @@ bool minic_riscv64_frame_layout(const MinicC0Program *program,
         MinicRiscv64AbiArgumentLocation location;
 
         parameter = minic_c0_program_local(program, function->local_begin + parameter_index);
-        if (parameter == NULL ||
-            !minic_riscv64_abi_place_argument(
-                program,
-                parameter->type,
-                true,
-                &abi_cursor,
-                &location)) {
+        if (parameter == NULL || !minic_riscv64_abi_place_argument(program,
+                                                                   parameter->type,
+                                                                   true,
+                                                                   &abi_cursor,
+                                                                   &location)) {
             return false;
         }
     }
