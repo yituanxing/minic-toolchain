@@ -135,13 +135,13 @@ new = '''            if (minic_c0_expression_is_null_pointer_constant_v0(parser-
                 }
             } else if (static_function_address_relocation_target(
                            parser->program, initializer_id, &target_function_id)) {
-                if (!minic_c0_global_object_set_zero_initialized(parser->program, object_id) ||
-                    !minic_c0_global_object_add_function_relocation(
+                if (!minic_c0_global_object_add_function_relocation(
                         parser->program,
                         object_id,
                         MINIC_GLOBAL_RELOCATION_LOCATION_SCALAR,
                         0U,
-                        target_function_id)) {
+                        target_function_id) ||
+                    !minic_c0_global_object_set_zero_initialized(parser->program, object_id)) {
                     minic_parser_error(parser, "cannot record static function-address relocation");
                     return false;
                 }
@@ -201,8 +201,6 @@ old = '''                       "static pointer initializer requires a null or z
 new = '''                       "static pointer initializer requires a null or zero-addend symbol address "
                        "constant");
 '''
-# Only the generic parser diagnostic; scalar fallback has same spelling too and should remain
-# aligned with the broader accepted contract, so replace all remaining exact occurrences.
 assert text.count(old) >= 1
 text = text.replace(old, new)
 parser_path.write_text(text)
