@@ -1,0 +1,45 @@
+name: Record DataLayout Query v1 Pressure
+
+on:
+  push:
+    branches: [refactor/record-datalayout-query-v1]
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: record-datalayout-query-v1-pressure
+  cancel-in-progress: true
+
+jobs:
+  full-compiler:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Materialize canonical record DataLayout candidate
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/run-materialize-record-datalayout-query-v1.py
+          python3 tools/dev/materialize-record-datalayout-cache-removal.py
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+          git diff --check
+
+      - name: Official full compiler gate
+        run: bash .github/scripts/compiler-c0-full-gate.sh
+
+  frozen-linux-hybrid:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Rebuild proven Linux hybrid and overlay record DataLayout ownership
+        run: bash tools/dev/run-record-datalayout-linux-pressure.sh
