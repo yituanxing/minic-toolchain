@@ -31,9 +31,6 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           candidate_base=$(git rev-parse HEAD)
 
-          # Recreate the exact #148 Linux-pressure composite, but stop before its
-          # historical cached-TU validation. The composite is already proven at
-          # 90,928/90,928; here it is used only as a source oracle for migration.
           git checkout --detach f5e529b48f831cad83a96c45684279a777cf1d3e
           git show f5e529b48f831cad83a96c45684279a777cf1d3e:tools/dev/run-global-object-datalayout-linux-pressure.sh \
             | awk '/^make -j4 MODE=release BUILD_DIR=build\/global-object-datalayout-hybrid-linux/{exit} {print}' \
@@ -55,14 +52,16 @@ jobs:
           mkdir -p tools
           cp -a /tmp/proven-product/tools/minic ./tools/minic
 
+          python3 tools/dev/normalize-converged-rv64-abi.py
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
           git diff --check
           mkdir -p build/convergence
-          git diff --stat > build/convergence/product-diff-stat.txt
-          git diff --binary -- include src tools/minic > build/convergence/product.patch
+          git diff --stat -- include src tools/minic tests/target/riscv64/abi_test.c \
+            > build/convergence/product-diff-stat.txt
+          git diff --binary -- include src tools/minic tests/target/riscv64/abi_test.c \
+            > build/convergence/product.patch
           cat build/convergence/product-diff-stat.txt
 
-          # Keep the ownership improvements from #141-#148 as hard invariants.
           if grep -R -n --include='*.c' --include='*.h' \
               'field->storage_offset\|field->bit_offset\|record->storage_size\|record->alignment\|object->storage_size\|object->alignment' src; then
             echo 'target-derived semantic AST layout cache reintroduced' >&2
@@ -75,7 +74,15 @@ jobs:
           grep -F 'minic_data_layout_global_object' src/target/riscv64/codegen_function.c >/dev/null
           grep -F 'minic_riscv64_abi_place_argument' src/target/riscv64/codegen_expression.c >/dev/null
           grep -F 'minic_riscv64_abi_place_argument' src/target/riscv64/codegen_function.c >/dev/null
+          grep -F 'MINIC_RISCV64_ABI_VALUE_VOID' src/target/riscv64/abi.h >/dev/null
+          grep -F 'MINIC_RISCV64_ABI_VALUE_IGNORE' src/target/riscv64/abi.h >/dev/null
+          grep -F 'MINIC_RISCV64_ABI_VALUE_INDIRECT' src/target/riscv64/abi.h >/dev/null
           grep -F 'minic_c0_program_remap_external_expression_ids' src/frontend/cast_normalization.c >/dev/null
+          if grep -n 'static bool minic_riscv64_integer_aggregate_member_type' \
+              src/target/riscv64/codegen_support.c; then
+            echo 'duplicate aggregate classifier remains outside TargetABI' >&2
+            exit 1
+          fi
 
       - name: Validate committed-source candidate
         shell: bash
@@ -139,7 +146,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          git add include src tools/minic
+          git add include src tools/minic tests/target/riscv64/abi_test.c
           git diff --cached --check
           git commit -m 'feat(compiler): converge proven Linux tail semantics'
           git push origin HEAD:agent/foundation-linux-tail-convergence-v1
