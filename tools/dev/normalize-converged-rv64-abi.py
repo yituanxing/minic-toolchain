@@ -38,6 +38,7 @@ replace_once(
 
 p = Path("src/target/riscv64/abi.c")
 text = p.read_text()
+text = text.replace('#include "target/riscv64/layout.h"\n', '#include "target/data_layout.h"\n', 1)
 old = """bool minic_riscv64_classify_abi_value(const MinicC0Program *program,
                                       MinicType type,
                                       MinicRiscv64AbiValue *result) {
@@ -70,7 +71,8 @@ new = """bool minic_riscv64_classify_abi_value(const MinicC0Program *program,
         result->kind = MINIC_RISCV64_ABI_VALUE_VOID;
         return true;
     }
-    if (!minic_riscv64_type_layout(program, type, &size, &alignment)) {
+    if (!minic_data_layout_type(
+            minic_default_data_layout(), program, type, &size, &alignment)) {
         return false;
     }
     (void)alignment;
@@ -81,6 +83,12 @@ if new not in text:
     if old not in text:
         raise SystemExit("ABI classifier prologue: anchor not found")
     text = text.replace(old, new, 1)
+else:
+    text = text.replace(
+        "if (!minic_riscv64_type_layout(program, type, &size, &alignment)) {",
+        "if (!minic_data_layout_type(\n            minic_default_data_layout(), program, type, &size, &alignment)) {",
+        1,
+    )
 
 old = """    if (value->kind == MINIC_RISCV64_ABI_VALUE_IGNORE) {
         value->slot_count = 0U;
@@ -115,9 +123,8 @@ if new not in text:
     text = text.replace(old, new, 1)
 p.write_text(text)
 
-# The converged codegen-support copy still carries discovery's old member-type
-# classifier even though TargetABI is now the sole classifier owner. Remove only
-# that unused duplicate; keep the public aggregate helper as an ABI adapter.
+# TargetABI is the sole aggregate classifier owner. Drop discovery's duplicate
+# helper from codegen_support while retaining the public ABI adapter.
 p = Path("src/target/riscv64/codegen_support.c")
 text = p.read_text()
 pattern = re.compile(
@@ -129,8 +136,7 @@ if count not in (0, 1):
     raise SystemExit(f"duplicate aggregate classifier: matches={count}")
 p.write_text(text2)
 
-# Promote the expanded ABI semantics into the formal unit test instead of
-# retaining the old v1 assumption that sub-XLEN aggregates are unsupported.
+# Promote the expanded ABI semantics into the canonical unit test.
 p = Path("tests/target/riscv64/abi_test.c")
 text = p.read_text()
 replace = {
@@ -178,6 +184,7 @@ for old, new in replace.items():
     if old not in text:
         raise SystemExit("ABI test migration anchor not found")
     text = text.replace(old, new, 1)
+text = text.replace("    MinicRiscv64AbiValue value;\n", "", 1)
 p.write_text(text)
 
 print("NORMALIZED converged RV64 ABI contract")
