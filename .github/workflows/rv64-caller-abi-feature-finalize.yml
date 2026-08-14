@@ -1,0 +1,244 @@
+name: Finalize RV64 Caller ABI Feature
+
+on:
+  push:
+    branches: [agent/rv64-caller-abi-linux-v1]
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: rv64-caller-abi-feature-finalize
+  cancel-in-progress: true
+
+jobs:
+  finalize:
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      FEATURE_BRANCH: refactor/rv64-caller-abi-location-v1
+      VALIDATION_WORKFLOW: rv64-caller-abi-location-validation.yml
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Wait for Linux-gated canonical feature head
+        id: canonical
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          canonical_sha=''
+          for attempt in $(seq 1 180); do
+            git fetch --no-tags origin "$FEATURE_BRANCH"
+            candidate=$(git rev-parse "origin/$FEATURE_BRANCH")
+            subject=$(git log -1 --format=%s "$candidate")
+            if test "$subject" = 'refactor(abi): consume abstract locations at RV64 caller'; then
+              if git show "$candidate:tools/dev/materialize-rv64-caller-abi-location-v1.py" \
+                   >/dev/null 2>&1; then
+                echo 'canonical commit still retains staging materializer' >&2
+                exit 1
+              fi
+              canonical_sha="$candidate"
+              break
+            fi
+            sleep 5
+          done
+          test -n "$canonical_sha"
+          echo "sha=$canonical_sha" >> "$GITHUB_OUTPUT"
+          git log -1 --format=%B "$canonical_sha"
+
+      - name: Wait for clean canonical host/full validation
+        id: canonical_validation
+        shell: bash
+        env:
+          TARGET_SHA: ${{ steps.canonical.outputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          run_id=''
+          for attempt in $(seq 1 90); do
+            run_id=$(gh run list \
+              --repo "$GITHUB_REPOSITORY" \
+              --workflow "$VALIDATION_WORKFLOW" \
+              --branch "$FEATURE_BRANCH" \
+              --commit "$TARGET_SHA" \
+              --limit 1 \
+              --json databaseId \
+              --jq '.[0].databaseId // empty')
+            if test -n "$run_id"; then
+              break
+            fi
+            sleep 5
+          done
+          test -n "$run_id"
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          for attempt in $(seq 1 180); do
+            status=$(gh run view "$run_id" --repo "$GITHUB_REPOSITORY" \
+              --json status,conclusion \
+              --jq '.status + ":" + (.conclusion // "")')
+            echo "canonical_validation=$run_id state=$status"
+            case "$status" in
+              completed:success) exit 0 ;;
+              completed:*)
+                gh run view "$run_id" --repo "$GITHUB_REPOSITORY" --log-failed || true
+                exit 1
+                ;;
+            esac
+            sleep 5
+          done
+          exit 1
+
+      - name: Add caller ABI architecture record
+        id: docs
+        shell: bash
+        env:
+          CANONICAL_SHA: ${{ steps.canonical.outputs.sha }}
+          CLEAN_RUN_ID: ${{ steps.canonical_validation.outputs.run_id }}
+        run: |
+          set -Eeuo pipefail
+          git checkout -B "$FEATURE_BRANCH" "origin/$FEATURE_BRANCH"
+          linux_run=$(git log -1 --format=%B "$CANONICAL_SHA" | \
+            sed -n 's/^Frozen Linux formal-compatible hybrid run: //p' | tail -n 1)
+          test -n "$linux_run"
+          mkdir -p docs/architecture
+          cat > docs/architecture/rv64-caller-abi-location-v1.md <<EOF
+          # RV64 caller ABI location consumer v1 / RV64 caller ABI 位置消费 v1
+
+          ## 1. Why this slice exists / 为什么需要这一刀
+
+          After the canonical RV64 ABI classifier/location seam and callee consumer landed, the caller still reconstructed the same argument placement twice: once to count outgoing stack slots and again to move staged arguments into integer registers, floating registers or stack slots.
+
+          这一刀只收敛 caller 的位置 ownership。C 实参求值顺序、先求值后 staging 的策略、临时对象生命周期和物理 RV64 汇编 emission 都保持原边界。
+
+          ## 2. New formal caller flow / 新的 formal caller 流程
+
+          \`codegen_expression.c\` now keeps the existing evaluation phase and then performs exactly one placement pass:
+
+          \`\`\`text
+          evaluate each argument in source order
+              ↓
+          preserve existing temporary staging
+              ↓
+          one MinicRiscv64AbiCursor pass
+              ↓
+          save argument_locations[]
+              ↓
+          outgoing stack bytes = cursor.stack_slot_count * XLEN
+              ↓
+          emit physical aN/faN/stack moves from saved locations
+          \`\`\`
+
+          TargetABI therefore owns abstract argument positions; the caller emitter still owns register spellings, stack addresses, loads/stores and call-frame mechanics.
+
+          ## 3. Formal-v1 capability boundary / formal-v1 能力边界
+
+          Product behavior remains intentionally bounded to the already-frozen ABI v1 contract:
+
+          - integer/pointer arguments through integer-register then stack locations;
+          - fixed floating parameters through FP locations;
+          - non-fixed floating arguments through the integer convention after frontend variadic conversion;
+          - fixed integer-only 8/16-byte records through one/two aggregate slots, including register/stack split;
+          - unsupported shapes fail closed.
+
+          This slice does not import discovery-only zero-sized aggregates, sub-XLEN aggregate ABI or >16-byte indirect-by-value records into formal product source.
+
+          ## 4. Linux pressure boundary / Linux 压力边界
+
+          Frozen Linux already depends on ABI capabilities intentionally wider than formal v1. The pressure harness therefore used a hybrid policy rather than pretending this PR implements them:
+
+          - calls containing only formal-v1-compatible argument shapes used the new saved \`AbiArgumentLocation\` caller path;
+          - a call containing \`IGNORE\`, non-fixed aggregate, sub-XLEN aggregate, or \`INDIRECT\` discovery-only shapes kept the already-proven discovery caller placement/emission for that entire call;
+          - the broad runner-only ABI adapter and extended callee remained validation infrastructure only.
+
+          This proves that the formal caller consumer can coexist with the already-proven Linux tail without smuggling discovery-only ABI semantics into product code.
+
+          Frozen Linux hybrid gate: run \`$linux_run\`.
+
+          ## 5. Validation / 验收
+
+          Before canonical folding, the formal candidate passed release \`-Werror + check-fast\`, sanitizer AST contracts, frozen Foundation focused semantics and the official full compiler gate.
+
+          After the Linux-gated candidate was folded into checked-in source and its materializer removed, clean canonical host/full validation passed in run \`$CLEAN_RUN_ID\`.
+
+          The final feature workflow reruns the same clean host/full gate after this document is added before retiring branch-only CI.
+
+          ## 6. Non-goals / 非目标
+
+          This slice does not:
+
+          - change argument evaluation order or temporary staging semantics;
+          - change record-value copy semantics;
+          - extract \`MinicLocal.storage_offset\` / \`MinicFunction.local_storage_size\` into backend side state;
+          - expand formal psABI coverage;
+          - add Core IR or Machine IR.
+
+          ## 7. Architectural consequence / 架构结论
+
+          Frame construction, callee entry and caller call lowering now all consume the same abstract TargetABI placement owner. The next slice must be chosen after rereading the new formal Foundation head; likely candidates are frame/local placement side-state extraction or a remaining semantic ownership issue, not an automatic continuation of ABI work.
+          EOF
+          sed -i 's/^          //' docs/architecture/rv64-caller-abi-location-v1.md
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add docs/architecture/rv64-caller-abi-location-v1.md
+          git commit -m 'docs: freeze RV64 caller ABI location boundary'
+          docs_sha=$(git rev-parse HEAD)
+          git push origin HEAD:"$FEATURE_BRANCH"
+          echo "sha=$docs_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for documentation-head clean validation
+        id: docs_validation
+        shell: bash
+        env:
+          TARGET_SHA: ${{ steps.docs.outputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          run_id=''
+          for attempt in $(seq 1 90); do
+            run_id=$(gh run list \
+              --repo "$GITHUB_REPOSITORY" \
+              --workflow "$VALIDATION_WORKFLOW" \
+              --branch "$FEATURE_BRANCH" \
+              --commit "$TARGET_SHA" \
+              --limit 1 \
+              --json databaseId \
+              --jq '.[0].databaseId // empty')
+            if test -n "$run_id"; then break; fi
+            sleep 5
+          done
+          test -n "$run_id"
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          for attempt in $(seq 1 180); do
+            status=$(gh run view "$run_id" --repo "$GITHUB_REPOSITORY" \
+              --json status,conclusion \
+              --jq '.status + ":" + (.conclusion // "")')
+            echo "docs_validation=$run_id state=$status"
+            case "$status" in
+              completed:success) exit 0 ;;
+              completed:*)
+                gh run view "$run_id" --repo "$GITHUB_REPOSITORY" --log-failed || true
+                exit 1
+                ;;
+            esac
+            sleep 5
+          done
+          exit 1
+
+      - name: Retire branch-only validation after final green head
+        shell: bash
+        env:
+          DOCS_SHA: ${{ steps.docs.outputs.sha }}
+          DOCS_RUN_ID: ${{ steps.docs_validation.outputs.run_id }}
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags origin "$FEATURE_BRANCH"
+          test "$(git rev-parse origin/$FEATURE_BRANCH)" = "$DOCS_SHA"
+          git checkout -B "$FEATURE_BRANCH" "origin/$FEATURE_BRANCH"
+          git rm .github/workflows/rv64-caller-abi-location-validation.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit \
+            -m 'ci: retire branch-only caller ABI validation' \
+            -m "Final docs-head validation run: $DOCS_RUN_ID"
+          git push origin HEAD:"$FEATURE_BRANCH"
