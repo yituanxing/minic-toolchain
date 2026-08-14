@@ -163,6 +163,9 @@ bool minic_parser_parse_integer_constant_expression(MinicParser *parser, int64_t
 bool minic_parser_parse_integer_initializer_bits(MinicParser *parser,
                                                  MinicType target_type,
                                                  uint64_t *bits);
+bool minic_parser_parse_static_storage_initializer_value(MinicParser *parser,
+                                                         MinicGlobalObjectId object_id,
+                                                         MinicType type);
 bool minic_parser_parse_integer_initializer_value(MinicParser *parser,
                                                   MinicType target_type,
                                                   int *value);
