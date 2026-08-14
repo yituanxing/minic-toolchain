@@ -19,4 +19,4 @@ mkdir -p "$work"
 grep -F '.globl main' "$work/zero_aggregate_null.s" >/dev/null
 grep -F '  sw ' "$work/zero_aggregate_null.s" >/dev/null
 grep -F '  sd ' "$work/zero_aggregate_null.s" >/dev/null
-printf '%s\n' 'PASS compiler/c0/zero_aggregate_null scalar-zero=yes pointer-null=yes'
+printf '%s\n' 'PASS compiler/c0/zero_aggregate_null consteval-zero=yes pointer-null=yes'

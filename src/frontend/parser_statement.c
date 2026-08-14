@@ -334,21 +334,27 @@ parse_local_array_initializer(MinicParser *parser, MinicLocalId local_id, bool i
     return minic_parser_advance(parser);
 }
 
-static bool aggregate_expression_is_zero_constant(const MinicC0Program *program,
+static bool aggregate_expression_is_zero_constant(const MinicParser *parser,
                                                   MinicExpressionId expression_id) {
+    MinicConstValue constant;
     const MinicExpression *expression;
+    bool is_zero;
 
-    expression = minic_c0_program_expression(program, expression_id);
+    if (parser == NULL) {
+        return false;
+    }
+    expression = minic_c0_program_expression(parser->program, expression_id);
     if (expression == NULL) {
         return false;
     }
-    if (expression->kind == MINIC_EXPRESSION_INTEGER) {
-        return minic_type_is_integer(expression->type) && expression->value.integer_value == 0;
-    }
     if (expression->kind == MINIC_EXPRESSION_CAST && minic_type_is_pointer(expression->type)) {
-        return aggregate_expression_is_zero_constant(program, expression->value.unary.operand);
+        return aggregate_expression_is_zero_constant(parser, expression->value.unary.operand);
     }
-    return false;
+    return minic_type_is_integer(expression->type) &&
+           minic_const_eval_integer(
+               parser->program, parser->target_info, expression_id, &constant) &&
+           minic_const_value_is_zero(parser->program, parser->target_info, &constant, &is_zero) &&
+           is_zero;
 }
 
 static bool parse_zero_aggregate_initializer_contents(MinicParser *parser,
@@ -376,7 +382,7 @@ static bool parse_zero_aggregate_initializer_contents(MinicParser *parser,
             MinicExpressionId value_id;
 
             if (!minic_parser_parse_expression(parser, &value_id, 0U) ||
-                !aggregate_expression_is_zero_constant(parser->program, value_id)) {
+                !aggregate_expression_is_zero_constant(parser, value_id)) {
                 if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
                     minic_parser_error(parser,
                                        "only all-zero aggregate initializers are supported");

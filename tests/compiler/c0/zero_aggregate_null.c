@@ -4,6 +4,6 @@ struct Pair {
 };
 
 int main(void) {
-    struct Pair value = {0, ((void *)0)};
+    struct Pair value = {1 - 1, ((void *)(2 - 2))};
     return value.count;
 }
