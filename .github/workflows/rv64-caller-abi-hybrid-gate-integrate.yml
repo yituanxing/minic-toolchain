@@ -106,11 +106,11 @@ jobs:
           fi
 
           mkdir -p docs/architecture
-          cat > docs/architecture/rv64-caller-abi-location-v1.md <<DOC
+          cat > docs/architecture/rv64-caller-abi-location-v1.md <<'DOC'
           # RV64 caller ABI location ownership v1
 
           This slice makes the checked-in RV64 call emitter consume the canonical
-          \\`MinicRiscv64AbiCursor\\` / \\`MinicRiscv64AbiArgumentLocation\\` result once per
+          `MinicRiscv64AbiCursor` / `MinicRiscv64AbiArgumentLocation` result once per
           call instead of independently recomputing integer-register, floating-register,
           and stack placement in two backend passes.
 
@@ -124,10 +124,10 @@ jobs:
           greater-than-16-byte indirect aggregate passing remain outside this formal slice
           until their psABI semantics are promoted deliberately.
 
-          Frozen Linux 6.6.143 \\`init/main.i\\` was revalidated with a hybrid pressure
+          Frozen Linux 6.6.143 `init/main.i` was revalidated with a hybrid pressure
           harness: formal-v1-compatible calls use the new location consumer, while
           discovery-only ABI shapes retain the already-proven discovery emission. The
-          exact hybrid run for this checked-in fold is \\`$LINUX_RUN_ID\\` and completed
+          exact hybrid run for this checked-in fold is `@LINUX_RUN_ID@` and completed
           with the 90,928-line full-TU gate.
 
           This preserves the future Core IR seam: target-neutral call semantics stay above
@@ -135,6 +135,7 @@ jobs:
           locations to textual registers and stack operations.
           DOC
           sed -i 's/^          //' docs/architecture/rv64-caller-abi-location-v1.md
+          sed -i "s/@LINUX_RUN_ID@/$LINUX_RUN_ID/" docs/architecture/rv64-caller-abi-location-v1.md
 
           git rm tools/dev/materialize-rv64-caller-abi-location-v1.py
           git diff --check
@@ -151,8 +152,7 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add src/target/riscv64/codegen_expression.c \
-            docs/architecture/rv64-caller-abi-location-v1.md \
-            tools/dev/materialize-rv64-caller-abi-location-v1.py
+            docs/architecture/rv64-caller-abi-location-v1.md
           git diff --cached --check
 
           changed=$(git diff --cached --name-only "$EXPECTED_FOUNDATION_HEAD" | sort)
