@@ -1,0 +1,36 @@
+name: Architecture Seams Full Validation
+
+on:
+  push:
+    branches:
+      - refactor/function-body-view-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: architecture-seams-full-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  full-compiler:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Restore RISC-V package archives
+        id: rv64-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/minic-apt/archives
+          key: rv64-apt-${{ runner.os }}-${{ runner.arch }}-noble-${{ hashFiles('tools/ci/ubuntu-24.04-packages.txt') }}
+
+      - name: Run complete compiler gate
+        env:
+          RV64_CACHE_HIT: ${{ steps.rv64-cache.outputs.cache-hit }}
+        run: bash .github/scripts/compiler-c0-full-gate.sh

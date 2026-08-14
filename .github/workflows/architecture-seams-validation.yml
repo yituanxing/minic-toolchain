@@ -1,0 +1,44 @@
+name: Architecture Seams Validation
+
+on:
+  push:
+    branches:
+      - refactor/architecture-seams-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: architecture-seams-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ast-traversal:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build focused AST traversal contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p build/architecture-seams
+          cc -std=c11 \
+            -Wall -Wextra -Wpedantic -Wconversion -Wshadow \
+            -Wstrict-prototypes -Wmissing-prototypes \
+            -Iinclude -Isrc \
+            src/frontend/ast.c \
+            src/frontend/ast_global.c \
+            src/frontend/ast_traversal.c \
+            src/frontend/ast_verifier.c \
+            src/frontend/cast_normalization.c \
+            src/frontend/type.c \
+            src/target/data_layout.c \
+            src/target/target_info.c \
+            tests/frontend/ast_traversal_test.c \
+            -o build/architecture-seams/ast-traversal-test
+
+      - name: Run focused AST traversal contract
+        run: build/architecture-seams/ast-traversal-test

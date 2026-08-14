@@ -1,0 +1,54 @@
+name: FunctionBody View Validation
+
+on:
+  push:
+    branches:
+      - refactor/function-body-view-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: function-body-view-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  focused:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Materialize canonical formatting for focused validation
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          clang-format-18 -i \
+            src/frontend/function_body.c \
+            src/frontend/function_body.h \
+            tests/frontend/function_body_view_test.c
+          git diff -- src/frontend/function_body.c src/frontend/function_body.h tests/frontend/function_body_view_test.c
+
+      - name: Build focused FunctionBody contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p build/function-body-view
+          cc -std=c11 \
+            -Wall -Wextra -Wpedantic -Wconversion -Wshadow \
+            -Wstrict-prototypes -Wmissing-prototypes -Werror \
+            -Iinclude -Isrc \
+            src/frontend/ast.c \
+            src/frontend/ast_global.c \
+            src/frontend/ast_traversal.c \
+            src/frontend/ast_verifier.c \
+            src/frontend/function_body.c \
+            src/frontend/type.c \
+            src/target/data_layout.c \
+            src/target/target_info.c \
+            tests/frontend/function_body_view_test.c \
+            -o build/function-body-view/function-body-view-test
+
+      - name: Run focused FunctionBody contract
+        run: build/function-body-view/function-body-view-test
