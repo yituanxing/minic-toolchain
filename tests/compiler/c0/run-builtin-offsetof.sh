@@ -68,4 +68,4 @@ if "$minic" -S "$work/nested-bit-field.i" -o "$work/nested-bit-field.s" \
 fi
 grep -F '__builtin_offsetof cannot name a bit-field' "$work/nested-bit-field.stderr" >/dev/null
 
-printf '%s\n' 'PASS compiler/c0/builtin_offsetof direct-member=1 typedef=1 promoted-anonymous=2 shared-member-resolver=1 target-layout=1 array-bound=8 array-designator=constant+runtime nested-member=record-path array-then-member=1 multidimensional-index=1 normalized=offset-terms+index*stride scalar-index=reject'
+printf '%s\n' 'PASS compiler/c0/builtin_offsetof direct-member=1 typedef=1 promoted-anonymous=2 shared-member-resolver=1 target-layout=1 array-bound=8 array-designator=constant+runtime nested-member=record-path array-then-member=1 multidimensional-index=1 semantic=field-offset-terms+index*sizeof scalar-index=reject'
