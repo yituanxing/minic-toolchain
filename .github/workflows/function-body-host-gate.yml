@@ -20,9 +20,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Materialize staged source-list integration
-        run: python3 tools/dev/materialize-function-body-source-list.py
-
       - name: Verify production inventory
         run: sh tools/maintenance/check-production-source-inventory.sh
 
