@@ -43,13 +43,34 @@ jobs:
             -e '/require_absent("src\/frontend\/ast_verifier.c", "minic_type_integer_common(")/d' \
             -e '/require_absent("src\/frontend\/ast_verifier.c", "minic_type_integer_promotion(")/d' \
             tools/dev/materialize-target-integer-consumers-v1.py
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('tests/target/riscv64/layout_test.c')
+          text = path.read_text()
+          old = '        MinicIntegerSign plain_char_sign;\n        MinicType promoted_type;\n'
+          sentinel = ('        MinicIntegerSign plain_char_sign;\n'
+                      '        /* staging-rv64-integer-model-anchor */\n'
+                      '        MinicType promoted_type;\n')
+          if text.count(old) != 2:
+              raise SystemExit(f'layout_test.c: expected two integer-model declaration blocks, found {text.count(old)}')
+          path.write_text(text.replace(old, sentinel, 1))
+          PY
           python3 tools/dev/materialize-target-integer-consumers-v1.py
           python3 - <<'PY'
           from pathlib import Path
 
+          path = Path('tests/target/riscv64/layout_test.c')
+          text = path.read_text()
+          sentinel = ('        MinicIntegerSign plain_char_sign;\n'
+                      '        /* staging-rv64-integer-model-anchor */\n'
+                      '        MinicType promoted_type;\n')
+          old = '        MinicIntegerSign plain_char_sign;\n        MinicType promoted_type;\n'
+          if text.count(sentinel) != 1:
+              raise SystemExit('layout_test.c: RV64 staging sentinel missing')
+          path.write_text(text.replace(sentinel, old, 1))
+
           path = Path('src/frontend/ast_verifier.c')
           text = path.read_text()
-
           replacements = [
               (
                   '!minic_type_integer_promotion(operand->type, &expected_type)',
@@ -75,11 +96,11 @@ jobs:
                   'if (!verify_statement(program, target, &program->statements[index])) {',
               ),
           ]
-          for old, new in replacements:
-              count = text.count(old)
+          for old_text, new_text in replacements:
+              count = text.count(old_text)
               if count != 1:
-                  raise SystemExit(f'ast_verifier.c: expected one occurrence, found {count}: {old}')
-              text = text.replace(old, new)
+                  raise SystemExit(f'ast_verifier.c: expected one occurrence, found {count}: {old_text}')
+              text = text.replace(old_text, new_text)
           if 'minic_type_integer_common(' in text or 'minic_type_integer_promotion(' in text:
               raise SystemExit('ast_verifier.c: legacy integer semantic helper remains')
           path.write_text(text)
