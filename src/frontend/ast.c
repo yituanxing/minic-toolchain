@@ -1142,6 +1142,22 @@ bool minic_c0_program_complete_array_type(MinicC0Program *program,
     return true;
 }
 
+bool minic_c0_program_discard_last_array_type(MinicC0Program *program, MinicType array_type) {
+    MinicArrayTypeId array_type_id;
+
+    if (program == NULL || !minic_type_is_array(array_type) || program->array_type_count == 0U) {
+        return false;
+    }
+    array_type_id = array_type.array_type_id;
+    if (array_type_id != program->array_type_count - 1U) {
+        return false;
+    }
+    (void)memset(
+        &program->array_types[array_type_id], 0, sizeof(program->array_types[array_type_id]));
+    program->array_type_count -= 1U;
+    return true;
+}
+
 static bool minic_function_type_matches(const MinicFunctionType *descriptor,
                                         MinicType return_type,
                                         const MinicType *parameter_types,

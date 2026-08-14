@@ -60,6 +60,12 @@ bool minic_riscv64_emit_integer_aggregate_local_chunk(
     MinicLocalId local_id,
     size_t chunk_index,
     const char *register_name);
+bool minic_riscv64_emit_integer_aggregate_load_chunk(FILE *file,
+                                                     const MinicC0Program *program,
+                                                     MinicType type,
+                                                     size_t chunk_index,
+                                                     const char *destination_register,
+                                                     const char *address_register);
 typedef struct MinicRiscv64FrameLayout {
     size_t frame_size;
     size_t saved_ra_offset;
