@@ -19,23 +19,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Materialize callee location consumer
+      - name: Verify canonical callee location consumer
         shell: bash
         run: |
           set -Eeuo pipefail
-          python3 tools/dev/materialize-rv64-callee-abi-location-v1.py
-          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
-          git diff --check
           grep -F 'MinicRiscv64AbiCursor abi_cursor;' src/target/riscv64/codegen_function.c >/dev/null
           grep -F 'minic_riscv64_abi_place_argument' src/target/riscv64/codegen_function.c >/dev/null
           if grep -F 'size_t stack_parameter_index;' src/target/riscv64/codegen_function.c >/dev/null; then
             echo 'legacy callee stack parameter cursor remains' >&2
             exit 1
           fi
-          git diff -- src/target/riscv64/codegen_function.c
 
-      - name: Verify unchanged production source inventory
+      - name: Verify production source inventory
         run: sh tools/maintenance/check-production-source-inventory.sh
+
+      - name: Check committed source formatting
+        run: CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
 
       - name: Run release host contracts
         run: make -j2 MODE=release BUILD_DIR=build/rv64-callee-abi-host CFLAGS=-Werror check-fast
@@ -59,13 +58,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Materialize callee location consumer
+      - name: Verify canonical callee location consumer
         shell: bash
         run: |
           set -Eeuo pipefail
-          python3 tools/dev/materialize-rv64-callee-abi-location-v1.py
-          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
-          git diff --check
+          grep -F 'MinicRiscv64AbiCursor abi_cursor;' src/target/riscv64/codegen_function.c >/dev/null
+          grep -F 'minic_riscv64_abi_place_argument' src/target/riscv64/codegen_function.c >/dev/null
+          if grep -F 'size_t stack_parameter_index;' src/target/riscv64/codegen_function.c >/dev/null; then
+            echo 'legacy callee stack parameter cursor remains' >&2
+            exit 1
+          fi
 
       - name: Restore RISC-V package archives
         id: rv64-cache
