@@ -388,11 +388,31 @@ bool minic_c0_global_relocation_object_target_type(const MinicC0Program *program
 
 static bool global_relocation_object_target_type_compatible(const MinicC0Program *program,
                                                             MinicType slot_type,
-                                                            MinicType target_type) {
+                                                            MinicType target_type,
+                                                            bool has_explicit_pointer_cast) {
     MinicType source_pointer_type;
 
     if (program == NULL || !minic_type_is_pointer(slot_type)) {
         return false;
+    }
+    if (has_explicit_pointer_cast) {
+        /* The parser has already validated the explicit pointer-to-pointer cast.
+         * Re-check only the normalized type-level legality here; target identity
+         * and member-path validity are still verified independently. */
+        if (minic_type_pointer_to(target_type, &source_pointer_type) &&
+            minic_type_cast_compatible(slot_type, source_pointer_type)) {
+            return true;
+        }
+        if (minic_type_is_array(target_type)) {
+            const MinicArrayType *array_type;
+
+            array_type = minic_c0_program_array_type(program, target_type.array_type_id);
+            if (array_type != NULL &&
+                minic_type_pointer_to(array_type->element_type, &source_pointer_type) &&
+                minic_type_cast_compatible(slot_type, source_pointer_type)) {
+                return true;
+            }
+        }
     }
     /* A symbolic object address can denote the object itself (`&object`). */
     if (minic_type_pointer_to(target_type, &source_pointer_type) &&
@@ -421,7 +441,8 @@ bool minic_c0_global_relocation_object_target_compatible(const MinicC0Program *p
     MinicType target_type;
 
     return minic_c0_global_relocation_object_target_type(program, relocation, &target_type) &&
-           global_relocation_object_target_type_compatible(program, slot_type, target_type);
+           global_relocation_object_target_type_compatible(
+               program, slot_type, target_type, relocation->has_explicit_pointer_cast);
 }
 
 bool minic_c0_global_relocation_slot_type(const MinicC0Program *program,
@@ -490,7 +511,8 @@ static bool add_global_symbol_relocation(MinicC0Program *program,
                                          MinicGlobalRelocationTargetKind target_kind,
                                          size_t target_id,
                                          const size_t *target_member_indices,
-                                         size_t target_member_depth) {
+                                         size_t target_member_depth,
+                                         bool has_explicit_pointer_cast) {
     MinicGlobalObject *object;
     MinicGlobalRelocation *relocation;
     MinicType slot_pointee;
@@ -513,16 +535,18 @@ static bool add_global_symbol_relocation(MinicC0Program *program,
     if (!minic_c0_global_relocation_slot_type(
             program, object, location_kind, location_index, &slot_type) ||
         !minic_type_pointee(slot_type, &slot_pointee) ||
-        (target_kind == MINIC_GLOBAL_RELOCATION_FUNCTION &&
-         !minic_type_is_function(slot_pointee)) ||
-        (target_kind == MINIC_GLOBAL_RELOCATION_OBJECT && minic_type_is_function(slot_pointee)) ||
+        (target_kind == MINIC_GLOBAL_RELOCATION_FUNCTION && !minic_type_is_function(slot_pointee) &&
+         !has_explicit_pointer_cast) ||
+        (target_kind == MINIC_GLOBAL_RELOCATION_OBJECT && minic_type_is_function(slot_pointee) &&
+         !has_explicit_pointer_cast) ||
         (target_kind == MINIC_GLOBAL_RELOCATION_OBJECT &&
          (!global_object_member_path_type(program,
                                           &program->global_objects[target_id],
                                           target_member_indices,
                                           target_member_depth,
                                           &target_type) ||
-          !global_relocation_object_target_type_compatible(program, slot_type, target_type))) ||
+          !global_relocation_object_target_type_compatible(
+              program, slot_type, target_type, has_explicit_pointer_cast))) ||
         object->is_tentative ||
         (object->initializer_count != 0U &&
          ((location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_RECORD_FIELD &&
@@ -549,6 +573,7 @@ static bool add_global_symbol_relocation(MinicC0Program *program,
     relocation->target_kind = target_kind;
     relocation->target_id = target_id;
     relocation->target_member_depth = target_member_depth;
+    relocation->has_explicit_pointer_cast = has_explicit_pointer_cast;
     for (path_index = 0U; path_index < target_member_depth; ++path_index) {
         relocation->target_member_indices[path_index] = target_member_indices[path_index];
     }
@@ -568,7 +593,25 @@ bool minic_c0_global_object_add_function_relocation(MinicC0Program *program,
                                         MINIC_GLOBAL_RELOCATION_FUNCTION,
                                         function_id,
                                         NULL,
-                                        0U);
+                                        0U,
+                                        false);
+}
+
+bool minic_c0_global_object_add_function_relocation_cast(
+    MinicC0Program *program,
+    MinicGlobalObjectId global_object_id,
+    MinicGlobalRelocationLocationKind location_kind,
+    size_t location_index,
+    MinicFunctionId function_id) {
+    return add_global_symbol_relocation(program,
+                                        global_object_id,
+                                        location_kind,
+                                        location_index,
+                                        MINIC_GLOBAL_RELOCATION_FUNCTION,
+                                        function_id,
+                                        NULL,
+                                        0U,
+                                        true);
 }
 
 bool minic_c0_global_object_set_extern(MinicC0Program *program,
@@ -602,7 +645,27 @@ bool minic_c0_global_object_add_object_relocation_path(
                                         MINIC_GLOBAL_RELOCATION_OBJECT,
                                         target_object_id,
                                         target_member_indices,
-                                        target_member_depth);
+                                        target_member_depth,
+                                        false);
+}
+
+bool minic_c0_global_object_add_object_relocation_path_cast(
+    MinicC0Program *program,
+    MinicGlobalObjectId global_object_id,
+    MinicGlobalRelocationLocationKind location_kind,
+    size_t location_index,
+    MinicGlobalObjectId target_object_id,
+    const size_t *target_member_indices,
+    size_t target_member_depth) {
+    return add_global_symbol_relocation(program,
+                                        global_object_id,
+                                        location_kind,
+                                        location_index,
+                                        MINIC_GLOBAL_RELOCATION_OBJECT,
+                                        target_object_id,
+                                        target_member_indices,
+                                        target_member_depth,
+                                        true);
 }
 
 bool minic_c0_global_object_add_object_relocation(MinicC0Program *program,
