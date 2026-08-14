@@ -1,0 +1,63 @@
+name: Stage external record constant initializer v1
+
+on:
+  push:
+    branches:
+      - staging/external-record-constant-initializer-v1
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    if: github.event.head_commit.message != 'materialize external record constant initializer v1'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Materialize narrow product delta
+        run: |
+          python3 tools/dev/stage-external-record-constant-initializer-v1.py
+          chmod +x tests/compiler/c0/run-external-record-compound-literal.sh
+      - name: Format and inspect product delta
+        run: |
+          clang-format-18 -i \
+            src/frontend/parser_global.c \
+            src/frontend/parser_internal.h \
+            src/frontend/parser_function.c \
+            tests/compiler/c0/external_record_compound_literal.c
+          git diff --check
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+          git diff -- \
+            src/frontend/parser_global.c \
+            src/frontend/parser_internal.h \
+            src/frontend/parser_function.c \
+            tests/compiler/c0/external_record_compound_literal.c \
+            tests/compiler/c0/run-external-record-compound-literal.sh \
+            tests/compiler/c0/run-foundation-focused.sh
+      - name: Build release compiler
+        run: make -j4 MODE=release BUILD_DIR=build/external-record-constant-stage
+      - name: Run focused initializer regressions
+        run: |
+          export MINIC="$GITHUB_WORKSPACE/build/external-record-constant-stage/bin/minic"
+          export BUILD_DIR="$GITHUB_WORKSPACE/build/external-record-constant-stage"
+          export HOST_CC=cc
+          sh tests/compiler/c0/run-external-record-compound-literal.sh
+          sh tests/compiler/c0/run-static-nested-record-initializers.sh
+          sh tests/compiler/c0/run-static-record-arrays.sh
+      - name: Run fast compiler checks
+        run: make -j4 MODE=release BUILD_DIR=build/external-record-constant-stage check-fast
+      - name: Commit staged product delta
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add \
+            src/frontend/parser_global.c \
+            src/frontend/parser_internal.h \
+            src/frontend/parser_function.c \
+            tests/compiler/c0/external_record_compound_literal.c \
+            tests/compiler/c0/run-external-record-compound-literal.sh \
+            tests/compiler/c0/run-foundation-focused.sh
+          git commit -m 'materialize external record constant initializer v1'
+          git push origin HEAD:staging/external-record-constant-initializer-v1
