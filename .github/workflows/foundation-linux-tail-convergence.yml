@@ -1,0 +1,134 @@
+name: Foundation Linux Tail Convergence
+
+on:
+  push:
+    branches: [agent/foundation-linux-tail-convergence-v1]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: foundation-linux-tail-convergence
+  cancel-in-progress: true
+
+jobs:
+  converge:
+    runs-on: ubuntu-24.04
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Materialize proven static pointer-array family
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git cherry-pick fc8a2a78313d35771728195e1b0c38d31bbadbc9
+
+      - name: Build and focused validation
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+          make -j4 MODE=release BUILD_DIR=build/tail-compiler
+          MINIC="$GITHUB_WORKSPACE/build/tail-compiler/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/tail-focused" \
+            sh tests/compiler/c0/run-static-pointer-arrays.sh
+          BUILD_DIR="$GITHUB_WORKSPACE/build/tail-full" \
+            bash .github/scripts/compiler-c0-full-gate.sh
+
+      - name: Publish committed product source candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git push origin HEAD:agent/foundation-linux-tail-convergence-v1
+
+      - name: Restore pinned Linux source archive
+        id: linux-source-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-cache/linux-6.6.143.tar.xz
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
+
+      - name: Install RISC-V Linux Kbuild dependencies
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            flex bison bc libelf-dev libssl-dev
+
+      - name: Drive committed candidate over unchanged init/main.i
+        id: linux
+        shell: bash
+        run: |
+          set +e
+          MINIC="$GITHUB_WORKSPACE/build/tail-compiler/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/linux-tail" \
+          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-cache/linux-6.6.143.tar.xz" \
+          CROSS_COMPILE=riscv64-linux-gnu- \
+            sh tests/external/linux/probe.sh
+          status=$?
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Prepare frontier diagnostics
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/linux-tail"
+          summary="$work/frontier-summary.txt"
+          mkdir -p "$work"
+          : > "$summary"
+          if test -s "$work/kbuild/init/main.i"; then
+            printf '%s\n' "total_lines=$(wc -l < "$work/kbuild/init/main.i" | tr -d ' ')" >> "$summary"
+          fi
+          if test -s "$work/minic.stderr"; then
+            frontier_line=$(sed -n 's/.*init\/main\.i:\([0-9][0-9]*\):.*/\1/p' "$work/minic.stderr" | head -n 1)
+            printf '%s\n' "frontier_line=${frontier_line:-unknown}" >> "$summary"
+            printf '%s\n' 'MiniC diagnostic:' >> "$summary"
+            sed -n '1,100p' "$work/minic.stderr" >> "$summary"
+            if test -n "${frontier_line:-}" && test -s "$work/kbuild/init/main.i"; then
+              start=$((frontier_line > 12 ? frontier_line - 12 : 1))
+              end=$((frontier_line + 12))
+              printf '\n%s\n' "init/main.i lines=$start-$end:" >> "$summary"
+              nl -ba "$work/kbuild/init/main.i" | sed -n "${start},${end}p" >> "$summary"
+            fi
+          else
+            printf '%s\n' 'No MiniC diagnostic; candidate passed MiniC or failed before it.' >> "$summary"
+          fi
+          printf '%s\n' "probe_status=${{ steps.linux.outputs.status }}" >> "$summary"
+          cat "$summary"
+
+      - name: Upload frontier
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: foundation-linux-tail-${{ github.run_id }}
+          path: |
+            build/linux-tail/frontier-summary.txt
+            build/linux-tail/main-i-inventory.txt
+            build/linux-tail/kbuild/init/main.i
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Save pinned Linux source archive
+        if: always() && steps.linux-source-cache.outputs.cache-hit != 'true' && hashFiles('build/linux-cache/linux-6.6.143.tar.xz') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: build/linux-cache/linux-6.6.143.tar.xz
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
+
+      - name: Fail if Linux candidate is not complete
+        if: always()
+        shell: bash
+        run: |
+          test "${{ steps.linux.outputs.status }}" = 0
