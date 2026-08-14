@@ -1,5 +1,10 @@
 extern int generic_side_effect(void);
 
+int typeof_function_redeclaration(int value) {
+    return value;
+}
+extern typeof(typeof_function_redeclaration) typeof_function_redeclaration;
+
 struct TypeofPending;
 extern __attribute__((section(".probe.typeof.incomplete")))
     __typeof__(struct TypeofPending) typeof_pending_object;
