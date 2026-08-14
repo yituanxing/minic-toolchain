@@ -16,7 +16,6 @@ concurrency:
 
 jobs:
   linux-frontier:
-    if: github.event_name == 'workflow_dispatch' || github.ref_name == 'external/linux-6.6.143-discovery-v2' || github.head_ref == 'refactor/foundation-v1'
     name: riscv-defconfig-init-main
     runs-on: ubuntu-24.04
     env:
