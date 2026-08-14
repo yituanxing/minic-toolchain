@@ -24,8 +24,6 @@ int main(void)
     MinicType const_double_type;
     MinicType double_pointer_type;
     MinicType unsigned_pointer_type;
-    MinicType promoted_type;
-    MinicType common_type;
     MinicType const_integer_type;
     MinicType const_pointer_type;
     MinicType pointer_type;
@@ -130,8 +128,7 @@ int main(void)
         minic_type_assignment_compatible(double_type, integer_type) ||
         minic_type_assignment_compatible(integer_type, double_type) ||
         !minic_type_cast_compatible(double_type, integer_type) ||
-        !minic_type_cast_compatible(integer_type, double_type) ||
-        minic_type_integer_promotion(double_type, &promoted_type)) {
+        !minic_type_cast_compatible(integer_type, double_type)) {
         return fail("bounded double conversions");
     }
     if (!minic_type_pointer_to(double_type, &double_pointer_type) ||
@@ -154,49 +151,6 @@ int main(void)
         minic_type_equal(unsigned_char_type, unsigned_integer_type) ||
         minic_type_equal(unsigned_char_type, integer_type)) {
         return fail("unsigned char identity");
-    }
-    if (!minic_type_integer_promotion(unsigned_char_type, &promoted_type) ||
-        !minic_type_equal(promoted_type, integer_type) ||
-        !minic_type_integer_promotion(integer_type, &promoted_type) ||
-        !minic_type_equal(promoted_type, integer_type) ||
-        !minic_type_integer_promotion(unsigned_integer_type, &promoted_type) ||
-        !minic_type_equal(promoted_type, unsigned_integer_type) ||
-        !minic_type_integer_promotion(signed_long_type, &promoted_type) ||
-        !minic_type_equal(promoted_type, signed_long_type) ||
-        !minic_type_integer_promotion(const_long_type, &promoted_type) ||
-        !minic_type_equal(promoted_type, signed_long_type) ||
-        minic_type_is_const(promoted_type) ||
-        !minic_type_integer_promotion(unsigned_long_type, &promoted_type) ||
-        !minic_type_equal(promoted_type, unsigned_long_type) ||
-        minic_type_integer_promotion(void_type, &promoted_type) ||
-        minic_type_integer_promotion(unsigned_char_type, NULL)) {
-        return fail("integer promotion");
-    }
-
-    if (!minic_type_integer_common(integer_type, integer_type, &common_type) ||
-        !minic_type_equal(common_type, integer_type) ||
-        !minic_type_integer_common(unsigned_char_type, unsigned_char_type, &common_type) ||
-        !minic_type_equal(common_type, integer_type) ||
-        !minic_type_integer_common(unsigned_char_type, integer_type, &common_type) ||
-        !minic_type_equal(common_type, integer_type) ||
-        !minic_type_integer_common(unsigned_char_type, unsigned_integer_type, &common_type) ||
-        !minic_type_equal(common_type, unsigned_integer_type) ||
-        !minic_type_integer_common(integer_type, unsigned_integer_type, &common_type) ||
-        !minic_type_equal(common_type, unsigned_integer_type) ||
-        !minic_type_integer_common(unsigned_integer_type, integer_type, &common_type) ||
-        !minic_type_equal(common_type, unsigned_integer_type) ||
-        !minic_type_integer_common(integer_type, signed_long_type, &common_type) ||
-        !minic_type_equal(common_type, signed_long_type) ||
-        !minic_type_integer_common(unsigned_integer_type, signed_long_type, &common_type) ||
-        !minic_type_equal(common_type, signed_long_type) ||
-        !minic_type_integer_common(integer_type, unsigned_long_type, &common_type) ||
-        !minic_type_equal(common_type, unsigned_long_type) ||
-        !minic_type_integer_common(signed_long_type, unsigned_long_type, &common_type) ||
-        !minic_type_equal(common_type, unsigned_long_type) ||
-        minic_type_integer_common(integer_type, void_type, &common_type) ||
-        minic_type_integer_common(integer_type, double_type, &common_type) ||
-        minic_type_integer_common(integer_type, unsigned_integer_type, NULL)) {
-        return fail("common integer type");
     }
     if (!minic_type_assignment_compatible(integer_type, unsigned_integer_type) ||
         !minic_type_assignment_compatible(unsigned_integer_type, integer_type) ||

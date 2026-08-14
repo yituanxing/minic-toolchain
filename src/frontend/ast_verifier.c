@@ -1,4 +1,5 @@
 #include "frontend/ast_verifier.h"
+#include "frontend/expression_semantics.h"
 
 #include <limits.h>
 #include <stdio.h>
@@ -181,6 +182,7 @@ static bool is_normalized_integer_cast_add(const MinicExpression *expression,
 }
 
 static bool verify_binary_type(const MinicC0Program *program,
+                               const MinicTargetInfo *target,
                                const MinicExpression *expression,
                                const MinicExpression *left,
                                const MinicExpression *right,
@@ -222,10 +224,11 @@ static bool verify_binary_type(const MinicC0Program *program,
         if (binary_is_comparison(expression->value.binary.operator_kind)) {
             expected_type = minic_type_int();
         } else if (binary_is_shift(expression->value.binary.operator_kind)) {
-            if (!minic_type_integer_promotion(left->type, &expected_type)) {
+            if (!minic_target_info_integer_promotion(target, left->type, &expected_type)) {
                 return false;
             }
-        } else if (!minic_type_integer_common(left->type, right->type, &expected_type)) {
+        } else if (!minic_target_info_integer_common(
+                       target, left->type, right->type, &expected_type)) {
             return false;
         }
         return minic_type_equal(expression->type, expected_type) ||
@@ -623,7 +626,7 @@ static bool verify_expression(const MinicC0Program *program,
             return false;
         }
         return minic_type_is_integer(left->type) && minic_type_is_integer(right->type) &&
-               minic_type_integer_common(left->type, right->type, &common_type);
+               minic_target_info_integer_common(target, left->type, right->type, &common_type);
     }
     case MINIC_EXPRESSION_UNARY: {
         MinicType expected_type;
@@ -660,7 +663,7 @@ static bool verify_expression(const MinicC0Program *program,
             return minic_type_equal(expression->type, operand->type);
         }
         if (!minic_type_is_integer(operand->type) ||
-            !minic_type_integer_promotion(operand->type, &expected_type)) {
+            !minic_target_info_integer_promotion(target, operand->type, &expected_type)) {
             return false;
         }
         return minic_type_equal(expression->type, expected_type);
@@ -669,7 +672,7 @@ static bool verify_expression(const MinicC0Program *program,
         left = expression_before(program, expression->value.binary.left, expression_index);
         right = expression_before(program, expression->value.binary.right, expression_index);
         return left != NULL && right != NULL && expression->value_category == MINIC_VALUE_RVALUE &&
-               verify_binary_type(program, expression, left, right, form);
+               verify_binary_type(program, target, expression, left, right, form);
     case MINIC_EXPRESSION_CONDITIONAL: {
         const MinicExpression *condition;
         const MinicExpression *when_true;
@@ -689,6 +692,7 @@ static bool verify_expression(const MinicC0Program *program,
                 expression->value.conditional.when_true ==
                     expression->value.conditional.condition) &&
                minic_c0_conditional_result_type(program,
+                                                target,
                                                 expression->value.conditional.when_true,
                                                 expression->value.conditional.when_false,
                                                 &expected_type) &&
@@ -802,7 +806,9 @@ static bool verify_expression(const MinicC0Program *program,
     return false;
 }
 
-static bool verify_statement(const MinicC0Program *program, const MinicStatement *statement) {
+static bool verify_statement(const MinicC0Program *program,
+                             const MinicTargetInfo *target_info,
+                             const MinicStatement *statement) {
     const MinicExpression *target;
     const MinicExpression *expression;
 
@@ -830,7 +836,8 @@ static bool verify_statement(const MinicC0Program *program, const MinicStatement
         return target != NULL && expression != NULL &&
                target->value_category == MINIC_VALUE_LVALUE &&
                minic_type_is_integer(target->type) && minic_type_is_integer(expression->type) &&
-               minic_type_integer_common(target->type, expression->type, &common_type);
+               minic_target_info_integer_common(
+                   target_info, target->type, expression->type, &common_type);
     }
     case MINIC_STATEMENT_EXPRESSION:
         return expression != NULL;
@@ -1318,7 +1325,7 @@ bool minic_c0_program_verify_target(const MinicC0Program *program,
         }
     }
     for (index = 0U; index < program->statement_count; ++index) {
-        if (!verify_statement(program, &program->statements[index])) {
+        if (!verify_statement(program, target, &program->statements[index])) {
             fprintf(stderr,
                     "VERIFY_FAIL statement=%zu kind=%d\n",
                     index,

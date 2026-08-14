@@ -256,7 +256,7 @@ static bool eval_binary(const MinicC0Program *program,
         expression->value.binary.operator_kind == MINIC_BINARY_GREATER_EQUAL) {
         bool comparison;
 
-        if (!minic_type_integer_common(left.type, right.type, &operation_type) ||
+        if (!minic_target_info_integer_common(target, left.type, right.type, &operation_type) ||
             !convert_value(program, target, &left, operation_type, &converted_left) ||
             !convert_value(program, target, &right, operation_type, &converted_right)) {
             return false;
@@ -325,7 +325,7 @@ static bool eval_binary(const MinicC0Program *program,
     operation_type = expression->type;
     if (expression->value.binary.operator_kind == MINIC_BINARY_SHIFT_LEFT ||
         expression->value.binary.operator_kind == MINIC_BINARY_SHIFT_RIGHT) {
-        if (!minic_type_integer_common(left.type, left.type, &operation_type)) {
+        if (!minic_target_info_integer_common(target, left.type, left.type, &operation_type)) {
             return false;
         }
     }
