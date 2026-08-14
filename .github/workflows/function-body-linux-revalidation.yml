@@ -38,6 +38,23 @@ jobs:
           git apply --3way --index /tmp/function-body.patch
           git diff --cached --check
 
+          # FunctionBody has made external ExpressionId remapping a canonical AST traversal
+          # responsibility. Retire the old discovery-only hand-written cleanup remap materializer
+          # in this overlaid workspace instead of reintroducing the superseded ownership path.
+          grep -F 'minic_c0_program_remap_external_expression_ids' src/frontend/ast_traversal.h >/dev/null
+          cat > tools/dev/materialize-cleanup-cast-remap.py <<'PY'
+          #!/usr/bin/env python3
+          from pathlib import Path
+
+          traversal = Path("src/frontend/ast_traversal.h").read_text()
+          normalization = Path("src/frontend/cast_normalization.c").read_text()
+          if "minic_c0_program_remap_external_expression_ids" not in traversal:
+              raise SystemExit("canonical external ExpressionId remap API missing")
+          if "minic_c0_program_remap_external_expression_ids" not in normalization:
+              raise SystemExit("cast normalization is not using canonical external ExpressionId remap")
+          print("SKIP legacy cleanup remap materializer: canonical traversal owner present")
+          PY
+
       - name: Materialize proven Linux tail semantics
         run: |
           set -Eeuo pipefail
