@@ -63,11 +63,16 @@ text = text.replace(
     1,
 )
 
-needle = "                is_inline,\n                section_name,"
-assert text.count(needle) == 2
-text = text.replace(
-    needle,
-    "                is_inline,\n                is_extern_declaration,\n                section_name,",
+pattern = re.compile(r"(?m)^(?P<indent>\s*)is_inline,\n(?P=indent)section_name,$")
+matches = list(pattern.finditer(text))
+assert len(matches) == 2
+text = pattern.sub(
+    lambda match: (
+        f"{match.group('indent')}is_inline,\n"
+        f"{match.group('indent')}is_extern_declaration,\n"
+        f"{match.group('indent')}section_name,"
+    ),
+    text,
 )
 parser_path.write_text(text)
 
