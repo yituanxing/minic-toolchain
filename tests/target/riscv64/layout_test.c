@@ -332,40 +332,39 @@ int main(void)
         }
         minic_riscv64_function_layout_destroy(&function_layout);
     }
-    if (function == NULL || function->local_storage_size != 76U ||
-        program.locals[0].storage_offset != 0U || program.locals[1].storage_offset != 1U ||
-        program.locals[2].storage_offset != 4U || program.locals[3].storage_offset != 8U ||
-        program.locals[4].storage_offset != 24U || program.locals[5].storage_offset != 32U ||
-        program.locals[6].storage_offset != 48U || program.locals[7].storage_offset != 52U) {
-        minic_c0_program_destroy(&program);
-        return fail("mixed byte, scalar, array, pointer, and record offsets");
-    }
-
     program.locals[1].element_count = 0U;
     diagnostic.message[0] = '\0';
-    if (minic_riscv64_layout_program(
-            "layout-zero",
-            &program,
-            &diagnostic) ||
-        strcmp(
-            diagnostic.message,
-            "local object size is invalid for the RV64 target") != 0) {
-        minic_c0_program_destroy(&program);
-        return fail("zero-element byte object accepted");
+    {
+        MinicRiscv64FunctionLayout invalid_layout;
+
+        minic_riscv64_function_layout_initialize(&invalid_layout);
+        if (minic_riscv64_layout_function(
+                "layout-zero", &program, function, &invalid_layout, &diagnostic) ||
+            strcmp(diagnostic.message,
+                   "local object size is invalid for the RV64 target") != 0) {
+            minic_riscv64_function_layout_destroy(&invalid_layout);
+            minic_c0_program_destroy(&program);
+            return fail("zero-element byte object accepted");
+        }
+        minic_riscv64_function_layout_destroy(&invalid_layout);
     }
 
     program.locals[1].element_count = 3U;
     program.locals[3].element_count = SIZE_MAX;
     diagnostic.message[0] = '\0';
-    if (minic_riscv64_layout_program(
-            "layout-overflow",
-            &program,
-            &diagnostic) ||
-        strcmp(
-            diagnostic.message,
-            "local object size is invalid for the RV64 target") != 0) {
-        minic_c0_program_destroy(&program);
-        return fail("array size overflow accepted");
+    {
+        MinicRiscv64FunctionLayout invalid_layout;
+
+        minic_riscv64_function_layout_initialize(&invalid_layout);
+        if (minic_riscv64_layout_function(
+                "layout-overflow", &program, function, &invalid_layout, &diagnostic) ||
+            strcmp(diagnostic.message,
+                   "local object size is invalid for the RV64 target") != 0) {
+            minic_riscv64_function_layout_destroy(&invalid_layout);
+            minic_c0_program_destroy(&program);
+            return fail("array size overflow accepted");
+        }
+        minic_riscv64_function_layout_destroy(&invalid_layout);
     }
 
     minic_c0_program_destroy(&program);

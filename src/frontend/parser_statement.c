@@ -1027,7 +1027,6 @@ parse_local_declarator(MinicParser *parser, MinicType base_type, bool is_registe
 
     local.type = declared_type;
     local.element_count = 1U;
-    local.storage_offset = 0U;
     local.is_array = false;
     local.is_register_storage = is_register_storage;
     if (minic_parser_name_bound_in_current_scope(parser, local.name_span)) {
@@ -1183,7 +1182,6 @@ static bool parse_auto_type_local_declaration(MinicParser *parser) {
     (void)memset(&local, 0, sizeof(local));
     local.name_span = parser->current.span;
     local.element_count = 1U;
-    local.storage_offset = 0U;
     local.is_array = false;
     local.is_register_storage = false;
     if (minic_parser_name_bound_in_current_scope(parser, local.name_span)) {

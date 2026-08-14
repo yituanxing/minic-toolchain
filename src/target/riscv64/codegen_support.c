@@ -86,37 +86,51 @@ bool minic_riscv64_integer_aggregate_abi(const MinicC0Program *program,
 
 static bool minic_riscv64_local_object(const MinicC0Program *program,
                                        const MinicFunction *function,
+                                       const MinicRiscv64FunctionLayout *function_layout,
                                        MinicLocalId local_id,
-                                       const MinicLocal **local) {
+                                       const MinicLocal **local,
+                                       size_t *offset) {
     const MinicLocal *object;
+    size_t object_offset;
 
-    if (program == NULL || function == NULL || local == NULL || local_id < function->local_begin ||
+    if (program == NULL || function == NULL || function_layout == NULL || local == NULL ||
+        offset == NULL || local_id < function->local_begin ||
         local_id - function->local_begin >= function->local_count) {
         return false;
     }
     object = minic_c0_program_local(program, local_id);
-    if (object == NULL || function->local_storage_size == 0U ||
-        object->storage_offset >= function->local_storage_size) {
+    if (object == NULL ||
+        !minic_riscv64_function_layout_local_offset(
+            function_layout, function, local_id, &object_offset) ||
+        function_layout->local_storage_size == 0U ||
+        object_offset >= function_layout->local_storage_size) {
         return false;
     }
     *local = object;
+    *offset = object_offset;
     return true;
 }
 
 static bool minic_riscv64_scalar_object_access(const MinicC0Program *program,
                                                const MinicFunction *function,
+                                               const MinicRiscv64FunctionLayout *function_layout,
                                                MinicLocalId local_id,
                                                const MinicLocal **local,
+                                               size_t *offset,
                                                size_t *width) {
     const MinicLocal *object;
+    size_t object_offset;
     size_t object_width;
 
-    if (!minic_riscv64_local_object(program, function, local_id, &object) ||
+    if (offset == NULL || width == NULL ||
+        !minic_riscv64_local_object(
+            program, function, function_layout, local_id, &object, &object_offset) ||
         !minic_riscv64_scalar_width(object->type, &object_width) ||
-        object_width > function->local_storage_size - object->storage_offset) {
+        object_width > function_layout->local_storage_size - object_offset) {
         return false;
     }
     *local = object;
+    *offset = object_offset;
     *width = object_width;
     return true;
 }
@@ -276,74 +290,89 @@ bool minic_riscv64_emit_scalar_store(FILE *file,
 bool minic_riscv64_emit_object_address(FILE *file,
                                        const MinicC0Program *program,
                                        const MinicFunction *function,
+                                       const MinicRiscv64FunctionLayout *function_layout,
                                        MinicLocalId local_id) {
     const MinicLocal *local;
+    size_t offset;
 
-    if (!minic_riscv64_local_object(program, function, local_id, &local)) {
+    if (!minic_riscv64_local_object(
+            program, function, function_layout, local_id, &local, &offset)) {
         return false;
     }
-    if (local->storage_offset <= 2047U) {
-        return fprintf(file, "  addi a0, s0, %zu\n", local->storage_offset) >= 0;
+    (void)local;
+    if (offset <= 2047U) {
+        return fprintf(file, "  addi a0, s0, %zu\n", offset) >= 0;
     }
     return fprintf(file,
                    "  li t2, %zu\n"
                    "  add a0, s0, t2\n",
-                   local->storage_offset) >= 0;
+                   offset) >= 0;
 }
 
 bool minic_riscv64_emit_object_load(FILE *file,
                                     const MinicC0Program *program,
                                     const MinicFunction *function,
+                                    const MinicRiscv64FunctionLayout *function_layout,
                                     MinicLocalId local_id) {
     const MinicLocal *local;
+    size_t offset;
     size_t width;
     const char *instruction;
 
-    if (!minic_riscv64_scalar_object_access(program, function, local_id, &local, &width)) {
+    if (!minic_riscv64_scalar_object_access(
+            program, function, function_layout, local_id, &local, &offset, &width)) {
         return false;
     }
     (void)width;
     instruction = minic_riscv64_load_instruction(local->type);
-    return minic_riscv64_emit_s0_access(file, instruction, "a0", local->storage_offset);
+    return minic_riscv64_emit_s0_access(file, instruction, "a0", offset);
 }
 
 bool minic_riscv64_emit_object_store_register(FILE *file,
                                               const MinicC0Program *program,
                                               const MinicFunction *function,
+                                              const MinicRiscv64FunctionLayout *function_layout,
                                               MinicLocalId local_id,
                                               const char *register_name) {
     const MinicLocal *local;
+    size_t offset;
     size_t width;
     const char *instruction;
 
     if (register_name == NULL ||
-        !minic_riscv64_scalar_object_access(program, function, local_id, &local, &width)) {
+        !minic_riscv64_scalar_object_access(
+            program, function, function_layout, local_id, &local, &offset, &width)) {
         return false;
     }
     (void)width;
     instruction = minic_riscv64_store_instruction(local->type);
-    return minic_riscv64_emit_s0_access(file, instruction, register_name, local->storage_offset);
+    return minic_riscv64_emit_s0_access(file, instruction, register_name, offset);
 }
 
-bool minic_riscv64_emit_integer_aggregate_local_chunk(FILE *file,
-                                                      const MinicC0Program *program,
-                                                      const MinicFunction *function,
-                                                      MinicLocalId local_id,
-                                                      size_t chunk_index,
-                                                      const char *register_name) {
+bool minic_riscv64_emit_integer_aggregate_local_chunk(
+    FILE *file,
+    const MinicC0Program *program,
+    const MinicFunction *function,
+    const MinicRiscv64FunctionLayout *function_layout,
+    MinicLocalId local_id,
+    size_t chunk_index,
+    const char *register_name) {
     const MinicLocal *local;
     size_t chunks;
     size_t storage_size;
+    size_t local_offset;
     size_t chunk_offset;
 
-    if (register_name == NULL || !minic_riscv64_local_object(program, function, local_id, &local) ||
+    if (register_name == NULL ||
+        !minic_riscv64_local_object(
+            program, function, function_layout, local_id, &local, &local_offset) ||
         !minic_riscv64_integer_aggregate_abi(program, local->type, &storage_size, &chunks) ||
-        chunk_index >= chunks || chunk_index > (SIZE_MAX - local->storage_offset) / 8U) {
+        chunk_index >= chunks || chunk_index > (SIZE_MAX - local_offset) / 8U) {
         return false;
     }
-    chunk_offset = local->storage_offset + chunk_index * 8U;
-    if (chunk_offset > function->local_storage_size ||
-        function->local_storage_size - chunk_offset < 8U) {
+    chunk_offset = local_offset + chunk_index * 8U;
+    if (chunk_offset > function_layout->local_storage_size ||
+        function_layout->local_storage_size - chunk_offset < 8U) {
         return false;
     }
     return minic_riscv64_emit_s0_access(file, "sd", register_name, chunk_offset);
@@ -352,8 +381,10 @@ bool minic_riscv64_emit_integer_aggregate_local_chunk(FILE *file,
 bool minic_riscv64_emit_object_store(FILE *file,
                                      const MinicC0Program *program,
                                      const MinicFunction *function,
+                                     const MinicRiscv64FunctionLayout *function_layout,
                                      MinicLocalId local_id) {
-    return minic_riscv64_emit_object_store_register(file, program, function, local_id, "a0");
+    return minic_riscv64_emit_object_store_register(
+        file, program, function, function_layout, local_id, "a0");
 }
 
 bool minic_riscv64_frame_layout_from_function_layout(
@@ -407,20 +438,4 @@ bool minic_riscv64_frame_layout_from_function_layout(
     layout->saved_s0_offset = layout->varargs_offset - 16U;
     layout->integer_parameter_count = abi_cursor.integer_register_count;
     return true;
-}
-
-bool minic_riscv64_frame_layout(const MinicC0Program *program,
-                                const MinicFunction *function,
-                                MinicRiscv64FrameLayout *layout) {
-    MinicRiscv64FunctionLayout function_layout;
-    bool success;
-
-    minic_riscv64_function_layout_initialize(&function_layout);
-    if (!minic_riscv64_layout_function(NULL, program, function, &function_layout, NULL)) {
-        return false;
-    }
-    success = minic_riscv64_frame_layout_from_function_layout(
-        program, function, &function_layout, layout);
-    minic_riscv64_function_layout_destroy(&function_layout);
-    return success;
 }

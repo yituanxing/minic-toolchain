@@ -786,7 +786,7 @@ static bool minic_riscv64_emit_function(FILE *file,
                                                                         : "  fmv.x.w t0, fa%zu\n",
                                   location.floating_register_begin) >= 0 &&
                           minic_riscv64_emit_object_store_register(
-                              file, program, function, local_id, "t0");
+                              file, program, function, &function_layout, local_id, "t0");
                 continue;
             }
 
@@ -824,8 +824,13 @@ static bool minic_riscv64_emit_function(FILE *file,
                         success = minic_riscv64_emit_sp_load64(file, "t0", incoming_offset);
                     }
                     if (success) {
-                        success = minic_riscv64_emit_integer_aggregate_local_chunk(
-                            file, program, function, local_id, chunk_index, source_register);
+                        success = minic_riscv64_emit_integer_aggregate_local_chunk(file,
+                                                                                   program,
+                                                                                   function,
+                                                                                   &function_layout,
+                                                                                   local_id,
+                                                                                   chunk_index,
+                                                                                   source_register);
                     }
                 }
                 continue;
@@ -842,6 +847,7 @@ static bool minic_riscv64_emit_function(FILE *file,
                     file,
                     program,
                     function,
+                    &function_layout,
                     local_id,
                     minic_riscv64_argument_registers[location.integer_register_begin]);
                 continue;
@@ -856,15 +862,15 @@ static bool minic_riscv64_emit_function(FILE *file,
                 incoming_offset = frame_size + location.stack_slot_begin * 8U;
                 success = minic_riscv64_emit_sp_load64(file, "t0", incoming_offset) &&
                           minic_riscv64_emit_object_store_register(
-                              file, program, function, local_id, "t0");
+                              file, program, function, &function_layout, local_id, "t0");
                 continue;
             }
             success = false;
         }
     }
     if (success) {
-        success =
-            minic_riscv64_emit_block(file, program, function, function->body_block, label_counter);
+        success = minic_riscv64_emit_block(
+            file, program, function, &function_layout, function->body_block, label_counter);
     }
     if (success) {
         success = fprintf(file,

@@ -22,12 +22,14 @@ typedef struct MinicSwitchLabels {
     MinicStatementId default_statement;
 } MinicSwitchLabels;
 
-static bool minic_riscv64_emit_block_with_break_target(FILE *file,
-                                                       const MinicC0Program *program,
-                                                       const MinicFunction *function,
-                                                       MinicBlockId block_id,
-                                                       size_t *label_counter,
-                                                       MinicBreakTarget break_target);
+static bool
+minic_riscv64_emit_block_with_break_target(FILE *file,
+                                           const MinicC0Program *program,
+                                           const MinicFunction *function,
+                                           const MinicRiscv64FunctionLayout *function_layout,
+                                           MinicBlockId block_id,
+                                           size_t *label_counter,
+                                           MinicBreakTarget break_target);
 
 static bool
 minic_riscv64_emit_normalize_word(FILE *file, MinicType type, const char *register_name) {
@@ -37,6 +39,7 @@ minic_riscv64_emit_normalize_word(FILE *file, MinicType type, const char *regist
 static bool minic_riscv64_emit_assignment(FILE *file,
                                           const MinicC0Program *program,
                                           const MinicFunction *function,
+                                          const MinicRiscv64FunctionLayout *function_layout,
                                           const MinicStatement *statement) {
     const MinicExpression *target;
     const MinicExpression *value;
@@ -47,10 +50,11 @@ static bool minic_riscv64_emit_assignment(FILE *file,
         !minic_c0_assignment_compatible(program, target->type, statement->expression)) {
         return false;
     }
-    return minic_riscv64_emit_expression(file, program, function, statement->expression) &&
+    return minic_riscv64_emit_expression(
+               file, program, function, function_layout, statement->expression) &&
            fprintf(file, "  addi sp, sp, -16\n  sd a0, 0(sp)\n") >= 0 &&
            minic_riscv64_emit_lvalue_address(
-               file, program, function, statement->target_expression) &&
+               file, program, function, function_layout, statement->target_expression) &&
            fprintf(file, "  ld t0, 0(sp)\n  addi sp, sp, 16\n") >= 0 &&
            (!minic_type_is_integer(target->type) ||
             minic_riscv64_emit_integer_conversion(file, target->type, "t0")) &&
@@ -60,15 +64,21 @@ static bool minic_riscv64_emit_assignment(FILE *file,
 static bool minic_riscv64_emit_record_copy(FILE *file,
                                            const MinicC0Program *program,
                                            const MinicFunction *function,
+                                           const MinicRiscv64FunctionLayout *function_layout,
                                            const MinicStatement *statement) {
-    return statement != NULL &&
-           minic_riscv64_emit_record_copy_value(
-               file, program, function, statement->target_expression, statement->expression, false);
+    return statement != NULL && minic_riscv64_emit_record_copy_value(file,
+                                                                     program,
+                                                                     function,
+                                                                     function_layout,
+                                                                     statement->target_expression,
+                                                                     statement->expression,
+                                                                     false);
 }
 
 static bool minic_riscv64_emit_xor_assignment(FILE *file,
                                               const MinicC0Program *program,
                                               const MinicFunction *function,
+                                              const MinicRiscv64FunctionLayout *function_layout,
                                               const MinicStatement *statement) {
     const MinicExpression *target;
     const MinicExpression *value;
@@ -79,12 +89,14 @@ static bool minic_riscv64_emit_xor_assignment(FILE *file,
     if (target == NULL || value == NULL || target->value_category != MINIC_VALUE_LVALUE ||
         !minic_type_is_integer(target->type) || !minic_type_is_integer(value->type) ||
         !minic_type_integer_common(target->type, value->type, &common_type) ||
-        !minic_riscv64_emit_lvalue_address(file, program, function, statement->target_expression) ||
+        !minic_riscv64_emit_lvalue_address(
+            file, program, function, function_layout, statement->target_expression) ||
         fprintf(file, "  addi sp, sp, -16\n  sd a0, 0(sp)\n") < 0 ||
         !minic_riscv64_emit_scalar_load(file, target->type, "t0", "a0") ||
         !minic_riscv64_emit_normalize_word(file, common_type, "t0") ||
         fprintf(file, "  sd t0, 8(sp)\n") < 0 ||
-        !minic_riscv64_emit_expression(file, program, function, statement->expression) ||
+        !minic_riscv64_emit_expression(
+            file, program, function, function_layout, statement->expression) ||
         !minic_riscv64_emit_normalize_word(file, common_type, "a0") ||
         fprintf(file,
                 "  ld t0, 8(sp)\n"
@@ -102,6 +114,7 @@ static bool minic_riscv64_emit_xor_assignment(FILE *file,
 static bool minic_riscv64_emit_cleanup_contexts(FILE *file,
                                                 const MinicC0Program *program,
                                                 const MinicFunction *function,
+                                                const MinicRiscv64FunctionLayout *function_layout,
                                                 MinicCleanupContextId current,
                                                 MinicCleanupContextId stop) {
     if (!minic_c0_cleanup_context_reaches(program, current, stop)) {
@@ -112,7 +125,8 @@ static bool minic_riscv64_emit_cleanup_contexts(FILE *file,
 
         context = minic_c0_program_cleanup_context(program, current);
         if (context == NULL ||
-            !minic_riscv64_emit_expression(file, program, function, context->cleanup_expression)) {
+            !minic_riscv64_emit_expression(
+                file, program, function, function_layout, context->cleanup_expression)) {
             return false;
         }
         current = context->parent;
@@ -123,6 +137,7 @@ static bool minic_riscv64_emit_cleanup_contexts(FILE *file,
 static bool minic_riscv64_emit_return(FILE *file,
                                       const MinicC0Program *program,
                                       const MinicFunction *function,
+                                      const MinicRiscv64FunctionLayout *function_layout,
                                       const MinicStatement *statement) {
     bool has_expression;
     bool has_value;
@@ -135,7 +150,8 @@ static bool minic_riscv64_emit_return(FILE *file,
 
             expression = minic_c0_program_expression(program, statement->expression);
             if (expression == NULL || !minic_type_is_void(expression->type) ||
-                !minic_riscv64_emit_expression(file, program, function, statement->expression)) {
+                !minic_riscv64_emit_expression(
+                    file, program, function, function_layout, statement->expression)) {
                 return false;
             }
         }
@@ -163,17 +179,18 @@ static bool minic_riscv64_emit_return(FILE *file,
             (void)aggregate_size;
             if (value->value_category == MINIC_VALUE_LVALUE) {
                 if (!minic_riscv64_emit_lvalue_address(
-                        file, program, function, statement->expression) ||
+                        file, program, function, function_layout, statement->expression) ||
                     fprintf(file, "  mv t0, a0\n  ld a0, 0(t0)\n") < 0 ||
                     (aggregate_chunks == 2U && fprintf(file, "  ld a1, 8(t0)\n") < 0)) {
                     return false;
                 }
             } else if (value->kind != MINIC_EXPRESSION_CALL ||
                        !minic_riscv64_emit_expression(
-                           file, program, function, statement->expression)) {
+                           file, program, function, function_layout, statement->expression)) {
                 return false;
             }
-        } else if (!minic_riscv64_emit_expression(file, program, function, statement->expression)) {
+        } else if (!minic_riscv64_emit_expression(
+                       file, program, function, function_layout, statement->expression)) {
             return false;
         }
         if (minic_type_is_integer(function->return_type) &&
@@ -190,6 +207,7 @@ static bool minic_riscv64_emit_return(FILE *file,
         if (!minic_riscv64_emit_cleanup_contexts(file,
                                                  program,
                                                  function,
+                                                 function_layout,
                                                  statement->cleanup_context,
                                                  statement->cleanup_stop_context)) {
             return false;
@@ -282,6 +300,7 @@ static bool minic_riscv64_emit_break(FILE *file, MinicBreakTarget target) {
 static bool minic_riscv64_emit_switch(FILE *file,
                                       const MinicC0Program *program,
                                       const MinicFunction *function,
+                                      const MinicRiscv64FunctionLayout *function_layout,
                                       const MinicStatement *statement,
                                       size_t *label_counter) {
     MinicSwitchLabels labels;
@@ -300,7 +319,8 @@ static bool minic_riscv64_emit_switch(FILE *file,
 
     label = *label_counter;
     *label_counter += 1U;
-    if (!minic_riscv64_emit_expression(file, program, function, statement->expression) ||
+    if (!minic_riscv64_emit_expression(
+            file, program, function, function_layout, statement->expression) ||
         !minic_riscv64_emit_integer_conversion(file, selector->type, "a0") ||
         fprintf(file, "  mv t0, a0\n") < 0) {
         return false;
@@ -335,14 +355,20 @@ static bool minic_riscv64_emit_switch(FILE *file,
 
     break_target.kind = MINIC_BREAK_TARGET_SWITCH;
     break_target.label = label;
-    return minic_riscv64_emit_block_with_break_target(
-               file, program, function, statement->then_block, label_counter, break_target) &&
+    return minic_riscv64_emit_block_with_break_target(file,
+                                                      program,
+                                                      function,
+                                                      function_layout,
+                                                      statement->then_block,
+                                                      label_counter,
+                                                      break_target) &&
            fprintf(file, ".Lswitch_end_%zu:\n", label) >= 0;
 }
 
 static bool minic_riscv64_emit_statement(FILE *file,
                                          const MinicC0Program *program,
                                          const MinicFunction *function,
+                                         const MinicRiscv64FunctionLayout *function_layout,
                                          MinicStatementId statement_id,
                                          const MinicStatement *statement,
                                          size_t *label_counter,
@@ -353,28 +379,31 @@ static bool minic_riscv64_emit_statement(FILE *file,
 
     switch (statement->kind) {
     case MINIC_STATEMENT_ASSIGN:
-        return minic_riscv64_emit_assignment(file, program, function, statement);
+        return minic_riscv64_emit_assignment(file, program, function, function_layout, statement);
 
     case MINIC_STATEMENT_RECORD_COPY:
-        return minic_riscv64_emit_record_copy(file, program, function, statement);
+        return minic_riscv64_emit_record_copy(file, program, function, function_layout, statement);
 
     case MINIC_STATEMENT_XOR_ASSIGN:
-        return minic_riscv64_emit_xor_assignment(file, program, function, statement);
+        return minic_riscv64_emit_xor_assignment(
+            file, program, function, function_layout, statement);
 
     case MINIC_STATEMENT_EXPRESSION:
         return statement->expression != MINIC_EXPRESSION_INVALID &&
-               minic_riscv64_emit_expression(file, program, function, statement->expression);
+               minic_riscv64_emit_expression(
+                   file, program, function, function_layout, statement->expression);
 
     case MINIC_STATEMENT_INLINE_ASM:
-        return minic_riscv64_emit_inline_asm(file, program, function, statement);
+        return minic_riscv64_emit_inline_asm(file, program, function, function_layout, statement);
 
     case MINIC_STATEMENT_RETURN:
-        return minic_riscv64_emit_return(file, program, function, statement);
+        return minic_riscv64_emit_return(file, program, function, function_layout, statement);
 
     case MINIC_STATEMENT_BREAK:
         return minic_riscv64_emit_cleanup_contexts(file,
                                                    program,
                                                    function,
+                                                   function_layout,
                                                    statement->cleanup_context,
                                                    statement->cleanup_stop_context) &&
                minic_riscv64_emit_break(file, break_target);
@@ -384,6 +413,7 @@ static bool minic_riscv64_emit_statement(FILE *file,
                minic_riscv64_emit_cleanup_contexts(file,
                                                    program,
                                                    function,
+                                                   function_layout,
                                                    statement->cleanup_context,
                                                    statement->cleanup_stop_context) &&
                fprintf(file, "  j .Luser_%zu\n", (size_t)statement->target_statement) >= 0;
@@ -397,10 +427,16 @@ static bool minic_riscv64_emit_statement(FILE *file,
 
         label = *label_counter;
         *label_counter += 1U;
-        if (!minic_riscv64_emit_expression(file, program, function, statement->expression) ||
+        if (!minic_riscv64_emit_expression(
+                file, program, function, function_layout, statement->expression) ||
             fprintf(file, "  beqz a0, .Lif_else_%zu\n", label) < 0 ||
-            !minic_riscv64_emit_block_with_break_target(
-                file, program, function, statement->then_block, label_counter, break_target) ||
+            !minic_riscv64_emit_block_with_break_target(file,
+                                                        program,
+                                                        function,
+                                                        function_layout,
+                                                        statement->then_block,
+                                                        label_counter,
+                                                        break_target) ||
             fprintf(file,
                     "  j .Lif_end_%zu\n"
                     ".Lif_else_%zu:\n",
@@ -409,8 +445,13 @@ static bool minic_riscv64_emit_statement(FILE *file,
             return false;
         }
         if (statement->else_block != MINIC_BLOCK_INVALID &&
-            !minic_riscv64_emit_block_with_break_target(
-                file, program, function, statement->else_block, label_counter, break_target)) {
+            !minic_riscv64_emit_block_with_break_target(file,
+                                                        program,
+                                                        function,
+                                                        function_layout,
+                                                        statement->else_block,
+                                                        label_counter,
+                                                        break_target)) {
             return false;
         }
         return fprintf(file, ".Lif_end_%zu:\n", label) >= 0;
@@ -426,7 +467,8 @@ static bool minic_riscv64_emit_statement(FILE *file,
             return false;
         }
         if (statement->expression != MINIC_EXPRESSION_INVALID &&
-            (!minic_riscv64_emit_expression(file, program, function, statement->expression) ||
+            (!minic_riscv64_emit_expression(
+                 file, program, function, function_layout, statement->expression) ||
              fprintf(file, "  beqz a0, .Lwhile_end_%zu\n", label) < 0)) {
             return false;
         }
@@ -435,6 +477,7 @@ static bool minic_riscv64_emit_statement(FILE *file,
         return minic_riscv64_emit_block_with_break_target(file,
                                                           program,
                                                           function,
+                                                          function_layout,
                                                           statement->then_block,
                                                           label_counter,
                                                           loop_break_target) &&
@@ -446,7 +489,8 @@ static bool minic_riscv64_emit_statement(FILE *file,
     }
 
     case MINIC_STATEMENT_SWITCH:
-        return minic_riscv64_emit_switch(file, program, function, statement, label_counter);
+        return minic_riscv64_emit_switch(
+            file, program, function, function_layout, statement, label_counter);
 
     case MINIC_STATEMENT_CASE:
         return fprintf(file, ".Lswitch_case_%zu:\n", (size_t)statement_id) >= 0;
@@ -458,12 +502,14 @@ static bool minic_riscv64_emit_statement(FILE *file,
     return false;
 }
 
-static bool minic_riscv64_emit_block_with_break_target(FILE *file,
-                                                       const MinicC0Program *program,
-                                                       const MinicFunction *function,
-                                                       MinicBlockId block_id,
-                                                       size_t *label_counter,
-                                                       MinicBreakTarget break_target) {
+static bool
+minic_riscv64_emit_block_with_break_target(FILE *file,
+                                           const MinicC0Program *program,
+                                           const MinicFunction *function,
+                                           const MinicRiscv64FunctionLayout *function_layout,
+                                           MinicBlockId block_id,
+                                           size_t *label_counter,
+                                           MinicBreakTarget break_target) {
     const MinicBlock *block;
     size_t index;
 
@@ -477,8 +523,14 @@ static bool minic_riscv64_emit_block_with_break_target(FILE *file,
 
         statement_id = block->statements[index];
         statement = minic_c0_program_statement(program, statement_id);
-        if (!minic_riscv64_emit_statement(
-                file, program, function, statement_id, statement, label_counter, break_target)) {
+        if (!minic_riscv64_emit_statement(file,
+                                          program,
+                                          function,
+                                          function_layout,
+                                          statement_id,
+                                          statement,
+                                          label_counter,
+                                          break_target)) {
             fprintf(stderr,
                     "CODEGEN_FAIL statement function=%s block=%zu statement=%zu kind=%d\n",
                     function != NULL ? function->name : "<null>",
@@ -494,6 +546,7 @@ static bool minic_riscv64_emit_block_with_break_target(FILE *file,
 bool minic_riscv64_emit_block(FILE *file,
                               const MinicC0Program *program,
                               const MinicFunction *function,
+                              const MinicRiscv64FunctionLayout *function_layout,
                               MinicBlockId block_id,
                               size_t *label_counter) {
     MinicBreakTarget break_target;
@@ -501,5 +554,5 @@ bool minic_riscv64_emit_block(FILE *file,
     break_target.kind = MINIC_BREAK_TARGET_NONE;
     break_target.label = 0U;
     return minic_riscv64_emit_block_with_break_target(
-        file, program, function, block_id, label_counter, break_target);
+        file, program, function, function_layout, block_id, label_counter, break_target);
 }
