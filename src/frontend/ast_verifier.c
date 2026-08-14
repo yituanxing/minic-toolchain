@@ -23,7 +23,8 @@ static bool pointer_qualifiers_are_valid(MinicType type) {
            (type.pointer_volatile_qualifiers >> type.pointer_depth) == 0U;
 }
 
-static bool type_is_valid(const MinicC0Program *program, MinicType type) {
+static bool
+type_is_valid(const MinicC0Program *program, const MinicTargetInfo *target, MinicType type) {
     if (program == NULL ||
         (type.base_qualifiers & ~((unsigned int)MINIC_TYPE_QUALIFIER_CONST |
                                   (unsigned int)MINIC_TYPE_QUALIFIER_VOLATILE)) != 0U ||
@@ -36,11 +37,14 @@ static bool type_is_valid(const MinicC0Program *program, MinicType type) {
     if (type.is_plain_char && type.base_kind != MINIC_TYPE_BASE_INT) {
         return false;
     }
-    if (type.is_plain_char && type.integer_sign != MINIC_INTEGER_SIGN_UNSIGNED) {
-        return false;
-    }
-    if (type.is_plain_char && type.integer_rank != MINIC_INTEGER_RANK_CHAR) {
-        return false;
+    if (type.is_plain_char) {
+        MinicIntegerSign plain_char_sign;
+
+        if (type.integer_rank != MINIC_INTEGER_RANK_CHAR ||
+            !minic_target_info_plain_char_sign(target, &plain_char_sign) ||
+            type.integer_sign != plain_char_sign) {
+            return false;
+        }
     }
 
     switch (type.base_kind) {
@@ -356,7 +360,7 @@ static bool verify_expression(const MinicC0Program *program,
     const MinicExpression *operand;
 
     expression = &program->expressions[expression_index];
-    if (!type_is_valid(program, expression->type) ||
+    if (!type_is_valid(program, target, expression->type) ||
         (expression->value_category != MINIC_VALUE_RVALUE &&
          expression->value_category != MINIC_VALUE_LVALUE)) {
         return false;
@@ -448,7 +452,7 @@ static bool verify_expression(const MinicC0Program *program,
 
         return target != NULL && expression->value_category == MINIC_VALUE_RVALUE &&
                minic_type_equal(expression->type, minic_type_unsigned_long()) &&
-               type_is_valid(program, expression->value.sizeof_type) &&
+               type_is_valid(program, target, expression->value.sizeof_type) &&
                minic_target_info_sizeof_type(
                    target, program, expression->value.sizeof_type, &measured_size);
     }
@@ -1115,7 +1119,7 @@ bool minic_c0_program_verify_target(const MinicC0Program *program,
         array_type = &program->array_types[index];
         if ((array_type->element_count == 0U &&
              !incomplete_array_has_semantic_owner(program, index)) ||
-            !type_is_valid(program, array_type->element_type) ||
+            !type_is_valid(program, target, array_type->element_type) ||
             minic_type_is_function(array_type->element_type)) {
             return false;
         }
@@ -1126,14 +1130,14 @@ bool minic_c0_program_verify_target(const MinicC0Program *program,
 
         function_type = &program->function_types[index];
         if (function_type->parameter_count > MINIC_MAX_FUNCTION_PARAMETERS ||
-            !type_is_valid(program, function_type->return_type) ||
+            !type_is_valid(program, target, function_type->return_type) ||
             minic_type_is_array(function_type->return_type) ||
             minic_type_is_function(function_type->return_type)) {
             return false;
         }
         for (parameter_index = 0U; parameter_index < function_type->parameter_count;
              ++parameter_index) {
-            if (!type_is_valid(program, function_type->parameter_types[parameter_index]) ||
+            if (!type_is_valid(program, target, function_type->parameter_types[parameter_index]) ||
                 !type_is_top_level_unqualified(function_type->parameter_types[parameter_index]) ||
                 minic_type_is_void(function_type->parameter_types[parameter_index]) ||
                 minic_type_is_function(function_type->parameter_types[parameter_index])) {
@@ -1155,14 +1159,15 @@ bool minic_c0_program_verify_target(const MinicC0Program *program,
 
             field = &record->fields[field_index];
             if (field->name == NULL || field->element_count == 0U ||
-                !type_is_valid(program, field->type) || minic_type_is_function(field->type)) {
+                !type_is_valid(program, target, field->type) ||
+                minic_type_is_function(field->type)) {
                 return false;
             }
         }
     }
     for (index = 0U; index < program->local_count; ++index) {
         if (program->locals[index].element_count == 0U ||
-            !type_is_valid(program, program->locals[index].type) ||
+            !type_is_valid(program, target, program->locals[index].type) ||
             minic_type_is_function(program->locals[index].type)) {
             return false;
         }
@@ -1173,7 +1178,7 @@ bool minic_c0_program_verify_target(const MinicC0Program *program,
 
         function = &program->functions[index];
         if (function->name == NULL || function->parameter_count > MINIC_MAX_FUNCTION_PARAMETERS ||
-            !type_is_valid(program, function->return_type) ||
+            !type_is_valid(program, target, function->return_type) ||
             minic_type_is_function(function->return_type) ||
             minic_type_is_array(function->return_type) ||
             function->local_begin > program->local_count ||
@@ -1184,7 +1189,7 @@ bool minic_c0_program_verify_target(const MinicC0Program *program,
             return false;
         }
         for (parameter_index = 0U; parameter_index < function->parameter_count; ++parameter_index) {
-            if (!type_is_valid(program, function->parameter_types[parameter_index]) ||
+            if (!type_is_valid(program, target, function->parameter_types[parameter_index]) ||
                 !type_is_top_level_unqualified(function->parameter_types[parameter_index]) ||
                 minic_type_is_void(function->parameter_types[parameter_index]) ||
                 minic_type_is_function(function->parameter_types[parameter_index])) {
@@ -1194,7 +1199,7 @@ bool minic_c0_program_verify_target(const MinicC0Program *program,
     }
     for (index = 0U; index < program->type_alias_count; ++index) {
         if (program->type_aliases[index].name == NULL ||
-            !type_is_valid(program, program->type_aliases[index].type)) {
+            !type_is_valid(program, target, program->type_aliases[index].type)) {
             return false;
         }
     }
@@ -1202,7 +1207,7 @@ bool minic_c0_program_verify_target(const MinicC0Program *program,
         const MinicGlobalObject *object;
 
         object = &program->global_objects[index];
-        if (object->name == NULL || !type_is_valid(program, object->type) ||
+        if (object->name == NULL || !type_is_valid(program, target, object->type) ||
             minic_type_is_function(object->type) ||
             (minic_type_is_void(object->type) && !object->is_extern) ||
             (object->is_extern &&
