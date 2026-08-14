@@ -502,12 +502,13 @@ bool minic_parser_parse_record_definition_specifier(MinicParser *parser, MinicTy
         const MinicRecord *record;
 
         name_span = parser->current.span;
-        record_id = minic_parser_find_record(parser, name_span);
+        record_id = minic_parser_find_record_in_current_scope(parser, name_span);
         if (record_id == MINIC_RECORD_INVALID) {
             if (!minic_c0_program_add_record(parser->program,
                                              parser->source + name_span.begin.offset,
                                              minic_parser_span_length(name_span),
-                                             &record_id)) {
+                                             &record_id) ||
+                !minic_parser_bind_record_tag(parser, name_span, record_id)) {
                 minic_parser_error(parser, "out of memory while adding record");
                 return false;
             }
@@ -571,27 +572,52 @@ bool minic_parser_parse_record_definition_specifier(MinicParser *parser, MinicTy
     return true;
 }
 
+static bool parse_record_forward_declaration(MinicParser *parser) {
+    MinicSourceSpan name_span;
+    MinicRecordId record_id;
+    MinicTokenKind keyword;
+    bool is_union;
+
+    keyword = parser->current.kind;
+    is_union = keyword == MINIC_TOKEN_KW_UNION;
+    if ((keyword != MINIC_TOKEN_KW_STRUCT && keyword != MINIC_TOKEN_KW_UNION) ||
+        !minic_parser_advance(parser) || parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
+        minic_parser_error(parser, "expected record tag in forward declaration");
+        return false;
+    }
+    name_span = parser->current.span;
+    record_id = minic_parser_find_record_in_current_scope(parser, name_span);
+    if (record_id == MINIC_RECORD_INVALID) {
+        if (!minic_c0_program_add_record(parser->program,
+                                         parser->source + name_span.begin.offset,
+                                         minic_parser_span_length(name_span),
+                                         &record_id) ||
+            !minic_parser_bind_record_tag(parser, name_span, record_id)) {
+            minic_parser_error(parser, "cannot create forward record tag");
+            return false;
+        }
+        parser->program->records[record_id].is_union = is_union;
+    } else if (parser->program->records[record_id].is_union != is_union) {
+        minic_parser_error(parser, "record tag kind does not match prior declaration");
+        return false;
+    }
+    return minic_parser_advance(parser) &&
+           minic_parser_expect(
+               parser, MINIC_TOKEN_SEMICOLON, "expected ';' after record declaration");
+}
+
 bool minic_parser_parse_record_definition(MinicParser *parser) {
     MinicParser probe;
     MinicType record_type;
-    bool is_forward_declaration;
 
     if (parser == NULL) {
         return false;
     }
 
     probe = *parser;
-    is_forward_declaration = false;
     if (minic_parser_advance(&probe) && probe.current.kind == MINIC_TOKEN_IDENTIFIER &&
         minic_parser_advance(&probe) && probe.current.kind == MINIC_TOKEN_SEMICOLON) {
-        is_forward_declaration = true;
-    }
-
-    if (is_forward_declaration) {
-        return minic_parser_parse_type_specifiers(parser, &record_type) &&
-               minic_type_is_record(record_type) &&
-               minic_parser_expect(
-                   parser, MINIC_TOKEN_SEMICOLON, "expected ';' after record declaration");
+        return parse_record_forward_declaration(parser);
     }
 
     return minic_parser_parse_record_definition_specifier(parser, &record_type) &&

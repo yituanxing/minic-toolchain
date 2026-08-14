@@ -109,14 +109,21 @@ int main(void)
         minic_c0_program_destroy(&program);
         return fail("record completion boundary");
     }
-    if (minic_c0_program_add_record(
+    if (!minic_c0_program_add_record(
             &program,
             "AES_ctx",
             7U,
             &duplicate_id) ||
+        duplicate_id == record_id ||
         minic_c0_program_add_record(&program, "", 0U, &duplicate_id)) {
         minic_c0_program_destroy(&program);
-        return fail("invalid tagged record accepted");
+        return fail("record entity identity contract");
+    }
+    record = minic_c0_program_record(&program, duplicate_id);
+    if (record == NULL || strcmp(record->name, "AES_ctx") != 0 || record->is_complete ||
+        record->field_count != 0U) {
+        minic_c0_program_destroy(&program);
+        return fail("duplicate-name record entity metadata");
     }
 
     if (!minic_c0_program_add_anonymous_record(&program, &anonymous_record_id) ||
