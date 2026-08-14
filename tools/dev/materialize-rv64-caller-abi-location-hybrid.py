@@ -192,7 +192,8 @@ selector = r'''        use_formal_location_path = true;
             if (value->kind == MINIC_RISCV64_ABI_VALUE_IGNORE ||
                 value->kind == MINIC_RISCV64_ABI_VALUE_INDIRECT ||
                 (value->kind == MINIC_RISCV64_ABI_VALUE_AGGREGATE &&
-                 value->storage_size != 8U && value->storage_size != 16U)) {
+                 (argument_index >= parameter_count ||
+                  (value->storage_size != 8U && value->storage_size != 16U)))) {
                 use_formal_location_path = false;
                 break;
             }
