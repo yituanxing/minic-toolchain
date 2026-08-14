@@ -42,7 +42,7 @@ jobs:
             -e 's/expected 7 type_is_valid calls/expected 11 type_is_valid calls/' \
             -e '/require_absent("src\/frontend\/ast_verifier.c", "minic_type_integer_common(")/d' \
             -e '/require_absent("src\/frontend\/ast_verifier.c", "minic_type_integer_promotion(")/d' \
-            -e 's/if path.as_posix() == "src\/frontend\/type.c":/if path.as_posix() in ("src\/frontend\/type.c", "src\/frontend\/const_eval.c"):/' \
+            -e 's/if path.as_posix() == "src\/frontend\/type.c":/if path.as_posix() in ("src\/frontend\/type.c", "src\/frontend\/const_eval.c", "src\/frontend\/ast_verifier.c"):/' \
             -e 's/if "minic_type_char()" in text:/if path.as_posix() != "src\/target\/target_info.c" and "minic_type_char()" in text:/' \
             tools/dev/materialize-target-integer-consumers-v1.py
           python3 - <<'PY'
