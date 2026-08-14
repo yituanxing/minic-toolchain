@@ -1693,7 +1693,8 @@ static bool parse_static_pointer_array(MinicParser *parser,
         !minic_parser_expect(parser, MINIC_TOKEN_LBRACE, "expected '{'")) {
         goto done;
     }
-    if (!minic_type_pointer_to(minic_type_char(), &string_pointer_type)) {
+    if (!minic_target_info_plain_char_type(parser->target_info, &string_pointer_type) ||
+        !minic_type_pointer_to(string_pointer_type, &string_pointer_type)) {
         minic_parser_error(parser, "cannot build string pointer type");
         goto done;
     }

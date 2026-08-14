@@ -104,7 +104,8 @@ static bool minic_type_plain_char_identity_is_valid(MinicType type) {
     if (!type.is_plain_char) {
         return true;
     }
-    if (type.integer_sign != MINIC_INTEGER_SIGN_UNSIGNED) {
+    if (type.integer_sign != MINIC_INTEGER_SIGN_SIGNED &&
+        type.integer_sign != MINIC_INTEGER_SIGN_UNSIGNED) {
         return false;
     }
     return type.integer_rank == MINIC_INTEGER_RANK_CHAR;

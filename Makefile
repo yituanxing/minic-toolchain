@@ -107,6 +107,8 @@ TYPE_TEST_BINARY  := $(BUILD_DIR)/tests/frontend/type-test
 RECORD_TEST_SOURCES := \
 	src/frontend/ast.c \
 	src/frontend/type.c \
+	src/target/data_layout.c \
+	src/target/target_info.c \
 	tests/frontend/record_test.c
 RECORD_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(RECORD_TEST_SOURCES))
 RECORD_TEST_BINARY  := $(BUILD_DIR)/tests/frontend/record-test
@@ -114,6 +116,8 @@ RECORD_TEST_BINARY  := $(BUILD_DIR)/tests/frontend/record-test
 TYPE_ALIAS_TEST_SOURCES := \
 	src/frontend/ast.c \
 	src/frontend/type.c \
+	src/target/data_layout.c \
+	src/target/target_info.c \
 	tests/frontend/type_alias_test.c
 TYPE_ALIAS_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(TYPE_ALIAS_TEST_SOURCES))
 TYPE_ALIAS_TEST_BINARY  := $(BUILD_DIR)/tests/frontend/type-alias-test
@@ -146,6 +150,7 @@ RV64_ABI_TEST_SOURCES := \
 	src/frontend/ast_global.c \
 	src/frontend/type.c \
 	src/target/data_layout.c \
+	src/target/target_info.c \
 	src/target/riscv64/abi.c \
 	tests/target/riscv64/abi_test.c
 RV64_ABI_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(RV64_ABI_TEST_SOURCES))

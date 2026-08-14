@@ -8,14 +8,12 @@
 #include <stdio.h>
 #include <string.h>
 
-static int fail(const char *message)
-{
+static int fail(const char *message) {
     (void)fprintf(stderr, "FAIL target/riscv64/layout: %s\n", message);
     return 1;
 }
 
-int main(void)
-{
+int main(void) {
     MinicC0Program program;
     MinicBlockId block_id;
     MinicFunctionId function_id;
@@ -70,7 +68,8 @@ int main(void)
             semantic_bits != 1U ||
             !minic_target_info_integer_width(target, &program, minic_type_char(), &semantic_bits) ||
             semantic_bits != 8U ||
-            !minic_target_info_integer_width(target, &program, minic_type_short(), &semantic_bits) ||
+            !minic_target_info_integer_width(
+                target, &program, minic_type_short(), &semantic_bits) ||
             semantic_bits != 16U ||
             !minic_target_info_integer_width(target, &program, minic_type_int(), &semantic_bits) ||
             semantic_bits != 32U ||
@@ -79,7 +78,8 @@ int main(void)
             !minic_target_info_integer_width(
                 target, &program, minic_type_long_long(), &semantic_bits) ||
             semantic_bits != 64U ||
-            !minic_target_info_integer_width(target, &program, minic_type_int128(), &semantic_bits) ||
+            !minic_target_info_integer_width(
+                target, &program, minic_type_int128(), &semantic_bits) ||
             semantic_bits != 128U) {
             minic_c0_program_destroy(&program);
             return fail("RV64 target integer semantic model");
@@ -104,10 +104,8 @@ int main(void)
             !minic_target_info_integer_common(
                 target, minic_type_long(), minic_type_unsigned_long(), &common_type) ||
             !minic_type_equal(common_type, minic_type_unsigned_long()) ||
-            !minic_target_info_integer_common(target,
-                                              minic_type_unsigned_long_long(),
-                                              minic_type_int128(),
-                                              &common_type) ||
+            !minic_target_info_integer_common(
+                target, minic_type_unsigned_long_long(), minic_type_int128(), &common_type) ||
             !minic_type_equal(common_type, minic_type_int128())) {
             minic_c0_program_destroy(&program);
             return fail("RV64 usual arithmetic conversions");
@@ -141,18 +139,10 @@ int main(void)
                                                     UINT64_MAX,
                                                     &literal_type) ||
             !minic_type_equal(literal_type, minic_type_unsigned_long()) ||
-            minic_target_info_integer_literal_type(target,
-                                                   MINIC_INTEGER_LITERAL_BASE_DECIMAL,
-                                                   false,
-                                                   0U,
-                                                   UINT64_MAX,
-                                                   &literal_type) ||
-            !minic_target_info_integer_literal_type(target,
-                                                    MINIC_INTEGER_LITERAL_BASE_DECIMAL,
-                                                    true,
-                                                    0U,
-                                                    UINT64_MAX,
-                                                    &literal_type) ||
+            minic_target_info_integer_literal_type(
+                target, MINIC_INTEGER_LITERAL_BASE_DECIMAL, false, 0U, UINT64_MAX, &literal_type) ||
+            !minic_target_info_integer_literal_type(
+                target, MINIC_INTEGER_LITERAL_BASE_DECIMAL, true, 0U, UINT64_MAX, &literal_type) ||
             !minic_type_equal(literal_type, minic_type_unsigned_long())) {
             minic_c0_program_destroy(&program);
             return fail("RV64 integer literal candidate selection");
@@ -163,6 +153,7 @@ int main(void)
         MinicTargetIntegerModel model;
         MinicTargetInfo target;
         MinicIntegerSign plain_char_sign;
+        MinicType plain_char_type;
         MinicType promoted_type;
         MinicType common_type;
         MinicType literal_type;
@@ -181,6 +172,9 @@ int main(void)
 
         if (!minic_target_info_plain_char_sign(&target, &plain_char_sign) ||
             plain_char_sign != MINIC_INTEGER_SIGN_SIGNED ||
+            !minic_target_info_plain_char_type(&target, &plain_char_type) ||
+            !minic_type_is_plain_char(plain_char_type) ||
+            !minic_type_is_signed_integer(plain_char_type) ||
             !minic_target_info_integer_promotion(&target, minic_type_short(), &promoted_type) ||
             !minic_type_equal(promoted_type, minic_type_int()) ||
             !minic_target_info_integer_promotion(
@@ -208,50 +202,31 @@ int main(void)
         }
     }
 
-    if (!minic_riscv64_type_layout(
-            &program,
-            byte_type,
-            &byte_size,
-            &byte_alignment) ||
+    if (!minic_riscv64_type_layout(&program, byte_type, &byte_size, &byte_alignment) ||
         byte_size != 1U || byte_alignment != 1U) {
         minic_c0_program_destroy(&program);
         return fail("unsigned-char scalar layout");
     }
 
-    if (!minic_riscv64_type_layout(
-            &program,
-            minic_type_long(),
-            &long_size,
-            &long_alignment) ||
+    if (!minic_riscv64_type_layout(&program, minic_type_long(), &long_size, &long_alignment) ||
         long_size != 8U || long_alignment != 8U ||
         !minic_riscv64_type_layout(
-            &program,
-            minic_type_unsigned_long(),
-            &long_size,
-            &long_alignment) ||
+            &program, minic_type_unsigned_long(), &long_size, &long_alignment) ||
         long_size != 8U || long_alignment != 8U) {
         minic_c0_program_destroy(&program);
         return fail("RV64 long scalar layout");
     }
 
-    if (!minic_type_is_float(minic_type_float()) ||
-        minic_type_is_double(minic_type_float()) ||
+    if (!minic_type_is_float(minic_type_float()) || minic_type_is_double(minic_type_float()) ||
         minic_type_is_integer(minic_type_float()) ||
-        !minic_riscv64_type_layout(
-            &program,
-            minic_type_float(),
-            &float_size,
-            &float_alignment) ||
+        !minic_riscv64_type_layout(&program, minic_type_float(), &float_size, &float_alignment) ||
         float_size != 4U || float_alignment != 4U) {
         minic_c0_program_destroy(&program);
         return fail("RV64 float scalar identity and layout");
     }
 
     if (!minic_riscv64_type_layout(
-            &program,
-            minic_type_double(),
-            &double_size,
-            &double_alignment) ||
+            &program, minic_type_double(), &double_size, &double_alignment) ||
         double_size != 8U || double_alignment != 8U) {
         minic_c0_program_destroy(&program);
         return fail("RV64 double scalar layout");
@@ -263,22 +238,14 @@ int main(void)
     }
     alloc_parameter_types[0] = minic_type_unsigned_long();
     free_parameter_types[0] = void_pointer_type;
-    if (!minic_c0_program_add_function_type(&program,
-                                            void_pointer_type,
-                                            alloc_parameter_types,
-                                            1U,
-                                            &alloc_function_type) ||
-        !minic_c0_program_add_function_type(&program,
-                                            minic_type_void(),
-                                            free_parameter_types,
-                                            1U,
-                                            &free_function_type) ||
+    if (!minic_c0_program_add_function_type(
+            &program, void_pointer_type, alloc_parameter_types, 1U, &alloc_function_type) ||
+        !minic_c0_program_add_function_type(
+            &program, minic_type_void(), free_parameter_types, 1U, &free_function_type) ||
         !minic_type_pointer_to(alloc_function_type, &alloc_pointer_type) ||
         !minic_type_pointer_to(free_function_type, &free_pointer_type) ||
-        !minic_riscv64_type_layout(&program,
-                                   alloc_pointer_type,
-                                   &function_pointer_size,
-                                   &function_pointer_alignment) ||
+        !minic_riscv64_type_layout(
+            &program, alloc_pointer_type, &function_pointer_size, &function_pointer_alignment) ||
         function_pointer_size != 8U || function_pointer_alignment != 8U) {
         minic_c0_program_destroy(&program);
         return fail("RV64 function pointer scalar layout");
@@ -293,63 +260,20 @@ int main(void)
         return fail("construct function pointer record");
     }
 
-    if (!minic_c0_program_add_record(
-            &program,
-            "FloatPacket",
-            11U,
-            &floating_record_id) ||
+    if (!minic_c0_program_add_record(&program, "FloatPacket", 11U, &floating_record_id) ||
+        !minic_c0_record_add_field(&program, floating_record_id, "prefix", 6U, byte_type, 1U) ||
         !minic_c0_record_add_field(
-            &program,
-            floating_record_id,
-            "prefix",
-            6U,
-            byte_type,
-            1U) ||
-        !minic_c0_record_add_field(
-            &program,
-            floating_record_id,
-            "value",
-            5U,
-            minic_type_double(),
-            1U) ||
-        !minic_c0_record_add_field(
-            &program,
-            floating_record_id,
-            "suffix",
-            6U,
-            byte_type,
-            1U) ||
+            &program, floating_record_id, "value", 5U, minic_type_double(), 1U) ||
+        !minic_c0_record_add_field(&program, floating_record_id, "suffix", 6U, byte_type, 1U) ||
         !minic_c0_program_finish_record(&program, floating_record_id)) {
         minic_c0_program_destroy(&program);
         return fail("construct double record");
     }
 
-    if (!minic_c0_program_add_record(
-            &program,
-            "Packet",
-            6U,
-            &record_id) ||
-        !minic_c0_record_add_field(
-            &program,
-            record_id,
-            "prefix",
-            6U,
-            byte_type,
-            1U) ||
-        !minic_c0_record_add_field(
-            &program,
-            record_id,
-            "data",
-            4U,
-            minic_type_int(),
-            4U) ||
-        !minic_c0_record_add_field(
-            &program,
-            record_id,
-            "value",
-            5U,
-            byte_type,
-            1U) ||
+    if (!minic_c0_program_add_record(&program, "Packet", 6U, &record_id) ||
+        !minic_c0_record_add_field(&program, record_id, "prefix", 6U, byte_type, 1U) ||
+        !minic_c0_record_add_field(&program, record_id, "data", 4U, minic_type_int(), 4U) ||
+        !minic_c0_record_add_field(&program, record_id, "value", 5U, byte_type, 1U) ||
         !minic_c0_program_finish_record(&program, record_id)) {
         minic_c0_program_destroy(&program);
         return fail("construct record");
@@ -419,18 +343,8 @@ int main(void)
         return fail("add record local");
     }
 
-    if (!minic_c0_program_add_function(
-            &program,
-            "sample",
-            6U,
-            0U,
-            8U,
-            block_id,
-            &function_id) ||
-        !minic_riscv64_layout_program(
-            "layout-test",
-            &program,
-            &diagnostic)) {
+    if (!minic_c0_program_add_function(&program, "sample", 6U, 0U, 8U, block_id, &function_id) ||
+        !minic_riscv64_layout_program("layout-test", &program, &diagnostic)) {
         minic_c0_program_destroy(&program);
         return fail("layout program");
     }
@@ -487,8 +401,7 @@ int main(void)
         size_t offset2;
 
         if (record == NULL ||
-            !minic_riscv64_type_layout(
-                &program, minic_type_record(record_id), &size, &alignment) ||
+            !minic_riscv64_type_layout(&program, minic_type_record(record_id), &size, &alignment) ||
             !minic_data_layout_record_field_offset(
                 minic_default_data_layout(), &program, record, 0U, &offset0) ||
             !minic_data_layout_record_field_offset(
@@ -537,8 +450,7 @@ int main(void)
         minic_riscv64_function_layout_initialize(&invalid_layout);
         if (minic_riscv64_layout_function(
                 "layout-zero", &program, function, &invalid_layout, &diagnostic) ||
-            strcmp(diagnostic.message,
-                   "local object size is invalid for the RV64 target") != 0) {
+            strcmp(diagnostic.message, "local object size is invalid for the RV64 target") != 0) {
             minic_riscv64_function_layout_destroy(&invalid_layout);
             minic_c0_program_destroy(&program);
             return fail("zero-element byte object accepted");
@@ -555,8 +467,7 @@ int main(void)
         minic_riscv64_function_layout_initialize(&invalid_layout);
         if (minic_riscv64_layout_function(
                 "layout-overflow", &program, function, &invalid_layout, &diagnostic) ||
-            strcmp(diagnostic.message,
-                   "local object size is invalid for the RV64 target") != 0) {
+            strcmp(diagnostic.message, "local object size is invalid for the RV64 target") != 0) {
             minic_riscv64_function_layout_destroy(&invalid_layout);
             minic_c0_program_destroy(&program);
             return fail("array size overflow accepted");

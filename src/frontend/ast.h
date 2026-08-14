@@ -31,6 +31,8 @@ typedef size_t MinicCleanupContextId;
 #define MINIC_FIXED_REGISTER_BINDING_INVALID ((MinicFixedRegisterBindingId) - 1)
 #define MINIC_INLINE_ASM_INVALID ((MinicInlineAsmId) - 1)
 #define MINIC_CLEANUP_CONTEXT_ROOT ((MinicCleanupContextId)0)
+
+struct MinicTargetInfo;
 #define MINIC_MAX_FUNCTION_PARAMETERS 16U
 
 typedef enum MinicValueCategory { MINIC_VALUE_RVALUE = 0, MINIC_VALUE_LVALUE } MinicValueCategory;
@@ -773,6 +775,7 @@ bool minic_c0_record_value_is_copy_source(const MinicC0Program *program,
 bool minic_c0_expression_is_null_pointer_constant_v0(const MinicC0Program *program,
                                                      MinicExpressionId expression_id);
 bool minic_c0_conditional_result_type(const MinicC0Program *program,
+                                      const struct MinicTargetInfo *target,
                                       MinicExpressionId when_true_expression_id,
                                       MinicExpressionId when_false_expression_id,
                                       MinicType *result);

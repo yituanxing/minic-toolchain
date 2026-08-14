@@ -167,6 +167,17 @@ bool minic_target_info_plain_char_sign(const MinicTargetInfo *target, MinicInteg
     return true;
 }
 
+bool minic_target_info_plain_char_type(const MinicTargetInfo *target, MinicType *type) {
+    MinicIntegerSign sign;
+
+    if (type == NULL || !minic_target_info_plain_char_sign(target, &sign)) {
+        return false;
+    }
+    *type = minic_type_char();
+    type->integer_sign = sign;
+    return true;
+}
+
 bool minic_target_info_wide_character_type(const MinicTargetInfo *target, MinicType *type) {
     if (target == NULL || type == NULL || !minic_type_is_integer(target->wide_character_type)) {
         return false;

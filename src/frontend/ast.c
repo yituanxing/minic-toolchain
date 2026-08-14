@@ -1,4 +1,5 @@
 #include "frontend/ast.h"
+#include "target/target_info.h"
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -1453,8 +1454,10 @@ bool minic_c0_expression_is_null_pointer_constant_v0(const MinicC0Program *progr
            minic_type_is_integer(operand->type) && operand->value.integer_value == 0;
 }
 
-static bool
-minic_c0_conditional_type_only(MinicType when_true, MinicType when_false, MinicType *result) {
+static bool minic_c0_conditional_type_only(const MinicTargetInfo *target,
+                                           MinicType when_true,
+                                           MinicType when_false,
+                                           MinicType *result) {
     bool has_double_operand;
     bool has_numeric_operands;
 
@@ -1469,7 +1472,7 @@ minic_c0_conditional_type_only(MinicType when_true, MinicType when_false, MinicT
         return true;
     }
     if (minic_type_is_integer(when_true) && minic_type_is_integer(when_false)) {
-        return minic_type_integer_common(when_true, when_false, result);
+        return minic_target_info_integer_common(target, when_true, when_false, result);
     }
     has_double_operand = minic_type_is_double(when_true) || minic_type_is_double(when_false);
     has_numeric_operands = (minic_type_is_double(when_true) || minic_type_is_integer(when_true)) &&
@@ -1482,13 +1485,14 @@ minic_c0_conditional_type_only(MinicType when_true, MinicType when_false, MinicT
 }
 
 bool minic_c0_conditional_result_type(const MinicC0Program *program,
+                                      const struct MinicTargetInfo *target,
                                       MinicExpressionId when_true_expression_id,
                                       MinicExpressionId when_false_expression_id,
                                       MinicType *result) {
     const MinicExpression *when_true;
     const MinicExpression *when_false;
 
-    if (program == NULL || result == NULL) {
+    if (program == NULL || target == NULL || result == NULL) {
         return false;
     }
     when_true = minic_c0_program_expression(program, when_true_expression_id);
@@ -1506,7 +1510,7 @@ bool minic_c0_conditional_result_type(const MinicC0Program *program,
         *result = when_false->type;
         return true;
     }
-    return minic_c0_conditional_type_only(when_true->type, when_false->type, result);
+    return minic_c0_conditional_type_only(target, when_true->type, when_false->type, result);
 }
 
 bool minic_c0_assignment_compatible(const MinicC0Program *program,
