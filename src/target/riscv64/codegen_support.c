@@ -356,15 +356,17 @@ bool minic_riscv64_emit_object_store(FILE *file,
     return minic_riscv64_emit_object_store_register(file, program, function, local_id, "a0");
 }
 
-bool minic_riscv64_frame_layout(const MinicC0Program *program,
-                                const MinicFunction *function,
-                                MinicRiscv64FrameLayout *layout) {
+bool minic_riscv64_frame_layout_from_function_layout(
+    const MinicC0Program *program,
+    const MinicFunction *function,
+    const MinicRiscv64FunctionLayout *function_layout,
+    MinicRiscv64FrameLayout *layout) {
     MinicRiscv64AbiCursor abi_cursor;
     size_t parameter_index;
     size_t required_bytes;
     size_t varargs_size;
 
-    if (program == NULL || function == NULL || layout == NULL ||
+    if (program == NULL || function == NULL || function_layout == NULL || layout == NULL ||
         function->parameter_count > MINIC_MAX_FUNCTION_PARAMETERS) {
         return false;
     }
@@ -385,11 +387,11 @@ bool minic_riscv64_frame_layout(const MinicC0Program *program,
     }
 
     varargs_size = function->is_variadic ? (8U - abi_cursor.integer_register_count) * 8U : 0U;
-    if (function->local_storage_size > SIZE_MAX - 16U ||
-        function->local_storage_size + 16U > SIZE_MAX - varargs_size) {
+    if (function_layout->local_storage_size > SIZE_MAX - 16U ||
+        function_layout->local_storage_size + 16U > SIZE_MAX - varargs_size) {
         return false;
     }
-    required_bytes = function->local_storage_size + 16U + varargs_size;
+    required_bytes = function_layout->local_storage_size + 16U + varargs_size;
     if (required_bytes > SIZE_MAX - 15U) {
         return false;
     }
@@ -398,11 +400,27 @@ bool minic_riscv64_frame_layout(const MinicC0Program *program,
     layout->varargs_size = varargs_size;
     layout->varargs_offset = layout->frame_size - varargs_size;
     if (layout->varargs_offset < 16U ||
-        function->local_storage_size > layout->varargs_offset - 16U) {
+        function_layout->local_storage_size > layout->varargs_offset - 16U) {
         return false;
     }
     layout->saved_ra_offset = layout->varargs_offset - 8U;
     layout->saved_s0_offset = layout->varargs_offset - 16U;
     layout->integer_parameter_count = abi_cursor.integer_register_count;
     return true;
+}
+
+bool minic_riscv64_frame_layout(const MinicC0Program *program,
+                                const MinicFunction *function,
+                                MinicRiscv64FrameLayout *layout) {
+    MinicRiscv64FunctionLayout function_layout;
+    bool success;
+
+    minic_riscv64_function_layout_initialize(&function_layout);
+    if (!minic_riscv64_layout_function(NULL, program, function, &function_layout, NULL)) {
+        return false;
+    }
+    success = minic_riscv64_frame_layout_from_function_layout(
+        program, function, &function_layout, layout);
+    minic_riscv64_function_layout_destroy(&function_layout);
+    return success;
 }

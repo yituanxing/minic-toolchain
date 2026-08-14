@@ -690,19 +690,25 @@ static bool minic_riscv64_emit_function(FILE *file,
                                         const MinicC0Program *program,
                                         const MinicFunction *function,
                                         size_t *label_counter) {
+    MinicRiscv64FunctionLayout function_layout;
     MinicRiscv64FrameLayout frame_layout;
     size_t frame_size;
     bool success;
     const char *symbol_name;
 
+    minic_riscv64_function_layout_initialize(&function_layout);
     if (function == NULL || !function->is_defined || function->name_length == 0U ||
         function->body_block >= program->block_count ||
-        !minic_riscv64_frame_layout(program, function, &frame_layout)) {
+        !minic_riscv64_layout_function(NULL, program, function, &function_layout, NULL) ||
+        !minic_riscv64_frame_layout_from_function_layout(
+            program, function, &function_layout, &frame_layout)) {
+        minic_riscv64_function_layout_destroy(&function_layout);
         return false;
     }
     frame_size = frame_layout.frame_size;
     symbol_name = minic_c0_function_symbol_name(function);
     if (symbol_name == NULL || symbol_name[0] == '\0') {
+        minic_riscv64_function_layout_destroy(&function_layout);
         return false;
     }
 
@@ -880,6 +886,7 @@ static bool minic_riscv64_emit_function(FILE *file,
                           symbol_name,
                           symbol_name) >= 0;
     }
+    minic_riscv64_function_layout_destroy(&function_layout);
     return success;
 }
 

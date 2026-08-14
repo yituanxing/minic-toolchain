@@ -305,6 +305,33 @@ int main(void)
     }
 
     function = minic_c0_program_function(&program, function_id);
+    {
+        MinicRiscv64FunctionLayout function_layout;
+        size_t expected_offsets[8] = {0U, 1U, 4U, 8U, 24U, 32U, 48U, 52U};
+        size_t index;
+
+        minic_riscv64_function_layout_initialize(&function_layout);
+        if (function == NULL ||
+            !minic_riscv64_layout_function(
+                "layout-function", &program, function, &function_layout, &diagnostic) ||
+            function_layout.local_count != 8U || function_layout.local_storage_size != 76U) {
+            minic_riscv64_function_layout_destroy(&function_layout);
+            minic_c0_program_destroy(&program);
+            return fail("function side-state layout");
+        }
+        for (index = 0U; index < 8U; ++index) {
+            size_t offset;
+
+            if (!minic_riscv64_function_layout_local_offset(
+                    &function_layout, function, index, &offset) ||
+                offset != expected_offsets[index]) {
+                minic_riscv64_function_layout_destroy(&function_layout);
+                minic_c0_program_destroy(&program);
+                return fail("function side-state local offsets");
+            }
+        }
+        minic_riscv64_function_layout_destroy(&function_layout);
+    }
     if (function == NULL || function->local_storage_size != 76U ||
         program.locals[0].storage_offset != 0U || program.locals[1].storage_offset != 1U ||
         program.locals[2].storage_offset != 4U || program.locals[3].storage_offset != 8U ||
