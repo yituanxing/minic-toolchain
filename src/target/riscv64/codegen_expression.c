@@ -1,4 +1,5 @@
 #include "target/riscv64/codegen_internal.h"
+#include "target/data_layout.h"
 #include "target/riscv64/abi.h"
 #include "target/riscv64/layout.h"
 #include "target/target_info.h"
@@ -275,6 +276,7 @@ static bool minic_riscv64_emit_scale_register(FILE *file,
 
 static bool minic_riscv64_emit_bit_field_load_from_address(FILE *file,
                                                            const MinicRecordField *field,
+                                                           size_t bit_offset,
                                                            const char *result_register,
                                                            const char *address_register) {
     size_t byte_count;
@@ -283,10 +285,10 @@ static bool minic_riscv64_emit_bit_field_load_from_address(FILE *file,
 
     if (file == NULL || field == NULL || result_register == NULL || address_register == NULL ||
         !field->is_bit_field || field->bit_width == 0U || field->bit_width > 64U ||
-        field->bit_offset >= 8U || field->bit_offset > SIZE_MAX - field->bit_width) {
+        bit_offset >= 8U || bit_offset > SIZE_MAX - field->bit_width) {
         return false;
     }
-    byte_count = (field->bit_offset + field->bit_width + 7U) / 8U;
+    byte_count = (bit_offset + field->bit_width + 7U) / 8U;
     if (byte_count == 0U || byte_count > 8U ||
         fprintf(file, "  mv t5, %s\n", address_register) < 0 ||
         fprintf(file, "  li %s, 0\n", result_register) < 0) {
@@ -303,9 +305,8 @@ static bool minic_riscv64_emit_bit_field_load_from_address(FILE *file,
             return false;
         }
     }
-    if (field->bit_offset != 0U &&
-        fprintf(file, "  srli %s, %s, %zu\n", result_register, result_register, field->bit_offset) <
-            0) {
+    if (bit_offset != 0U &&
+        fprintf(file, "  srli %s, %s, %zu\n", result_register, result_register, bit_offset) < 0) {
         return false;
     }
     if (field->bit_width == 64U) {
@@ -327,6 +328,7 @@ static bool minic_riscv64_emit_bit_field_load_from_address(FILE *file,
 
 static bool minic_riscv64_emit_bit_field_store_to_address(FILE *file,
                                                           const MinicRecordField *field,
+                                                          size_t bit_offset,
                                                           const char *value_register,
                                                           const char *address_register) {
     uint64_t value_mask;
@@ -337,10 +339,10 @@ static bool minic_riscv64_emit_bit_field_store_to_address(FILE *file,
 
     if (file == NULL || field == NULL || value_register == NULL || address_register == NULL ||
         !field->is_bit_field || field->bit_width == 0U || field->bit_width > 64U ||
-        field->bit_offset >= 8U || field->bit_offset > SIZE_MAX - field->bit_width) {
+        bit_offset >= 8U || bit_offset > SIZE_MAX - field->bit_width) {
         return false;
     }
-    byte_count = (field->bit_offset + field->bit_width + 7U) / 8U;
+    byte_count = (bit_offset + field->bit_width + 7U) / 8U;
     if (byte_count == 0U || byte_count > 8U ||
         fprintf(file, "  mv t5, %s\n  li t2, 0\n", address_register) < 0) {
         return false;
@@ -353,19 +355,18 @@ static bool minic_riscv64_emit_bit_field_store_to_address(FILE *file,
         }
     }
     if (field->bit_width == 64U) {
-        if (field->bit_offset != 0U || fprintf(file, "  mv t2, %s\n", value_register) < 0) {
+        if (bit_offset != 0U || fprintf(file, "  mv t2, %s\n", value_register) < 0) {
             return false;
         }
     } else {
         value_mask = (UINT64_C(1) << field->bit_width) - UINT64_C(1);
-        positioned_mask = value_mask << field->bit_offset;
+        positioned_mask = value_mask << bit_offset;
         if (fprintf(file,
                     "  li t3, %" PRIu64 "\n"
                     "  and t4, %s, t3\n",
                     value_mask,
                     value_register) < 0 ||
-            (field->bit_offset != 0U &&
-             fprintf(file, "  slli t4, t4, %zu\n", field->bit_offset) < 0) ||
+            (bit_offset != 0U && fprintf(file, "  slli t4, t4, %zu\n", bit_offset) < 0) ||
             fprintf(file,
                     "  li t3, %" PRIu64 "\n"
                     "  not t3, t3\n"
@@ -412,11 +413,29 @@ static bool minic_riscv64_emit_lvalue_load_from_address(FILE *file,
                                                         const char *result_register,
                                                         const char *address_register) {
     const MinicRecordField *field;
+    const MinicExpression *expression;
+    const MinicRecord *record;
+    size_t bit_offset;
+    size_t field_offset;
 
+    expression = minic_c0_program_expression(program, expression_id);
     field = minic_c0_expression_bit_field(program, expression_id);
+    record = expression != NULL && expression->kind == MINIC_EXPRESSION_MEMBER
+                 ? minic_c0_program_record(program, expression->value.member.record_id)
+                 : NULL;
     if (field != NULL) {
+        if (record == NULL ||
+            !minic_data_layout_record_field_layout(minic_default_data_layout(),
+                                                   program,
+                                                   record,
+                                                   expression->value.member.field_index,
+                                                   &field_offset,
+                                                   &bit_offset)) {
+            return false;
+        }
+        (void)field_offset;
         return minic_riscv64_emit_bit_field_load_from_address(
-            file, field, result_register, address_register);
+            file, field, bit_offset, result_register, address_register);
     }
     return minic_riscv64_emit_scalar_load(file, type, result_register, address_register);
 }
@@ -428,11 +447,29 @@ static bool minic_riscv64_emit_lvalue_store_to_address(FILE *file,
                                                        const char *value_register,
                                                        const char *address_register) {
     const MinicRecordField *field;
+    const MinicExpression *expression;
+    const MinicRecord *record;
+    size_t bit_offset;
+    size_t field_offset;
 
+    expression = minic_c0_program_expression(program, expression_id);
     field = minic_c0_expression_bit_field(program, expression_id);
+    record = expression != NULL && expression->kind == MINIC_EXPRESSION_MEMBER
+                 ? minic_c0_program_record(program, expression->value.member.record_id)
+                 : NULL;
     if (field != NULL) {
+        if (record == NULL ||
+            !minic_data_layout_record_field_layout(minic_default_data_layout(),
+                                                   program,
+                                                   record,
+                                                   expression->value.member.field_index,
+                                                   &field_offset,
+                                                   &bit_offset)) {
+            return false;
+        }
+        (void)field_offset;
         return minic_riscv64_emit_bit_field_store_to_address(
-            file, field, value_register, address_register);
+            file, field, bit_offset, value_register, address_register);
     }
     return minic_riscv64_emit_scalar_store(file, type, value_register, address_register);
 }
@@ -571,6 +608,7 @@ static bool minic_riscv64_emit_member_address(FILE *file,
     const MinicExpression *base;
     const MinicRecord *record;
     const MinicRecordField *field;
+    size_t field_offset;
     MinicType record_type;
 
     if (expression == NULL || expression->kind != MINIC_EXPRESSION_MEMBER) {
@@ -582,20 +620,25 @@ static bool minic_riscv64_emit_member_address(FILE *file,
     if (base == NULL || record == NULL || field == NULL ||
         !minic_type_pointee(base->type, &record_type) || !minic_type_is_record(record_type) ||
         record_type.record_id != expression->value.member.record_id ||
+        !minic_data_layout_record_field_offset(minic_default_data_layout(),
+                                               program,
+                                               record,
+                                               expression->value.member.field_index,
+                                               &field_offset) ||
         !minic_riscv64_emit_expression(
             file, program, function, function_layout, expression->value.member.base)) {
         return false;
     }
-    if (field->storage_offset == 0U) {
+    if (field_offset == 0U) {
         return true;
     }
-    if (field->storage_offset <= 2047U) {
-        return fprintf(file, "  addi a0, a0, %zu\n", field->storage_offset) >= 0;
+    if (field_offset <= 2047U) {
+        return fprintf(file, "  addi a0, a0, %zu\n", field_offset) >= 0;
     }
     return fprintf(file,
                    "  li t0, %zu\n"
                    "  add a0, a0, t0\n",
-                   field->storage_offset) >= 0;
+                   field_offset) >= 0;
 }
 
 static bool
@@ -756,6 +799,7 @@ minic_riscv64_emit_record_rvalue_member(FILE *file,
     const MinicExpression *base;
     const MinicRecord *record;
     const MinicRecordField *field;
+    size_t field_offset;
     size_t storage_size;
     size_t temporary_size;
 
@@ -771,11 +815,19 @@ minic_riscv64_emit_record_rvalue_member(FILE *file,
         base->value_category != MINIC_VALUE_RVALUE || !minic_type_is_record(base->type) ||
         base->type.record_id != expression->value.member.record_id ||
         !minic_c0_record_value_is_copy_source(program, expression->value.member.base) ||
-        field->is_array || minic_type_is_record(field->type) || record->storage_size == 0U ||
-        record->storage_size > SIZE_MAX - 15U) {
+        field->is_array || minic_type_is_record(field->type) ||
+        !minic_riscv64_type_layout(program,
+                                   minic_type_record(expression->value.member.record_id),
+                                   &storage_size,
+                                   &temporary_size) ||
+        storage_size == 0U || storage_size > SIZE_MAX - 15U ||
+        !minic_data_layout_record_field_offset(minic_default_data_layout(),
+                                               program,
+                                               record,
+                                               expression->value.member.field_index,
+                                               &field_offset)) {
         return false;
     }
-    storage_size = record->storage_size;
     temporary_size = (storage_size + 15U) & ~(size_t)15U;
     if (!minic_riscv64_emit_record_value_temporary(file,
                                                    program,
@@ -786,18 +838,18 @@ minic_riscv64_emit_record_rvalue_member(FILE *file,
                                                    temporary_size)) {
         return false;
     }
-    if (field->storage_offset == 0U) {
+    if (field_offset == 0U) {
         if (fprintf(file, "  mv a0, sp\n") < 0) {
             return false;
         }
-    } else if (field->storage_offset <= 2047U) {
-        if (fprintf(file, "  addi a0, sp, %zu\n", field->storage_offset) < 0) {
+    } else if (field_offset <= 2047U) {
+        if (fprintf(file, "  addi a0, sp, %zu\n", field_offset) < 0) {
             return false;
         }
     } else if (fprintf(file,
                        "  li t0, %zu\n"
                        "  add a0, sp, t0\n",
-                       field->storage_offset) < 0) {
+                       field_offset) < 0) {
         return false;
     }
     return minic_riscv64_emit_lvalue_load_from_address(
@@ -828,11 +880,11 @@ bool minic_riscv64_emit_record_copy_value(FILE *file,
         return false;
     }
     record = minic_c0_program_record(program, target->type.record_id);
-    if (record == NULL || !record->is_complete || record->storage_size == 0U ||
-        record->storage_size > SIZE_MAX - 15U) {
+    if (record == NULL || !record->is_complete ||
+        !minic_riscv64_type_layout(program, target->type, &storage_size, &temporary_size) ||
+        storage_size == 0U || storage_size > SIZE_MAX - 15U) {
         return false;
     }
-    storage_size = record->storage_size;
     temporary_size = (storage_size + 15U) & ~(size_t)15U;
 
     if (!minic_riscv64_emit_record_value_temporary(
@@ -1178,11 +1230,15 @@ bool minic_riscv64_emit_expression(FILE *file,
         field = minic_c0_record_field(record, expression->value.offsetof_value.field_index);
         if (record == NULL || field == NULL || !record->is_complete ||
             !minic_type_equal(expression->type, minic_type_unsigned_long()) ||
-            expression->value.offsetof_value.anonymous_prefix_offset >
-                SIZE_MAX - field->storage_offset) {
+            !minic_data_layout_record_field_offset(minic_default_data_layout(),
+                                                   program,
+                                                   record,
+                                                   expression->value.offsetof_value.field_index,
+                                                   &offset) ||
+            expression->value.offsetof_value.anonymous_prefix_offset > SIZE_MAX - offset) {
             return false;
         }
-        offset = expression->value.offsetof_value.anonymous_prefix_offset + field->storage_offset;
+        offset = expression->value.offsetof_value.anonymous_prefix_offset + offset;
         return fprintf(file, "  li a0, %zu\n", offset) >= 0;
     }
     case MINIC_EXPRESSION_CAST:

@@ -1023,7 +1023,6 @@ bool minic_c0_record_add_bit_field(MinicC0Program *program,
     field = &record->fields[record->field_count - 1U];
     field->is_bit_field = true;
     field->bit_width = bit_width;
-    field->bit_offset = 0U;
     return true;
 }
 
