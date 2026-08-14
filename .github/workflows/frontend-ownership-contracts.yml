@@ -40,6 +40,7 @@ jobs:
             -Wstrict-prototypes -Wmissing-prototypes \
             -Iinclude -Isrc \
             src/frontend/ast.c \
+            src/frontend/expression_semantics.c \
             src/frontend/ast_global.c \
             src/frontend/ast_traversal.c \
             src/frontend/ast_verifier.c \
@@ -62,6 +63,7 @@ jobs:
             -Wstrict-prototypes -Wmissing-prototypes -Werror \
             -Iinclude -Isrc \
             src/frontend/ast.c \
+            src/frontend/expression_semantics.c \
             src/frontend/ast_global.c \
             src/frontend/ast_traversal.c \
             src/frontend/ast_verifier.c \
