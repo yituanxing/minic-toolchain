@@ -1,0 +1,160 @@
+name: Merge RV64 Caller ABI Feature
+
+on:
+  push:
+    branches: [agent/rv64-caller-abi-linux-v1]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: rv64-caller-abi-pr-merge
+  cancel-in-progress: true
+
+jobs:
+  merge:
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      FEATURE_BRANCH: refactor/rv64-caller-abi-location-v1
+      BASE_BRANCH: refactor/foundation-v1
+      EXPECTED_BASE: 7bbefb7252a6ba52541478a0412a22dc4701334c
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Wait for final caller feature shape
+        id: final
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          final_sha=''
+          for attempt in $(seq 1 240); do
+            git fetch --no-tags origin "$FEATURE_BRANCH" "$BASE_BRANCH"
+            base_sha=$(git rev-parse "origin/$BASE_BRANCH")
+            test "$base_sha" = "$EXPECTED_BASE"
+            candidate=$(git rev-parse "origin/$FEATURE_BRANCH")
+            subject=$(git log -1 --format=%s "$candidate")
+            if test "$subject" = 'ci: retire branch-only caller ABI validation'; then
+              final_sha="$candidate"
+              break
+            fi
+            sleep 5
+          done
+          test -n "$final_sha"
+
+          test ! -e tools/dev/materialize-rv64-caller-abi-location-v1.py || true
+          git checkout --detach "$final_sha"
+          test ! -e tools/dev/materialize-rv64-caller-abi-location-v1.py
+          test ! -e .github/workflows/rv64-caller-abi-location-validation.yml
+          grep -F 'MinicRiscv64AbiArgumentLocation argument_locations' \
+            src/target/riscv64/codegen_expression.c >/dev/null
+          grep -F 'stack_argument_count = abi_cursor.stack_slot_count;' \
+            src/target/riscv64/codegen_expression.c >/dev/null
+          if grep -F 'size_t stack_argument_index;' src/target/riscv64/codegen_expression.c >/dev/null; then
+            echo 'legacy caller placement cursor remains at final head' >&2
+            exit 1
+          fi
+
+          git diff --name-only "$EXPECTED_BASE" "$final_sha" | sort > /tmp/changed.txt
+          cat > /tmp/expected.txt <<'EOF'
+          docs/architecture/rv64-caller-abi-location-v1.md
+          src/target/riscv64/codegen_expression.c
+          EOF
+          diff -u /tmp/expected.txt /tmp/changed.txt
+          git diff --check "$EXPECTED_BASE" "$final_sha"
+
+          linux_run=$(git log "$EXPECTED_BASE..$final_sha" --format=%B | \
+            sed -n 's/^Frozen Linux formal-compatible hybrid run: //p' | head -n 1)
+          final_validation=$(git log "$EXPECTED_BASE..$final_sha" --format=%B | \
+            sed -n 's/^Final docs-head validation run: //p' | head -n 1)
+          test -n "$linux_run"
+          test -n "$final_validation"
+          echo "sha=$final_sha" >> "$GITHUB_OUTPUT"
+          echo "linux_run=$linux_run" >> "$GITHUB_OUTPUT"
+          echo "final_validation=$final_validation" >> "$GITHUB_OUTPUT"
+
+      - name: Create or reuse bounded PR
+        id: pr
+        shell: bash
+        env:
+          FEATURE_SHA: ${{ steps.final.outputs.sha }}
+          LINUX_RUN_ID: ${{ steps.final.outputs.linux_run }}
+          FINAL_RUN_ID: ${{ steps.final.outputs.final_validation }}
+        run: |
+          set -Eeuo pipefail
+          pr=$(gh pr list --repo "$GITHUB_REPOSITORY" \
+            --head "$FEATURE_BRANCH" --base "$BASE_BRANCH" --state open \
+            --json number --jq '.[0].number // empty')
+          if test -z "$pr"; then
+            body=$(cat <<EOF
+          ## Goal
+
+          Make RV64 caller call lowering consume the canonical TargetABI argument locations instead of reconstructing integer-register, floating-register and stack placement twice.
+
+          ## Scope
+
+          - keep C argument evaluation order and existing temporary staging unchanged;
+          - perform one \`MinicRiscv64AbiCursor\` placement pass;
+          - retain \`argument_locations[]\` for the physical move pass;
+          - derive outgoing stack slots from the canonical cursor;
+          - keep \`aN\` / \`faN\` names, stack addressing and loads/stores in the RV64 emitter;
+          - remove the caller's independent \`stack_argument_index\` / duplicated placement ownership.
+
+          ## Non-goals
+
+          - no FrameLayout/local-storage side-state extraction;
+          - no argument evaluation/staging semantic change;
+          - no discovery-only ABI capability expansion in formal source;
+          - no Core IR or Machine IR.
+
+          ## Validation
+
+          Formal candidate host/full passed before canonical folding.
+
+          Frozen Linux pressure used a formal-compatible hybrid: calls containing only formal-v1 ABI shapes exercised the new saved-location caller path; calls containing discovery-only IGNORE/sub-XLEN/non-fixed aggregate/INDIRECT shapes retained the already-proven discovery caller path. Hard frozen Linux gate: run \`$LINUX_RUN_ID\`, requiring status 0, non-empty assembly and 90,928 input lines.
+
+          The canonical checked-in source and documentation head then passed clean host/full validation; final docs-head run: \`$FINAL_RUN_ID\`.
+
+          Final diff against \`$EXPECTED_BASE\` is exactly two files: \`src/target/riscv64/codegen_expression.c\` and \`docs/architecture/rv64-caller-abi-location-v1.md\`.
+          EOF
+            )
+            pr_url=$(gh pr create --repo "$GITHUB_REPOSITORY" --draft \
+              --base "$BASE_BRANCH" --head "$FEATURE_BRANCH" \
+              --title 'refactor(abi): consume abstract locations at RV64 caller' \
+              --body "$body")
+            pr=${pr_url##*/}
+          fi
+          echo "number=$pr" >> "$GITHUB_OUTPUT"
+
+          gh pr view "$pr" --repo "$GITHUB_REPOSITORY" \
+            --json headRefOid,baseRefOid \
+            --jq '"head=" + .headRefOid + " base=" + .baseRefOid'
+          test "$(gh pr view "$pr" --repo "$GITHUB_REPOSITORY" --json headRefOid --jq .headRefOid)" = "$FEATURE_SHA"
+          test "$(gh pr view "$pr" --repo "$GITHUB_REPOSITORY" --json baseRefOid --jq .baseRefOid)" = "$EXPECTED_BASE"
+
+      - name: Require mergeability and squash into Foundation
+        shell: bash
+        env:
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          FEATURE_SHA: ${{ steps.final.outputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          mergeable='UNKNOWN'
+          for attempt in $(seq 1 60); do
+            mergeable=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
+              --json mergeable --jq .mergeable)
+            echo "mergeable=$mergeable"
+            if test "$mergeable" = 'MERGEABLE'; then break; fi
+            if test "$mergeable" = 'CONFLICTING'; then exit 1; fi
+            sleep 3
+          done
+          test "$mergeable" = 'MERGEABLE'
+          gh pr ready "$PR_NUMBER" --repo "$GITHUB_REPOSITORY"
+          gh pr merge "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
+            --squash \
+            --match-head-commit "$FEATURE_SHA" \
+            --subject "refactor(abi): consume abstract locations at RV64 caller (#$PR_NUMBER)" \
+            --body 'Use one canonical TargetABI placement pass for RV64 caller arguments while preserving evaluation/staging semantics and frozen Linux pressure evidence.'
