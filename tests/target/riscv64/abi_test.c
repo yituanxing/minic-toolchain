@@ -29,15 +29,17 @@ static bool add_record(MinicC0Program *program,
                        const MinicType *field_types,
                        size_t field_count,
                        MinicType *type) {
+    static const char *const field_names[] = {"a", "b", "c", "d"};
     MinicRecordId record_id;
     size_t index;
 
     CHECK(program != NULL);
     CHECK(type != NULL);
+    CHECK(field_count <= sizeof(field_names) / sizeof(field_names[0]));
     CHECK(minic_c0_program_add_anonymous_record(program, &record_id));
     for (index = 0U; index < field_count; ++index) {
         CHECK(minic_c0_record_add_field(
-            program, record_id, "x", 1U, field_types[index], 1U));
+            program, record_id, field_names[index], 1U, field_types[index], 1U));
     }
     CHECK(minic_c0_program_finish_record(program, record_id));
     *type = minic_type_record(record_id);
