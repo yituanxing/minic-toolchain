@@ -45,6 +45,8 @@ MINIC_SOURCES := \
 	src/compiler/compiler.c \
 	src/frontend/attribute.c \
 	src/frontend/ast.c \
+	src/frontend/ast_traversal.c \
+	src/frontend/function_body.c \
 	src/frontend/ast_verifier.c \
 	src/frontend/cast_normalization.c \
 	src/frontend/const_eval.c \
@@ -118,6 +120,7 @@ TYPE_ALIAS_TEST_BINARY  := $(BUILD_DIR)/tests/frontend/type-alias-test
 AST_CONTRACT_TEST_SOURCES := \
 	src/frontend/ast.c \
 	src/frontend/ast_global.c \
+	src/frontend/ast_traversal.c \
 	src/frontend/ast_verifier.c \
 	src/frontend/cast_normalization.c \
 	src/frontend/type.c \
