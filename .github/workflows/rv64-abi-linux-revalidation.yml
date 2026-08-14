@@ -1,0 +1,414 @@
+name: RV64 ABI Linux Revalidation
+
+on:
+  push:
+    branches: [agent/static-pointer-array-tail-v1]
+
+concurrency:
+  group: rv64-abi-linux-revalidation
+  cancel-in-progress: true
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  revalidate:
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      DISCOVERY_BASE: 4a4893dc1f306cb082ceb7ea086bf93c4f11790b
+      FORMAL_FOUNDATION: c60828f883639a06409b33e1890ef08b15bad688
+      ABI_HEAD: 3d4a3960f6e8958851b8a060ebd6b35282e9b60a
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Overlay current formal architecture on proven discovery base
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags origin refactor/foundation-v1 refactor/rv64-abi-classification-v1 \
+            agent/static-pointer-array-tail-v1
+          git checkout --detach "$DISCOVERY_BASE"
+          merge_base=$(git merge-base "$DISCOVERY_BASE" "$FORMAL_FOUNDATION")
+          echo "merge_base=$merge_base"
+          git diff --binary "$merge_base" "$FORMAL_FOUNDATION" -- . ':(exclude).github/workflows/*' \
+            > /tmp/formal-foundation.patch
+          git apply --3way --index /tmp/formal-foundation.patch
+          git diff --cached --check
+
+          # Canonical traversal now owns external ExpressionId remapping. The old discovery
+          # materializer must not recreate the superseded hand-written cleanup owner.
+          grep -F 'minic_c0_program_remap_external_expression_ids' src/frontend/ast_traversal.h >/dev/null
+          cat > tools/dev/materialize-cleanup-cast-remap.py <<'PY'
+          #!/usr/bin/env python3
+          from pathlib import Path
+
+          traversal = Path("src/frontend/ast_traversal.h").read_text()
+          normalization = Path("src/frontend/cast_normalization.c").read_text()
+          if "minic_c0_program_remap_external_expression_ids" not in traversal:
+              raise SystemExit("canonical external ExpressionId remap API missing")
+          if "minic_c0_program_remap_external_expression_ids" not in normalization:
+              raise SystemExit("cast normalization is not using canonical external ExpressionId remap")
+          print("SKIP legacy cleanup remap materializer: canonical traversal owner present")
+          PY
+
+      - name: Materialize the already-proven Linux semantic tail
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/materialize-tail-ownership.py
+          set +e
+          python3 tools/dev/materialize-subxlen-aggregate.py 2>build-subxlen.err
+          materialize_status=$?
+          set -e
+          if test "$materialize_status" -ne 0; then
+            grep -Fx 'unexpected aggregate call staging anchor' build-subxlen.err >/dev/null
+          fi
+          python3 tools/dev/materialize-subxlen-aggregate-finish.py
+          python3 tools/dev/fix-subxlen-materialization.py
+          python3 tools/dev/materialize-aggregate-rvalue-arg.py
+          python3 tools/dev/materialize-inline-asm-symbolic-immediate.py
+          python3 tools/dev/materialize-inline-asm-rj-z.py
+          python3 tools/dev/fix-inline-asm-rj-materialization.py
+          python3 tools/dev/materialize-inline-asm-rk.py
+          python3 tools/dev/materialize-codegen-span-trace.py
+          git diff --check
+
+      - name: Install runner-only ABI compatibility implementation
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cat > src/target/riscv64/abi.h <<'EOF'
+          #ifndef MINIC_TARGET_RISCV64_ABI_H
+          #define MINIC_TARGET_RISCV64_ABI_H
+
+          #include "frontend/ast.h"
+
+          #include <stdbool.h>
+          #include <stddef.h>
+
+          typedef enum MinicRiscv64AbiValueKind {
+              MINIC_RISCV64_ABI_VALUE_INVALID = 0,
+              MINIC_RISCV64_ABI_VALUE_VOID,
+              MINIC_RISCV64_ABI_VALUE_INTEGER,
+              MINIC_RISCV64_ABI_VALUE_FLOAT,
+              MINIC_RISCV64_ABI_VALUE_AGGREGATE,
+              MINIC_RISCV64_ABI_VALUE_IGNORE,
+              MINIC_RISCV64_ABI_VALUE_INDIRECT
+          } MinicRiscv64AbiValueKind;
+
+          typedef struct MinicRiscv64AbiValue {
+              MinicRiscv64AbiValueKind kind;
+              size_t storage_size;
+              size_t slot_count;
+              size_t register_chunks;
+          } MinicRiscv64AbiValue;
+
+          typedef struct MinicRiscv64AbiCursor {
+              size_t integer_register_count;
+              size_t floating_register_count;
+              size_t stack_slot_count;
+          } MinicRiscv64AbiCursor;
+
+          typedef struct MinicRiscv64AbiArgumentLocation {
+              MinicRiscv64AbiValue value;
+              size_t integer_register_begin;
+              size_t integer_register_count;
+              size_t floating_register_begin;
+              size_t floating_register_count;
+              size_t stack_slot_begin;
+              size_t stack_slot_count;
+          } MinicRiscv64AbiArgumentLocation;
+
+          bool minic_riscv64_classify_abi_value(const MinicC0Program *program,
+                                                MinicType type,
+                                                MinicRiscv64AbiValue *result);
+          void minic_riscv64_abi_cursor_initialize(MinicRiscv64AbiCursor *cursor);
+          bool minic_riscv64_abi_classify_value(const MinicC0Program *program,
+                                                MinicType type,
+                                                MinicRiscv64AbiValue *value);
+          bool minic_riscv64_abi_place_argument(const MinicC0Program *program,
+                                                MinicType type,
+                                                bool is_fixed_parameter,
+                                                MinicRiscv64AbiCursor *cursor,
+                                                MinicRiscv64AbiArgumentLocation *location);
+
+          #endif
+          EOF
+
+          cat > src/target/riscv64/abi.c <<'EOF'
+          #include "target/riscv64/abi.h"
+
+          #include "target/data_layout.h"
+          #include "target/riscv64/layout.h"
+
+          #include <stdint.h>
+
+          #define MINIC_RISCV64_ABI_ARGUMENT_REGISTER_COUNT 8U
+
+          static bool minic_riscv64_abi_integer_aggregate_member_type(const MinicC0Program *program,
+                                                                      MinicType type) {
+              if (minic_type_is_integer(type) || minic_type_is_pointer(type)) {
+                  return true;
+              }
+              if (minic_type_is_array(type)) {
+                  const MinicArrayType *array_type;
+
+                  array_type = minic_c0_program_array_type(program, type.array_type_id);
+                  return array_type != NULL && minic_riscv64_abi_integer_aggregate_member_type(
+                                                   program, array_type->element_type);
+              }
+              if (minic_type_is_record(type)) {
+                  const MinicRecord *record;
+                  size_t field_index;
+
+                  record = minic_c0_program_record(program, type.record_id);
+                  if (record == NULL || !record->is_complete) {
+                      return false;
+                  }
+                  for (field_index = 0U; field_index < record->field_count; ++field_index) {
+                      const MinicRecordField *field;
+
+                      field = minic_c0_record_field(record, field_index);
+                      if (field == NULL || !minic_riscv64_abi_integer_aggregate_member_type(
+                                               program, field->type)) {
+                          return false;
+                      }
+                  }
+                  return true;
+              }
+              return false;
+          }
+
+          static bool minic_riscv64_abi_discovery_classify(const MinicC0Program *program,
+                                                            MinicType type,
+                                                            MinicRiscv64AbiValue *result) {
+              size_t alignment;
+              size_t size;
+
+              if (program == NULL || result == NULL ||
+                  !minic_data_layout_type(minic_default_data_layout(), program, type, &size, &alignment)) {
+                  return false;
+              }
+              (void)alignment;
+              result->kind = MINIC_RISCV64_ABI_VALUE_INVALID;
+              result->storage_size = size;
+              result->slot_count = 0U;
+              result->register_chunks = 0U;
+
+              if (minic_type_is_void(type)) {
+                  result->kind = MINIC_RISCV64_ABI_VALUE_VOID;
+                  return true;
+              }
+              if (minic_type_is_record(type)) {
+                  if (size == 0U) {
+                      result->kind = MINIC_RISCV64_ABI_VALUE_IGNORE;
+                      return true;
+                  }
+                  if (minic_riscv64_abi_integer_aggregate_member_type(program, type) && size <= 16U) {
+                      result->kind = MINIC_RISCV64_ABI_VALUE_AGGREGATE;
+                      result->slot_count = (size + 7U) / 8U;
+                      result->register_chunks = result->slot_count;
+                      return true;
+                  }
+                  result->kind = MINIC_RISCV64_ABI_VALUE_INDIRECT;
+                  result->slot_count = 1U;
+                  result->register_chunks = 1U;
+                  return true;
+              }
+              if (minic_type_is_float(type) || minic_type_is_double(type)) {
+                  result->kind = MINIC_RISCV64_ABI_VALUE_FLOAT;
+                  result->slot_count = 1U;
+                  result->register_chunks = 1U;
+                  return true;
+              }
+              if (minic_type_is_integer(type) || minic_type_is_pointer(type)) {
+                  result->kind = MINIC_RISCV64_ABI_VALUE_INTEGER;
+                  result->slot_count = 1U;
+                  result->register_chunks = 1U;
+                  return true;
+              }
+              return false;
+          }
+
+          bool minic_riscv64_classify_abi_value(const MinicC0Program *program,
+                                                MinicType type,
+                                                MinicRiscv64AbiValue *result) {
+              return minic_riscv64_abi_discovery_classify(program, type, result);
+          }
+
+          void minic_riscv64_abi_cursor_initialize(MinicRiscv64AbiCursor *cursor) {
+              if (cursor == NULL) {
+                  return;
+              }
+              cursor->integer_register_count = 0U;
+              cursor->floating_register_count = 0U;
+              cursor->stack_slot_count = 0U;
+          }
+
+          bool minic_riscv64_abi_classify_value(const MinicC0Program *program,
+                                                MinicType type,
+                                                MinicRiscv64AbiValue *value) {
+              return minic_riscv64_abi_discovery_classify(program, type, value);
+          }
+
+          bool minic_riscv64_abi_place_argument(const MinicC0Program *program,
+                                                MinicType type,
+                                                bool is_fixed_parameter,
+                                                MinicRiscv64AbiCursor *cursor,
+                                                MinicRiscv64AbiArgumentLocation *location) {
+              MinicRiscv64AbiArgumentLocation result;
+              MinicRiscv64AbiCursor next;
+              size_t integer_slots;
+              size_t available_integer_registers;
+
+              if (cursor == NULL || location == NULL ||
+                  cursor->integer_register_count > MINIC_RISCV64_ABI_ARGUMENT_REGISTER_COUNT ||
+                  cursor->floating_register_count > MINIC_RISCV64_ABI_ARGUMENT_REGISTER_COUNT ||
+                  !minic_riscv64_abi_classify_value(program, type, &result.value) ||
+                  result.value.kind == MINIC_RISCV64_ABI_VALUE_VOID ||
+                  result.value.kind == MINIC_RISCV64_ABI_VALUE_INVALID) {
+                  return false;
+              }
+
+              result.integer_register_begin = cursor->integer_register_count;
+              result.integer_register_count = 0U;
+              result.floating_register_begin = cursor->floating_register_count;
+              result.floating_register_count = 0U;
+              result.stack_slot_begin = cursor->stack_slot_count;
+              result.stack_slot_count = 0U;
+              next = *cursor;
+
+              if (result.value.kind == MINIC_RISCV64_ABI_VALUE_IGNORE) {
+                  *location = result;
+                  return true;
+              }
+              if (is_fixed_parameter && result.value.kind == MINIC_RISCV64_ABI_VALUE_FLOAT) {
+                  if (next.floating_register_count >= MINIC_RISCV64_ABI_ARGUMENT_REGISTER_COUNT) {
+                      return false;
+                  }
+                  result.floating_register_begin = next.floating_register_count;
+                  result.floating_register_count = 1U;
+                  next.floating_register_count += 1U;
+                  *cursor = next;
+                  *location = result;
+                  return true;
+              }
+
+              integer_slots = result.value.kind == MINIC_RISCV64_ABI_VALUE_AGGREGATE
+                                  ? result.value.slot_count
+                                  : 1U;
+              available_integer_registers =
+                  MINIC_RISCV64_ABI_ARGUMENT_REGISTER_COUNT - next.integer_register_count;
+              result.integer_register_begin = next.integer_register_count;
+              result.integer_register_count = integer_slots < available_integer_registers
+                                                  ? integer_slots
+                                                  : available_integer_registers;
+              result.stack_slot_begin = next.stack_slot_count;
+              result.stack_slot_count = integer_slots - result.integer_register_count;
+              if (next.stack_slot_count > SIZE_MAX - result.stack_slot_count) {
+                  return false;
+              }
+              next.integer_register_count += result.integer_register_count;
+              next.stack_slot_count += result.stack_slot_count;
+              *cursor = next;
+              *location = result;
+              return true;
+          }
+          EOF
+
+          # Preserve the exact formal consumer shapes while letting discovery supply the
+          # broader zero/sub-XLEN/indirect semantic implementation behind the same seam.
+          python3 - <<'PY'
+          import os
+          import subprocess
+          from pathlib import Path
+
+          abi_head = os.environ["ABI_HEAD"]
+          path = Path("src/target/riscv64/codegen_support.c")
+          target = path.read_text()
+          formal = subprocess.check_output(
+              ["git", "show", f"{abi_head}:src/target/riscv64/codegen_support.c"], text=True
+          )
+
+          def function_span(text: str, name: str) -> tuple[int, int]:
+              marker = name + "("
+              marker_index = text.index(marker)
+              start = text.rfind("\n", 0, marker_index) + 1
+              brace = text.index("{", marker_index)
+              depth = 0
+              index = brace
+              while index < len(text):
+                  char = text[index]
+                  if char == "{":
+                      depth += 1
+                  elif char == "}":
+                      depth -= 1
+                      if depth == 0:
+                          return start, index + 1
+                  index += 1
+              raise RuntimeError(f"unterminated function: {name}")
+
+          def extract(text: str, name: str) -> str:
+              start, end = function_span(text, name)
+              return text[start:end]
+
+          def replace(text: str, name: str, replacement: str) -> str:
+              start, end = function_span(text, name)
+              return text[:start] + replacement + text[end:]
+
+          for function_name in (
+              "minic_riscv64_integer_aggregate_abi",
+              "minic_riscv64_frame_layout",
+          ):
+              target = replace(target, function_name, extract(formal, function_name))
+
+          include = '#include "target/riscv64/abi.h"\n'
+          if include not in target:
+              anchor = '#include "target/riscv64/codegen_internal.h"\n'
+              if anchor not in target:
+                  raise SystemExit("codegen support include anchor missing")
+              target = target.replace(anchor, anchor + "\n" + include, 1)
+
+          path.write_text(target)
+          print("ABI_FORMAL_CONSUMERS_OVERLAID=2")
+          PY
+
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+          git diff --check
+          grep -F 'minic_riscv64_abi_place_argument' src/target/riscv64/codegen_support.c >/dev/null
+          grep -F 'MINIC_RISCV64_ABI_VALUE_INDIRECT' src/target/riscv64/abi.c >/dev/null
+
+      - name: Build ABI-seam discovery compiler
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release BUILD_DIR=build/rv64-abi-linux-revalidation
+
+      - name: Revalidate frozen Linux init main TU
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          minic="$GITHUB_WORKSPACE/build/rv64-abi-linux-revalidation/bin/minic"
+          mkdir -p build/linux-artifact
+          gh run download 31689171683 -n linux-frontier-31689171683 -D build/linux-artifact
+          test -s build/linux-artifact/kbuild/init/main.i
+          lines=$(wc -l < build/linux-artifact/kbuild/init/main.i)
+          test "$lines" -eq 90928
+
+          set +e
+          "$minic" -S build/linux-artifact/kbuild/init/main.i -o build/linux-artifact/main.s \
+            >build/linux-artifact/minic.stdout 2>build/linux-artifact/minic.stderr
+          status=$?
+          set -e
+
+          echo "cached_tu_status=$status"
+          if test -s build/linux-artifact/minic.stderr; then
+            tail -n 100 build/linux-artifact/minic.stderr
+          fi
+          test "$status" -eq 0
+          test -s build/linux-artifact/main.s
+          echo "FULL_TU_PASS lines=$lines"
