@@ -100,8 +100,7 @@ static bool visit_expression_child_ids(const MinicExpression *expression,
     copy = *expression;
     read_context.visitor = visitor;
     read_context.context = context;
-    return minic_c0_expression_visit_child_id_refs(
-        &copy, visit_read_expression_id, &read_context);
+    return minic_c0_expression_visit_child_id_refs(&copy, visit_read_expression_id, &read_context);
 }
 
 static bool validation_storage_is_valid(const MinicC0Program *program) {
@@ -172,8 +171,9 @@ static bool initialize_validation(const MinicC0Program *program,
         !allocate_array((void **)&validation->expression_generations,
                         program->expression_count,
                         sizeof(*validation->expression_generations)) ||
-        !allocate_array(
-            (void **)&validation->block_work, program->block_count, sizeof(*validation->block_work)) ||
+        !allocate_array((void **)&validation->block_work,
+                        program->block_count,
+                        sizeof(*validation->block_work)) ||
         !allocate_array((void **)&validation->statement_work,
                         program->statement_count,
                         sizeof(*validation->statement_work)) ||
@@ -222,7 +222,8 @@ static bool assign_local_owners(MinicFunctionBodyValidation *validation) {
         if (!function->is_defined) {
             continue;
         }
-        if (function->body_block >= program->block_count || function->local_begin > program->local_count ||
+        if (function->body_block >= program->block_count ||
+            function->local_begin > program->local_count ||
             function->local_count > program->local_count - function->local_begin ||
             function->parameter_count > function->local_count) {
             return false;
@@ -257,7 +258,8 @@ static bool claim_block(MinicFunctionBodyValidation *validation, MinicBlockId bl
     return true;
 }
 
-static bool claim_statement(MinicFunctionBodyValidation *validation, MinicStatementId statement_id) {
+static bool claim_statement(MinicFunctionBodyValidation *validation,
+                            MinicStatementId statement_id) {
     const MinicC0Program *program;
 
     if (validation == NULL || validation->program == NULL) {
@@ -337,7 +339,8 @@ static bool enqueue_expression_visitor(MinicExpressionId expression_id, void *op
 
 static bool enqueue_optional_expression(MinicFunctionBodyValidation *validation,
                                         MinicExpressionId expression_id) {
-    return expression_id == MINIC_EXPRESSION_INVALID || enqueue_expression(validation, expression_id);
+    return expression_id == MINIC_EXPRESSION_INVALID ||
+           enqueue_expression(validation, expression_id);
 }
 
 static bool enqueue_cleanup_expressions(MinicFunctionBodyValidation *validation,
@@ -452,8 +455,9 @@ static bool process_block(MinicFunctionBodyValidation *validation, MinicBlockId 
         return false;
     }
     block = minic_c0_program_block(validation->program, block_id);
-    if (block == NULL ||
-        !storage_shape_is_valid(block->statements, block->statement_count, block->statement_capacity)) {
+    if (block == NULL || !storage_shape_is_valid(block->statements,
+                                                 block->statement_count,
+                                                 block->statement_capacity)) {
         return false;
     }
     for (index = 0U; index < block->statement_count; ++index) {
@@ -528,7 +532,8 @@ static bool validate_semantic_edges(const MinicFunctionBodyValidation *validatio
         }
         if (statement->kind == MINIC_STATEMENT_GOTO &&
             (statement->target_statement >= program->statement_count ||
-             validation->statement_owners[statement->target_statement] != validation->function_id)) {
+             validation->statement_owners[statement->target_statement] !=
+                 validation->function_id)) {
             return false;
         }
         if (statement->kind == MINIC_STATEMENT_INLINE_ASM) {
@@ -536,7 +541,8 @@ static bool validate_semantic_edges(const MinicFunctionBodyValidation *validatio
             size_t label_index;
 
             if (statement->inline_asm_id >= program->inline_asm_count ||
-                validation->inline_asm_owners[statement->inline_asm_id] != validation->function_id) {
+                validation->inline_asm_owners[statement->inline_asm_id] !=
+                    validation->function_id) {
                 return false;
             }
             inline_asm = &program->inline_asms[statement->inline_asm_id];
@@ -589,7 +595,8 @@ static bool validate_one_function(MinicFunctionBodyValidation *validation,
                                   MinicFunctionId function_id) {
     MinicFunctionBodyView view;
 
-    if (validation == NULL || validation->program == NULL || function_id == MINIC_FUNCTION_INVALID ||
+    if (validation == NULL || validation->program == NULL ||
+        function_id == MINIC_FUNCTION_INVALID ||
         !minic_c0_function_body_view(validation->program, function_id, &view) ||
         !next_expression_generation(validation)) {
         return false;
@@ -639,7 +646,8 @@ bool minic_c0_program_validate_function_body_ownership(const MinicC0Program *pro
     }
 
     success = true;
-    for (function_index = 0U; success && function_index < program->function_count; ++function_index) {
+    for (function_index = 0U; success && function_index < program->function_count;
+         ++function_index) {
         if (!program->functions[function_index].is_defined) {
             continue;
         }
