@@ -1264,6 +1264,11 @@ bool minic_riscv64_emit_expression(FILE *file,
         if (operand == NULL) {
             return false;
         }
+        if (minic_type_is_integer(expression->type) && minic_type_is_integer(operand->type)) {
+            return minic_riscv64_emit_expression(
+                       file, program, function, function_layout, expression->value.unary.operand) &&
+                   minic_riscv64_emit_integer_conversion(file, expression->type, "a0");
+        }
         if (minic_type_is_double(expression->type) && minic_type_is_float(operand->type)) {
             return minic_riscv64_emit_expression(
                        file, program, function, function_layout, expression->value.unary.operand) &&

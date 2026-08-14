@@ -173,24 +173,11 @@ static bool type_is_condition_scalar(MinicType type) {
     return minic_type_is_integer(type) || minic_type_is_pointer(type);
 }
 
-static bool is_normalized_integer_cast_add(const MinicExpression *expression,
-                                           const MinicExpression *left,
-                                           const MinicExpression *right,
-                                           MinicC0AstForm form) {
-    return form == MINIC_C0_AST_NORMALIZED &&
-           expression->value.binary.operator_kind == MINIC_BINARY_ADD &&
-           right->kind == MINIC_EXPRESSION_INTEGER && right->value.integer_value == 0 &&
-           minic_type_equal(right->type, minic_type_int()) && minic_type_is_integer(left->type) &&
-           minic_type_is_integer(expression->type) &&
-           minic_type_cast_compatible(expression->type, left->type);
-}
-
 static bool verify_binary_type(const MinicC0Program *program,
                                const MinicTargetInfo *target,
                                const MinicExpression *expression,
                                const MinicExpression *left,
-                               const MinicExpression *right,
-                               MinicC0AstForm form) {
+                               const MinicExpression *right) {
     MinicType expected_type;
     MinicType pointer_type;
     MinicType pointee_type;
@@ -235,8 +222,7 @@ static bool verify_binary_type(const MinicC0Program *program,
                        target, left->type, right->type, &expected_type)) {
             return false;
         }
-        return minic_type_equal(expression->type, expected_type) ||
-               is_normalized_integer_cast_add(expression, left, right, form);
+        return minic_type_equal(expression->type, expected_type);
     }
 
     if (binary_is_comparison(expression->value.binary.operator_kind) &&
@@ -524,7 +510,9 @@ static bool verify_expression(const MinicC0Program *program,
                expression->value_category == MINIC_VALUE_RVALUE &&
                ((minic_type_is_double(expression->type) &&
                  (minic_type_is_integer(operand->type) || minic_type_is_float(operand->type))) ||
-                (minic_type_is_integer(expression->type) && minic_type_is_double(operand->type)));
+                (minic_type_is_integer(expression->type) && minic_type_is_double(operand->type)) ||
+                (minic_type_is_integer(expression->type) && minic_type_is_integer(operand->type) &&
+                 minic_type_cast_compatible(expression->type, operand->type)));
     case MINIC_EXPRESSION_DISCARD:
         operand = expression_before(program, expression->value.unary.operand, expression_index);
         return form == MINIC_C0_AST_NORMALIZED && operand != NULL &&
@@ -676,7 +664,7 @@ static bool verify_expression(const MinicC0Program *program,
         left = expression_before(program, expression->value.binary.left, expression_index);
         right = expression_before(program, expression->value.binary.right, expression_index);
         return left != NULL && right != NULL && expression->value_category == MINIC_VALUE_RVALUE &&
-               verify_binary_type(program, target, expression, left, right, form);
+               verify_binary_type(program, target, expression, left, right);
     case MINIC_EXPRESSION_CONDITIONAL: {
         const MinicExpression *condition;
         const MinicExpression *when_true;
