@@ -795,6 +795,7 @@ bool minic_parser_begin_scope(MinicParser *parser) {
     }
     scope = &parser->scopes[parser->scope_count];
     scope->binding_begin = parser->local_binding_count;
+    scope->record_tag_begin = parser->record_tag_count;
     scope->cleanup_context = parser->cleanup_context;
     parser->scope_count += 1U;
     return true;
@@ -816,6 +817,7 @@ void minic_parser_end_scope(MinicParser *parser) {
     }
     parser->scope_count -= 1U;
     parser->local_binding_count = parser->scopes[parser->scope_count].binding_begin;
+    parser->record_tag_count = parser->scopes[parser->scope_count].record_tag_begin;
     parser->cleanup_context = parser->scopes[parser->scope_count].cleanup_context;
 }
 
@@ -1028,10 +1030,14 @@ void minic_parser_destroy_scopes(MinicParser *parser) {
     parser->local_label_count = 0U;
     parser->local_label_capacity = 0U;
     free(parser->local_bindings);
+    free(parser->record_tags);
     free(parser->scopes);
     parser->local_bindings = NULL;
     parser->local_binding_count = 0U;
     parser->local_binding_capacity = 0U;
+    parser->record_tags = NULL;
+    parser->record_tag_count = 0U;
+    parser->record_tag_capacity = 0U;
     parser->scopes = NULL;
     parser->scope_count = 0U;
     parser->scope_capacity = 0U;
@@ -1098,18 +1104,65 @@ MinicFunctionId minic_parser_find_function(const MinicParser *parser, MinicSourc
 }
 
 MinicRecordId minic_parser_find_record(const MinicParser *parser, MinicSourceSpan name_span) {
-    size_t name_length;
     size_t index;
 
-    name_length = minic_parser_span_length(name_span);
-    for (index = 0U; index < parser->program->record_count; ++index) {
-        const MinicRecord *record;
+    if (parser == NULL) {
+        return MINIC_RECORD_INVALID;
+    }
+    for (index = parser->record_tag_count; index > 0U; --index) {
+        const MinicParserRecordTag *tag;
 
-        record = minic_c0_program_record(parser->program, index);
-        if (record != NULL && record->name_length == name_length &&
-            memcmp(record->name, parser->source + name_span.begin.offset, name_length) == 0) {
-            return index;
+        tag = &parser->record_tags[index - 1U];
+        if (minic_parser_span_equals(parser, tag->name_span, name_span)) {
+            return tag->record_id;
         }
     }
     return MINIC_RECORD_INVALID;
+}
+
+MinicRecordId minic_parser_find_record_in_current_scope(const MinicParser *parser,
+                                                        MinicSourceSpan name_span) {
+    size_t begin;
+    size_t index;
+
+    if (parser == NULL) {
+        return MINIC_RECORD_INVALID;
+    }
+    begin =
+        parser->scope_count == 0U ? 0U : parser->scopes[parser->scope_count - 1U].record_tag_begin;
+    for (index = parser->record_tag_count; index > begin; --index) {
+        const MinicParserRecordTag *tag;
+
+        tag = &parser->record_tags[index - 1U];
+        if (minic_parser_span_equals(parser, tag->name_span, name_span)) {
+            return tag->record_id;
+        }
+    }
+    return MINIC_RECORD_INVALID;
+}
+
+bool minic_parser_bind_record_tag(MinicParser *parser,
+                                  MinicSourceSpan name_span,
+                                  MinicRecordId record_id) {
+    MinicParserRecordTag *tag;
+
+    if (parser == NULL || record_id == MINIC_RECORD_INVALID ||
+        minic_parser_find_record_in_current_scope(parser, name_span) != MINIC_RECORD_INVALID) {
+        if (parser != NULL) {
+            minic_parser_error(parser, "duplicate record tag binding in current scope");
+        }
+        return false;
+    }
+    if (parser->record_tag_count == parser->record_tag_capacity &&
+        !minic_parser_grow_array((void **)&parser->record_tags,
+                                 &parser->record_tag_capacity,
+                                 sizeof(*parser->record_tags))) {
+        minic_parser_error(parser, "out of memory while binding record tag");
+        return false;
+    }
+    tag = &parser->record_tags[parser->record_tag_count];
+    tag->name_span = name_span;
+    tag->record_id = record_id;
+    parser->record_tag_count += 1U;
+    return true;
 }
