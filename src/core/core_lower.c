@@ -308,24 +308,41 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
     }
     if (expression->kind == MINIC_EXPRESSION_BINARY &&
         expression->value.binary.operator_kind == MINIC_BINARY_ADD) {
+        const MinicExpression *left_expression;
+        const MinicExpression *right_expression;
         MinicCoreValueId left;
+        MinicCoreValueId left_source;
         MinicCoreValueId right;
+        MinicCoreValueId right_source;
         MinicCoreLowerStatus status;
 
         if (!minic_type_is_integer(expression->type)) {
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
-        status = lower_expression(context, expression->value.binary.left, &left);
+        left_expression =
+            minic_c0_program_expression(context->body->program, expression->value.binary.left);
+        right_expression =
+            minic_c0_program_expression(context->body->program, expression->value.binary.right);
+        if (left_expression == NULL || right_expression == NULL) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        status = lower_expression(context, expression->value.binary.left, &left_source);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
-        status = lower_expression(context, expression->value.binary.right, &right);
+        status = append_integer_conversion(
+            context, left_expression->span, expression->type, left_source, &left);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
-        if (!minic_type_equal(context->function->values[left].type, expression->type) ||
-            !minic_type_equal(context->function->values[right].type, expression->type)) {
-            return MINIC_CORE_LOWER_UNSUPPORTED;
+        status = lower_expression(context, expression->value.binary.right, &right_source);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        status = append_integer_conversion(
+            context, right_expression->span, expression->type, right_source, &right);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
         }
         instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_ADD;
         instruction.value.binary.left = left;

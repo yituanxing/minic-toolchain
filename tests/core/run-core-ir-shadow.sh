@@ -45,6 +45,13 @@ int add_one(int value) {
 EOF
 check_strict_case parameter
 
+cat >"$work_dir/mixed-add.i" <<'EOF'
+int add_mixed(signed char value) {
+    return value + 1;
+}
+EOF
+check_strict_case mixed-add
+
 cat >"$work_dir/implicit-conversion.i" <<'EOF'
 int widen(signed char value) {
     return value;
