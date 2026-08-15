@@ -2359,12 +2359,23 @@ static bool parse_expression_or_assignment_statement(MinicParser *parser,
         assignment_token != MINIC_TOKEN_AMPERSAND_EQUAL &&
         assignment_token != MINIC_TOKEN_PIPE_EQUAL &&
         assignment_token != MINIC_TOKEN_GREATER_GREATER_EQUAL) {
-        if (!allow_expression_statement && first_expression->kind != MINIC_EXPRESSION_ASSIGNMENT) {
+        const MinicExpression *full_expression;
+
+        if (!minic_parser_parse_full_expression_tail(
+                parser, statement.expression, &statement.expression)) {
+            return false;
+        }
+        full_expression = minic_c0_program_expression(parser->program, statement.expression);
+        if (full_expression == NULL) {
+            minic_parser_error(parser, "invalid full expression statement");
+            return false;
+        }
+        if (!allow_expression_statement && full_expression->kind != MINIC_EXPRESSION_ASSIGNMENT) {
             minic_parser_error(parser, "for initializer requires an assignment");
             return false;
         }
         statement.kind = MINIC_STATEMENT_EXPRESSION;
-        statement.span.end = first_expression->span.end;
+        statement.span.end = full_expression->span.end;
         return minic_parser_expect(
                    parser, MINIC_TOKEN_SEMICOLON, "expected ';' after expression") &&
                minic_parser_add_statement(parser, &statement);

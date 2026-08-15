@@ -400,6 +400,9 @@ bool minic_parser_parse_expression(MinicParser *parser,
                                    MinicExpressionId *expression_id,
                                    unsigned int minimum_precedence);
 bool minic_parser_parse_expression_no_decay(MinicParser *parser, MinicExpressionId *expression_id);
+bool minic_parser_parse_full_expression_tail(MinicParser *parser,
+                                             MinicExpressionId left,
+                                             MinicExpressionId *expression_id);
 bool minic_parser_parse_full_expression(MinicParser *parser, MinicExpressionId *expression_id);
 bool minic_parser_parse_static_assert_declaration(MinicParser *parser);
 bool minic_parser_add_default_return(MinicParser *parser);
