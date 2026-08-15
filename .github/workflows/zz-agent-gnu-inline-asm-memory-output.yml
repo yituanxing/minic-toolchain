@@ -1,0 +1,83 @@
+name: Agent GNU inline asm memory output
+
+on:
+  push:
+    branches:
+      - agent/gnu-inline-asm-memory-output-v1
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build baseline and prove the Linux-shaped gap
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release BUILD_DIR=build/agent-asm-memory-baseline
+          cat > /tmp/asm-memory-output.c <<'EOF'
+          void f(int *p, int value) {
+              __asm__ __volatile__("sw %z1, %0" : "=m"(*p) : "rJ"(value) : "memory");
+          }
+          EOF
+          cc -E -P -std=gnu11 -x c /tmp/asm-memory-output.c -o /tmp/asm-memory-output.i
+          if build/agent-asm-memory-baseline/bin/minic -S /tmp/asm-memory-output.i -o /tmp/asm-memory-output.s \
+              2>/tmp/asm-memory-output.stderr; then
+            echo 'baseline unexpectedly accepted GNU asm =m output' >&2
+            exit 1
+          fi
+          grep -F 'cannot write RISC-V assembly' /tmp/asm-memory-output.stderr >/dev/null
+
+      - name: Apply candidate product patch
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/agent-gnu-inline-asm-memory-output.py
+          clang-format-18 -i src/target/riscv64/codegen_inline_asm.c tests/compiler/c0/gnu_inline_asm_operands.c
+          git diff --check
+
+      - name: Build patched compiler with warnings as errors
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make clean BUILD_DIR=build/agent-asm-memory-patched || true
+          make -j4 MODE=release BUILD_DIR=build/agent-asm-memory-patched \
+            EXTRA_CFLAGS='-Werror'
+
+      - name: Run focused GNU inline asm coverage
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/agent-asm-memory-patched/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/agent-asm-memory-focused" \
+          HOST_CC=cc \
+            sh tests/compiler/c0/run-gnu-inline-asm-operands.sh
+
+      - name: Run fast regression gate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 check-fast
+
+      - name: Commit only validated product files
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -f tools/dev/agent-gnu-inline-asm-memory-output.py
+          rm -f .github/workflows/zz-agent-gnu-inline-asm-memory-output.yml
+          git add src/target/riscv64/codegen_inline_asm.c \
+                  tests/compiler/c0/gnu_inline_asm_operands.c \
+                  tests/compiler/c0/run-gnu-inline-asm-operands.sh \
+                  tools/dev/agent-gnu-inline-asm-memory-output.py \
+                  .github/workflows/zz-agent-gnu-inline-asm-memory-output.yml
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'feat: support GNU inline asm memory outputs'
+          git push origin HEAD:agent/gnu-inline-asm-memory-output-v1
