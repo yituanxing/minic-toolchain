@@ -289,6 +289,61 @@ bool minic_parser_add_string_literal_initializer(MinicParser *parser,
     return true;
 }
 
+bool minic_parser_add_bounded_string_literal_initializer(MinicParser *parser,
+                                                         MinicGlobalObjectId object_id,
+                                                         size_t element_capacity) {
+    MinicParser probe;
+    size_t decoded_length;
+    size_t total_length;
+    size_t stored_count;
+
+    if (parser == NULL || element_capacity == 0U ||
+        parser->current.kind != MINIC_TOKEN_STRING_LITERAL) {
+        return false;
+    }
+    probe = *parser;
+    total_length = 0U;
+    while (probe.current.kind == MINIC_TOKEN_STRING_LITERAL) {
+        if (!decoded_string_length(
+                &probe, probe.current.span, probe.current.kind, &decoded_length) ||
+            total_length > SIZE_MAX - decoded_length || !minic_parser_advance(&probe)) {
+            return false;
+        }
+        total_length += decoded_length;
+    }
+    if (total_length > element_capacity) {
+        minic_parser_error(parser, "string initializer is too long for character array");
+        return false;
+    }
+
+    while (parser->current.kind == MINIC_TOKEN_STRING_LITERAL) {
+        MinicSourceSpan literal_span;
+
+        literal_span = parser->current.span;
+        if (!add_string_payload(parser, literal_span, MINIC_TOKEN_STRING_LITERAL, object_id) ||
+            !minic_parser_advance(parser)) {
+            return false;
+        }
+    }
+    stored_count = total_length;
+    if (stored_count < element_capacity) {
+        if (!minic_c0_global_object_add_initializer(parser->program, object_id, 0)) {
+            minic_parser_error(parser,
+                               "out of memory while terminating bounded string initializer");
+            return false;
+        }
+        stored_count += 1U;
+    }
+    while (stored_count < element_capacity) {
+        if (!minic_c0_global_object_add_initializer(parser->program, object_id, 0)) {
+            minic_parser_error(parser, "out of memory while padding bounded string initializer");
+            return false;
+        }
+        stored_count += 1U;
+    }
+    return true;
+}
+
 bool minic_parser_get_predefined_function_name_object(MinicParser *parser,
                                                       MinicGlobalObjectId *object_id) {
     const MinicFunction *function;
