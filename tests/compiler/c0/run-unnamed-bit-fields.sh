@@ -41,6 +41,16 @@ sed -n '/read_int_high:/,/^\.size/p' "$assembly" | grep -F 'lbu t6, 1(t5)' >/dev
 sed -n '/add_int_high:/,/^\.size/p' "$assembly" | grep -F 'sb t2, 0(t5)' >/dev/null
 sed -n '/increment_barrier_second:/,/^\.size/p' "$assembly" | grep -F 'addi a0, a0, 4' >/dev/null
 
+static_bool_section=$(sed -n '/^static_bool_bits:/,/^\.size/p' "$assembly")
+printf '%s\n' "$static_bool_section" | grep -F '  .byte 3' >/dev/null
+printf '%s\n' "$static_bool_section" | grep -F '  .byte 5' >/dev/null
+
+static_int_section=$(sed -n '/^static_int_bits:/,/^\.size/p' "$assembly")
+printf '%s\n' "$static_int_section" | grep -F '  .byte 85' >/dev/null
+printf '%s\n' "$static_int_section" | grep -F '  .byte 241' >/dev/null
+printf '%s\n' "$static_int_section" | grep -F '  .byte 42' >/dev/null
+printf '%s\n' "$static_int_section" | grep -F '  .byte 7' >/dev/null
+
 for invalid in invalid_bit_field_address invalid_named_zero_bit_field invalid_bit_field_width; do
     "$host_cc" -E -P -std=gnu11 -x c "$root/tests/compiler/c0/$invalid.c" -o "$work/$invalid.i"
     if "$minic" -S "$work/$invalid.i" -o "$work/$invalid.s" >"$work/$invalid.out" 2>"$work/$invalid.err"; then
@@ -52,4 +62,4 @@ grep -F 'cannot take the address of a bit-field' "$work/invalid_bit_field_addres
 grep -F 'named bit-field width must be positive' "$work/invalid_named_zero_bit_field.err" >/dev/null
 grep -F 'named bit-field width must be positive and fit its integer type' "$work/invalid_bit_field_width.err" >/dev/null
 
-printf '%s\n' 'PASS compiler/c0/unnamed_bit_fields full-unit=1 zero-width=1 named-partial=bool+signed-int+uint+ushort packing=little-endian boundary=type-alignment signed-extension=1 access=byte-rmw address-of=reject width=checked'
+printf '%s\n' 'PASS compiler/c0/unnamed_bit_fields full-unit=1 zero-width=1 named-partial=bool+signed-int+uint+ushort packing=little-endian static-pack=bool+cross-byte boundary=type-alignment signed-extension=1 access=byte-rmw address-of=reject width=checked'
