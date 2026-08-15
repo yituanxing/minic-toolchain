@@ -43,6 +43,8 @@ MINIC_INCLUDES := -Iinclude -Isrc
 
 MINIC_SOURCES := \
 	src/compiler/compiler.c \
+	src/core/core_ir.c \
+	src/core/core_lower.c \
 	src/frontend/attribute.c \
 	src/frontend/ast.c \
 	src/frontend/expression_semantics.c \
