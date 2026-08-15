@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <inttypes.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static const char *const minic_riscv64_argument_registers[8] = {
@@ -221,6 +222,160 @@ emit_symbol_relocs(FILE *file, const MinicC0Program *program, const MinicGlobalO
     return cursor <= storage_size && minic_riscv64_emit_zero_bytes(file, storage_size - cursor);
 }
 
+static bool minic_riscv64_record_has_bit_fields(const MinicRecord *record) {
+    size_t field_index;
+
+    if (record == NULL) {
+        return false;
+    }
+    for (field_index = 0U; field_index < record->field_count; ++field_index) {
+        if (record->fields[field_index].is_bit_field) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool minic_riscv64_emit_record_bit_field_run(FILE *file,
+                                                    const MinicC0Program *program,
+                                                    const MinicGlobalObject *object,
+                                                    const MinicRecord *record,
+                                                    size_t field_limit,
+                                                    size_t type_size,
+                                                    size_t *field_index,
+                                                    size_t *initializer_index,
+                                                    size_t *relocation_index,
+                                                    size_t *cursor) {
+    uint8_t *bytes;
+    size_t run_first;
+    size_t run_end;
+    size_t run_start_offset;
+    size_t run_start_bit;
+    size_t run_end_offset;
+    size_t run_size;
+    size_t index;
+
+    if (file == NULL || program == NULL || object == NULL || record == NULL ||
+        field_index == NULL || initializer_index == NULL || relocation_index == NULL ||
+        cursor == NULL || *field_index >= field_limit ||
+        !record->fields[*field_index].is_bit_field) {
+        return false;
+    }
+    run_first = *field_index;
+    run_end = run_first;
+    while (run_end < field_limit && record->fields[run_end].is_bit_field) {
+        run_end += 1U;
+    }
+    if (!minic_data_layout_record_field_layout(minic_default_data_layout(),
+                                               program,
+                                               record,
+                                               run_first,
+                                               &run_start_offset,
+                                               &run_start_bit) ||
+        run_start_bit >= 8U || run_start_offset < *cursor) {
+        return false;
+    }
+    if (run_end < field_limit) {
+        size_t next_bit_offset;
+
+        if (!minic_data_layout_record_field_layout(minic_default_data_layout(),
+                                                   program,
+                                                   record,
+                                                   run_end,
+                                                   &run_end_offset,
+                                                   &next_bit_offset)) {
+            return false;
+        }
+        (void)next_bit_offset;
+    } else {
+        run_end_offset = type_size;
+    }
+    if (run_end_offset < run_start_offset || run_end_offset > type_size ||
+        !minic_riscv64_emit_zero_bytes(file, run_start_offset - *cursor)) {
+        return false;
+    }
+    run_size = run_end_offset - run_start_offset;
+    bytes = run_size == 0U ? NULL : (uint8_t *)calloc(run_size, sizeof(*bytes));
+    if (run_size != 0U && bytes == NULL) {
+        return false;
+    }
+
+    for (index = run_first; index < run_end; ++index) {
+        const MinicRecordField *field;
+        const MinicGlobalRelocation *relocation;
+        uint64_t bits;
+        uint64_t mask;
+        size_t slot_index;
+        size_t field_offset;
+        size_t bit_offset;
+        size_t relative_bit;
+        size_t bit_index;
+
+        field = &record->fields[index];
+        if (*initializer_index >= object->initializer_count) {
+            free(bytes);
+            return false;
+        }
+        slot_index = *initializer_index;
+        bits = object->initializer_values[slot_index];
+        *initializer_index += 1U;
+        relocation = *relocation_index < object->relocation_count
+                         ? &object->relocations[*relocation_index]
+                         : NULL;
+        if (relocation != NULL &&
+            relocation->location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR &&
+            relocation->location_index <= slot_index) {
+            free(bytes);
+            return false;
+        }
+        if (!minic_data_layout_record_field_layout(
+                minic_default_data_layout(), program, record, index, &field_offset, &bit_offset) ||
+            field_offset < run_start_offset || bit_offset >= 8U) {
+            free(bytes);
+            return false;
+        }
+        if (field->bit_width == 0U) {
+            if (bits != 0U) {
+                free(bytes);
+                return false;
+            }
+            continue;
+        }
+        if (field->bit_width > 64U || field_offset - run_start_offset > SIZE_MAX / 8U) {
+            free(bytes);
+            return false;
+        }
+        relative_bit = (field_offset - run_start_offset) * 8U + bit_offset;
+        if (run_size > SIZE_MAX / 8U || relative_bit > run_size * 8U ||
+            field->bit_width > run_size * 8U - relative_bit) {
+            free(bytes);
+            return false;
+        }
+        mask =
+            field->bit_width == 64U ? UINT64_MAX : (UINT64_C(1) << field->bit_width) - UINT64_C(1);
+        bits &= mask;
+        for (bit_index = 0U; bit_index < field->bit_width; ++bit_index) {
+            size_t positioned_bit;
+
+            if ((bits & (UINT64_C(1) << bit_index)) == 0U) {
+                continue;
+            }
+            positioned_bit = relative_bit + bit_index;
+            bytes[positioned_bit / 8U] |= (uint8_t)(1U << (positioned_bit % 8U));
+        }
+    }
+    for (index = 0U; index < run_size; ++index) {
+        if (fprintf(file, "  .byte %u\n", (unsigned int)bytes[index]) < 0) {
+            free(bytes);
+            return false;
+        }
+    }
+    free(bytes);
+    *cursor = run_end_offset;
+    *field_index = run_end - 1U;
+    return true;
+}
+
 static bool minic_riscv64_emit_direct_record_values(FILE *file,
                                                     const MinicC0Program *program,
                                                     const MinicGlobalObject *object,
@@ -390,6 +545,24 @@ static bool minic_riscv64_emit_constant_value(FILE *file,
             if (field == NULL || field->element_count == 0U || field->is_flexible_array) {
                 return false;
             }
+            if (field->is_bit_field) {
+                if (!minic_riscv64_emit_record_bit_field_run(file,
+                                                             program,
+                                                             object,
+                                                             record,
+                                                             field_limit,
+                                                             type_size,
+                                                             &field_index,
+                                                             initializer_index,
+                                                             relocation_index,
+                                                             &cursor)) {
+                    return false;
+                }
+                if (record->is_union) {
+                    break;
+                }
+                continue;
+            }
             if (record->is_union) {
                 field_offset = 0U;
             } else if (!minic_data_layout_record_field_offset(minic_default_data_layout(),
@@ -470,7 +643,7 @@ static bool minic_riscv64_emit_record_values(FILE *file,
             }
         }
         if (!record->is_union && object->initializer_count == record->field_count &&
-            !has_recursive_relocation) {
+            !has_recursive_relocation && !minic_riscv64_record_has_bit_fields(record)) {
             return minic_riscv64_emit_direct_record_values(file, program, object, record);
         }
     }
