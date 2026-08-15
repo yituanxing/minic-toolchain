@@ -1,0 +1,229 @@
+name: Publish External Array Declarator Routing
+
+on:
+  push:
+    branches: [frontend/external-array-declarator-routing]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-external-array-declarator-routing
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Converge complete external arrays on generic object routing
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/frontend/parser_function.c')
+          text = path.read_text()
+
+          # Complete arrays are ordinary complete object types once their declarator suffix is
+          # materialized. Let the generic external-object definition owner consume them.
+          old = '''    if (parser == NULL || parser->current.kind != MINIC_TOKEN_EQUAL ||\n        (!minic_type_is_integer(object_type) && !minic_type_is_pointer(object_type) &&\n         !minic_type_is_record(object_type))) {\n'''
+          new = '''    if (parser == NULL || parser->current.kind != MINIC_TOKEN_EQUAL ||\n        (!minic_type_is_integer(object_type) && !minic_type_is_pointer(object_type) &&\n         !minic_type_is_record(object_type) && !minic_type_is_array(object_type))) {\n'''
+          if text.count(old) != 1:
+              raise SystemExit('external object definition type gate seam not found')
+          text = text.replace(old, new, 1)
+
+          old = '''    if (minic_type_is_record(object_type)) {\n        if (!minic_parser_parse_static_storage_initializer_value(parser, object_id, object_type)) {\n'''
+          new = '''    if (minic_type_is_record(object_type) || minic_type_is_array(object_type)) {\n        if (!minic_parser_parse_static_storage_initializer_value(parser, object_id, object_type)) {\n'''
+          if text.count(old) != 1:
+              raise SystemExit('external aggregate initializer seam not found')
+          text = text.replace(old, new, 1)
+
+          begin = text.index('static bool parse_visible_external_array(MinicParser *parser,')
+          end = text.index('\ntypedef struct MinicParsedDeclarationPrefix {', begin)
+          replacement = r'''static bool parse_visible_external_array(MinicParser *parser,
+                                         MinicType element_type,
+                                         MinicSourceSpan name_span,
+                                         char *section_name,
+                                         size_t section_name_capacity,
+                                         size_t *section_name_length,
+                                         bool *has_section,
+                                         size_t *explicit_alignment,
+                                         MinicSymbolVisibility visibility,
+                                         bool has_visibility) {
+    MinicParser probe;
+    MinicType array_type;
+    bool is_array;
+
+    if (parser == NULL || parser->current.kind != MINIC_TOKEN_LBRACKET ||
+        section_name == NULL || section_name_length == NULL || has_section == NULL ||
+        explicit_alignment == NULL) {
+        return false;
+    }
+
+    /* Incomplete top-level array definitions still need the legacy bound-inference owner.
+     * Keep that special case bounded until initializer semantics owns inferred aggregate shape. */
+    probe = *parser;
+    if (!minic_parser_advance(&probe)) {
+        return false;
+    }
+    if (probe.current.kind == MINIC_TOKEN_RBRACKET) {
+        if (!minic_parser_advance(&probe)) {
+            return false;
+        }
+        if (probe.current.kind == MINIC_TOKEN_SEMICOLON) {
+            minic_parser_error(parser,
+                               "incomplete external tentative array is not implemented yet");
+            return false;
+        }
+        return parse_external_integer_array_definition(parser, element_type, name_span);
+    }
+
+    /* A complete array is an ordinary complete object. Materialize the full declarator first,
+     * then collect suffix attributes before deciding tentative-definition vs definition. */
+    if (!minic_parser_parse_array_declarator_suffix(
+            parser, element_type, true, &array_type, &is_array) ||
+        !is_array ||
+        !minic_parser_parse_gnu_object_attribute_lists(parser,
+                                                       section_name,
+                                                       section_name_capacity,
+                                                       section_name_length,
+                                                       has_section,
+                                                       explicit_alignment)) {
+        return false;
+    }
+    if (parser->current.kind == MINIC_TOKEN_SEMICOLON) {
+        return parse_external_tentative_object(parser,
+                                               array_type,
+                                               name_span,
+                                               section_name,
+                                               *section_name_length,
+                                               *has_section,
+                                               *explicit_alignment,
+                                               visibility,
+                                               has_visibility);
+    }
+    return parse_external_object_definition(parser,
+                                            array_type,
+                                            name_span,
+                                            section_name,
+                                            *section_name_length,
+                                            *has_section,
+                                            *explicit_alignment,
+                                            visibility,
+                                            has_visibility);
+}
+'''
+          text = text[:begin] + replacement + text[end:]
+
+          old = '''            return parse_visible_external_array(parser,\n                                                return_type,\n                                                name_span,\n                                                section_name,\n                                                section_name_length,\n                                                has_section,\n                                                object_explicit_alignment,\n                                                visibility,\n                                                has_visibility);\n'''
+          new = '''            return parse_visible_external_array(parser,\n                                                return_type,\n                                                name_span,\n                                                section_name,\n                                                sizeof(section_name),\n                                                &section_name_length,\n                                                &has_section,\n                                                &object_explicit_alignment,\n                                                visibility,\n                                                has_visibility);\n'''
+          if text.count(old) != 1:
+              raise SystemExit('visible external array callsite seam not found')
+          text = text.replace(old, new, 1)
+          path.write_text(text)
+
+          runner = Path('tests/compiler/c0/run-foundation-focused.sh')
+          data = runner.read_text()
+          anchor = '    run-external-tentative-definitions.sh \\\n'
+          addition = anchor + '    run-external-array-declarator-routing.sh \\\n'
+          if 'run-external-array-declarator-routing.sh' not in data:
+              if anchor not in data:
+                  raise SystemExit('foundation runner insertion seam not found')
+              runner.write_text(data.replace(anchor, addition, 1))
+          PY
+
+          cat > tests/compiler/c0/external_array_declarator_routing.c <<'EOF'
+          typedef unsigned char u8;
+
+          struct cpu_operations {
+              int state;
+          };
+
+          const struct cpu_operations *cpu_ops[4]
+              __attribute__((__section__(".data..ro_after_init")));
+
+          unsigned long empty_zero_page[8]
+              __attribute__((__section__(".bss..page_aligned")))
+              __attribute__((__aligned__(64)));
+
+          u8 purgatory_sha256_digest[32]
+              __attribute__((__section__(".kexec-purgatory")));
+          u8 purgatory_sha_regions[2][4]
+              __attribute__((__section__(".kexec-purgatory")));
+
+          unsigned long initialized_map[4]
+              __attribute__((__section__(".data..ro_after_init"))) = {1, 2, 3, 4};
+          EOF
+
+          cat > tests/compiler/c0/run-external-array-declarator-routing.sh <<'EOF'
+          #!/bin/sh
+          set -eu
+
+          root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+          minic=${MINIC:-"$root/build/debug/bin/minic"}
+          host_cc=${HOST_CC:-${CC:-cc}}
+          work=${BUILD_DIR:-"$root/build/debug"}/tests/compiler-c0-external-array-declarator-routing
+
+          rm -rf "$work"
+          mkdir -p "$work"
+          "$host_cc" -fsyntax-only -std=gnu11 -Werror -Wno-pedantic -x c \
+            "$root/tests/compiler/c0/external_array_declarator_routing.c"
+          "$host_cc" -E -P -std=gnu11 -x c \
+            "$root/tests/compiler/c0/external_array_declarator_routing.c" -o "$work/input.i"
+          "$minic" -S "$work/input.i" -o "$work/output.s"
+          test -s "$work/output.s"
+          grep -F 'cpu_ops:' "$work/output.s" >/dev/null
+          grep -F 'empty_zero_page:' "$work/output.s" >/dev/null
+          grep -F 'purgatory_sha256_digest:' "$work/output.s" >/dev/null
+          grep -F 'purgatory_sha_regions:' "$work/output.s" >/dev/null
+          grep -F 'initialized_map:' "$work/output.s" >/dev/null
+          grep -F '.data..ro_after_init' "$work/output.s" >/dev/null
+          grep -F '.bss..page_aligned' "$work/output.s" >/dev/null
+          grep -F '.kexec-purgatory' "$work/output.s" >/dev/null
+          printf '%s\n' 'PASS compiler/c0/external_array_declarator_routing complete-array=generic-object suffix-attrs=1 multidim=1 initialized=1'
+          EOF
+          chmod +x tests/compiler/c0/run-external-array-declarator-routing.sh
+
+          sudo apt-get update >/dev/null
+          sudo apt-get install -y --no-install-recommends clang-format-18 >/dev/null
+          clang-format-18 -i src/frontend/parser_function.c \
+            tests/compiler/c0/external_array_declarator_routing.c
+          rm .github/workflows/publish-external-array-declarator-routing.yml
+          git diff --check
+
+      - name: Sanitizer focused regression
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=sanitize BUILD_DIR=build/external-array-routing-sanitize
+          MINIC="$GITHUB_WORKSPACE/build/external-array-routing-sanitize/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/external-array-routing-sanitize" \
+            sh tests/compiler/c0/run-external-array-declarator-routing.sh
+
+      - name: Release Foundation regression
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release BUILD_DIR=build/external-array-routing-release
+          MINIC="$GITHUB_WORKSPACE/build/external-array-routing-release/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/external-array-routing-release" \
+            sh tests/compiler/c0/run-foundation-focused.sh
+
+      - name: Commit product-only patch
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'LiYang Dong'
+          git config user.email '119646676+yituanxing@users.noreply.github.com'
+          git add -A
+          git commit -m 'frontend: route complete external arrays through generic objects' \
+            -m 'Materialize complete array declarator suffixes before classifying file-scope external-linkage objects, then consume post-declarator GNU object attributes and route complete arrays through the generic tentative/definition owners. Generic external definitions now reuse the shared static-storage initializer for complete arrays. Incomplete top-level array definitions remain on the bounded legacy inference path until initializer semantics owns inferred aggregate shape.' \
+            -m '中文说明：文件作用域 external-linkage 对象先完整物化 array declarator suffix，再解析 declarator 后 GNU object attributes，并将完整数组统一路由到 generic tentative/definition owner；完整数组定义复用 shared static-storage initializer。需要从 initializer 推断 bound 的 incomplete top-level array definition 暂时保留在受限旧路径，直到 initializer semantics 正式拥有 aggregate shape inference。' \
+            -m 'Validation / 验证：host GCC syntax PASS; focused sanitizer PASS; Foundation focused PASS; clang-format-18 canonical.'
+          git push origin HEAD:frontend/external-array-declarator-routing
