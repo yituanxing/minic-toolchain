@@ -520,83 +520,29 @@ static bool minic_riscv64_emit_record_array_values(FILE *file,
                                                    const MinicGlobalObject *object) {
     size_t object_alignment;
     size_t storage_size;
+    size_t emitted_size;
+    size_t initializer_index;
+    size_t relocation_index;
 
-    if (!minic_data_layout_global_object(
+    if (file == NULL || program == NULL || object == NULL || object->is_zero_initialized ||
+        !minic_riscv64_record_array_info(program, object->type, NULL, NULL) ||
+        !minic_data_layout_global_object(
             minic_default_data_layout(), program, object, &storage_size, &object_alignment)) {
         return false;
     }
     (void)object_alignment;
-
-    const MinicArrayType *array_type;
-    const MinicRecord *record;
-    size_t element_size;
-    size_t element_alignment;
-    size_t cursor;
-    size_t element_index;
-    size_t initializer_index;
-
-    if (file == NULL || program == NULL || object == NULL || object->is_zero_initialized ||
-        object->relocation_count != 0U ||
-        !minic_riscv64_record_array_info(program, object->type, &array_type, &record) ||
-        record->field_count == 0U || array_type->element_count > SIZE_MAX / record->field_count ||
-        object->initializer_count != array_type->element_count * record->field_count ||
-        !minic_riscv64_type_layout(
-            program, array_type->element_type, &element_size, &element_alignment) ||
-        element_size == 0U || array_type->element_count > SIZE_MAX / element_size ||
-        storage_size != array_type->element_count * element_size) {
-        return false;
-    }
-    (void)element_alignment;
-
-    cursor = 0U;
     initializer_index = 0U;
-    for (element_index = 0U; element_index < array_type->element_count; ++element_index) {
-        size_t field_index;
-        size_t element_base;
-
-        element_base = element_index * element_size;
-        for (field_index = 0U; field_index < record->field_count; ++field_index) {
-            const MinicRecordField *field;
-            const char *directive;
-            size_t field_size;
-            size_t field_alignment;
-            size_t field_offset;
-            uint64_t value;
-
-            field = minic_c0_record_field(record, field_index);
-            if (field == NULL || field->element_count != 1U || field->is_flexible_array ||
-                !minic_type_is_integer(field->type) ||
-                !minic_riscv64_type_layout(program, field->type, &field_size, &field_alignment)) {
-                return false;
-            }
-            (void)field_alignment;
-            if (!minic_data_layout_record_field_offset(
-                    minic_default_data_layout(), program, record, field_index, &field_offset) ||
-                field_offset > element_size || field_size > element_size - field_offset) {
-                return false;
-            }
-            field_offset = element_base + field_offset;
-            if (field_offset < cursor || field_offset > storage_size ||
-                field_size > storage_size - field_offset ||
-                !minic_riscv64_emit_zero_bytes(file, field_offset - cursor)) {
-                return false;
-            }
-
-            value = object->initializer_values[initializer_index++];
-            directive = minic_riscv64_integer_data_directive(field_size);
-            if (directive == NULL ||
-                !minic_riscv64_emit_typed_bits(file, program, field->type, value)) {
-                return false;
-            }
-            cursor = field_offset + field_size;
-        }
-        if (cursor > element_base + element_size ||
-            !minic_riscv64_emit_zero_bytes(file, element_base + element_size - cursor)) {
-            return false;
-        }
-        cursor = element_base + element_size;
-    }
-    return initializer_index == object->initializer_count && cursor == storage_size;
+    relocation_index = 0U;
+    emitted_size = 0U;
+    return minic_riscv64_emit_constant_value(file,
+                                             program,
+                                             object,
+                                             object->type,
+                                             &initializer_index,
+                                             &relocation_index,
+                                             &emitted_size) &&
+           initializer_index == object->initializer_count &&
+           relocation_index == object->relocation_count && emitted_size == storage_size;
 }
 
 static bool minic_riscv64_emit_file_asm(FILE *file, const MinicFileAsm *file_asm) {
@@ -675,14 +621,7 @@ static bool minic_riscv64_emit_global_object(FILE *file,
             return false;
         }
     } else if (minic_riscv64_record_array_info(program, object->type, NULL, NULL)) {
-        const MinicArrayType *array_type;
-        const MinicRecord *record;
-
-        if (!minic_riscv64_record_array_info(program, object->type, &array_type, &record) ||
-            record->field_count == 0U ||
-            array_type->element_count > SIZE_MAX / record->field_count ||
-            object->relocation_count != 0U ||
-            object->initializer_count != array_type->element_count * record->field_count) {
+        if (object->initializer_count == 0U || object->relocation_count != 0U) {
             return false;
         }
     } else {
