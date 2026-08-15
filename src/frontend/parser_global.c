@@ -1136,31 +1136,80 @@ static bool parse_static_record_field_initializer(MinicParser *parser,
            ensure_static_record_base_value(parser, object_id, field_index, 0);
 }
 
-static bool static_record_array_append_value(int **values,
-                                             size_t *value_count,
-                                             size_t *value_capacity,
-                                             int value) {
-    int *resized;
-    size_t new_capacity;
+static bool count_static_array_initializer_elements(MinicParser *parser, size_t *element_count) {
+    MinicParser probe;
+    size_t brace_depth;
+    size_t parenthesis_depth;
+    size_t bracket_depth;
 
-    if (values == NULL || value_count == NULL || value_capacity == NULL) {
+    if (parser == NULL || element_count == NULL || parser->current.kind != MINIC_TOKEN_LBRACE) {
         return false;
     }
-    if (*value_count == *value_capacity) {
-        new_capacity = *value_capacity == 0U ? 16U : *value_capacity * 2U;
-        if (new_capacity < *value_capacity || new_capacity > SIZE_MAX / sizeof(**values)) {
-            return false;
-        }
-        resized = (int *)realloc(*values, new_capacity * sizeof(**values));
-        if (resized == NULL) {
-            return false;
-        }
-        *values = resized;
-        *value_capacity = new_capacity;
+    probe = *parser;
+    if (!minic_parser_advance(&probe)) {
+        return false;
     }
-    (*values)[*value_count] = value;
-    *value_count += 1U;
-    return true;
+    *element_count = 0U;
+    if (probe.current.kind == MINIC_TOKEN_RBRACE) {
+        return true;
+    }
+
+    *element_count = 1U;
+    brace_depth = 0U;
+    parenthesis_depth = 0U;
+    bracket_depth = 0U;
+    while (probe.current.kind != MINIC_TOKEN_EOF) {
+        switch (probe.current.kind) {
+        case MINIC_TOKEN_LBRACE:
+            brace_depth += 1U;
+            break;
+        case MINIC_TOKEN_RBRACE:
+            if (brace_depth == 0U) {
+                return parenthesis_depth == 0U && bracket_depth == 0U;
+            }
+            brace_depth -= 1U;
+            break;
+        case MINIC_TOKEN_LPAREN:
+            parenthesis_depth += 1U;
+            break;
+        case MINIC_TOKEN_RPAREN:
+            if (parenthesis_depth == 0U) {
+                return false;
+            }
+            parenthesis_depth -= 1U;
+            break;
+        case MINIC_TOKEN_LBRACKET:
+            bracket_depth += 1U;
+            break;
+        case MINIC_TOKEN_RBRACKET:
+            if (bracket_depth == 0U) {
+                return false;
+            }
+            bracket_depth -= 1U;
+            break;
+        case MINIC_TOKEN_COMMA:
+            if (brace_depth == 0U && parenthesis_depth == 0U && bracket_depth == 0U) {
+                if (!minic_parser_advance(&probe)) {
+                    return false;
+                }
+                if (probe.current.kind == MINIC_TOKEN_RBRACE) {
+                    return true;
+                }
+                if (*element_count == SIZE_MAX) {
+                    return false;
+                }
+                *element_count += 1U;
+                continue;
+            }
+            break;
+        default:
+            break;
+        }
+        if (!minic_parser_advance(&probe)) {
+            return false;
+        }
+    }
+    return false;
 }
 
 static bool
@@ -1168,156 +1217,51 @@ parse_static_record_array(MinicParser *parser, MinicType element_type, MinicSour
     const MinicRecord *record;
     MinicType object_type;
     MinicGlobalObjectId object_id;
-    int *values;
-    size_t value_count;
-    size_t value_capacity;
-    size_t element_count;
     size_t declared_count;
+    size_t initializer_count;
     bool inferred_bound;
-    bool success;
-    size_t field_index;
 
     record = minic_c0_program_record(parser->program, element_type.record_id);
     if (record == NULL || !record->is_complete || record->is_union || record->field_count == 0U) {
         minic_parser_error(parser, "static record array requires a complete non-empty struct type");
         return false;
     }
-    for (field_index = 0U; field_index < record->field_count; ++field_index) {
-        const MinicRecordField *field;
 
-        field = minic_c0_record_field(record, field_index);
-        if (field == NULL || field->element_count != 1U || field->is_flexible_array ||
-            !minic_type_is_integer(field->type)) {
-            minic_parser_error(
-                parser, "static record array currently requires direct scalar integer fields");
-            return false;
-        }
-    }
-
-    values = NULL;
-    value_count = 0U;
-    value_capacity = 0U;
-    element_count = 0U;
     declared_count = 0U;
     inferred_bound = false;
-    success = false;
-
     if (!minic_parser_expect(parser, MINIC_TOKEN_LBRACKET, "expected '['")) {
-        goto done;
+        return false;
     }
     if (parser->current.kind == MINIC_TOKEN_RBRACKET) {
         inferred_bound = true;
         if (!minic_parser_advance(parser)) {
-            goto done;
+            return false;
         }
     } else if (!minic_parser_parse_fixed_array_bound(parser, &declared_count)) {
-        goto done;
+        return false;
     }
     if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
         minic_parser_error(parser, "multi-dimensional static record arrays are not supported yet");
-        goto done;
+        return false;
     }
     if (!minic_parser_expect(parser, MINIC_TOKEN_EQUAL, "expected '=' after static record array") ||
-        !minic_parser_expect(
-            parser, MINIC_TOKEN_LBRACE, "expected '{' in record array initializer")) {
-        goto done;
-    }
-
-    while (parser->current.kind != MINIC_TOKEN_RBRACE) {
-        if (!inferred_bound && element_count >= declared_count) {
-            minic_parser_error(parser, "too many static record array initializers");
-            goto done;
+        parser->current.kind != MINIC_TOKEN_LBRACE ||
+        !count_static_array_initializer_elements(parser, &initializer_count)) {
+        if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+            minic_parser_error(parser, "cannot inspect static record array initializer");
         }
-        if (!minic_parser_expect(
-                parser, MINIC_TOKEN_LBRACE, "expected '{' before record array element")) {
-            goto done;
-        }
-
-        field_index = 0U;
-        while (parser->current.kind != MINIC_TOKEN_RBRACE) {
-            int64_t parsed_value;
-
-            if (field_index >= record->field_count) {
-                minic_parser_error(parser, "too many fields in static record array element");
-                goto done;
-            }
-            if (!minic_parser_parse_integer_constant_expression(parser, &parsed_value)) {
-                goto done;
-            }
-            if (parsed_value < INT_MIN || parsed_value > INT_MAX) {
-                minic_parser_error(parser,
-                                   "static record array initializer is out of supported range");
-                goto done;
-            }
-            if (!static_record_array_append_value(
-                    &values, &value_count, &value_capacity, (int)parsed_value)) {
-                minic_parser_error(parser,
-                                   "out of memory while recording record array initializer");
-                goto done;
-            }
-            field_index += 1U;
-            if (parser->current.kind == MINIC_TOKEN_COMMA) {
-                if (!minic_parser_advance(parser)) {
-                    goto done;
-                }
-                if (parser->current.kind == MINIC_TOKEN_RBRACE) {
-                    break;
-                }
-            } else if (parser->current.kind != MINIC_TOKEN_RBRACE) {
-                minic_parser_error(parser, "expected ',' or '}' in record array element");
-                goto done;
-            }
-        }
-        while (field_index < record->field_count) {
-            if (!static_record_array_append_value(&values, &value_count, &value_capacity, 0)) {
-                minic_parser_error(parser, "out of memory while zero-filling record array element");
-                goto done;
-            }
-            field_index += 1U;
-        }
-        if (!minic_parser_expect(
-                parser, MINIC_TOKEN_RBRACE, "expected '}' after record array element")) {
-            goto done;
-        }
-        element_count += 1U;
-
-        if (parser->current.kind == MINIC_TOKEN_COMMA) {
-            if (!minic_parser_advance(parser)) {
-                goto done;
-            }
-            if (parser->current.kind == MINIC_TOKEN_RBRACE) {
-                break;
-            }
-        } else if (parser->current.kind != MINIC_TOKEN_RBRACE) {
-            minic_parser_error(parser, "expected ',' or '}' after record array element");
-            goto done;
-        }
-    }
-    if (!minic_parser_expect(
-            parser, MINIC_TOKEN_RBRACE, "expected '}' after static record array initializer")) {
-        goto done;
-    }
-    if (element_count == 0U) {
-        minic_parser_error(parser, "static record array requires at least one initializer");
-        goto done;
+        return false;
     }
     if (inferred_bound) {
-        declared_count = element_count;
-    } else {
-        while (element_count < declared_count) {
-            for (field_index = 0U; field_index < record->field_count; ++field_index) {
-                if (!static_record_array_append_value(&values, &value_count, &value_capacity, 0)) {
-                    minic_parser_error(parser, "out of memory while zero-filling record array");
-                    goto done;
-                }
-            }
-            element_count += 1U;
+        if (initializer_count == 0U) {
+            minic_parser_error(parser,
+                               "cannot infer static record array bound from an empty initializer");
+            return false;
         }
-    }
-    if (record->field_count > SIZE_MAX / declared_count ||
-        value_count != record->field_count * declared_count) {
-        minic_parser_error(parser, "invalid static record array initializer shape");
-        goto done;
+        declared_count = initializer_count;
+    } else if (initializer_count > declared_count) {
+        minic_parser_error(parser, "too many static record array initializers");
+        return false;
     }
 
     if (!minic_c0_program_add_array_type(
@@ -1328,23 +1272,15 @@ parse_static_record_array(MinicParser *parser, MinicType element_type, MinicSour
                                             object_type,
                                             true,
                                             minic_type_is_const(element_type),
-                                            &object_id)) {
-        minic_parser_error(parser, "cannot create static record array object");
-        goto done;
-    }
-    for (field_index = 0U; field_index < value_count; ++field_index) {
-        if (!minic_c0_global_object_add_initializer(
-                parser->program, object_id, values[field_index])) {
-            minic_parser_error(parser, "cannot record static record array initializer value");
-            goto done;
+                                            &object_id) ||
+        !minic_parser_parse_static_storage_initializer_value(parser, object_id, object_type)) {
+        if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+            minic_parser_error(parser, "cannot parse static record array initializer");
         }
+        return false;
     }
-    success = minic_parser_expect(
+    return minic_parser_expect(
         parser, MINIC_TOKEN_SEMICOLON, "expected ';' after static record array");
-
-done:
-    free(values);
-    return success;
 }
 
 static bool parse_static_record(MinicParser *parser, MinicType type, MinicSourceSpan name_span) {
