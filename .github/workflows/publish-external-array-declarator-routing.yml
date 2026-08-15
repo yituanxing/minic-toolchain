@@ -18,7 +18,9 @@ jobs:
           fetch-depth: 0
 
       - name: Stage product patch
-        run: python3 tools/dev/publish_external_array_declarator_routing.py
+        run: |
+          sed -i 's/run-external-tentative-definitions\.sh/run-gnu-visible-extern-arrays.sh/' tools/dev/publish_external_array_declarator_routing.py
+          python3 tools/dev/publish_external_array_declarator_routing.py
 
       - name: Canonical format
         run: |
