@@ -24,5 +24,11 @@ grep -F 'sd a2,' "$assembly" >/dev/null
 grep -F 'sd a3,' "$assembly" >/dev/null
 grep -F 'ld a0, 0(t0)' "$assembly" >/dev/null
 grep -F 'ld a1, 8(t0)' "$assembly" >/dev/null
+grep -F 'make_triple:' "$assembly" >/dev/null
+grep -F 'forward_triple:' "$assembly" >/dev/null
+grep -F 'cleanup_triple_call:' "$assembly" >/dev/null
+grep -F 'call make_triple' "$assembly" >/dev/null
+grep -F 'lbu t0, 0(t2)' "$assembly" >/dev/null
+grep -F 'sb t0, 0(t3)' "$assembly" >/dev/null
 
-printf '%s\n' 'PASS compiler/c0/rv64_integer_aggregate_return size=16 class=integer callee-params=a0-a3 caller-chunks=1 return=a0-a1 record-local=1 record-call=1'
+printf '%s\n' 'PASS compiler/c0/rv64_integer_aggregate_return direct=8,16 indirect=24 hidden-result=a0 explicit-args=a1+ record-local=1 record-call=1 cleanup=1'

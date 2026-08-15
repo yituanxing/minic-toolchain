@@ -100,6 +100,29 @@ void minic_riscv64_abi_cursor_initialize(MinicRiscv64AbiCursor *cursor) {
     cursor->stack_slot_count = 0U;
 }
 
+bool minic_riscv64_abi_cursor_initialize_for_return(const MinicC0Program *program,
+                                                    MinicType return_type,
+                                                    MinicRiscv64AbiCursor *cursor,
+                                                    MinicRiscv64AbiValue *return_value) {
+    MinicRiscv64AbiCursor next;
+    MinicRiscv64AbiValue result;
+
+    if (cursor == NULL || return_value == NULL ||
+        !minic_riscv64_abi_classify_value(program, return_type, &result)) {
+        return false;
+    }
+    minic_riscv64_abi_cursor_initialize(&next);
+    if (result.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) {
+        if (!minic_type_is_record(return_type) || result.storage_size <= 16U) {
+            return false;
+        }
+        next.integer_register_count = 1U;
+    }
+    *cursor = next;
+    *return_value = result;
+    return true;
+}
+
 bool minic_riscv64_abi_classify_value(const MinicC0Program *program,
                                       MinicType type,
                                       MinicRiscv64AbiValue *value) {
