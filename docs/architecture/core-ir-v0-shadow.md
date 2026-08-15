@@ -37,7 +37,7 @@ DataLayout remains a read-only target-dependent semantic query service that may 
 
 The direct AST -> RV64 path has accumulated target-neutral responsibilities: expression evaluation order, temporary materialization, control-flow construction, cleanup traversal and aggregate execution rules. The backend is therefore beginning to answer both "what must execute?" and "how does RV64 execute it?".
 
-The first Core IR slice separates those questions without changing emitted assembly.
+Core IR separates those questions while the shadow migration keeps emitted assembly unchanged.
 
 ## 3. v0 scalar-shadow contract / v0 标量影子契约
 
@@ -75,7 +75,69 @@ Facts are preserved only when they still have a real downstream consumer. In thi
 
 The current `MinicType` and `MinicSourceSpan` representations are reused deliberately. Core IR does not create duplicate type or source-location systems merely to appear independent.
 
-## 5. Memory is intentionally not in this slice / 本切片故意不加入内存操作
+The lowering unit is the **normalized canonical `FunctionBody`**, not an imagined source-level tree. For example, the parser currently appends a canonical default return at function end. The scalar lowering accepts the first reachable supported return and only tolerates trailing return statements as an unreachable canonical tail; any other trailing statement remains unsupported. Parser representation details are absorbed at the AST/Core seam rather than leaked into RV64.
+
+## 5. Lowering result contract / Lowering 结果契约
+
+Core lowering is tri-state:
+
+```text
+MINIC_CORE_LOWER_OK
+MINIC_CORE_LOWER_UNSUPPORTED
+MINIC_CORE_LOWER_ERROR
+```
+
+- `OK` means a valid CoreFunction was produced and verified.
+- `UNSUPPORTED` means the normalized AST is valid but outside the current bounded Core coverage.
+- `ERROR` means an internal representation, lookup, allocation or verifier contract failed.
+
+A non-`OK` lowering never partially replaces the caller's existing CoreFunction. This distinction is required for a real shadow migration: large real programs may contain unsupported functions without turning expected coverage gaps into compiler errors, while actual Core failures must still fail closed.
+
+## 6. Pipeline shadow migration / 编译管线影子迁移
+
+The default production path remains unchanged:
+
+```text
+normalized Semantic AST
+        ↓
+existing RV64 layout/backend
+        ↓
+assembly
+```
+
+The opt-in development shadow now runs inside the real compiler after normalized AST and FunctionBody validation and before RV64 layout:
+
+```text
+normalized Semantic AST
+        ↓
+FunctionBody ownership validation
+        ↓
+Core shadow: lower -> verify -> destroy
+        ↓
+existing RV64 layout/backend
+        ↓
+assembly
+```
+
+The temporary internal environment switch is:
+
+```text
+MINIC_CORE_IR unset   -> shadow disabled
+MINIC_CORE_IR=shadow  -> lower supported functions; skip UNSUPPORTED
+MINIC_CORE_IR=strict  -> fail if any defined function is UNSUPPORTED
+```
+
+An invalid value fails closed. `strict` exists so CI can prove that the shadow path actually executed; it is not a public compiler API. The environment switch is migration plumbing and should be deleted when Core IR becomes the production function-body path.
+
+The pipeline contract freezes two important properties:
+
+- a supported `return 1 + 2` function succeeds under `strict`;
+- an unsupported `return 1 - 2` function is skipped under `shadow` and rejected under `strict`;
+- whenever default and shadow compilation both succeed, their RV64 assembly is byte-identical.
+
+No RV64 code-generation API consumes Core IR yet.
+
+## 7. Memory is intentionally not in this slice / 本切片故意不加入内存操作
 
 v0 does **not** introduce `LOAD`, `STORE`, object addresses or pointer-derived memory operations yet.
 
@@ -83,54 +145,7 @@ The first memory slice must establish the minimum object/address/volatile contra
 
 This is a bounded deferral, not a plan for a large memory framework.
 
-## 6. Shadow migration rule / 影子迁移规则
-
-The production path remains unchanged:
-
-```text
-normalized Semantic AST
-        ↓
-existing RV64 backend
-        ↓
-assembly
-```
-
-The new path is initially a focused shadow contract:
-
-```text
-normalized FunctionBody
-        ↓
-CoreFunction
-        ↓
-verify
-        ↓
-deterministic dump
-```
-
-Unsupported AST forms fail closed. A failed lowering must not partially replace the caller's existing CoreFunction.
-
-The first focused example is equivalent to:
-
-```c
-int f(void) {
-    return 1 + 2;
-}
-```
-
-and freezes the deterministic form:
-
-```text
-core function @f
-bb0:
-  %0 = const.int 1
-  %1 = const.int 2
-  %2 = add.int %0, %1
-  return %2
-```
-
-No RV64 code-generation API consumes Core IR in this slice.
-
-## 7. What is deliberately not designed yet / 现在不提前设计什么
+## 8. What is deliberately not designed yet / 现在不提前设计什么
 
 This slice does not create:
 
@@ -144,8 +159,8 @@ This slice does not create:
 - a complete C undefined-behavior model;
 - cleanup, switch, aggregate or inline-asm Core operations.
 
-Those concepts are introduced only when the next real lowering slice needs them. Their eventual ownership must still follow the same rule: resolve a rule where it belongs, preserve the resulting fact while a real consumer needs it, and lower only when the remaining choice belongs to the next layer.
+Those concepts are introduced only when a real lowering slice needs them. Their eventual ownership must still follow the same rule: resolve a rule where it belongs, preserve the resulting fact while a real consumer needs it, and lower only when the remaining choice belongs to the next layer.
 
-## 8. Next widening criterion / 下一刀
+## 9. Next widening criterion / 下一刀
 
 The next Core IR widening should be driven by the smallest real function that requires local object access. Before the first `LOAD` or `STORE` lands, freeze only the object/address/volatile semantics necessary for that function and re-run the same focused + Foundation + unchanged-real-program gates.

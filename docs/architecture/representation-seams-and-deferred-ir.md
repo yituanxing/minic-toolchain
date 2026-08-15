@@ -152,7 +152,7 @@ Language-specific rules must be resolved above the AST/Core seam. Their resultin
 
 Target machine placement remains below the Core/ABI and ABI/machine seams: physical register names, frame offsets, spill slots, saved-register layout, instruction spelling and encoding do not belong to Core IR.
 
-The first checked-in Core IR remains shadow-only. It proves a compact function representation, verifier, deterministic dump and a bounded normalized-FunctionBody lowering. The production assembly path is still unchanged:
+The checked-in Core IR remains shadow-only. It proves a compact function representation, verifier, deterministic dump and a bounded normalized-FunctionBody lowering. The default assembly path is still unchanged:
 
 ```text
 normalized Semantic AST
@@ -162,7 +162,7 @@ existing RV64 backend
 assembly
 ```
 
-The focused shadow path begins separately and fails closed on unsupported forms. See `core-ir-v0-shadow.md` for the exact current contract.
+The shadow is now wired into the real compiler after normalized FunctionBody validation and before RV64 layout. Lowering distinguishes `OK`, valid-but-`UNSUPPORTED`, and actual `ERROR`; optional shadow mode skips unsupported functions, while strict mode turns them into a CI-visible coverage failure. Supported shadow compilation must remain byte-identical to the default RV64 output. The temporary environment switch is migration plumbing rather than a public compiler interface. See `core-ir-v0-shadow.md` for the exact current contract.
 
 ## 6. DataLayout, BackendLayout and ABI boundaries / DataLayout、BackendLayout 与 ABI 边界
 
@@ -238,12 +238,16 @@ DataLayout / TargetABI ownership seams
         ↓
 normalized FunctionBody
         ↓
-Core IR scalar shadow
+Core IR scalar lowering
         ↓
-verify + deterministic dump
+tri-state shadow + verify
+        ↓
+existing RV64 backend remains production owner
 ```
 
 The current Core slice does not move FunctionBody storage or replace the AST→RV64 production path. It also deliberately does not introduce memory operations, SSA, a pass manager, alias analysis or Machine IR.
+
+The pipeline shadow consumes the real canonical FunctionBody rather than a source-shaped test approximation. Parser normalization details such as the trailing default return are handled at the AST/Core seam without widening Core semantics merely to mirror parser storage.
 
 The next widening must be justified by a real lowering case. Before the first Core `LOAD`/`STORE` lands, define only the minimum object/address/volatile contract required by that case. Unsupported forms remain outside the shadow coverage rather than forcing speculative IR features.
 
