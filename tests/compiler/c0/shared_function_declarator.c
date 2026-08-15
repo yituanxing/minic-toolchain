@@ -36,11 +36,12 @@ static int apply_local(int value)
 {
     void (*notify)(int);
     int (*transform)(int);
+    int (ordinary) = value;
 
     notify = discard;
     transform = add_one;
-    notify(value);
-    return transform(value);
+    notify(ordinary);
+    return transform(ordinary);
 }
 
 static int proc_impl(struct ctl_table *ctl, int write, void *buffer,
