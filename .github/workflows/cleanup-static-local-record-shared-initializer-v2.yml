@@ -1,0 +1,47 @@
+name: Validate static-local initializer dead-helper cleanup
+
+on:
+  push:
+    branches:
+      - staging/static-local-record-shared-initializer-v2
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: staging/static-local-record-shared-initializer-v2
+          fetch-depth: 0
+      - name: Remove retired helper chain
+        run: python3 tools/dev/cleanup-static-local-record-shared-initializer-v2.py
+      - name: Build and focused validation
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang-format-18
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/static-local-record-shared-v2
+          MINIC="$GITHUB_WORKSPACE/build/static-local-record-shared-v2/bin/minic" \
+            BUILD_DIR="$GITHUB_WORKSPACE/build/static-local-record-shared-v2-tests" \
+            HOST_CC=cc \
+            sh tests/compiler/c0/run-static-local-record-initializers.sh
+          MINIC="$GITHUB_WORKSPACE/build/static-local-record-shared-v2/bin/minic" \
+            BUILD_DIR="$GITHUB_WORKSPACE/build/static-local-record-shared-v2-aggregate-tests" \
+            HOST_CC=cc \
+            sh tests/compiler/c0/run-static-aggregate-initializers.sh
+          make check-fast
+          git diff --check
+      - name: Commit corrected product file
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/frontend/parser_statement.c
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m 'refactor: remove retired zero-aggregate helpers [materialized v2]'
+          git push origin HEAD:staging/static-local-record-shared-initializer-v2
