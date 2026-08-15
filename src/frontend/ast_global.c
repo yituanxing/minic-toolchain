@@ -238,7 +238,7 @@ bool minic_c0_global_object_add_initializer_bits(MinicC0Program *program,
     if (object->relocation_count != 0U) {
         size_t relocation_index;
 
-        if (!minic_type_is_record(object->type)) {
+        if (!minic_type_is_record(object->type) && !minic_type_is_array(object->type)) {
             return false;
         }
         for (relocation_index = 0U; relocation_index < object->relocation_count;

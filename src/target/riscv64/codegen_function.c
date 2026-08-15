@@ -621,7 +621,7 @@ static bool minic_riscv64_emit_global_object(FILE *file,
             return false;
         }
     } else if (minic_riscv64_record_array_info(program, object->type, NULL, NULL)) {
-        if (object->initializer_count == 0U || object->relocation_count != 0U) {
+        if (object->initializer_count == 0U) {
             return false;
         }
     } else {
@@ -674,6 +674,11 @@ static bool minic_riscv64_emit_global_object(FILE *file,
         if (!minic_riscv64_emit_record_values(file, program, object)) {
             return false;
         }
+    } else if (minic_riscv64_record_array_info(program, object->type, NULL, NULL) &&
+               object->initializer_count != 0U) {
+        if (!minic_riscv64_emit_record_array_values(file, program, object)) {
+            return false;
+        }
     } else if (object->relocation_count != 0U) {
         if (!emit_symbol_relocs(file, program, object)) {
             return false;
@@ -684,10 +689,6 @@ static bool minic_riscv64_emit_global_object(FILE *file,
         }
     } else if (minic_type_is_record(object->type)) {
         if (!minic_riscv64_emit_record_values(file, program, object)) {
-            return false;
-        }
-    } else if (minic_riscv64_record_array_info(program, object->type, NULL, NULL)) {
-        if (!minic_riscv64_emit_record_array_values(file, program, object)) {
             return false;
         }
     } else {
