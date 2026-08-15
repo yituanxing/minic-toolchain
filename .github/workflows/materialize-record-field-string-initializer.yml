@@ -1,0 +1,50 @@
+name: Materialize record-field string initializer
+
+on:
+  push:
+    branches:
+      - staging/record-field-string-initializer-v1-run
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Materialize product delta
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/materialize-record-field-string-initializer.py
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+          git diff --check
+
+      - name: Build and focused validation
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS='-Wall -Wextra -Werror' BUILD_DIR=build/record-field-string
+          MINIC="$GITHUB_WORKSPACE/build/record-field-string/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/record-field-string-focused" \
+          HOST_CC=cc \
+            sh tests/compiler/c0/run-static-record-arrays.sh
+          make check-fast
+
+      - name: Commit materialized product files
+        run: |
+          set -Eeuo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add \
+            src/frontend/parser_string.c \
+            src/frontend/parser_internal.h \
+            src/frontend/parser_global.c \
+            tests/compiler/c0/static_record_array.c \
+            tests/compiler/c0/run-static-record-arrays.sh
+          git commit -m 'feat: initialize record character arrays from strings [materialized]'
+          git push origin HEAD:staging/record-field-string-initializer-v1-run
