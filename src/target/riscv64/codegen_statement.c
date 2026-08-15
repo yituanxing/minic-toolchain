@@ -1,4 +1,5 @@
 #include "target/riscv64/codegen_internal.h"
+#include "target/riscv64/abi.h"
 #include "target/target_info.h"
 
 #include <inttypes.h>
@@ -184,30 +185,47 @@ static bool minic_riscv64_emit_return(FILE *file,
             return false;
         }
         if (minic_type_is_record(function->return_type)) {
-            size_t aggregate_size;
-            size_t aggregate_chunks;
+            MinicRiscv64AbiValue return_value;
 
             if (!minic_type_is_record(value->type) ||
                 value->type.record_id != function->return_type.record_id ||
-                !minic_riscv64_integer_aggregate_abi(
-                    program, function->return_type, &aggregate_size, &aggregate_chunks)) {
+                !minic_riscv64_abi_classify_value(program, function->return_type, &return_value)) {
                 return false;
             }
-            (void)aggregate_size;
-            if (minic_c0_record_value_is_address_backed(program, statement->expression)) {
-                if (!minic_riscv64_emit_address_backed_record_value(
-                        file, program, function, function_layout, statement->expression) ||
-                    fprintf(file, "  mv t0, a0\n") < 0 ||
-                    !minic_riscv64_emit_integer_aggregate_load_chunk(
-                        file, program, function->return_type, 0U, "a0", "t0") ||
-                    (aggregate_chunks == 2U &&
-                     !minic_riscv64_emit_integer_aggregate_load_chunk(
-                         file, program, function->return_type, 1U, "a1", "t0"))) {
+            if (return_value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) {
+                MinicRiscv64FrameLayout frame_layout;
+
+                if (return_value.storage_size <= 16U ||
+                    !minic_riscv64_frame_layout_from_function_layout(
+                        program, function, function_layout, &frame_layout) ||
+                    !frame_layout.has_indirect_return ||
+                    !minic_riscv64_emit_record_return_value(file,
+                                                            program,
+                                                            function,
+                                                            function_layout,
+                                                            statement->expression,
+                                                            frame_layout.indirect_return_offset)) {
                     return false;
                 }
-            } else if (value->kind != MINIC_EXPRESSION_CALL ||
-                       !minic_riscv64_emit_expression(
-                           file, program, function, function_layout, statement->expression)) {
+            } else if (return_value.kind == MINIC_RISCV64_ABI_VALUE_AGGREGATE &&
+                       return_value.slot_count != 0U && return_value.slot_count <= 2U) {
+                if (minic_c0_record_value_is_address_backed(program, statement->expression)) {
+                    if (!minic_riscv64_emit_address_backed_record_value(
+                            file, program, function, function_layout, statement->expression) ||
+                        fprintf(file, "  mv t0, a0\n") < 0 ||
+                        !minic_riscv64_emit_integer_aggregate_load_chunk(
+                            file, program, function->return_type, 0U, "a0", "t0") ||
+                        (return_value.slot_count == 2U &&
+                         !minic_riscv64_emit_integer_aggregate_load_chunk(
+                             file, program, function->return_type, 1U, "a1", "t0"))) {
+                        return false;
+                    }
+                } else if (value->kind != MINIC_EXPRESSION_CALL ||
+                           !minic_riscv64_emit_expression(
+                               file, program, function, function_layout, statement->expression)) {
+                    return false;
+                }
+            } else {
                 return false;
             }
         } else if (!minic_riscv64_emit_expression(

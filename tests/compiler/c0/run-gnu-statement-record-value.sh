@@ -64,38 +64,23 @@ pair_t infer_from_call(long value)
     return inferred;
 }
 
-void unsupported_large_call(large_t *target)
+void assign_from_large_call(large_t *target)
 {
     *target = make_large();
 }
 EOF
 "$host_cc" -E -P -std=gnu11 -x c "$work/record_call.c" -o "$work/record_call.i"
-# The supported 8/16-byte forms must compile; keep the 24-byte target boundary separate.
-sed '/void unsupported_large_call/,$d' "$work/record_call.i" >"$work/record_call_supported.i"
-"$minic" -S "$work/record_call_supported.i" -o "$work/record_call.s"
+# Keep the register-return and indirect-return call-rvalue paths visible in one focused contract.
+"$minic" -S "$work/record_call.i" -o "$work/record_call.s"
 grep -F '  call make_item' "$work/record_call.s" >/dev/null
 grep -F '  call make_pair' "$work/record_call.s" >/dev/null
+grep -F '  call make_large' "$work/record_call.s" >/dev/null
 grep -F '  sd a0, 0(sp)' "$work/record_call.s" >/dev/null
 grep -F '  sd a1, 8(sp)' "$work/record_call.s" >/dev/null
 call_copy_loads=$(grep -c '^  lbu t0, 0(t2)$' "$work/record_call.s")
 call_copy_stores=$(grep -c '^  sb t0, 0(t3)$' "$work/record_call.s")
-test "$call_copy_loads" -ge 40
-test "$call_copy_stores" -ge 40
-
-cat >"$work/large_call.c" <<'EOF'
-typedef struct large { long first; long second; long third; } large_t;
-extern large_t make_large(void);
-void unsupported_large_call(large_t *target)
-{
-    *target = make_large();
-}
-EOF
-"$host_cc" -E -P -std=gnu11 -x c "$work/large_call.c" -o "$work/large_call.i"
-if "$minic" -S "$work/large_call.i" -o "$work/large_call.s" \
-    >"$work/large_call.stdout" 2>"$work/large_call.stderr"; then
-    printf '%s\n' 'unsupported 24-byte record call copy unexpectedly succeeded' >&2
-    exit 1
-fi
+test "$call_copy_loads" -ge 64
+test "$call_copy_stores" -ge 64
 
 printf '%s\n' \
-    'PASS compiler/c0/gnu_statement_record_value initializer=record-rvalue assignment=record-rvalue address-backed=preserved call-rvalue=8+16-byte register-backed auto-type=1 large-call=bounded lvalue=unchanged'
+    'PASS compiler/c0/gnu_statement_record_value initializer=record-rvalue assignment=record-rvalue address-backed=preserved call-rvalue=8+16-register+24-indirect auto-type=1 hidden-result=1 lvalue=unchanged'
