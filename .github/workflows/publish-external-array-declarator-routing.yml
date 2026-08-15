@@ -21,6 +21,7 @@ jobs:
         run: |
           sed -i 's/run-external-tentative-definitions\.sh/run-gnu-visible-extern-arrays.sh/' tools/dev/publish_external_array_declarator_routing.py
           python3 tools/dev/publish_external_array_declarator_routing.py
+          python3 tools/dev/publish_external_array_static_emitter.py
           python3 - <<'PY'
           from pathlib import Path
           path = Path('tests/compiler/c0/run-extern-fixed-integer-arrays.sh')
@@ -36,16 +37,20 @@ jobs:
         run: |
           sudo apt-get update >/dev/null
           sudo apt-get install -y --no-install-recommends clang-format-18 >/dev/null
-          clang-format-18 -i src/frontend/parser_function.c tests/compiler/c0/external_array_declarator_routing.c
+          clang-format-18 -i src/frontend/parser_function.c src/target/riscv64/codegen_function.c tests/compiler/c0/external_array_declarator_routing.c
           chmod +x tests/compiler/c0/run-external-array-declarator-routing.sh
           rm .github/workflows/publish-external-array-declarator-routing.yml
           rm tools/dev/publish_external_array_declarator_routing.py
+          rm tools/dev/publish_external_array_static_emitter.py
           git diff --check
 
-      - name: Sanitizer focused regression
+      - name: Sanitizer focused regressions
         run: |
           make -j4 MODE=sanitize BUILD_DIR=build/external-array-routing-sanitize
-          MINIC="$GITHUB_WORKSPACE/build/external-array-routing-sanitize/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/external-array-routing-sanitize" sh tests/compiler/c0/run-external-array-declarator-routing.sh
+          export MINIC="$GITHUB_WORKSPACE/build/external-array-routing-sanitize/bin/minic"
+          export BUILD_DIR="$GITHUB_WORKSPACE/build/external-array-routing-sanitize"
+          sh tests/compiler/c0/run-external-array-declarator-routing.sh
+          sh tests/compiler/c0/run-external-pointer-arrays.sh
 
       - name: Foundation regression
         run: |
@@ -57,5 +62,5 @@ jobs:
           git config user.name 'LiYang Dong'
           git config user.email '119646676+yituanxing@users.noreply.github.com'
           git add -A
-          git commit -m 'frontend: route complete external arrays through generic objects' -m 'Materialize complete array declarator suffixes before classifying file-scope external-linkage objects, consume post-declarator GNU object attributes, and route complete arrays through the generic tentative/definition owners. Generic external definitions reuse the shared static-storage initializer, whose explicit semantic zero elements replace the old specialized sparse-tail assembly contract. Incomplete top-level array definitions remain on the bounded legacy inference path until initializer semantics owns inferred aggregate shape.' -m '中文说明：文件作用域 external-linkage 对象先完整物化 array declarator suffix，再解析 declarator 后 GNU object attributes，并将完整数组统一路由到 generic tentative/definition owner；完整数组定义复用 shared static-storage initializer，其显式 semantic zero element 取代旧专用路径依赖的 sparse-tail 汇编拼写。需要从 initializer 推断 bound 的 incomplete top-level array definition 暂时保留在受限旧路径。'
+          git commit -m 'frontend: converge complete external array object lowering' -m 'Materialize complete external array declarators before object classification, consume post-declarator attributes, and route complete arrays through generic tentative/definition plus shared static-storage initializer owners. Extend the existing recursive RV64 constant-data emitter from record arrays to all complete initialized arrays, including aggregate-scalar relocations. Incomplete top-level array definitions remain on the bounded inference path.' -m '中文说明：完整 external array 先物化 declarator，再解析 declarator 后属性，并统一走 generic tentative/definition 与 shared static-storage initializer；RV64 既有 recursive constant-data emitter 从 record array 扩展为所有完整初始化数组，包括 aggregate-scalar relocation。incomplete top-level array definition 暂留受限推断路径。'
           git push origin HEAD:frontend/external-array-declarator-routing
