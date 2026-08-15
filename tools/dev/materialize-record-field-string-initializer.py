@@ -22,6 +22,18 @@ replace_once(
     '''            (object->relocation_count != 0U && !object->is_zero_initialized &&\n             ((!minic_type_is_record(object->type) && !minic_type_is_array(object->type)) ||\n              object->initializer_count == 0U)) ||\n''',
 )
 
+replace_once(
+    "src/target/riscv64/codegen_function.c",
+    '''    } else if (minic_riscv64_record_array_info(program, object->type, NULL, NULL)) {\n        if (object->initializer_count == 0U || object->relocation_count != 0U) {\n            return false;\n        }\n''',
+    '''    } else if (minic_riscv64_record_array_info(program, object->type, NULL, NULL)) {\n        if (object->initializer_count == 0U) {\n            return false;\n        }\n''',
+)
+
+replace_once(
+    "src/target/riscv64/codegen_function.c",
+    '''    if (minic_type_is_record(object->type) && object->initializer_count != 0U) {\n        if (!minic_riscv64_emit_record_values(file, program, object)) {\n            return false;\n        }\n    } else if (object->relocation_count != 0U) {\n        if (!emit_symbol_relocs(file, program, object)) {\n            return false;\n        }\n    } else if (object->is_zero_initialized || object->is_tentative) {\n        if (!minic_riscv64_emit_zero_bytes(file, storage_size)) {\n            return false;\n        }\n    } else if (minic_type_is_record(object->type)) {\n        if (!minic_riscv64_emit_record_values(file, program, object)) {\n            return false;\n        }\n    } else if (minic_riscv64_record_array_info(program, object->type, NULL, NULL)) {\n        if (!minic_riscv64_emit_record_array_values(file, program, object)) {\n            return false;\n        }\n''',
+    '''    if (minic_type_is_record(object->type) && object->initializer_count != 0U) {\n        if (!minic_riscv64_emit_record_values(file, program, object)) {\n            return false;\n        }\n    } else if (minic_riscv64_record_array_info(program, object->type, NULL, NULL) &&\n               object->initializer_count != 0U) {\n        if (!minic_riscv64_emit_record_array_values(file, program, object)) {\n            return false;\n        }\n    } else if (object->relocation_count != 0U) {\n        if (!emit_symbol_relocs(file, program, object)) {\n            return false;\n        }\n    } else if (object->is_zero_initialized || object->is_tentative) {\n        if (!minic_riscv64_emit_zero_bytes(file, storage_size)) {\n            return false;\n        }\n    } else if (minic_type_is_record(object->type)) {\n        if (!minic_riscv64_emit_record_values(file, program, object)) {\n            return false;\n        }\n''',
+)
+
 parser_string = Path("src/frontend/parser_string.c")
 text = parser_string.read_text()
 anchor = '''bool minic_parser_get_predefined_function_name_object(MinicParser *parser,\n'''
