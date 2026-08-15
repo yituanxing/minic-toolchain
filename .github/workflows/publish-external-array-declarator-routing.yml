@@ -24,13 +24,22 @@ jobs:
           python3 tools/dev/publish_external_array_static_emitter.py
           python3 - <<'PY'
           from pathlib import Path
-          path = Path('tests/compiler/c0/run-extern-fixed-integer-arrays.sh')
-          text = path.read_text()
+
+          integer_test = Path('tests/compiler/c0/run-extern-fixed-integer-arrays.sh')
+          text = integer_test.read_text()
           old = "grep -F '  .zero 2' \"$work/extern_fixed_integer_array.s\" >/dev/null\n"
           new = "test \"$(grep -c -F '  .byte 0' \"$work/extern_fixed_integer_array.s\")\" -eq 2\n"
           if text.count(old) != 1:
               raise SystemExit('external fixed-array zero-fill contract seam not found')
-          path.write_text(text.replace(old, new, 1))
+          integer_test.write_text(text.replace(old, new, 1))
+
+          pointer_test = Path('tests/compiler/c0/run-external-pointer-arrays.sh')
+          text = pointer_test.read_text()
+          old = "grep -F '  .zero 8' \"$asm\" >/dev/null\n"
+          new = "grep -F '  .dword 0' \"$asm\" >/dev/null\n"
+          if text.count(old) != 1:
+              raise SystemExit('external pointer-array null contract seam not found')
+          pointer_test.write_text(text.replace(old, new, 1))
           PY
 
       - name: Canonical format
@@ -51,6 +60,7 @@ jobs:
           export BUILD_DIR="$GITHUB_WORKSPACE/build/external-array-routing-sanitize"
           sh tests/compiler/c0/run-external-array-declarator-routing.sh
           sh tests/compiler/c0/run-external-pointer-arrays.sh
+          sh tests/compiler/c0/run-extern-fixed-integer-arrays.sh
 
       - name: Foundation regression
         run: |
@@ -62,5 +72,5 @@ jobs:
           git config user.name 'LiYang Dong'
           git config user.email '119646676+yituanxing@users.noreply.github.com'
           git add -A
-          git commit -m 'frontend: converge complete external array object lowering' -m 'Materialize complete external array declarators before object classification, consume post-declarator attributes, and route complete arrays through generic tentative/definition plus shared static-storage initializer owners. Extend the existing recursive RV64 constant-data emitter from record arrays to all complete initialized arrays, including aggregate-scalar relocations. Incomplete top-level array definitions remain on the bounded inference path.' -m '中文说明：完整 external array 先物化 declarator，再解析 declarator 后属性，并统一走 generic tentative/definition 与 shared static-storage initializer；RV64 既有 recursive constant-data emitter 从 record array 扩展为所有完整初始化数组，包括 aggregate-scalar relocation。incomplete top-level array definition 暂留受限推断路径。'
+          git commit -m 'frontend: converge complete external array object lowering' -m 'Materialize complete external array declarators before object classification, consume post-declarator attributes, and route complete arrays through generic tentative/definition plus shared static-storage initializer owners. Extend the existing recursive RV64 constant-data emitter from record arrays to all complete initialized arrays, including aggregate-scalar relocations. Explicit semantic zero slots replace old sparse-tail assembly spelling. Incomplete top-level array definitions remain on the bounded inference path.' -m '中文说明：完整 external array 先物化 declarator，再解析 declarator 后属性，并统一走 generic tentative/definition 与 shared static-storage initializer；RV64 既有 recursive constant-data emitter 从 record array 扩展为所有完整初始化数组，包括 aggregate-scalar relocation。显式 semantic zero slot 取代旧专用路径的 sparse-tail 汇编拼写。incomplete top-level array definition 暂留受限推断路径。'
           git push origin HEAD:frontend/external-array-declarator-routing
