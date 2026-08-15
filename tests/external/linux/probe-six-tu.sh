@@ -59,6 +59,7 @@ for source in $units; do
     assembly="$work/minic/$stem.s"
     stdout="$work/logs/$safe_name.minic.stdout"
     stderr="$work/logs/$safe_name.minic.stderr"
+    partial_tail="$work/logs/$safe_name.minic.partial-s.tail"
 
     mkdir -p "$(dirname -- "$assembly")"
     printf '%s\n' "LINUX_SIX_TU_REFERENCE source=$source"
@@ -84,22 +85,49 @@ for source in $units; do
     set -e
 
     if test "$status" -ne 0; then
+        phase=source
         frontier_line=$(awk -F: '$2 ~ /^[0-9]+$/ { print $2; exit }' "$stderr")
-        if test -z "$frontier_line"; then
-            frontier_line=1
+        if grep -F "$assembly:" "$stderr" >/dev/null 2>&1; then
+            phase=emit
+            frontier_line=0
+        elif test -z "$frontier_line"; then
+            phase=unknown
+            frontier_line=0
         fi
-        start_line=$((frontier_line > 18 ? frontier_line - 18 : 1))
-        end_line=$((frontier_line + 18))
+
+        assembly_bytes=0
+        assembly_lines=0
+        if test -f "$assembly"; then
+            assembly_bytes=$(wc -c < "$assembly" | tr -d ' ')
+            assembly_lines=$(wc -l < "$assembly" | tr -d ' ')
+            tail -n 160 "$assembly" > "$partial_tail"
+        else
+            : > "$partial_tail"
+        fi
+
         cp "$input" "$work/blocker.i"
         printf '%s\n' "source=$source" > "$work/blocker.txt"
+        printf '%s\n' "phase=$phase" >> "$work/blocker.txt"
         printf '%s\n' "line=$frontier_line" >> "$work/blocker.txt"
         printf '%s\n' "status=$status" >> "$work/blocker.txt"
         printf '%s\n' "passed_before_blocker=$passed" >> "$work/blocker.txt"
-        printf '%s\n' "LINUX_SIX_TU_BLOCKER source=$source line=$frontier_line passed=$passed minic_status=$status" >&2
-        printf '%s\n' "$source preprocessed frontier lines=$start_line-$end_line:" >&2
-        nl -ba "$input" | sed -n "${start_line},${end_line}p" >&2
+        printf '%s\n' "assembly_lines=$assembly_lines" >> "$work/blocker.txt"
+        printf '%s\n' "assembly_bytes=$assembly_bytes" >> "$work/blocker.txt"
+        printf '%s\n' "LINUX_SIX_TU_BLOCKER source=$source phase=$phase line=$frontier_line passed=$passed minic_status=$status assembly_lines=$assembly_lines assembly_bytes=$assembly_bytes" >&2
+
+        if test "$phase" = source && test "$frontier_line" -gt 0; then
+            start_line=$((frontier_line > 18 ? frontier_line - 18 : 1))
+            end_line=$((frontier_line + 18))
+            printf '%s\n' "$source preprocessed frontier lines=$start_line-$end_line:" >&2
+            nl -ba "$input" | sed -n "${start_line},${end_line}p" >&2
+        fi
+
         printf '%s\n' 'MiniC diagnostic:' >&2
         sed -n '1,160p' "$stderr" >&2
+        if test -s "$partial_tail"; then
+            printf '%s\n' 'Partial RISC-V assembly tail:' >&2
+            cat "$partial_tail" >&2
+        fi
         exit "$status"
     fi
 
