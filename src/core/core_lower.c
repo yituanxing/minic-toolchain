@@ -16,6 +16,8 @@ typedef struct MinicCoreLowerContext {
 static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                                              MinicExpressionId expression_id,
                                              MinicCoreValueId *value_id);
+static MinicCoreLowerStatus
+lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool *terminated);
 
 static MinicCoreLowerStatus lower_local_object(MinicCoreLowerContext *context,
                                                MinicLocalId local_id,
@@ -355,38 +357,34 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
     return MINIC_CORE_LOWER_UNSUPPORTED;
 }
 
-static MinicCoreLowerStatus lower_assignment(MinicCoreLowerContext *context,
-                                             const MinicStatement *statement) {
+static MinicCoreLowerStatus lower_assignment_pair(MinicCoreLowerContext *context,
+                                                  MinicExpressionId target_id,
+                                                  MinicExpressionId source_id,
+                                                  MinicSourceSpan span) {
     const MinicExpression *target;
-    MinicExpressionId source_id;
     MinicCoreInstruction instruction;
     MinicCoreValueId address_id;
     MinicCoreValueId stored_value;
     MinicCoreLowerStatus status;
 
-    if (context == NULL || context->body == NULL || context->body->program == NULL ||
-        statement == NULL) {
+    if (context == NULL || context->body == NULL || context->body->program == NULL) {
         return MINIC_CORE_LOWER_ERROR;
     }
-    target = minic_c0_program_expression(context->body->program, statement->target_expression);
-    if (target == NULL) {
+    target = minic_c0_program_expression(context->body->program, target_id);
+    if (target == NULL || target->value_category != MINIC_VALUE_LVALUE) {
         return MINIC_CORE_LOWER_ERROR;
     }
-    if (target->value_category != MINIC_VALUE_LVALUE) {
-        return MINIC_CORE_LOWER_ERROR;
-    }
-    status = lower_address(context, statement->target_expression, &address_id);
+    status = lower_address(context, target_id, &address_id);
     if (status != MINIC_CORE_LOWER_OK) {
         return status;
     }
-    source_id = statement->expression;
     status = lower_integer_assignment_value(context, target->type, source_id, &stored_value);
     if (status != MINIC_CORE_LOWER_OK) {
         return status;
     }
     (void)memset(&instruction, 0, sizeof(instruction));
     instruction.kind = MINIC_CORE_INSTRUCTION_STORE;
-    instruction.span = statement->span;
+    instruction.span = span;
     instruction.type = minic_type_void();
     instruction.result = MINIC_CORE_VALUE_INVALID;
     instruction.value.store.address = address_id;
@@ -396,6 +394,41 @@ static MinicCoreLowerStatus lower_assignment(MinicCoreLowerContext *context,
                context->function, context->block_id, &instruction)
                ? MINIC_CORE_LOWER_OK
                : MINIC_CORE_LOWER_ERROR;
+}
+
+static MinicCoreLowerStatus lower_assignment(MinicCoreLowerContext *context,
+                                             const MinicStatement *statement) {
+    MinicExpressionId source_id;
+    MinicExpressionId target_id;
+
+    if (statement == NULL) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    target_id = statement->target_expression;
+    source_id = statement->expression;
+    return lower_assignment_pair(context, target_id, source_id, statement->span);
+}
+
+static MinicCoreLowerStatus lower_expression_statement(MinicCoreLowerContext *context,
+                                                       const MinicStatement *statement) {
+    const MinicExpression *expression;
+    MinicExpressionId source_id;
+    MinicExpressionId target_id;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        statement == NULL || statement->expression == MINIC_EXPRESSION_INVALID) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    expression = minic_c0_program_expression(context->body->program, statement->expression);
+    if (expression == NULL) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    if (expression->kind != MINIC_EXPRESSION_ASSIGNMENT) {
+        return MINIC_CORE_LOWER_UNSUPPORTED;
+    }
+    target_id = expression->value.binary.left;
+    source_id = expression->value.binary.right;
+    return lower_assignment_pair(context, target_id, source_id, expression->span);
 }
 
 static MinicCoreLowerStatus lower_return(MinicCoreLowerContext *context,
@@ -434,25 +467,148 @@ static MinicCoreLowerStatus lower_return(MinicCoreLowerContext *context,
                : MINIC_CORE_LOWER_ERROR;
 }
 
-static MinicCoreLowerStatus lower_root_block(MinicCoreLowerContext *context,
-                                             const MinicBlock *source_block) {
-    size_t statement_index;
-    bool terminated;
+static MinicCoreLowerStatus set_branch(MinicCoreLowerContext *context,
+                                       MinicCoreBlockId block_id,
+                                       MinicSourceSpan span,
+                                       MinicCoreBlockId target) {
+    MinicCoreTerminator terminator;
 
-    if (context == NULL || source_block == NULL) {
+    if (context == NULL || context->function == NULL) {
         return MINIC_CORE_LOWER_ERROR;
     }
-    terminated = false;
+    (void)memset(&terminator, 0, sizeof(terminator));
+    terminator.kind = MINIC_CORE_TERMINATOR_BRANCH;
+    terminator.span = span;
+    terminator.return_value = MINIC_CORE_VALUE_INVALID;
+    terminator.branch_target = target;
+    return minic_core_function_set_terminator(context->function, block_id, &terminator)
+               ? MINIC_CORE_LOWER_OK
+               : MINIC_CORE_LOWER_ERROR;
+}
+
+static MinicCoreLowerStatus
+lower_if(MinicCoreLowerContext *context, const MinicStatement *statement, bool *terminated) {
+    const MinicBlock *else_source;
+    const MinicBlock *then_source;
+    const MinicExpression *condition_expression;
+    MinicCoreBlockId condition_block;
+    MinicCoreBlockId else_block;
+    MinicCoreBlockId false_target;
+    MinicCoreBlockId merge_block;
+    MinicCoreBlockId then_block;
+    MinicCoreTerminator terminator;
+    MinicCoreValueId condition;
+    MinicCoreLowerStatus status;
+    bool else_terminated;
+    bool needs_merge;
+    bool then_terminated;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        context->function == NULL || statement == NULL || terminated == NULL) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    condition_expression =
+        minic_c0_program_expression(context->body->program, statement->expression);
+    then_source = minic_c0_program_block(context->body->program, statement->then_block);
+    if (condition_expression == NULL || then_source == NULL ||
+        !minic_type_is_integer(condition_expression->type)) {
+        return MINIC_CORE_LOWER_UNSUPPORTED;
+    }
+    else_source = NULL;
+    if (statement->else_block != MINIC_BLOCK_INVALID) {
+        else_source = minic_c0_program_block(context->body->program, statement->else_block);
+        if (else_source == NULL) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+    }
+
+    condition_block = context->block_id;
+    status = lower_expression(context, statement->expression, &condition);
+    if (status != MINIC_CORE_LOWER_OK) {
+        return status;
+    }
+    if (!minic_type_is_integer(context->function->values[condition].type) ||
+        !minic_core_function_add_block(context->function, &then_block)) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    else_block = MINIC_CORE_BLOCK_INVALID;
+    if (else_source != NULL && !minic_core_function_add_block(context->function, &else_block)) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+
+    context->block_id = then_block;
+    status = lower_block(context, then_source, &then_terminated);
+    if (status != MINIC_CORE_LOWER_OK) {
+        return status;
+    }
+    else_terminated = false;
+    if (else_source != NULL) {
+        context->block_id = else_block;
+        status = lower_block(context, else_source, &else_terminated);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+    }
+
+    needs_merge = !then_terminated || else_source == NULL || !else_terminated;
+    merge_block = MINIC_CORE_BLOCK_INVALID;
+    if (needs_merge) {
+        if (!minic_core_function_add_block(context->function, &merge_block)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        if (!then_terminated) {
+            status = set_branch(context, then_block, statement->span, merge_block);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
+        }
+        if (else_source != NULL && !else_terminated) {
+            status = set_branch(context, else_block, statement->span, merge_block);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
+        }
+        false_target = else_source == NULL ? merge_block : else_block;
+        context->block_id = merge_block;
+    } else {
+        false_target = else_block;
+        context->block_id = condition_block;
+    }
+
+    (void)memset(&terminator, 0, sizeof(terminator));
+    terminator.kind = MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH;
+    terminator.span = statement->span;
+    terminator.return_value = MINIC_CORE_VALUE_INVALID;
+    terminator.conditional.condition = condition;
+    terminator.conditional.when_true = then_block;
+    terminator.conditional.when_false = false_target;
+    if (!minic_core_function_set_terminator(context->function, condition_block, &terminator)) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    *terminated = !needs_merge;
+    return MINIC_CORE_LOWER_OK;
+}
+
+static MinicCoreLowerStatus
+lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool *terminated) {
+    size_t statement_index;
+    bool block_terminated;
+
+    if (context == NULL || source_block == NULL || terminated == NULL) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    block_terminated = false;
     for (statement_index = 0U; statement_index < source_block->statement_count; ++statement_index) {
         const MinicStatement *statement;
         MinicCoreLowerStatus status;
+        bool statement_terminated;
 
         statement = minic_c0_program_statement(context->body->program,
                                                source_block->statements[statement_index]);
         if (statement == NULL) {
             return MINIC_CORE_LOWER_ERROR;
         }
-        if (terminated) {
+        if (block_terminated) {
             if (statement->kind != MINIC_STATEMENT_RETURN) {
                 return MINIC_CORE_LOWER_UNSUPPORTED;
             }
@@ -462,13 +618,20 @@ static MinicCoreLowerStatus lower_root_block(MinicCoreLowerContext *context,
             statement->cleanup_stop_context != MINIC_CLEANUP_CONTEXT_ROOT) {
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
+        statement_terminated = false;
         switch (statement->kind) {
         case MINIC_STATEMENT_ASSIGN:
             status = lower_assignment(context, statement);
             break;
+        case MINIC_STATEMENT_EXPRESSION:
+            status = lower_expression_statement(context, statement);
+            break;
         case MINIC_STATEMENT_RETURN:
             status = lower_return(context, statement);
-            terminated = status == MINIC_CORE_LOWER_OK;
+            statement_terminated = status == MINIC_CORE_LOWER_OK;
+            break;
+        case MINIC_STATEMENT_IF:
+            status = lower_if(context, statement, &statement_terminated);
             break;
         default:
             return MINIC_CORE_LOWER_UNSUPPORTED;
@@ -476,8 +639,10 @@ static MinicCoreLowerStatus lower_root_block(MinicCoreLowerContext *context,
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
+        block_terminated = statement_terminated;
     }
-    return terminated ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_UNSUPPORTED;
+    *terminated = block_terminated;
+    return MINIC_CORE_LOWER_OK;
 }
 
 MinicCoreLowerStatus minic_core_lower_function(const MinicFunctionBodyView *body,
@@ -490,6 +655,7 @@ MinicCoreLowerStatus minic_core_lower_function(const MinicFunctionBodyView *body
     MinicCoreObjectId *local_objects;
     MinicCoreLowerStatus status;
     size_t local_index;
+    bool terminated;
 
     if (body == NULL || body->program == NULL || output == NULL) {
         return MINIC_CORE_LOWER_ERROR;
@@ -536,13 +702,18 @@ MinicCoreLowerStatus minic_core_lower_function(const MinicFunctionBodyView *body
     context.block_id = block_id;
     context.local_objects = local_objects;
     status = lower_parameter_ingress(&context);
+    terminated = false;
     if (status == MINIC_CORE_LOWER_OK) {
-        status = lower_root_block(&context, source_block);
+        status = lower_block(&context, source_block, &terminated);
     }
     free(local_objects);
     if (status != MINIC_CORE_LOWER_OK) {
         minic_core_function_destroy(&lowered);
         return status;
+    }
+    if (!terminated) {
+        minic_core_function_destroy(&lowered);
+        return MINIC_CORE_LOWER_UNSUPPORTED;
     }
     if (!minic_core_function_verify(&lowered)) {
         minic_core_function_destroy(&lowered);

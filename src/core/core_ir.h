@@ -31,7 +31,11 @@ typedef enum MinicCoreInstructionKind {
     MINIC_CORE_INSTRUCTION_STORE
 } MinicCoreInstructionKind;
 
-typedef enum MinicCoreTerminatorKind { MINIC_CORE_TERMINATOR_RETURN = 0 } MinicCoreTerminatorKind;
+typedef enum MinicCoreTerminatorKind {
+    MINIC_CORE_TERMINATOR_RETURN = 0,
+    MINIC_CORE_TERMINATOR_BRANCH,
+    MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH
+} MinicCoreTerminatorKind;
 
 typedef struct MinicCoreValue {
     MinicType type;
@@ -73,6 +77,12 @@ typedef struct MinicCoreTerminator {
     MinicCoreTerminatorKind kind;
     MinicSourceSpan span;
     MinicCoreValueId return_value;
+    MinicCoreBlockId branch_target;
+    struct {
+        MinicCoreValueId condition;
+        MinicCoreBlockId when_true;
+        MinicCoreBlockId when_false;
+    } conditional;
 } MinicCoreTerminator;
 
 typedef struct MinicCoreBlock {

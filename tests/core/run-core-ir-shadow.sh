@@ -70,6 +70,53 @@ int truncate(unsigned long value) {
 EOF
 check_strict_case explicit-conversion
 
+cat >"$work_dir/if-return.i" <<'EOF'
+int select_return(int condition) {
+    if (condition) {
+        return 1;
+    } else {
+        return 2;
+    }
+}
+EOF
+check_strict_case if-return
+
+cat >"$work_dir/if-assign-return.i" <<'EOF'
+int select_assigned_return(int condition) {
+    int value;
+    if (condition) {
+        value = 1;
+        return value;
+    } else {
+        value = 2;
+        return value;
+    }
+}
+EOF
+check_strict_case if-assign-return
+
+cat >"$work_dir/if-empty-merge.i" <<'EOF'
+int pass_through(int condition) {
+    if (condition) {
+    }
+    return 7;
+}
+EOF
+check_strict_case if-empty-merge
+
+cat >"$work_dir/if-merge.i" <<'EOF'
+int select_value(int condition) {
+    int value;
+    if (condition) {
+        value = 1;
+    } else {
+        value = 2;
+    }
+    return value;
+}
+EOF
+check_strict_case if-merge
+
 cat >"$work_dir/unsupported.i" <<'EOF'
 int main(void) {
     return 1 - 2;
