@@ -117,6 +117,36 @@ int select_value(int condition) {
 EOF
 check_strict_case if-merge
 
+cat >"$work_dir/while-backedge.i" <<'EOF'
+int clear_then_add(int value) {
+    while (value) {
+        value = 0;
+    }
+    return value + 7;
+}
+EOF
+check_strict_case while-backedge
+
+cat >"$work_dir/for-shape.i" <<'EOF'
+int for_shape(int value) {
+    for (; value;) {
+        value = 0;
+    }
+    return value;
+}
+EOF
+
+"$MINIC" -S "$work_dir/for-shape.i" -o "$work_dir/for-shape-normal.s"
+MINIC_CORE_IR=shadow "$MINIC" -S "$work_dir/for-shape.i" -o "$work_dir/for-shape-shadow.s"
+cmp "$work_dir/for-shape-normal.s" "$work_dir/for-shape-shadow.s"
+if MINIC_CORE_IR=strict "$MINIC" -S "$work_dir/for-shape.i" \
+    -o "$work_dir/for-shape-strict.s" 2>"$work_dir/for-shape-strict.err"; then
+    echo "strict Core IR shadow unexpectedly accepted canonical for-loop lowering" >&2
+    exit 1
+fi
+grep -F "Core IR shadow does not yet support function 'for_shape'" \
+    "$work_dir/for-shape-strict.err" >/dev/null
+
 cat >"$work_dir/unsupported.i" <<'EOF'
 int main(void) {
     return 1 - 2;

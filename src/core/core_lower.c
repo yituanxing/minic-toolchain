@@ -589,6 +589,98 @@ lower_if(MinicCoreLowerContext *context, const MinicStatement *statement, bool *
     return MINIC_CORE_LOWER_OK;
 }
 
+static bool internal_while_label_pair(const MinicStatement *label, const MinicStatement *loop) {
+    bool same_begin;
+
+    if (label == NULL || loop == NULL) {
+        return false;
+    }
+    same_begin = label->span.begin.offset == loop->span.begin.offset &&
+                 label->span.begin.line == loop->span.begin.line &&
+                 label->span.begin.column == loop->span.begin.column;
+    return label->kind == MINIC_STATEMENT_LABEL && loop->kind == MINIC_STATEMENT_WHILE &&
+           same_begin && label->target_expression == MINIC_EXPRESSION_INVALID &&
+           label->expression == MINIC_EXPRESSION_INVALID &&
+           label->target_statement == MINIC_STATEMENT_INVALID;
+}
+
+static MinicCoreLowerStatus
+lower_while(MinicCoreLowerContext *context, const MinicStatement *statement, bool *terminated) {
+    const MinicBlock *body_source;
+    const MinicExpression *condition_expression;
+    MinicCoreBlockId body_block;
+    MinicCoreBlockId condition_block;
+    MinicCoreBlockId exit_block;
+    MinicCoreBlockId preheader_block;
+    MinicCoreTerminator terminator;
+    MinicCoreValueId condition;
+    MinicCoreLowerStatus status;
+    bool body_terminated;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        context->function == NULL || statement == NULL || terminated == NULL ||
+        statement->kind != MINIC_STATEMENT_WHILE ||
+        statement->cleanup_context != MINIC_CLEANUP_CONTEXT_ROOT ||
+        statement->cleanup_stop_context != MINIC_CLEANUP_CONTEXT_ROOT ||
+        statement->expression == MINIC_EXPRESSION_INVALID ||
+        statement->then_block == MINIC_BLOCK_INVALID ||
+        statement->else_block != MINIC_BLOCK_INVALID) {
+        return MINIC_CORE_LOWER_UNSUPPORTED;
+    }
+    condition_expression =
+        minic_c0_program_expression(context->body->program, statement->expression);
+    body_source = minic_c0_program_block(context->body->program, statement->then_block);
+    if (condition_expression == NULL || body_source == NULL ||
+        !minic_type_is_integer(condition_expression->type)) {
+        return MINIC_CORE_LOWER_UNSUPPORTED;
+    }
+
+    preheader_block = context->block_id;
+    if (!minic_core_function_add_block(context->function, &condition_block) ||
+        !minic_core_function_add_block(context->function, &body_block) ||
+        !minic_core_function_add_block(context->function, &exit_block)) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    status = set_branch(context, preheader_block, statement->span, condition_block);
+    if (status != MINIC_CORE_LOWER_OK) {
+        return status;
+    }
+
+    context->block_id = condition_block;
+    status = lower_expression(context, statement->expression, &condition);
+    if (status != MINIC_CORE_LOWER_OK) {
+        return status;
+    }
+    if (!minic_type_is_integer(context->function->values[condition].type)) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    (void)memset(&terminator, 0, sizeof(terminator));
+    terminator.kind = MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH;
+    terminator.span = statement->span;
+    terminator.return_value = MINIC_CORE_VALUE_INVALID;
+    terminator.conditional.condition = condition;
+    terminator.conditional.when_true = body_block;
+    terminator.conditional.when_false = exit_block;
+    if (!minic_core_function_set_terminator(context->function, condition_block, &terminator)) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+
+    context->block_id = body_block;
+    status = lower_block(context, body_source, &body_terminated);
+    if (status != MINIC_CORE_LOWER_OK) {
+        return status;
+    }
+    if (!body_terminated) {
+        status = set_branch(context, context->block_id, statement->span, condition_block);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+    }
+    context->block_id = exit_block;
+    *terminated = false;
+    return MINIC_CORE_LOWER_OK;
+}
+
 static MinicCoreLowerStatus
 lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool *terminated) {
     size_t statement_index;
@@ -619,25 +711,44 @@ lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
         statement_terminated = false;
-        switch (statement->kind) {
-        case MINIC_STATEMENT_ASSIGN:
-            status = lower_assignment(context, statement);
-            break;
-        case MINIC_STATEMENT_EXPRESSION:
-            status = lower_expression_statement(context, statement);
-            break;
-        case MINIC_STATEMENT_RETURN:
-            status = lower_return(context, statement);
-            statement_terminated = status == MINIC_CORE_LOWER_OK;
-            break;
-        case MINIC_STATEMENT_IF:
-            status = lower_if(context, statement, &statement_terminated);
-            break;
-        default:
-            return MINIC_CORE_LOWER_UNSUPPORTED;
-        }
-        if (status != MINIC_CORE_LOWER_OK) {
-            return status;
+        if (statement->kind == MINIC_STATEMENT_LABEL) {
+            const MinicStatement *loop;
+            MinicStatementId next_statement_id;
+
+            if (statement_index + 1U >= source_block->statement_count) {
+                return MINIC_CORE_LOWER_UNSUPPORTED;
+            }
+            next_statement_id = source_block->statements[statement_index + 1U];
+            loop = minic_c0_program_statement(context->body->program, next_statement_id);
+            if (!internal_while_label_pair(statement, loop)) {
+                return MINIC_CORE_LOWER_UNSUPPORTED;
+            }
+            status = lower_while(context, loop, &statement_terminated);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
+            statement_index += 1U;
+        } else {
+            switch (statement->kind) {
+            case MINIC_STATEMENT_ASSIGN:
+                status = lower_assignment(context, statement);
+                break;
+            case MINIC_STATEMENT_EXPRESSION:
+                status = lower_expression_statement(context, statement);
+                break;
+            case MINIC_STATEMENT_RETURN:
+                status = lower_return(context, statement);
+                statement_terminated = status == MINIC_CORE_LOWER_OK;
+                break;
+            case MINIC_STATEMENT_IF:
+                status = lower_if(context, statement, &statement_terminated);
+                break;
+            default:
+                return MINIC_CORE_LOWER_UNSUPPORTED;
+            }
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
         }
         block_terminated = statement_terminated;
     }

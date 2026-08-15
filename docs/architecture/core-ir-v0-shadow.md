@@ -61,7 +61,7 @@ It currently permits:
 
 A `CoreObject` is semantic addressable storage, **not** a stack slot. Stack offsets, frame placement and physical registers remain backend decisions. `OBJECT_ADDRESS` turns object identity into a normal typed pointer value.
 
-Instructions may be value-producing or effect-only. `STORE` has no result value. Value-producing instructions define immutable values exactly once. In v0 a `CoreValue` may be consumed only inside the block that defines it; mutable state that must survive a branch is represented through `CoreObject` storage and a fresh load in the destination block. Every block has exactly one explicit terminator. The verifier freezes these rules without introducing SSA, phi nodes or dominance analysis.
+Instructions may be value-producing or effect-only. `STORE` has no result value. Value-producing instructions define immutable values exactly once. In v0 a `CoreValue` may be consumed only inside the block that defines it; mutable state that must survive a branch or loop backedge is represented through `CoreObject` storage and a fresh load in the destination block. Every block has exactly one explicit terminator. The verifier freezes these rules without introducing SSA, phi nodes or dominance analysis.
 
 `INTEGER_ADD` does not grant an optimizer a signed-no-overflow assumption. Core IR v0 intentionally does not exploit C undefined-overflow rules as an optimization contract.
 
@@ -148,11 +148,11 @@ body LOAD / STORE
 
 The current lowering supports ordinary non-const/non-volatile integer parameters. Pointer, aggregate, register-storage, const and volatile parameter ingress remain `UNSUPPORTED` until a real case justifies widening the contract.
 
-## 7. First CFG boundary: `if` / 第一条 CFG 边界：`if`
+## 7. CFG boundary: `if` and source `while` / CFG 边界：`if` 与源码 `while`
 
-`if` is the first structured source-control construct whose target-neutral execution ownership has moved into Core. RV64 should eventually consume blocks and terminators rather than decide the source statement's branch topology itself.
+`if` is the first structured source-control construct whose target-neutral execution ownership moved into Core. Supported source `while` is the second consumer of the same CFG contract. RV64 should eventually consume blocks and terminators rather than decide source-control topology itself.
 
-The current lowering uses:
+Supported `if` lowering uses:
 
 ```text
 condition block
@@ -166,9 +166,21 @@ then block       optional else block
 
 A merge block is created only when some path falls through. If both arms return, each arm terminates directly and no dead merge block is created. An `if` without `else` sends the false edge directly to the merge block.
 
-This slice deliberately does not create phi nodes. For example, if both arms assign the same local and execution continues after the `if`, each arm stores into the same `CoreObject`; the merge block obtains the current value with a new address/load sequence. This is sufficient for the current mutable-object execution model and keeps SSA questions deferred until real optimization pressure exists.
+Supported source `while` reuses the same existing terminators and adds no loop-specific Core operation:
 
-Only integer conditions are currently accepted. Pointer conditions, loops, `break`, `goto`, `switch`, cleanup-aware control transfer and general cross-block CoreValue flow remain unsupported.
+```text
+preheader
+    ↓ BR
+condition
+  ├─ true  → body ── BR back to condition
+  └─ false → exit
+```
+
+The parser's canonical representation inserts an internal continue label in the parent block immediately before a source `while`. AST→Core absorbs that parser representation detail as one source-while pair instead of exposing the internal label to Core. Canonical `for` and `do-while` lowerings use different label placement and remain unsupported; Core does not treat every AST `WHILE` as the same source construct.
+
+This CFG slice deliberately does not create phi nodes. If branches or loop iterations mutate a local object, they store into the same `CoreObject`; a later block obtains the current value with a fresh address/load sequence. This is sufficient for the current mutable-object execution model and keeps SSA questions deferred until real optimization pressure exists.
+
+Only integer conditions are currently accepted. Pointer conditions, `break`, `continue`, user `goto`/labels, `for`, `do-while`, `switch`, cleanup-aware control transfer and general cross-block CoreValue flow remain unsupported.
 
 ## 8. What crosses the AST/Core boundary / AST/Core 边界保留什么
 
@@ -188,7 +200,7 @@ Facts cross the seam only while a real downstream consumer still needs them. The
 
 The current `MinicType` and `MinicSourceSpan` representations are reused deliberately. Core IR does not create duplicate type or source-location systems merely to appear independent.
 
-The lowering unit is the **normalized canonical `FunctionBody`**, not an imagined source-level tree. The parser appends a canonical default return at function end and materializes parameters at the beginning of the function-local range; not every implicit integer assignment conversion is a physical AST node, and ordinary assignment statements arrive through the expression-statement shape described above. Core lowering absorbs those representation facts at the AST/Core seam instead of leaking parser storage or re-deriving C rules in lower layers.
+The lowering unit is the **normalized canonical `FunctionBody`**, not an imagined source-level tree. The parser appends a canonical default return at function end and materializes parameters at the beginning of the function-local range; not every implicit integer assignment conversion is a physical AST node, ordinary assignment statements arrive through the expression-statement shape described above, and source `while` carries an internal parent-block continue label. Core lowering absorbs those representation facts at the AST/Core seam instead of leaking parser storage or re-deriving C rules in lower layers.
 
 ## 9. Lowering result contract / Lowering 结果契约
 
@@ -255,6 +267,8 @@ The pipeline contract currently freezes:
 - source assignments inside branches;
 - fallthrough `if` CFG with a merge block;
 - mutable local state written on branches and read after the merge through `CoreObject` storage;
+- a real source `while` with a body-to-condition backedge and loop-carried local state through `CoreObject`;
+- canonical `for` lowering rejected by strict shadow rather than accidentally accepted as source `while`;
 - unsupported subtraction skipped by optional shadow and rejected by strict shadow;
 - whenever default and shadow compilation both succeed, their RV64 assembly is byte-identical.
 
@@ -273,10 +287,11 @@ This slice does not create:
 - ABI locations inside Core IR;
 - physical register or frame information;
 - a complete C undefined-behavior model;
-- loop, goto, switch, cleanup, aggregate or inline-asm Core operations.
+- loop-specific IR operations or a loop framework;
+- `break`, `continue`, `for`, `do-while`, goto, switch, cleanup, aggregate or inline-asm Core operations.
 
 Those concepts are introduced only when a real lowering slice needs them. The rule remains: resolve a rule where it belongs, preserve the resulting fact while a real consumer needs it, and lower only when the remaining choice belongs to the next layer.
 
 ## 12. Next widening criterion / 下一刀
 
-The next widening must come from the smallest real function that exceeds the current conversion/parameter/object-memory/`if` coverage. Do not broaden arithmetic, addressing, loop CFG, calls or aggregate semantics merely to fill an opcode list. Each widening must preserve the focused shadow contract, Foundation gates and unchanged real-program behavior before another responsibility moves into Core.
+The next widening must come from the smallest real function that exceeds the current conversion/parameter/object-memory/`if`/source-`while` coverage. Do not broaden arithmetic, addressing, calls, other loop forms or aggregate semantics merely to fill an opcode list. Each widening must preserve the focused shadow contract, Foundation gates and unchanged real-program behavior before another responsibility moves into Core.
