@@ -27,6 +27,22 @@ static int apply(int (*function)(int), int value)
     return function(value);
 }
 
+static void discard(int value)
+{
+    (void)value;
+}
+
+static int apply_local(int value)
+{
+    void (*notify)(int);
+    int (*transform)(int);
+
+    notify = discard;
+    transform = add_one;
+    notify(value);
+    return transform(value);
+}
+
 static int proc_impl(struct ctl_table *ctl, int write, void *buffer,
                      size_t *lenp, loff_t *ppos)
 {
@@ -44,5 +60,6 @@ static int apply_proc(proc_handler *handler)
 
 int main(void)
 {
-    return (apply(add_one, 41) - 42) + (apply_proc(proc_impl) - 42);
+    return (apply(add_one, 41) - 42) + (apply_proc(proc_impl) - 42) +
+           (apply_local(41) - 42);
 }

@@ -1024,14 +1024,32 @@ parse_local_declarator(MinicParser *parser, MinicType base_type, bool is_registe
     if (!minic_parser_parse_pointer_declarator(parser, base_type, &declared_type)) {
         return false;
     }
-    if (minic_type_is_void(declared_type)) {
-        minic_parser_error(parser, "local object cannot have void type");
-        return false;
-    }
-    if (!minic_parser_parse_direct_declarator_name(parser, &local.name_span)) {
+    if (parser->current.kind == MINIC_TOKEN_LPAREN) {
+        MinicParsedFunctionDeclarator declarator;
+
+        if (!minic_parser_parse_parenthesized_function_declarator(
+                parser, true, true, &declarator)) {
+            return false;
+        }
+        if (declarator.is_variadic) {
+            minic_parser_error(parser,
+                               "variadic direct local function pointers are not supported yet");
+            return false;
+        }
+        if (!minic_parser_build_function_declarator_type(
+                parser, declared_type, &declarator, &declared_type)) {
+            minic_parser_error(parser, "cannot build local function pointer type");
+            return false;
+        }
+        local.name_span = declarator.name_span;
+    } else if (!minic_parser_parse_direct_declarator_name(parser, &local.name_span)) {
         if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
             minic_parser_error(parser, "expected local name");
         }
+        return false;
+    }
+    if (minic_type_is_void(declared_type)) {
+        minic_parser_error(parser, "local object cannot have void type");
         return false;
     }
 
