@@ -18,6 +18,36 @@ bool minic_c0_integer_assignment_value_type(const MinicC0Program *program,
     return minic_type_is_integer(*result);
 }
 
+static bool binary_is_integer_comparison(MinicBinaryOperator operator_kind) {
+    return operator_kind == MINIC_BINARY_EQUAL || operator_kind == MINIC_BINARY_NOT_EQUAL ||
+           operator_kind == MINIC_BINARY_LESS || operator_kind == MINIC_BINARY_LESS_EQUAL ||
+           operator_kind == MINIC_BINARY_GREATER || operator_kind == MINIC_BINARY_GREATER_EQUAL;
+}
+
+bool minic_c0_integer_comparison_operand_type(const MinicC0Program *program,
+                                              const MinicTargetInfo *target,
+                                              MinicExpressionId expression_id,
+                                              MinicType *result) {
+    const MinicExpression *expression;
+    const MinicExpression *left;
+    const MinicExpression *right;
+
+    if (program == NULL || target == NULL || result == NULL) {
+        return false;
+    }
+    expression = minic_c0_program_expression(program, expression_id);
+    if (expression == NULL || expression->kind != MINIC_EXPRESSION_BINARY ||
+        !binary_is_integer_comparison(expression->value.binary.operator_kind) ||
+        !minic_type_equal(expression->type, minic_type_int())) {
+        return false;
+    }
+    left = minic_c0_program_expression(program, expression->value.binary.left);
+    right = minic_c0_program_expression(program, expression->value.binary.right);
+    return left != NULL && right != NULL && minic_type_is_integer(left->type) &&
+           minic_type_is_integer(right->type) &&
+           minic_target_info_integer_common(target, left->type, right->type, result);
+}
+
 static bool conditional_type_only(const MinicTargetInfo *target,
                                   MinicType when_true,
                                   MinicType when_false,
