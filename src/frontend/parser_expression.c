@@ -688,6 +688,84 @@ static bool parse_builtin_expect(MinicParser *parser, MinicExpressionId *express
     return minic_parser_add_expression(parser, &conversion, expression_id);
 }
 
+static bool parse_builtin_prefetch(MinicParser *parser, MinicExpressionId *expression_id) {
+    MinicExpression discard_cast;
+    MinicExpressionId address_id;
+    const MinicExpression *address;
+    MinicSourcePosition begin;
+    MinicSourcePosition end;
+    int64_t rw = 0;
+    int64_t locality = 3;
+
+    if (parser == NULL || expression_id == NULL ||
+        !current_identifier_is(parser, "__builtin_prefetch")) {
+        return false;
+    }
+    begin = parser->current.span.begin;
+    if (!minic_parser_advance(parser) ||
+        !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '(' after __builtin_prefetch") ||
+        !parse_expression_internal(parser, &address_id, 0U, true)) {
+        return false;
+    }
+    address = minic_c0_program_expression(parser->program, address_id);
+    if (address == NULL || !minic_type_is_pointer(address->type)) {
+        minic_parser_error(parser, "__builtin_prefetch address must have pointer type");
+        return false;
+    }
+
+    if (parser->current.kind == MINIC_TOKEN_COMMA) {
+        if (!minic_parser_advance(parser) ||
+            !minic_parser_parse_integer_constant_expression(parser, &rw)) {
+            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                minic_parser_error(parser, "__builtin_prefetch rw must be an integer constant");
+            }
+            return false;
+        }
+        if (rw < 0 || rw > 2) {
+            minic_parser_error(parser, "__builtin_prefetch rw must be between 0 and 2");
+            return false;
+        }
+        if (parser->current.kind == MINIC_TOKEN_COMMA) {
+            if (!minic_parser_advance(parser) ||
+                !minic_parser_parse_integer_constant_expression(parser, &locality)) {
+                if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                    minic_parser_error(parser,
+                                       "__builtin_prefetch locality must be an integer constant");
+                }
+                return false;
+            }
+            if (locality < 0 || locality > 3) {
+                minic_parser_error(parser, "__builtin_prefetch locality must be between 0 and 3");
+                return false;
+            }
+        }
+    }
+    (void)rw;
+    (void)locality;
+    if (parser->current.kind != MINIC_TOKEN_RPAREN) {
+        minic_parser_error(parser, "expected ')' after __builtin_prefetch arguments");
+        return false;
+    }
+    end = parser->current.span.end;
+    if (!minic_parser_advance(parser)) {
+        return false;
+    }
+
+    /* Prefetch is an optimization hint. Keep the address expression as a real
+     * runtime edge so side effects and address evaluation are preserved, but
+     * lower the hint itself to a void cast. Cast normalization turns this into
+     * the canonical DISCARD node; targets may therefore omit a prefetch
+     * instruction without inventing a prefetch-specific AST representation. */
+    (void)memset(&discard_cast, 0, sizeof(discard_cast));
+    discard_cast.kind = MINIC_EXPRESSION_CAST;
+    discard_cast.span.begin = begin;
+    discard_cast.span.end = end;
+    discard_cast.type = minic_type_void();
+    discard_cast.value_category = MINIC_VALUE_RVALUE;
+    discard_cast.value.unary.operand = address_id;
+    return minic_parser_add_expression(parser, &discard_cast, expression_id);
+}
+
 static bool current_is_builtin_offsetof(const MinicParser *parser) {
     static const char name[] = "__builtin_offsetof";
     size_t length;
@@ -1658,6 +1736,13 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
     }
     if (current_identifier_is(parser, "__builtin_expect")) {
         if (!parse_builtin_expect(parser, &primary_id) ||
+            !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
+            return false;
+        }
+        return finish_value_expression(parser, primary_id, decay_array, expression_id);
+    }
+    if (current_identifier_is(parser, "__builtin_prefetch")) {
+        if (!parse_builtin_prefetch(parser, &primary_id) ||
             !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
             return false;
         }
