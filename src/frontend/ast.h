@@ -712,6 +712,14 @@ bool minic_c0_global_object_add_initializer(MinicC0Program *program,
 bool minic_c0_global_object_add_initializer_bits(MinicC0Program *program,
                                                  MinicGlobalObjectId global_object_id,
                                                  uint64_t bits);
+bool minic_c0_global_object_replace_zero_initializer_bits(MinicC0Program *program,
+                                                          MinicGlobalObjectId global_object_id,
+                                                          size_t initializer_index,
+                                                          uint64_t bits);
+bool minic_c0_global_record_field_initializer_slot(const MinicC0Program *program,
+                                                   const MinicRecord *record,
+                                                   size_t field_index,
+                                                   size_t *slot_index);
 bool minic_c0_global_object_add_function_relocation(MinicC0Program *program,
                                                     MinicGlobalObjectId global_object_id,
                                                     MinicGlobalRelocationLocationKind location_kind,
