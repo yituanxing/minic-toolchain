@@ -3689,9 +3689,8 @@ static bool parse_return(MinicParser *parser) {
             return false;
         }
         returned_expression = minic_c0_program_expression(parser->program, statement.expression);
-        if (returned_expression == NULL || !minic_c0_assignment_compatible(parser->program,
-                                                                           return_type,
-                                                                           statement.expression)) {
+        if (returned_expression == NULL ||
+            !minic_c0_assignment_compatible(parser->program, return_type, statement.expression)) {
             minic_parser_error(parser, "return expression does not match function return type");
             return false;
         }
