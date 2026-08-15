@@ -1711,15 +1711,12 @@ static bool parse_static_local_record_initializer(MinicParser *parser,
                                                   MinicSourceSpan name_span,
                                                   MinicGlobalObjectId *out_object_id) {
     char symbol_name[96];
-    const MinicRecord *record;
     MinicGlobalObjectId object_id;
-    size_t field_index;
     int symbol_length;
 
-    record = minic_c0_program_record(parser->program, declared_type.record_id);
-    if (record == NULL || !record->is_complete || record->is_union) {
-        minic_parser_error(parser,
-                           "static local record initializer requires a complete struct type");
+    if (parser == NULL || out_object_id == NULL || !minic_type_is_record(declared_type) ||
+        !minic_parser_require_complete_object_type(
+            parser, declared_type, "static local record requires a complete record type")) {
         return false;
     }
     symbol_length = snprintf(symbol_name,
@@ -1739,81 +1736,11 @@ static bool parse_static_local_record_initializer(MinicParser *parser,
                                             minic_type_is_const(declared_type),
                                             &object_id) ||
         !minic_parser_expect(parser, MINIC_TOKEN_EQUAL, "expected '=' after static record") ||
-        !minic_parser_expect(
-            parser, MINIC_TOKEN_LBRACE, "expected '{' in static record initializer")) {
-        if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
-            minic_parser_error(parser, "cannot begin static local record initializer");
-        }
-        return false;
-    }
-
-    field_index = 0U;
-    while (parser->current.kind != MINIC_TOKEN_RBRACE) {
-        const MinicRecordField *field;
-        int value;
-
-        if (field_index >= record->field_count) {
-            minic_parser_error(parser, "too many static local record initializers");
-            return false;
-        }
-        field = minic_c0_record_field(record, field_index);
-        if (field == NULL || field->element_count != 1U || field->is_flexible_array) {
-            minic_parser_error(parser, "unsupported static local record field initializer");
-            return false;
-        }
-
-        value = 0;
-        if (parser->current.kind == MINIC_TOKEN_LBRACE) {
-            MinicSourceSpan initializer_span;
-
-            if (!minic_type_is_record(field->type) ||
-                !parse_zero_aggregate_initializer(parser, &initializer_span)) {
-                if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
-                    minic_parser_error(parser, "nested static record initializer must be all zero");
-                }
-                return false;
-            }
-        } else {
-            if (!minic_type_is_integer(field->type) ||
-                !parse_static_local_integer_constant(
-                    parser,
-                    "static record field constant is out of supported integer range",
-                    &value)) {
-                if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
-                    minic_parser_error(
-                        parser, "static record field requires an integer constant expression");
-                }
-                return false;
-            }
-        }
-        if (!minic_c0_global_object_add_initializer(parser->program, object_id, value)) {
-            minic_parser_error(parser, "cannot record static local record initializer");
-            return false;
-        }
-        field_index += 1U;
-
-        if (parser->current.kind == MINIC_TOKEN_COMMA) {
-            if (!minic_parser_advance(parser)) {
-                return false;
-            }
-            if (parser->current.kind == MINIC_TOKEN_RBRACE) {
-                break;
-            }
-        } else if (parser->current.kind != MINIC_TOKEN_RBRACE) {
-            minic_parser_error(parser, "expected ',' or '}' in static record initializer");
-            return false;
-        }
-    }
-    while (field_index < record->field_count) {
-        if (!minic_c0_global_object_add_initializer(parser->program, object_id, 0)) {
-            minic_parser_error(parser, "cannot zero-fill static local record initializer");
-            return false;
-        }
-        field_index += 1U;
-    }
-    if (!minic_parser_expect(
-            parser, MINIC_TOKEN_RBRACE, "expected '}' after static record initializer") ||
+        !minic_parser_parse_static_storage_initializer_value(parser, object_id, declared_type) ||
         !minic_parser_bind_scoped_global_object(parser, name_span, object_id)) {
+        if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+            minic_parser_error(parser, "cannot initialize static local record storage");
+        }
         return false;
     }
     *out_object_id = object_id;
