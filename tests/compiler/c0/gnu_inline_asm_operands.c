@@ -69,3 +69,11 @@ int main(void) {
                ? 0
                : 1;
 }
+
+static int memory_input_linux_shape(const int *value) {
+    long error = 0;
+    int loaded;
+
+    __asm__ __volatile__("lw %1, %2" : "+r"(error), "=&r"(loaded) : "m"(*value));
+    return loaded + (int)error;
+}
