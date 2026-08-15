@@ -164,8 +164,7 @@ static bool minic_riscv64_local_object(const MinicC0Program *program,
     if (object == NULL ||
         !minic_riscv64_function_layout_local_offset(
             function_layout, function, local_id, &object_offset) ||
-        function_layout->local_storage_size == 0U ||
-        object_offset >= function_layout->local_storage_size) {
+        object_offset > function_layout->local_storage_size) {
         return false;
     }
     *local = object;
