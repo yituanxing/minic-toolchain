@@ -4,6 +4,13 @@ from pathlib import Path
 path = Path("src/target/riscv64/codegen_function.c")
 text = path.read_text()
 
+# The old helper only answered "is this an array of records?". Once all complete
+# initialized arrays use the recursive constant emitter, keeping that classifier
+# would preserve a dead type-specific fork.
+begin = text.index("static bool minic_riscv64_record_array_info(")
+end = text.index("\nstatic bool minic_riscv64_emit_record_array_values(", begin)
+text = text[:begin] + text[end + 1 :]
+
 old = '''static bool minic_riscv64_emit_record_array_values(FILE *file,\n                                                   const MinicC0Program *program,\n                                                   const MinicGlobalObject *object) {\n'''
 new = '''static bool minic_riscv64_emit_array_values(FILE *file,\n                                            const MinicC0Program *program,\n                                            const MinicGlobalObject *object) {\n'''
 if text.count(old) != 1:
