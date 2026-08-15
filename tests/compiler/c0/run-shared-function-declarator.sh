@@ -18,6 +18,6 @@ mkdir -p "$work"
 grep -F ".type apply, @function" "$work/shared_function_declarator.s" >/dev/null
 grep -F "  call apply" "$work/shared_function_declarator.s" >/dev/null
 jalr_count=$(grep -c -F "  jalr" "$work/shared_function_declarator.s")
-test "$jalr_count" -ge 4
+test "$jalr_count" -ge 5
 printf '%s\n' \
-    "PASS compiler/c0/shared_function_declarator contexts=parenthesized-function-typedef,direct-function-typedef,function-pointer-field,extern-function-pointer-object,function-pointer-parameter,local-function-pointer local=void+int ordinary-parenthesized-local=preserved direct-pointer-call=1"
+    "PASS compiler/c0/shared_function_declarator contexts=parenthesized-function-typedef,direct-function-typedef,function-pointer-field,extern-function-pointer-object,function-pointer-parameter,local-function-pointer,function-pointer-type-name local=void+int ordinary-parenthesized-local=preserved explicit-cast=1 direct-pointer-call=1"
