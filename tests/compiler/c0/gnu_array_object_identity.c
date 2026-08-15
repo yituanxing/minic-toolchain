@@ -17,3 +17,15 @@ unsigned long *fixed_member_decay(struct FixedArrayHolder *holder) { return hold
 struct CpuMask *linux_flexible_array_shape(struct FlexibleArrayHolder *holder) { return (struct CpuMask *)&holder->values; }
 unsigned long local_array_address_pointee_size(void) { unsigned long values[3]; return sizeof(*(&values)); }
 unsigned long local_array_typeof_size(void) { unsigned long values[3]; return sizeof(typeof(values)); }
+
+
+typedef struct CpuMask CpuMaskVar[1];
+struct RqMaskHolder {
+    CpuMaskVar scratch_mask;
+};
+static int accept_mask_pointer(CpuMaskVar *mask) {
+    return (int)sizeof(**mask);
+}
+int typedef_array_member_address_call(struct RqMaskHolder *rq) {
+    return accept_mask_pointer(&rq->scratch_mask);
+}
