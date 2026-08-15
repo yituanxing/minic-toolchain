@@ -44,6 +44,23 @@ static int apply_local(int value)
     return transform(ordinary);
 }
 
+struct Rq {
+    int value;
+};
+
+static void observe_rq(struct Rq *rq)
+{
+    (void)rq;
+}
+
+static void apply_casted_callback(void *raw, struct Rq *rq)
+{
+    void (*function)(struct Rq *);
+
+    function = (void (*)(struct Rq *))raw;
+    function(rq);
+}
+
 static int proc_impl(struct ctl_table *ctl, int write, void *buffer,
                      size_t *lenp, loff_t *ppos)
 {
@@ -61,6 +78,10 @@ static int apply_proc(proc_handler *handler)
 
 int main(void)
 {
+    struct Rq rq;
+
+    rq.value = 7;
+    apply_casted_callback((void *)observe_rq, &rq);
     return (apply(add_one, 41) - 42) + (apply_proc(proc_impl) - 42) +
            (apply_local(41) - 42);
 }
