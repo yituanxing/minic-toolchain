@@ -132,7 +132,7 @@ The boundaries are ownership rules rather than copies of another compiler's repr
 
 Language-specific rules are resolved above the AST/Core seam. Their resulting facts cross the seam only while a real lower consumer still needs them. Target machine placement remains below the Core/ABI and ABI/machine seams.
 
-The checked-in Core IR remains shadow-only with respect to code generation: the default assembly path still uses the existing RV64 backend. The shadow consumes the real normalized FunctionBody and supports a bounded execution subset including scalar and abstract parameter values, frontend-resolved integer value conversion, local object identity, object addresses, typed load/store effects, operation-level volatile semantics and the first explicit multi-block control-flow slice for supported `if` statements.
+The checked-in Core IR remains shadow-only with respect to code generation: the default assembly path still uses the existing RV64 backend. The shadow consumes the real normalized FunctionBody and supports a bounded execution subset including scalar and abstract parameter values, frontend-resolved integer value conversion, local object identity, object addresses, typed load/store effects, operation-level volatile semantics, and explicit CFG ownership for supported `if` and source `while` statements.
 
 Core lowering distinguishes `OK`, valid-but-`UNSUPPORTED`, and actual `ERROR`; optional shadow mode skips unsupported functions, while strict mode turns them into a CI-visible coverage failure. Supported shadow compilation must remain byte-identical to default RV64 output. The temporary environment switch is migration plumbing rather than a public compiler interface. See `core-ir-v0-shadow.md` for the exact current contract.
 
@@ -214,7 +214,7 @@ frontend semantic query
 Core IR execution shadow
         ├── scalar + abstract parameter + integer conversion values
         ├── local object / address / load-store / volatile
-        └── explicit blocks + BR / COND_BR for supported if control flow
+        └── explicit blocks + BR / COND_BR for supported if and source-while CFG
         ↓
 tri-state shadow + verify
         ↓
@@ -225,13 +225,15 @@ The current Core slice does not move FunctionBody storage or replace the AST→R
 
 The pipeline shadow consumes the real canonical FunctionBody rather than a source-shaped test approximation. Parser normalization details such as the trailing default return and the physical placement of parameters at the beginning of the function-local range are absorbed at the AST/Core seam rather than leaked into RV64-facing Core semantics.
 
-The first memory boundary is explicit: `CoreObject` represents semantic addressable storage, `OBJECT_ADDRESS` produces a typed pointer value, and `LOAD`/`STORE` carry memory effects with operation-level volatile semantics. Declaration initialization and ordinary source assignment use different canonical AST statement shapes; the AST/Core seam now maps both complete-statement forms to the same Core store execution fact. General value-producing assignment expressions remain unsupported. Arrays, records, register locals, member/subscript addressing and general pointer-derived addresses remain unsupported until a real case requires them.
+The first memory boundary is explicit: `CoreObject` represents semantic addressable storage, `OBJECT_ADDRESS` produces a typed pointer value, and `LOAD`/`STORE` carry memory effects with operation-level volatile semantics. Declaration initialization and ordinary source assignment use different canonical AST statement shapes; the AST/Core seam maps both complete-statement forms to the same Core store execution fact. General value-producing assignment expressions remain unsupported. Arrays, records, register locals, member/subscript addressing and general pointer-derived addresses remain unsupported until a real case requires them.
 
 Parameter ingress is explicit: `PARAMETER` represents the logical incoming value by source parameter index, and lowering materializes supported parameters into their CoreObject before body execution. Core does not encode ABI registers, stack locations or hidden calling-convention slots; those remain owned by TargetABI and machine lowering.
 
 Integer assignment/return conversion is frontend-owned. `frontend/expression_semantics` answers the effective integer value type using the canonical assignment-compatibility rule; AST→Core lowers that resolved fact to `INTEGER_CONVERSION` only when the value type changes. The same Core instruction consumes normalized explicit integer conversions. For integer `ADD`, the normalized AST verifier already freezes the common result type, so Core converts both operands to that type without independently re-deriving the usual arithmetic conversions.
 
-The first CFG boundary is explicit: supported integer-condition `if` statements lower to Core blocks with `BRANCH` and `CONDITIONAL_BRANCH` terminators. A merge block exists only when a path falls through. CoreValue use remains block-local in v0, so mutable state that crosses a branch is carried through `CoreObject` stores and fresh loads rather than speculative phi nodes. Loops, `break`, `goto`, `switch`, cleanup-aware control transfer and general cross-block value flow remain unsupported.
+The CFG boundary now has two real consumers. Supported integer-condition `if` statements lower to Core blocks with `BRANCH` and `CONDITIONAL_BRANCH` terminators, creating a merge only when a path falls through. Supported source `while` reuses those same terminators to form preheader, condition, body, backedge and exit blocks; no loop-specific Core operation was added. CoreValue use remains block-local in v0, so mutable state across branches and loop iterations is carried through `CoreObject` stores and fresh loads rather than speculative phi nodes.
+
+The source-while seam also absorbs a parser representation detail: the canonical parser inserts an internal continue label in the parent block immediately before a source `while`. AST→Core recognizes that pair and removes the internal label from Core semantics. Canonical `for` and `do-while` lowerings place their internal labels differently and remain unsupported rather than being mistaken for source `while`. `break`, `continue`, user labels/goto, pointer conditions, switch and cleanup-aware control transfer also remain outside current coverage.
 
 Each next widening must be justified by the smallest real lowering case that exceeds current coverage. Unsupported forms remain outside the shadow rather than forcing speculative IR features.
 
