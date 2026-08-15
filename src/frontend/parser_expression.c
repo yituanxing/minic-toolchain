@@ -2818,11 +2818,12 @@ static bool parse_expression_internal(MinicParser *parser,
     return true;
 }
 
-static bool
-parse_comma_expression(MinicParser *parser, MinicExpressionId *expression_id, bool decay_array) {
-    MinicExpressionId left;
-
-    if (!parse_expression_internal(parser, &left, 0U, decay_array)) {
+static bool parse_comma_expression_tail(MinicParser *parser,
+                                        MinicExpressionId left,
+                                        MinicExpressionId *expression_id,
+                                        bool decay_array) {
+    if (parser == NULL || expression_id == NULL ||
+        minic_c0_program_expression(parser->program, left) == NULL) {
         return false;
     }
     while (parser->current.kind == MINIC_TOKEN_COMMA) {
@@ -2859,6 +2860,16 @@ parse_comma_expression(MinicParser *parser, MinicExpressionId *expression_id, bo
     return true;
 }
 
+static bool
+parse_comma_expression(MinicParser *parser, MinicExpressionId *expression_id, bool decay_array) {
+    MinicExpressionId left;
+
+    if (!parse_expression_internal(parser, &left, 0U, decay_array)) {
+        return false;
+    }
+    return parse_comma_expression_tail(parser, left, expression_id, decay_array);
+}
+
 bool minic_parser_parse_expression_no_decay(MinicParser *parser, MinicExpressionId *expression_id) {
     if (parser == NULL || expression_id == NULL) {
         return false;
@@ -2882,6 +2893,12 @@ bool minic_parser_parse_null_pointer_constant_expression(MinicParser *parser,
     }
     return minic_c0_assignment_compatible(parser->program, target_type, expression_id) &&
            minic_c0_expression_is_null_pointer_constant_v0(parser->program, expression_id);
+}
+
+bool minic_parser_parse_full_expression_tail(MinicParser *parser,
+                                             MinicExpressionId left,
+                                             MinicExpressionId *expression_id) {
+    return parse_comma_expression_tail(parser, left, expression_id, true);
 }
 
 bool minic_parser_parse_full_expression(MinicParser *parser, MinicExpressionId *expression_id) {
