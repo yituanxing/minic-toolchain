@@ -7,6 +7,13 @@
 #include <inttypes.h>
 #include <string.h>
 
+static bool minic_riscv64_emit_expression_impl(FILE *file,
+                                               const MinicC0Program *program,
+                                               const MinicFunction *function,
+                                               const MinicRiscv64FunctionLayout *function_layout,
+                                               MinicExpressionId expression_id,
+                                               size_t record_result_temporary_size);
+
 static bool minic_riscv64_pointer_element_size(const MinicC0Program *program,
                                                MinicType pointer_type,
                                                size_t *element_size) {
@@ -772,19 +779,27 @@ minic_riscv64_emit_record_value_temporary(FILE *file,
         return true;
     }
     if (source->kind == MINIC_EXPRESSION_CALL) {
-        size_t aggregate_size;
-        size_t aggregate_chunks;
+        MinicRiscv64AbiValue value;
 
-        if (!minic_riscv64_integer_aggregate_abi(
-                program, source->type, &aggregate_size, &aggregate_chunks) ||
-            aggregate_size != storage_size ||
+        if (!minic_riscv64_abi_classify_value(program, source->type, &value) ||
+            value.storage_size != storage_size) {
+            return false;
+        }
+        if (value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) {
+            return storage_size > 16U && temporary_size >= storage_size &&
+                   (temporary_size & 15U) == 0U &&
+                   minic_riscv64_emit_expression_impl(
+                       file, program, function, function_layout, source_id, temporary_size);
+        }
+        if (value.kind != MINIC_RISCV64_ABI_VALUE_AGGREGATE || value.slot_count == 0U ||
+            value.slot_count > 2U ||
             !minic_riscv64_emit_expression(file, program, function, function_layout, source_id) ||
             !minic_riscv64_emit_stack_allocate(file, temporary_size) ||
             fprintf(file, "  sd a0, 0(sp)\n") < 0 ||
-            (aggregate_chunks == 2U && fprintf(file, "  sd a1, 8(sp)\n") < 0)) {
+            (value.slot_count == 2U && fprintf(file, "  sd a1, 8(sp)\n") < 0)) {
             return false;
         }
-        return aggregate_chunks == 1U || aggregate_chunks == 2U;
+        return true;
     }
     return false;
 }
@@ -857,6 +872,58 @@ minic_riscv64_emit_record_rvalue_member(FILE *file,
            minic_riscv64_emit_stack_release(file, temporary_size);
 }
 
+static bool minic_riscv64_emit_record_temporary_to_address(FILE *file,
+                                                           size_t storage_size,
+                                                           size_t temporary_size,
+                                                           const char *address_register,
+                                                           bool preserve_address) {
+    size_t index;
+
+    if (file == NULL || address_register == NULL || storage_size == 0U ||
+        temporary_size < storage_size ||
+        (preserve_address && fprintf(file, "  mv t4, %s\n", address_register) < 0) ||
+        fprintf(file, "  mv t2, sp\n  mv t3, %s\n", address_register) < 0) {
+        return false;
+    }
+    for (index = 0U; index < storage_size; ++index) {
+        if (fprintf(file,
+                    "  lbu t0, 0(t2)\n"
+                    "  sb t0, 0(t3)\n"
+                    "  addi t2, t2, 1\n"
+                    "  addi t3, t3, 1\n") < 0) {
+            return false;
+        }
+    }
+    if (!minic_riscv64_emit_stack_release(file, temporary_size)) {
+        return false;
+    }
+    return !preserve_address || fprintf(file, "  mv a0, t4\n") >= 0;
+}
+
+bool minic_riscv64_emit_record_return_value(FILE *file,
+                                            const MinicC0Program *program,
+                                            const MinicFunction *function,
+                                            const MinicRiscv64FunctionLayout *function_layout,
+                                            MinicExpressionId source_id,
+                                            size_t result_pointer_offset) {
+    const MinicExpression *source;
+    size_t storage_size;
+    size_t temporary_size;
+
+    source = minic_c0_program_expression(program, source_id);
+    if (source == NULL || !minic_type_is_record(source->type) ||
+        !minic_riscv64_type_layout(program, source->type, &storage_size, &temporary_size) ||
+        storage_size <= 16U || storage_size > SIZE_MAX - 15U) {
+        return false;
+    }
+    temporary_size = (storage_size + 15U) & ~(size_t)15U;
+    return minic_riscv64_emit_record_value_temporary(
+               file, program, function, function_layout, source_id, storage_size, temporary_size) &&
+           minic_riscv64_emit_s0_load64(file, "t4", result_pointer_offset) &&
+           minic_riscv64_emit_record_temporary_to_address(
+               file, storage_size, temporary_size, "t4", false);
+}
+
 bool minic_riscv64_emit_record_copy_value(FILE *file,
                                           const MinicC0Program *program,
                                           const MinicFunction *function,
@@ -869,7 +936,6 @@ bool minic_riscv64_emit_record_copy_value(FILE *file,
     const MinicRecord *record;
     size_t storage_size;
     size_t temporary_size;
-    size_t index;
 
     target = minic_c0_program_expression(program, target_id);
     source = minic_c0_program_expression(program, source_id);
@@ -887,26 +953,11 @@ bool minic_riscv64_emit_record_copy_value(FILE *file,
     }
     temporary_size = (storage_size + 15U) & ~(size_t)15U;
 
-    if (!minic_riscv64_emit_record_value_temporary(
-            file, program, function, function_layout, source_id, storage_size, temporary_size) ||
-        !minic_riscv64_emit_lvalue_address(file, program, function, function_layout, target_id) ||
-        (preserve_target_address && fprintf(file, "  mv t4, a0\n") < 0) ||
-        fprintf(file, "  mv t2, sp\n  mv t3, a0\n") < 0) {
-        return false;
-    }
-    for (index = 0U; index < storage_size; ++index) {
-        if (fprintf(file,
-                    "  lbu t0, 0(t2)\n"
-                    "  sb t0, 0(t3)\n"
-                    "  addi t2, t2, 1\n"
-                    "  addi t3, t3, 1\n") < 0) {
-            return false;
-        }
-    }
-    if (!minic_riscv64_emit_stack_release(file, temporary_size)) {
-        return false;
-    }
-    return !preserve_target_address || fprintf(file, "  mv a0, t4\n") >= 0;
+    return minic_riscv64_emit_record_value_temporary(
+               file, program, function, function_layout, source_id, storage_size, temporary_size) &&
+           minic_riscv64_emit_lvalue_address(file, program, function, function_layout, target_id) &&
+           minic_riscv64_emit_record_temporary_to_address(
+               file, storage_size, temporary_size, "a0", preserve_target_address);
 }
 
 static bool
@@ -1115,11 +1166,12 @@ static bool minic_riscv64_emit_overflow_builtin(FILE *file,
     return minic_riscv64_emit_scalar_store(file, result_type, "t2", "t3");
 }
 
-bool minic_riscv64_emit_expression(FILE *file,
-                                   const MinicC0Program *program,
-                                   const MinicFunction *function,
-                                   const MinicRiscv64FunctionLayout *function_layout,
-                                   MinicExpressionId expression_id) {
+static bool minic_riscv64_emit_expression_impl(FILE *file,
+                                               const MinicC0Program *program,
+                                               const MinicFunction *function,
+                                               const MinicRiscv64FunctionLayout *function_layout,
+                                               MinicExpressionId expression_id,
+                                               size_t record_result_temporary_size) {
     const MinicExpression *expression;
 
     expression = minic_c0_program_expression(program, expression_id);
@@ -1859,6 +1911,9 @@ bool minic_riscv64_emit_expression(FILE *file,
         MinicType abi_parameter_types[MINIC_MAX_FUNCTION_PARAMETERS];
         MinicRiscv64AbiValue abi_values[MINIC_MAX_FUNCTION_PARAMETERS];
         MinicRiscv64AbiArgumentLocation argument_locations[MINIC_MAX_FUNCTION_PARAMETERS];
+        MinicRiscv64AbiCursor initial_abi_cursor;
+        MinicRiscv64AbiValue return_value;
+        bool has_indirect_return;
         bool use_formal_location_path;
         size_t argument_stage_end[MINIC_MAX_FUNCTION_PARAMETERS];
         size_t parameter_count;
@@ -1883,6 +1938,21 @@ bool minic_riscv64_emit_expression(FILE *file,
         stack_argument_count = 0U;
         staged_bytes = 0U;
         (void)memset(argument_stage_end, 0, sizeof(argument_stage_end));
+        if (!minic_riscv64_abi_cursor_initialize_for_return(
+                program, expression->type, &initial_abi_cursor, &return_value)) {
+            return false;
+        }
+        has_indirect_return = return_value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT;
+        if (has_indirect_return) {
+            if (!minic_type_is_record(expression->type) || return_value.storage_size <= 16U ||
+                record_result_temporary_size < return_value.storage_size ||
+                (record_result_temporary_size & 15U) != 0U ||
+                !minic_riscv64_emit_stack_allocate(file, record_result_temporary_size)) {
+                return false;
+            }
+        } else if (record_result_temporary_size != 0U) {
+            return false;
+        }
 
         if (is_indirect) {
             MinicType function_type;
@@ -2045,7 +2115,7 @@ bool minic_riscv64_emit_expression(FILE *file,
         if (use_formal_location_path) {
             MinicRiscv64AbiCursor abi_cursor;
 
-            minic_riscv64_abi_cursor_initialize(&abi_cursor);
+            abi_cursor = initial_abi_cursor;
             for (argument_index = 0U; argument_index < argument_count; ++argument_index) {
                 const MinicExpression *argument;
                 MinicType placement_type;
@@ -2073,7 +2143,7 @@ bool minic_riscv64_emit_expression(FILE *file,
                 size_t integer_register_index;
                 size_t floating_register_index;
 
-                integer_register_index = 0U;
+                integer_register_index = has_indirect_return ? 1U : 0U;
                 floating_register_index = 0U;
                 for (argument_index = 0U; argument_index < argument_count; ++argument_index) {
                     bool fixed_floating;
@@ -2228,7 +2298,7 @@ bool minic_riscv64_emit_expression(FILE *file,
                 size_t floating_register_index;
                 size_t stack_argument_index;
 
-                integer_register_index = 0U;
+                integer_register_index = has_indirect_return ? 1U : 0U;
                 floating_register_index = 0U;
                 stack_argument_index = 0U;
                 for (argument_index = 0U; argument_index < argument_count; ++argument_index) {
@@ -2348,6 +2418,28 @@ bool minic_riscv64_emit_expression(FILE *file,
             !minic_riscv64_emit_stack_release(file, temporary_bytes)) {
             return false;
         }
+        if (has_indirect_return) {
+            size_t result_offset;
+
+            if (outgoing_stack_bytes == 0U) {
+                result_offset = 0U;
+            } else {
+                if (outgoing_stack_bytes > SIZE_MAX - staged_bytes) {
+                    return false;
+                }
+                result_offset = outgoing_stack_bytes + staged_bytes;
+            }
+            if (result_offset <= 2047U) {
+                if (fprintf(file, "  addi a0, sp, %zu\n", result_offset) < 0) {
+                    return false;
+                }
+            } else if (fprintf(file,
+                               "  li t1, %zu\n"
+                               "  add a0, sp, t1\n",
+                               result_offset) < 0) {
+                return false;
+            }
+        }
         if (is_indirect) {
             if (fprintf(file, "  jalr ra, t0, 0\n") < 0) {
                 return false;
@@ -2372,6 +2464,9 @@ bool minic_riscv64_emit_expression(FILE *file,
             size_t aggregate_size;
             size_t aggregate_chunks;
 
+            if (has_indirect_return) {
+                return true;
+            }
             return minic_riscv64_integer_aggregate_abi(
                 program, expression->type, &aggregate_size, &aggregate_chunks);
         }
@@ -2379,4 +2474,13 @@ bool minic_riscv64_emit_expression(FILE *file,
     }
     }
     return false;
+}
+
+bool minic_riscv64_emit_expression(FILE *file,
+                                   const MinicC0Program *program,
+                                   const MinicFunction *function,
+                                   const MinicRiscv64FunctionLayout *function_layout,
+                                   MinicExpressionId expression_id) {
+    return minic_riscv64_emit_expression_impl(
+        file, program, function, function_layout, expression_id, 0U);
 }

@@ -479,16 +479,20 @@ bool minic_riscv64_frame_layout_from_function_layout(
     const MinicRiscv64FunctionLayout *function_layout,
     MinicRiscv64FrameLayout *layout) {
     MinicRiscv64AbiCursor abi_cursor;
+    MinicRiscv64AbiValue return_value;
+    size_t hidden_return_size;
+    size_t metadata_size;
     size_t parameter_index;
     size_t required_bytes;
     size_t varargs_size;
 
     if (program == NULL || function == NULL || function_layout == NULL || layout == NULL ||
-        function->parameter_count > MINIC_MAX_FUNCTION_PARAMETERS) {
+        function->parameter_count > MINIC_MAX_FUNCTION_PARAMETERS ||
+        !minic_riscv64_abi_cursor_initialize_for_return(
+            program, function->return_type, &abi_cursor, &return_value)) {
         return false;
     }
 
-    minic_riscv64_abi_cursor_initialize(&abi_cursor);
     for (parameter_index = 0U; parameter_index < function->parameter_count; ++parameter_index) {
         const MinicLocal *parameter;
         MinicRiscv64AbiArgumentLocation location;
@@ -503,12 +507,14 @@ bool minic_riscv64_frame_layout_from_function_layout(
         return false;
     }
 
+    hidden_return_size = return_value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT ? 8U : 0U;
+    metadata_size = 16U + hidden_return_size;
     varargs_size = function->is_variadic ? (8U - abi_cursor.integer_register_count) * 8U : 0U;
-    if (function_layout->local_storage_size > SIZE_MAX - 16U ||
-        function_layout->local_storage_size + 16U > SIZE_MAX - varargs_size) {
+    if (function_layout->local_storage_size > SIZE_MAX - metadata_size ||
+        function_layout->local_storage_size + metadata_size > SIZE_MAX - varargs_size) {
         return false;
     }
-    required_bytes = function_layout->local_storage_size + 16U + varargs_size;
+    required_bytes = function_layout->local_storage_size + metadata_size + varargs_size;
     if (required_bytes > SIZE_MAX - 15U) {
         return false;
     }
@@ -516,12 +522,15 @@ bool minic_riscv64_frame_layout_from_function_layout(
     layout->frame_size = (required_bytes + 15U) & ~(size_t)15U;
     layout->varargs_size = varargs_size;
     layout->varargs_offset = layout->frame_size - varargs_size;
-    if (layout->varargs_offset < 16U ||
-        function_layout->local_storage_size > layout->varargs_offset - 16U) {
+    if (layout->varargs_offset < metadata_size ||
+        function_layout->local_storage_size > layout->varargs_offset - metadata_size) {
         return false;
     }
     layout->saved_ra_offset = layout->varargs_offset - 8U;
     layout->saved_s0_offset = layout->varargs_offset - 16U;
+    layout->has_indirect_return = return_value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT;
+    layout->indirect_return_offset =
+        layout->has_indirect_return ? layout->varargs_offset - 24U : 0U;
     layout->integer_parameter_count = abi_cursor.integer_register_count;
     return true;
 }

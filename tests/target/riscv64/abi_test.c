@@ -3,12 +3,12 @@
 
 #include <stdio.h>
 
-#define CHECK(condition)                                                                         \
-    do {                                                                                         \
-        if (!(condition)) {                                                                      \
-            (void)fprintf(stderr, "CHECK failed at %s:%d: %s\n", __FILE__, __LINE__, #condition); \
-            return false;                                                                        \
-        }                                                                                        \
+#define CHECK(condition)                                                                           \
+    do {                                                                                           \
+        if (!(condition)) {                                                                        \
+            (void)fprintf(stderr, "CHECK failed at %s:%d: %s\n", __FILE__, __LINE__, #condition);  \
+            return false;                                                                          \
+        }                                                                                          \
     } while (0)
 
 static bool expect_value(const MinicC0Program *program,
@@ -67,16 +67,54 @@ static bool test_value_classification(void) {
     CHECK(add_record(&program, &record_fp_field, 1U, &record_fp));
     CHECK(minic_type_pointer_to(minic_type_int(), &pointer_type));
 
-    CHECK(expect_value(
-        &program, minic_type_int(), MINIC_RISCV64_ABI_VALUE_INTEGER, 4U, 1U));
+    CHECK(expect_value(&program, minic_type_int(), MINIC_RISCV64_ABI_VALUE_INTEGER, 4U, 1U));
     CHECK(expect_value(&program, pointer_type, MINIC_RISCV64_ABI_VALUE_INTEGER, 8U, 1U));
-    CHECK(expect_value(
-        &program, minic_type_double(), MINIC_RISCV64_ABI_VALUE_FLOAT, 8U, 1U));
+    CHECK(expect_value(&program, minic_type_double(), MINIC_RISCV64_ABI_VALUE_FLOAT, 8U, 1U));
     CHECK(expect_value(&program, minic_type_void(), MINIC_RISCV64_ABI_VALUE_VOID, 0U, 0U));
     CHECK(expect_value(&program, record16, MINIC_RISCV64_ABI_VALUE_AGGREGATE, 16U, 2U));
 
     CHECK(expect_value(&program, record4, MINIC_RISCV64_ABI_VALUE_AGGREGATE, 4U, 1U));
     CHECK(expect_value(&program, record_fp, MINIC_RISCV64_ABI_VALUE_INDIRECT, 8U, 1U));
+
+    minic_c0_program_destroy(&program);
+    return true;
+}
+
+static bool test_return_argument_cursor(void) {
+    MinicC0Program program;
+    MinicType record24_fields[3];
+    MinicType record_fp_field;
+    MinicType record24;
+    MinicType record_fp;
+    MinicRiscv64AbiCursor cursor;
+    MinicRiscv64AbiValue return_value;
+    MinicRiscv64AbiArgumentLocation location;
+
+    minic_c0_program_initialize(&program);
+    record24_fields[0] = minic_type_long();
+    record24_fields[1] = minic_type_long();
+    record24_fields[2] = minic_type_long();
+    record_fp_field = minic_type_double();
+    CHECK(add_record(&program, record24_fields, 3U, &record24));
+    CHECK(add_record(&program, &record_fp_field, 1U, &record_fp));
+
+    CHECK(
+        minic_riscv64_abi_cursor_initialize_for_return(&program, record24, &cursor, &return_value));
+    CHECK(return_value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT);
+    CHECK(return_value.storage_size == 24U);
+    CHECK(cursor.integer_register_count == 1U);
+    CHECK(cursor.floating_register_count == 0U);
+    CHECK(cursor.stack_slot_count == 0U);
+    CHECK(minic_riscv64_abi_place_argument(&program, minic_type_long(), true, &cursor, &location));
+    CHECK(location.integer_register_begin == 1U);
+    CHECK(location.integer_register_count == 1U);
+
+    minic_riscv64_abi_cursor_initialize(&cursor);
+    CHECK(!minic_riscv64_abi_cursor_initialize_for_return(
+        &program, record_fp, &cursor, &return_value));
+    CHECK(cursor.integer_register_count == 0U);
+    CHECK(cursor.floating_register_count == 0U);
+    CHECK(cursor.stack_slot_count == 0U);
 
     minic_c0_program_destroy(&program);
     return true;
@@ -115,20 +153,19 @@ static bool test_argument_placement(void) {
     CHECK(cursor.integer_register_count == 8U);
     CHECK(cursor.stack_slot_count == 1U);
 
-    CHECK(minic_riscv64_abi_place_argument(
-        &program, minic_type_int(), true, &cursor, &location));
+    CHECK(minic_riscv64_abi_place_argument(&program, minic_type_int(), true, &cursor, &location));
     CHECK(location.integer_register_count == 0U);
     CHECK(location.stack_slot_begin == 1U);
     CHECK(location.stack_slot_count == 1U);
 
-    CHECK(minic_riscv64_abi_place_argument(
-        &program, minic_type_double(), true, &cursor, &location));
+    CHECK(
+        minic_riscv64_abi_place_argument(&program, minic_type_double(), true, &cursor, &location));
     CHECK(location.floating_register_begin == 0U);
     CHECK(location.floating_register_count == 1U);
     CHECK(location.stack_slot_count == 0U);
 
-    CHECK(minic_riscv64_abi_place_argument(
-        &program, minic_type_double(), false, &cursor, &location));
+    CHECK(
+        minic_riscv64_abi_place_argument(&program, minic_type_double(), false, &cursor, &location));
     CHECK(location.floating_register_count == 0U);
     CHECK(location.integer_register_count == 0U);
     CHECK(location.stack_slot_begin == 2U);
@@ -142,8 +179,8 @@ static bool test_argument_placement(void) {
         CHECK(location.floating_register_count == 1U);
     }
     before_failure = cursor;
-    CHECK(!minic_riscv64_abi_place_argument(
-        &program, minic_type_double(), true, &cursor, &location));
+    CHECK(
+        !minic_riscv64_abi_place_argument(&program, minic_type_double(), true, &cursor, &location));
     CHECK(cursor.integer_register_count == before_failure.integer_register_count);
     CHECK(cursor.floating_register_count == before_failure.floating_register_count);
     CHECK(cursor.stack_slot_count == before_failure.stack_slot_count);
@@ -161,11 +198,9 @@ static bool test_unsupported_argument_is_transactional(void) {
     minic_c0_program_initialize(&program);
 
     minic_riscv64_abi_cursor_initialize(&cursor);
-    CHECK(minic_riscv64_abi_place_argument(
-        &program, minic_type_long(), true, &cursor, &location));
+    CHECK(minic_riscv64_abi_place_argument(&program, minic_type_long(), true, &cursor, &location));
     before_failure = cursor;
-    CHECK(!minic_riscv64_abi_place_argument(
-        &program, minic_type_void(), true, &cursor, &location));
+    CHECK(!minic_riscv64_abi_place_argument(&program, minic_type_void(), true, &cursor, &location));
     CHECK(cursor.integer_register_count == before_failure.integer_register_count);
     CHECK(cursor.floating_register_count == before_failure.floating_register_count);
     CHECK(cursor.stack_slot_count == before_failure.stack_slot_count);
@@ -175,10 +210,10 @@ static bool test_unsupported_argument_is_transactional(void) {
 }
 
 int main(void) {
-    if (!test_value_classification() || !test_argument_placement() ||
-        !test_unsupported_argument_is_transactional()) {
+    if (!test_value_classification() || !test_return_argument_cursor() ||
+        !test_argument_placement() || !test_unsupported_argument_is_transactional()) {
         return 1;
     }
-    (void)puts("PASS rv64 abi classification+placement canonical owner");
+    (void)puts("PASS rv64 abi classification+return-cursor+placement canonical owner");
     return 0;
 }
