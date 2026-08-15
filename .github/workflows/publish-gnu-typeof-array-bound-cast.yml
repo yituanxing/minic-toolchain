@@ -1,4 +1,4 @@
-name: Publish GNU Typeof Array Bound Cast
+name: Publish Typed Array Declarator Bounds
 
 on:
   push:
@@ -8,7 +8,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: publish-gnu-typeof-array-bound-cast
+  group: publish-typed-array-declarator-bounds
   cancel-in-progress: true
 
 jobs:
@@ -20,23 +20,43 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Reuse canonical type-name lookahead for array-bound casts
+      - name: Route array declarator bounds through typed ConstEval
         shell: bash
         run: |
           set -Eeuo pipefail
           python3 - <<'PY'
           from pathlib import Path
 
-          path = Path('src/frontend/parser_core.c')
-          text = path.read_text()
-          begin = text.index('static bool array_bound_parenthesis_starts_integer_cast(MinicParser *parser) {')
-          end = text.index('\nstatic bool array_bound_apply_integer_cast', begin)
-          old = text[begin:end]
-          new = '''static bool array_bound_parenthesis_starts_integer_cast(MinicParser *parser) {\n    MinicParser probe;\n\n    if (parser == NULL || parser->current.kind != MINIC_TOKEN_LPAREN) {\n        return false;\n    }\n    probe = *parser;\n    if (!minic_parser_advance(&probe)) {\n        return false;\n    }\n    return minic_parser_token_starts_type_name(parser, probe.current);\n}\n'''
-          if 'switch (probe.current.kind)' not in old:
-              raise SystemExit('legacy array-bound cast lookahead shape not found')
-          text = text[:begin] + new + text[end:]
-          path.write_text(text)
+          core = Path('src/frontend/parser_core.c')
+          text = core.read_text()
+          old = '''static bool minic_parser_parse_typed_integer_constant_expression(MinicParser *parser,\n                                                                 int64_t *value) {'''
+          new = '''bool minic_parser_parse_typed_integer_constant_expression(MinicParser *parser,\n                                                          int64_t *value) {'''
+          if text.count(old) != 1:
+              raise SystemExit('typed ConstEval helper definition seam not found')
+          core.write_text(text.replace(old, new, 1))
+
+          header = Path('src/frontend/parser_internal.h')
+          text = header.read_text()
+          anchor = 'bool minic_parser_parse_integer_constant_expression(MinicParser *parser, int64_t *value);\n'
+          addition = anchor + ('bool minic_parser_parse_typed_integer_constant_expression(MinicParser *parser,\n'
+                               '                                                          int64_t *value);\n')
+          if 'bool minic_parser_parse_typed_integer_constant_expression(' not in text:
+              if text.count(anchor) != 1:
+                  raise SystemExit('parser_internal typed ConstEval declaration seam not found')
+              text = text.replace(anchor, addition, 1)
+              header.write_text(text)
+
+          declarator = Path('src/frontend/parser_declarator.c')
+          text = declarator.read_text()
+          begin = text.index('static bool parse_array_bound_allow_zero(MinicParser *parser, size_t *element_count) {')
+          end = text.index('\nbool minic_parser_parse_array_declarator_suffix(', begin)
+          section = text[begin:end]
+          old_call = '!minic_parser_parse_integer_constant_expression(parser, &value)'
+          new_call = '!minic_parser_parse_typed_integer_constant_expression(parser, &value)'
+          if section.count(old_call) != 1:
+              raise SystemExit('array declarator legacy ICE consumer seam not found')
+          text = text[:begin] + section.replace(old_call, new_call, 1) + text[end:]
+          declarator.write_text(text)
 
           runner = Path('tests/compiler/c0/run-foundation-focused.sh')
           data = runner.read_text()
@@ -78,13 +98,14 @@ jobs:
           "$minic" -S "$work/input.i" -o "$work/output.s"
           test -s "$work/output.s"
           grep -F 'typeof_array_bound_cast_size:' "$work/output.s" >/dev/null
-          printf '%s\n' 'PASS compiler/c0/gnu_typeof_array_bound_cast shared-type-lookahead=1 typeof-cast=1'
+          printf '%s\n' 'PASS compiler/c0/gnu_typeof_array_bound_cast semantic-ast=1 typed-consteval=1'
           EOF
           chmod +x tests/compiler/c0/run-gnu-typeof-array-bound-cast.sh
 
           sudo apt-get update >/dev/null
           sudo apt-get install -y --no-install-recommends clang-format-18 >/dev/null
-          clang-format-18 -i src/frontend/parser_core.c tests/compiler/c0/gnu_typeof_array_bound_cast.c
+          clang-format-18 -i src/frontend/parser_core.c src/frontend/parser_declarator.c \
+            src/frontend/parser_internal.h tests/compiler/c0/gnu_typeof_array_bound_cast.c
           rm .github/workflows/publish-gnu-typeof-array-bound-cast.yml
           git diff --check
 
@@ -92,18 +113,18 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          make -j4 MODE=sanitize BUILD_DIR=build/typeof-bound-sanitize
-          MINIC="$GITHUB_WORKSPACE/build/typeof-bound-sanitize/bin/minic" \
-          BUILD_DIR="$GITHUB_WORKSPACE/build/typeof-bound-sanitize" \
+          make -j4 MODE=sanitize BUILD_DIR=build/typed-array-bound-sanitize
+          MINIC="$GITHUB_WORKSPACE/build/typed-array-bound-sanitize/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/typed-array-bound-sanitize" \
             sh tests/compiler/c0/run-gnu-typeof-array-bound-cast.sh
 
       - name: Release Foundation regression
         shell: bash
         run: |
           set -Eeuo pipefail
-          make -j4 MODE=release BUILD_DIR=build/typeof-bound-release
-          MINIC="$GITHUB_WORKSPACE/build/typeof-bound-release/bin/minic" \
-          BUILD_DIR="$GITHUB_WORKSPACE/build/typeof-bound-release" \
+          make -j4 MODE=release BUILD_DIR=build/typed-array-bound-release
+          MINIC="$GITHUB_WORKSPACE/build/typed-array-bound-release/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/typed-array-bound-release" \
             sh tests/compiler/c0/run-foundation-focused.sh
 
       - name: Commit product-only patch
@@ -113,8 +134,8 @@ jobs:
           git config user.name 'LiYang Dong'
           git config user.email '119646676+yituanxing@users.noreply.github.com'
           git add -A
-          git commit -m 'frontend: share type-name lookahead for array-bound casts' \
-            -m 'Replace the stale integer-array-bound cast token switch with the canonical token_starts_type_name semantic query. GNU typeof, typedef shadowing, GNU int128 spellings, and ordinary type specifiers now have one type-name owner; actual integer-cast legality remains in the existing array-bound evaluator.' \
-            -m '中文说明：用 canonical token_starts_type_name 语义查询替换旧的 integer array-bound cast token switch。GNU typeof、typedef shadowing、GNU int128 和普通类型说明符统一由一个 type-name owner 判断；整数 cast 的合法性仍由既有 array-bound evaluator 负责。' \
+          git commit -m 'frontend: route array declarator bounds through typed ConstEval' \
+            -m 'Move array-declarator bounds off the legacy token-level integer-expression evaluator and onto the existing semantic expression AST plus typed ConstEval owner already used by fixed array bounds. GNU typeof casts, sizeof, bitwise operators, and future constant-expression semantics therefore share one canonical evaluator instead of growing a second mini expression language.' \
+            -m '中文说明：将 array declarator bound 从 legacy token-level 整数表达式求值器迁移到 fixed array bound 已使用的 semantic expression AST + typed ConstEval owner。GNU typeof cast、sizeof、位运算以及后续常量表达式语义由同一个 canonical evaluator 负责，不再扩张第二套迷你表达式语言。' \
             -m 'Validation / 验证：focused sanitizer PASS; Foundation focused PASS; clang-format-18 canonical.'
           git push origin HEAD:compiler/gnu-typeof-array-bound-cast
