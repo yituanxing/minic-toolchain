@@ -79,6 +79,7 @@ for test_script in \
     run-block-scope-extern-function-attributes.sh \
     run-gnu-void-pointer-arithmetic.sh \
     run-gnu-statement-expression.sh \
+    run-function-arena-borrow-lifetime.sh \
     run-gnu-statement-record-value.sh \
     run-gnu-array-range-initializer.sh \
     run-gnu-record-compound-literal.sh \
