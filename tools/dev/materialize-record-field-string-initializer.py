@@ -10,6 +10,12 @@ def replace_once(path: str, old: str, new: str) -> None:
     p.write_text(text.replace(old, new, 1))
 
 
+replace_once(
+    "src/frontend/ast_global.c",
+    '''    if (object->relocation_count != 0U) {\n        size_t relocation_index;\n\n        if (!minic_type_is_record(object->type)) {\n            return false;\n        }\n''',
+    '''    if (object->relocation_count != 0U) {\n        size_t relocation_index;\n\n        if (!minic_type_is_record(object->type) && !minic_type_is_array(object->type)) {\n            return false;\n        }\n''',
+)
+
 parser_string = Path("src/frontend/parser_string.c")
 text = parser_string.read_text()
 anchor = '''bool minic_parser_get_predefined_function_name_object(MinicParser *parser,\n'''
