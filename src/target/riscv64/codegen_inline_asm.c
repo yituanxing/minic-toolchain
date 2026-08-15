@@ -171,12 +171,15 @@ static bool validate_input(const MinicInlineAsm *inline_asm,
         }
     } else if (!constraint_is(operand, "r") && !constraint_is(operand, "I") &&
                !constraint_is(operand, "i") && !constraint_is(operand, "rJ") &&
-               !constraint_is(operand, "rK")) {
+               !constraint_is(operand, "rK") && !constraint_is(operand, "m")) {
         return false;
     }
     expression = minic_c0_program_expression(program, operand->expression);
     if (expression == NULL) {
         return false;
+    }
+    if (constraint_is(operand, "m")) {
+        return expression->value_category == MINIC_VALUE_LVALUE;
     }
     if (constraint_is(operand, "rJ")) {
         return minic_type_is_integer(expression->type) || minic_type_is_pointer(expression->type);
@@ -631,7 +634,7 @@ static bool emit_template(FILE *file,
                 if (fprintf(file, "(%s)", register_name) < 0) {
                     return false;
                 }
-            } else if (constraint_is(operand, "=m")) {
+            } else if (constraint_is(operand, "=m") || constraint_is(operand, "m")) {
                 if (fprintf(file, "0(%s)", register_name) < 0) {
                     return false;
                 }
@@ -757,6 +760,14 @@ bool minic_riscv64_emit_inline_asm(FILE *file,
         operand = &inline_asm->inputs[index];
         operand_index = inline_asm->output_count + index;
         if (operand_uses_immediate(program, operand)) {
+            continue;
+        }
+        if (constraint_is(operand, "m")) {
+            if (!minic_riscv64_emit_lvalue_address(
+                    file, program, function, function_layout, operand->expression) ||
+                !minic_riscv64_emit_sp_store64(file, "a0", operand_index * 8U)) {
+                return false;
+            }
             continue;
         }
         if (!minic_riscv64_emit_expression(
