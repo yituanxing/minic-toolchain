@@ -45,6 +45,83 @@ static MinicCoreLowerStatus lower_local_object(MinicCoreLowerContext *context,
     return MINIC_CORE_LOWER_OK;
 }
 
+static MinicCoreLowerStatus lower_parameter_ingress(MinicCoreLowerContext *context) {
+    size_t parameter_index;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        context->source_function == NULL || context->function == NULL ||
+        context->source_function->parameter_count > context->source_function->local_count) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    for (parameter_index = 0U; parameter_index < context->source_function->parameter_count;
+         ++parameter_index) {
+        const MinicLocal *parameter;
+        MinicCoreInstruction instruction;
+        MinicCoreObjectId object_id;
+        MinicCoreValueId address_id;
+        MinicCoreValueId parameter_value;
+        MinicCoreLowerStatus status;
+        MinicLocalId local_id;
+        MinicType pointer_type;
+
+        local_id = context->source_function->local_begin + parameter_index;
+        parameter = minic_c0_program_local(context->body->program, local_id);
+        if (parameter == NULL ||
+            !minic_type_equal(parameter->type,
+                              context->source_function->parameter_types[parameter_index])) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        if (!minic_type_is_integer(parameter->type) || minic_type_is_const(parameter->type) ||
+            minic_type_is_volatile(parameter->type) || parameter->is_array ||
+            parameter->is_register_storage) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        status = lower_local_object(context, local_id, &object_id);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+
+        (void)memset(&instruction, 0, sizeof(instruction));
+        instruction.kind = MINIC_CORE_INSTRUCTION_PARAMETER;
+        instruction.span = parameter->name_span;
+        instruction.type = parameter->type;
+        instruction.result = MINIC_CORE_VALUE_INVALID;
+        instruction.value.parameter_index = parameter_index;
+        if (!minic_core_function_append_value_instruction(
+                context->function, context->block_id, &instruction, &parameter_value)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+
+        if (!minic_type_pointer_to(parameter->type, &pointer_type)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        (void)memset(&instruction, 0, sizeof(instruction));
+        instruction.kind = MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS;
+        instruction.span = parameter->name_span;
+        instruction.type = pointer_type;
+        instruction.result = MINIC_CORE_VALUE_INVALID;
+        instruction.value.object_id = object_id;
+        if (!minic_core_function_append_value_instruction(
+                context->function, context->block_id, &instruction, &address_id)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+
+        (void)memset(&instruction, 0, sizeof(instruction));
+        instruction.kind = MINIC_CORE_INSTRUCTION_STORE;
+        instruction.span = parameter->name_span;
+        instruction.type = minic_type_void();
+        instruction.result = MINIC_CORE_VALUE_INVALID;
+        instruction.value.store.address = address_id;
+        instruction.value.store.stored_value = parameter_value;
+        instruction.value.store.is_volatile = false;
+        if (!minic_core_function_append_effect_instruction(
+                context->function, context->block_id, &instruction)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+    }
+    return MINIC_CORE_LOWER_OK;
+}
+
 static MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
                                           MinicExpressionId expression_id,
                                           MinicCoreValueId *address_id) {
@@ -338,7 +415,10 @@ MinicCoreLowerStatus minic_core_lower_function(const MinicFunctionBodyView *body
     context.function = &lowered;
     context.block_id = block_id;
     context.local_objects = local_objects;
-    status = lower_root_block(&context, source_block);
+    status = lower_parameter_ingress(&context);
+    if (status == MINIC_CORE_LOWER_OK) {
+        status = lower_root_block(&context, source_block);
+    }
     free(local_objects);
     if (status != MINIC_CORE_LOWER_OK) {
         minic_core_function_destroy(&lowered);

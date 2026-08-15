@@ -38,6 +38,13 @@ int main(void) {
 EOF
 check_strict_case volatile-object
 
+cat >"$work_dir/parameter.i" <<'EOF'
+int add_one(int value) {
+    return value + 1;
+}
+EOF
+check_strict_case parameter
+
 cat >"$work_dir/unsupported.i" <<'EOF'
 int main(void) {
     return 1 - 2;

@@ -24,6 +24,7 @@ typedef enum MinicCorePhase { MINIC_CORE_PHASE_EXECUTION_SHADOW = 0 } MinicCoreP
 typedef enum MinicCoreInstructionKind {
     MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT = 0,
     MINIC_CORE_INSTRUCTION_INTEGER_ADD,
+    MINIC_CORE_INSTRUCTION_PARAMETER,
     MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS,
     MINIC_CORE_INSTRUCTION_LOAD,
     MINIC_CORE_INSTRUCTION_STORE
@@ -52,6 +53,7 @@ typedef struct MinicCoreInstruction {
             MinicCoreValueId left;
             MinicCoreValueId right;
         } binary;
+        size_t parameter_index;
         MinicCoreObjectId object_id;
         struct {
             MinicCoreValueId address;
