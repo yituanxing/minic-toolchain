@@ -562,12 +562,62 @@ bool minic_parser_parse_pointer_declarator(MinicParser *parser,
     return true;
 }
 
+static bool type_name_starts_parenthesized_function_pointer(const MinicParser *parser) {
+    MinicDiagnostic diagnostic;
+    MinicLexer lookahead;
+    MinicToken token;
+
+    if (parser == NULL || parser->current.kind != MINIC_TOKEN_LPAREN) {
+        return false;
+    }
+    lookahead = parser->lexer;
+    (void)memset(&diagnostic, 0, sizeof(diagnostic));
+    if (!minic_lexer_next(&lookahead, &token, &diagnostic) || token.kind != MINIC_TOKEN_STAR) {
+        return false;
+    }
+    for (;;) {
+        if (!minic_lexer_next(&lookahead, &token, &diagnostic)) {
+            return false;
+        }
+        while (token.kind == MINIC_TOKEN_KW_CONST || token.kind == MINIC_TOKEN_KW_VOLATILE ||
+               minic_parser_token_text_equals(parser, token, "restrict") ||
+               minic_parser_token_text_equals(parser, token, "__restrict")) {
+            if (!minic_lexer_next(&lookahead, &token, &diagnostic)) {
+                return false;
+            }
+        }
+        if (token.kind != MINIC_TOKEN_STAR) {
+            break;
+        }
+    }
+    return token.kind == MINIC_TOKEN_RPAREN;
+}
+
 bool minic_parser_parse_type_name_preserving_incomplete(MinicParser *parser, MinicType *type) {
     MinicType base_type;
 
-    return parser != NULL && type != NULL &&
-           minic_parser_parse_type_specifiers(parser, &base_type) &&
-           minic_parser_parse_pointer_declarator(parser, base_type, type);
+    if (parser == NULL || type == NULL || !minic_parser_parse_type_specifiers(parser, &base_type)) {
+        return false;
+    }
+    if (type_name_starts_parenthesized_function_pointer(parser)) {
+        MinicParsedFunctionDeclarator declarator;
+
+        if (!minic_parser_parse_parenthesized_function_declarator(
+                parser, false, true, &declarator)) {
+            return false;
+        }
+        if (declarator.is_variadic) {
+            minic_parser_error(parser,
+                               "variadic function-pointer type names are not supported yet");
+            return false;
+        }
+        if (!minic_parser_build_function_declarator_type(parser, base_type, &declarator, type)) {
+            minic_parser_error(parser, "cannot build function-pointer type name");
+            return false;
+        }
+        return true;
+    }
+    return minic_parser_parse_pointer_declarator(parser, base_type, type);
 }
 
 bool minic_parser_parse_type_name(MinicParser *parser, MinicType *type) {
