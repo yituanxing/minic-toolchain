@@ -37,9 +37,13 @@ jobs:
           make -j4 MODE=sanitize BUILD_DIR=build/external-array-routing-sanitize
           MINIC="$GITHUB_WORKSPACE/build/external-array-routing-sanitize/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/external-array-routing-sanitize" sh tests/compiler/c0/run-external-array-declarator-routing.sh
 
-      - name: Foundation regression
+      - name: Trace existing fixed external array contract
         run: |
           make -j4 MODE=release BUILD_DIR=build/external-array-routing-release
+          MINIC="$GITHUB_WORKSPACE/build/external-array-routing-release/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/external-array-routing-release" sh -x tests/compiler/c0/run-extern-fixed-integer-arrays.sh
+
+      - name: Foundation regression
+        run: |
           MINIC="$GITHUB_WORKSPACE/build/external-array-routing-release/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/external-array-routing-release" sh tests/compiler/c0/run-foundation-focused.sh
 
       - name: Publish product-only patch
