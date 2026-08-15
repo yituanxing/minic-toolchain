@@ -16,6 +16,8 @@ mkdir -p "$work"
 test -s "$assembly"
 grep -F 'amoadd.w zero, t1, (t0)' "$assembly" >/dev/null
 grep -F 'amoadd.w t1, t3, (t0)' "$assembly" >/dev/null
+grep -F '.type memory_output_store_like, @function' "$assembly" >/dev/null
+grep -F 'sw t1, 0(t0)' "$assembly" >/dev/null
 grep -F 'addi t3, zero, 7' "$assembly" >/dev/null
 grep -F 'add t0, t0, t3' "$assembly" >/dev/null
 grep -F 'add t0, t1, t4' "$assembly" >/dev/null
@@ -55,4 +57,4 @@ grep -F "GNU asm 'I' input requires a signed 12-bit integer constant" \
     "$work/out-of-range-I.stderr" >/dev/null
 
 printf '%s\n' \
-    'PASS compiler/c0/gnu_inline_asm_operands outputs=+A,=r,+r inputs=r,I clobber=memory,t3 reservation=t3->t4 immediates=rv64-I placeholders=0,1,2 staging=stack target=RV64'
+    'PASS compiler/c0/gnu_inline_asm_operands outputs=+A,=m,=r,+r inputs=r,rJ,I clobber=memory,t3 reservation=t3->t4 immediates=rv64-I placeholders=0,1,2 staging=stack target=RV64'

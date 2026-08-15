@@ -5,10 +5,7 @@ typedef struct AtomicLike {
 static AtomicLike global_counter = {7};
 
 static void atomic_add_like(int value, AtomicLike *target) {
-    __asm__ __volatile__("amoadd.w zero, %1, %0"
-                         : "+A"(target->counter)
-                         : "r"(value)
-                         : "memory");
+    __asm__ __volatile__("amoadd.w zero, %1, %0" : "+A"(target->counter) : "r"(value) : "memory");
 }
 
 static int atomic_fetch_add_like(int value, AtomicLike *target) {
@@ -19,6 +16,10 @@ static int atomic_fetch_add_like(int value, AtomicLike *target) {
                          : "r"(value)
                          : "memory");
     return previous;
+}
+
+static void memory_output_store_like(int value, int *target) {
+    __asm__ __volatile__("sw %z1, %0" : "=m"(*target) : "rJ"(value) : "memory");
 }
 
 static int linux_target_constraint_shape(int value) {
@@ -33,10 +34,7 @@ static int linux_target_constraint_shape(int value) {
 static int clobber_reservation(int left, int right) {
     int result;
 
-    __asm__ __volatile__("add %0, %1, %2"
-                         : "=r"(result)
-                         : "r"(left), "r"(right)
-                         : "t3");
+    __asm__ __volatile__("add %0, %1, %2" : "=r"(result) : "r"(left), "r"(right) : "t3");
     return result;
 }
 
