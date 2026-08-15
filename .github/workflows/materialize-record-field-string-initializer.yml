@@ -46,6 +46,7 @@ jobs:
             src/frontend/parser_string.c \
             src/frontend/parser_internal.h \
             src/frontend/parser_global.c \
+            src/target/riscv64/codegen_function.c \
             tests/compiler/c0/static_record_array.c \
             tests/compiler/c0/run-static-record-arrays.sh
           git commit -m 'feat: initialize record character arrays from strings [materialized]'
