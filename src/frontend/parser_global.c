@@ -490,14 +490,14 @@ static bool parse_static_scalar(MinicParser *parser, MinicType type, MinicSource
     }
 
     if (minic_type_is_integer(type)) {
-        int value;
+        uint64_t bits;
 
         if (parser->current.kind == MINIC_TOKEN_LBRACE) {
             minic_parser_error(parser, "expected integer constant expression");
             return false;
         }
-        if (!minic_parser_parse_integer_initializer_value(parser, type, &value) ||
-            !minic_c0_global_object_add_initializer(parser->program, object_id, value)) {
+        if (!minic_parser_parse_integer_initializer_bits(parser, type, &bits) ||
+            !minic_c0_global_object_add_initializer_bits(parser->program, object_id, bits)) {
             if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
                 minic_parser_error(parser, "cannot record static integer initializer");
             }
@@ -1022,7 +1022,7 @@ parse_static_nested_record_object(MinicParser *parser, MinicType type, MinicSour
 static bool ensure_static_record_base_value(MinicParser *parser,
                                             MinicGlobalObjectId object_id,
                                             size_t field_index,
-                                            int value) {
+                                            uint64_t bits) {
     MinicGlobalObject *object;
 
     if (parser == NULL || object_id >= parser->program->global_object_count) {
@@ -1036,7 +1036,7 @@ static bool ensure_static_record_base_value(MinicParser *parser,
         object = &parser->program->global_objects[object_id];
     }
     return object->initializer_count == field_index &&
-           minic_c0_global_object_add_initializer(parser->program, object_id, value);
+           minic_c0_global_object_add_initializer_bits(parser->program, object_id, bits);
 }
 
 static bool parse_static_record_field_initializer(MinicParser *parser,
@@ -1119,15 +1119,15 @@ static bool parse_static_record_field_initializer(MinicParser *parser,
         return true;
     }
     if (minic_type_is_integer(field->type)) {
-        int value;
+        uint64_t bits;
 
-        if (!minic_parser_parse_integer_initializer_value(parser, field->type, &value)) {
+        if (!minic_parser_parse_integer_initializer_bits(parser, field->type, &bits)) {
             return false;
         }
-        if (value == 0 && parser->program->global_objects[object_id].initializer_count == 0U) {
+        if (bits == 0U && parser->program->global_objects[object_id].initializer_count == 0U) {
             return true;
         }
-        return ensure_static_record_base_value(parser, object_id, field_index, value);
+        return ensure_static_record_base_value(parser, object_id, field_index, bits);
     }
     if (!parse_zero_initializer(parser, field->type)) {
         return false;
