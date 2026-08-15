@@ -1,0 +1,64 @@
+name: Core IR Shadow Contract
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'src/core/**'
+      - 'src/frontend/ast.h'
+      - 'src/frontend/function_body.c'
+      - 'src/frontend/function_body.h'
+      - 'src/frontend/type.c'
+      - 'src/frontend/type.h'
+      - 'tests/core/core_ir_shadow_test.c'
+      - 'Makefile'
+      - '.github/workflows/core-ir-shadow.yml'
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: core-ir-shadow-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify production source inventory
+        shell: bash
+        run: bash tools/maintenance/check-production-source-inventory.sh
+
+      - name: Build Core IR shadow contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p build/core-ir-shadow
+          cc -std=c11 \
+            -Wall -Wextra -Wpedantic -Wconversion -Wshadow \
+            -Wstrict-prototypes -Wmissing-prototypes -Werror \
+            -Iinclude -Isrc \
+            src/core/core_ir.c \
+            src/core/core_lower.c \
+            src/frontend/ast.c \
+            src/frontend/expression_semantics.c \
+            src/frontend/ast_global.c \
+            src/frontend/ast_traversal.c \
+            src/frontend/ast_verifier.c \
+            src/frontend/function_body.c \
+            src/frontend/type.c \
+            src/target/data_layout.c \
+            src/target/target_info.c \
+            tests/core/core_ir_shadow_test.c \
+            -o build/core-ir-shadow/core-ir-shadow-test
+
+      - name: Run Core IR shadow contract
+        run: build/core-ir-shadow/core-ir-shadow-test

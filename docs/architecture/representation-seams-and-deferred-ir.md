@@ -1,4 +1,4 @@
-# Representation seams and deferred Core IR / 表示边界与暂缓 Core IR 契约
+# Representation seams and Core IR / 表示边界与 Core IR 契约
 
 ## 1. Purpose / 目的
 
@@ -6,9 +6,9 @@ MiniC should keep semantic contracts stable while allowing physical representati
 
 MiniC 应稳定长期语义契约，同时允许物理表示与算法在真实负载证明需要时演化。
 
-This document does **not** require a framework, virtual interface hierarchy, Core IR implementation, pointer AST, or immediate data-structure migration. Plain C functions and small value types are sufficient abstraction boundaries.
+This document does **not** require a framework, virtual interface hierarchy, pointer AST, or immediate data-structure migration. Plain C functions and small value types are sufficient abstraction boundaries.
 
-本文**不**要求引入框架、虚接口体系、立即实现 Core IR、改成指针 AST，或立刻迁移数据结构。普通 C 函数和小型值对象即可形成有效边界。
+本文**不**要求引入框架、虚接口体系、改成指针 AST，或立刻迁移数据结构。普通 C 函数和小型值对象即可形成有效边界。
 
 The guiding rule is:
 
@@ -17,6 +17,12 @@ The guiding rule is:
 > Stable semantics and interfaces; replaceable representation and strategy.
 >
 > 稳定的是语义与接口；可替换的是表示与策略。
+
+A second rule now governs representation lowering:
+
+> Resolve a rule where it belongs; preserve the resulting fact while a real consumer still needs it; lower it when the remaining choice belongs to the next layer.
+>
+> 规则在真正所属的层解释；解释产生的事实只要仍有真实 consumer 就继续保留；直到剩余选择属于下一层时再降低。
 
 ## 2. Architecture review questions / 架构审查三问
 
@@ -79,7 +85,7 @@ Required invariants:
 
 This distinction matters because cast normalization currently rebuilds the expression arena. “Stable ID” therefore means a reliable handle inside a representation version, not an immutable identity that survives every compiler transformation without remapping.
 
-## 4. FunctionBody as the future ownership seam / FunctionBody 作为未来 ownership 边界
+## 4. FunctionBody as the ownership seam / FunctionBody 作为 ownership 边界
 
 Function-local semantic state has a natural lifetime and ownership boundary:
 
@@ -97,17 +103,19 @@ TranslationUnit
         └── inline asm / local labels
 ```
 
-The first step does not need to move storage. A lightweight `FunctionBodyView` can define ownership and traversal while existing program-wide arenas remain canonical.
+The first step does not need to move storage. A lightweight `FunctionBodyView` defines ownership and traversal while existing program-wide arenas remain canonical.
 
-第一步不必移动任何存储。可以先用轻量 `FunctionBodyView` 定义函数体 ownership 与遍历边界，底层仍使用当前 Program-wide arenas。
+第一步不必移动任何存储。轻量 `FunctionBodyView` 定义函数体 ownership 与遍历边界，底层仍使用当前 Program-wide arenas。
 
 The ExpressionId traversal/remap seam and FunctionBody ownership seam are related but distinct: traversal owns expression-reference relationships, while FunctionBody owns which reachable structural and semantic graph nodes belong to one function.
 
 A later storage migration is allowed only after callers depend on the FunctionBody interface rather than raw global arenas.
 
-## 5. Deferred Core IR seam / 暂缓 Core IR 的预留边界
+## 5. Activated Core IR shadow seam / 已启用的 Core IR 影子边界
 
-Core IR is intentionally not implemented yet. The future insertion point is nevertheless explicit:
+Real backend pressure has now justified activating the previously reserved seam. Direct AST→RV64 lowering accumulated target-neutral execution responsibilities such as evaluation order, CFG construction, temporary materialization, cleanup traversal and aggregate execution rules.
+
+The ownership direction is now:
 
 ```text
 source
@@ -118,24 +126,43 @@ Semantic AST / FunctionBody
   ↓
 AST normalization and language-semantic lowering
   ↓
-──────────── future Core IR seam ────────────
+──────────── AST / Core boundary ────────────
   ↓
-Core IR                 (deferred)
+Core IR
+  ↓
+──────────── Core / ABI boundary ────────────
   ↓
 Target ABI lowering
+  ↓
+──────────── ABI / machine boundary ─────────
   ↓
 backend placement / Machine lowering
   ↓
 RV64 assembly or future object emission
 ```
 
-Language semantics must be resolved above the seam: lvalue/rvalue rules, array decay, C conversions, record-value semantics, initializer semantics, cleanup semantics, statement expressions, volatile semantics, and constant-expression rules.
+The boundaries are ownership rules rather than copies of another compiler's representation stack:
 
-IR should not need to understand source constructs such as “compound literal” or “GNU statement expression” merely to recover C semantics that the frontend could have made explicit.
+- Semantic AST owns what the C/GNU C program means.
+- Core IR owns the execution facts that remain after source-language rules are resolved while lower-layer implementation choices stay open.
+- TargetABI owns calling-convention classification and abstract argument/return placement.
+- Machine lowering owns physical registers, stack addressing, instruction selection, spelling and encoding.
 
-Target machine placement remains below the seam: physical register names, stack offsets, spill slots, saved-register layout, instruction spelling, and encoding.
+Language-specific rules must be resolved above the AST/Core seam. Their resulting facts cross the seam only when a real lower consumer still needs them. Core IR should not reinterpret source constructs merely to recover C semantics that the frontend could have made explicit.
 
-Core IR is activated only when real evidence shows that direct AST→target lowering is causing repeated target-neutral complexity, such as duplicated control-flow lowering, temporary-lifetime machinery, evaluation-order handling, multi-target duplication, optimization requirements, or register/stack staging leaking upward.
+Target machine placement remains below the Core/ABI and ABI/machine seams: physical register names, frame offsets, spill slots, saved-register layout, instruction spelling and encoding do not belong to Core IR.
+
+The first checked-in Core IR remains shadow-only. It proves a compact function representation, verifier, deterministic dump and a bounded normalized-FunctionBody lowering. The production assembly path is still unchanged:
+
+```text
+normalized Semantic AST
+        ↓
+existing RV64 backend
+        ↓
+assembly
+```
+
+The focused shadow path begins separately and fails closed on unsupported forms. See `core-ir-v0-shadow.md` for the exact current contract.
 
 ## 6. DataLayout, BackendLayout and ABI boundaries / DataLayout、BackendLayout 与 ABI 边界
 
@@ -200,20 +227,24 @@ Real workloads drive representation choices just as real workloads drive languag
 
 ## 10. Current migration rule / 当前迁移规则
 
-The first representation slice is now intentionally bounded to two cooperating seams:
+The representation work has progressed through cooperating seams rather than a wholesale rewrite:
 
 ```text
-canonical ExpressionId child/external traversal
-        ↓
-transactional cast-normalization remap
+canonical ExpressionId traversal/remap
         +
-FunctionBody logical ownership view
+FunctionBody logical ownership
+        +
+DataLayout / TargetABI ownership seams
         ↓
-focused + host + full real-program gates
+normalized FunctionBody
         ↓
-frozen Linux init/main.i 90928/90928
+Core IR scalar shadow
+        ↓
+verify + deterministic dump
 ```
 
-It does not move FunctionBody storage, introduce Core IR, or redesign all AST containers.
+The current Core slice does not move FunctionBody storage or replace the AST→RV64 production path. It also deliberately does not introduce memory operations, SSA, a pass manager, alias analysis or Machine IR.
 
-After a structural slice passes all frozen gates, re-read the affected code and the surrounding compiler globally before choosing the next boundary. DataLayout/BackendLayout separation and TargetABI consolidation remain candidates, not a mechanical checklist.
+The next widening must be justified by a real lowering case. Before the first Core `LOAD`/`STORE` lands, define only the minimum object/address/volatile contract required by that case. Unsupported forms remain outside the shadow coverage rather than forcing speculative IR features.
+
+After each structural slice passes focused, Foundation and unchanged real-program gates, reread the affected code and surrounding compiler before choosing the next ownership boundary. This is an evidence-driven migration, not a mechanical checklist.
