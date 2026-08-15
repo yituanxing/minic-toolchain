@@ -3597,12 +3597,18 @@ static bool parse_break(MinicParser *parser) {
 static bool parse_return(MinicParser *parser) {
     const MinicFunction *function;
     MinicStatement statement;
+    MinicType return_type;
 
     function = minic_c0_program_function(parser->program, parser->current_function);
     if (function == NULL) {
         minic_parser_error(parser, "return statement outside a function");
         return false;
     }
+
+    /* FunctionId is the stable identity. program->functions is a growable arena,
+       and parsing a GNU statement-expression may add block-scope extern functions.
+       Copy the semantic return type before recursive parsing can reallocate the arena. */
+    return_type = function->return_type;
 
     (void)memset(&statement, 0, sizeof(statement));
     statement.kind = MINIC_STATEMENT_RETURN;
@@ -3615,7 +3621,7 @@ static bool parse_return(MinicParser *parser) {
         return false;
     }
 
-    if (minic_type_is_void(function->return_type)) {
+    if (minic_type_is_void(return_type)) {
         if (parser->current.kind == MINIC_TOKEN_SEMICOLON) {
             statement.span.end = parser->current.span.end;
         } else {
@@ -3679,13 +3685,12 @@ static bool parse_return(MinicParser *parser) {
             }
             statement.expression = target_id;
         }
-        if (!apply_assignment_conversion(parser, function->return_type, &statement.expression)) {
+        if (!apply_assignment_conversion(parser, return_type, &statement.expression)) {
             return false;
         }
         returned_expression = minic_c0_program_expression(parser->program, statement.expression);
-        if (returned_expression == NULL || !minic_c0_assignment_compatible(parser->program,
-                                                                           function->return_type,
-                                                                           statement.expression)) {
+        if (returned_expression == NULL ||
+            !minic_c0_assignment_compatible(parser->program, return_type, statement.expression)) {
             minic_parser_error(parser, "return expression does not match function return type");
             return false;
         }
