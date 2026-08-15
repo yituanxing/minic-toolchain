@@ -44,6 +44,10 @@ bool minic_riscv64_classify_abi_value(const MinicC0Program *program,
                                       MinicRiscv64AbiValue *result);
 
 void minic_riscv64_abi_cursor_initialize(MinicRiscv64AbiCursor *cursor);
+bool minic_riscv64_abi_cursor_initialize_for_return(const MinicC0Program *program,
+                                                    MinicType return_type,
+                                                    MinicRiscv64AbiCursor *cursor,
+                                                    MinicRiscv64AbiValue *return_value);
 bool minic_riscv64_abi_classify_value(const MinicC0Program *program,
                                       MinicType type,
                                       MinicRiscv64AbiValue *value);

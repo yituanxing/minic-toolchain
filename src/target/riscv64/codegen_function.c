@@ -940,6 +940,9 @@ static bool minic_riscv64_emit_function(FILE *file,
                   minic_riscv64_emit_sp_store64(file, "s0", frame_layout.saved_s0_offset) &&
                   fprintf(file, "  mv s0, sp\n") >= 0;
     }
+    if (success && frame_layout.has_indirect_return) {
+        success = minic_riscv64_emit_sp_store64(file, "a0", frame_layout.indirect_return_offset);
+    }
     if (success && function->is_variadic) {
         size_t register_index;
 
@@ -955,9 +958,15 @@ static bool minic_riscv64_emit_function(FILE *file,
     }
     if (success) {
         MinicRiscv64AbiCursor abi_cursor;
+        MinicRiscv64AbiValue return_value;
         size_t parameter_index;
 
-        minic_riscv64_abi_cursor_initialize(&abi_cursor);
+        if (!minic_riscv64_abi_cursor_initialize_for_return(
+                program, function->return_type, &abi_cursor, &return_value) ||
+            (return_value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) !=
+                frame_layout.has_indirect_return) {
+            success = false;
+        }
         for (parameter_index = 0U; success && parameter_index < function->parameter_count;
              ++parameter_index) {
             const MinicLocal *parameter;
