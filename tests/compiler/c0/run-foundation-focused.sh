@@ -80,6 +80,7 @@ for test_script in \
     run-gnu-void-pointer-arithmetic.sh \
     run-gnu-statement-expression.sh \
     run-gnu-statement-record-value.sh \
+    run-gnu-array-range-initializer.sh \
     run-gnu-record-compound-literal.sh \
     run-gnu-static-local-implicit-zero.sh \
     run-gnu-top-level-empty-declaration.sh \
