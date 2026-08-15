@@ -617,7 +617,17 @@ bool minic_parser_parse_type_name_preserving_incomplete(MinicParser *parser, Min
         }
         return true;
     }
-    return minic_parser_parse_pointer_declarator(parser, base_type, type);
+    {
+        MinicType declarator_type;
+        bool is_array;
+
+        if (!minic_parser_parse_pointer_declarator(parser, base_type, &declarator_type) ||
+            !minic_parser_parse_array_declarator_suffix(
+                parser, declarator_type, true, type, &is_array)) {
+            return false;
+        }
+        return true;
+    }
 }
 
 bool minic_parser_parse_type_name(MinicParser *parser, MinicType *type) {
