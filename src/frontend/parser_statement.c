@@ -1012,6 +1012,16 @@ static bool finalize_local_cleanup(MinicParser *parser,
     return true;
 }
 
+static bool local_declarator_starts_function_pointer(const MinicParser *parser) {
+    MinicParser probe;
+
+    if (parser == NULL || parser->current.kind != MINIC_TOKEN_LPAREN) {
+        return false;
+    }
+    probe = *parser;
+    return minic_parser_advance(&probe) && probe.current.kind == MINIC_TOKEN_STAR;
+}
+
 static bool
 parse_local_declarator(MinicParser *parser, MinicType base_type, bool is_register_storage) {
     MinicLocal local;
@@ -1024,7 +1034,7 @@ parse_local_declarator(MinicParser *parser, MinicType base_type, bool is_registe
     if (!minic_parser_parse_pointer_declarator(parser, base_type, &declared_type)) {
         return false;
     }
-    if (parser->current.kind == MINIC_TOKEN_LPAREN) {
+    if (local_declarator_starts_function_pointer(parser)) {
         MinicParsedFunctionDeclarator declarator;
 
         if (!minic_parser_parse_parenthesized_function_declarator(
