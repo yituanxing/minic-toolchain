@@ -102,8 +102,9 @@ static int test_scalar_shadow_lowering(void) {
         return 1;
     }
     minic_core_function_initialize(&core);
-    if (!minic_core_lower_function(&view, &core) || !minic_core_function_verify(&core) ||
-        core.block_count != 1U || core.instruction_count != 3U || core.value_count != 3U) {
+    if (minic_core_lower_function(&view, &core) != MINIC_CORE_LOWER_OK ||
+        !minic_core_function_verify(&core) || core.block_count != 1U ||
+        core.instruction_count != 3U || core.value_count != 3U) {
         minic_core_function_destroy(&core);
         minic_c0_program_destroy(&program);
         return 2;
@@ -130,7 +131,7 @@ static int test_scalar_shadow_lowering(void) {
     return status;
 }
 
-static int test_unsupported_expression_fails_closed(void) {
+static int test_unsupported_expression_is_distinct(void) {
     MinicC0Program program;
     MinicFunctionBodyView view;
     MinicCoreFunction core;
@@ -140,8 +141,9 @@ static int test_unsupported_expression_fails_closed(void) {
         return 6;
     }
     minic_core_function_initialize(&core);
-    if (minic_core_lower_function(&view, &core) || core.name != NULL || core.block_count != 0U ||
-        core.instruction_count != 0U || core.value_count != 0U) {
+    if (minic_core_lower_function(&view, &core) != MINIC_CORE_LOWER_UNSUPPORTED ||
+        core.name != NULL || core.block_count != 0U || core.instruction_count != 0U ||
+        core.value_count != 0U) {
         minic_core_function_destroy(&core);
         minic_c0_program_destroy(&program);
         return 7;
@@ -151,6 +153,16 @@ static int test_unsupported_expression_fails_closed(void) {
     return 0;
 }
 
+static int test_invalid_input_is_error(void) {
+    MinicCoreFunction core;
+    int status;
+
+    minic_core_function_initialize(&core);
+    status = minic_core_lower_function(NULL, &core) == MINIC_CORE_LOWER_ERROR ? 0 : 8;
+    minic_core_function_destroy(&core);
+    return status;
+}
+
 int main(void) {
     int status;
 
@@ -158,5 +170,9 @@ int main(void) {
     if (status != 0) {
         return status;
     }
-    return test_unsupported_expression_fails_closed();
+    status = test_unsupported_expression_is_distinct();
+    if (status != 0) {
+        return status;
+    }
+    return test_invalid_input_is_error();
 }

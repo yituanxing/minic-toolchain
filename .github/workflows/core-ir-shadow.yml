@@ -5,13 +5,14 @@ on:
     branches:
       - main
     paths:
+      - 'src/compiler/compiler.c'
       - 'src/core/**'
       - 'src/frontend/ast.h'
       - 'src/frontend/function_body.c'
       - 'src/frontend/function_body.h'
       - 'src/frontend/type.c'
       - 'src/frontend/type.h'
-      - 'tests/core/core_ir_shadow_test.c'
+      - 'tests/core/**'
       - 'Makefile'
       - '.github/workflows/core-ir-shadow.yml'
   push:
@@ -37,7 +38,7 @@ jobs:
         shell: bash
         run: bash tools/maintenance/check-production-source-inventory.sh
 
-      - name: Build Core IR shadow contract
+      - name: Build Core IR unit contract
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -60,5 +61,15 @@ jobs:
             tests/core/core_ir_shadow_test.c \
             -o build/core-ir-shadow/core-ir-shadow-test
 
-      - name: Run Core IR shadow contract
+      - name: Run Core IR unit contract
         run: build/core-ir-shadow/core-ir-shadow-test
+
+      - name: Build committed compiler for pipeline shadow
+        run: make MODE=release CFLAGS=-Werror
+
+      - name: Run Core IR pipeline shadow contract
+        shell: bash
+        run: |
+          MINIC="$PWD/build/release/bin/minic" \
+          BUILD_DIR="$PWD/build/core-ir-shadow" \
+          bash tests/core/run-core-ir-shadow.sh
