@@ -22,6 +22,27 @@ static void memory_output_store_like(int value, int *target) {
     __asm__ __volatile__("sw %z1, %0" : "=m"(*target) : "rJ"(value) : "memory");
 }
 
+typedef struct RegisterOutputs {
+    unsigned long first;
+    unsigned long second;
+    unsigned long third;
+    unsigned long fourth;
+    unsigned long fifth;
+} RegisterOutputs;
+
+static void register_member_outputs_like(RegisterOutputs *target) {
+    __asm__ __volatile__("li %0, 1\n\t"
+                         "li %1, 2\n\t"
+                         "li %2, 3\n\t"
+                         "li %3, 4\n\t"
+                         "li %4, 5"
+                         : "=r"(target->first),
+                           "=r"(target->second),
+                           "=r"(target->third),
+                           "=r"(target->fourth),
+                           "=r"(target->fifth));
+}
+
 static int linux_target_constraint_shape(int value) {
     __asm__ __volatile__("addi t3, zero, %1\n\t"
                          "add %0, %0, t3"
