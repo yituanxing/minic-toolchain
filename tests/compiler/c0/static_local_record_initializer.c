@@ -43,3 +43,12 @@ int read_static_compound_record(void) {
     };
     return once_key.key.enabled.counter + (int)once_key.key.type;
 }
+
+
+struct MiniEmptyRecord {
+};
+
+int read_static_empty_record(void) {
+    static struct MiniEmptyRecord empty = {};
+    return (int)sizeof(empty);
+}

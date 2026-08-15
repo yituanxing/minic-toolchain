@@ -675,7 +675,7 @@ append_static_constant_zero(MinicParser *parser, MinicGlobalObjectId object_id, 
         size_t field_limit;
 
         record = minic_c0_program_record(parser->program, type.record_id);
-        if (record == NULL || !record->is_complete || record->field_count == 0U) {
+        if (record == NULL || !record->is_complete) {
             return false;
         }
         field_limit = record->is_union ? 1U : record->field_count;
@@ -828,7 +828,7 @@ static bool parse_static_record_constant(MinicParser *parser,
     size_t field_index;
     size_t field_limit;
 
-    if (record == NULL || !record->is_complete || record->field_count == 0U ||
+    if (record == NULL || !record->is_complete ||
         !minic_parser_expect(parser, MINIC_TOKEN_LBRACE, "expected '{' in record initializer")) {
         return false;
     }
