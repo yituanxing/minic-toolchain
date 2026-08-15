@@ -22,7 +22,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            clang-format-18 gcc-riscv64-linux-gnu qemu-user
+            clang-format-18 gcc-riscv64-linux-gnu libc6-dev-riscv64-cross qemu-user
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
           make -j4 MODE=release BUILD_DIR=build/materialize-builtin-prefetch
