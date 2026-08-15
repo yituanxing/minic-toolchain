@@ -20,7 +20,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Extend canonical array-bound cast recognition
+      - name: Reuse canonical type-name lookahead for array-bound casts
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -29,14 +29,13 @@ jobs:
 
           path = Path('src/frontend/parser_core.c')
           text = path.read_text()
-          old = '''    if (!minic_parser_advance(&probe)) {\n        return false;\n    }\n    switch (probe.current.kind) {\n'''
-          new = '''    if (!minic_parser_advance(&probe)) {\n        return false;\n    }\n    if (minic_parser_token_is_gnu_typeof(parser, probe.current)) {\n        return true;\n    }\n    switch (probe.current.kind) {\n'''
           begin = text.index('static bool array_bound_parenthesis_starts_integer_cast(MinicParser *parser) {')
           end = text.index('\nstatic bool array_bound_apply_integer_cast', begin)
-          section = text[begin:end]
-          if section.count(old) != 1:
-              raise SystemExit('array-bound cast lookahead seam not found exactly once')
-          text = text[:begin] + section.replace(old, new, 1) + text[end:]
+          old = text[begin:end]
+          new = '''static bool array_bound_parenthesis_starts_integer_cast(MinicParser *parser) {\n    MinicParser probe;\n\n    if (parser == NULL || parser->current.kind != MINIC_TOKEN_LPAREN) {\n        return false;\n    }\n    probe = *parser;\n    if (!minic_parser_advance(&probe)) {\n        return false;\n    }\n    return minic_parser_token_starts_type_name(parser, probe.current);\n}\n'''
+          if 'switch (probe.current.kind)' not in old:
+              raise SystemExit('legacy array-bound cast lookahead shape not found')
+          text = text[:begin] + new + text[end:]
           path.write_text(text)
 
           runner = Path('tests/compiler/c0/run-foundation-focused.sh')
@@ -79,7 +78,7 @@ jobs:
           "$minic" -S "$work/input.i" -o "$work/output.s"
           test -s "$work/output.s"
           grep -F 'typeof_array_bound_cast_size:' "$work/output.s" >/dev/null
-          printf '%s\n' 'PASS compiler/c0/gnu_typeof_array_bound_cast typeof-cast=1 array-bound=1'
+          printf '%s\n' 'PASS compiler/c0/gnu_typeof_array_bound_cast shared-type-lookahead=1 typeof-cast=1'
           EOF
           chmod +x tests/compiler/c0/run-gnu-typeof-array-bound-cast.sh
 
@@ -114,8 +113,8 @@ jobs:
           git config user.name 'LiYang Dong'
           git config user.email '119646676+yituanxing@users.noreply.github.com'
           git add -A
-          git commit -m 'frontend: recognize GNU typeof casts in array bounds' \
-            -m 'Teach the legacy integer-array-bound cast lookahead to recognize the existing GNU typeof type-specifier path. The actual type parsing and integer cast semantics remain owned by canonical type-name parsing and the existing array-bound evaluator; this only removes the stale lookahead gap.' \
-            -m '中文说明：让 legacy integer array-bound 的 cast lookahead 识别已有 GNU typeof type-specifier 路径。真正的 type-name 解析与整数 cast 语义仍由 canonical type-name 和既有 array-bound evaluator 负责，本修改只消除旧 lookahead 的能力缺口。' \
+          git commit -m 'frontend: share type-name lookahead for array-bound casts' \
+            -m 'Replace the stale integer-array-bound cast token switch with the canonical token_starts_type_name semantic query. GNU typeof, typedef shadowing, GNU int128 spellings, and ordinary type specifiers now have one type-name owner; actual integer-cast legality remains in the existing array-bound evaluator.' \
+            -m '中文说明：用 canonical token_starts_type_name 语义查询替换旧的 integer array-bound cast token switch。GNU typeof、typedef shadowing、GNU int128 和普通类型说明符统一由一个 type-name owner 判断；整数 cast 的合法性仍由既有 array-bound evaluator 负责。' \
             -m 'Validation / 验证：focused sanitizer PASS; Foundation focused PASS; clang-format-18 canonical.'
           git push origin HEAD:compiler/gnu-typeof-array-bound-cast
