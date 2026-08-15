@@ -21,3 +21,11 @@ int comma_conditions(int *target) {
     }
     return 0;
 }
+
+int comma_expression_statement(void)
+{
+    int value = 0;
+
+    (void)(value += 1), (void)(value += 2), (void)(value += 4);
+    return value;
+}
