@@ -17,11 +17,13 @@ check_li local_array_address_pointee_size 24
 check_li local_array_typeof_size 24
 sed -n '/linux_flexible_array_shape:/,/^\.size/p' "$assembly" | grep -F '  addi a0, a0, 8' >/dev/null
 sed -n '/fixed_member_index:/,/^\.size/p' "$assembly" | grep -F '  slli a0, a0, 3' >/dev/null
-for invalid in invalid_record_array_assignment invalid_record_array_update invalid_flexible_array_sizeof; do
+grep -F 'typedef_array_member_address_call:' "$assembly" >/dev/null
+for invalid in invalid_record_array_assignment invalid_record_array_update invalid_flexible_array_sizeof invalid_typedef_array_member_address_call; do
   "$host_cc" -E -P -std=gnu11 -x c "$root/tests/compiler/c0/$invalid.c" -o "$work/$invalid.i"
   if "$minic" -S "$work/$invalid.i" -o "$work/$invalid.s" >"$work/$invalid.out" 2>"$work/$invalid.err"; then echo "expected $invalid to fail" >&2; exit 1; fi
 done
 grep -F 'assignment expression requires a modifiable object lvalue' "$work/invalid_record_array_assignment.err" >/dev/null
 grep -F 'postfix update requires a modifiable scalar lvalue' "$work/invalid_record_array_update.err" >/dev/null
 grep -F 'sizeof requires a supported complete type' "$work/invalid_flexible_array_sizeof.err" >/dev/null
-printf '%s\n' 'PASS compiler/c0/gnu_array_object_identity record=fixed+flexible local=legacy decay=shared address-of=pointer-to-array sizeof=no-decay typeof=no-decay subscript=shared mutation=reject'
+grep -F 'call argument type does not match declaration' "$work/invalid_typedef_array_member_address_call.err" >/dev/null
+printf '%s\n' 'PASS compiler/c0/gnu_array_object_identity record=fixed+flexible+typedef-array local=legacy decay=shared address-of=pointer-to-array structural-array-compatibility=1 bounds=mismatch-reject sizeof=no-decay typeof=no-decay subscript=shared mutation=reject'
