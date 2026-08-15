@@ -1467,6 +1467,24 @@ bool minic_c0_expression_is_null_pointer_constant_v0(const MinicC0Program *progr
            minic_type_is_integer(operand->type) && operand->value.integer_value == 0;
 }
 
+static bool minic_c0_gnu_void_function_pointer_assignment_compatible(MinicType target,
+                                                                     MinicType source) {
+    MinicType target_unqualified;
+    MinicType source_unqualified;
+    MinicType target_pointee;
+    MinicType source_pointee;
+
+    if (!minic_type_unqualified(target, &target_unqualified) ||
+        !minic_type_unqualified(source, &source_unqualified) ||
+        target_unqualified.pointer_depth != 1U || source_unqualified.pointer_depth != 1U ||
+        !minic_type_pointee(target_unqualified, &target_pointee) ||
+        !minic_type_pointee(source_unqualified, &source_pointee)) {
+        return false;
+    }
+    return (minic_type_is_void(target_pointee) && minic_type_is_function(source_pointee)) ||
+           (minic_type_is_function(target_pointee) && minic_type_is_void(source_pointee));
+}
+
 bool minic_c0_assignment_compatible(const MinicC0Program *program,
                                     MinicType target_type,
                                     MinicExpressionId source_expression_id) {
@@ -1483,7 +1501,8 @@ bool minic_c0_assignment_compatible(const MinicC0Program *program,
         return true;
     }
     if (minic_type_is_pointer(target_type) && minic_type_is_pointer(source->type) &&
-        minic_c0_types_compatible(program, target_type, source->type)) {
+        (minic_c0_types_compatible(program, target_type, source->type) ||
+         minic_c0_gnu_void_function_pointer_assignment_compatible(target_type, source->type))) {
         return true;
     }
     return minic_type_is_pointer(target_type) &&
