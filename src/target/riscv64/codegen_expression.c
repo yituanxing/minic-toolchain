@@ -948,8 +948,15 @@ bool minic_riscv64_emit_record_copy_value(FILE *file,
     record = minic_c0_program_record(program, target->type.record_id);
     if (record == NULL || !record->is_complete ||
         !minic_riscv64_type_layout(program, target->type, &storage_size, &temporary_size) ||
-        storage_size == 0U || storage_size > SIZE_MAX - 15U) {
+        storage_size > SIZE_MAX - 15U) {
         return false;
+    }
+    if (storage_size == 0U) {
+        return minic_c0_record_value_is_address_backed(program, source_id) &&
+               minic_riscv64_emit_address_backed_record_value(
+                   file, program, function, function_layout, source_id) &&
+               minic_riscv64_emit_lvalue_address(
+                   file, program, function, function_layout, target_id);
     }
     temporary_size = (storage_size + 15U) & ~(size_t)15U;
 
