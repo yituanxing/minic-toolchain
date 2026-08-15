@@ -1,0 +1,121 @@
+name: Publish GNU Typeof Array Bound Cast
+
+on:
+  push:
+    branches: [compiler/gnu-typeof-array-bound-cast]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-gnu-typeof-array-bound-cast
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extend canonical array-bound cast recognition
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/frontend/parser_core.c')
+          text = path.read_text()
+          old = '''    if (!minic_parser_advance(&probe)) {\n        return false;\n    }\n    switch (probe.current.kind) {\n'''
+          new = '''    if (!minic_parser_advance(&probe)) {\n        return false;\n    }\n    if (minic_parser_token_is_gnu_typeof(parser, probe.current)) {\n        return true;\n    }\n    switch (probe.current.kind) {\n'''
+          begin = text.index('static bool array_bound_parenthesis_starts_integer_cast(MinicParser *parser) {')
+          end = text.index('\nstatic bool array_bound_apply_integer_cast', begin)
+          section = text[begin:end]
+          if section.count(old) != 1:
+              raise SystemExit('array-bound cast lookahead seam not found exactly once')
+          text = text[:begin] + section.replace(old, new, 1) + text[end:]
+          path.write_text(text)
+
+          runner = Path('tests/compiler/c0/run-foundation-focused.sh')
+          data = runner.read_text()
+          anchor = '    run-gnu-typeof-array-type-name.sh \\\n'
+          if anchor not in data:
+              anchor = '    run-gnu-statement-expression.sh \\\n'
+          addition = anchor + '    run-gnu-typeof-array-bound-cast.sh \\\n'
+          if 'run-gnu-typeof-array-bound-cast.sh' not in data:
+              if anchor not in data:
+                  raise SystemExit('foundation runner insertion seam not found')
+              runner.write_text(data.replace(anchor, addition, 1))
+          PY
+
+          cat > tests/compiler/c0/gnu_typeof_array_bound_cast.c <<'EOF'
+          typedef unsigned int note_like_t[
+              (((sizeof(unsigned long) + ((__typeof__((sizeof(unsigned long))))((4)) - 1)) &
+                ~((__typeof__((sizeof(unsigned long))))((4)) - 1)) * 2) /
+               4)];
+
+          int typeof_array_bound_cast_size(void)
+          {
+              return (int)sizeof(note_like_t);
+          }
+          EOF
+
+          cat > tests/compiler/c0/run-gnu-typeof-array-bound-cast.sh <<'EOF'
+          #!/bin/sh
+          set -eu
+
+          root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+          minic=${MINIC:-"$root/build/debug/bin/minic"}
+          host_cc=${HOST_CC:-${CC:-cc}}
+          work=${BUILD_DIR:-"$root/build/debug"}/tests/compiler-c0-gnu-typeof-array-bound-cast
+
+          rm -rf "$work"
+          mkdir -p "$work"
+          "$host_cc" -E -P -std=gnu11 -x c \
+            "$root/tests/compiler/c0/gnu_typeof_array_bound_cast.c" -o "$work/input.i"
+          "$minic" -S "$work/input.i" -o "$work/output.s"
+          test -s "$work/output.s"
+          grep -F 'typeof_array_bound_cast_size:' "$work/output.s" >/dev/null
+          printf '%s\n' 'PASS compiler/c0/gnu_typeof_array_bound_cast typeof-cast=1 array-bound=1'
+          EOF
+          chmod +x tests/compiler/c0/run-gnu-typeof-array-bound-cast.sh
+
+          sudo apt-get update >/dev/null
+          sudo apt-get install -y --no-install-recommends clang-format-18 >/dev/null
+          clang-format-18 -i src/frontend/parser_core.c tests/compiler/c0/gnu_typeof_array_bound_cast.c
+          rm .github/workflows/publish-gnu-typeof-array-bound-cast.yml
+          git diff --check
+
+      - name: Sanitizer focused regression
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=sanitize BUILD_DIR=build/typeof-bound-sanitize
+          MINIC="$GITHUB_WORKSPACE/build/typeof-bound-sanitize/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/typeof-bound-sanitize" \
+            sh tests/compiler/c0/run-gnu-typeof-array-bound-cast.sh
+
+      - name: Release Foundation regression
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release BUILD_DIR=build/typeof-bound-release
+          MINIC="$GITHUB_WORKSPACE/build/typeof-bound-release/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/typeof-bound-release" \
+            sh tests/compiler/c0/run-foundation-focused.sh
+
+      - name: Commit product-only patch
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'LiYang Dong'
+          git config user.email '119646676+yituanxing@users.noreply.github.com'
+          git add -A
+          git commit -m 'frontend: recognize GNU typeof casts in array bounds' \
+            -m 'Teach the legacy integer-array-bound cast lookahead to recognize the existing GNU typeof type-specifier path. The actual type parsing and integer cast semantics remain owned by canonical type-name parsing and the existing array-bound evaluator; this only removes the stale lookahead gap.' \
+            -m '中文说明：让 legacy integer array-bound 的 cast lookahead 识别已有 GNU typeof type-specifier 路径。真正的 type-name 解析与整数 cast 语义仍由 canonical type-name 和既有 array-bound evaluator 负责，本修改只消除旧 lookahead 的能力缺口。' \
+            -m 'Validation / 验证：focused sanitizer PASS; Foundation focused PASS; clang-format-18 canonical.'
+          git push origin HEAD:compiler/gnu-typeof-array-bound-cast
