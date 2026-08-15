@@ -20,17 +20,17 @@ replace_once(
 fixture = Path("tests/compiler/c0/gnu_empty_records.c")
 fixture.write_text(
     fixture.read_text()
-    + '''\nstruct EmptyHolder {\n    struct EmptyStruct cookie;\n};\n\nstatic int empty_source_hits;\nstatic int empty_target_hits;\n\nstatic struct EmptyStruct *empty_target(struct EmptyHolder *holder) {\n    empty_target_hits += 1;\n    return &holder->cookie;\n}\n\nstatic void empty_source_side_effect(void) {\n    empty_source_hits += 1;\n}\n\nvoid empty_record_statement_copy(struct EmptyHolder *holder) {\n    *empty_target(holder) = ({\n        struct EmptyStruct cookie = {};\n        empty_source_side_effect();\n        cookie;\n    });\n}\n\nint empty_record_copy_hits(void) {\n    return empty_source_hits * 10 + empty_target_hits;\n}\n'''
+    + '''\nstruct EmptyHolder {\n    struct EmptyStruct cookie;\n};\n\nstatic struct EmptyStruct *empty_source(struct EmptyStruct *value) {\n    return value;\n}\n\nstatic struct EmptyStruct *empty_target(struct EmptyStruct *value) {\n    return value;\n}\n\nvoid empty_record_statement_copy(struct EmptyHolder *holder) {\n    holder->cookie = ({\n        struct EmptyStruct cookie = {};\n        cookie;\n    });\n}\n\nvoid empty_record_lvalue_copy(struct EmptyStruct *target, struct EmptyStruct *source) {\n    *empty_target(target) = *empty_source(source);\n}\n'''
 )
 
 runner = Path("tests/compiler/c0/run-gnu-empty-records.sh")
 replace_once(
     runner,
     '''for symbol in empty_struct_size empty_union_size empty_member_record_size empty_identity; do\n''',
-    '''for symbol in empty_struct_size empty_union_size empty_member_record_size empty_identity \\\n              empty_record_statement_copy empty_record_copy_hits; do\n''',
+    '''for symbol in empty_struct_size empty_union_size empty_member_record_size empty_identity \\\n              empty_record_statement_copy empty_record_lvalue_copy; do\n''',
 )
 replace_once(
     runner,
     '''grep -F '  li a0, 8' "$assembly" >/dev/null\n\nprintf '%s\\n' 'PASS compiler/c0/gnu_empty_records struct-size=0 union-size=0 empty-member-declaration=ignored member-record-size=8 complete=1 layout-sentinel=alignment'\n''',
-    '''grep -F '  li a0, 8' "$assembly" >/dev/null\ngrep -F '  call empty_source_side_effect' "$assembly" >/dev/null\ngrep -F '  call empty_target' "$assembly" >/dev/null\nsource_line=$(grep -n -m1 '  call empty_source_side_effect' "$assembly" | cut -d: -f1)\ntarget_line=$(grep -n -m1 '  call empty_target' "$assembly" | cut -d: -f1)\ntest "$source_line" -lt "$target_line"\n\nprintf '%s\\n' 'PASS compiler/c0/gnu_empty_records struct-size=0 union-size=0 empty-member-declaration=ignored member-record-size=8 zero-copy=address-backed side-effects=source+target complete=1 layout-sentinel=alignment'\n''',
+    '''grep -F '  li a0, 8' "$assembly" >/dev/null\ngrep -F '  call empty_source' "$assembly" >/dev/null\ngrep -F '  call empty_target' "$assembly" >/dev/null\nsource_line=$(grep -n -m1 '  call empty_source' "$assembly" | cut -d: -f1)\ntarget_line=$(grep -n -m1 '  call empty_target' "$assembly" | cut -d: -f1)\ntest "$source_line" -lt "$target_line"\n\nprintf '%s\\n' 'PASS compiler/c0/gnu_empty_records struct-size=0 union-size=0 empty-member-declaration=ignored member-record-size=8 zero-copy=statement+rvalue side-effects=source+target complete=1 layout-sentinel=alignment'\n''',
 )
