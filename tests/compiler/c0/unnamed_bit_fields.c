@@ -42,6 +42,18 @@ struct named_zero_barrier {
     char tail;
 };
 
+static struct bool_bits static_bool_bits = {
+    .second = 1,
+    .first = 1,
+    .tail = 5,
+};
+
+static struct int_bits static_int_bits = {
+    .high = 0xabc,
+    .low = 0x155,
+    .tail = 7,
+};
+
 unsigned long full_unit_tail_offset(void) {
     return __builtin_offsetof(struct full_unit_pad, tail);
 }
