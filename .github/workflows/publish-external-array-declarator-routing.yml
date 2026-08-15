@@ -21,6 +21,16 @@ jobs:
         run: |
           sed -i 's/run-external-tentative-definitions\.sh/run-gnu-visible-extern-arrays.sh/' tools/dev/publish_external_array_declarator_routing.py
           python3 tools/dev/publish_external_array_declarator_routing.py
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('tests/compiler/c0/run-extern-fixed-integer-arrays.sh')
+          text = path.read_text()
+          old = "grep -F '  .zero 2' \"$work/extern_fixed_integer_array.s\" >/dev/null\n"
+          new = "test \"$(grep -c -F '  .byte 0' \"$work/extern_fixed_integer_array.s\")\" -eq 2\n"
+          if text.count(old) != 1:
+              raise SystemExit('external fixed-array zero-fill contract seam not found')
+          path.write_text(text.replace(old, new, 1))
+          PY
 
       - name: Canonical format
         run: |
@@ -37,13 +47,9 @@ jobs:
           make -j4 MODE=sanitize BUILD_DIR=build/external-array-routing-sanitize
           MINIC="$GITHUB_WORKSPACE/build/external-array-routing-sanitize/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/external-array-routing-sanitize" sh tests/compiler/c0/run-external-array-declarator-routing.sh
 
-      - name: Trace existing fixed external array contract
-        run: |
-          make -j4 MODE=release BUILD_DIR=build/external-array-routing-release
-          MINIC="$GITHUB_WORKSPACE/build/external-array-routing-release/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/external-array-routing-release" sh -x tests/compiler/c0/run-extern-fixed-integer-arrays.sh
-
       - name: Foundation regression
         run: |
+          make -j4 MODE=release BUILD_DIR=build/external-array-routing-release
           MINIC="$GITHUB_WORKSPACE/build/external-array-routing-release/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/external-array-routing-release" sh tests/compiler/c0/run-foundation-focused.sh
 
       - name: Publish product-only patch
@@ -51,5 +57,5 @@ jobs:
           git config user.name 'LiYang Dong'
           git config user.email '119646676+yituanxing@users.noreply.github.com'
           git add -A
-          git commit -m 'frontend: route complete external arrays through generic objects' -m 'Materialize complete array declarator suffixes before classifying file-scope external-linkage objects, consume post-declarator GNU object attributes, and route complete arrays through the generic tentative/definition owners. Generic external definitions reuse the shared static-storage initializer. Incomplete top-level array definitions remain on the bounded legacy inference path until initializer semantics owns inferred aggregate shape.' -m '中文说明：文件作用域 external-linkage 对象先完整物化 array declarator suffix，再解析 declarator 后 GNU object attributes，并将完整数组统一路由到 generic tentative/definition owner；完整数组定义复用 shared static-storage initializer。需要从 initializer 推断 bound 的 incomplete top-level array definition 暂时保留在受限旧路径。'
+          git commit -m 'frontend: route complete external arrays through generic objects' -m 'Materialize complete array declarator suffixes before classifying file-scope external-linkage objects, consume post-declarator GNU object attributes, and route complete arrays through the generic tentative/definition owners. Generic external definitions reuse the shared static-storage initializer, whose explicit semantic zero elements replace the old specialized sparse-tail assembly contract. Incomplete top-level array definitions remain on the bounded legacy inference path until initializer semantics owns inferred aggregate shape.' -m '中文说明：文件作用域 external-linkage 对象先完整物化 array declarator suffix，再解析 declarator 后 GNU object attributes，并将完整数组统一路由到 generic tentative/definition owner；完整数组定义复用 shared static-storage initializer，其显式 semantic zero element 取代旧专用路径依赖的 sparse-tail 汇编拼写。需要从 initializer 推断 bound 的 incomplete top-level array definition 暂时保留在受限旧路径。'
           git push origin HEAD:frontend/external-array-declarator-routing
