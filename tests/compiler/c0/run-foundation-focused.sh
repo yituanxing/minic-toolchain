@@ -79,6 +79,7 @@ for test_script in \
     run-block-scope-extern-function-attributes.sh \
     run-gnu-void-pointer-arithmetic.sh \
     run-gnu-statement-expression.sh \
+    run-gnu-void-function-pointer-assignment.sh \
     run-gnu-no-profile-function-attribute.sh \
     run-gnu-typeof-array-type-name.sh \
     run-gnu-typeof-array-bound-cast.sh \
