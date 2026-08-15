@@ -142,7 +142,6 @@ static bool validate_output(const MinicC0Program *program, const MinicInlineAsmO
     }
     if (constraint_is(operand, "=r") || constraint_is(operand, "=&r")) {
         return operand->access == MINIC_INLINE_ASM_OPERAND_WRITE_ONLY &&
-               expression->kind == MINIC_EXPRESSION_LOCAL &&
                (minic_type_is_integer(expression->type) || minic_type_is_pointer(expression->type));
     }
     return false;
@@ -732,7 +731,8 @@ bool minic_riscv64_emit_inline_asm(FILE *file,
         const MinicInlineAsmOperand *operand;
 
         operand = &inline_asm->outputs[index];
-        if (constraint_is(operand, "+A") || constraint_is(operand, "=m")) {
+        if (constraint_is(operand, "+A") || constraint_is(operand, "=m") ||
+            constraint_is(operand, "=r") || constraint_is(operand, "=&r")) {
             if (!minic_riscv64_emit_lvalue_address(
                     file, program, function, function_layout, operand->expression) ||
                 !minic_riscv64_emit_sp_store64(file, "a0", index * 8U)) {
@@ -800,13 +800,22 @@ bool minic_riscv64_emit_inline_asm(FILE *file,
             continue;
         }
         expression = minic_c0_program_expression(program, operand->expression);
-        if (expression == NULL || expression->kind != MINIC_EXPRESSION_LOCAL ||
-            !minic_riscv64_emit_object_store_register(file,
-                                                      program,
-                                                      function,
-                                                      function_layout,
-                                                      expression->value.local_id,
-                                                      operand_registers[index])) {
+        if (expression == NULL) {
+            return false;
+        }
+        if (constraint_is(operand, "+r")) {
+            if (expression->kind != MINIC_EXPRESSION_LOCAL ||
+                !minic_riscv64_emit_object_store_register(file,
+                                                          program,
+                                                          function,
+                                                          function_layout,
+                                                          expression->value.local_id,
+                                                          operand_registers[index])) {
+                return false;
+            }
+        } else if (!minic_riscv64_emit_sp_load64(file, "a0", index * 8U) ||
+                   !minic_riscv64_emit_scalar_store(
+                       file, expression->type, operand_registers[index], "a0")) {
             return false;
         }
     }
