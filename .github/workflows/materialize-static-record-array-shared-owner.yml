@@ -21,7 +21,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           python3 tools/dev/materialize-static-record-array-shared-owner.py
-          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh fix
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
           git diff --check
 
