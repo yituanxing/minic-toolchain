@@ -1,0 +1,124 @@
+name: Publish GNU Typeof Array Type Name
+
+on:
+  push:
+    branches: [compiler/gnu-typeof-array-type-name]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-gnu-typeof-array-type-name
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply canonical type-name suffix fix
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/frontend/parser_type.c')
+          text = path.read_text()
+          begin = text.index('bool minic_parser_parse_type_name_preserving_incomplete(MinicParser *parser, MinicType *type) {')
+          end = text.index('\nbool minic_parser_parse_type_name(MinicParser *parser, MinicType *type) {', begin)
+          section = text[begin:end]
+          old = '''    return minic_parser_parse_pointer_declarator(parser, base_type, type);\n}'''
+          new = '''    {\n        MinicType declarator_type;\n        bool is_array;\n\n        if (!minic_parser_parse_pointer_declarator(parser, base_type, &declarator_type) ||\n            !minic_parser_parse_array_declarator_suffix(\n                parser, declarator_type, true, type, &is_array)) {\n            return false;\n        }\n        return true;\n    }\n}'''
+          if section.count(old) != 1:
+              raise SystemExit('type-name return seam not found exactly once')
+          section = section.replace(old, new, 1)
+          text = text[:begin] + section + text[end:]
+          path.write_text(text)
+
+          runner = Path('tests/compiler/c0/run-foundation-focused.sh')
+          data = runner.read_text()
+          anchor = '    run-gnu-statement-expression.sh \\\n'
+          addition = anchor + '    run-gnu-typeof-array-type-name.sh \\\n'
+          if 'run-gnu-typeof-array-type-name.sh' not in data:
+              if anchor not in data:
+                  raise SystemExit('foundation insertion point not found')
+              runner.write_text(data.replace(anchor, addition, 1))
+          PY
+
+          cat > tests/compiler/c0/gnu_typeof_array_type_name.c <<'EOF'
+          extern __typeof__(unsigned long [0x00001000 / sizeof(long)]) overflow_stack;
+          extern __typeof__(unsigned long *[4]) pointer_table;
+
+          unsigned long typeof_array_size(void)
+          {
+              return sizeof(overflow_stack);
+          }
+
+          unsigned long typeof_pointer_array_size(void)
+          {
+              return sizeof(pointer_table);
+          }
+          EOF
+
+          cat > tests/compiler/c0/run-gnu-typeof-array-type-name.sh <<'EOF'
+          #!/bin/sh
+          set -eu
+
+          root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+          minic=${MINIC:-"$root/build/debug/bin/minic"}
+          host_cc=${HOST_CC:-${CC:-cc}}
+          work=${BUILD_DIR:-"$root/build/debug"}/tests/compiler-c0-gnu-typeof-array-type-name
+
+          rm -rf "$work"
+          mkdir -p "$work"
+          "$host_cc" -E -P -std=gnu11 -x c \
+            "$root/tests/compiler/c0/gnu_typeof_array_type_name.c" -o "$work/input.i"
+          "$minic" -S "$work/input.i" -o "$work/output.s"
+          test -s "$work/output.s"
+          grep -F 'typeof_array_size:' "$work/output.s" >/dev/null
+          grep -F 'typeof_pointer_array_size:' "$work/output.s" >/dev/null
+          printf '%s\n' 'PASS compiler/c0/gnu_typeof_array_type_name array=constant-bound pointer-array=1 sizeof=1'
+          EOF
+          chmod +x tests/compiler/c0/run-gnu-typeof-array-type-name.sh
+
+          sudo apt-get update >/dev/null
+          sudo apt-get install -y --no-install-recommends clang-format-18 >/dev/null
+          clang-format-18 -i src/frontend/parser_type.c tests/compiler/c0/gnu_typeof_array_type_name.c
+          rm .github/workflows/publish-gnu-typeof-array-type-name.yml
+          git diff --check
+
+      - name: Sanitizer focused regression
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=sanitize BUILD_DIR=build/typeof-array-sanitize
+          MINIC="$GITHUB_WORKSPACE/build/typeof-array-sanitize/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/typeof-array-sanitize" \
+            sh tests/compiler/c0/run-gnu-typeof-array-type-name.sh
+
+      - name: Release Foundation regression
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release BUILD_DIR=build/typeof-array-release
+          MINIC="$GITHUB_WORKSPACE/build/typeof-array-release/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/typeof-array-release" \
+            sh tests/compiler/c0/run-foundation-focused.sh
+
+      - name: Commit product-only patch
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'LiYang Dong'
+          git config user.email '119646676+yituanxing@users.noreply.github.com'
+          git add -A
+          git commit -m 'frontend: support array abstract declarators in type names' \
+            -m 'Route canonical type-name parsing through the existing array declarator suffix owner after pointer declarators. This lets GNU typeof(type-name) preserve complete and incomplete array type identity, including array-of-pointer forms, without adding a Linux-specific path or a second type representation.' \
+            -m '中文说明：type-name 在 pointer declarator 之后继续复用现有 array declarator suffix owner，使 GNU typeof(type-name) 能正确保留完整/不完整数组以及指针数组的类型身份；不增加 Linux 特判，也不增加第二套类型表示。' \
+            -m 'Validation / 验证：focused sanitizer PASS; Foundation focused PASS; clang-format-18 canonical.'
+          git push origin HEAD:compiler/gnu-typeof-array-type-name
