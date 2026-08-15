@@ -81,6 +81,7 @@ for test_script in \
     run-gnu-statement-expression.sh \
     run-gnu-no-profile-function-attribute.sh \
     run-gnu-typeof-array-type-name.sh \
+    run-gnu-typeof-array-bound-cast.sh \
     run-function-arena-borrow-lifetime.sh \
     run-gnu-statement-record-value.sh \
     run-gnu-array-range-initializer.sh \

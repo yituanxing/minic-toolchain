@@ -544,8 +544,7 @@ bool minic_parser_parse_integer_constant_expression_value(MinicParser *parser, i
     return value != NULL && parse_array_bound_additive(parser, value);
 }
 
-static bool minic_parser_parse_typed_integer_constant_expression(MinicParser *parser,
-                                                                 int64_t *value) {
+bool minic_parser_parse_typed_integer_constant_expression(MinicParser *parser, int64_t *value) {
     MinicConstValue constant;
     MinicExpressionId expression_id;
 

@@ -144,7 +144,7 @@ static bool parse_array_bound_allow_zero(MinicParser *parser, size_t *element_co
     int64_t value;
 
     if (parser == NULL || element_count == NULL ||
-        !minic_parser_parse_integer_constant_expression(parser, &value)) {
+        !minic_parser_parse_typed_integer_constant_expression(parser, &value)) {
         return false;
     }
     if (value < 0) {
