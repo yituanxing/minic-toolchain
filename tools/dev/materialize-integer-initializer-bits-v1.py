@@ -57,27 +57,28 @@ if text.count(old) != 1:
     raise SystemExit("static scalar integer initializer consumer shape changed")
 text = text.replace(old, new)
 
-# The record-field base-value helper also stores the canonical payload bits.
-start_marker = '''static bool ensure_static_record_base_value(MinicParser *parser,
+old = '''static bool ensure_static_record_base_value(MinicParser *parser,
                                             MinicGlobalObjectId object_id,
                                             size_t field_index,
                                             int value) {
 '''
-end_marker = '''static bool parse_static_record_field_value(MinicParser *parser,
+new = '''static bool ensure_static_record_base_value(MinicParser *parser,
+                                            MinicGlobalObjectId object_id,
+                                            size_t field_index,
+                                            uint64_t bits) {
 '''
-start = text.find(start_marker)
-end = text.find(end_marker, start)
-if start < 0 or end < 0:
-    raise SystemExit("static record base-value helper shape changed")
-chunk = text[start:end]
-chunk_new = chunk.replace("                                            int value) {\n",
-                          "                                            uint64_t bits) {\n")
-chunk_new = chunk_new.replace(
-    "minic_c0_global_object_add_initializer(parser->program, object_id, value)",
-    "minic_c0_global_object_add_initializer_bits(parser->program, object_id, bits)")
-if chunk_new == chunk or " int value" in chunk_new:
-    raise SystemExit("static record base-value helper did not migrate cleanly")
-text = text[:start] + chunk_new + text[end:]
+if text.count(old) != 1:
+    raise SystemExit("static record base-value helper signature changed")
+text = text.replace(old, new)
+old = '''    return object->initializer_count == field_index &&
+           minic_c0_global_object_add_initializer(parser->program, object_id, value);
+'''
+new = '''    return object->initializer_count == field_index &&
+           minic_c0_global_object_add_initializer_bits(parser->program, object_id, bits);
+'''
+if text.count(old) != 1:
+    raise SystemExit("static record base-value payload write changed")
+text = text.replace(old, new)
 
 old = '''    if (minic_type_is_integer(field->type)) {
         int value;
@@ -191,7 +192,6 @@ if text.count(old) != 1:
     raise SystemExit("external scalar legacy payload contract changed")
 runner.write_text(text.replace(old, new))
 
-# The old negative fixture encoded the retired int-bounded payload contract.
 legacy_negative = root / "tests/compiler/c0/invalid_external_integer_payload_range.c"
 if not legacy_negative.exists():
     raise SystemExit("legacy payload-range negative fixture is missing")
