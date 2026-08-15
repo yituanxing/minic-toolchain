@@ -47,7 +47,7 @@ jobs:
       - name: Apply bounded range-designator patch
         run: |
           python3 tools/dev/agent-gnu-runtime-array-range-designator.py
-          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh fix
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
           git diff --check
 
