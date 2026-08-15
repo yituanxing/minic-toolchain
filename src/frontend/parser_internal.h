@@ -160,6 +160,7 @@ bool minic_parser_current_integer_literal_syntax(const MinicParser *parser,
                                                  bool *has_unsigned_suffix,
                                                  unsigned int *long_count);
 bool minic_parser_parse_integer_constant_expression(MinicParser *parser, int64_t *value);
+bool minic_parser_parse_typed_integer_constant_expression(MinicParser *parser, int64_t *value);
 bool minic_parser_parse_integer_initializer_bits(MinicParser *parser,
                                                  MinicType target_type,
                                                  uint64_t *bits);
