@@ -73,6 +73,8 @@ typedef struct MinicRiscv64FrameLayout {
     size_t varargs_offset;
     size_t varargs_size;
     size_t integer_parameter_count;
+    bool has_indirect_return;
+    size_t indirect_return_offset;
 } MinicRiscv64FrameLayout;
 
 bool minic_riscv64_frame_layout_from_function_layout(
@@ -92,6 +94,12 @@ bool minic_riscv64_emit_address_backed_record_value(
     const MinicFunction *function,
     const MinicRiscv64FunctionLayout *function_layout,
     MinicExpressionId expression_id);
+bool minic_riscv64_emit_record_return_value(FILE *file,
+                                            const MinicC0Program *program,
+                                            const MinicFunction *function,
+                                            const MinicRiscv64FunctionLayout *function_layout,
+                                            MinicExpressionId source_id,
+                                            size_t result_pointer_offset);
 bool minic_riscv64_emit_record_copy_value(FILE *file,
                                           const MinicC0Program *program,
                                           const MinicFunction *function,
