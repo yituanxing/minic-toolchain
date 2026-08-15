@@ -32,4 +32,31 @@ if grep -F '.globl sched_core_sysctls_like' "$work/static_record_array.s" >/dev/
     exit 1
 fi
 grep -F 'read_sysctl_size:' "$work/static_record_array.s" >/dev/null
-printf '%s\n' 'PASS compiler/c0/static_record_array inferred-count=3 fields=2 missing-field-zero=1 size=6 complex-empty=1 complex-size=32 shared-owner=1 internal-rodata=1'
+grep -F '.type named_hooks, @object' "$work/static_record_array.s" >/dev/null
+grep -F '.size named_hooks, 24' "$work/static_record_array.s" >/dev/null
+grep -F '  .byte 115' "$work/static_record_array.s" >/dev/null
+grep -F '  .byte 104' "$work/static_record_array.s" >/dev/null
+grep -F '  .byte 97' "$work/static_record_array.s" >/dev/null
+grep -F '  .byte 114' "$work/static_record_array.s" >/dev/null
+grep -F '  .byte 101' "$work/static_record_array.s" >/dev/null
+grep -F '  .dword read_named' "$work/static_record_array.s" >/dev/null
+grep -F '  .dword write_named' "$work/static_record_array.s" >/dev/null
+grep -F '.type exact_tags, @object' "$work/static_record_array.s" >/dev/null
+grep -F '.size exact_tags, 8' "$work/static_record_array.s" >/dev/null
+
+cat >"$work/too_long.c" <<'EOF'
+struct TooLongName {
+    char name[3];
+};
+static struct TooLongName bad[] = {
+    { .name = "abcd" },
+};
+EOF
+"$host_cc" -E -P -x c "$work/too_long.c" -o "$work/too_long.i"
+if "$minic" -S "$work/too_long.i" -o "$work/too_long.s" 2>"$work/too_long.err"; then
+    echo 'overlong fixed character-array field string initializer was accepted' >&2
+    exit 1
+fi
+grep -F 'string initializer is too long for character array' "$work/too_long.err" >/dev/null
+
+printf '%s\n' 'PASS compiler/c0/static_record_array inferred-count=3 fields=2 missing-field-zero=1 size=6 complex-empty=1 complex-size=32 string-field=1 exact-fit=1 function-relocations=1 shared-owner=1 internal-rodata=1'
