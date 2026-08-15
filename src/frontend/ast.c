@@ -301,6 +301,26 @@ const MinicEnumerator *minic_c0_program_enumerator(const MinicC0Program *program
                : NULL;
 }
 
+static bool
+minic_c0_array_shapes_compatible(const MinicC0Program *program, MinicType left, MinicType right) {
+    const MinicArrayType *left_array;
+    const MinicArrayType *right_array;
+
+    if (program == NULL || left.base_kind != MINIC_TYPE_BASE_ARRAY ||
+        right.base_kind != MINIC_TYPE_BASE_ARRAY || left.pointer_depth != right.pointer_depth ||
+        left.base_qualifiers != right.base_qualifiers ||
+        left.pointer_qualifiers != right.pointer_qualifiers ||
+        left.pointer_volatile_qualifiers != right.pointer_volatile_qualifiers) {
+        return false;
+    }
+    left_array = minic_c0_program_array_type(program, left.array_type_id);
+    right_array = minic_c0_program_array_type(program, right.array_type_id);
+    return left_array != NULL && right_array != NULL &&
+           left_array->element_count == right_array->element_count &&
+           left_array->is_zero_length == right_array->is_zero_length &&
+           minic_c0_types_compatible(program, left_array->element_type, right_array->element_type);
+}
+
 bool minic_c0_types_compatible(const MinicC0Program *program, MinicType left, MinicType right) {
     MinicType left_unqualified;
     MinicType right_unqualified;
@@ -325,7 +345,8 @@ bool minic_c0_types_compatible(const MinicC0Program *program, MinicType left, Mi
         return entity != NULL && entity->is_complete &&
                minic_type_equal(entity->compatible_type, left_unqualified);
     }
-    return minic_type_equal(left_unqualified, right_unqualified);
+    return minic_type_equal(left_unqualified, right_unqualified) ||
+           minic_c0_array_shapes_compatible(program, left_unqualified, right_unqualified);
 }
 
 bool minic_c0_program_add_expression(MinicC0Program *program,
@@ -1459,6 +1480,10 @@ bool minic_c0_assignment_compatible(const MinicC0Program *program,
         return false;
     }
     if (minic_type_assignment_compatible(target_type, source->type)) {
+        return true;
+    }
+    if (minic_type_is_pointer(target_type) && minic_type_is_pointer(source->type) &&
+        minic_c0_types_compatible(program, target_type, source->type)) {
         return true;
     }
     return minic_type_is_pointer(target_type) &&
