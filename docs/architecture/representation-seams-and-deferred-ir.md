@@ -95,7 +95,7 @@ A later storage migration is allowed only after consumers depend on the Function
 
 ## 5. Activated Core IR shadow seam / 已启用的 Core IR 影子边界
 
-Real backend pressure justified activating the previously reserved seam. Direct AST→RV64 lowering accumulated target-neutral execution responsibilities such as evaluation order, temporary materialization, CFG construction, cleanup traversal and aggregate execution rules.
+Real backend pressure justified activating the previously reserved seam. Direct AST→RV64 lowering accumulated target-neutral execution responsibilities such as evaluation order, value conversion, temporary materialization, CFG construction, cleanup traversal and aggregate execution rules.
 
 The ownership direction is:
 
@@ -132,7 +132,7 @@ The boundaries are ownership rules rather than copies of another compiler's repr
 
 Language-specific rules are resolved above the AST/Core seam. Their resulting facts cross the seam only while a real lower consumer still needs them. Target machine placement remains below the Core/ABI and ABI/machine seams.
 
-The checked-in Core IR remains shadow-only with respect to code generation: the default assembly path still uses the existing RV64 backend. The shadow now consumes the real normalized FunctionBody and supports a bounded execution subset including scalar and abstract parameter values plus local object identity, object addresses, typed load/store effects and operation-level volatile semantics.
+The checked-in Core IR remains shadow-only with respect to code generation: the default assembly path still uses the existing RV64 backend. The shadow consumes the real normalized FunctionBody and supports a bounded execution subset including scalar and abstract parameter values, frontend-resolved integer value conversion, local object identity, object addresses, typed load/store effects and operation-level volatile semantics.
 
 Core lowering distinguishes `OK`, valid-but-`UNSUPPORTED`, and actual `ERROR`; optional shadow mode skips unsupported functions, while strict mode turns them into a CI-visible coverage failure. Supported shadow compilation must remain byte-identical to default RV64 output. The temporary environment switch is migration plumbing rather than a public compiler interface. See `core-ir-v0-shadow.md` for the exact current contract.
 
@@ -208,8 +208,11 @@ DataLayout / TargetABI ownership seams
         ↓
 normalized FunctionBody
         ↓
+frontend semantic query
+        └── integer assignment/return value type
+        ↓
 Core IR execution shadow
-        ├── scalar + abstract parameter values
+        ├── scalar + abstract parameter + integer conversion values
         └── local object / address / load-store / volatile
         ↓
 tri-state shadow + verify
@@ -223,8 +226,12 @@ The pipeline shadow consumes the real canonical FunctionBody rather than a sourc
 
 The first memory boundary is explicit: `CoreObject` represents semantic addressable storage, `OBJECT_ADDRESS` produces a typed pointer value, and `LOAD`/`STORE` carry memory effects with operation-level volatile semantics. Arrays, records, register locals, member/subscript addressing and general pointer-derived addresses remain unsupported until a real case requires them.
 
-Parameter ingress is also explicit: `PARAMETER` represents the logical incoming value by source parameter index, and lowering materializes supported parameters into their CoreObject before body execution. Core does not encode ABI registers, stack locations or hidden calling-convention slots; those remain owned by TargetABI and machine lowering.
+Parameter ingress is explicit: `PARAMETER` represents the logical incoming value by source parameter index, and lowering materializes supported parameters into their CoreObject before body execution. Core does not encode ABI registers, stack locations or hidden calling-convention slots; those remain owned by TargetABI and machine lowering.
+
+Integer assignment/return conversion is frontend-owned. `frontend/expression_semantics` answers the effective integer value type using the canonical assignment-compatibility rule; AST→Core lowers that resolved fact to `INTEGER_CONVERSION` only when the value type changes. The same Core instruction consumes normalized explicit integer conversions. Core therefore does not independently re-derive C assignment conversion rules, while the production RV64 path remains unchanged during shadow migration.
+
+Mixed-type integer arithmetic whose usual arithmetic conversions are not yet materialized in Core remains `UNSUPPORTED`, not an internal verifier failure.
 
 Each next widening must be justified by the smallest real lowering case that exceeds current coverage. Unsupported forms remain outside the shadow rather than forcing speculative IR features.
 
-After each structural slice passes focused, Foundation and unchanged real-program gates, reread the affected code and surrounding compiler before choosing the next ownership boundary. This is an evidence-driven migration, not a mechanical checklist.
+After each structural slice passes focused, frontend ownership, Foundation and unchanged real-program gates, reread the affected code and surrounding compiler before choosing the next ownership boundary. This is an evidence-driven migration, not a mechanical checklist.

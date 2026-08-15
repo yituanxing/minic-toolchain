@@ -1,5 +1,23 @@
 #include "frontend/expression_semantics.h"
 
+bool minic_c0_integer_assignment_value_type(const MinicC0Program *program,
+                                            MinicType target_type,
+                                            MinicExpressionId source_expression_id,
+                                            MinicType *result) {
+    const MinicExpression *source;
+
+    if (program == NULL || result == NULL || !minic_type_is_integer(target_type)) {
+        return false;
+    }
+    source = minic_c0_program_expression(program, source_expression_id);
+    if (source == NULL || !minic_type_is_integer(source->type) ||
+        !minic_c0_assignment_compatible(program, target_type, source_expression_id) ||
+        !minic_type_unqualified(target_type, result)) {
+        return false;
+    }
+    return minic_type_is_integer(*result);
+}
+
 static bool conditional_type_only(const MinicTargetInfo *target,
                                   MinicType when_true,
                                   MinicType when_false,
