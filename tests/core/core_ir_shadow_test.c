@@ -104,8 +104,6 @@ static bool build_return_function(MinicC0Program *program,
 static bool build_parameter_function(MinicC0Program *program, MinicFunctionBodyView *view) {
     MinicBlockId body_block;
     MinicExpressionId local_expression;
-    MinicExpressionId one;
-    MinicExpressionId result;
     MinicFunctionId function_id;
     MinicLocal local;
     MinicLocalId local_id;
@@ -119,20 +117,19 @@ static bool build_parameter_function(MinicC0Program *program, MinicFunctionBodyV
     }
     (void)memset(&local, 0, sizeof(local));
     local.name_span = test_span(0U);
-    local.type = minic_type_int();
+    local.type = minic_type_signed_char();
     local.element_count = 1U;
     if (!minic_c0_program_add_local(program, &local, &local_id) ||
-        !add_local_reference(program, local_id, &local_expression) || !add_integer(program, 1, &one) ||
-        !add_binary(program, MINIC_BINARY_ADD, local_expression, one, &result)) {
+        !add_local_reference(program, local_id, &local_expression)) {
         return false;
     }
     (void)memset(&statement, 0, sizeof(statement));
     statement.kind = MINIC_STATEMENT_RETURN;
     statement.span = test_span(program->statement_count);
-    statement.expression = result;
+    statement.expression = local_expression;
     statement.cleanup_context = MINIC_CLEANUP_CONTEXT_ROOT;
     statement.cleanup_stop_context = MINIC_CLEANUP_CONTEXT_ROOT;
-    parameter_type = minic_type_int();
+    parameter_type = minic_type_signed_char();
     return minic_c0_program_add_statement(program, &statement, &statement_id) &&
            minic_c0_block_add_statement(program, body_block, statement_id) &&
            minic_c0_program_add_function(program, "f", 1U, 0U, 1U, body_block, &function_id) &&
@@ -195,7 +192,7 @@ static int test_scalar_shadow_lowering(void) {
     return status;
 }
 
-static int test_parameter_ingress_lowering(void) {
+static int test_parameter_ingress_and_conversion_lowering(void) {
     static const char expected[] = "core function @f\n"
                                    "object %o0\n"
                                    "bb0:\n"
@@ -204,9 +201,8 @@ static int test_parameter_ingress_lowering(void) {
                                    "  store %0, %1\n"
                                    "  %2 = object.addr %o0\n"
                                    "  %3 = load %2\n"
-                                   "  %4 = const.int 1\n"
-                                   "  %5 = add.int %3, %4\n"
-                                   "  return %5\n";
+                                   "  %4 = convert.int %3\n"
+                                   "  return %4\n";
     MinicC0Program program;
     MinicFunctionBodyView view;
     MinicCoreFunction core;
@@ -219,7 +215,7 @@ static int test_parameter_ingress_lowering(void) {
     minic_core_function_initialize(&core);
     if (minic_core_lower_function(&view, &core) != MINIC_CORE_LOWER_OK ||
         !minic_core_function_verify(&core) || core.object_count != 1U ||
-        core.instruction_count != 7U || core.value_count != 6U) {
+        core.instruction_count != 6U || core.value_count != 5U) {
         minic_core_function_destroy(&core);
         minic_c0_program_destroy(&program);
         return 7;
@@ -269,7 +265,7 @@ int main(void) {
     if (status != 0) {
         return status;
     }
-    status = test_parameter_ingress_lowering();
+    status = test_parameter_ingress_and_conversion_lowering();
     if (status != 0) {
         return status;
     }

@@ -288,6 +288,12 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
         right = &function->values[instruction->value.binary.right];
         return minic_type_equal(left->type, instruction->type) &&
                minic_type_equal(right->type, instruction->type);
+    case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION:
+        return instruction_result_is_valid(function, instruction) &&
+               minic_type_is_integer(instruction->type) &&
+               instruction->value.operand < function->value_count &&
+               available_values[instruction->value.operand] &&
+               minic_type_is_integer(function->values[instruction->value.operand].type);
     case MINIC_CORE_INSTRUCTION_PARAMETER:
         return instruction_result_is_valid(function, instruction) &&
                instruction->value.parameter_index < function->parameter_count &&
@@ -467,6 +473,14 @@ bool minic_core_function_dump(FILE *output, const MinicCoreFunction *function) {
                         instruction->result,
                         instruction->value.binary.left,
                         instruction->value.binary.right) < 0) {
+                return false;
+            }
+            break;
+        case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION:
+            if (fprintf(output,
+                        "  %%%" PRIu32 " = convert.int %%%" PRIu32 "\n",
+                        instruction->result,
+                        instruction->value.operand) < 0) {
                 return false;
             }
             break;

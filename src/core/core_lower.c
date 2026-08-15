@@ -1,5 +1,7 @@
 #include "core/core_lower.h"
 
+#include "frontend/expression_semantics.h"
+
 #include <stdlib.h>
 #include <string.h>
 
@@ -10,6 +12,10 @@ typedef struct MinicCoreLowerContext {
     MinicCoreBlockId block_id;
     MinicCoreObjectId *local_objects;
 } MinicCoreLowerContext;
+
+static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
+                                             MinicExpressionId expression_id,
+                                             MinicCoreValueId *value_id);
 
 static MinicCoreLowerStatus lower_local_object(MinicCoreLowerContext *context,
                                                MinicLocalId local_id,
@@ -160,6 +166,67 @@ static MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
                : MINIC_CORE_LOWER_ERROR;
 }
 
+static MinicCoreLowerStatus append_integer_conversion(MinicCoreLowerContext *context,
+                                                      MinicSourceSpan span,
+                                                      MinicType target_type,
+                                                      MinicCoreValueId source_value,
+                                                      MinicCoreValueId *value_id) {
+    MinicCoreInstruction instruction;
+    const MinicCoreValue *source;
+
+    if (context == NULL || context->function == NULL || value_id == NULL ||
+        source_value >= context->function->value_count || !minic_type_is_integer(target_type)) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    source = &context->function->values[source_value];
+    if (!minic_type_is_integer(source->type)) {
+        return MINIC_CORE_LOWER_UNSUPPORTED;
+    }
+    if (minic_type_equal(source->type, target_type)) {
+        *value_id = source_value;
+        return MINIC_CORE_LOWER_OK;
+    }
+    (void)memset(&instruction, 0, sizeof(instruction));
+    instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION;
+    instruction.span = span;
+    instruction.type = target_type;
+    instruction.result = MINIC_CORE_VALUE_INVALID;
+    instruction.value.operand = source_value;
+    return minic_core_function_append_value_instruction(
+               context->function, context->block_id, &instruction, value_id)
+               ? MINIC_CORE_LOWER_OK
+               : MINIC_CORE_LOWER_ERROR;
+}
+
+static MinicCoreLowerStatus lower_integer_assignment_value(MinicCoreLowerContext *context,
+                                                           MinicType target_type,
+                                                           MinicExpressionId expression_id,
+                                                           MinicCoreValueId *value_id) {
+    const MinicExpression *expression;
+    MinicCoreValueId source_value;
+    MinicCoreLowerStatus status;
+    MinicType result_type;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        value_id == NULL) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    expression = minic_c0_program_expression(context->body->program, expression_id);
+    if (expression == NULL) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    if (!minic_c0_integer_assignment_value_type(
+            context->body->program, target_type, expression_id, &result_type)) {
+        return MINIC_CORE_LOWER_UNSUPPORTED;
+    }
+    status = lower_expression(context, expression_id, &source_value);
+    if (status != MINIC_CORE_LOWER_OK) {
+        return status;
+    }
+    return append_integer_conversion(
+        context, expression->span, result_type, source_value, value_id);
+}
+
 static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                                              MinicExpressionId expression_id,
                                              MinicCoreValueId *value_id) {
@@ -215,6 +282,30 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                    ? MINIC_CORE_LOWER_OK
                    : MINIC_CORE_LOWER_ERROR;
     }
+    if (expression->kind == MINIC_EXPRESSION_CONVERSION) {
+        const MinicExpression *operand;
+        MinicExpressionId operand_id;
+        MinicCoreValueId operand_value;
+        MinicCoreLowerStatus status;
+        MinicType target_type;
+
+        operand_id = expression->value.unary.operand;
+        operand = minic_c0_program_expression(context->body->program, operand_id);
+        if (operand == NULL) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        if (!minic_type_is_integer(expression->type) || !minic_type_is_integer(operand->type) ||
+            !minic_type_unqualified(expression->type, &target_type) ||
+            !minic_type_equal(target_type, expression->type)) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        status = lower_expression(context, operand_id, &operand_value);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        return append_integer_conversion(
+            context, expression->span, target_type, operand_value, value_id);
+    }
     if (expression->kind == MINIC_EXPRESSION_BINARY &&
         expression->value.binary.operator_kind == MINIC_BINARY_ADD) {
         MinicCoreValueId left;
@@ -232,6 +323,10 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
+        if (!minic_type_equal(context->function->values[left].type, expression->type) ||
+            !minic_type_equal(context->function->values[right].type, expression->type)) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
         instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_ADD;
         instruction.value.binary.left = left;
         instruction.value.binary.right = right;
@@ -246,6 +341,7 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
 static MinicCoreLowerStatus lower_assignment(MinicCoreLowerContext *context,
                                              const MinicStatement *statement) {
     const MinicExpression *target;
+    MinicExpressionId source_id;
     MinicCoreInstruction instruction;
     MinicCoreValueId address_id;
     MinicCoreValueId stored_value;
@@ -266,7 +362,8 @@ static MinicCoreLowerStatus lower_assignment(MinicCoreLowerContext *context,
     if (status != MINIC_CORE_LOWER_OK) {
         return status;
     }
-    status = lower_expression(context, statement->expression, &stored_value);
+    source_id = statement->expression;
+    status = lower_integer_assignment_value(context, target->type, source_id, &stored_value);
     if (status != MINIC_CORE_LOWER_OK) {
         return status;
     }
@@ -304,7 +401,13 @@ static MinicCoreLowerStatus lower_return(MinicCoreLowerContext *context,
         if (statement->expression == MINIC_EXPRESSION_INVALID) {
             return MINIC_CORE_LOWER_ERROR;
         }
-        status = lower_expression(context, statement->expression, &terminator.return_value);
+        if (!minic_type_is_integer(context->source_function->return_type)) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        status = lower_integer_assignment_value(context,
+                                                context->source_function->return_type,
+                                                statement->expression,
+                                                &terminator.return_value);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }

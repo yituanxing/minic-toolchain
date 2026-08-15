@@ -45,6 +45,24 @@ int add_one(int value) {
 EOF
 check_strict_case parameter
 
+cat >"$work_dir/implicit-conversion.i" <<'EOF'
+int widen(signed char value) {
+    return value;
+}
+
+signed char narrow(void) {
+    return 257;
+}
+EOF
+check_strict_case implicit-conversion
+
+cat >"$work_dir/explicit-conversion.i" <<'EOF'
+int truncate(unsigned long value) {
+    return (int)value;
+}
+EOF
+check_strict_case explicit-conversion
+
 cat >"$work_dir/unsupported.i" <<'EOF'
 int main(void) {
     return 1 - 2;
