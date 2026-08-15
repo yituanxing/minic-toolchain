@@ -40,6 +40,14 @@ jobs:
           if text.count(old) != 1:
               raise SystemExit('external pointer-array null contract seam not found')
           pointer_test.write_text(text.replace(old, new, 1))
+
+          bitwise_test = Path('tests/compiler/c0/run-integer-constant-bitwise.sh')
+          text = bitwise_test.read_text()
+          old = "grep -F '  .zero 3' \"$work/integer_constant_bitwise.s\" >/dev/null\n"
+          new = "test \"$(grep -c -F '  .byte 0' \"$work/integer_constant_bitwise.s\")\" -eq 3\n"
+          if text.count(old) != 1:
+              raise SystemExit('bitwise global-array zero-fill contract seam not found')
+          bitwise_test.write_text(text.replace(old, new, 1))
           PY
 
       - name: Canonical format
@@ -61,6 +69,7 @@ jobs:
           sh tests/compiler/c0/run-external-array-declarator-routing.sh
           sh tests/compiler/c0/run-external-pointer-arrays.sh
           sh tests/compiler/c0/run-extern-fixed-integer-arrays.sh
+          sh tests/compiler/c0/run-integer-constant-bitwise.sh
 
       - name: Foundation regression
         run: |
