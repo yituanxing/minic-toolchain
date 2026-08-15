@@ -1,0 +1,50 @@
+name: Materialize array structural compatibility
+
+on:
+  push:
+    branches:
+      - staging/array-type-structural-compatibility-v1
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: staging/array-type-structural-compatibility-v1
+          fetch-depth: 0
+      - name: Materialize product delta
+        run: python3 tools/dev/materialize-array-type-structural-compatibility-v1.py
+      - name: Build and focused validation
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang-format-18
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/array-type-structural-compatibility
+          MINIC="$GITHUB_WORKSPACE/build/array-type-structural-compatibility/bin/minic" \
+            BUILD_DIR="$GITHUB_WORKSPACE/build/array-type-structural-compatibility-tests" \
+            HOST_CC=cc \
+            sh tests/compiler/c0/run-gnu-array-object-identity.sh
+          MINIC="$GITHUB_WORKSPACE/build/array-type-structural-compatibility/bin/minic" \
+            BUILD_DIR="$GITHUB_WORKSPACE/build/array-type-structural-compatibility-param-tests" \
+            HOST_CC=cc \
+            sh tests/compiler/c0/run-array-parameter-adjustment.sh
+          make check-fast
+          git diff --check
+      - name: Commit materialized product files
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/frontend/ast.c \
+                  tests/compiler/c0/gnu_array_object_identity.c \
+                  tests/compiler/c0/invalid_typedef_array_member_address_call.c \
+                  tests/compiler/c0/run-gnu-array-object-identity.sh
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m 'fix: compare materialized array types structurally [materialized]'
+          git push origin HEAD:staging/array-type-structural-compatibility-v1
