@@ -594,47 +594,6 @@ bool minic_parser_parse_integer_initializer_bits(MinicParser *parser,
     return true;
 }
 
-bool minic_parser_parse_integer_initializer_value(MinicParser *parser,
-                                                  MinicType target_type,
-                                                  int *value) {
-    uint64_t bits;
-    int64_t signed_value;
-    MinicConstValue converted;
-    unsigned int width;
-
-    if (parser == NULL || value == NULL ||
-        !minic_parser_parse_integer_initializer_bits(parser, target_type, &bits) ||
-        !minic_target_info_integer_width(
-            parser->target_info, parser->program, target_type, &width) ||
-        width == 0U || width > 64U) {
-        return false;
-    }
-    converted.type = target_type;
-    converted.bits = bits;
-    if (width <= 32U && minic_type_is_unsigned_integer(target_type)) {
-        uint32_t raw;
-
-        _Static_assert(sizeof(int) == sizeof(uint32_t),
-                       "MiniC legacy initializer payload requires 32-bit host int");
-        raw = (uint32_t)bits;
-        if (width < 32U) {
-            raw &= (UINT32_C(1) << width) - UINT32_C(1);
-            *value = (int)raw;
-        } else {
-            (void)memcpy(value, &raw, sizeof(raw));
-        }
-        return true;
-    }
-    if (!minic_const_value_as_int64(
-            parser->program, parser->target_info, &converted, &signed_value) ||
-        signed_value < INT_MIN || signed_value > INT_MAX) {
-        minic_parser_error(parser, "integer initializer exceeds current global payload range");
-        return false;
-    }
-    *value = (int)signed_value;
-    return true;
-}
-
 bool minic_parser_parse_fixed_array_bound(MinicParser *parser, size_t *element_count) {
     int64_t value;
 

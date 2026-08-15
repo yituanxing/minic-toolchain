@@ -1054,10 +1054,10 @@ static bool parse_external_object_definition(MinicParser *parser,
         return false;
     }
     if (minic_type_is_integer(object_type)) {
-        int value;
+        uint64_t bits;
 
-        if (!minic_parser_parse_integer_initializer_value(parser, object_type, &value) ||
-            !minic_c0_global_object_add_initializer(parser->program, object_id, value)) {
+        if (!minic_parser_parse_integer_initializer_bits(parser, object_type, &bits) ||
+            !minic_c0_global_object_add_initializer_bits(parser->program, object_id, bits)) {
             if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
                 minic_parser_error(parser, "cannot record external integer initializer");
             }

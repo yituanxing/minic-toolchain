@@ -166,9 +166,6 @@ bool minic_parser_parse_integer_initializer_bits(MinicParser *parser,
 bool minic_parser_parse_static_storage_initializer_value(MinicParser *parser,
                                                          MinicGlobalObjectId object_id,
                                                          MinicType type);
-bool minic_parser_parse_integer_initializer_value(MinicParser *parser,
-                                                  MinicType target_type,
-                                                  int *value);
 bool minic_parser_parse_alignof_type_value(MinicParser *parser,
                                            int64_t *value,
                                            MinicSourceSpan *span);
