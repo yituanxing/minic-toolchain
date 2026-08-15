@@ -18,6 +18,9 @@ test -s "$assembly"
 grep -F 'construct_box:' "$assembly" >/dev/null
 grep -F 'assign_box:' "$assembly" >/dev/null
 grep -F '  call try_lock' "$assembly" >/dev/null
+grep -F '.type discard_record_lvalue, @function' "$assembly" >/dev/null
+grep -F '  call discard_record_source' "$assembly" >/dev/null
+grep -F '.type discard_zero_record_member, @function' "$assembly" >/dev/null
 # Two RECORD_COPY sites must snapshot from address-backed statement-expression results.
 copy_loads=$(grep -c '^  lbu t0, 0(t2)$' "$assembly")
 copy_stores=$(grep -c '^  sb t0, 0(t3)$' "$assembly")
@@ -83,4 +86,4 @@ test "$call_copy_loads" -ge 64
 test "$call_copy_stores" -ge 64
 
 printf '%s\n' \
-    'PASS compiler/c0/gnu_statement_record_value initializer=record-rvalue assignment=record-rvalue address-backed=preserved call-rvalue=8+16-register+24-indirect auto-type=1 hidden-result=1 lvalue=unchanged'
+    'PASS compiler/c0/gnu_statement_record_value initializer=record-rvalue assignment=record-rvalue address-backed=preserved discard=record-lvalue+zero-member call-rvalue=8+16-register+24-indirect auto-type=1 hidden-result=1 lvalue=unchanged'
