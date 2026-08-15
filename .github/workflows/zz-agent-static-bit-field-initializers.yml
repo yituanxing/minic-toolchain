@@ -1,0 +1,62 @@
+name: Agent static bit-field initializer packing
+
+on:
+  push:
+    branches:
+      - compiler/static-bit-field-initializers-v1
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: compiler/static-bit-field-initializers-v1
+          fetch-depth: 0
+
+      - name: Prove current backend blocker
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release BUILD_DIR=build/baseline
+          mkdir -p build/agent-probe
+          printf '%s\n' \
+            'typedef _Bool bool;' \
+            'struct Bits { bool a : 1; bool b : 1; char tail; };' \
+            'static struct Bits x = { .b = 1, .a = 1, .tail = 5 };' \
+            'int main(void) { return x.a + x.b + x.tail; }' \
+            > build/agent-probe/static-bit-field.c
+          cc -E -P -std=gnu11 -x c build/agent-probe/static-bit-field.c -o build/agent-probe/static-bit-field.i
+          if build/baseline/bin/minic -S build/agent-probe/static-bit-field.i -o build/agent-probe/baseline.s 2>build/agent-probe/baseline.err; then
+            echo 'baseline unexpectedly emitted a shared-storage static bit-field record' >&2
+            exit 1
+          fi
+          grep -F 'cannot write RISC-V assembly' build/agent-probe/baseline.err >/dev/null
+
+      - name: Apply bit-field constant-data packing
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/agent-static-bit-field-initializers.py
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+          git diff --check
+
+      - name: Validate focused and fast gates
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release BUILD_DIR=build/agent-release CFLAGS=-Werror
+          MINIC="$GITHUB_WORKSPACE/build/agent-release/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/agent-focused" HOST_CC=cc sh tests/compiler/c0/run-unnamed-bit-fields.sh
+          MINIC="$GITHUB_WORKSPACE/build/agent-release/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/agent-record" HOST_CC=cc sh tests/compiler/c0/run-external-record-compound-literal.sh
+          make -j4 check-fast
+
+      - name: Commit validated product patch
+        run: |
+          set -Eeuo pipefail
+          rm .github/workflows/zz-agent-static-bit-field-initializers.yml
+          rm tools/dev/agent-static-bit-field-initializers.py
+          git config user.name 'LiYang Dong'
+          git config user.email '119646676+yituanxing@users.noreply.github.com'
+          git add src/target/riscv64/codegen_function.c tests/compiler/c0/unnamed_bit_fields.c tests/compiler/c0/run-unnamed-bit-fields.sh .github/workflows/zz-agent-static-bit-field-initializers.yml tools/dev/agent-static-bit-field-initializers.py
+          git commit -m 'feat: pack static record bit-field initializers'
+          git push origin HEAD:compiler/static-bit-field-initializers-v1
