@@ -73,8 +73,7 @@ jobs:
           cat > tests/compiler/c0/gnu_typeof_array_bound_cast.c <<'EOF'
           typedef unsigned int note_like_t[
               (((sizeof(unsigned long) + ((__typeof__((sizeof(unsigned long))))((4)) - 1)) &
-                ~((__typeof__((sizeof(unsigned long))))((4)) - 1)) * 2) /
-               4)];
+                ~((__typeof__((sizeof(unsigned long))))((4)) - 1)) * 2 / 4)];
 
           int typeof_array_bound_cast_size(void)
           {
@@ -93,6 +92,8 @@ jobs:
 
           rm -rf "$work"
           mkdir -p "$work"
+          "$host_cc" -fsyntax-only -std=gnu11 -x c \
+            "$root/tests/compiler/c0/gnu_typeof_array_bound_cast.c"
           "$host_cc" -E -P -std=gnu11 -x c \
             "$root/tests/compiler/c0/gnu_typeof_array_bound_cast.c" -o "$work/input.i"
           "$minic" -S "$work/input.i" -o "$work/output.s"
