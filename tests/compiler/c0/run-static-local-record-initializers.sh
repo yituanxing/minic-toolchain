@@ -24,4 +24,5 @@ awk '
 ' "$work/static_local_record_initializer.s"
 grep -F '  .word -1' "$work/static_local_record_initializer.s" >/dev/null
 grep -F '  .word -2' "$work/static_local_record_initializer.s" >/dev/null
-printf '%s\n' 'PASS compiler/c0/static_local_record_initializer enum=7 nested-zero=12 signed=-1,-2 target-layout=rv64'
+grep -F '  .dword 1' "$work/static_local_record_initializer.s" >/dev/null
+printf '%s\n' 'PASS compiler/c0/static_local_record_initializer enum=7 nested-zero=12 signed=-1,-2 compound-literal=1 designated-nested=1 anonymous-union-first=1 empty-record=1 shared-owner=1 target-layout=rv64'
