@@ -48,7 +48,7 @@ void minic_core_function_initialize(MinicCoreFunction *function) {
         return;
     }
     (void)memset(function, 0, sizeof(*function));
-    function->phase = MINIC_CORE_PHASE_SCALAR_SHADOW;
+    function->phase = MINIC_CORE_PHASE_EXECUTION_SHADOW;
     function->entry_block = MINIC_CORE_BLOCK_INVALID;
 }
 
@@ -63,6 +63,7 @@ void minic_core_function_destroy(MinicCoreFunction *function) {
     }
     free(function->name);
     free(function->parameter_types);
+    free(function->objects);
     free(function->values);
     free(function->instructions);
     free(function->blocks);
@@ -125,6 +126,49 @@ bool minic_core_function_add_block(MinicCoreFunction *function, MinicCoreBlockId
     return true;
 }
 
+bool minic_core_function_add_object(MinicCoreFunction *function,
+                                    MinicSourceSpan span,
+                                    MinicType type,
+                                    MinicCoreObjectId *object_id) {
+    MinicCoreObjectId new_id;
+
+    if (function == NULL || object_id == NULL || function->object_count >= (size_t)UINT32_MAX ||
+        minic_type_is_void(type) || minic_type_is_function(type) ||
+        !grow_array((void **)&function->objects,
+                    &function->object_capacity,
+                    function->object_count,
+                    sizeof(*function->objects))) {
+        return false;
+    }
+    new_id = (MinicCoreObjectId)function->object_count;
+    function->objects[function->object_count].span = span;
+    function->objects[function->object_count].type = type;
+    function->object_count += 1U;
+    *object_id = new_id;
+    return true;
+}
+
+static bool reserve_instruction(MinicCoreFunction *function, MinicCoreBlock *block) {
+    return grow_array((void **)&function->instructions,
+                      &function->instruction_capacity,
+                      function->instruction_count,
+                      sizeof(*function->instructions)) &&
+           grow_array((void **)&block->instructions,
+                      &block->instruction_capacity,
+                      block->instruction_count,
+                      sizeof(*block->instructions));
+}
+
+static void append_reserved_instruction(MinicCoreFunction *function,
+                                        MinicCoreBlock *block,
+                                        const MinicCoreInstruction *instruction,
+                                        MinicCoreInstructionId instruction_id) {
+    function->instructions[function->instruction_count] = *instruction;
+    function->instruction_count += 1U;
+    block->instructions[block->instruction_count] = instruction_id;
+    block->instruction_count += 1U;
+}
+
 bool minic_core_function_append_value_instruction(MinicCoreFunction *function,
                                                   MinicCoreBlockId block_id,
                                                   const MinicCoreInstruction *instruction,
@@ -140,33 +184,44 @@ bool minic_core_function_append_value_instruction(MinicCoreFunction *function,
         return false;
     }
     block = &function->blocks[block_id];
-    if (block->has_terminator ||
-        !grow_array((void **)&function->instructions,
-                    &function->instruction_capacity,
-                    function->instruction_count,
-                    sizeof(*function->instructions)) ||
+    if (block->has_terminator || !reserve_instruction(function, block) ||
         !grow_array((void **)&function->values,
                     &function->value_capacity,
                     function->value_count,
-                    sizeof(*function->values)) ||
-        !grow_array((void **)&block->instructions,
-                    &block->instruction_capacity,
-                    block->instruction_count,
-                    sizeof(*block->instructions))) {
+                    sizeof(*function->values))) {
         return false;
     }
     instruction_id = (MinicCoreInstructionId)function->instruction_count;
     result_id = (MinicCoreValueId)function->value_count;
     stored = *instruction;
     stored.result = result_id;
-    function->instructions[function->instruction_count] = stored;
-    function->instruction_count += 1U;
     function->values[function->value_count].type = stored.type;
     function->values[function->value_count].definition = instruction_id;
     function->value_count += 1U;
-    block->instructions[block->instruction_count] = instruction_id;
-    block->instruction_count += 1U;
+    append_reserved_instruction(function, block, &stored, instruction_id);
     *value_id = result_id;
+    return true;
+}
+
+bool minic_core_function_append_effect_instruction(MinicCoreFunction *function,
+                                                   MinicCoreBlockId block_id,
+                                                   const MinicCoreInstruction *instruction) {
+    MinicCoreBlock *block;
+    MinicCoreInstruction stored;
+    MinicCoreInstructionId instruction_id;
+
+    if (function == NULL || instruction == NULL || block_id >= function->block_count ||
+        function->instruction_count >= (size_t)UINT32_MAX) {
+        return false;
+    }
+    block = &function->blocks[block_id];
+    if (block->has_terminator || !reserve_instruction(function, block)) {
+        return false;
+    }
+    instruction_id = (MinicCoreInstructionId)function->instruction_count;
+    stored = *instruction;
+    stored.result = MINIC_CORE_VALUE_INVALID;
+    append_reserved_instruction(function, block, &stored, instruction_id);
     return true;
 }
 
@@ -191,21 +246,38 @@ static bool storage_shape_is_valid(const void *data, size_t count, size_t capaci
     return count <= capacity && (count == 0U || data != NULL);
 }
 
+static bool instruction_result_is_valid(const MinicCoreFunction *function,
+                                        const MinicCoreInstruction *instruction) {
+    return instruction->result < function->value_count &&
+           minic_type_equal(function->values[instruction->result].type, instruction->type);
+}
+
+static bool available_pointer_pointee(const MinicCoreFunction *function,
+                                      const bool *available_values,
+                                      MinicCoreValueId address,
+                                      MinicType *pointee) {
+    if (address >= function->value_count || !available_values[address]) {
+        return false;
+    }
+    return minic_type_pointee(function->values[address].type, pointee);
+}
+
 static bool instruction_is_valid(const MinicCoreFunction *function,
                                  const MinicCoreInstruction *instruction,
                                  const bool *available_values) {
     const MinicCoreValue *left;
     const MinicCoreValue *right;
 
-    if (function == NULL || instruction == NULL || instruction->result >= function->value_count ||
-        !minic_type_equal(function->values[instruction->result].type, instruction->type)) {
+    if (function == NULL || instruction == NULL) {
         return false;
     }
     switch (instruction->kind) {
     case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT:
-        return minic_type_is_integer(instruction->type);
+        return instruction_result_is_valid(function, instruction) &&
+               minic_type_is_integer(instruction->type);
     case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
-        if (!minic_type_is_integer(instruction->type) ||
+        if (!instruction_result_is_valid(function, instruction) ||
+            !minic_type_is_integer(instruction->type) ||
             instruction->value.binary.left >= function->value_count ||
             instruction->value.binary.right >= function->value_count ||
             !available_values[instruction->value.binary.left] ||
@@ -216,6 +288,47 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
         right = &function->values[instruction->value.binary.right];
         return minic_type_equal(left->type, instruction->type) &&
                minic_type_equal(right->type, instruction->type);
+    case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS: {
+        MinicType pointer_type;
+
+        if (!instruction_result_is_valid(function, instruction) ||
+            instruction->value.object_id >= function->object_count ||
+            !minic_type_pointer_to(function->objects[instruction->value.object_id].type,
+                                   &pointer_type)) {
+            return false;
+        }
+        return minic_type_equal(pointer_type, instruction->type);
+    }
+    case MINIC_CORE_INSTRUCTION_LOAD: {
+        MinicType pointee;
+        MinicType value_type;
+
+        if (!instruction_result_is_valid(function, instruction) ||
+            !available_pointer_pointee(
+                function, available_values, instruction->value.load.address, &pointee) ||
+            !minic_type_unqualified(pointee, &value_type)) {
+            return false;
+        }
+        return minic_type_equal(value_type, instruction->type) &&
+               instruction->value.load.is_volatile == minic_type_is_volatile(pointee);
+    }
+    case MINIC_CORE_INSTRUCTION_STORE: {
+        MinicType pointee;
+        MinicType value_type;
+        MinicCoreValueId stored_value;
+
+        stored_value = instruction->value.store.stored_value;
+        if (instruction->result != MINIC_CORE_VALUE_INVALID ||
+            !minic_type_is_void(instruction->type) || stored_value >= function->value_count ||
+            !available_values[stored_value] ||
+            !available_pointer_pointee(
+                function, available_values, instruction->value.store.address, &pointee) ||
+            !minic_type_unqualified(pointee, &value_type)) {
+            return false;
+        }
+        return minic_type_equal(value_type, function->values[stored_value].type) &&
+               instruction->value.store.is_volatile == minic_type_is_volatile(pointee);
+    }
     }
     return false;
 }
@@ -227,9 +340,11 @@ bool minic_core_function_verify(const MinicCoreFunction *function) {
     size_t index;
     bool valid;
 
-    if (function == NULL || function->phase != MINIC_CORE_PHASE_SCALAR_SHADOW ||
+    if (function == NULL || function->phase != MINIC_CORE_PHASE_EXECUTION_SHADOW ||
         function->name == NULL || function->name_length == 0U ||
         (function->parameter_count != 0U && function->parameter_types == NULL) ||
+        !storage_shape_is_valid(
+            function->objects, function->object_count, function->object_capacity) ||
         !storage_shape_is_valid(
             function->values, function->value_count, function->value_capacity) ||
         !storage_shape_is_valid(
@@ -237,7 +352,7 @@ bool minic_core_function_verify(const MinicCoreFunction *function) {
         !storage_shape_is_valid(
             function->blocks, function->block_count, function->block_capacity) ||
         function->block_count != 1U || function->entry_block != 0U ||
-        function->value_count != function->instruction_count) {
+        function->value_count > function->instruction_count) {
         return false;
     }
     block = &function->blocks[0];
@@ -262,7 +377,6 @@ bool minic_core_function_verify(const MinicCoreFunction *function) {
     for (index = 0U; valid && index < block->instruction_count; ++index) {
         MinicCoreInstructionId instruction_id;
         const MinicCoreInstruction *instruction;
-        const MinicCoreValue *result;
 
         instruction_id = block->instructions[index];
         if (instruction_id >= function->instruction_count || instruction_seen[instruction_id]) {
@@ -274,13 +388,17 @@ bool minic_core_function_verify(const MinicCoreFunction *function) {
             valid = false;
             break;
         }
-        result = &function->values[instruction->result];
-        if (available_values[instruction->result] || result->definition != instruction_id) {
-            valid = false;
-            break;
+        if (instruction->result != MINIC_CORE_VALUE_INVALID) {
+            const MinicCoreValue *result;
+
+            result = &function->values[instruction->result];
+            if (available_values[instruction->result] || result->definition != instruction_id) {
+                valid = false;
+                break;
+            }
+            available_values[instruction->result] = true;
         }
         instruction_seen[instruction_id] = true;
-        available_values[instruction->result] = true;
     }
     for (index = 0U; valid && index < function->instruction_count; ++index) {
         valid = instruction_seen[index];
@@ -310,7 +428,18 @@ bool minic_core_function_dump(FILE *output, const MinicCoreFunction *function) {
     if (output == NULL || !minic_core_function_verify(function) ||
         fprintf(output, "core function @") < 0 ||
         fwrite(function->name, 1U, function->name_length, output) != function->name_length ||
-        fprintf(output, "\nbb0:\n") < 0) {
+        fprintf(output, "\n") < 0) {
+        return false;
+    }
+    for (index = 0U; index < function->object_count; ++index) {
+        if (fprintf(output,
+                    "object %%o%" PRIu32 "%s\n",
+                    (MinicCoreObjectId)index,
+                    minic_type_is_volatile(function->objects[index].type) ? " volatile" : "") < 0) {
+            return false;
+        }
+    }
+    if (fprintf(output, "bb0:\n") < 0) {
         return false;
     }
     block = &function->blocks[0];
@@ -333,6 +462,32 @@ bool minic_core_function_dump(FILE *output, const MinicCoreFunction *function) {
                         instruction->result,
                         instruction->value.binary.left,
                         instruction->value.binary.right) < 0) {
+                return false;
+            }
+            break;
+        case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS:
+            if (fprintf(output,
+                        "  %%%" PRIu32 " = object.addr %%o%" PRIu32 "\n",
+                        instruction->result,
+                        instruction->value.object_id) < 0) {
+                return false;
+            }
+            break;
+        case MINIC_CORE_INSTRUCTION_LOAD:
+            if (fprintf(output,
+                        "  %%%" PRIu32 " = load%s %%%" PRIu32 "\n",
+                        instruction->result,
+                        instruction->value.load.is_volatile ? ".volatile" : "",
+                        instruction->value.load.address) < 0) {
+                return false;
+            }
+            break;
+        case MINIC_CORE_INSTRUCTION_STORE:
+            if (fprintf(output,
+                        "  store%s %%%" PRIu32 ", %%%" PRIu32 "\n",
+                        instruction->value.store.is_volatile ? ".volatile" : "",
+                        instruction->value.store.stored_value,
+                        instruction->value.store.address) < 0) {
                 return false;
             }
             break;

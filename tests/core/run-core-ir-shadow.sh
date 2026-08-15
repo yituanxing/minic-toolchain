@@ -7,15 +7,36 @@ work_dir="${BUILD_DIR:-build/core-ir-shadow}/pipeline-shadow"
 rm -rf "$work_dir"
 mkdir -p "$work_dir"
 
+check_strict_case() {
+    local name="$1"
+
+    "$MINIC" -S "$work_dir/$name.i" -o "$work_dir/$name-normal.s"
+    MINIC_CORE_IR=strict "$MINIC" -S "$work_dir/$name.i" -o "$work_dir/$name-shadow.s"
+    cmp "$work_dir/$name-normal.s" "$work_dir/$name-shadow.s"
+}
+
 cat >"$work_dir/supported.i" <<'EOF'
 int main(void) {
     return 1 + 2;
 }
 EOF
+check_strict_case supported
 
-"$MINIC" -S "$work_dir/supported.i" -o "$work_dir/supported-normal.s"
-MINIC_CORE_IR=strict "$MINIC" -S "$work_dir/supported.i" -o "$work_dir/supported-shadow.s"
-cmp "$work_dir/supported-normal.s" "$work_dir/supported-shadow.s"
+cat >"$work_dir/local-object.i" <<'EOF'
+int main(void) {
+    int value = 1;
+    return value;
+}
+EOF
+check_strict_case local-object
+
+cat >"$work_dir/volatile-object.i" <<'EOF'
+int main(void) {
+    volatile int value = 1;
+    return value;
+}
+EOF
+check_strict_case volatile-object
 
 cat >"$work_dir/unsupported.i" <<'EOF'
 int main(void) {
