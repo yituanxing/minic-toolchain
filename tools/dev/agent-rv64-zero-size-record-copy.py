@@ -10,6 +10,13 @@ def replace_once(path: Path, old: str, new: str) -> None:
     path.write_text(text.replace(old, new, 1))
 
 
+support = Path("src/target/riscv64/codegen_support.c")
+replace_once(
+    support,
+    '''    if (object == NULL ||\n        !minic_riscv64_function_layout_local_offset(\n            function_layout, function, local_id, &object_offset) ||\n        function_layout->local_storage_size == 0U ||\n        object_offset >= function_layout->local_storage_size) {\n        return false;\n    }\n''',
+    '''    if (object == NULL ||\n        !minic_riscv64_function_layout_local_offset(\n            function_layout, function, local_id, &object_offset) ||\n        object_offset > function_layout->local_storage_size) {\n        return false;\n    }\n''',
+)
+
 codegen = Path("src/target/riscv64/codegen_expression.c")
 replace_once(
     codegen,
@@ -32,5 +39,5 @@ replace_once(
 replace_once(
     runner,
     '''grep -F '  li a0, 8' "$assembly" >/dev/null\n\nprintf '%s\\n' 'PASS compiler/c0/gnu_empty_records struct-size=0 union-size=0 empty-member-declaration=ignored member-record-size=8 complete=1 layout-sentinel=alignment'\n''',
-    '''grep -F '  li a0, 8' "$assembly" >/dev/null\ngrep -F '  call empty_source' "$assembly" >/dev/null\ngrep -F '  call empty_target' "$assembly" >/dev/null\nsource_line=$(grep -n -m1 '  call empty_source' "$assembly" | cut -d: -f1)\ntarget_line=$(grep -n -m1 '  call empty_target' "$assembly" | cut -d: -f1)\ntest "$source_line" -lt "$target_line"\n\nprintf '%s\\n' 'PASS compiler/c0/gnu_empty_records struct-size=0 union-size=0 empty-member-declaration=ignored member-record-size=8 zero-copy=statement+rvalue side-effects=source+target complete=1 layout-sentinel=alignment'\n''',
+    '''grep -F '  li a0, 8' "$assembly" >/dev/null\ngrep -F '  call empty_source' "$assembly" >/dev/null\ngrep -F '  call empty_target' "$assembly" >/dev/null\nsource_line=$(grep -n -m1 '  call empty_source' "$assembly" | cut -d: -f1)\ntarget_line=$(grep -n -m1 '  call empty_target' "$assembly" | cut -d: -f1)\ntest "$source_line" -lt "$target_line"\n\nprintf '%s\\n' 'PASS compiler/c0/gnu_empty_records struct-size=0 union-size=0 empty-member-declaration=ignored member-record-size=8 zero-copy=statement+rvalue addressable-zero-local=1 side-effects=source+target complete=1 layout-sentinel=alignment'\n''',
 )
