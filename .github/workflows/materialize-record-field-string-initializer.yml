@@ -20,6 +20,15 @@ jobs:
       - name: Materialize product delta
         run: |
           set -Eeuo pipefail
+          git checkout 8617a93adb43d564a227c2972eaa9b222ac7e1bc -- \
+            src/frontend/ast_global.c \
+            src/frontend/ast_verifier.c \
+            src/frontend/parser_string.c \
+            src/frontend/parser_internal.h \
+            src/frontend/parser_global.c \
+            src/target/riscv64/codegen_function.c \
+            tests/compiler/c0/static_record_array.c \
+            tests/compiler/c0/run-static-record-arrays.sh
           python3 tools/dev/materialize-record-field-string-initializer.py
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
@@ -49,5 +58,9 @@ jobs:
             src/target/riscv64/codegen_function.c \
             tests/compiler/c0/static_record_array.c \
             tests/compiler/c0/run-static-record-arrays.sh
+          if git diff --cached --quiet; then
+            echo 'materialized product tree already current'
+            exit 0
+          fi
           git commit -m 'feat: initialize record character arrays from strings [materialized]'
           git push origin HEAD:staging/record-field-string-initializer-v1-run
