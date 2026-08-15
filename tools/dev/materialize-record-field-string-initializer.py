@@ -16,6 +16,12 @@ replace_once(
     '''    if (object->relocation_count != 0U) {\n        size_t relocation_index;\n\n        if (!minic_type_is_record(object->type) && !minic_type_is_array(object->type)) {\n            return false;\n        }\n''',
 )
 
+replace_once(
+    "src/frontend/ast_verifier.c",
+    '''            (object->relocation_count != 0U && !object->is_zero_initialized &&\n             (!minic_type_is_record(object->type) || object->initializer_count == 0U)) ||\n''',
+    '''            (object->relocation_count != 0U && !object->is_zero_initialized &&\n             ((!minic_type_is_record(object->type) && !minic_type_is_array(object->type)) ||\n              object->initializer_count == 0U)) ||\n''',
+)
+
 parser_string = Path("src/frontend/parser_string.c")
 text = parser_string.read_text()
 anchor = '''bool minic_parser_get_predefined_function_name_object(MinicParser *parser,\n'''
