@@ -22,7 +22,25 @@ new = '''static bool type_name_starts_parenthesized_function_pointer(const Minic
     }
     lookahead = parser->lexer;
     (void)memset(&diagnostic, 0, sizeof(diagnostic));
-    return minic_lexer_next(&lookahead, &token, &diagnostic) && token.kind == MINIC_TOKEN_STAR;
+    if (!minic_lexer_next(&lookahead, &token, &diagnostic) || token.kind != MINIC_TOKEN_STAR) {
+        return false;
+    }
+    for (;;) {
+        if (!minic_lexer_next(&lookahead, &token, &diagnostic)) {
+            return false;
+        }
+        while (token.kind == MINIC_TOKEN_KW_CONST || token.kind == MINIC_TOKEN_KW_VOLATILE ||
+               minic_parser_token_text_equals(parser, token, "restrict") ||
+               minic_parser_token_text_equals(parser, token, "__restrict")) {
+            if (!minic_lexer_next(&lookahead, &token, &diagnostic)) {
+                return false;
+            }
+        }
+        if (token.kind != MINIC_TOKEN_STAR) {
+            break;
+        }
+    }
+    return token.kind == MINIC_TOKEN_RPAREN;
 }
 
 bool minic_parser_parse_type_name_preserving_incomplete(MinicParser *parser, MinicType *type) {
