@@ -53,6 +53,7 @@ It currently permits:
 - immutable `CoreValue` results;
 - function-local addressable `CoreObject` identities;
 - `INTEGER_CONSTANT` and `INTEGER_ADD`;
+- target-neutral `PARAMETER` values indexed by source parameter position;
 - `OBJECT_ADDRESS`, typed `LOAD`, and side-effect-only `STORE`;
 - an explicit `RETURN` terminator;
 - copied function symbol/signature information;
@@ -60,7 +61,7 @@ It currently permits:
 
 A `CoreObject` is semantic addressable storage, **not** a stack slot. Stack offsets, frame placement and physical registers remain backend decisions. `OBJECT_ADDRESS` turns object identity into a normal typed pointer value.
 
-Instructions may now be value-producing or effect-only. `STORE` has no result value. Value-producing instructions still define immutable values exactly once, and values must be defined before use. The single block must have exactly one explicit terminator. The verifier freezes these rules rather than relying on lowering code to behave correctly by convention.
+Instructions may be value-producing or effect-only. `STORE` has no result value. Value-producing instructions define immutable values exactly once, and values must be defined before use. The single block must have exactly one explicit terminator. The verifier freezes these rules rather than relying on lowering code to behave correctly by convention.
 
 `INTEGER_ADD` does not grant an optimizer a signed-no-overflow assumption. Core IR v0 intentionally does not exploit C undefined-overflow rules as an optimization contract.
 
@@ -107,7 +108,25 @@ The verifier requires the operation-level volatile flag to agree with the pointe
 
 Current object-memory coverage is intentionally limited to scalar integer locals. Arrays, records, register locals, member/subscript addressing and general pointer-derived addresses remain unsupported. Alias analysis is not introduced by this slice.
 
-## 5. What crosses the AST/Core boundary / AST/Core 边界保留什么
+## 5. Parameter ingress boundary / 参数入口边界
+
+Function parameters are source-level local objects, but their initial values come from the caller. Core now represents that fact explicitly rather than allowing a parameter object to be loaded before any initial value exists:
+
+```text
+abstract parameter #N
+        ↓
+PARAMETER value
+        ↓
+parameter CoreObject
+        ↓
+body LOAD / STORE
+```
+
+`PARAMETER` identifies the logical incoming value by parameter index only. It does **not** name `a0`, `fa0`, stack locations, hidden ABI slots or frame offsets. Those choices remain below the Core/ABI boundary.
+
+The current lowering supports ordinary non-const/non-volatile integer parameters. Pointer, aggregate, register-storage, const and volatile parameter ingress remain `UNSUPPORTED` until a real case justifies widening the contract.
+
+## 6. What crosses the AST/Core boundary / AST/Core 边界保留什么
 
 Source-language rules are resolved above the seam. Core IR does not reinterpret C integer promotions, lvalue conversion, GNU syntax or declaration lookup.
 
@@ -115,6 +134,7 @@ Facts cross the seam only while a real downstream consumer still needs them. The
 
 - resolved value/object types;
 - function signature and symbol identity;
+- abstract incoming parameter identity;
 - object identity and addressability;
 - execution order expressed by instruction order;
 - explicit memory effects and volatile access semantics;
@@ -123,9 +143,9 @@ Facts cross the seam only while a real downstream consumer still needs them. The
 
 The current `MinicType` and `MinicSourceSpan` representations are reused deliberately. Core IR does not create duplicate type or source-location systems merely to appear independent.
 
-The lowering unit is the **normalized canonical `FunctionBody`**, not an imagined source-level tree. For example, the parser appends a canonical default return at function end. Core lowering absorbs that representation fact at the AST/Core seam instead of leaking it into RV64.
+The lowering unit is the **normalized canonical `FunctionBody`**, not an imagined source-level tree. For example, the parser appends a canonical default return at function end and materializes parameters at the beginning of the function-local range. Core lowering absorbs those representation facts at the AST/Core seam instead of leaking them into RV64.
 
-## 6. Lowering result contract / Lowering 结果契约
+## 7. Lowering result contract / Lowering 结果契约
 
 Core lowering is tri-state:
 
@@ -141,7 +161,7 @@ MINIC_CORE_LOWER_ERROR
 
 A non-`OK` lowering never partially replaces the caller's existing CoreFunction. This lets real programs expose coverage gaps without confusing them with compiler failures, while actual Core failures still fail closed.
 
-## 7. Pipeline shadow migration / 编译管线影子迁移
+## 8. Pipeline shadow migration / 编译管线影子迁移
 
 The default production path remains unchanged:
 
@@ -182,12 +202,13 @@ The pipeline contract currently freezes:
 - scalar `return 1 + 2` under strict shadow;
 - ordinary local initialization/read under strict shadow;
 - volatile local initialization/read under strict shadow;
+- ordinary integer parameter ingress/read under strict shadow;
 - unsupported subtraction skipped by optional shadow and rejected by strict shadow;
 - whenever default and shadow compilation both succeed, their RV64 assembly is byte-identical.
 
 No RV64 code-generation API consumes Core IR yet.
 
-## 8. What is deliberately not designed yet / 现在不提前设计什么
+## 9. What is deliberately not designed yet / 现在不提前设计什么
 
 This slice does not create:
 
@@ -203,6 +224,6 @@ This slice does not create:
 
 Those concepts are introduced only when a real lowering slice needs them. The rule remains: resolve a rule where it belongs, preserve the resulting fact while a real consumer needs it, and lower only when the remaining choice belongs to the next layer.
 
-## 9. Next widening criterion / 下一刀
+## 10. Next widening criterion / 下一刀
 
-The next widening must come from the smallest real function that exceeds the current object-memory coverage. Do not broaden addressing, CFG or aggregate semantics merely to fill an opcode list. Each widening must preserve the focused shadow contract, Foundation gates and unchanged real-program behavior before another responsibility moves into Core.
+The next widening must come from the smallest real function that exceeds the current parameter/object-memory coverage. Do not broaden addressing, CFG, calls or aggregate semantics merely to fill an opcode list. Each widening must preserve the focused shadow contract, Foundation gates and unchanged real-program behavior before another responsibility moves into Core.

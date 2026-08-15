@@ -132,7 +132,7 @@ The boundaries are ownership rules rather than copies of another compiler's repr
 
 Language-specific rules are resolved above the AST/Core seam. Their resulting facts cross the seam only while a real lower consumer still needs them. Target machine placement remains below the Core/ABI and ABI/machine seams.
 
-The checked-in Core IR remains shadow-only with respect to code generation: the default assembly path still uses the existing RV64 backend. The shadow now consumes the real normalized FunctionBody and supports a bounded execution subset including scalar values plus local object identity, object addresses, typed load/store effects and operation-level volatile semantics.
+The checked-in Core IR remains shadow-only with respect to code generation: the default assembly path still uses the existing RV64 backend. The shadow now consumes the real normalized FunctionBody and supports a bounded execution subset including scalar and abstract parameter values plus local object identity, object addresses, typed load/store effects and operation-level volatile semantics.
 
 Core lowering distinguishes `OK`, valid-but-`UNSUPPORTED`, and actual `ERROR`; optional shadow mode skips unsupported functions, while strict mode turns them into a CI-visible coverage failure. Supported shadow compilation must remain byte-identical to default RV64 output. The temporary environment switch is migration plumbing rather than a public compiler interface. See `core-ir-v0-shadow.md` for the exact current contract.
 
@@ -209,7 +209,7 @@ DataLayout / TargetABI ownership seams
 normalized FunctionBody
         ↓
 Core IR execution shadow
-        ├── scalar values
+        ├── scalar + abstract parameter values
         └── local object / address / load-store / volatile
         ↓
 tri-state shadow + verify
@@ -219,9 +219,11 @@ existing RV64 backend remains production owner
 
 The current Core slice does not move FunctionBody storage or replace the AST→RV64 production path. It deliberately does not introduce SSA, a pass manager, alias analysis, Machine IR, stack placement or ABI locations into Core.
 
-The pipeline shadow consumes the real canonical FunctionBody rather than a source-shaped test approximation. Parser normalization details such as the trailing default return are handled at the AST/Core seam without widening Core merely to mirror parser storage.
+The pipeline shadow consumes the real canonical FunctionBody rather than a source-shaped test approximation. Parser normalization details such as the trailing default return and the physical placement of parameters at the beginning of the function-local range are absorbed at the AST/Core seam rather than leaked into RV64-facing Core semantics.
 
-The first memory boundary is now explicit: `CoreObject` represents semantic addressable storage, `OBJECT_ADDRESS` produces a typed pointer value, and `LOAD`/`STORE` carry memory effects with operation-level volatile semantics. Arrays, records, register locals, member/subscript addressing and general pointer-derived addresses remain unsupported until a real case requires them.
+The first memory boundary is explicit: `CoreObject` represents semantic addressable storage, `OBJECT_ADDRESS` produces a typed pointer value, and `LOAD`/`STORE` carry memory effects with operation-level volatile semantics. Arrays, records, register locals, member/subscript addressing and general pointer-derived addresses remain unsupported until a real case requires them.
+
+Parameter ingress is also explicit: `PARAMETER` represents the logical incoming value by source parameter index, and lowering materializes supported parameters into their CoreObject before body execution. Core does not encode ABI registers, stack locations or hidden calling-convention slots; those remain owned by TargetABI and machine lowering.
 
 Each next widening must be justified by the smallest real lowering case that exceeds current coverage. Unsupported forms remain outside the shadow rather than forcing speculative IR features.
 

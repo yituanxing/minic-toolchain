@@ -288,6 +288,11 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
         right = &function->values[instruction->value.binary.right];
         return minic_type_equal(left->type, instruction->type) &&
                minic_type_equal(right->type, instruction->type);
+    case MINIC_CORE_INSTRUCTION_PARAMETER:
+        return instruction_result_is_valid(function, instruction) &&
+               instruction->value.parameter_index < function->parameter_count &&
+               minic_type_equal(function->parameter_types[instruction->value.parameter_index],
+                                instruction->type);
     case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS: {
         MinicType pointer_type;
 
@@ -462,6 +467,14 @@ bool minic_core_function_dump(FILE *output, const MinicCoreFunction *function) {
                         instruction->result,
                         instruction->value.binary.left,
                         instruction->value.binary.right) < 0) {
+                return false;
+            }
+            break;
+        case MINIC_CORE_INSTRUCTION_PARAMETER:
+            if (fprintf(output,
+                        "  %%%" PRIu32 " = parameter %zu\n",
+                        instruction->result,
+                        instruction->value.parameter_index) < 0) {
                 return false;
             }
             break;
