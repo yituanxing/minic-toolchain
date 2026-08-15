@@ -58,8 +58,8 @@ text = replace_once(
 )
 text = replace_once(
     text,
-    '''    'PASS compiler/c0/gnu_inline_asm_operands outputs=+A,=r,+r inputs=r,I clobber=memory,t3 reservation=t3->t4 immediates=rv64-I placeholders=0,1,2 staging=stack target=RV64' ''',
-    '''    'PASS compiler/c0/gnu_inline_asm_operands outputs=+A,=m,=r,+r inputs=r,rJ,I clobber=memory,t3 reservation=t3->t4 immediates=rv64-I placeholders=0,1,2 staging=stack target=RV64' ''',
+    'outputs=+A,=r,+r inputs=r,I',
+    'outputs=+A,=m,=r,+r inputs=r,rJ,I',
     "memory output PASS summary",
 )
 runner.write_text(text)
