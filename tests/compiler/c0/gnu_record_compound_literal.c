@@ -95,3 +95,25 @@ int nested_designated_braces(int value)
     };
     return (int)(item.inner.first + item.inner.second) + item.count;
 }
+
+
+struct RangeMask {
+    unsigned long bits[4];
+};
+
+static unsigned long range_effect(void)
+{
+    return 13UL;
+}
+
+/* Linux nodemask shape: GNU range designator inside a nested array initializer. */
+void assign_range_mask(struct RangeMask *out)
+{
+    *out = (struct RangeMask) { { [1 ... 2] = 7UL, 9UL } };
+}
+
+/* A one-element range preserves normal runtime-expression evaluation. */
+void assign_single_range_effect(struct RangeMask *out)
+{
+    *out = (struct RangeMask) { { [2 ... 2] = range_effect() } };
+}

@@ -184,6 +184,23 @@ static bool add_local_array_zero_element(MinicParser *parser,
            add_local_array_element_assignment(parser, local_id, index, zero_id);
 }
 
+static bool add_array_object_zero_element(MinicParser *parser,
+                                          MinicExpressionId base_id,
+                                          size_t index,
+                                          MinicSourceSpan initializer_span) {
+    MinicExpression zero;
+    MinicExpressionId zero_id;
+
+    (void)memset(&zero, 0, sizeof(zero));
+    zero.kind = MINIC_EXPRESSION_INTEGER;
+    zero.span = initializer_span;
+    zero.type = minic_type_int();
+    zero.value_category = MINIC_VALUE_RVALUE;
+    zero.value.integer_value = 0;
+    return minic_parser_add_expression(parser, &zero, &zero_id) &&
+           add_array_object_element_assignment(parser, base_id, index, zero_id);
+}
+
 static bool add_array_object_zero_elements(MinicParser *parser,
                                            MinicExpressionId base_id,
                                            size_t element_count,
@@ -191,20 +208,54 @@ static bool add_array_object_zero_elements(MinicParser *parser,
     size_t index;
 
     for (index = 0U; index < element_count; ++index) {
-        MinicExpression zero;
-        MinicExpressionId zero_id;
-
-        (void)memset(&zero, 0, sizeof(zero));
-        zero.kind = MINIC_EXPRESSION_INTEGER;
-        zero.span = initializer_span;
-        zero.type = minic_type_int();
-        zero.value_category = MINIC_VALUE_RVALUE;
-        zero.value.integer_value = 0;
-        if (!minic_parser_add_expression(parser, &zero, &zero_id) ||
-            !add_array_object_element_assignment(parser, base_id, index, zero_id)) {
+        if (!add_array_object_zero_element(parser, base_id, index, initializer_span)) {
             return false;
         }
     }
+    return true;
+}
+
+static bool parse_runtime_array_designator(MinicParser *parser,
+                                           size_t element_count,
+                                           size_t next_index,
+                                           size_t *first_index,
+                                           size_t *last_index) {
+    int64_t first;
+    int64_t last;
+
+    if (parser == NULL || first_index == NULL || last_index == NULL ||
+        parser->current.kind != MINIC_TOKEN_LBRACKET || !minic_parser_advance(parser) ||
+        !minic_parser_parse_integer_constant_expression(parser, &first)) {
+        if (parser != NULL && parser->diagnostic != NULL &&
+            parser->diagnostic->message[0] == '\0') {
+            minic_parser_error(parser, "expected integer array designator index");
+        }
+        return false;
+    }
+    last = first;
+    if (parser->current.kind == MINIC_TOKEN_ELLIPSIS) {
+        if (!minic_parser_advance(parser) ||
+            !minic_parser_parse_integer_constant_expression(parser, &last)) {
+            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                minic_parser_error(parser, "expected GNU array range designator end");
+            }
+            return false;
+        }
+    }
+    if (!minic_parser_expect(parser, MINIC_TOKEN_RBRACKET, "expected ']' after array designator") ||
+        !minic_parser_expect(parser, MINIC_TOKEN_EQUAL, "expected '=' after array designator")) {
+        return false;
+    }
+    if (first < 0 || last < first || (uint64_t)last >= (uint64_t)element_count) {
+        minic_parser_error(parser, "runtime array designator range is out of bounds");
+        return false;
+    }
+    if ((uint64_t)first < (uint64_t)next_index) {
+        minic_parser_error(parser, "backward runtime array designators are not supported yet");
+        return false;
+    }
+    *first_index = (size_t)first;
+    *last_index = (size_t)last;
     return true;
 }
 
@@ -228,15 +279,52 @@ static bool parse_fixed_runtime_array_initializer(MinicParser *parser,
     while (parser->current.kind != MINIC_TOKEN_RBRACE) {
         MinicExpressionId value_id;
 
-        if (initializer_count >= element_count) {
-            minic_parser_error(parser, "too many runtime array initializer elements");
-            return false;
+        if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
+            MinicConstValue constant;
+            MinicSourceSpan zero_span;
+            size_t first_index;
+            size_t last_index;
+            size_t index;
+
+            if (!parse_runtime_array_designator(
+                    parser, element_count, initializer_count, &first_index, &last_index)) {
+                return false;
+            }
+            zero_span = parser->current.span;
+            for (index = initializer_count; index < first_index; ++index) {
+                if (!add_array_object_zero_element(parser, base_id, index, zero_span)) {
+                    return false;
+                }
+            }
+            if (!minic_parser_parse_expression(parser, &value_id, 0U)) {
+                return false;
+            }
+            if (last_index > first_index &&
+                !minic_const_eval_integer(
+                    parser->program, parser->target_info, value_id, &constant)) {
+                minic_parser_error(parser,
+                                   "multi-element runtime array range initializer requires an "
+                                   "integer constant expression");
+                return false;
+            }
+            for (index = first_index; index <= last_index; ++index) {
+                if (!add_array_object_element_assignment(parser, base_id, index, value_id)) {
+                    return false;
+                }
+            }
+            initializer_count = last_index + 1U;
+        } else {
+            if (initializer_count >= element_count) {
+                minic_parser_error(parser, "too many runtime array initializer elements");
+                return false;
+            }
+            if (!minic_parser_parse_expression(parser, &value_id, 0U) ||
+                !add_array_object_element_assignment(
+                    parser, base_id, initializer_count, value_id)) {
+                return false;
+            }
+            initializer_count += 1U;
         }
-        if (!minic_parser_parse_expression(parser, &value_id, 0U) ||
-            !add_array_object_element_assignment(parser, base_id, initializer_count, value_id)) {
-            return false;
-        }
-        initializer_count += 1U;
         if (parser->current.kind == MINIC_TOKEN_COMMA) {
             if (!minic_parser_advance(parser)) {
                 return false;
@@ -253,17 +341,7 @@ static bool parse_fixed_runtime_array_initializer(MinicParser *parser,
     }
     initializer_span.end = parser->current.span.end;
     while (initializer_count < element_count) {
-        MinicExpression zero;
-        MinicExpressionId zero_id;
-
-        (void)memset(&zero, 0, sizeof(zero));
-        zero.kind = MINIC_EXPRESSION_INTEGER;
-        zero.span = initializer_span;
-        zero.type = minic_type_int();
-        zero.value_category = MINIC_VALUE_RVALUE;
-        zero.value.integer_value = 0;
-        if (!minic_parser_add_expression(parser, &zero, &zero_id) ||
-            !add_array_object_element_assignment(parser, base_id, initializer_count, zero_id)) {
+        if (!add_array_object_zero_element(parser, base_id, initializer_count, initializer_span)) {
             return false;
         }
         initializer_count += 1U;
