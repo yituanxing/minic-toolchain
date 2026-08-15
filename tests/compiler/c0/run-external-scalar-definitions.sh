@@ -22,6 +22,12 @@ grep -F '  .dword 11' "$work/external_scalar_definition.s" >/dev/null
 grep -F '.globl loops_per_jiffy' "$work/external_scalar_definition.s" >/dev/null
 grep -F 'loops_per_jiffy:' "$work/external_scalar_definition.s" >/dev/null
 grep -F '  .dword 4096' "$work/external_scalar_definition.s" >/dev/null
+grep -F '.globl external_payload_wide' "$work/external_scalar_definition.s" >/dev/null
+grep -F '  .dword 1099511627776' "$work/external_scalar_definition.s" >/dev/null
+grep -F 'internal_runtime_limit:' "$work/external_scalar_definition.s" >/dev/null
+grep -F '  .dword 17592186044415000' "$work/external_scalar_definition.s" >/dev/null
+grep -F 'internal_wide_record:' "$work/external_scalar_definition.s" >/dev/null
+test "$(grep -c '  .dword 1099511627776' "$work/external_scalar_definition.s")" -ge 2
 grep -F 'internal_folded:' "$work/external_scalar_definition.s" >/dev/null
 grep -F '  .word 16' "$work/external_scalar_definition.s" >/dev/null
 if grep -F '.globl internal_folded' "$work/external_scalar_definition.s" >/dev/null; then
@@ -49,8 +55,5 @@ expect_failure() {
 
 expect_failure invalid_external_integer_nonconstant \
     'integer initializer requires an integer constant expression'
-expect_failure invalid_external_integer_payload_range \
-    'integer initializer exceeds current global payload range'
-
 printf '%s\n' \
-    'PASS compiler/c0/external_scalar_definition extern-merge=1 typed-consteval=1 int=.word long=.dword static=shared payload=int-bounded'
+    'PASS compiler/c0/external_scalar_definition extern-merge=1 typed-consteval=1 int=.word long=.dword static=shared payload=typed-bits wide=external+static+record'
