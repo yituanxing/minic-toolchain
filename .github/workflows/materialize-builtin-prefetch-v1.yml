@@ -1,0 +1,54 @@
+name: Materialize builtin prefetch support
+
+on:
+  push:
+    branches:
+      - staging/builtin-prefetch-v1
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: staging/builtin-prefetch-v1
+          fetch-depth: 0
+      - name: Materialize product delta
+        run: python3 tools/dev/materialize-builtin-prefetch-v1.py
+      - name: Build and focused validation
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang-format-18 gcc-riscv64-linux-gnu qemu-user
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+          make -j4 MODE=release BUILD_DIR=build/materialize-builtin-prefetch
+          MINIC="$GITHUB_WORKSPACE/build/materialize-builtin-prefetch/bin/minic" \
+            BUILD_DIR="$GITHUB_WORKSPACE/build/materialize-builtin-prefetch-tests" \
+            HOST_CC=cc \
+            TARGET_CC=riscv64-linux-gnu-gcc \
+            QEMU=qemu-riscv64 \
+            sh tests/compiler/c0/run-builtin-prefetch.sh
+          make check-fast
+          git diff --check
+      - name: Commit materialized product files
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/frontend/parser_expression.c \
+                  tests/compiler/c0/builtin_prefetch.c \
+                  tests/compiler/c0/invalid_builtin_prefetch_rw.c \
+                  tests/compiler/c0/invalid_builtin_prefetch_locality.c \
+                  tests/compiler/c0/invalid_builtin_prefetch_address.c \
+                  tests/compiler/c0/run-builtin-prefetch.sh \
+                  tests/compiler/c0/run-foundation-focused.sh
+          chmod +x tests/compiler/c0/run-builtin-prefetch.sh
+          git add tests/compiler/c0/run-builtin-prefetch.sh
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m 'feat: support GNU builtin prefetch [materialized]'
+          git push origin HEAD:staging/builtin-prefetch-v1
