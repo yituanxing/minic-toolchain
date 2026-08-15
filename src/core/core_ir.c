@@ -344,10 +344,82 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
     return false;
 }
 
-bool minic_core_function_verify(const MinicCoreFunction *function) {
+static bool terminator_is_valid(const MinicCoreFunction *function,
+                                const MinicCoreTerminator *terminator,
+                                const bool *available_values) {
+    if (function == NULL || terminator == NULL) {
+        return false;
+    }
+    switch (terminator->kind) {
+    case MINIC_CORE_TERMINATOR_RETURN:
+        if (minic_type_is_void(function->return_type)) {
+            return terminator->return_value == MINIC_CORE_VALUE_INVALID;
+        }
+        return terminator->return_value < function->value_count &&
+               available_values[terminator->return_value] &&
+               minic_type_equal(function->values[terminator->return_value].type,
+                                function->return_type);
+    case MINIC_CORE_TERMINATOR_BRANCH:
+        return terminator->branch_target < function->block_count;
+    case MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH:
+        return terminator->conditional.condition < function->value_count &&
+               available_values[terminator->conditional.condition] &&
+               minic_type_is_integer(function->values[terminator->conditional.condition].type) &&
+               terminator->conditional.when_true < function->block_count &&
+               terminator->conditional.when_false < function->block_count;
+    }
+    return false;
+}
+
+static bool verify_block(const MinicCoreFunction *function,
+                         MinicCoreBlockId block_id,
+                         bool *instruction_seen,
+                         bool *value_seen,
+                         bool *available_values) {
     const MinicCoreBlock *block;
-    bool *instruction_seen;
+    size_t index;
+
+    block = &function->blocks[block_id];
+    if (!storage_shape_is_valid(
+            block->instructions, block->instruction_count, block->instruction_capacity) ||
+        !block->has_terminator) {
+        return false;
+    }
+    if (function->value_count != 0U) {
+        (void)memset(available_values, 0, function->value_count * sizeof(*available_values));
+    }
+    for (index = 0U; index < block->instruction_count; ++index) {
+        MinicCoreInstructionId instruction_id;
+        const MinicCoreInstruction *instruction;
+
+        instruction_id = block->instructions[index];
+        if (instruction_id >= function->instruction_count || instruction_seen[instruction_id]) {
+            return false;
+        }
+        instruction = &function->instructions[instruction_id];
+        if (!instruction_is_valid(function, instruction, available_values)) {
+            return false;
+        }
+        if (instruction->result != MINIC_CORE_VALUE_INVALID) {
+            const MinicCoreValue *result;
+
+            result = &function->values[instruction->result];
+            if (value_seen[instruction->result] || result->definition != instruction_id) {
+                return false;
+            }
+            available_values[instruction->result] = true;
+            value_seen[instruction->result] = true;
+        }
+        instruction_seen[instruction_id] = true;
+    }
+    return terminator_is_valid(function, &block->terminator, available_values);
+}
+
+bool minic_core_function_verify(const MinicCoreFunction *function) {
     bool *available_values;
+    bool *instruction_seen;
+    bool *value_seen;
+    size_t block_index;
     size_t index;
     bool valid;
 
@@ -362,78 +434,111 @@ bool minic_core_function_verify(const MinicCoreFunction *function) {
             function->instructions, function->instruction_count, function->instruction_capacity) ||
         !storage_shape_is_valid(
             function->blocks, function->block_count, function->block_capacity) ||
-        function->block_count != 1U || function->entry_block != 0U ||
+        function->block_count == 0U || function->entry_block != 0U ||
         function->value_count > function->instruction_count) {
-        return false;
-    }
-    block = &function->blocks[0];
-    if (!storage_shape_is_valid(
-            block->instructions, block->instruction_count, block->instruction_capacity) ||
-        block->instruction_count != function->instruction_count || !block->has_terminator) {
         return false;
     }
     instruction_seen = function->instruction_count == 0U
                            ? NULL
                            : (bool *)calloc(function->instruction_count, sizeof(*instruction_seen));
+    value_seen = function->value_count == 0U
+                     ? NULL
+                     : (bool *)calloc(function->value_count, sizeof(*value_seen));
     available_values = function->value_count == 0U
                            ? NULL
                            : (bool *)calloc(function->value_count, sizeof(*available_values));
     if ((function->instruction_count != 0U && instruction_seen == NULL) ||
-        (function->value_count != 0U && available_values == NULL)) {
+        (function->value_count != 0U && (value_seen == NULL || available_values == NULL))) {
         free(instruction_seen);
+        free(value_seen);
         free(available_values);
         return false;
     }
     valid = true;
-    for (index = 0U; valid && index < block->instruction_count; ++index) {
-        MinicCoreInstructionId instruction_id;
-        const MinicCoreInstruction *instruction;
-
-        instruction_id = block->instructions[index];
-        if (instruction_id >= function->instruction_count || instruction_seen[instruction_id]) {
-            valid = false;
-            break;
-        }
-        instruction = &function->instructions[instruction_id];
-        if (!instruction_is_valid(function, instruction, available_values)) {
-            valid = false;
-            break;
-        }
-        if (instruction->result != MINIC_CORE_VALUE_INVALID) {
-            const MinicCoreValue *result;
-
-            result = &function->values[instruction->result];
-            if (available_values[instruction->result] || result->definition != instruction_id) {
-                valid = false;
-                break;
-            }
-            available_values[instruction->result] = true;
-        }
-        instruction_seen[instruction_id] = true;
+    for (block_index = 0U; valid && block_index < function->block_count; ++block_index) {
+        valid = verify_block(function,
+                             (MinicCoreBlockId)block_index,
+                             instruction_seen,
+                             value_seen,
+                             available_values);
     }
     for (index = 0U; valid && index < function->instruction_count; ++index) {
         valid = instruction_seen[index];
     }
-    if (valid) {
-        if (block->terminator.kind != MINIC_CORE_TERMINATOR_RETURN) {
-            valid = false;
-        } else if (minic_type_is_void(function->return_type)) {
-            valid = block->terminator.return_value == MINIC_CORE_VALUE_INVALID;
-        } else {
-            MinicCoreValueId return_value;
-
-            return_value = block->terminator.return_value;
-            valid = return_value < function->value_count && available_values[return_value] &&
-                    minic_type_equal(function->values[return_value].type, function->return_type);
-        }
+    for (index = 0U; valid && index < function->value_count; ++index) {
+        valid = value_seen[index];
     }
     free(instruction_seen);
+    free(value_seen);
     free(available_values);
     return valid;
 }
 
+static bool dump_instruction(FILE *output, const MinicCoreInstruction *instruction) {
+    switch (instruction->kind) {
+    case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT:
+        return fprintf(output,
+                       "  %%%" PRIu32 " = const.int %" PRId64 "\n",
+                       instruction->result,
+                       instruction->value.integer_value) >= 0;
+    case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
+        return fprintf(output,
+                       "  %%%" PRIu32 " = add.int %%%" PRIu32 ", %%%" PRIu32 "\n",
+                       instruction->result,
+                       instruction->value.binary.left,
+                       instruction->value.binary.right) >= 0;
+    case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION:
+        return fprintf(output,
+                       "  %%%" PRIu32 " = convert.int %%%" PRIu32 "\n",
+                       instruction->result,
+                       instruction->value.operand) >= 0;
+    case MINIC_CORE_INSTRUCTION_PARAMETER:
+        return fprintf(output,
+                       "  %%%" PRIu32 " = parameter %zu\n",
+                       instruction->result,
+                       instruction->value.parameter_index) >= 0;
+    case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS:
+        return fprintf(output,
+                       "  %%%" PRIu32 " = object.addr %%o%" PRIu32 "\n",
+                       instruction->result,
+                       instruction->value.object_id) >= 0;
+    case MINIC_CORE_INSTRUCTION_LOAD:
+        return fprintf(output,
+                       "  %%%" PRIu32 " = load%s %%%" PRIu32 "\n",
+                       instruction->result,
+                       instruction->value.load.is_volatile ? ".volatile" : "",
+                       instruction->value.load.address) >= 0;
+    case MINIC_CORE_INSTRUCTION_STORE:
+        return fprintf(output,
+                       "  store%s %%%" PRIu32 ", %%%" PRIu32 "\n",
+                       instruction->value.store.is_volatile ? ".volatile" : "",
+                       instruction->value.store.stored_value,
+                       instruction->value.store.address) >= 0;
+    }
+    return false;
+}
+
+static bool dump_terminator(FILE *output, const MinicCoreTerminator *terminator) {
+    switch (terminator->kind) {
+    case MINIC_CORE_TERMINATOR_RETURN:
+        if (terminator->return_value == MINIC_CORE_VALUE_INVALID) {
+            return fprintf(output, "  return\n") >= 0;
+        }
+        return fprintf(output, "  return %%%" PRIu32 "\n", terminator->return_value) >= 0;
+    case MINIC_CORE_TERMINATOR_BRANCH:
+        return fprintf(output, "  br bb%" PRIu32 "\n", terminator->branch_target) >= 0;
+    case MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH:
+        return fprintf(output,
+                       "  cond_br %%%" PRIu32 ", bb%" PRIu32 ", bb%" PRIu32 "\n",
+                       terminator->conditional.condition,
+                       terminator->conditional.when_true,
+                       terminator->conditional.when_false) >= 0;
+    }
+    return false;
+}
+
 bool minic_core_function_dump(FILE *output, const MinicCoreFunction *function) {
-    const MinicCoreBlock *block;
+    size_t block_index;
     size_t index;
 
     if (output == NULL || !minic_core_function_verify(function) ||
@@ -450,78 +555,24 @@ bool minic_core_function_dump(FILE *output, const MinicCoreFunction *function) {
             return false;
         }
     }
-    if (fprintf(output, "bb0:\n") < 0) {
-        return false;
-    }
-    block = &function->blocks[0];
-    for (index = 0U; index < block->instruction_count; ++index) {
-        const MinicCoreInstruction *instruction;
+    for (block_index = 0U; block_index < function->block_count; ++block_index) {
+        const MinicCoreBlock *block;
 
-        instruction = &function->instructions[block->instructions[index]];
-        switch (instruction->kind) {
-        case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT:
-            if (fprintf(output,
-                        "  %%%" PRIu32 " = const.int %" PRId64 "\n",
-                        instruction->result,
-                        instruction->value.integer_value) < 0) {
+        block = &function->blocks[block_index];
+        if (fprintf(output, "bb%zu:\n", block_index) < 0) {
+            return false;
+        }
+        for (index = 0U; index < block->instruction_count; ++index) {
+            const MinicCoreInstruction *instruction;
+
+            instruction = &function->instructions[block->instructions[index]];
+            if (!dump_instruction(output, instruction)) {
                 return false;
             }
-            break;
-        case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
-            if (fprintf(output,
-                        "  %%%" PRIu32 " = add.int %%%" PRIu32 ", %%%" PRIu32 "\n",
-                        instruction->result,
-                        instruction->value.binary.left,
-                        instruction->value.binary.right) < 0) {
-                return false;
-            }
-            break;
-        case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION:
-            if (fprintf(output,
-                        "  %%%" PRIu32 " = convert.int %%%" PRIu32 "\n",
-                        instruction->result,
-                        instruction->value.operand) < 0) {
-                return false;
-            }
-            break;
-        case MINIC_CORE_INSTRUCTION_PARAMETER:
-            if (fprintf(output,
-                        "  %%%" PRIu32 " = parameter %zu\n",
-                        instruction->result,
-                        instruction->value.parameter_index) < 0) {
-                return false;
-            }
-            break;
-        case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS:
-            if (fprintf(output,
-                        "  %%%" PRIu32 " = object.addr %%o%" PRIu32 "\n",
-                        instruction->result,
-                        instruction->value.object_id) < 0) {
-                return false;
-            }
-            break;
-        case MINIC_CORE_INSTRUCTION_LOAD:
-            if (fprintf(output,
-                        "  %%%" PRIu32 " = load%s %%%" PRIu32 "\n",
-                        instruction->result,
-                        instruction->value.load.is_volatile ? ".volatile" : "",
-                        instruction->value.load.address) < 0) {
-                return false;
-            }
-            break;
-        case MINIC_CORE_INSTRUCTION_STORE:
-            if (fprintf(output,
-                        "  store%s %%%" PRIu32 ", %%%" PRIu32 "\n",
-                        instruction->value.store.is_volatile ? ".volatile" : "",
-                        instruction->value.store.stored_value,
-                        instruction->value.store.address) < 0) {
-                return false;
-            }
-            break;
+        }
+        if (!dump_terminator(output, &block->terminator)) {
+            return false;
         }
     }
-    if (block->terminator.return_value == MINIC_CORE_VALUE_INVALID) {
-        return fprintf(output, "  return\n") >= 0;
-    }
-    return fprintf(output, "  return %%%" PRIu32 "\n", block->terminator.return_value) >= 0;
+    return true;
 }
