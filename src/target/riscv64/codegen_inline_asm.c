@@ -132,6 +132,9 @@ static bool validate_output(const MinicC0Program *program, const MinicInlineAsmO
     if (constraint_is(operand, "+A")) {
         return operand->access == MINIC_INLINE_ASM_OPERAND_READ_WRITE;
     }
+    if (constraint_is(operand, "=m")) {
+        return operand->access == MINIC_INLINE_ASM_OPERAND_WRITE_ONLY;
+    }
     if (constraint_is(operand, "+r")) {
         return operand->access == MINIC_INLINE_ASM_OPERAND_READ_WRITE &&
                expression->kind == MINIC_EXPRESSION_LOCAL &&
@@ -629,6 +632,10 @@ static bool emit_template(FILE *file,
                 if (fprintf(file, "(%s)", register_name) < 0) {
                     return false;
                 }
+            } else if (constraint_is(operand, "=m")) {
+                if (fprintf(file, "0(%s)", register_name) < 0) {
+                    return false;
+                }
             } else if (fputs(register_name, file) == EOF) {
                 return false;
             }
@@ -725,7 +732,7 @@ bool minic_riscv64_emit_inline_asm(FILE *file,
         const MinicInlineAsmOperand *operand;
 
         operand = &inline_asm->outputs[index];
-        if (constraint_is(operand, "+A")) {
+        if (constraint_is(operand, "+A") || constraint_is(operand, "=m")) {
             if (!minic_riscv64_emit_lvalue_address(
                     file, program, function, function_layout, operand->expression) ||
                 !minic_riscv64_emit_sp_store64(file, "a0", index * 8U)) {
@@ -761,6 +768,7 @@ bool minic_riscv64_emit_inline_asm(FILE *file,
 
     for (index = 0U; index < inline_asm->output_count; ++index) {
         if ((constraint_is(&inline_asm->outputs[index], "+A") ||
+             constraint_is(&inline_asm->outputs[index], "=m") ||
              constraint_is(&inline_asm->outputs[index], "+r")) &&
             !minic_riscv64_emit_sp_load64(file, operand_registers[index], index * 8U)) {
             return false;
