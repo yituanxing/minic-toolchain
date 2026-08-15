@@ -25,4 +25,11 @@ if grep -F '.globl priority' "$work/static_record_array.s" >/dev/null; then
     exit 1
 fi
 grep -F 'read_priority:' "$work/static_record_array.s" >/dev/null
-printf '%s\n' 'PASS compiler/c0/static_record_array inferred-count=3 fields=2 missing-field-zero=1 size=6 internal-rodata=1'
+grep -F '.type sched_core_sysctls_like, @object' "$work/static_record_array.s" >/dev/null
+grep -F '.size sched_core_sysctls_like, 32' "$work/static_record_array.s" >/dev/null
+if grep -F '.globl sched_core_sysctls_like' "$work/static_record_array.s" >/dev/null; then
+    echo 'complex static record array leaked external linkage' >&2
+    exit 1
+fi
+grep -F 'read_sysctl_size:' "$work/static_record_array.s" >/dev/null
+printf '%s\n' 'PASS compiler/c0/static_record_array inferred-count=3 fields=2 missing-field-zero=1 size=6 complex-empty=1 complex-size=32 shared-owner=1 internal-rodata=1'
