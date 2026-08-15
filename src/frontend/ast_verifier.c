@@ -1206,7 +1206,8 @@ bool minic_c0_program_verify_target(const MinicC0Program *program,
               object->relocation_count != 0U)) ||
             (object->is_zero_initialized && object->initializer_count != 0U) ||
             (object->relocation_count != 0U && !object->is_zero_initialized &&
-             (!minic_type_is_record(object->type) || object->initializer_count == 0U)) ||
+             ((!minic_type_is_record(object->type) && !minic_type_is_array(object->type)) ||
+              object->initializer_count == 0U)) ||
             !storage_is_valid(object->initializer_values,
                               object->initializer_count,
                               object->initializer_capacity) ||
