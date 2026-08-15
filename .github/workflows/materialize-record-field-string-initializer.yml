@@ -42,6 +42,7 @@ jobs:
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add \
             src/frontend/ast_global.c \
+            src/frontend/ast_verifier.c \
             src/frontend/parser_string.c \
             src/frontend/parser_internal.h \
             src/frontend/parser_global.c \
