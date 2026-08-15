@@ -1309,10 +1309,25 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
             return minic_riscv64_emit_integer_conversion(file, expression->type, "a0");
         }
         return minic_type_is_pointer(expression->type);
-    case MINIC_EXPRESSION_DISCARD:
-        return minic_type_is_void(expression->type) &&
-               minic_riscv64_emit_expression(
-                   file, program, function, function_layout, expression->value.unary.operand);
+    case MINIC_EXPRESSION_DISCARD: {
+        const MinicExpression *operand;
+        MinicExpressionId operand_id;
+
+        if (!minic_type_is_void(expression->type)) {
+            return false;
+        }
+        operand_id = expression->value.unary.operand;
+        operand = minic_c0_program_expression(program, operand_id);
+        if (operand == NULL) {
+            return false;
+        }
+        if (minic_type_is_record(operand->type) &&
+            minic_c0_record_value_is_address_backed(program, operand_id)) {
+            return minic_riscv64_emit_address_backed_record_value(
+                file, program, function, function_layout, operand_id);
+        }
+        return minic_riscv64_emit_expression(file, program, function, function_layout, operand_id);
+    }
     case MINIC_EXPRESSION_CONVERSION: {
         const MinicExpression *operand;
         const char *instruction;
