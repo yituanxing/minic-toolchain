@@ -1,0 +1,76 @@
+name: Linux PR245 Batch Pressure
+
+on:
+  push:
+    branches: [tests/linux-batch-pr245]
+
+permissions:
+  contents: read
+
+jobs:
+  batch-pressure:
+    name: configured-tu-batch
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Restore pinned Linux source archive
+        id: linux-source-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-cache/linux-6.6.143.tar.xz
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
+
+      - name: Install RISC-V Linux Kbuild dependencies
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            flex bison bc libelf-dev libssl-dev
+
+      - name: Build MiniC candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release BUILD_DIR=build/linux-batch-compiler
+
+      - name: Drive configured Linux TU batch
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/linux-batch-compiler/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/linux-batch" \
+          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-cache/linux-6.6.143.tar.xz" \
+          CROSS_COMPILE=riscv64-linux-gnu- \
+          LINUX_BATCH_OFFSET=0 LINUX_BATCH_LIMIT=100 LINUX_BATCH_JOBS=2 \
+            sh tests/external/linux/batch_probe.sh
+
+      - name: Show compact batch summary
+        if: always()
+        shell: bash
+        run: |
+          test -s build/linux-batch/batch-summary.txt && cat build/linux-batch/batch-summary.txt || true
+
+      - name: Upload Linux batch evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-batch-${{ github.run_id }}
+          path: |
+            build/linux-batch/batch-summary.txt
+            build/linux-batch/batch-results.tsv
+            build/linux-batch/batch-results.json
+            build/linux-batch/failure-contexts.txt
+            build/linux-batch/tu-manifest.txt
+            build/linux-batch/selected-tus.txt
+            build/linux-batch/kbuild-plan.stderr
+            build/linux-batch/preprocess.log
+            build/linux-batch/minic-stderr/**/*.stderr
+          if-no-files-found: ignore
+          retention-days: 7
