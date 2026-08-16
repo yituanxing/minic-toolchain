@@ -1,0 +1,151 @@
+name: Linux 6.6.143 Batch Pressure
+
+on:
+  push:
+    branches: [tests/linux-batch-pressure-v1]
+  workflow_dispatch:
+    inputs:
+      offset:
+        description: Configured TU window offset
+        required: false
+        default: '0'
+      limit:
+        description: Number of configured TUs to compile; 0 means all remaining
+        required: false
+        default: '100'
+      minic_jobs:
+        description: Concurrent MiniC processes
+        required: false
+        default: '2'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-6.6.143-batch-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  batch-pressure:
+    name: configured-tu-batch
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Restore pinned Linux source archive
+        id: linux-source-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-cache/linux-6.6.143.tar.xz
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
+
+      - name: Install RISC-V Linux Kbuild dependencies
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            flex bison bc libelf-dev libssl-dev
+
+      - name: Build MiniC candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release BUILD_DIR=build/linux-batch-compiler
+
+      - name: Drive configured Linux TU batch
+        shell: bash
+        env:
+          BATCH_OFFSET: ${{ github.event_name == 'workflow_dispatch' && inputs.offset || '0' }}
+          BATCH_LIMIT: ${{ github.event_name == 'workflow_dispatch' && inputs.limit || '100' }}
+          BATCH_JOBS: ${{ github.event_name == 'workflow_dispatch' && inputs.minic_jobs || '2' }}
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/linux-batch-compiler/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/linux-batch" \
+          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-cache/linux-6.6.143.tar.xz" \
+          CROSS_COMPILE=riscv64-linux-gnu- \
+          LINUX_BATCH_OFFSET="$BATCH_OFFSET" \
+          LINUX_BATCH_LIMIT="$BATCH_LIMIT" \
+          LINUX_BATCH_JOBS="$BATCH_JOBS" \
+            sh tests/external/linux/batch_probe.sh
+
+      - name: Show compact batch summary
+        if: always()
+        shell: bash
+        run: |
+          if test -s build/linux-batch/batch-summary.txt; then
+            cat build/linux-batch/batch-summary.txt
+          else
+            printf '%s\n' 'No batch summary was produced.'
+            test -s build/linux-batch/kbuild-plan.stderr && tail -n 120 build/linux-batch/kbuild-plan.stderr || true
+            test -s build/linux-batch/preprocess.log && tail -n 120 build/linux-batch/preprocess.log || true
+          fi
+
+      - name: Retain crashing MiniC inputs
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          import gzip
+          import json
+          from pathlib import Path
+
+          work = Path('build/linux-batch')
+          results_path = work / 'batch-results.json'
+          if not results_path.is_file():
+              raise SystemExit(0)
+          output_root = work / 'crash-inputs'
+          captured = 0
+          for row in json.loads(results_path.read_text()):
+              rc = row.get('returncode')
+              rel = row.get('input')
+              if not isinstance(rc, int) or rc >= 0 or not rel:
+                  continue
+              source = work / 'kbuild' / rel
+              if not source.is_file():
+                  continue
+              destination = output_root / (rel + '.gz')
+              destination.parent.mkdir(parents=True, exist_ok=True)
+              with source.open('rb') as src, gzip.open(destination, 'wb', compresslevel=6) as dst:
+                  while True:
+                      block = src.read(1024 * 1024)
+                      if not block:
+                          break
+                      dst.write(block)
+              captured += 1
+              print(f'LINUX_BATCH_CRASH_INPUT rc={rc} input={rel} artifact={destination}')
+          print(f'LINUX_BATCH_CRASH_INPUTS captured={captured}')
+          PY
+
+      - name: Upload Linux batch evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-batch-${{ github.run_id }}
+          path: |
+            build/linux-batch/batch-summary.txt
+            build/linux-batch/batch-results.tsv
+            build/linux-batch/batch-results.json
+            build/linux-batch/failure-contexts.txt
+            build/linux-batch/tu-manifest.txt
+            build/linux-batch/selected-tus.txt
+            build/linux-batch/kbuild-plan.stderr
+            build/linux-batch/preprocess.log
+            build/linux-batch/minic-stderr/**/*.stderr
+            build/linux-batch/crash-inputs/**/*.i.gz
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Save pinned Linux source archive
+        if: always() && steps.linux-source-cache.outputs.cache-hit != 'true' && hashFiles('build/linux-cache/linux-6.6.143.tar.xz') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: build/linux-cache/linux-6.6.143.tar.xz
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
