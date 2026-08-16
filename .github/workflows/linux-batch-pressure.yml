@@ -8,11 +8,11 @@ on:
       offset:
         description: Configured TU window offset
         required: false
-        default: '74'
+        default: '0'
       limit:
         description: Number of configured TUs to compile; 0 means all remaining
         required: false
-        default: '5'
+        default: '100'
       minic_jobs:
         description: Concurrent MiniC processes
         required: false
@@ -52,12 +52,6 @@ jobs:
             gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
             flex bison bc libelf-dev libssl-dev
 
-      - name: Add temporary RV64 object failure diagnostic
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          python3 tools/dev/linux-backend-frontier-debug.py
-
       - name: Build MiniC candidate
         shell: bash
         run: |
@@ -67,8 +61,8 @@ jobs:
       - name: Drive configured Linux TU batch
         shell: bash
         env:
-          BATCH_OFFSET: ${{ github.event_name == 'workflow_dispatch' && inputs.offset || '74' }}
-          BATCH_LIMIT: ${{ github.event_name == 'workflow_dispatch' && inputs.limit || '5' }}
+          BATCH_OFFSET: ${{ github.event_name == 'workflow_dispatch' && inputs.offset || '0' }}
+          BATCH_LIMIT: ${{ github.event_name == 'workflow_dispatch' && inputs.limit || '100' }}
           BATCH_JOBS: ${{ github.event_name == 'workflow_dispatch' && inputs.minic_jobs || '2' }}
         run: |
           set -Eeuo pipefail
@@ -93,7 +87,7 @@ jobs:
             test -s build/linux-batch/preprocess.log && tail -n 120 build/linux-batch/preprocess.log || true
           fi
 
-      - name: Retain late-stage MiniC inputs
+      - name: Retain crashing MiniC inputs
         if: always()
         shell: bash
         run: |
@@ -107,16 +101,12 @@ jobs:
           results_path = work / 'batch-results.json'
           if not results_path.is_file():
               raise SystemExit(0)
-          output_root = work / 'late-inputs'
+          output_root = work / 'crash-inputs'
           captured = 0
-          late_messages = {
-              'cannot write RISC-V assembly',
-              'parsed AST violates compiler contracts',
-          }
           for row in json.loads(results_path.read_text()):
+              rc = row.get('returncode')
               rel = row.get('input')
-              message = row.get('message')
-              if not rel or message not in late_messages:
+              if not isinstance(rc, int) or rc >= 0 or not rel:
                   continue
               source = work / 'kbuild' / rel
               if not source.is_file():
@@ -130,8 +120,8 @@ jobs:
                           break
                       dst.write(block)
               captured += 1
-              print(f'LINUX_BATCH_LATE_INPUT input={rel} message={message} artifact={destination}')
-          print(f'LINUX_BATCH_LATE_INPUTS captured={captured}')
+              print(f'LINUX_BATCH_CRASH_INPUT rc={rc} input={rel} artifact={destination}')
+          print(f'LINUX_BATCH_CRASH_INPUTS captured={captured}')
           PY
 
       - name: Upload Linux batch evidence
@@ -149,7 +139,7 @@ jobs:
             build/linux-batch/kbuild-plan.stderr
             build/linux-batch/preprocess.log
             build/linux-batch/minic-stderr/**/*.stderr
-            build/linux-batch/late-inputs/**/*.i.gz
+            build/linux-batch/crash-inputs/**/*.i.gz
           if-no-files-found: ignore
           retention-days: 7
 
