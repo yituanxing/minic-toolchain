@@ -1,0 +1,203 @@
+name: Staging Inline Asm Readwrite Earlyclobber V1
+
+on:
+  push:
+    branches:
+      - staging/inline-asm-readwrite-earlyclobber-v1
+
+permissions:
+  contents: write
+
+jobs:
+  validate-and-publish:
+    if: ${{ !contains(github.event.head_commit.message, '[publish-v1]') }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install validation tools
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang-format gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu qemu-user
+
+      - name: Apply read-write early-clobber support
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('src/target/riscv64/codegen_inline_asm.c')
+          s = p.read_text()
+
+          anchor = '''static bool constraint_is_immediate(const MinicInlineAsmOperand *operand) {
+              return constraint_is(operand, "i") || constraint_is(operand, "I");
+          }
+          '''
+          assert s.count(anchor) == 1
+          helper = anchor + '''
+          /*
+           * +r and +&r are both read-write register outputs.  The '&' form also
+           * requires non-overlap with unrelated inputs; the current allocator is
+           * intentionally more conservative and assigns one physical register to
+           * every unmatched register operand, so that early-clobber rule already
+           * holds without a separate allocation path.
+           */
+          static bool constraint_is_readwrite_register(const MinicInlineAsmOperand *operand) {
+              return constraint_is(operand, "+r") || constraint_is(operand, "+&r");
+          }
+          '''
+          s = s.replace(anchor, helper, 1)
+
+          replacements = [
+              ('''    return constraint_is(output, "=r") || constraint_is(output, "=&r") ||
+                     constraint_is(output, "+r");
+          ''', '''    return constraint_is(output, "=r") || constraint_is(output, "=&r") ||
+                     constraint_is_readwrite_register(output);
+          '''),
+              ('''    if (constraint_is(operand, "+r")) {
+          ''', '''    if (constraint_is_readwrite_register(operand)) {
+          '''),
+              ('''           constraint_is(operand, "=&r") || constraint_is(operand, "+r");
+          ''', '''           constraint_is(operand, "=&r") || constraint_is_readwrite_register(operand);
+          '''),
+              ('''        } else if (constraint_is(operand, "+r")) {
+          ''', '''        } else if (constraint_is_readwrite_register(operand)) {
+          '''),
+              ('''             constraint_is(&inline_asm->outputs[index], "+r")) &&
+          ''', '''             constraint_is_readwrite_register(&inline_asm->outputs[index])) &&
+          '''),
+              ('''            !constraint_is(operand, "+r")) {
+          ''', '''            !constraint_is_readwrite_register(operand)) {
+          '''),
+          ]
+          for old, new in replacements:
+              count = s.count(old)
+              assert count == 1, (old, count)
+              s = s.replace(old, new, 1)
+
+          # There are two read-write-specific branches in the output lifecycle;
+          # one was replaced above in validate_output, the second is writeback.
+          old = '''        if (constraint_is(operand, "+r")) {
+          '''
+          assert s.count(old) == 1, s.count(old)
+          s = s.replace(old, '''        if (constraint_is_readwrite_register(operand)) {
+          ''', 1)
+
+          p.write_text(s)
+          PY
+
+          cat > tests/compiler/c0/gnu_inline_asm_readwrite_earlyclobber.c <<'EOF'
+          static unsigned long readwrite_earlyclobber(unsigned long left, unsigned long right) {
+              register unsigned long a0 asm("a0") = left;
+              register unsigned long a1 asm("a1") = right;
+              unsigned long scratch = 3;
+              unsigned long extra = 7;
+
+              asm volatile("add %0, %0, %3\n\t"
+                           "add %1, %1, %3\n\t"
+                           "add %2, %2, %3"
+                           : "+&r"(a0), "+&r"(a1), "+&r"(scratch)
+                           : "r"(extra)
+                           : "memory");
+              return a0 + a1 + scratch;
+          }
+
+          int main(void) {
+              return readwrite_earlyclobber(4, 5) == 33 ? 0 : 1;
+          }
+          EOF
+
+          cat > tests/compiler/c0/run-gnu-inline-asm-readwrite-earlyclobber-rv64.sh <<'EOF'
+          #!/bin/sh
+          set -eu
+          root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+          minic=${MINIC:-"$root/build/debug/bin/minic"}
+          host_cc=${HOST_CC:-${CC:-cc}}
+          rv_cc=${RV_CC:-riscv64-linux-gnu-gcc}
+          qemu=${QEMU_RISCV64:-qemu-riscv64}
+          work=${BUILD_DIR:-"$root/build/debug"}/tests/compiler-c0-gnu-inline-asm-readwrite-earlyclobber
+          source="$root/tests/compiler/c0/gnu_inline_asm_readwrite_earlyclobber.c"
+          rm -rf "$work"
+          mkdir -p "$work"
+          "$host_cc" -E -P -x c "$source" -o "$work/probe.i"
+          "$minic" -S "$work/probe.i" -o "$work/minic.s"
+          grep -F 'add a0, a0,' "$work/minic.s" >/dev/null
+          grep -F 'add a1, a1,' "$work/minic.s" >/dev/null
+          "$rv_cc" -static "$work/minic.s" -o "$work/minic.elf"
+          "$rv_cc" -static -std=gnu11 "$source" -o "$work/gcc.elf"
+          set +e
+          "$qemu" "$work/gcc.elf"
+          gcc_status=$?
+          "$qemu" "$work/minic.elf"
+          minic_status=$?
+          set -e
+          test "$gcc_status" -eq 0
+          test "$minic_status" -eq "$gcc_status"
+          printf '%s\n' 'PASS compiler/c0/gnu_inline_asm_readwrite_earlyclobber_rv64 constraint=+&r fixed=a0,a1 unmatched_nonoverlap=1 qemu=1'
+          EOF
+          chmod +x tests/compiler/c0/run-gnu-inline-asm-readwrite-earlyclobber-rv64.sh
+
+      - name: Canonical formatting
+        run: |
+          set -Eeuo pipefail
+          clang-format -i src/target/riscv64/codegen_inline_asm.c tests/compiler/c0/gnu_inline_asm_readwrite_earlyclobber.c
+
+      - name: Release Werror build
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release BUILD_DIR=build/staging-readwrite-earlyclobber CFLAGS_EXTRA='-Werror'
+
+      - name: Focused read-write early-clobber regression
+        env:
+          MINIC: ${{ github.workspace }}/build/staging-readwrite-earlyclobber/bin/minic
+          BUILD_DIR: ${{ github.workspace }}/build/staging-readwrite-earlyclobber
+        run: |
+          set -Eeuo pipefail
+          sh tests/compiler/c0/run-gnu-inline-asm-readwrite-earlyclobber-rv64.sh
+
+      - name: Preserve local fixed-register regression
+        env:
+          MINIC: ${{ github.workspace }}/build/staging-readwrite-earlyclobber/bin/minic
+          BUILD_DIR: ${{ github.workspace }}/build/staging-readwrite-earlyclobber
+        run: |
+          set -Eeuo pipefail
+          sh tests/compiler/c0/run-gnu-local-fixed-register-rv64.sh
+
+      - name: Preserve existing inline-asm regression
+        env:
+          MINIC: ${{ github.workspace }}/build/staging-readwrite-earlyclobber/bin/minic
+          BUILD_DIR: ${{ github.workspace }}/build/staging-readwrite-earlyclobber
+        run: |
+          set -Eeuo pipefail
+          sh tests/compiler/c0/run-gnu-inline-asm-operands-rv64.sh
+
+      - name: Broad C0 suite
+        env:
+          MINIC: ${{ github.workspace }}/build/staging-readwrite-earlyclobber/bin/minic
+          BUILD_DIR: ${{ github.workspace }}/build/staging-readwrite-earlyclobber
+        run: |
+          set -Eeuo pipefail
+          sh tests/compiler/c0/check-fast.sh
+
+      - name: Foundation focused suite
+        env:
+          MINIC: ${{ github.workspace }}/build/staging-readwrite-earlyclobber/bin/minic
+          BUILD_DIR: ${{ github.workspace }}/build/staging-readwrite-earlyclobber
+        run: |
+          set -Eeuo pipefail
+          sh tests/compiler/foundation/check-foundation.sh
+
+      - name: Publish validated product diff
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'LiYang Dong'
+          git config user.email '119646676+yituanxing@users.noreply.github.com'
+          git add src/target/riscv64/codegen_inline_asm.c \
+                  tests/compiler/c0/gnu_inline_asm_readwrite_earlyclobber.c \
+                  tests/compiler/c0/run-gnu-inline-asm-readwrite-earlyclobber-rv64.sh
+          git diff --cached --check
+          git commit -m 'target: support RV64 +&r inline asm [publish-v1]'
+          git push origin HEAD:staging/inline-asm-readwrite-earlyclobber-v1
