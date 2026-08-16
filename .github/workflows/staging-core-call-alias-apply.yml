@@ -40,7 +40,7 @@ jobs:
           assert text.count(old) == 1, text.count(old)
           path.write_text(text.replace(old, new, 1))
           PY
-          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh apply
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
           git diff --check -- src/core/core_lower.c
 
       - name: Commit source-only patch
