@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <string.h>
 
-#define MINIC_RISCV64_INLINE_ASM_MAX_OPERANDS 6U
+#define MINIC_RISCV64_INLINE_ASM_MAX_OPERANDS 8U
 
 typedef struct MinicRiscv64InlineAsmRegisterCandidate {
     const char *name;
