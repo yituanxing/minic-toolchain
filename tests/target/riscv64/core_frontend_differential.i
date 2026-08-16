@@ -1,3 +1,8 @@
+struct CoreDiffLayout {
+    char prefix;
+    int value;
+};
+
 int core_diff_math(int x, int y) {
     return -(x + y);
 }
@@ -35,6 +40,22 @@ int core_diff_call_target(int a, int b, int c, int d, int e, int f) {
 
 int core_diff_call(int value) {
     return core_diff_call_target(value, 2, 3, 4, 5, 6);
+}
+
+int core_diff_field(struct CoreDiffLayout *item) {
+    item->value = 41;
+    return 7;
+}
+
+int core_diff_pointer_call_target(int *value) {
+    return !value;
+}
+
+int core_diff_field_call(struct CoreDiffLayout *item) {
+    int result;
+
+    result = core_diff_pointer_call_target(&item->value);
+    return result;
 }
 
 void core_diff_call_nop(void) {

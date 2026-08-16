@@ -21,9 +21,16 @@
  * metadata carried separately from Core IR through MinicRiscv64FunctionSymbol.
  */
 bool minic_riscv64_core_function_can_emit_basic_v0(const MinicCoreFunction *function);
+bool minic_riscv64_core_function_can_emit_basic_v0_for_program(const MinicC0Program *program,
+                                                               const MinicCoreFunction *function);
 
 bool minic_riscv64_emit_core_function_basic_v0_with_symbol(
     FILE *file, const MinicCoreFunction *function, const MinicRiscv64FunctionSymbol *symbol);
+bool minic_riscv64_emit_core_function_basic_v0_for_program_with_symbol(
+    FILE *file,
+    const MinicC0Program *program,
+    const MinicCoreFunction *function,
+    const MinicRiscv64FunctionSymbol *symbol);
 
 static inline bool minic_riscv64_emit_core_function_basic_v0(FILE *file,
                                                              const MinicCoreFunction *function,
