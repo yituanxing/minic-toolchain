@@ -62,6 +62,7 @@ for test_script in \
     run-static-local-fixed-arrays.sh \
     run-static-inferred-char-arrays.sh \
     run-static-inferred-integer-array.sh \
+    run-static-mutable-arrays.sh \
     run-prefix-update-expressions.sh \
     run-function-designator-calls.sh \
     run-function-address-expressions.sh \
