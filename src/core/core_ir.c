@@ -439,6 +439,12 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
         }
         return minic_type_equal(pointer_type, instruction->type);
     }
+    case MINIC_CORE_INSTRUCTION_ADDRESS_OFFSET:
+        return instruction_result_is_valid(function, instruction) &&
+               minic_type_is_pointer(instruction->type) &&
+               instruction->value.address_offset.base < function->value_count &&
+               available_values[instruction->value.address_offset.base] &&
+               minic_type_is_pointer(function->values[instruction->value.address_offset.base].type);
     case MINIC_CORE_INSTRUCTION_LOAD: {
         MinicType pointee;
         MinicType value_type;
@@ -694,6 +700,12 @@ static bool dump_instruction(FILE *output,
                        "  %%%" PRIu32 " = object.addr %%o%" PRIu32 "\n",
                        instruction->result,
                        instruction->value.object_id) >= 0;
+    case MINIC_CORE_INSTRUCTION_ADDRESS_OFFSET:
+        return fprintf(output,
+                       "  %%%" PRIu32 " = addr.offset %%%" PRIu32 ", %" PRId64 "\n",
+                       instruction->result,
+                       instruction->value.address_offset.base,
+                       instruction->value.address_offset.byte_offset) >= 0;
     case MINIC_CORE_INSTRUCTION_LOAD:
         return fprintf(output,
                        "  %%%" PRIu32 " = load%s %%%" PRIu32 "\n",
