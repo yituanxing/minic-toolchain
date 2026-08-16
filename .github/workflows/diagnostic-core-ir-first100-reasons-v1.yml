@@ -1,0 +1,299 @@
+name: Diagnostic Core IR First100 Reasons V1
+
+on:
+  push:
+    branches:
+      - diagnostic/core-ir-first100-reasons-v1
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore pinned Linux source archive
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-cache/linux-6.6.143.tar.xz
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
+
+      - name: Install Linux Kbuild dependencies
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            flex bison bc libelf-dev libssl-dev
+
+      - name: Instrument first unsupported Core family
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('src/core/core_lower.c')
+          s = p.read_text()
+          old = '#include <stdlib.h>\n#include <string.h>\n'
+          assert s.count(old) == 1
+          s = s.replace(old, '#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n', 1)
+
+          anchor = '''static MinicCoreLowerStatus
+          lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool *terminated);
+          '''
+          assert s.count(anchor) == 1
+          helper = anchor + '''
+          static MinicCoreLowerStatus core_diag_unsupported(const char *reason) {
+              (void)fprintf(stderr,
+                            "MINIC_CORE_UNSUPPORTED_REASON reason=%s\\n",
+                            reason != NULL ? reason : "unknown");
+              return MINIC_CORE_LOWER_UNSUPPORTED;
+          }
+          '''
+          s = s.replace(anchor, helper, 1)
+
+          replacements = [
+              ('''    if (local->is_array || local->is_register_storage || !minic_type_is_integer(local->type)) {
+                  return MINIC_CORE_LOWER_UNSUPPORTED;
+              }
+          ''', '''    if (local->is_array || local->is_register_storage || !minic_type_is_integer(local->type)) {
+                  return core_diag_unsupported("local_object_form");
+              }
+          '''),
+              ('''        if (!minic_type_is_integer(parameter->type) || minic_type_is_const(parameter->type) ||
+                      minic_type_is_volatile(parameter->type) || parameter->is_array ||
+                      parameter->is_register_storage) {
+                      return MINIC_CORE_LOWER_UNSUPPORTED;
+                  }
+          ''', '''        if (!minic_type_is_integer(parameter->type) || minic_type_is_const(parameter->type) ||
+                      minic_type_is_volatile(parameter->type) || parameter->is_array ||
+                      parameter->is_register_storage) {
+                      return core_diag_unsupported("parameter_form");
+                  }
+          '''),
+              ('''    if (expression->kind != MINIC_EXPRESSION_LOCAL ||
+                  expression->value_category != MINIC_VALUE_LVALUE) {
+                  return MINIC_CORE_LOWER_UNSUPPORTED;
+              }
+          ''', '''    if (expression->kind != MINIC_EXPRESSION_LOCAL ||
+                  expression->value_category != MINIC_VALUE_LVALUE) {
+                  return core_diag_unsupported("address_form");
+              }
+          '''),
+              ('''    if (!minic_type_is_integer(source->type)) {
+                  return MINIC_CORE_LOWER_UNSUPPORTED;
+              }
+          ''', '''    if (!minic_type_is_integer(source->type)) {
+                  return core_diag_unsupported("conversion_source_type");
+              }
+          '''),
+              ('''    if (!minic_c0_integer_assignment_value_type(
+                  context->body->program, target_type, expression_id, &result_type)) {
+                  return MINIC_CORE_LOWER_UNSUPPORTED;
+              }
+          ''', '''    if (!minic_c0_integer_assignment_value_type(
+                  context->body->program, target_type, expression_id, &result_type)) {
+                  return core_diag_unsupported("assignment_conversion");
+              }
+          '''),
+              ('''    if (expression->value_category != MINIC_VALUE_RVALUE) {
+                  return MINIC_CORE_LOWER_UNSUPPORTED;
+              }
+          ''', '''    if (expression->value_category != MINIC_VALUE_RVALUE) {
+                  return core_diag_unsupported("value_category");
+              }
+          '''),
+              ('''        if (!minic_type_is_integer(expression->type) || !minic_type_is_integer(operand->type) ||
+                      !minic_type_unqualified(expression->type, &target_type) ||
+                      !minic_type_equal(target_type, expression->type)) {
+                      return MINIC_CORE_LOWER_UNSUPPORTED;
+                  }
+          ''', '''        if (!minic_type_is_integer(expression->type) || !minic_type_is_integer(operand->type) ||
+                      !minic_type_unqualified(expression->type, &target_type) ||
+                      !minic_type_equal(target_type, expression->type)) {
+                      return core_diag_unsupported("integer_conversion_form");
+                  }
+          '''),
+              ('''        if (!minic_type_is_integer(expression->type)) {
+                      return MINIC_CORE_LOWER_UNSUPPORTED;
+                  }
+          ''', '''        if (!minic_type_is_integer(expression->type)) {
+                      return core_diag_unsupported("integer_add_type");
+                  }
+          '''),
+              ('''    if (expression->kind != MINIC_EXPRESSION_ASSIGNMENT) {
+                  return MINIC_CORE_LOWER_UNSUPPORTED;
+              }
+          ''', '''    if (expression->kind != MINIC_EXPRESSION_ASSIGNMENT) {
+                  return core_diag_unsupported("expression_statement_kind");
+              }
+          '''),
+              ('''        if (statement->expression != MINIC_EXPRESSION_INVALID) {
+                      return MINIC_CORE_LOWER_UNSUPPORTED;
+                  }
+          ''', '''        if (statement->expression != MINIC_EXPRESSION_INVALID) {
+                      return core_diag_unsupported("void_return_value");
+                  }
+          '''),
+              ('''        if (!minic_type_is_integer(context->source_function->return_type)) {
+                      return MINIC_CORE_LOWER_UNSUPPORTED;
+                  }
+          ''', '''        if (!minic_type_is_integer(context->source_function->return_type)) {
+                      return core_diag_unsupported("return_type");
+                  }
+          '''),
+              ('''    if (condition_expression == NULL || then_source == NULL ||
+                  !minic_type_is_integer(condition_expression->type)) {
+                  return MINIC_CORE_LOWER_UNSUPPORTED;
+              }
+          ''', '''    if (condition_expression == NULL || then_source == NULL ||
+                  !minic_type_is_integer(condition_expression->type)) {
+                  return core_diag_unsupported("if_condition_or_shape");
+              }
+          '''),
+              ('''        statement->expression == MINIC_EXPRESSION_INVALID ||
+                  statement->then_block == MINIC_BLOCK_INVALID ||
+                  statement->else_block != MINIC_BLOCK_INVALID) {
+                  return MINIC_CORE_LOWER_UNSUPPORTED;
+              }
+          ''', '''        statement->expression == MINIC_EXPRESSION_INVALID ||
+                  statement->then_block == MINIC_BLOCK_INVALID ||
+                  statement->else_block != MINIC_BLOCK_INVALID) {
+                  return core_diag_unsupported("while_shape");
+              }
+          '''),
+              ('''    if (condition_expression == NULL || body_source == NULL ||
+                  !minic_type_is_integer(condition_expression->type)) {
+                  return MINIC_CORE_LOWER_UNSUPPORTED;
+              }
+          ''', '''    if (condition_expression == NULL || body_source == NULL ||
+                  !minic_type_is_integer(condition_expression->type)) {
+                  return core_diag_unsupported("while_condition");
+              }
+          '''),
+              ('''            if (statement->kind != MINIC_STATEMENT_RETURN) {
+                          return MINIC_CORE_LOWER_UNSUPPORTED;
+                      }
+          ''', '''            if (statement->kind != MINIC_STATEMENT_RETURN) {
+                          return core_diag_unsupported("post_termination_statement");
+                      }
+          '''),
+              ('''        if (statement->cleanup_context != MINIC_CLEANUP_CONTEXT_ROOT ||
+                      statement->cleanup_stop_context != MINIC_CLEANUP_CONTEXT_ROOT) {
+                      return MINIC_CORE_LOWER_UNSUPPORTED;
+                  }
+          ''', '''        if (statement->cleanup_context != MINIC_CLEANUP_CONTEXT_ROOT ||
+                      statement->cleanup_stop_context != MINIC_CLEANUP_CONTEXT_ROOT) {
+                      return core_diag_unsupported("cleanup_context");
+                  }
+          '''),
+              ('''            if (statement_index + 1U >= source_block->statement_count) {
+                          return MINIC_CORE_LOWER_UNSUPPORTED;
+                      }
+          ''', '''            if (statement_index + 1U >= source_block->statement_count) {
+                          return core_diag_unsupported("label_or_loop_shape");
+                      }
+          '''),
+              ('''            if (!internal_while_label_pair(statement, loop)) {
+                          return MINIC_CORE_LOWER_UNSUPPORTED;
+                      }
+          ''', '''            if (!internal_while_label_pair(statement, loop)) {
+                          return core_diag_unsupported("label_or_loop_shape");
+                      }
+          '''),
+              ('''            default:
+                          return MINIC_CORE_LOWER_UNSUPPORTED;
+          ''', '''            default:
+                          return core_diag_unsupported("statement_kind");
+          '''),
+              ('''    if (source_block->statement_count == 0U) {
+                  return MINIC_CORE_LOWER_UNSUPPORTED;
+              }
+          ''', '''    if (source_block->statement_count == 0U) {
+                  return core_diag_unsupported("empty_function_body");
+              }
+          '''),
+              ('''    if (!terminated) {
+                  minic_core_function_destroy(&lowered);
+                  return MINIC_CORE_LOWER_UNSUPPORTED;
+              }
+          ''', '''    if (!terminated) {
+                  minic_core_function_destroy(&lowered);
+                  return core_diag_unsupported("function_fallthrough");
+              }
+          '''),
+          ]
+          for old, new in replacements:
+              count = s.count(old)
+              if count:
+                  s = s.replace(old, new)
+
+          # Any remaining origin gets a coarse bucket instead of going unobserved.
+          s = s.replace('return MINIC_CORE_LOWER_UNSUPPORTED;',
+                        'return core_diag_unsupported("other");')
+          p.write_text(s)
+          PY
+
+      - name: Build diagnostic compiler
+        run: make -j4 MODE=release BUILD_DIR=build/core-reasons-compiler
+
+      - name: Drive fixed first100 with Core shadow
+        continue-on-error: true
+        env:
+          MINIC_CORE_IR: shadow
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/core-reasons-compiler/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/core-reasons-linux" \
+          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-cache/linux-6.6.143.tar.xz" \
+          CROSS_COMPILE=riscv64-linux-gnu- \
+          LINUX_BATCH_OFFSET=0 LINUX_BATCH_LIMIT=100 LINUX_BATCH_JOBS=2 \
+            sh tests/external/linux/batch_probe.sh
+
+      - name: Aggregate first unsupported reasons
+        if: always()
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from collections import Counter
+          from pathlib import Path
+          import re
+
+          out = Path('build/core-reasons-linux')
+          out.mkdir(parents=True, exist_ok=True)
+          root = out / 'minic-stderr'
+          pattern = re.compile(r'^MINIC_CORE_UNSUPPORTED_REASON reason=(.+)$')
+          reasons = Counter()
+          total_markers = 0
+          for path in root.rglob('*.stderr') if root.is_dir() else []:
+              for line in path.read_text(errors='replace').splitlines():
+                  match = pattern.match(line.strip())
+                  if match:
+                      reasons[match.group(1)] += 1
+                      total_markers += 1
+          lines = ['MINIC_CORE_FIRST100_UNSUPPORTED_REASONS', f'total_unsupported={total_markers}']
+          for reason, count in reasons.most_common():
+              pct = 100.0 * count / total_markers if total_markers else 0.0
+              lines.append(f'{reason}={count} ({pct:.2f}%)')
+          text = '\n'.join(lines) + '\n'
+          (out / 'core-unsupported-reasons.txt').write_text(text)
+          print(text, end='')
+          PY
+          test -s build/core-reasons-linux/batch-summary.txt && cat build/core-reasons-linux/batch-summary.txt || true
+
+      - name: Upload reason evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-ir-first100-reasons-${{ github.run_id }}
+          path: |
+            build/core-reasons-linux/core-unsupported-reasons.txt
+            build/core-reasons-linux/batch-summary.txt
+            build/core-reasons-linux/minic-stderr/**/*.stderr
+          if-no-files-found: ignore
+          retention-days: 7
