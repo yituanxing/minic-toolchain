@@ -332,25 +332,22 @@ static bool emit_terminator(FILE *file,
     return false;
 }
 
-bool minic_riscv64_emit_core_function_basic_v0(FILE *file,
-                                               const MinicCoreFunction *function,
-                                               const char *symbol_name) {
+bool minic_riscv64_emit_core_function_basic_v0(
+    FILE *file,
+    const MinicCoreFunction *function,
+    const MinicRiscv64FunctionSymbol *symbol) {
     MinicRiscv64CoreFrame frame;
+    const char *symbol_name;
     size_t block_index;
 
-    if (file == NULL || symbol_name == NULL || symbol_name[0] == '\0' ||
+    if (file == NULL || symbol == NULL || symbol->symbol_name == NULL ||
+        symbol->symbol_name[0] == '\0' ||
         !minic_riscv64_core_function_can_emit_basic_v0(function) ||
         !core_frame_initialize(function, &frame)) {
         return false;
     }
-    if (fprintf(file,
-                ".text\n"
-                ".globl %s\n"
-                ".type %s, @function\n"
-                "%s:\n",
-                symbol_name,
-                symbol_name,
-                symbol_name) < 0 ||
+    symbol_name = symbol->symbol_name;
+    if (!minic_riscv64_emit_function_symbol_begin(file, symbol) ||
         !minic_riscv64_emit_stack_allocate(file, frame.frame_size) ||
         fprintf(file, "  j .L%s_core_bb%" PRIu32 "\n", symbol_name, function->entry_block) < 0) {
         return false;
@@ -381,11 +378,8 @@ bool minic_riscv64_emit_core_function_basic_v0(FILE *file,
     }
     if (fprintf(file, ".L%s_core_return:\n", symbol_name) < 0 ||
         !minic_riscv64_emit_stack_release(file, frame.frame_size) ||
-        fprintf(file,
-                "  ret\n"
-                ".size %s, .-%s\n",
-                symbol_name,
-                symbol_name) < 0) {
+        fprintf(file, "  ret\n") < 0 ||
+        !minic_riscv64_emit_function_symbol_end(file, symbol)) {
         return false;
     }
     return true;
