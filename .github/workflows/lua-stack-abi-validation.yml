@@ -144,6 +144,43 @@ jobs:
           cmp build/core-frontend-diff/reference.out build/core-frontend-diff/legacy.out
           cmp build/core-frontend-diff/reference.out build/core-frontend-diff/core.out
 
+      - name: Run hybrid Core RV64 production routing differential
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work=build/core-hybrid-diff
+          compiler=build/rv64-stack-abi-compiler/bin/minic
+          source_file=tests/target/riscv64/core_hybrid_differential.i
+          runtime=tests/target/riscv64/core_hybrid_differential_runtime.c
+          mkdir -p "$work"
+          "$compiler" -S "$source_file" -o "$work/legacy.s"
+          MINIC_CORE_CODEGEN=basic-v0 \
+            "$compiler" -S "$source_file" -o "$work/hybrid.s"
+          grep -q '^\.Lcore_hybrid_core_core_bb0:' "$work/hybrid.s"
+          grep -q '^\.Lcore_hybrid_fallback_load_return:' "$work/hybrid.s"
+          if grep -q '^\.Lcore_hybrid_fallback_load_core_bb' "$work/hybrid.s"; then
+            printf '%s\n' 'fallback function unexpectedly used Core emitter' >&2
+            exit 1
+          fi
+          if MINIC_CORE_CODEGEN=invalid \
+              "$compiler" -S "$source_file" -o "$work/invalid.s" \
+              >"$work/invalid.stdout" 2>"$work/invalid.stderr"; then
+            printf '%s\n' 'invalid Core codegen mode unexpectedly succeeded' >&2
+            exit 1
+          fi
+          grep -F "MINIC_CORE_CODEGEN must be unset or 'basic-v0'" "$work/invalid.stderr"
+          riscv64-linux-gnu-gcc -static -O2 \
+            "$source_file" "$runtime" -o "$work/reference-rv64"
+          riscv64-linux-gnu-gcc -static -O2 \
+            "$runtime" "$work/legacy.s" -o "$work/legacy-rv64"
+          riscv64-linux-gnu-gcc -static -O2 \
+            "$runtime" "$work/hybrid.s" -o "$work/hybrid-rv64"
+          qemu-riscv64 "$work/reference-rv64" > "$work/reference.out"
+          qemu-riscv64 "$work/legacy-rv64" > "$work/legacy.out"
+          qemu-riscv64 "$work/hybrid-rv64" > "$work/hybrid.out"
+          cmp "$work/reference.out" "$work/legacy.out"
+          cmp "$work/reference.out" "$work/hybrid.out"
+
       - name: Run GCC-MiniC fixed stack-argument differential
         shell: bash
         run: |
