@@ -66,3 +66,7 @@ int core_diff_asm(int value) __asm__("core_diff_asm_alias");
 int core_diff_asm(int value) {
     return value;
 }
+
+int core_diff_asm_call(int value) {
+    return core_diff_asm(value);
+}
