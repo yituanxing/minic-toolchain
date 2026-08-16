@@ -30,34 +30,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-          path = Path('tools/dev/stage-object-suffix-visibility.py')
-          text = path.read_text()
-          old = '''    probe = *parser;
-              probe.lexer.cursor = attribute->arguments_span.begin.offset + 1U;
-              if (!minic_lexer_next(&probe.lexer, &probe.current) ||
-          '''
-          new = '''    probe = *parser;
-              minic_lexer_initialize(&probe.lexer, parser->path, parser->source, parser->lexer.length);
-              probe.lexer.cursor = attribute->arguments_span.begin.offset + 1U;
-              probe.lexer.line = attribute->arguments_span.begin.line;
-              probe.lexer.column = attribute->arguments_span.begin.column + 1U;
-              if (!minic_parser_advance(&probe) ||
-          '''
-          if text.count(old) != 1:
-              raise SystemExit(f'visibility probe anchor count={text.count(old)}')
-          text = text.replace(old, new, 1)
-          old = '''        !initialize_object_attribute_context(parser,
-                                                       &context,
-          '''
-          new = '''        !initialize_object_attribute_context(&context,
-          '''
-          if text.count(old) != 1:
-              raise SystemExit(f'context initializer anchor count={text.count(old)}')
-          path.write_text(text.replace(old, new, 1))
-          PY
-          python3 tools/dev/stage-object-suffix-visibility.py
+          python3 tools/dev/stage-object-suffix-visibility-v2.py
 
       - name: Canonical formatting
         shell: bash
