@@ -7,8 +7,28 @@
 
 #define MINIC_RISCV64_INLINE_ASM_MAX_OPERANDS 6U
 
-static const char *const minic_riscv64_inline_asm_registers[] = {
-    "t0", "t1", "t3", "t4", "t5", "t6"};
+typedef struct MinicRiscv64InlineAsmRegisterCandidate {
+    const char *name;
+    bool is_callee_saved;
+} MinicRiscv64InlineAsmRegisterCandidate;
+
+static const MinicRiscv64InlineAsmRegisterCandidate minic_riscv64_inline_asm_registers[] = {
+    {"t0", false},
+    {"t1", false},
+    {"t3", false},
+    {"t4", false},
+    {"t5", false},
+    {"t6", false},
+    {"s1", true},
+    {"s2", true},
+    {"s3", true},
+    {"s4", true},
+    {"s5", true},
+    {"s6", true},
+};
+
+#define MINIC_RISCV64_INLINE_ASM_REGISTER_COUNT                                                    \
+    (sizeof(minic_riscv64_inline_asm_registers) / sizeof(minic_riscv64_inline_asm_registers[0]))
 
 static bool constraint_is(const MinicInlineAsmOperand *operand, const char *text) {
     size_t length;
@@ -243,6 +263,42 @@ static bool inline_asm_clobbers_register(const MinicInlineAsm *inline_asm,
     return false;
 }
 
+static bool inline_asm_register_is_callee_saved(const char *register_name) {
+    size_t index;
+
+    if (register_name == NULL) {
+        return false;
+    }
+    for (index = 0U; index < MINIC_RISCV64_INLINE_ASM_REGISTER_COUNT; ++index) {
+        if (strcmp(minic_riscv64_inline_asm_registers[index].name, register_name) == 0) {
+            return minic_riscv64_inline_asm_registers[index].is_callee_saved;
+        }
+    }
+    return false;
+}
+
+static bool append_saved_operand_register(const char *register_name,
+                                          const char **saved_registers,
+                                          size_t *saved_register_count) {
+    size_t index;
+
+    if (register_name == NULL || saved_registers == NULL || saved_register_count == NULL ||
+        *saved_register_count >= MINIC_RISCV64_INLINE_ASM_MAX_OPERANDS) {
+        return false;
+    }
+    if (!inline_asm_register_is_callee_saved(register_name)) {
+        return true;
+    }
+    for (index = 0U; index < *saved_register_count; ++index) {
+        if (strcmp(saved_registers[index], register_name) == 0) {
+            return true;
+        }
+    }
+    saved_registers[*saved_register_count] = register_name;
+    *saved_register_count += 1U;
+    return true;
+}
+
 static bool assign_operand_registers(const MinicInlineAsm *inline_asm,
                                      const MinicC0Program *program,
                                      const char **operand_registers,
@@ -277,15 +333,17 @@ static bool assign_operand_registers(const MinicInlineAsm *inline_asm,
             operand_registers[operand_index] = NULL;
             continue;
         }
-        while (candidate_index < MINIC_RISCV64_INLINE_ASM_MAX_OPERANDS &&
-               inline_asm_clobbers_register(inline_asm,
-                                            minic_riscv64_inline_asm_registers[candidate_index])) {
+        while (candidate_index < MINIC_RISCV64_INLINE_ASM_REGISTER_COUNT &&
+               (inline_asm_clobbers_register(
+                    inline_asm, minic_riscv64_inline_asm_registers[candidate_index].name) ||
+                (inline_asm->is_goto &&
+                 minic_riscv64_inline_asm_registers[candidate_index].is_callee_saved))) {
             candidate_index += 1U;
         }
-        if (candidate_index >= MINIC_RISCV64_INLINE_ASM_MAX_OPERANDS) {
+        if (candidate_index >= MINIC_RISCV64_INLINE_ASM_REGISTER_COUNT) {
             return false;
         }
-        operand_registers[operand_index] = minic_riscv64_inline_asm_registers[candidate_index];
+        operand_registers[operand_index] = minic_riscv64_inline_asm_registers[candidate_index].name;
         candidate_index += 1U;
     }
     return true;
@@ -653,7 +711,10 @@ bool minic_riscv64_emit_inline_asm(FILE *file,
                                    const MinicStatement *statement) {
     const MinicInlineAsm *inline_asm;
     const char *operand_registers[MINIC_RISCV64_INLINE_ASM_MAX_OPERANDS];
+    const char *saved_registers[MINIC_RISCV64_INLINE_ASM_MAX_OPERANDS];
     size_t operand_count;
+    size_t saved_register_count;
+    size_t temporary_slot_count;
     size_t temporary_size;
     size_t index;
 
@@ -695,6 +756,17 @@ bool minic_riscv64_emit_inline_asm(FILE *file,
     if (!assign_operand_registers(inline_asm, program, operand_registers, operand_count)) {
         return false;
     }
+    saved_register_count = 0U;
+    for (index = 0U; index < operand_count; ++index) {
+        if (operand_registers[index] != NULL &&
+            !append_saved_operand_register(
+                operand_registers[index], saved_registers, &saved_register_count)) {
+            return false;
+        }
+    }
+    if (inline_asm->is_goto && saved_register_count != 0U) {
+        return false;
+    }
 
     for (index = 0U; index < inline_asm->input_count; ++index) {
         const MinicInlineAsmOperand *operand;
@@ -722,12 +794,22 @@ bool minic_riscv64_emit_inline_asm(FILE *file,
         }
     }
 
-    if (operand_count > (SIZE_MAX - 15U) / 8U) {
+    if (operand_count > SIZE_MAX - saved_register_count) {
         return false;
     }
-    temporary_size = inline_asm->is_goto ? 0U : (operand_count * 8U + 15U) & ~(size_t)15U;
+    temporary_slot_count = operand_count + saved_register_count;
+    if (temporary_slot_count > (SIZE_MAX - 15U) / 8U) {
+        return false;
+    }
+    temporary_size = inline_asm->is_goto ? 0U : (temporary_slot_count * 8U + 15U) & ~(size_t)15U;
     if (!minic_riscv64_emit_stack_allocate(file, temporary_size)) {
         return false;
+    }
+    for (index = 0U; index < saved_register_count; ++index) {
+        if (!minic_riscv64_emit_sp_store64(
+                file, saved_registers[index], (operand_count + index) * 8U)) {
+            return false;
+        }
     }
 
     for (index = 0U; index < inline_asm->output_count; ++index) {
@@ -827,6 +909,12 @@ bool minic_riscv64_emit_inline_asm(FILE *file,
         } else if (!minic_riscv64_emit_sp_load64(file, "a0", index * 8U) ||
                    !minic_riscv64_emit_scalar_store(
                        file, expression->type, operand_registers[index], "a0")) {
+            return false;
+        }
+    }
+    for (index = 0U; index < saved_register_count; ++index) {
+        if (!minic_riscv64_emit_sp_load64(
+                file, saved_registers[index], (operand_count + index) * 8U)) {
             return false;
         }
     }
