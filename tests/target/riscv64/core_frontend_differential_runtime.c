@@ -19,7 +19,7 @@ int core_diff_ninth(int a0,
                     int a8);
 int core_diff_pointer_zero(int *value);
 int core_diff_call(int value);
-int core_diff_field(struct CoreDiffLayout *item);
+int *core_diff_field(struct CoreDiffLayout *item);
 int core_diff_field_call(struct CoreDiffLayout *item);
 int core_diff_void_call(int value);
 int core_diff_asm_call(int value);
@@ -48,7 +48,7 @@ int main(void) {
     }
     layout.prefix = 3;
     layout.value = 41;
-    (void)printf("field %d\n", core_diff_field(&layout));
+    (void)printf("field %d\n", *core_diff_field(&layout));
     (void)printf("field-call %d\n", core_diff_field_call(&layout));
     (void)printf("ninth %d\n", core_diff_ninth(1, 2, 3, 4, 5, 6, 7, 8, 91));
     pointed = -1234;
