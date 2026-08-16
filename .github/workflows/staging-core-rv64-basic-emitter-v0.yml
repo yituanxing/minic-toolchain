@@ -32,8 +32,14 @@ jobs:
                                  1))
           PY
 
-      - name: Verify canonical formatting
+      - name: Canonicalize and verify formatting
         run: |
+          set -Eeuo pipefail
+          clang-format -i \
+            src/target/riscv64/core_codegen.h \
+            src/target/riscv64/core_codegen.c \
+            tests/target/riscv64/core_basic_emitter_test.c \
+            tests/target/riscv64/core_basic_emitter_runtime.c
           clang-format --dry-run --Werror \
             src/target/riscv64/core_codegen.h \
             src/target/riscv64/core_codegen.c \
