@@ -1006,6 +1006,65 @@ static bool finalize_local_cleanup(MinicParser *parser,
     return true;
 }
 
+static bool local_identifier_is(const MinicParser *parser, const char *name) {
+    size_t name_length;
+
+    if (parser == NULL || name == NULL || parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
+        return false;
+    }
+    name_length = strlen(name);
+    return minic_parser_span_length(parser->current.span) == name_length &&
+           memcmp(parser->source + parser->current.span.begin.offset, name, name_length) == 0;
+}
+
+static bool parse_local_fixed_register_name(
+    MinicParser *parser, char *buffer, size_t capacity, size_t *length, bool *has_binding) {
+    size_t cursor;
+    size_t end;
+
+    if (parser == NULL || buffer == NULL || capacity == 0U || length == NULL ||
+        has_binding == NULL) {
+        return false;
+    }
+    *length = 0U;
+    *has_binding = false;
+    if (!local_identifier_is(parser, "asm") && !local_identifier_is(parser, "__asm") &&
+        !local_identifier_is(parser, "__asm__")) {
+        return true;
+    }
+    if (!minic_parser_advance(parser) ||
+        !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '(' after local asm") ||
+        parser->current.kind != MINIC_TOKEN_STRING_LITERAL) {
+        if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+            minic_parser_error(parser, "local fixed register requires one string literal");
+        }
+        return false;
+    }
+    if (parser->current.span.end.offset <= parser->current.span.begin.offset + 1U) {
+        minic_parser_error(parser, "local fixed register name cannot be empty");
+        return false;
+    }
+    cursor = parser->current.span.begin.offset + 1U;
+    end = parser->current.span.end.offset - 1U;
+    while (cursor < end) {
+        if (parser->source[cursor] == '\\') {
+            minic_parser_error(parser, "escaped local fixed register names are not supported yet");
+            return false;
+        }
+        if (*length + 1U >= capacity) {
+            minic_parser_error(parser, "local fixed register name is too long");
+            return false;
+        }
+        buffer[*length] = parser->source[cursor];
+        *length += 1U;
+        cursor += 1U;
+    }
+    buffer[*length] = '\0';
+    *has_binding = true;
+    return minic_parser_advance(parser) &&
+           minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')' after local asm name");
+}
+
 static bool local_declarator_starts_function_pointer(const MinicParser *parser) {
     MinicParser probe;
 
@@ -1022,8 +1081,14 @@ parse_local_declarator(MinicParser *parser, MinicType base_type, bool is_registe
     MinicLocalId local_id;
     MinicLocalObjectAttributes attributes;
     MinicType declared_type;
+    char fixed_register_name[32];
+    size_t fixed_register_name_length;
+    bool has_fixed_register_binding;
 
     (void)memset(&attributes, 0, sizeof(attributes));
+    (void)memset(fixed_register_name, 0, sizeof(fixed_register_name));
+    fixed_register_name_length = 0U;
+    has_fixed_register_binding = false;
     attributes.cleanup_function = MINIC_FUNCTION_INVALID;
     if (!minic_parser_parse_pointer_declarator(parser, base_type, &declared_type)) {
         return false;
@@ -1056,14 +1121,57 @@ parse_local_declarator(MinicParser *parser, MinicType base_type, bool is_registe
         minic_parser_error(parser, "local object cannot have void type");
         return false;
     }
+    if (!parse_local_fixed_register_name(parser,
+                                         fixed_register_name,
+                                         sizeof(fixed_register_name),
+                                         &fixed_register_name_length,
+                                         &has_fixed_register_binding)) {
+        return false;
+    }
+    if (has_fixed_register_binding && !is_register_storage) {
+        minic_parser_error(parser, "local fixed register binding requires register storage class");
+        return false;
+    }
+    if (has_fixed_register_binding &&
+        (!minic_type_is_integer(declared_type) && !minic_type_is_pointer(declared_type))) {
+        minic_parser_error(parser,
+                           "local fixed register binding requires scalar integer or pointer type");
+        return false;
+    }
+    if (has_fixed_register_binding &&
+        !minic_target_info_local_fixed_register_supported(
+            parser->target_info, fixed_register_name, fixed_register_name_length)) {
+        minic_parser_error(parser, "local fixed register binding is not supported by this target");
+        return false;
+    }
 
     local.type = declared_type;
     local.element_count = 1U;
+    local.fixed_register_binding_id = MINIC_FIXED_REGISTER_BINDING_INVALID;
     local.is_array = false;
     local.is_register_storage = is_register_storage;
+    local.has_fixed_register_binding = false;
     if (minic_parser_name_bound_in_current_scope(parser, local.name_span)) {
         minic_parser_error(parser, "duplicate local declaration");
         return false;
+    }
+    if (has_fixed_register_binding && parser->current.kind == MINIC_TOKEN_LBRACKET) {
+        minic_parser_error(parser, "local fixed register arrays are not supported");
+        return false;
+    }
+    if (has_fixed_register_binding) {
+        if (!minic_c0_program_add_local_fixed_register_binding(
+                parser->program,
+                parser->source + local.name_span.begin.offset,
+                minic_parser_span_length(local.name_span),
+                local.type,
+                fixed_register_name,
+                fixed_register_name_length,
+                &local.fixed_register_binding_id)) {
+            minic_parser_error(parser, "cannot record local fixed register binding");
+            return false;
+        }
+        local.has_fixed_register_binding = true;
     }
     if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
         bool inferred_array;

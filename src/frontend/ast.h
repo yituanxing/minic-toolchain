@@ -205,8 +205,10 @@ typedef struct MinicLocal {
     MinicSourceSpan name_span;
     MinicType type;
     size_t element_count;
+    MinicFixedRegisterBindingId fixed_register_binding_id;
     bool is_array;
     bool is_register_storage;
+    bool has_fixed_register_binding;
 } MinicLocal;
 
 typedef struct MinicCleanupContext {
@@ -396,6 +398,7 @@ typedef struct MinicFixedRegisterBinding {
     char *register_name;
     size_t register_name_length;
     MinicType type;
+    bool is_local;
 } MinicFixedRegisterBinding;
 
 typedef enum MinicGlobalRelocationTargetKind {
@@ -688,6 +691,13 @@ bool minic_c0_program_add_fixed_register_binding(MinicC0Program *program,
                                                  const char *register_name,
                                                  size_t register_name_length,
                                                  MinicFixedRegisterBindingId *binding_id);
+bool minic_c0_program_add_local_fixed_register_binding(MinicC0Program *program,
+                                                       const char *name,
+                                                       size_t name_length,
+                                                       MinicType type,
+                                                       const char *register_name,
+                                                       size_t register_name_length,
+                                                       MinicFixedRegisterBindingId *binding_id);
 bool minic_c0_program_add_global_object(MinicC0Program *program,
                                         const char *name,
                                         size_t name_length,
