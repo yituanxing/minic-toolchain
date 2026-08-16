@@ -1912,6 +1912,16 @@ static bool parse_static_pointer_array(MinicParser *parser,
         parser, MINIC_TOKEN_SEMICOLON, "expected ';' after static pointer array");
 }
 
+static bool static_object_type_is_read_only(const MinicC0Program *program, MinicType type) {
+    const MinicArrayType *array_type;
+
+    if (!minic_type_is_array(type)) {
+        return minic_type_is_const(type);
+    }
+    array_type = minic_c0_program_array_type(program, type.array_type_id);
+    return array_type != NULL && static_object_type_is_read_only(program, array_type->element_type);
+}
+
 static bool parse_static_zero_definition(MinicParser *parser,
                                          MinicType object_type,
                                          MinicSourceSpan name_span) {
@@ -1919,21 +1929,21 @@ static bool parse_static_zero_definition(MinicParser *parser,
 
     if (parser == NULL || parser->current.kind != MINIC_TOKEN_SEMICOLON ||
         (!minic_type_is_integer(object_type) && !minic_type_is_pointer(object_type) &&
-         !minic_type_is_record(object_type))) {
+         !minic_type_is_record(object_type) && !minic_type_is_array(object_type))) {
         return false;
     }
-    if (minic_type_is_record(object_type) &&
-        !minic_parser_require_complete_object_type(
-            parser, object_type, "static object requires a complete record type")) {
+    if (!minic_c0_type_is_complete_object(parser->program, object_type)) {
+        minic_parser_error(parser, "static object requires a complete object type");
         return false;
     }
-    if (!minic_c0_program_add_global_object(parser->program,
-                                            parser->source + name_span.begin.offset,
-                                            minic_parser_span_length(name_span),
-                                            object_type,
-                                            true,
-                                            minic_type_is_const(object_type),
-                                            &object_id) ||
+    if (!minic_c0_program_add_global_object(
+            parser->program,
+            parser->source + name_span.begin.offset,
+            minic_parser_span_length(name_span),
+            object_type,
+            true,
+            static_object_type_is_read_only(parser->program, object_type),
+            &object_id) ||
         !minic_c0_global_object_set_zero_initialized(parser->program, object_id)) {
         minic_parser_error(parser, "cannot create zero-initialized static object");
         return false;
@@ -2157,7 +2167,7 @@ bool minic_parser_parse_static_global_after_head(MinicParser *parser,
     MinicGlobalObjectId object_id;
     if (parser == NULL ||
         (!minic_type_is_integer(element_type) && !minic_type_is_pointer(element_type) &&
-         !minic_type_is_record(element_type))) {
+         !minic_type_is_record(element_type) && !minic_type_is_array(element_type))) {
         if (parser != NULL) {
             minic_parser_error(parser, "unsupported static global object type");
         }
@@ -2178,6 +2188,10 @@ bool minic_parser_parse_static_global_after_head(MinicParser *parser,
 
     if (parser->current.kind == MINIC_TOKEN_SEMICOLON) {
         return parse_static_zero_definition(parser, element_type, name_span);
+    }
+    if (minic_type_is_array(element_type)) {
+        minic_parser_error(parser, "pre-formed static array initializer is not supported yet");
+        return false;
     }
     if (minic_type_is_record(element_type)) {
         return parse_static_record(parser, element_type, name_span);
