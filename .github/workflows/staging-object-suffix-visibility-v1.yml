@@ -1,0 +1,107 @@
+name: Staging Object Suffix Visibility V1
+
+on:
+  push:
+    branches: [staging/object-suffix-visibility-v1]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: staging-object-suffix-visibility-v1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate-and-publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install validation tools
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang-format-18 gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu
+
+      - name: Apply suffix object visibility routing
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/stage-object-suffix-visibility.py
+
+      - name: Canonical formatting
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          clang-format-18 -i \
+            src/frontend/parser_attribute.c \
+            src/frontend/parser_internal.h \
+            src/frontend/parser_global.c \
+            tests/compiler/c0/gnu_visible_extern_array.c
+          python3 - <<'PY'
+          from pathlib import Path
+          for name in ['tests/compiler/c0/run-gnu-visible-extern-arrays.sh']:
+              path = Path(name)
+              path.write_text(path.read_text().rstrip() + '\n')
+          PY
+
+      - name: Release Werror build
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/staging-object-visibility
+
+      - name: Focused visible extern array regression
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/staging-object-visibility/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/staging-object-visibility-focused" \
+          HOST_CC=cc \
+            sh tests/compiler/c0/run-gnu-visible-extern-arrays.sh
+          riscv64-linux-gnu-gcc -c \
+            "$GITHUB_WORKSPACE/build/staging-object-visibility-focused/tests/compiler-c0-gnu-visible-extern-arrays/gnu_visible_extern_array.s" \
+            -o "$GITHUB_WORKSPACE/build/staging-object-visibility-focused/gnu_visible_extern_array.o"
+
+      - name: Preserve existing function visibility regression
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/staging-object-visibility/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/staging-function-visibility" \
+          HOST_CC=cc \
+            sh tests/compiler/c0/run-gnu-function-visibility.sh
+
+      - name: Broad C0 suite
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release BUILD_DIR=build/staging-object-visibility check-fast
+
+      - name: Foundation focused suite
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/staging-object-visibility/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/staging-object-visibility-foundation" \
+          HOST_CC=cc \
+            sh tests/compiler/c0/run-foundation-focused.sh
+
+      - name: Publish validated product diff
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'LiYang Dong'
+          git config user.email '119646676+yituanxing@users.noreply.github.com'
+          git add \
+            src/frontend/parser_attribute.c \
+            src/frontend/parser_internal.h \
+            src/frontend/parser_global.c \
+            tests/compiler/c0/gnu_visible_extern_array.c \
+            tests/compiler/c0/run-gnu-visible-extern-arrays.sh
+          git diff --cached --check
+          git commit -m 'frontend: persist suffix object visibility [publish-v1]'
+          git push origin HEAD:staging/object-suffix-visibility-v1
