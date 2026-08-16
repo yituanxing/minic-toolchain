@@ -993,17 +993,84 @@ static bool minic_riscv64_emit_builtin_unary(FILE *file,
                                              const MinicExpression *expression,
                                              MinicExpressionId expression_id) {
     const MinicExpression *operand;
+    MinicBuiltinUnaryOperator operator_kind;
+    MinicType expected_operand_type;
 
     if (file == NULL || program == NULL || expression == NULL ||
         expression->kind != MINIC_EXPRESSION_BUILTIN_UNARY ||
-        expression->value.builtin_unary.operator_kind != MINIC_BUILTIN_UNARY_CLZLL ||
         !minic_type_equal(expression->type, minic_type_int())) {
         return false;
     }
+    operator_kind = expression->value.builtin_unary.operator_kind;
+    switch (operator_kind) {
+    case MINIC_BUILTIN_UNARY_CLZLL:
+        expected_operand_type = minic_type_unsigned_long_long();
+        break;
+    case MINIC_BUILTIN_UNARY_CTZL:
+        expected_operand_type = minic_type_unsigned_long();
+        break;
+    case MINIC_BUILTIN_UNARY_FFSLL:
+        expected_operand_type = minic_type_long_long();
+        break;
+    case MINIC_BUILTIN_UNARY_ISDIGIT:
+        expected_operand_type = minic_type_int();
+        break;
+    default:
+        return false;
+    }
     operand = minic_c0_program_expression(program, expression->value.builtin_unary.operand);
-    if (operand == NULL || !minic_type_equal(operand->type, minic_type_unsigned_long_long()) ||
+    if (operand == NULL || !minic_type_equal(operand->type, expected_operand_type) ||
         !minic_riscv64_emit_expression(
             file, program, function, function_layout, expression->value.builtin_unary.operand)) {
+        return false;
+    }
+
+    switch (operator_kind) {
+    case MINIC_BUILTIN_UNARY_CTZL:
+        return fprintf(file,
+                       "  beqz a0, .Lminic_ctzl_zero_%zu\n"
+                       "  li t0, 0\n"
+                       ".Lminic_ctzl_loop_%zu:\n"
+                       "  andi t1, a0, 1\n"
+                       "  bnez t1, .Lminic_ctzl_done_%zu\n"
+                       "  addi t0, t0, 1\n"
+                       "  srli a0, a0, 1\n"
+                       "  j .Lminic_ctzl_loop_%zu\n"
+                       ".Lminic_ctzl_zero_%zu:\n"
+                       "  li t0, 64\n"
+                       ".Lminic_ctzl_done_%zu:\n"
+                       "  mv a0, t0\n",
+                       expression_id,
+                       expression_id,
+                       expression_id,
+                       expression_id,
+                       expression_id,
+                       expression_id) >= 0;
+    case MINIC_BUILTIN_UNARY_FFSLL:
+        return fprintf(file,
+                       "  beqz a0, .Lminic_ffsll_zero_%zu\n"
+                       "  li t0, 1\n"
+                       ".Lminic_ffsll_loop_%zu:\n"
+                       "  andi t1, a0, 1\n"
+                       "  bnez t1, .Lminic_ffsll_done_%zu\n"
+                       "  addi t0, t0, 1\n"
+                       "  srli a0, a0, 1\n"
+                       "  j .Lminic_ffsll_loop_%zu\n"
+                       ".Lminic_ffsll_zero_%zu:\n"
+                       "  li t0, 0\n"
+                       ".Lminic_ffsll_done_%zu:\n"
+                       "  mv a0, t0\n",
+                       expression_id,
+                       expression_id,
+                       expression_id,
+                       expression_id,
+                       expression_id,
+                       expression_id) >= 0;
+    case MINIC_BUILTIN_UNARY_ISDIGIT:
+        return fprintf(file, "  addi t0, a0, -48\n  sltiu a0, t0, 10\n") >= 0;
+    case MINIC_BUILTIN_UNARY_CLZLL:
+        break;
+    default:
         return false;
     }
 

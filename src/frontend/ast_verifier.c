@@ -692,12 +692,28 @@ static bool verify_expression(const MinicC0Program *program,
     }
     case MINIC_EXPRESSION_BUILTIN_UNARY: {
         const MinicExpression *builtin_operand;
+        MinicType expected_operand_type;
 
         builtin_operand =
             expression_before(program, expression->value.builtin_unary.operand, expression_index);
-        return expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_CLZLL &&
-               builtin_operand != NULL &&
-               minic_type_equal(builtin_operand->type, minic_type_unsigned_long_long()) &&
+        switch (expression->value.builtin_unary.operator_kind) {
+        case MINIC_BUILTIN_UNARY_CLZLL:
+            expected_operand_type = minic_type_unsigned_long_long();
+            break;
+        case MINIC_BUILTIN_UNARY_CTZL:
+            expected_operand_type = minic_type_unsigned_long();
+            break;
+        case MINIC_BUILTIN_UNARY_FFSLL:
+            expected_operand_type = minic_type_long_long();
+            break;
+        case MINIC_BUILTIN_UNARY_ISDIGIT:
+            expected_operand_type = minic_type_int();
+            break;
+        default:
+            return false;
+        }
+        return builtin_operand != NULL &&
+               minic_type_equal(builtin_operand->type, expected_operand_type) &&
                expression->value_category == MINIC_VALUE_RVALUE &&
                minic_type_equal(expression->type, minic_type_int());
     }

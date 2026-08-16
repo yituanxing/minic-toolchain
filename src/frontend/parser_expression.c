@@ -1621,6 +1621,15 @@ static bool parse_builtin_unary(MinicParser *parser,
     case MINIC_BUILTIN_UNARY_CLZLL:
         argument_type = minic_type_unsigned_long_long();
         break;
+    case MINIC_BUILTIN_UNARY_CTZL:
+        argument_type = minic_type_unsigned_long();
+        break;
+    case MINIC_BUILTIN_UNARY_FFSLL:
+        argument_type = minic_type_long_long();
+        break;
+    case MINIC_BUILTIN_UNARY_ISDIGIT:
+        argument_type = minic_type_int();
+        break;
     default:
         return false;
     }
@@ -1756,6 +1765,29 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
     if (generic_token_text_equals(parser, "__builtin_clzll")) {
         if (!parse_builtin_unary(
                 parser, MINIC_BUILTIN_UNARY_CLZLL, "__builtin_clzll", &primary_id) ||
+            !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
+            return false;
+        }
+        return finish_value_expression(parser, primary_id, decay_array, expression_id);
+    }
+    if (generic_token_text_equals(parser, "__builtin_ctzl")) {
+        if (!parse_builtin_unary(parser, MINIC_BUILTIN_UNARY_CTZL, "__builtin_ctzl", &primary_id) ||
+            !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
+            return false;
+        }
+        return finish_value_expression(parser, primary_id, decay_array, expression_id);
+    }
+    if (generic_token_text_equals(parser, "__builtin_ffsll")) {
+        if (!parse_builtin_unary(
+                parser, MINIC_BUILTIN_UNARY_FFSLL, "__builtin_ffsll", &primary_id) ||
+            !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
+            return false;
+        }
+        return finish_value_expression(parser, primary_id, decay_array, expression_id);
+    }
+    if (generic_token_text_equals(parser, "__builtin_isdigit")) {
+        if (!parse_builtin_unary(
+                parser, MINIC_BUILTIN_UNARY_ISDIGIT, "__builtin_isdigit", &primary_id) ||
             !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
             return false;
         }
