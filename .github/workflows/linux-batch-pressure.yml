@@ -52,10 +52,11 @@ jobs:
             gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
             flex bison bc libelf-dev libssl-dev
 
-      - name: Build MiniC candidate
+      - name: Build instrumented MiniC candidate
         shell: bash
         run: |
           set -Eeuo pipefail
+          python3 tools/dev/pressure-rv64-emitter-owner.py
           make -j4 MODE=release BUILD_DIR=build/linux-batch-compiler
 
       - name: Drive configured Linux TU batch
