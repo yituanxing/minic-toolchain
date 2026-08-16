@@ -1,0 +1,79 @@
+name: Staging External Inferred Record Array
+
+on:
+  push:
+    branches:
+      - staging/external-inferred-record-array-v1
+
+permissions:
+  contents: write
+
+jobs:
+  validate-and-publish:
+    if: ${{ !contains(github.event.head_commit.message, '[publish]') }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install formatter
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang-format-18
+
+      - name: Apply inferred record-array composition
+        run: python3 tools/dev/stage-external-inferred-record-array.py
+
+      - name: Canonical formatting
+        run: |
+          clang-format-18 -i \
+            src/frontend/parser_function.c \
+            tests/compiler/c0/external_inferred_record_array.c \
+            tests/compiler/c0/invalid_external_inferred_record_array_brace_elision.c
+          chmod +x tests/compiler/c0/run-external-inferred-record-array.sh
+
+      - name: Release Werror build
+        run: make -j4 MODE=release BUILD_DIR=build/staging-record-array EXTRA_CFLAGS=-Werror
+
+      - name: Focused inferred record-array regression
+        env:
+          MINIC: ${{ github.workspace }}/build/staging-record-array/bin/minic
+          HOST_CC: cc
+          BUILD_DIR: ${{ github.workspace }}/build/staging-record-array
+        run: sh tests/compiler/c0/run-external-inferred-record-array.sh
+
+      - name: Preserve existing static record arrays
+        env:
+          MINIC: ${{ github.workspace }}/build/staging-record-array/bin/minic
+          HOST_CC: cc
+          BUILD_DIR: ${{ github.workspace }}/build/staging-record-array
+        run: sh tests/compiler/c0/run-static-record-arrays.sh
+
+      - name: Run broad C0 suite
+        env:
+          MINIC: ${{ github.workspace }}/build/staging-record-array/bin/minic
+          HOST_CC: cc
+          BUILD_DIR: ${{ github.workspace }}/build/staging-record-array
+        run: sh tests/compiler/c0/run.sh
+
+      - name: Run Foundation focused suite
+        env:
+          MINIC: ${{ github.workspace }}/build/staging-record-array/bin/minic
+          HOST_CC: cc
+          BUILD_DIR: ${{ github.workspace }}/build/staging-record-array
+        run: sh tests/compiler/c0/run-foundation-focused.sh
+
+      - name: Publish validated product diff
+        run: |
+          git config user.name 'LiYang Dong'
+          git config user.email '119646676+yituanxing@users.noreply.github.com'
+          git add \
+            src/frontend/parser_function.c \
+            tests/compiler/c0/run.sh \
+            tests/compiler/c0/external_inferred_record_array.c \
+            tests/compiler/c0/invalid_external_inferred_record_array_brace_elision.c \
+            tests/compiler/c0/run-external-inferred-record-array.sh
+          git diff --cached --check
+          git commit -m 'frontend: compose inferred external record arrays [publish]'
+          git push origin HEAD:staging/external-inferred-record-array-v1
