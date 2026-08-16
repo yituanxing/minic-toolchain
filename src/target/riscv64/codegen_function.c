@@ -150,7 +150,7 @@ static bool minic_riscv64_emit_symbol_value(FILE *file,
                                             size_t width) {
     const char *directive;
     const char *target_name;
-    size_t target_addend;
+    int64_t target_addend;
 
     directive = minic_riscv64_integer_data_directive(width);
     target_name = minic_riscv64_global_relocation_target_name(program, relocation);
@@ -162,7 +162,10 @@ static bool minic_riscv64_emit_symbol_value(FILE *file,
     if (target_addend == 0U) {
         return fprintf(file, "  %s %s\n", directive, target_name) >= 0;
     }
-    return fprintf(file, "  %s %s+%zu\n", directive, target_name, target_addend) >= 0;
+    if (target_addend > 0) {
+        return fprintf(file, "  %s %s+%" PRId64 "\n", directive, target_name, target_addend) >= 0;
+    }
+    return fprintf(file, "  %s %s%" PRId64 "\n", directive, target_name, target_addend) >= 0;
 }
 
 static bool
