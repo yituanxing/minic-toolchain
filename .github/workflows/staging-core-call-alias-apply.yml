@@ -1,0 +1,55 @@
+name: Staging Core CALL Alias Apply
+
+on:
+  push:
+    branches:
+      - staging/core-rv64-call-v0
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    if: github.actor != 'github-actions[bot]'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Patch Core direct-call symbol identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/core/core_lower.c')
+          text = path.read_text()
+          old = '''    const MinicFunction *callee;\n    MinicCoreCalleeId callee_id;\n    MinicCoreInstruction instruction;\n'''
+          new = '''    const MinicFunction *callee;\n    const char *callee_name;\n    size_t callee_name_length;\n    MinicCoreCalleeId callee_id;\n    MinicCoreInstruction instruction;\n'''
+          assert text.count(old) == 1, text.count(old)
+          text = text.replace(old, new, 1)
+          old = '''    callee = minic_c0_program_function(context->body->program, expression->value.call.function_id);\n    if (callee == NULL || callee->name == NULL || callee->name_length == 0U) {\n        return MINIC_CORE_LOWER_ERROR;\n    }\n    returns_void = minic_type_is_void(callee->return_type);\n'''
+          new = '''    callee = minic_c0_program_function(context->body->program, expression->value.call.function_id);\n    if (callee == NULL || callee->name == NULL || callee->name_length == 0U) {\n        return MINIC_CORE_LOWER_ERROR;\n    }\n    callee_name = minic_c0_function_symbol_name(callee);\n    callee_name_length = callee->assembler_name != NULL ? callee->assembler_name_length\n                                                        : callee->name_length;\n    if (callee_name == NULL || callee_name_length == 0U) {\n        return MINIC_CORE_LOWER_ERROR;\n    }\n    returns_void = minic_type_is_void(callee->return_type);\n'''
+          assert text.count(old) == 1, text.count(old)
+          text = text.replace(old, new, 1)
+          old = '''    if (!minic_core_function_add_callee(context->function,\n                                        callee->name,\n                                        callee->name_length,\n                                        callee->return_type,\n'''
+          new = '''    if (!minic_core_function_add_callee(context->function,\n                                        callee_name,\n                                        callee_name_length,\n                                        callee->return_type,\n'''
+          assert text.count(old) == 1, text.count(old)
+          path.write_text(text.replace(old, new, 1))
+          PY
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh apply
+          git diff --check -- src/core/core_lower.c
+
+      - name: Commit source-only patch
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/core/core_lower.c
+          git diff --cached --quiet && exit 0
+          git commit -m 'core: preserve direct callee symbol identity'
+          git push origin HEAD:staging/core-rv64-call-v0
