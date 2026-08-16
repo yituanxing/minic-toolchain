@@ -725,12 +725,21 @@ parse_static_scalar_constant(MinicParser *parser, MinicGlobalObjectId object_id,
 static bool parse_static_array_constant(MinicParser *parser,
                                         MinicGlobalObjectId object_id,
                                         const MinicArrayType *array_type) {
+    const MinicGlobalObject *object;
+    const MinicArrayType *root_array_type;
     size_t element_index;
+    bool materialize_tail_zeros;
 
     if (array_type == NULL || array_type->element_count == 0U ||
+        object_id >= parser->program->global_object_count ||
         !minic_parser_expect(parser, MINIC_TOKEN_LBRACE, "expected '{' in array initializer")) {
         return false;
     }
+    object = &parser->program->global_objects[object_id];
+    root_array_type = minic_type_is_array(object->type)
+                          ? minic_c0_program_array_type(parser->program, object->type.array_type_id)
+                          : NULL;
+    materialize_tail_zeros = root_array_type != array_type;
     element_index = 0U;
     while (parser->current.kind != MINIC_TOKEN_RBRACE) {
         if (element_index >= array_type->element_count) {
@@ -754,7 +763,7 @@ static bool parse_static_array_constant(MinicParser *parser,
             return false;
         }
     }
-    while (element_index < array_type->element_count) {
+    while (materialize_tail_zeros && element_index < array_type->element_count) {
         if (!append_static_constant_zero(parser, object_id, array_type->element_type)) {
             minic_parser_error(parser, "cannot zero-fill nested static array initializer");
             return false;

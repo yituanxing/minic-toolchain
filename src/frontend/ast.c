@@ -316,8 +316,10 @@ minic_c0_array_shapes_compatible(const MinicC0Program *program, MinicType left, 
     left_array = minic_c0_program_array_type(program, left.array_type_id);
     right_array = minic_c0_program_array_type(program, right.array_type_id);
     return left_array != NULL && right_array != NULL &&
-           left_array->element_count == right_array->element_count &&
            left_array->is_zero_length == right_array->is_zero_length &&
+           (left_array->element_count == right_array->element_count ||
+            (!left_array->is_zero_length &&
+             (left_array->element_count == 0U || right_array->element_count == 0U))) &&
            minic_c0_types_compatible(program, left_array->element_type, right_array->element_type);
 }
 
