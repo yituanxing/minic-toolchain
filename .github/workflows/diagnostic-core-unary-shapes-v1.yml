@@ -1,0 +1,113 @@
+name: Diagnostic Core Unary Shapes V1
+
+on:
+  push:
+    branches:
+      - diagnostic/core-unary-shapes-v1
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore pinned Linux source archive
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-cache/linux-6.6.143.tar.xz
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
+      - name: Install Linux Kbuild dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu flex bison bc libelf-dev libssl-dev
+      - name: Instrument unary operators
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/core/core_lower.c')
+          s = p.read_text()
+          old = '#include <stdlib.h>\n#include <string.h>\n'
+          assert s.count(old) == 1, s.count(old)
+          s = s.replace(old, '#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n', 1)
+          old = '''    return MINIC_CORE_LOWER_UNSUPPORTED;
+          }
+
+          static MinicCoreLowerStatus lower_assignment_pair'''
+          new = '''    if (expression->kind == MINIC_EXPRESSION_UNARY) {
+                  const MinicExpression *operand;
+                  operand = minic_c0_program_expression(context->body->program,
+                                                        expression->value.unary.operand);
+                  if (operand == NULL) {
+                      return MINIC_CORE_LOWER_ERROR;
+                  }
+                  (void)fprintf(stderr,
+                                "MINIC_CORE_UNARY_SHAPE op=%d operand_kind=%d operand_category=%d operand_integer=%d\\n",
+                                (int)expression->value.unary.operator_kind,
+                                (int)operand->kind,
+                                (int)operand->value_category,
+                                minic_type_is_integer(operand->type) ? 1 : 0);
+              }
+              return MINIC_CORE_LOWER_UNSUPPORTED;
+          }
+
+          static MinicCoreLowerStatus lower_assignment_pair'''
+          assert s.count(old) == 1, s.count(old)
+          p.write_text(s.replace(old, new, 1))
+          PY
+      - name: Build diagnostic compiler
+        run: make -j4 MODE=release BUILD_DIR=build/core-unary-shapes-compiler
+      - name: Drive fixed first100 with Core shadow
+        continue-on-error: true
+        env:
+          MINIC_CORE_IR: shadow
+        run: |
+          MINIC="$GITHUB_WORKSPACE/build/core-unary-shapes-compiler/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/core-unary-shapes-linux" \
+          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-cache/linux-6.6.143.tar.xz" \
+          CROSS_COMPILE=riscv64-linux-gnu- LINUX_BATCH_OFFSET=0 LINUX_BATCH_LIMIT=100 LINUX_BATCH_JOBS=2 \
+            sh tests/external/linux/batch_probe.sh
+      - name: Aggregate unary shapes
+        if: always()
+        run: |
+          python3 - <<'PY'
+          from collections import Counter
+          from pathlib import Path
+          import re
+          names = ['PLUS','NEGATE','LOGICAL_NOT','BITWISE_NOT','POST_INCREMENT','POST_DECREMENT','PRE_INCREMENT','PRE_DECREMENT']
+          pat = re.compile(r'^MINIC_CORE_UNARY_SHAPE op=(-?\d+) operand_kind=(-?\d+) operand_category=(-?\d+) operand_integer=(\d+)$')
+          counts = Counter()
+          root = Path('build/core-unary-shapes-linux/minic-stderr')
+          for path in root.rglob('*.stderr') if root.is_dir() else []:
+              for line in path.read_text(errors='replace').splitlines():
+                  m = pat.match(line.strip())
+                  if not m:
+                      continue
+                  op, kind, category, integer = map(int, m.groups())
+                  name = names[op] if 0 <= op < len(names) else f'OP_{op}'
+                  counts[(name, kind, category, integer)] += 1
+          total = sum(counts.values())
+          lines = ['MINIC_CORE_FIRST100_UNARY_SHAPES', f'total_unary={total}']
+          for (name, kind, category, integer), count in counts.most_common():
+              pct = 100.0 * count / total if total else 0.0
+              lines.append(f'op={name} operand_kind={kind} operand_category={category} operand_integer={integer} count={count} pct={pct:.2f}')
+          text = '\n'.join(lines) + '\n'
+          out = Path('build/core-unary-shapes-linux/unary-shapes.txt')
+          out.write_text(text)
+          print(text, end='')
+          PY
+          test -s build/core-unary-shapes-linux/batch-summary.txt && cat build/core-unary-shapes-linux/batch-summary.txt || true
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-unary-shapes-${{ github.run_id }}
+          path: |
+            build/core-unary-shapes-linux/unary-shapes.txt
+            build/core-unary-shapes-linux/batch-summary.txt
+          retention-days: 7
