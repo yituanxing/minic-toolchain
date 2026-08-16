@@ -21,6 +21,6 @@ if "$minic" -S "$root/tests/compiler/c0/invalid_static_record_object_relocation_
     printf '%s\n' 'FAIL compiler/c0/static-mixed-symbol-relocations: incompatible record pointer field accepted' >&2
     exit 1
 fi
-grep -F 'static record pointer initializer type mismatch' "$work/invalid-type.stderr" >/dev/null
+grep -F 'static pointer initializer type mismatch' "$work/invalid-type.stderr" >/dev/null
 
 printf '%s\n' 'PASS compiler/c0/static-mixed-symbol-relocations location=semantic-record-field target=object+function base=constant-overlay scalar=nonzero type=checked'
