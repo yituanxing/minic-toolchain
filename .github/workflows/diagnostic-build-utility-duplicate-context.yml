@@ -1,0 +1,78 @@
+name: Diagnostic build_utility Duplicate Context
+
+on:
+  push:
+    branches:
+      - diagnostic/linux-first100-variadic-stack-v0
+
+permissions:
+  contents: read
+
+concurrency:
+  group: diagnostic-build-utility-duplicate-context
+  cancel-in-progress: true
+
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Restore pinned Linux source archive
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-cache/linux-6.6.143.tar.xz
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            flex bison bc libelf-dev libssl-dev
+
+      - name: Build compiler and materialize index 98
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release BUILD_DIR=build/duplicate-context-compiler
+          set +e
+          MINIC="$GITHUB_WORKSPACE/build/duplicate-context-compiler/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/duplicate-context-linux" \
+          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-cache/linux-6.6.143.tar.xz" \
+          CROSS_COMPILE=riscv64-linux-gnu- \
+          LINUX_BATCH_OFFSET=98 LINUX_BATCH_LIMIT=1 LINUX_BATCH_JOBS=1 \
+            sh tests/external/linux/batch_probe.sh
+          status=$?
+          set -e
+          test "$status" -eq 1
+          cat build/duplicate-context-linux/batch-summary.txt
+
+      - name: Print exact frontier context and repeated identifiers
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          file=build/duplicate-context-linux/kbuild/kernel/sched/build_utility.i
+          test -s "$file"
+          printf '%s\n' 'BUILD_UTILITY_CONTEXT_BEGIN'
+          sed -n '69980,70030p' "$file"
+          printf '%s\n' 'BUILD_UTILITY_CONTEXT_END'
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          path = Path('build/duplicate-context-linux/kbuild/kernel/sched/build_utility.i')
+          lines = path.read_text(errors='replace').splitlines()
+          target = lines[70009] if len(lines) >= 70010 else ''
+          print(f'TARGET_LINE={target}')
+          ids = re.findall(r'\b[A-Za-z_][A-Za-z0-9_]*\b', target)
+          for name in sorted(set(ids)):
+              hits = [i + 1 for i, line in enumerate(lines) if re.search(rf'\b{re.escape(name)}\b', line)]
+              if len(hits) > 1:
+                  print(f'REPEATED name={name} count={len(hits)} lines={hits[-12:]}')
+          PY
