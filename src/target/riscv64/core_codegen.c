@@ -22,6 +22,8 @@ typedef struct MinicRiscv64CoreFrame {
     size_t frame_size;
     size_t object_count;
     size_t value_count;
+    size_t return_address_offset;
+    bool saves_return_address;
 } MinicRiscv64CoreFrame;
 
 static bool core_scalar_type(MinicType type) {
@@ -46,6 +48,21 @@ static bool align_up(size_t value, size_t alignment, size_t *result) {
     return true;
 }
 
+static bool core_function_has_call(const MinicCoreFunction *function) {
+    size_t instruction_index;
+
+    if (function == NULL) {
+        return false;
+    }
+    for (instruction_index = 0U; instruction_index < function->instruction_count;
+         ++instruction_index) {
+        if (function->instructions[instruction_index].kind == MINIC_CORE_INSTRUCTION_CALL) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool core_frame_initialize(const MinicCoreFunction *function, MinicRiscv64CoreFrame *frame) {
     size_t slot_count;
     size_t storage_size;
@@ -55,6 +72,18 @@ static bool core_frame_initialize(const MinicCoreFunction *function, MinicRiscv6
         return false;
     }
     slot_count = function->object_count + function->value_count;
+    frame->saves_return_address = core_function_has_call(function);
+    frame->return_address_offset = 0U;
+    if (frame->saves_return_address) {
+        if (slot_count > SIZE_MAX / 8U) {
+            return false;
+        }
+        frame->return_address_offset = slot_count * 8U;
+        if (slot_count == SIZE_MAX) {
+            return false;
+        }
+        slot_count += 1U;
+    }
     if (slot_count > SIZE_MAX / 8U) {
         return false;
     }
@@ -127,8 +156,11 @@ static bool store_core_value(FILE *file,
            minic_riscv64_emit_sp_store64(file, register_name, offset);
 }
 
-static bool core_instruction_supported(const MinicCoreInstruction *instruction) {
-    if (instruction == NULL) {
+static bool core_instruction_supported(const MinicCoreFunction *function,
+                                       const MinicCoreInstruction *instruction) {
+    const MinicCoreCallee *callee;
+
+    if (function == NULL || instruction == NULL) {
         return false;
     }
     switch (instruction->kind) {
@@ -142,8 +174,14 @@ static bool core_instruction_supported(const MinicCoreInstruction *instruction) 
     case MINIC_CORE_INSTRUCTION_LOAD:
     case MINIC_CORE_INSTRUCTION_STORE:
         return true;
-    case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:
     case MINIC_CORE_INSTRUCTION_CALL:
+        if (instruction->value.call.callee_id >= function->callee_count ||
+            instruction->value.call.argument_count > 8U) {
+            return false;
+        }
+        callee = &function->callees[instruction->value.call.callee_id];
+        return callee->name != NULL && callee->name_length != 0U && callee->parameter_count <= 8U;
+    case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:
         return false;
     }
     return false;
@@ -172,7 +210,7 @@ bool minic_riscv64_core_function_can_emit_basic_v0(const MinicCoreFunction *func
         }
     }
     for (index = 0U; index < function->instruction_count; ++index) {
-        if (!core_instruction_supported(&function->instructions[index])) {
+        if (!core_instruction_supported(function, &function->instructions[index])) {
             return false;
         }
     }
@@ -214,6 +252,44 @@ static bool emit_parameter(FILE *file,
     return store_core_value(file, frame, instruction->result, "t0");
 }
 
+static bool emit_call(FILE *file,
+                      const MinicCoreFunction *function,
+                      const MinicRiscv64CoreFrame *frame,
+                      const MinicCoreInstruction *instruction) {
+    const MinicCoreCallee *callee;
+    size_t argument_index;
+    size_t argument_offset;
+
+    if (file == NULL || function == NULL || frame == NULL || instruction == NULL ||
+        instruction->kind != MINIC_CORE_INSTRUCTION_CALL ||
+        !core_instruction_supported(function, instruction)) {
+        return false;
+    }
+    callee = &function->callees[instruction->value.call.callee_id];
+    for (argument_index = 0U; argument_index < instruction->value.call.argument_count;
+         ++argument_index) {
+        argument_offset = instruction->value.call.argument_begin + argument_index;
+        if (argument_offset >= function->call_argument_count ||
+            !load_core_value(file,
+                             frame,
+                             function->call_arguments[argument_offset],
+                             minic_core_rv64_argument_registers[argument_index])) {
+            return false;
+        }
+    }
+    if (fprintf(file, "  call %s\n", callee->name) < 0) {
+        return false;
+    }
+    if (minic_type_is_void(instruction->type)) {
+        return true;
+    }
+    if (minic_type_is_integer(instruction->type) &&
+        !minic_riscv64_emit_integer_conversion(file, instruction->type, "a0")) {
+        return false;
+    }
+    return store_core_value(file, frame, instruction->result, "a0");
+}
+
 static bool emit_instruction(FILE *file,
                              const MinicCoreFunction *function,
                              const MinicRiscv64CoreFrame *frame,
@@ -221,7 +297,7 @@ static bool emit_instruction(FILE *file,
     size_t object_offset;
 
     if (file == NULL || function == NULL || frame == NULL || instruction == NULL ||
-        !core_instruction_supported(instruction)) {
+        !core_instruction_supported(function, instruction)) {
         return false;
     }
     switch (instruction->kind) {
@@ -285,8 +361,9 @@ static bool emit_instruction(FILE *file,
                load_core_value(file, frame, stored_value, "t1") &&
                minic_riscv64_emit_scalar_store(file, stored_type, "t1", "t0");
     }
-    case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:
     case MINIC_CORE_INSTRUCTION_CALL:
+        return emit_call(file, function, frame, instruction);
+    case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:
         return false;
     }
     return false;
@@ -346,8 +423,14 @@ bool minic_riscv64_emit_core_function_basic_v0_with_symbol(
     }
     symbol_name = symbol->symbol_name;
     if (!minic_riscv64_emit_function_symbol_begin(file, symbol) ||
-        !minic_riscv64_emit_stack_allocate(file, frame.frame_size) ||
-        fprintf(file, "  j .L%s_core_bb%" PRIu32 "\n", symbol_name, function->entry_block) < 0) {
+        !minic_riscv64_emit_stack_allocate(file, frame.frame_size)) {
+        return false;
+    }
+    if (frame.saves_return_address &&
+        !minic_riscv64_emit_sp_store64(file, "ra", frame.return_address_offset)) {
+        return false;
+    }
+    if (fprintf(file, "  j .L%s_core_bb%" PRIu32 "\n", symbol_name, function->entry_block) < 0) {
         return false;
     }
     for (block_index = 0U; block_index < function->block_count; ++block_index) {
@@ -374,8 +457,14 @@ bool minic_riscv64_emit_core_function_basic_v0_with_symbol(
             return false;
         }
     }
-    if (fprintf(file, ".L%s_core_return:\n", symbol_name) < 0 ||
-        !minic_riscv64_emit_stack_release(file, frame.frame_size) || fprintf(file, "  ret\n") < 0 ||
+    if (fprintf(file, ".L%s_core_return:\n", symbol_name) < 0) {
+        return false;
+    }
+    if (frame.saves_return_address &&
+        !minic_riscv64_emit_sp_load64(file, "ra", frame.return_address_offset)) {
+        return false;
+    }
+    if (!minic_riscv64_emit_stack_release(file, frame.frame_size) || fprintf(file, "  ret\n") < 0 ||
         !minic_riscv64_emit_function_symbol_end(file, symbol)) {
         return false;
     }
