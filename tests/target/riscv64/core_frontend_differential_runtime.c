@@ -1,5 +1,10 @@
 #include <stdio.h>
 
+struct CoreDiffLayout {
+    char prefix;
+    int value;
+};
+
 int core_diff_math(int x, int y);
 int core_diff_branch(int x);
 int core_diff_zero(int x);
@@ -14,11 +19,14 @@ int core_diff_ninth(int a0,
                     int a8);
 int core_diff_pointer_zero(int *value);
 int core_diff_call(int value);
+int core_diff_field(struct CoreDiffLayout *item);
+int core_diff_field_call(struct CoreDiffLayout *item);
 int core_diff_void_call(int value);
 int core_diff_asm_call(int value);
 
 int main(void) {
     static const int values[] = {-7, -1, 0, 1, 9};
+    struct CoreDiffLayout layout;
     size_t left;
     size_t right;
     int pointed;
@@ -38,6 +46,11 @@ int main(void) {
         (void)printf("void-call %d %d\n", values[left], core_diff_void_call(values[left]));
         (void)printf("asm-call %d %d\n", values[left], core_diff_asm_call(values[left]));
     }
+    layout.prefix = 3;
+    layout.value = -99;
+    (void)printf("field-ret %d\n", core_diff_field(&layout));
+    (void)printf("field-value %d\n", layout.value);
+    (void)printf("field-call %d\n", core_diff_field_call(&layout));
     (void)printf("ninth %d\n", core_diff_ninth(1, 2, 3, 4, 5, 6, 7, 8, 91));
     pointed = -1234;
     (void)printf("pointer-nonnull %d\n", core_diff_pointer_zero(&pointed));
