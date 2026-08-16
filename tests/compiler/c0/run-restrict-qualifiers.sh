@@ -17,5 +17,6 @@ mkdir -p "$work"
 test -s "$work/restrict_qualifiers.s"
 grep -F 'call_restrict_forms:' "$work/restrict_qualifiers.s" >/dev/null
 grep -F '  call copy_gnu' "$work/restrict_qualifiers.s" >/dev/null
+grep -F '  call copy_gnu_double' "$work/restrict_qualifiers.s" >/dev/null
 grep -F '  call copy_c' "$work/restrict_qualifiers.s" >/dev/null
-printf '%s\n' 'PASS compiler/c0/restrict_qualifiers C=restrict GNU=__restrict pointer-only=1 abi=unchanged'
+printf '%s\n' 'PASS compiler/c0/restrict_qualifiers C=restrict GNU=__restrict/__restrict__ pointer-only=1 abi=unchanged'
