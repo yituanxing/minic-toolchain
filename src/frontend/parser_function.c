@@ -977,7 +977,11 @@ static bool parse_external_tentative_object(MinicParser *parser,
     } else {
         existing = minic_c0_program_global_object(parser->program, object_id);
         if (existing == NULL ||
-            !minic_c0_types_compatible(parser->program, existing->type, object_type) ||
+            !minic_parser_external_object_types_compatible(
+                parser->program, existing->type, object_type) ||
+            (minic_type_is_array(existing->type) &&
+             !minic_parser_merge_external_array_composite_type(
+                 parser->program, existing->type, object_type)) ||
             !minic_c0_global_object_merge_tentative(parser->program, object_id)) {
             minic_parser_error(parser, "conflicting external tentative definition");
             return false;
@@ -1036,7 +1040,11 @@ static bool parse_external_object_definition(MinicParser *parser,
     } else {
         existing = minic_c0_program_global_object(parser->program, object_id);
         if (existing == NULL ||
-            !minic_c0_types_compatible(parser->program, existing->type, object_type) ||
+            !minic_parser_external_object_types_compatible(
+                parser->program, existing->type, object_type) ||
+            (minic_type_is_array(existing->type) &&
+             !minic_parser_merge_external_array_composite_type(
+                 parser->program, existing->type, object_type)) ||
             !minic_c0_global_object_begin_definition(parser->program, object_id)) {
             minic_parser_error(parser, "conflicting external object definition");
             return false;

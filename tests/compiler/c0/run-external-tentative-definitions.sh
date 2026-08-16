@@ -25,6 +25,11 @@ grep -F '.zero 1024' "$assembly" >/dev/null
 grep -F '.word 7' "$assembly" >/dev/null
 grep -F '.word 9' "$assembly" >/dev/null
 
+grep -F 'composite_page_table:' "$assembly" >/dev/null
+grep -F '.size composite_page_table, 32' "$assembly" >/dev/null
+grep -F 'composite_call_table:' "$assembly" >/dev/null
+grep -F '.size composite_call_table, 32' "$assembly" >/dev/null
+
 test "$(grep -c '^repeated_tentative:' "$assembly")" -eq 1
 test "$(grep -c '^extern_then_tentative:' "$assembly")" -eq 1
 test "$(grep -c '^tentative_then_extern:' "$assembly")" -eq 1
@@ -46,4 +51,12 @@ if "$minic" -S "$root/tests/compiler/c0/invalid_external_tentative_redeclaration
 fi
 grep -F 'conflicting external tentative definition' "$work/invalid-redecl.stderr" >/dev/null
 
-printf '%s\n' 'PASS compiler/c0/external_tentative_definitions state=extern|tentative|defined zero=end-of-tu fixed-array=1 attrs=section suffix=1 incomplete-array=fail-closed'
+if "$minic" -S "$root/tests/compiler/c0/invalid_external_array_composite_bound.c" \
+    -o "$work/invalid-array-bound.s" 2>"$work/invalid-array-bound.stderr"; then
+    printf '%s\n' 'conflicting complete array bounds unexpectedly accepted' >&2
+    exit 1
+fi
+grep -F 'conflicting external tentative definition' \
+    "$work/invalid-array-bound.stderr" >/dev/null
+
+printf '%s\n' 'PASS compiler/c0/external_tentative_definitions state=extern|tentative|defined array-composite=incomplete-to-complete zero=end-of-tu fixed-array=1 attrs=section suffix=1 incomplete-array=fail-closed'
