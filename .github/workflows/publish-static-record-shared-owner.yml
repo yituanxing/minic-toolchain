@@ -26,6 +26,10 @@ jobs:
           path = Path('src/frontend/parser_global.c')
           text = path.read_text()
 
+          start = text.index('static bool parse_zero_initializer')
+          end = text.index('static bool function_designator_type', start)
+          text = text[:start] + text[end:]
+
           start = text.index('static bool static_record_has_direct_function_pointer')
           end = text.index('static bool\nappend_static_constant_zero', start)
           text = text[:start] + text[end:]
@@ -66,6 +70,14 @@ jobs:
               raise SystemExit('static mixed relocation regression shape changed')
           case.write_text(source.replace(old, new, 1))
 
+          runner = Path('tests/compiler/c0/run-static-mixed-symbol-relocations.sh')
+          source = runner.read_text()
+          old = "grep -F 'static record pointer initializer type mismatch' \"$work/invalid-type.stderr\" >/dev/null"
+          new = "grep -F 'static pointer initializer type mismatch' \"$work/invalid-type.stderr\" >/dev/null"
+          if old not in source:
+              raise SystemExit('static mixed relocation diagnostic contract changed')
+          runner.write_text(source.replace(old, new, 1))
+
           focused = Path('tests/compiler/c0/run-foundation-focused.sh')
           source = focused.read_text()
           anchor = '    run-static-nested-record-initializers.sh \\\n'
@@ -105,8 +117,9 @@ jobs:
           git rm .github/workflows/publish-static-record-shared-owner.yml
           git add src/frontend/parser_global.c \
                   tests/compiler/c0/static_mixed_symbol_relocations.c \
+                  tests/compiler/c0/run-static-mixed-symbol-relocations.sh \
                   tests/compiler/c0/run-foundation-focused.sh
           git commit -m 'refactor(frontend): unify static record initializer ownership' \
-            -m 'Route every non-array static record through the canonical static-storage initializer owner. Remove the legacy direct-function-pointer record path so designated function-symbol members reuse the same semantic relocation machinery as nested/static aggregate initialization.' \
-            -m '中文说明：所有非数组 static record 统一走 canonical static-storage initializer owner；删除旧的 direct-function-pointer record 专用路径，使 designated function-symbol member 与其他静态聚合初始化共享同一套语义 relocation 机制。'
+            -m 'Route every non-array static record through the canonical static-storage initializer owner. Remove the legacy direct-function-pointer and zero-only record paths so designated function-symbol members reuse the same semantic relocation machinery as nested/static aggregate initialization.' \
+            -m '中文说明：所有非数组 static record 统一走 canonical static-storage initializer owner；删除旧的 direct-function-pointer 与 zero-only record 专用路径，使 designated function-symbol member 与其他静态聚合初始化共享同一套语义 relocation 机制。'
           git push origin HEAD:frontend/static-record-shared-owner-staging
