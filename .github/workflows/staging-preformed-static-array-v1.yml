@@ -1,0 +1,67 @@
+name: Staging Preformed Static Array V1
+
+on:
+  push:
+    branches: [staging/preformed-static-array-v1]
+
+permissions:
+  contents: write
+
+jobs:
+  validate-and-publish:
+    if: "!contains(github.event.head_commit.message, '[publish-v1]')"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install formatter
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang-format-18
+      - name: Apply product patch
+        run: python3 tools/dev/staging-preformed-static-array-v1.py
+      - name: Canonical formatting
+        run: |
+          clang-format-18 -i \
+            src/frontend/parser_global.c \
+            tests/compiler/c0/static_preformed_array_zero.c
+      - name: Release Werror build
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/staging-preformed-static-array-v1
+      - name: Focused preformed array regression
+        run: |
+          MINIC="$GITHUB_WORKSPACE/build/staging-preformed-static-array-v1/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/staging-preformed-static-array-v1-focused" \
+          HOST_CC=cc \
+            sh tests/compiler/c0/run-static-preformed-array-zero.sh
+      - name: Existing static array ownership regressions
+        run: |
+          MINIC="$GITHUB_WORKSPACE/build/staging-preformed-static-array-v1/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/staging-preformed-static-array-v1-existing" \
+          HOST_CC=cc \
+            sh tests/compiler/c0/run-static-record-arrays.sh
+          MINIC="$GITHUB_WORKSPACE/build/staging-preformed-static-array-v1/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/staging-preformed-static-array-v1-existing" \
+          HOST_CC=cc \
+            sh tests/compiler/c0/run-static-mutable-arrays.sh
+      - name: Broad C0 suite
+        run: make -j4 MODE=release BUILD_DIR=build/staging-preformed-static-array-v1 check-fast
+      - name: Foundation focused suite
+        run: |
+          MINIC="$GITHUB_WORKSPACE/build/staging-preformed-static-array-v1/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/staging-preformed-static-array-v1-foundation" \
+          HOST_CC=cc \
+            sh tests/compiler/c0/run-foundation-focused.sh
+      - name: Publish validated product diff
+        run: |
+          git config user.name 'LiYang Dong'
+          git config user.email '119646676+yituanxing@users.noreply.github.com'
+          git add \
+            src/frontend/parser_global.c \
+            tests/compiler/c0/static_preformed_array_zero.c \
+            tests/compiler/c0/run-static-preformed-array-zero.sh \
+            tests/compiler/c0/run-foundation-focused.sh
+          git diff --cached --check
+          git commit -m 'frontend: accept pre-formed complete static arrays [publish-v1]'
+          git push origin HEAD:staging/preformed-static-array-v1
