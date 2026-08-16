@@ -323,6 +323,8 @@ static MinicCoreLowerStatus lower_direct_call(MinicCoreLowerContext *context,
                                               const MinicExpression *expression,
                                               MinicCoreValueId *value_id) {
     const MinicFunction *callee;
+    const char *callee_name;
+    size_t callee_name_length;
     MinicCoreCalleeId callee_id;
     MinicCoreInstruction instruction;
     MinicCoreValueId *arguments;
@@ -341,6 +343,12 @@ static MinicCoreLowerStatus lower_direct_call(MinicCoreLowerContext *context,
     }
     callee = minic_c0_program_function(context->body->program, expression->value.call.function_id);
     if (callee == NULL || callee->name == NULL || callee->name_length == 0U) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    callee_name = minic_c0_function_symbol_name(callee);
+    callee_name_length =
+        callee->assembler_name != NULL ? callee->assembler_name_length : callee->name_length;
+    if (callee_name == NULL || callee_name_length == 0U) {
         return MINIC_CORE_LOWER_ERROR;
     }
     returns_void = minic_type_is_void(callee->return_type);
@@ -374,8 +382,8 @@ static MinicCoreLowerStatus lower_direct_call(MinicCoreLowerContext *context,
         }
     }
     if (!minic_core_function_add_callee(context->function,
-                                        callee->name,
-                                        callee->name_length,
+                                        callee_name,
+                                        callee_name_length,
                                         callee->return_type,
                                         callee->parameter_types,
                                         callee->parameter_count,
