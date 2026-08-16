@@ -763,6 +763,10 @@ bool minic_c0_global_relocation_object_target_type(const MinicC0Program *program
 bool minic_c0_global_relocation_object_target_compatible(const MinicC0Program *program,
                                                          const MinicGlobalRelocation *relocation,
                                                          MinicType slot_type);
+bool minic_c0_global_relocation_function_target_compatible(const MinicC0Program *program,
+                                                           MinicType slot_type,
+                                                           MinicFunctionId function_id,
+                                                           bool has_explicit_pointer_cast);
 bool minic_c0_global_object_set_zero_initialized(MinicC0Program *program,
                                                  MinicGlobalObjectId global_object_id);
 bool minic_c0_global_object_set_extern(MinicC0Program *program,

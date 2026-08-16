@@ -277,9 +277,13 @@ expect_compile_failure \
 expect_compile_failure \
     invalid_too_many_global_initializers \
     "too many global array initializers"
-expect_compile_failure \
-    invalid_writable_static_global \
-    "static global arrays currently require const integer elements"
+compile_source writable_static_global invalid_writable_static_global
+printf '%s\n' "PASS compiler/c0/writable_static_global"
+
+MINIC="$minic" \
+HOST_CC="$host_cc" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+sh "$root/tests/compiler/c0/run-static-array-designators.sh"
 compile_source static_scalar_global static_scalar_global
 expect_instructions static_scalar_global "la a0, value" "lw a0, 0(a0)"
 grep -F "  .word 7" "$work/static_scalar_global.s" >/dev/null
