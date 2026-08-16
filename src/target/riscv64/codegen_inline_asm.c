@@ -299,6 +299,27 @@ static bool append_saved_operand_register(const char *register_name,
     return true;
 }
 
+static const MinicFixedRegisterBinding *
+operand_local_fixed_register_binding(const MinicC0Program *program,
+                                     const MinicInlineAsmOperand *operand) {
+    const MinicExpression *expression;
+
+    if (program == NULL || operand == NULL) {
+        return NULL;
+    }
+    expression = minic_c0_program_expression(program, operand->expression);
+    if (expression == NULL || expression->kind != MINIC_EXPRESSION_LOCAL) {
+        return NULL;
+    }
+    return minic_c0_program_local_fixed_register_binding(program, expression->value.local_id);
+}
+
+static bool operand_accepts_register(const MinicInlineAsmOperand *operand) {
+    return constraint_is(operand, "r") || constraint_is(operand, "rJ") ||
+           constraint_is(operand, "rK") || constraint_is(operand, "=r") ||
+           constraint_is(operand, "=&r") || constraint_is(operand, "+r");
+}
+
 static bool assign_operand_registers(const MinicInlineAsm *inline_asm,
                                      const MinicC0Program *program,
                                      const char **operand_registers,
@@ -312,25 +333,44 @@ static bool assign_operand_registers(const MinicInlineAsm *inline_asm,
     candidate_index = 0U;
     for (operand_index = 0U; operand_index < operand_count; ++operand_index) {
         const MinicInlineAsmOperand *operand;
+        const MinicFixedRegisterBinding *binding;
 
         operand = operand_at(inline_asm, operand_index);
         if (operand == NULL) {
             return false;
         }
+        binding = operand_local_fixed_register_binding(program, operand);
         if (operand_index >= inline_asm->output_count) {
             size_t matching_output_index;
 
             if (constraint_matching_output(inline_asm, operand, &matching_output_index)) {
+                const char *matched_register;
+
                 if (!matching_output_is_register(inline_asm, matching_output_index) ||
                     operand_registers[matching_output_index] == NULL) {
                     return false;
                 }
-                operand_registers[operand_index] = operand_registers[matching_output_index];
+                matched_register = operand_registers[matching_output_index];
+                if (binding != NULL && (strlen(matched_register) != binding->register_name_length ||
+                                        memcmp(matched_register,
+                                               binding->register_name,
+                                               binding->register_name_length) != 0)) {
+                    return false;
+                }
+                operand_registers[operand_index] = matched_register;
                 continue;
             }
         }
         if (operand_uses_immediate(program, operand)) {
             operand_registers[operand_index] = NULL;
+            continue;
+        }
+        if (binding != NULL) {
+            if (!operand_accepts_register(operand) ||
+                inline_asm_clobbers_register(inline_asm, binding->register_name)) {
+                return false;
+            }
+            operand_registers[operand_index] = binding->register_name;
             continue;
         }
         while (candidate_index < MINIC_RISCV64_INLINE_ASM_REGISTER_COUNT &&
