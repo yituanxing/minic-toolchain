@@ -28,7 +28,8 @@ bool minic_parser_parse_pointer_qualifier_sequence(MinicParser *parser,
     while (parser->current.kind == MINIC_TOKEN_KW_CONST ||
            parser->current.kind == MINIC_TOKEN_KW_VOLATILE ||
            declarator_identifier_is(parser, "restrict") ||
-           declarator_identifier_is(parser, "__restrict")) {
+           declarator_identifier_is(parser, "__restrict") ||
+           declarator_identifier_is(parser, "__restrict__")) {
         if (parser->current.kind == MINIC_TOKEN_KW_CONST) {
             *const_qualifiers |= bit;
         } else if (parser->current.kind == MINIC_TOKEN_KW_VOLATILE) {
