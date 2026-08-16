@@ -1,0 +1,69 @@
+name: Staging Fixed Static Record Array V1
+
+on:
+  push:
+    branches: [staging/fixed-static-record-array-v1]
+
+permissions:
+  contents: write
+
+jobs:
+  validate-and-publish:
+    if: "!contains(github.event.head_commit.message, '[publish-v1]')"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install formatter
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang-format-18
+      - name: Apply product patch
+        run: python3 tools/dev/staging-fixed-static-record-array-v1.py
+      - name: Canonical formatting
+        run: |
+          clang-format-18 -i \
+            src/frontend/parser_global.c \
+            tests/compiler/c0/static_fixed_record_array_zero.c
+      - name: Release Werror build
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/staging-fixed-static-record-array-v1
+      - name: Focused fixed record array regression
+        run: |
+          MINIC="$GITHUB_WORKSPACE/build/staging-fixed-static-record-array-v1/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/staging-fixed-static-record-array-v1-focused" \
+          HOST_CC=cc \
+            sh tests/compiler/c0/run-static-fixed-record-array-zero.sh
+      - name: Preserve inferred record array regression
+        run: |
+          MINIC="$GITHUB_WORKSPACE/build/staging-fixed-static-record-array-v1/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/staging-fixed-static-record-array-v1-inferred" \
+          HOST_CC=cc \
+            sh tests/compiler/c0/run-static-record-arrays.sh
+      - name: Preserve fixed mutable array regression
+        run: |
+          MINIC="$GITHUB_WORKSPACE/build/staging-fixed-static-record-array-v1/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/staging-fixed-static-record-array-v1-mutable" \
+          HOST_CC=cc \
+            sh tests/compiler/c0/run-static-mutable-arrays.sh
+      - name: Broad C0 suite
+        run: make -j4 MODE=release BUILD_DIR=build/staging-fixed-static-record-array-v1 check-fast
+      - name: Foundation focused suite
+        run: |
+          MINIC="$GITHUB_WORKSPACE/build/staging-fixed-static-record-array-v1/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/staging-fixed-static-record-array-v1-foundation" \
+          HOST_CC=cc \
+            sh tests/compiler/c0/run-foundation-focused.sh
+      - name: Publish validated product diff
+        run: |
+          git config user.name 'LiYang Dong'
+          git config user.email '119646676+yituanxing@users.noreply.github.com'
+          git add \
+            src/frontend/parser_global.c \
+            tests/compiler/c0/static_fixed_record_array_zero.c \
+            tests/compiler/c0/run-static-fixed-record-array-zero.sh \
+            tests/compiler/c0/run-foundation-focused.sh
+          git diff --cached --check
+          git commit -m 'frontend: route fixed record arrays through shared owner [publish-v1]'
+          git push origin HEAD:staging/fixed-static-record-array-v1
