@@ -1,6 +1,7 @@
 #include "target/riscv64/codegen.h"
 #include "target/riscv64/abi.h"
 #include "target/riscv64/codegen_internal.h"
+#include "target/riscv64/function_symbol.h"
 #include "target/data_layout.h"
 
 #include <errno.h>
@@ -896,6 +897,7 @@ static bool minic_riscv64_emit_function(FILE *file,
                                         size_t *label_counter) {
     MinicRiscv64FunctionLayout function_layout;
     MinicRiscv64FrameLayout frame_layout;
+    MinicRiscv64FunctionSymbol symbol;
     size_t frame_size;
     bool success;
     const char *symbol_name;
@@ -914,34 +916,13 @@ static bool minic_riscv64_emit_function(FILE *file,
         return false;
     }
     frame_size = frame_layout.frame_size;
-    symbol_name = minic_c0_function_symbol_name(function);
-    if (symbol_name == NULL || symbol_name[0] == '\0') {
+    if (!minic_riscv64_function_symbol_from_function(function, &symbol)) {
         minic_riscv64_function_layout_destroy(&function_layout);
         return false;
     }
+    symbol_name = symbol.symbol_name;
 
-    success = function->section_name != NULL
-                  ? fprintf(file, ".section %s\n", function->section_name) >= 0
-                  : fprintf(file, ".text\n") >= 0;
-    if (success && !function->is_internal) {
-        success = fprintf(file, function->is_weak ? ".weak %s\n" : ".globl %s\n", symbol_name) >= 0;
-        if (success && function->visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT) {
-            const char *directive;
-
-            directive = function->visibility == MINIC_SYMBOL_VISIBILITY_HIDDEN      ? ".hidden"
-                        : function->visibility == MINIC_SYMBOL_VISIBILITY_INTERNAL  ? ".internal"
-                        : function->visibility == MINIC_SYMBOL_VISIBILITY_PROTECTED ? ".protected"
-                                                                                    : NULL;
-            success = directive != NULL && fprintf(file, "%s %s\n", directive, symbol_name) >= 0;
-        }
-    }
-    if (success) {
-        success = fprintf(file,
-                          ".type %s, @function\n"
-                          "%s:\n",
-                          symbol_name,
-                          symbol_name) >= 0;
-    }
+    success = minic_riscv64_emit_function_symbol_begin(file, &symbol);
     if (success) {
         success = minic_riscv64_emit_stack_allocate(file, frame_size);
     }
@@ -1160,11 +1141,8 @@ static bool minic_riscv64_emit_function(FILE *file,
         success = minic_riscv64_emit_stack_release(file, frame_size);
     }
     if (success) {
-        success = fprintf(file,
-                          "  ret\n"
-                          ".size %s, .-%s\n",
-                          symbol_name,
-                          symbol_name) >= 0;
+        success =
+            fprintf(file, "  ret\n") >= 0 && minic_riscv64_emit_function_symbol_end(file, &symbol);
     }
     minic_riscv64_function_layout_destroy(&function_layout);
     return success;
