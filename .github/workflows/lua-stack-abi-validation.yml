@@ -109,6 +109,26 @@ jobs:
             grep -q "^${symbol}:" build/core-frontend-diff/legacy.s
             grep -q "^${symbol}:" build/core-frontend-diff/core.s
           done
+          for output in build/core-frontend-diff/legacy.s build/core-frontend-diff/core.s; do
+            grep -q '^core_diff_static:' "$output"
+            if grep -q '^\.globl core_diff_static$' "$output"; then
+              printf '%s\n' "internal Core differential function was exported: $output" >&2
+              exit 1
+            fi
+            grep -q '^\.weak core_diff_weak$' "$output"
+            grep -q '^core_diff_weak:' "$output"
+            grep -q '^\.globl core_diff_hidden$' "$output"
+            grep -q '^\.hidden core_diff_hidden$' "$output"
+            grep -q '^core_diff_hidden:' "$output"
+            grep -q '^\.section \.core\.diff\.text$' "$output"
+            grep -q '^core_diff_section:' "$output"
+            grep -q '^\.globl core_diff_asm_alias$' "$output"
+            grep -q '^core_diff_asm_alias:' "$output"
+            if grep -q '^core_diff_asm:' "$output"; then
+              printf '%s\n' "C identifier leaked past assembler-name mapping: $output" >&2
+              exit 1
+            fi
+          done
           riscv64-linux-gnu-gcc -static -O2 \
             "$source_file" "$runtime" \
             -o build/core-frontend-diff/reference-rv64
