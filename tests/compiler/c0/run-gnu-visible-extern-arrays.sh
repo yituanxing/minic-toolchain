@@ -18,6 +18,9 @@ test -s "$work/gnu_visible_extern_array.s"
 grep -F '.globl names' "$work/gnu_visible_extern_array.s" >/dev/null
 grep -F '.internal names' "$work/gnu_visible_extern_array.s" >/dev/null
 grep -F '.size names, 24' "$work/gnu_visible_extern_array.s" >/dev/null
+grep -F '.globl hidden_items' "$work/gnu_visible_extern_array.s" >/dev/null
+grep -F '.hidden hidden_items' "$work/gnu_visible_extern_array.s" >/dev/null
+grep -F '.size hidden_items, 8' "$work/gnu_visible_extern_array.s" >/dev/null
 
 test "$(grep -c '^  .dword .Lminic_string_' "$work/gnu_visible_extern_array.s")" -ge 3
-printf '%s\n' 'PASS compiler/c0/gnu_visible_extern_array declaration=fixed-pointer-array definition=merge visibility=internal size=24'
+printf '%s\n' 'PASS compiler/c0/gnu_visible_extern_array prefix=internal suffix=hidden extern-array=merge size=24,8'
