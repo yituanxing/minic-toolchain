@@ -1016,7 +1016,7 @@ static bool parse_external_object_definition(MinicParser *parser,
 
     if (parser == NULL || parser->current.kind != MINIC_TOKEN_EQUAL ||
         (!minic_type_is_integer(object_type) && !minic_type_is_pointer(object_type) &&
-         !minic_type_is_record(object_type))) {
+         !minic_type_is_record(object_type) && !minic_type_is_array(object_type))) {
         minic_parser_error(parser, "unsupported external object definition");
         return false;
     }
@@ -1066,7 +1066,7 @@ static bool parse_external_object_definition(MinicParser *parser,
         return minic_parser_expect(
             parser, MINIC_TOKEN_SEMICOLON, "expected ';' after external object definition");
     }
-    if (minic_type_is_record(object_type)) {
+    if (minic_type_is_record(object_type) || minic_type_is_array(object_type)) {
         if (!minic_parser_parse_static_storage_initializer_value(parser, object_id, object_type)) {
             if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
                 minic_parser_error(parser, "cannot record external record initializer");
@@ -1104,122 +1104,73 @@ static bool parse_external_object_definition(MinicParser *parser,
 static bool parse_visible_external_array(MinicParser *parser,
                                          MinicType element_type,
                                          MinicSourceSpan name_span,
-                                         const char *section_name,
-                                         size_t section_name_length,
-                                         bool has_section,
-                                         size_t explicit_alignment,
+                                         char *section_name,
+                                         size_t section_name_capacity,
+                                         size_t *section_name_length,
+                                         bool *has_section,
+                                         size_t *explicit_alignment,
                                          MinicSymbolVisibility visibility,
                                          bool has_visibility) {
     MinicParser probe;
-    bool is_tentative;
+    MinicType array_type;
+    bool is_array;
 
-    if (parser == NULL || parser->current.kind != MINIC_TOKEN_LBRACKET) {
+    if (parser == NULL || parser->current.kind != MINIC_TOKEN_LBRACKET || section_name == NULL ||
+        section_name_length == NULL || has_section == NULL || explicit_alignment == NULL) {
         return false;
     }
 
+    /* Incomplete top-level array definitions still need the legacy bound-inference owner.
+     * Keep that special case bounded until initializer semantics owns inferred aggregate shape. */
     probe = *parser;
     if (!minic_parser_advance(&probe)) {
         return false;
     }
-    while (probe.current.kind != MINIC_TOKEN_RBRACKET && probe.current.kind != MINIC_TOKEN_EOF) {
+    if (probe.current.kind == MINIC_TOKEN_RBRACKET) {
         if (!minic_parser_advance(&probe)) {
             return false;
         }
-    }
-    if (probe.current.kind != MINIC_TOKEN_RBRACKET || !minic_parser_advance(&probe)) {
-        return false;
-    }
-    is_tentative = probe.current.kind == MINIC_TOKEN_SEMICOLON;
-
-    if (is_tentative) {
-        MinicGlobalObjectId object_id;
-        MinicGlobalObject *object;
-        const MinicArrayType *existing_array;
-        MinicType array_type;
-        size_t element_count;
-
-        if (!minic_parser_advance(parser)) {
-            return false;
-        }
-        if (parser->current.kind == MINIC_TOKEN_RBRACKET) {
+        if (probe.current.kind == MINIC_TOKEN_SEMICOLON) {
             minic_parser_error(parser,
                                "incomplete external tentative array is not implemented yet");
             return false;
         }
-        if (!minic_parser_parse_fixed_array_bound(parser, &element_count)) {
-            return false;
-        }
-        object_id = minic_parser_find_global_object_entity(parser, name_span);
-        if (object_id == MINIC_GLOBAL_OBJECT_INVALID) {
-            if (!minic_c0_program_add_array_type(
-                    parser->program, element_type, element_count, &array_type) ||
-                !minic_c0_program_add_tentative_global_object(parser->program,
-                                                              parser->source +
-                                                                  name_span.begin.offset,
-                                                              minic_parser_span_length(name_span),
-                                                              array_type,
-                                                              false,
-                                                              minic_type_is_const(element_type),
-                                                              &object_id)) {
-                minic_parser_error(parser, "cannot create fixed external tentative array");
-                return false;
-            }
-        } else {
-            object = &parser->program->global_objects[object_id];
-            existing_array =
-                minic_type_is_array(object->type)
-                    ? minic_c0_program_array_type(parser->program, object->type.array_type_id)
-                    : NULL;
-            if (existing_array == NULL ||
-                !minic_c0_types_compatible(
-                    parser->program, existing_array->element_type, element_type) ||
-                (existing_array->element_count != 0U &&
-                 existing_array->element_count != element_count) ||
-                (existing_array->element_count == 0U &&
-                 !minic_c0_program_complete_array_type(
-                     parser->program, object->type, element_count)) ||
-                !minic_c0_global_object_merge_tentative(parser->program, object_id)) {
-                minic_parser_error(parser, "conflicting fixed external tentative array");
-                return false;
-            }
-        }
-        parser->program->global_objects[object_id].is_block_scope_extern_only = false;
-        if (!apply_external_object_metadata(parser,
-                                            object_id,
-                                            section_name,
-                                            section_name_length,
-                                            has_section,
-                                            explicit_alignment,
-                                            visibility,
-                                            has_visibility) ||
-            !minic_parser_expect(
-                parser, MINIC_TOKEN_SEMICOLON, "expected ';' after external tentative array")) {
-            return false;
-        }
-        return true;
+        return parse_external_integer_array_definition(parser, element_type, name_span);
     }
 
-    if (!parse_external_integer_array_definition(parser, element_type, name_span)) {
+    /* A complete array is an ordinary complete object. Materialize the full declarator first,
+     * then collect suffix attributes before deciding tentative-definition vs definition. */
+    if (!minic_parser_parse_array_declarator_suffix(
+            parser, element_type, true, &array_type, &is_array) ||
+        !is_array ||
+        !minic_parser_parse_gnu_object_attribute_lists(parser,
+                                                       section_name,
+                                                       section_name_capacity,
+                                                       section_name_length,
+                                                       has_section,
+                                                       explicit_alignment)) {
         return false;
     }
-    {
-        MinicGlobalObjectId object_id;
-
-        object_id = minic_parser_find_global_object_entity(parser, name_span);
-        if (object_id == MINIC_GLOBAL_OBJECT_INVALID ||
-            !apply_external_object_metadata(parser,
-                                            object_id,
-                                            section_name,
-                                            section_name_length,
-                                            has_section,
-                                            explicit_alignment,
-                                            visibility,
-                                            has_visibility)) {
-            minic_parser_error(parser, "cannot record visible external array definition metadata");
-            return false;
-        }
+    if (parser->current.kind == MINIC_TOKEN_SEMICOLON) {
+        return parse_external_tentative_object(parser,
+                                               array_type,
+                                               name_span,
+                                               section_name,
+                                               *section_name_length,
+                                               *has_section,
+                                               *explicit_alignment,
+                                               visibility,
+                                               has_visibility);
     }
-    return true;
+    return parse_external_object_definition(parser,
+                                            array_type,
+                                            name_span,
+                                            section_name,
+                                            *section_name_length,
+                                            *has_section,
+                                            *explicit_alignment,
+                                            visibility,
+                                            has_visibility);
 }
 
 typedef struct MinicParsedDeclarationPrefix {
@@ -1802,9 +1753,10 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                                                 return_type,
                                                 name_span,
                                                 section_name,
-                                                section_name_length,
-                                                has_section,
-                                                object_explicit_alignment,
+                                                sizeof(section_name),
+                                                &section_name_length,
+                                                &has_section,
+                                                &object_explicit_alignment,
                                                 visibility,
                                                 has_visibility);
         }
