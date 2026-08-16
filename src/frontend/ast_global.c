@@ -179,6 +179,36 @@ bool minic_c0_program_add_tentative_global_object(MinicC0Program *program,
     return true;
 }
 
+bool minic_c0_global_object_merge_declaration_type(MinicC0Program *program,
+                                                   MinicGlobalObjectId global_object_id,
+                                                   MinicType declared_type) {
+    MinicGlobalObject *object;
+    const MinicArrayType *existing_array;
+    const MinicArrayType *declared_array;
+
+    if (program == NULL || global_object_id >= program->global_object_count) {
+        return false;
+    }
+    object = &program->global_objects[global_object_id];
+    if (!minic_c0_types_compatible(program, object->type, declared_type)) {
+        return false;
+    }
+    if (!minic_type_is_array(object->type) || !minic_type_is_array(declared_type)) {
+        return true;
+    }
+    existing_array = minic_c0_program_array_type(program, object->type.array_type_id);
+    declared_array = minic_c0_program_array_type(program, declared_type.array_type_id);
+    if (existing_array == NULL || declared_array == NULL) {
+        return false;
+    }
+    if (!existing_array->is_zero_length && existing_array->element_count == 0U &&
+        !declared_array->is_zero_length && declared_array->element_count != 0U) {
+        return minic_c0_program_complete_array_type(
+            program, object->type, declared_array->element_count);
+    }
+    return true;
+}
+
 static bool global_object_has_definition_payload(const MinicGlobalObject *object) {
     return object != NULL && (object->initializer_count != 0U || object->relocation_count != 0U ||
                               object->is_zero_initialized);
