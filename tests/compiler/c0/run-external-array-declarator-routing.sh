@@ -14,7 +14,7 @@ mkdir -p "$work"
   "$root/tests/compiler/c0/external_array_declarator_routing.c" -o "$work/input.i"
 "$minic" -S "$work/input.i" -o "$work/output.s"
 test -s "$work/output.s"
-for symbol in cpu_ops empty_zero_page purgatory_sha256_digest purgatory_sha_regions initialized_map; do
+for symbol in cpu_ops empty_zero_page purgatory_sha256_digest purgatory_sha_regions initialized_map completed_tentative completed_definition; do
   grep -F "$symbol:" "$work/output.s" >/dev/null
 done
 grep -F '.data..ro_after_init' "$work/output.s" >/dev/null

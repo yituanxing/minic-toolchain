@@ -702,6 +702,9 @@ bool minic_c0_program_add_tentative_global_object(MinicC0Program *program,
                                                   bool is_internal,
                                                   bool is_read_only,
                                                   MinicGlobalObjectId *global_object_id);
+bool minic_c0_global_object_merge_declaration_type(MinicC0Program *program,
+                                                   MinicGlobalObjectId global_object_id,
+                                                   MinicType declared_type);
 bool minic_c0_global_object_merge_tentative(MinicC0Program *program,
                                             MinicGlobalObjectId global_object_id);
 bool minic_c0_global_object_begin_definition(MinicC0Program *program,
