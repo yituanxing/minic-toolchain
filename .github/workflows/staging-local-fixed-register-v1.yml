@@ -1,0 +1,116 @@
+name: Staging Local Fixed Register V1
+
+on:
+  push:
+    branches: [staging/local-fixed-register-v1]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: staging-local-fixed-register-v1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate-and-publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install validation tools
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang-format-18 gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu
+
+      - name: Apply local fixed-register support
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/stage-local-fixed-register-v1.py
+
+      - name: Canonical formatting
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          clang-format-18 -i \
+            src/frontend/ast.h \
+            src/frontend/ast_global.c \
+            src/frontend/ast_verifier.c \
+            src/frontend/parser_global.c \
+            src/frontend/parser_statement.c \
+            src/target/target_info.h \
+            src/target/target_info.c \
+            src/target/riscv64/codegen_inline_asm.c \
+            tests/compiler/c0/gnu_local_fixed_register_bindings.c \
+            tests/compiler/c0/gnu_local_fixed_register_binding_reject.c
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('tests/compiler/c0/run-gnu-local-fixed-register-bindings.sh')
+          path.write_text(path.read_text().rstrip() + '\n')
+          PY
+
+      - name: Release Werror build
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/staging-local-fixed-register
+
+      - name: Focused local fixed-register regression
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/staging-local-fixed-register/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/staging-local-fixed-register-focused" \
+          HOST_CC=cc \
+          RV_CC=riscv64-linux-gnu-gcc \
+            sh tests/compiler/c0/run-gnu-local-fixed-register-bindings.sh
+
+      - name: Preserve file-scope fixed-register regression
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/staging-local-fixed-register/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/staging-global-fixed-register" \
+          HOST_CC=cc \
+            sh tests/compiler/c0/run-gnu-fixed-register-bindings.sh
+
+      - name: Broad C0 suite
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release BUILD_DIR=build/staging-local-fixed-register check-fast
+
+      - name: Foundation focused suite
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/staging-local-fixed-register/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/staging-local-fixed-register-foundation" \
+          HOST_CC=cc \
+            sh tests/compiler/c0/run-foundation-focused.sh
+
+      - name: Publish validated product diff
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'LiYang Dong'
+          git config user.email '119646676+yituanxing@users.noreply.github.com'
+          git add \
+            src/frontend/ast.h \
+            src/frontend/ast_global.c \
+            src/frontend/ast_verifier.c \
+            src/frontend/parser_global.c \
+            src/frontend/parser_statement.c \
+            src/target/target_info.h \
+            src/target/target_info.c \
+            src/target/riscv64/codegen_inline_asm.c \
+            tests/compiler/c0/gnu_local_fixed_register_bindings.c \
+            tests/compiler/c0/gnu_local_fixed_register_binding_reject.c \
+            tests/compiler/c0/run-gnu-local-fixed-register-bindings.sh
+          git diff --cached --check
+          git commit -m 'frontend: model local fixed-register asm bindings [publish-v1]'
+          git push origin HEAD:staging/local-fixed-register-v1
