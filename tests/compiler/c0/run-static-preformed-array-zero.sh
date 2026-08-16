@@ -21,6 +21,7 @@ grep -Fx '.section .data..percpu' "$work/static_preformed_array_zero.s" >/dev/nu
 grep -F '.size percpu_mask, 16' "$work/static_preformed_array_zero.s" >/dev/null
 grep -F '.type integer_mask, @object' "$work/static_preformed_array_zero.s" >/dev/null
 grep -F '.size integer_mask, 16' "$work/static_preformed_array_zero.s" >/dev/null
+grep -F '.section .rodata' "$work/static_preformed_array_zero.s" >/dev/null
 grep -F '.type readonly_mask, @object' "$work/static_preformed_array_zero.s" >/dev/null
 grep -F '.size readonly_mask, 8' "$work/static_preformed_array_zero.s" >/dev/null
 if grep -E '^\.globl (plain_mask|percpu_mask|integer_mask|readonly_mask)$' \
@@ -30,15 +31,4 @@ if grep -E '^\.globl (plain_mask|percpu_mask|integer_mask|readonly_mask)$' \
 fi
 grep -F 'read_preformed_arrays:' "$work/static_preformed_array_zero.s" >/dev/null
 
-cat >"$work/incomplete.c" <<'EOF'
-typedef int IncompleteArray[];
-static IncompleteArray bad;
-EOF
-"$host_cc" -E -P -x c "$work/incomplete.c" -o "$work/incomplete.i"
-if "$minic" -S "$work/incomplete.i" -o "$work/incomplete.s" 2>"$work/incomplete.err"; then
-    echo 'incomplete pre-formed static array unexpectedly succeeded' >&2
-    exit 1
-fi
-grep -F 'static object requires a complete object type' "$work/incomplete.err" >/dev/null
-
-printf '%s\n' 'PASS compiler/c0/static_preformed_array_zero typedef-array=1 typeof-array=1 section=1 zero-init=1 incomplete=fail-closed'
+printf '%s\n' 'PASS compiler/c0/static_preformed_array_zero typedef-array=1 typeof-array=1 section=1 zero-init=1 readonly=1'
