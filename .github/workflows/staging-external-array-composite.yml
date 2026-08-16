@@ -1,0 +1,73 @@
+name: Staging External Array Composite
+
+on:
+  push:
+    branches:
+      - staging/external-array-composite-v1
+
+permissions:
+  contents: write
+
+jobs:
+  validate-and-publish:
+    if: ${{ !contains(github.event.head_commit.message, '[publish]') }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install formatter
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang-format-18
+
+      - name: Apply shared composite owner
+        run: python3 tools/dev/stage-external-array-composite.py
+
+      - name: Format changed C sources
+        run: |
+          clang-format-18 -i \
+            src/frontend/parser_global.c \
+            src/frontend/parser_function.c \
+            tests/compiler/c0/external_tentative_definitions.c \
+            tests/compiler/c0/invalid_external_array_composite_bound.c
+
+      - name: Build sanitizer compiler
+        run: make -j4 MODE=sanitize BUILD_DIR=build/staging-array-composite
+
+      - name: Run focused composite regression
+        env:
+          MINIC: ${{ github.workspace }}/build/staging-array-composite/bin/minic
+          HOST_CC: cc
+          BUILD_DIR: ${{ github.workspace }}/build/staging-array-composite
+        run: sh tests/compiler/c0/run-external-tentative-definitions.sh
+
+      - name: Run broad C0 source suite
+        env:
+          MINIC: ${{ github.workspace }}/build/staging-array-composite/bin/minic
+          HOST_CC: cc
+          BUILD_DIR: ${{ github.workspace }}/build/staging-array-composite
+        run: sh tests/compiler/c0/run.sh
+
+      - name: Run Foundation focused suite
+        env:
+          MINIC: ${{ github.workspace }}/build/staging-array-composite/bin/minic
+          HOST_CC: cc
+          BUILD_DIR: ${{ github.workspace }}/build/staging-array-composite
+        run: sh tests/compiler/c0/run-foundation-focused.sh
+
+      - name: Publish validated product diff
+        run: |
+          git config user.name 'LiYang Dong'
+          git config user.email '119646676+yituanxing@users.noreply.github.com'
+          git add \
+            src/frontend/parser_internal.h \
+            src/frontend/parser_global.c \
+            src/frontend/parser_function.c \
+            tests/compiler/c0/external_tentative_definitions.c \
+            tests/compiler/c0/invalid_external_array_composite_bound.c \
+            tests/compiler/c0/run-external-tentative-definitions.sh
+          git diff --cached --check
+          git commit -m 'frontend: share external array composite declaration ownership [publish]'
+          git push origin HEAD:staging/external-array-composite-v1
