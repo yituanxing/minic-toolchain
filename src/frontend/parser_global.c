@@ -2193,7 +2193,7 @@ bool minic_parser_parse_static_global_after_head(MinicParser *parser,
         minic_parser_error(parser, "pre-formed static array initializer is not supported yet");
         return false;
     }
-    if (minic_type_is_record(element_type)) {
+    if (minic_type_is_record(element_type) && parser->current.kind != MINIC_TOKEN_LBRACKET) {
         return parse_static_record(parser, element_type, name_span);
     }
     if (parser->current.kind != MINIC_TOKEN_LBRACKET) {
@@ -2209,7 +2209,7 @@ bool minic_parser_parse_static_global_after_head(MinicParser *parser,
                                           has_section,
                                           explicit_alignment);
     }
-    if (!minic_type_is_integer(element_type)) {
+    if (!minic_type_is_integer(element_type) && !minic_type_is_record(element_type)) {
         minic_parser_error(parser,
                            "static array requires an integer, pointer, or record element type");
         return false;
@@ -2222,6 +2222,9 @@ bool minic_parser_parse_static_global_after_head(MinicParser *parser,
             return false;
         }
         if (probe.current.kind == MINIC_TOKEN_RBRACKET) {
+            if (minic_type_is_record(element_type)) {
+                return parse_static_record(parser, element_type, name_span);
+            }
             if (minic_type_is_char_integer(element_type)) {
                 return parse_static_inferred_char_array(parser,
                                                         element_type,
@@ -2247,7 +2250,13 @@ bool minic_parser_parse_static_global_after_head(MinicParser *parser,
 
         if (!minic_parser_parse_array_declarator_suffix(
                 parser, element_type, false, &object_type, &is_array) ||
-            !is_array) {
+            !is_array ||
+            !minic_parser_parse_gnu_object_attribute_lists(parser,
+                                                           section_name,
+                                                           section_capacity,
+                                                           section_name_length,
+                                                           has_section,
+                                                           explicit_alignment)) {
             if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
                 minic_parser_error(parser, "cannot build fixed static array type");
             }
