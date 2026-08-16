@@ -1,0 +1,97 @@
+name: Diagnostic Inline Asm Count V1
+
+on:
+  push:
+    branches: [diagnostic/inline-asm-count-v1]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: diagnostic-inline-asm-count-v1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Restore pinned Linux source archive
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-cache/linux-6.6.143.tar.xz
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            flex bison bc libelf-dev libssl-dev
+
+      - name: Instrument operand count and widen only diagnostic capacity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/target/riscv64/codegen_inline_asm.c')
+          s = p.read_text()
+          old_cap = '#define MINIC_RISCV64_INLINE_ASM_MAX_OPERANDS 6U'
+          assert s.count(old_cap) == 1
+          s = s.replace(old_cap, '#define MINIC_RISCV64_INLINE_ASM_MAX_OPERANDS 12U', 1)
+          old_include = '#include <stdint.h>\n#include <string.h>'
+          assert s.count(old_include) == 1
+          s = s.replace(old_include, '#include <stdint.h>\n#include <stdio.h>\n#include <string.h>', 1)
+          old_guard = '''    if (operand_count > MINIC_RISCV64_INLINE_ASM_MAX_OPERANDS ||\n        !template_operands_are_valid(inline_asm, operand_count)) {\n'''
+          assert s.count(old_guard) == 1
+          new_guard = '''    if (operand_count > 6U) {\n        (void)fprintf(stderr,\n                      "MINIC_DIAG_INLINE_ASM_OPERANDS total=%zu outputs=%zu inputs=%zu\\n",\n                      operand_count,\n                      inline_asm->output_count,\n                      inline_asm->input_count);\n    }\n    if (operand_count > MINIC_RISCV64_INLINE_ASM_MAX_OPERANDS ||\n        !template_operands_are_valid(inline_asm, operand_count)) {\n'''
+          p.write_text(s.replace(old_guard, new_guard, 1))
+          PY
+          git diff -- src/target/riscv64/codegen_inline_asm.c
+
+      - name: Build diagnostic compiler
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release BUILD_DIR=build/diag-inline-asm-count
+
+      - name: Drive narrow Linux window around SBI
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/diag-inline-asm-count/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/linux-batch" \
+          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-cache/linux-6.6.143.tar.xz" \
+          CROSS_COMPILE=riscv64-linux-gnu- \
+          LINUX_BATCH_OFFSET=38 LINUX_BATCH_LIMIT=10 LINUX_BATCH_JOBS=2 \
+            sh tests/external/linux/batch_probe.sh
+
+      - name: Show diagnostic markers and summary
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          grep -R -H 'MINIC_DIAG_INLINE_ASM_OPERANDS' build/linux-batch/minic-stderr || true
+          test -s build/linux-batch/batch-summary.txt && cat build/linux-batch/batch-summary.txt || true
+
+      - name: Upload diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: diagnostic-inline-asm-count-${{ github.run_id }}
+          path: |
+            build/linux-batch/batch-summary.txt
+            build/linux-batch/batch-results.json
+            build/linux-batch/failure-contexts.txt
+            build/linux-batch/selected-tus.txt
+            build/linux-batch/minic-stderr/**/*.stderr
+          if-no-files-found: ignore
+          retention-days: 7
