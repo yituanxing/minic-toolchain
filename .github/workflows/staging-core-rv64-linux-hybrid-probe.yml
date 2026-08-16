@@ -71,25 +71,29 @@ jobs:
           printf '%s\n' \
             "LINUX_HYBRID_ROUTING core_functions=$core_functions function_symbols=$function_symbols"
 
-          printf '%s\n' 'LINUX_HYBRID_KBUILD_COMMAND_BEGIN'
-          grep -m1 -- 'riscv64-linux-gnu-gcc.*init/main\.c' "$reference_log" || true
-          printf '%s\n' 'LINUX_HYBRID_KBUILD_COMMAND_END'
-
           mapfile -t target_flags < <(
             python3 - "$reference_log" <<'PY'
           import re
           import sys
           from pathlib import Path
 
-          text = Path(sys.argv[1]).read_text(errors="replace")
+          lines = Path(sys.argv[1]).read_text(errors="replace").splitlines()
+          commands = [
+              line
+              for line in lines
+              if "riscv64-linux-gnu-gcc" in line
+              and "-o init/main.o" in line
+              and "init/main.c" in line
+          ]
+          if len(commands) != 1:
+              raise SystemExit(f"expected one init/main.c Kbuild command, found {len(commands)}")
+          command = commands[0]
+          print(f"KBUILD_COMMAND={command}", file=sys.stderr)
           for option in ("march", "mabi"):
-              matches = re.findall(rf"(?<!\S)-{option}=([^\s]+)", text)
-              if not matches:
-                  raise SystemExit(f"missing -{option} in Kbuild reference log")
-              values = list(dict.fromkeys(matches))
-              if len(values) != 1:
-                  raise SystemExit(f"ambiguous -{option} values: {values}")
-              print(f"-{option}={values[0]}")
+              match = re.search(rf"(?<!\S)-{option}=([^\s]+)", command)
+              if match is None:
+                  raise SystemExit(f"missing -{option} in init/main.c Kbuild command")
+              print(f"-{option}={match.group(1)}")
           PY
           )
           if test "${#target_flags[@]}" -ne 2; then
