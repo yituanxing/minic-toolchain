@@ -23,6 +23,7 @@ for test_script in \
     run-restrict-qualifiers.sh \
     run-gnu-extension-declaration.sh \
     run-builtin-expect.sh \
+    run-builtin-memcpy-call.sh \
     run-builtin-prefetch.sh \
     run-gnu-function-attributes.sh \
     run-gnu-function-asm-labels.sh \
