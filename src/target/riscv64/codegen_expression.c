@@ -778,6 +778,47 @@ minic_riscv64_emit_record_value_temporary(FILE *file,
         }
         return true;
     }
+    if (source->kind == MINIC_EXPRESSION_CONDITIONAL) {
+        const MinicExpression *condition;
+        const MinicExpression *when_true;
+        const MinicExpression *when_false;
+
+        condition = minic_c0_program_expression(program, source->value.conditional.condition);
+        when_true = minic_c0_program_expression(program, source->value.conditional.when_true);
+        when_false = minic_c0_program_expression(program, source->value.conditional.when_false);
+        if (source->value.conditional.uses_condition_value || condition == NULL ||
+            when_true == NULL || when_false == NULL || !type_is_condition_scalar(condition->type) ||
+            !minic_type_is_record(when_true->type) || !minic_type_is_record(when_false->type) ||
+            when_true->type.record_id != source->type.record_id ||
+            when_false->type.record_id != source->type.record_id ||
+            !minic_c0_record_value_is_copy_source(program, source->value.conditional.when_true) ||
+            !minic_c0_record_value_is_copy_source(program, source->value.conditional.when_false) ||
+            !minic_riscv64_emit_expression(
+                file, program, function, function_layout, source->value.conditional.condition) ||
+            fprintf(file, "  beqz a0, .Lminic_record_cond_false_%zu\n", source_id) < 0 ||
+            !minic_riscv64_emit_record_value_temporary(file,
+                                                       program,
+                                                       function,
+                                                       function_layout,
+                                                       source->value.conditional.when_true,
+                                                       storage_size,
+                                                       temporary_size) ||
+            fprintf(file,
+                    "  j .Lminic_record_cond_end_%zu\n"
+                    ".Lminic_record_cond_false_%zu:\n",
+                    source_id,
+                    source_id) < 0 ||
+            !minic_riscv64_emit_record_value_temporary(file,
+                                                       program,
+                                                       function,
+                                                       function_layout,
+                                                       source->value.conditional.when_false,
+                                                       storage_size,
+                                                       temporary_size)) {
+            return false;
+        }
+        return fprintf(file, ".Lminic_record_cond_end_%zu:\n", source_id) >= 0;
+    }
     if (source->kind == MINIC_EXPRESSION_CALL) {
         MinicRiscv64AbiValue value;
 
