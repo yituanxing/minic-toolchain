@@ -35,6 +35,16 @@ if grep -E '\+A|"r"|=r' "$assembly" >/dev/null; then
     exit 1
 fi
 
+cat >"$work/argument-clobber.c" <<'EOF'
+int f(int value) {
+    __asm__ __volatile__("add %0, %0, zero" : "+r"(value) : : "a0", "a7");
+    return value;
+}
+EOF
+"$host_cc" -E -P -std=gnu11 -x c "$work/argument-clobber.c" -o "$work/argument-clobber.i"
+"$minic" -S "$work/argument-clobber.i" -o "$work/argument-clobber.s"
+grep -F 'add t0, t0, zero' "$work/argument-clobber.s" >/dev/null
+
 cat >"$work/unsupported-clobber.c" <<'EOF'
 int f(int value) {
     __asm__ __volatile__("add %0, %0, zero" : "+r"(value) : : "s1");
