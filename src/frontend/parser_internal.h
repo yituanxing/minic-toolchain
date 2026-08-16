@@ -241,6 +241,15 @@ bool minic_parser_parse_gnu_object_attribute_lists(MinicParser *parser,
                                                    size_t *section_name_length,
                                                    bool *has_section,
                                                    size_t *explicit_alignment);
+bool minic_parser_parse_gnu_object_attribute_lists_with_visibility(
+    MinicParser *parser,
+    char *section_name,
+    size_t section_capacity,
+    size_t *section_name_length,
+    bool *has_section,
+    size_t *explicit_alignment,
+    MinicSymbolVisibility *visibility,
+    bool *has_visibility);
 bool minic_parser_apply_alignment_attribute(MinicParser *parser,
                                             const MinicParsedAttribute *attribute,
                                             const char *subject,
