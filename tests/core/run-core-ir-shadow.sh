@@ -240,6 +240,27 @@ int logical_double_not(int value) {
 EOF
 check_strict_case scalar-is-zero-v0
 
+cat >"$work_dir/integer-negate-v0.i" <<'EOF'
+int negate_int(int value) {
+    return -value;
+}
+
+long negate_long(long value) {
+    return -value;
+}
+
+int source_value(void);
+
+int negate_call_result(void) {
+    return -source_value();
+}
+
+int double_negate(int value) {
+    return -(-value);
+}
+EOF
+check_strict_case integer-negate-v0
+
 cat >"$work_dir/indirect-call-unsupported.i" <<'EOF'
 int indirect_caller(int (*callee)(int), int value) {
     return callee(value);
