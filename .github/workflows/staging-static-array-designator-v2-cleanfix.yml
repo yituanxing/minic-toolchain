@@ -1,0 +1,62 @@
+name: Staging Static Array Designator V2 Cleanfix
+
+on:
+  push:
+    branches:
+      - staging/static-array-designator-v2-cleanfix
+
+permissions:
+  contents: write
+
+jobs:
+  validate-and-publish:
+    if: ${{ !contains(github.event.head_commit.message, '[publish]') }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install formatter
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang-format-18
+
+      - name: Repair literal NUL source spelling
+        run: python3 tools/dev/fix-static-designator-nul.py
+
+      - name: Canonical formatting
+        run: clang-format-18 -i src/frontend/parser_global.c
+
+      - name: Release Werror build
+        run: make -j4 MODE=release BUILD_DIR=build/staging-static-array-cleanfix EXTRA_CFLAGS=-Werror
+
+      - name: Focused static designators
+        env:
+          MINIC: ${{ github.workspace }}/build/staging-static-array-cleanfix/bin/minic
+          HOST_CC: cc
+          BUILD_DIR: ${{ github.workspace }}/build/staging-static-array-cleanfix
+        run: sh tests/compiler/c0/run-static-array-designators.sh
+
+      - name: Broad C0 source suite
+        env:
+          MINIC: ${{ github.workspace }}/build/staging-static-array-cleanfix/bin/minic
+          HOST_CC: cc
+          BUILD_DIR: ${{ github.workspace }}/build/staging-static-array-cleanfix
+        run: sh tests/compiler/c0/run.sh
+
+      - name: Foundation focused suite
+        env:
+          MINIC: ${{ github.workspace }}/build/staging-static-array-cleanfix/bin/minic
+          HOST_CC: cc
+          BUILD_DIR: ${{ github.workspace }}/build/staging-static-array-cleanfix
+        run: sh tests/compiler/c0/run-foundation-focused.sh
+
+      - name: Publish corrected product blob
+        run: |
+          git config user.name 'LiYang Dong'
+          git config user.email '119646676+yituanxing@users.noreply.github.com'
+          git add src/frontend/parser_global.c
+          git diff --cached --check
+          git commit -m 'frontend: repair static designator source spelling [publish]'
+          git push origin HEAD:staging/static-array-designator-v2-cleanfix
