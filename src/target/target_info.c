@@ -394,9 +394,14 @@ bool minic_target_info_inline_asm_register_clobber_supported(const MinicTargetIn
     if (target == NULL || name == NULL) {
         return false;
     }
-    /* TargetConstraint v0 exposes the RV64 temporary-register class used by
-     * unchanged Linux. Broader physical-register classes remain fail-closed. */
-    return name_length == 2U && name[0] == 't' && name[1] >= '0' && name[1] <= '6';
+    /* TargetConstraint v1 keeps temporary registers available to the current
+     * inline-asm operand allocator while also recognizing the RV64 argument
+     * registers as clobber-only physical registers. The backend never allocates
+     * a0..a7 to GNU asm operands, so declaring them clobbered cannot alias an
+     * allocator-owned operand. Broader saved/special register classes remain
+     * fail-closed until their preservation contract is explicit. */
+    return name_length == 2U && ((name[0] == 't' && name[1] >= '0' && name[1] <= '6') ||
+                                 (name[0] == 'a' && name[1] >= '0' && name[1] <= '7'));
 }
 
 bool minic_target_info_inline_asm_immediate_constraint_supported(const MinicTargetInfo *target,
