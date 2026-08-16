@@ -1,0 +1,241 @@
+name: Diagnostic Core IR First100 Address Base Shapes V1
+
+on:
+  push:
+    branches:
+      - diagnostic/core-ir-first100-address-base-shapes-v1
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore pinned Linux source archive
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-cache/linux-6.6.143.tar.xz
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
+
+      - name: Install Linux Kbuild dependencies
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            flex bison bc libelf-dev libssl-dev
+
+      - name: Instrument nested address shapes
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('src/core/core_lower.c')
+          s = p.read_text()
+          old = '#include <stdlib.h>\n#include <string.h>\n'
+          assert s.count(old) == 1
+          s = s.replace(old, '#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n', 1)
+
+          anchor = '''static bool core_memory_scalar_type(MinicType type) {
+              return minic_type_is_integer(type) || minic_type_is_pointer(type);
+          }
+          '''
+          helper = '''static bool core_memory_scalar_type(MinicType type) {
+              return minic_type_is_integer(type) || minic_type_is_pointer(type);
+          }
+
+          static const char *diagnostic_address_type_class(MinicType type) {
+              if (minic_type_is_pointer(type)) {
+                  return "ptr";
+              }
+              if (minic_type_is_integer(type)) {
+                  return "int";
+              }
+              if (minic_type_is_record(type)) {
+                  return "record";
+              }
+              if (minic_type_is_array(type)) {
+                  return "array";
+              }
+              if (minic_type_is_function(type)) {
+                  return "function";
+              }
+              return "other";
+          }
+          '''
+          assert s.count(anchor) == 1, s.count(anchor)
+          s = s.replace(anchor, helper, 1)
+
+          old = '''    return MINIC_CORE_LOWER_UNSUPPORTED;
+          }
+
+          static MinicCoreLowerStatus lower_assignment_pair'''
+          new = '''    if (expression->kind == MINIC_EXPRESSION_ADDRESS_OF) {
+                  const MinicExpression *operand;
+
+                  operand = minic_c0_program_expression(context->body->program,
+                                                        expression->value.unary.operand);
+                  if (operand == NULL) {
+                      return MINIC_CORE_LOWER_ERROR;
+                  }
+                  if (operand->kind == MINIC_EXPRESSION_MEMBER) {
+                      const MinicExpression *base;
+
+                      base = minic_c0_program_expression(context->body->program,
+                                                        operand->value.member.base);
+                      if (base == NULL) {
+                          return MINIC_CORE_LOWER_ERROR;
+                      }
+                      (void)fprintf(stderr,
+                                    "MINIC_CORE_ADDRESS_BASE form=MEMBER base_kind=%d base_cat=%d base_type=%s leaf_type=%s\\n",
+                                    (int)base->kind,
+                                    (int)base->value_category,
+                                    diagnostic_address_type_class(base->type),
+                                    diagnostic_address_type_class(operand->type));
+                  } else if (operand->kind == MINIC_EXPRESSION_SUBSCRIPT) {
+                      const MinicExpression *base;
+                      const MinicExpression *index;
+                      MinicArrayObjectInfo array_info;
+                      bool base_is_array;
+
+                      base = minic_c0_program_expression(context->body->program,
+                                                        operand->value.subscript.base);
+                      index = minic_c0_program_expression(context->body->program,
+                                                         operand->value.subscript.index);
+                      if (base == NULL || index == NULL) {
+                          return MINIC_CORE_LOWER_ERROR;
+                      }
+                      base_is_array =
+                          minic_c0_expression_array_object_info(context->body->program,
+                                                                base,
+                                                                &array_info);
+                      (void)fprintf(stderr,
+                                    "MINIC_CORE_ADDRESS_BASE form=SUBSCRIPT base_kind=%d base_cat=%d base_type=%s base_array=%d index_kind=%d leaf_type=%s\\n",
+                                    (int)base->kind,
+                                    (int)base->value_category,
+                                    diagnostic_address_type_class(base->type),
+                                    base_is_array ? 1 : 0,
+                                    (int)index->kind,
+                                    diagnostic_address_type_class(operand->type));
+                  } else {
+                      (void)fprintf(stderr,
+                                    "MINIC_CORE_ADDRESS_BASE form=OTHER base_kind=%d base_cat=%d base_type=%s leaf_type=%s\\n",
+                                    (int)operand->kind,
+                                    (int)operand->value_category,
+                                    diagnostic_address_type_class(operand->type),
+                                    diagnostic_address_type_class(operand->type));
+                  }
+              }
+              return MINIC_CORE_LOWER_UNSUPPORTED;
+          }
+
+          static MinicCoreLowerStatus lower_assignment_pair'''
+          assert s.count(old) == 1, s.count(old)
+          p.write_text(s.replace(old, new, 1))
+          PY
+
+      - name: Build diagnostic compiler
+        run: make -j4 MODE=release BUILD_DIR=build/core-address-base-compiler
+
+      - name: Drive fixed first100 with Core shadow
+        continue-on-error: true
+        env:
+          MINIC_CORE_IR: shadow
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/core-address-base-compiler/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/core-address-base-linux" \
+          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-cache/linux-6.6.143.tar.xz" \
+          CROSS_COMPILE=riscv64-linux-gnu- \
+          LINUX_BATCH_OFFSET=0 LINUX_BATCH_LIMIT=100 LINUX_BATCH_JOBS=2 \
+            sh tests/external/linux/batch_probe.sh
+
+      - name: Aggregate nested address shapes
+        if: always()
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from collections import Counter
+          from pathlib import Path
+          import re
+
+          expression_names = [
+              'INTEGER','FLOATING','LOCAL','GLOBAL_OBJECT','FIXED_REGISTER','FUNCTION',
+              'LABEL_ADDRESS','CALL_FRAME_ADDRESS','BUILTIN_UNREACHABLE','SIZEOF','OFFSETOF',
+              'ADDRESS_OF','DEREFERENCE','CAST','BITCAST','CONVERSION','DISCARD','SUBSCRIPT',
+              'MEMBER','LVALUE_READ','ASSIGNMENT','COMPOUND_ASSIGNMENT','UNARY','BINARY',
+              'CONDITIONAL','CALL','COMPOUND_LITERAL','STATEMENT','BUILTIN_UNARY','BUILTIN_OVERFLOW'
+          ]
+          category_names = ['RVALUE','LVALUE']
+          member_pat = re.compile(
+              r'^MINIC_CORE_ADDRESS_BASE form=MEMBER base_kind=(-?\d+) base_cat=(-?\d+) '
+              r'base_type=(\S+) leaf_type=(\S+)$'
+          )
+          subscript_pat = re.compile(
+              r'^MINIC_CORE_ADDRESS_BASE form=SUBSCRIPT base_kind=(-?\d+) base_cat=(-?\d+) '
+              r'base_type=(\S+) base_array=(\d+) index_kind=(-?\d+) leaf_type=(\S+)$'
+          )
+          other_pat = re.compile(
+              r'^MINIC_CORE_ADDRESS_BASE form=OTHER base_kind=(-?\d+) base_cat=(-?\d+) '
+              r'base_type=(\S+) leaf_type=(\S+)$'
+          )
+          counts = Counter()
+          root = Path('build/core-address-base-linux/minic-stderr')
+          for path in root.rglob('*.stderr') if root.is_dir() else []:
+              for line in path.read_text(errors='replace').splitlines():
+                  line = line.strip()
+                  m = member_pat.match(line)
+                  if m:
+                      kind, cat, base_type, leaf_type = m.groups()
+                      kind = int(kind); cat = int(cat)
+                      kname = expression_names[kind] if 0 <= kind < len(expression_names) else f'EXPR_{kind}'
+                      cname = category_names[cat] if 0 <= cat < len(category_names) else f'CAT_{cat}'
+                      counts[f'MEMBER base={kname}/{cname}/{base_type} leaf={leaf_type}'] += 1
+                      continue
+                  m = subscript_pat.match(line)
+                  if m:
+                      kind, cat, base_type, base_array, index_kind, leaf_type = m.groups()
+                      kind = int(kind); cat = int(cat); index_kind = int(index_kind)
+                      kname = expression_names[kind] if 0 <= kind < len(expression_names) else f'EXPR_{kind}'
+                      cname = category_names[cat] if 0 <= cat < len(category_names) else f'CAT_{cat}'
+                      iname = expression_names[index_kind] if 0 <= index_kind < len(expression_names) else f'EXPR_{index_kind}'
+                      counts[f'SUBSCRIPT base={kname}/{cname}/{base_type}/array={base_array} index={iname} leaf={leaf_type}'] += 1
+                      continue
+                  m = other_pat.match(line)
+                  if m:
+                      kind, cat, base_type, leaf_type = m.groups()
+                      kind = int(kind); cat = int(cat)
+                      kname = expression_names[kind] if 0 <= kind < len(expression_names) else f'EXPR_{kind}'
+                      cname = category_names[cat] if 0 <= cat < len(category_names) else f'CAT_{cat}'
+                      counts[f'OTHER operand={kname}/{cname}/{base_type} leaf={leaf_type}'] += 1
+
+          total = sum(counts.values())
+          lines = ['MINIC_CORE_FIRST100_ADDRESS_BASE_SHAPES', f'total_address_of={total}']
+          for shape, count in counts.most_common():
+              pct = 100.0 * count / total if total else 0.0
+              lines.append(f'{shape} count={count} pct={pct:.2f}')
+          text = '\n'.join(lines) + '\n'
+          out = Path('build/core-address-base-linux/core-address-base-shapes.txt')
+          out.parent.mkdir(parents=True, exist_ok=True)
+          out.write_text(text)
+          print(text, end='')
+          PY
+          test -s build/core-address-base-linux/batch-summary.txt && cat build/core-address-base-linux/batch-summary.txt || true
+
+      - name: Upload nested address evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-ir-first100-address-base-shapes-${{ github.run_id }}
+          path: |
+            build/core-address-base-linux/core-address-base-shapes.txt
+            build/core-address-base-linux/batch-summary.txt
+          if-no-files-found: ignore
+          retention-days: 7
