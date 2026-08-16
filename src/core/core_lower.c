@@ -345,7 +345,7 @@ static MinicCoreLowerStatus lower_direct_call(MinicCoreLowerContext *context,
     if (callee == NULL || callee->name == NULL || callee->name_length == 0U) {
         return MINIC_CORE_LOWER_ERROR;
     }
-    callee_name = minic_c0_function_symbol_name(callee);
+    callee_name = callee->assembler_name != NULL ? callee->assembler_name : callee->name;
     callee_name_length =
         callee->assembler_name != NULL ? callee->assembler_name_length : callee->name_length;
     if (callee_name == NULL || callee_name_length == 0U) {
