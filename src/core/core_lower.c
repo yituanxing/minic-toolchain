@@ -19,6 +19,10 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
 static MinicCoreLowerStatus
 lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool *terminated);
 
+static bool core_memory_scalar_type(MinicType type) {
+    return minic_type_is_integer(type) || minic_type_is_pointer(type);
+}
+
 static MinicCoreLowerStatus lower_local_object(MinicCoreLowerContext *context,
                                                MinicLocalId local_id,
                                                MinicCoreObjectId *object_id) {
@@ -42,7 +46,7 @@ static MinicCoreLowerStatus lower_local_object(MinicCoreLowerContext *context,
     if (local == NULL) {
         return MINIC_CORE_LOWER_ERROR;
     }
-    if (local->is_array || local->is_register_storage || !minic_type_is_integer(local->type)) {
+    if (local->is_array || local->is_register_storage || !core_memory_scalar_type(local->type)) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
     if (!minic_core_function_add_object(
@@ -77,7 +81,7 @@ static MinicCoreLowerStatus lower_parameter_ingress(MinicCoreLowerContext *conte
         if (parameter == NULL) {
             return MINIC_CORE_LOWER_ERROR;
         }
-        if (!minic_type_is_integer(parameter->type) || minic_type_is_const(parameter->type) ||
+        if (!core_memory_scalar_type(parameter->type) || minic_type_is_const(parameter->type) ||
             minic_type_is_volatile(parameter->type) || parameter->is_array ||
             parameter->is_register_storage) {
             return MINIC_CORE_LOWER_UNSUPPORTED;

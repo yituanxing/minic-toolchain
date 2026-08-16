@@ -45,6 +45,20 @@ int add_one(int value) {
 EOF
 check_strict_case parameter
 
+cat >"$work_dir/pointer-parameter.i" <<'EOF'
+int pointer_parameter(int *value) {
+    return 7;
+}
+EOF
+
+"$MINIC" -S "$work_dir/pointer-parameter.i" -o "$work_dir/pointer-parameter-normal.s"
+MINIC_CORE_IR=shadow "$MINIC" -S "$work_dir/pointer-parameter.i" \
+    -o "$work_dir/pointer-parameter-shadow.s"
+cmp "$work_dir/pointer-parameter-normal.s" "$work_dir/pointer-parameter-shadow.s"
+MINIC_CORE_IR=strict "$MINIC" -S "$work_dir/pointer-parameter.i" \
+    -o "$work_dir/pointer-parameter-strict.s"
+cmp "$work_dir/pointer-parameter-normal.s" "$work_dir/pointer-parameter-strict.s"
+
 cat >"$work_dir/qualified-parameter.i" <<'EOF'
 unsigned long qualified_parameter(const unsigned long value) {
     return value;
