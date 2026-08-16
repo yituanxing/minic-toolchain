@@ -1,0 +1,347 @@
+name: Staging Core Field Address V0
+
+on:
+  push:
+    branches:
+      - staging/core-field-address-v0
+
+permissions:
+  contents: write
+
+jobs:
+  validate-and-publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Materialize field-address product candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('src/core/core_ir.h')
+          s = p.read_text()
+          old = '''    MINIC_CORE_INSTRUCTION_PARAMETER,
+              MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS,
+              MINIC_CORE_INSTRUCTION_LOAD,'''
+          new = '''    MINIC_CORE_INSTRUCTION_PARAMETER,
+              MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS,
+              MINIC_CORE_INSTRUCTION_FIELD_ADDRESS,
+              MINIC_CORE_INSTRUCTION_LOAD,'''
+          assert s.count(old) == 1, s.count(old)
+          s = s.replace(old, new, 1)
+          old = '''        size_t parameter_index;
+              MinicCoreObjectId object_id;
+              struct {
+                  MinicCoreValueId address;'''
+          new = '''        size_t parameter_index;
+              MinicCoreObjectId object_id;
+              struct {
+                  MinicCoreValueId base;
+                  MinicRecordId record_id;
+                  size_t field_index;
+              } field_address;
+              struct {
+                  MinicCoreValueId address;'''
+          assert s.count(old) == 1, s.count(old)
+          p.write_text(s.replace(old, new, 1))
+
+          p = Path('src/core/core_ir.c')
+          s = p.read_text()
+          old = '''    case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS: {
+                  MinicType pointer_type;
+          
+                  if (!instruction_result_is_valid(function, instruction) ||
+                      instruction->value.object_id >= function->object_count ||
+                      !minic_type_pointer_to(function->objects[instruction->value.object_id].type,
+                                             &pointer_type)) {
+                      return false;
+                  }
+                  return minic_type_equal(pointer_type, instruction->type);
+              }
+              case MINIC_CORE_INSTRUCTION_LOAD: {'''
+          new = '''    case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS: {
+                  MinicType pointer_type;
+          
+                  if (!instruction_result_is_valid(function, instruction) ||
+                      instruction->value.object_id >= function->object_count ||
+                      !minic_type_pointer_to(function->objects[instruction->value.object_id].type,
+                                             &pointer_type)) {
+                      return false;
+                  }
+                  return minic_type_equal(pointer_type, instruction->type);
+              }
+              case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS: {
+                  MinicCoreValueId base;
+                  MinicType base_pointee;
+                  MinicType field_type;
+          
+                  base = instruction->value.field_address.base;
+                  if (!instruction_result_is_valid(function, instruction) ||
+                      base >= function->value_count || !available_values[base] ||
+                      !minic_type_pointee(function->values[base].type, &base_pointee) ||
+                      !minic_type_is_record(base_pointee) ||
+                      base_pointee.record_id != instruction->value.field_address.record_id ||
+                      !minic_type_pointee(instruction->type, &field_type) ||
+                      minic_type_is_void(field_type) || minic_type_is_function(field_type)) {
+                      return false;
+                  }
+                  return true;
+              }
+              case MINIC_CORE_INSTRUCTION_LOAD: {'''
+          assert s.count(old) == 1, s.count(old)
+          s = s.replace(old, new, 1)
+          old = '''    case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS:
+                  return fprintf(output,
+                                 "  %%%" PRIu32 " = object.addr %%o%" PRIu32 "\\n",
+                                 instruction->result,
+                                 instruction->value.object_id) >= 0;
+              case MINIC_CORE_INSTRUCTION_LOAD:'''
+          new = '''    case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS:
+                  return fprintf(output,
+                                 "  %%%" PRIu32 " = object.addr %%o%" PRIu32 "\\n",
+                                 instruction->result,
+                                 instruction->value.object_id) >= 0;
+              case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:
+                  return fprintf(output,
+                                 "  %%%" PRIu32 " = field.addr %%%" PRIu32 ", record=%zu, field=%zu\\n",
+                                 instruction->result,
+                                 instruction->value.field_address.base,
+                                 instruction->value.field_address.record_id,
+                                 instruction->value.field_address.field_index) >= 0;
+              case MINIC_CORE_INSTRUCTION_LOAD:'''
+          assert s.count(old) == 1, s.count(old)
+          p.write_text(s.replace(old, new, 1))
+
+          p = Path('src/core/core_lower.c')
+          s = p.read_text()
+          old = '''    if (local->is_array || local->is_register_storage || !core_memory_scalar_type(local->type)) {
+                  return MINIC_CORE_LOWER_UNSUPPORTED;
+              }'''
+          new = '''    if (local->is_array || local->is_register_storage ||
+                  (!core_memory_scalar_type(local->type) && !minic_type_is_record(local->type))) {
+                  return MINIC_CORE_LOWER_UNSUPPORTED;
+              }'''
+          assert s.count(old) == 1, s.count(old)
+          s = s.replace(old, new, 1)
+          start = s.index('static MinicCoreLowerStatus lower_address(')
+          end = s.index('static MinicCoreLowerStatus append_integer_conversion', start)
+          replacement = r'''static MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
+                                                    MinicExpressionId expression_id,
+                                                    MinicCoreValueId *address_id) {
+              const MinicExpression *expression;
+              MinicCoreInstruction instruction;
+              MinicCoreLowerStatus status;
+          
+              if (context == NULL || context->body == NULL || context->body->program == NULL ||
+                  context->function == NULL || address_id == NULL) {
+                  return MINIC_CORE_LOWER_ERROR;
+              }
+              expression = minic_c0_program_expression(context->body->program, expression_id);
+              if (expression == NULL) {
+                  return MINIC_CORE_LOWER_ERROR;
+              }
+              if (expression->value_category != MINIC_VALUE_LVALUE) {
+                  return MINIC_CORE_LOWER_UNSUPPORTED;
+              }
+              if (expression->kind == MINIC_EXPRESSION_LOCAL) {
+                  MinicCoreObjectId object_id;
+          
+                  status = lower_local_object(context, expression->value.local_id, &object_id);
+                  if (status != MINIC_CORE_LOWER_OK) {
+                      return status;
+                  }
+                  (void)memset(&instruction, 0, sizeof(instruction));
+                  instruction.kind = MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS;
+                  instruction.span = expression->span;
+                  instruction.result = MINIC_CORE_VALUE_INVALID;
+                  instruction.value.object_id = object_id;
+                  if (!minic_type_pointer_to(expression->type, &instruction.type)) {
+                      return MINIC_CORE_LOWER_ERROR;
+                  }
+                  return minic_core_function_append_value_instruction(
+                             context->function, context->block_id, &instruction, address_id)
+                             ? MINIC_CORE_LOWER_OK
+                             : MINIC_CORE_LOWER_ERROR;
+              }
+              if (expression->kind == MINIC_EXPRESSION_DEREFERENCE) {
+                  MinicType pointer_type;
+          
+                  if (!minic_type_pointer_to(expression->type, &pointer_type)) {
+                      return MINIC_CORE_LOWER_ERROR;
+                  }
+                  status = lower_expression(context, expression->value.unary.operand, address_id);
+                  if (status != MINIC_CORE_LOWER_OK) {
+                      return status;
+                  }
+                  if (*address_id >= context->function->value_count ||
+                      !minic_type_equal(context->function->values[*address_id].type, pointer_type)) {
+                      return MINIC_CORE_LOWER_UNSUPPORTED;
+                  }
+                  return MINIC_CORE_LOWER_OK;
+              }
+              if (expression->kind == MINIC_EXPRESSION_MEMBER) {
+                  const MinicExpression *base_expression;
+                  const MinicRecord *record;
+                  const MinicRecordField *field;
+                  MinicCoreValueId base;
+                  MinicType base_pointee;
+          
+                  record = minic_c0_program_record(context->body->program,
+                                                   expression->value.member.record_id);
+                  if (record == NULL ||
+                      expression->value.member.field_index >= record->field_count) {
+                      return MINIC_CORE_LOWER_ERROR;
+                  }
+                  field = &record->fields[expression->value.member.field_index];
+                  if (field->is_bit_field) {
+                      return MINIC_CORE_LOWER_UNSUPPORTED;
+                  }
+                  base_expression = minic_c0_program_expression(context->body->program,
+                                                               expression->value.member.base);
+                  if (base_expression == NULL || !minic_type_is_pointer(base_expression->type) ||
+                      !minic_type_pointee(base_expression->type, &base_pointee) ||
+                      !minic_type_is_record(base_pointee) ||
+                      base_pointee.record_id != expression->value.member.record_id) {
+                      return MINIC_CORE_LOWER_UNSUPPORTED;
+                  }
+                  status = lower_expression(context, expression->value.member.base, &base);
+                  if (status != MINIC_CORE_LOWER_OK) {
+                      return status;
+                  }
+                  if (base >= context->function->value_count ||
+                      !minic_type_equal(context->function->values[base].type,
+                                        base_expression->type)) {
+                      return MINIC_CORE_LOWER_ERROR;
+                  }
+                  (void)memset(&instruction, 0, sizeof(instruction));
+                  instruction.kind = MINIC_CORE_INSTRUCTION_FIELD_ADDRESS;
+                  instruction.span = expression->span;
+                  instruction.result = MINIC_CORE_VALUE_INVALID;
+                  instruction.value.field_address.base = base;
+                  instruction.value.field_address.record_id = expression->value.member.record_id;
+                  instruction.value.field_address.field_index =
+                      expression->value.member.field_index;
+                  if (!minic_type_pointer_to(expression->type, &instruction.type)) {
+                      return MINIC_CORE_LOWER_ERROR;
+                  }
+                  return minic_core_function_append_value_instruction(
+                             context->function, context->block_id, &instruction, address_id)
+                             ? MINIC_CORE_LOWER_OK
+                             : MINIC_CORE_LOWER_ERROR;
+              }
+              return MINIC_CORE_LOWER_UNSUPPORTED;
+          }
+          
+          '''
+          s = s[:start] + replacement + s[end:]
+          old = '''    if (expression->kind == MINIC_EXPRESSION_CALL) {
+                  return lower_direct_call(context, expression, value_id);
+              }
+              (void)memset(&instruction, 0, sizeof(instruction));'''
+          new = '''    if (expression->kind == MINIC_EXPRESSION_ADDRESS_OF) {
+                  return lower_address(context, expression->value.unary.operand, value_id);
+              }
+              if (expression->kind == MINIC_EXPRESSION_CALL) {
+                  return lower_direct_call(context, expression, value_id);
+              }
+              (void)memset(&instruction, 0, sizeof(instruction));'''
+          assert s.count(old) == 1, s.count(old)
+          p.write_text(s.replace(old, new, 1))
+
+          p = Path('tests/core/run-core-ir-shadow.sh')
+          s = p.read_text()
+          anchor = '''cat >"$work_dir/indirect-call-unsupported.i" <<'EOF'
+          int indirect_caller(int (*callee)(int), int value) {'''
+          insert = '''cat >"$work_dir/field-address-v0.i" <<'EOF'
+          struct pair {
+              int value;
+              long other;
+          };
+          
+          void consume_int_pointer(int *value);
+          
+          void pointer_field_address(struct pair *pair) {
+              consume_int_pointer(&pair->value);
+              return;
+          }
+          
+          void local_field_address(void) {
+              struct pair pair;
+              consume_int_pointer(&pair.value);
+              return;
+          }
+          EOF
+          check_strict_case field-address-v0
+          
+          cat >"$work_dir/indirect-call-unsupported.i" <<'EOF'
+          int indirect_caller(int (*callee)(int), int value) {'''
+          assert s.count(anchor) == 1, s.count(anchor)
+          p.write_text(s.replace(anchor, insert, 1))
+          PY
+
+      - name: Verify canonical formatting
+        run: |
+          set -Eeuo pipefail
+          clang-format --dry-run --Werror src/core/core_ir.h src/core/core_ir.c src/core/core_lower.c
+
+      - name: Build Core IR unit contract with Werror
+        run: |
+          set -Eeuo pipefail
+          mkdir -p build/core-field-address
+          cc -std=c11 \
+            -Wall -Wextra -Wpedantic -Wconversion -Wshadow \
+            -Wstrict-prototypes -Wmissing-prototypes -Werror \
+            -Iinclude -Isrc \
+            src/core/core_ir.c src/core/core_lower.c \
+            src/frontend/ast.c src/frontend/expression_semantics.c \
+            src/frontend/ast_global.c src/frontend/ast_traversal.c \
+            src/frontend/ast_verifier.c src/frontend/function_body.c \
+            src/frontend/type.c src/target/data_layout.c src/target/target_info.c \
+            tests/core/core_ir_shadow_test.c \
+            -o build/core-field-address/core-ir-shadow-test
+          build/core-field-address/core-ir-shadow-test
+
+      - name: Build Release compiler with Werror
+        run: make -j4 MODE=release CFLAGS=-Werror
+
+      - name: Run Core IR strict and shadow contract
+        run: |
+          MINIC="$PWD/build/release/bin/minic" \
+          BUILD_DIR="$PWD/build/core-field-address" \
+          bash tests/core/run-core-ir-shadow.sh
+
+      - name: Run broad C0 fast gate
+        run: make check-fast
+
+      - name: Run Foundation focused suite
+        run: |
+          MINIC="$PWD/build/release/bin/minic" \
+          BUILD_DIR="$PWD/build/core-field-foundation" \
+          bash tests/compiler/c0/run-foundation-focused.sh
+
+      - name: Publish clean product branch
+        if: success()
+        run: |
+          set -Eeuo pipefail
+          mkdir -p /tmp/core-field-product/src/core /tmp/core-field-product/tests/core
+          cp src/core/core_ir.h /tmp/core-field-product/src/core/core_ir.h
+          cp src/core/core_ir.c /tmp/core-field-product/src/core/core_ir.c
+          cp src/core/core_lower.c /tmp/core-field-product/src/core/core_lower.c
+          cp tests/core/run-core-ir-shadow.sh /tmp/core-field-product/tests/core/run-core-ir-shadow.sh
+          git fetch origin main
+          git checkout --detach origin/main
+          cp /tmp/core-field-product/src/core/core_ir.h src/core/core_ir.h
+          cp /tmp/core-field-product/src/core/core_ir.c src/core/core_ir.c
+          cp /tmp/core-field-product/src/core/core_lower.c src/core/core_lower.c
+          cp /tmp/core-field-product/tests/core/run-core-ir-shadow.sh tests/core/run-core-ir-shadow.sh
+          git config user.name "LiYang Dong"
+          git config user.email "119646676+yituanxing@users.noreply.github.com"
+          git add src/core/core_ir.h src/core/core_ir.c src/core/core_lower.c tests/core/run-core-ir-shadow.sh
+          git commit -m "core: add structured field address v0 [publish-v1]"
+          git push --force origin HEAD:refs/heads/agent/core-field-address-v0
