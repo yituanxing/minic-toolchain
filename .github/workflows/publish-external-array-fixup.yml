@@ -1,0 +1,121 @@
+name: Validate external array typed zero slots
+
+on:
+  push:
+    branches:
+      - frontend/external-array-routing-fixup-staging
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply bounded fixup
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/target/riscv64/codegen_function.c')
+          text = path.read_text()
+          old = '''    } else {
+        size_t emitted_initializer_count;
+
+        emitted_initializer_count = object->initializer_count;
+        if (minic_type_is_array(object->type)) {
+            while (emitted_initializer_count != 0U &&
+                   object->initializer_values[emitted_initializer_count - 1U] == 0U) {
+                emitted_initializer_count -= 1U;
+            }
+        }
+        for (initializer_index = 0U; initializer_index < emitted_initializer_count;
+             ++initializer_index) {
+            if (!minic_riscv64_emit_typed_bits(
+                    file, program, scalar_type, object->initializer_values[initializer_index])) {
+                return false;
+            }
+        }
+        if (!minic_riscv64_emit_zero_bytes(
+                file, storage_size - emitted_initializer_count * scalar_width)) {
+            return false;
+        }
+    }
+'''
+          new = '''    } else {
+        for (initializer_index = 0U; initializer_index < object->initializer_count;
+             ++initializer_index) {
+            if (!minic_riscv64_emit_typed_bits(
+                    file, program, scalar_type, object->initializer_values[initializer_index])) {
+                return false;
+            }
+        }
+        if (!minic_riscv64_emit_zero_bytes(
+                file, storage_size - object->initializer_count * scalar_width)) {
+            return false;
+        }
+    }
+'''
+          if text.count(old) != 1:
+              raise SystemExit('flat array trailing-zero block changed')
+          path.write_text(text.replace(old, new, 1))
+
+          path = Path('tests/compiler/c0/run-extern-fixed-integer-arrays.sh')
+          text = path.read_text()
+          old = "grep -F '  .zero 2' \"$work/extern_fixed_integer_array.s\" >/dev/null"
+          new = "test \"$(grep -Fc '  .byte 0' \"$work/extern_fixed_integer_array.s\")\" -eq 2"
+          if text.count(old) != 1:
+              raise SystemExit('extern fixed integer zero contract changed')
+          path.write_text(text.replace(old, new, 1))
+
+          path = Path('tests/compiler/c0/run-integer-constant-bitwise.sh')
+          text = path.read_text()
+          old = "grep -F '  .zero 3' \"$work/integer_constant_bitwise.s\" >/dev/null"
+          new = "test \"$(grep -Fc '  .byte 0' \"$work/integer_constant_bitwise.s\")\" -eq 3"
+          if text.count(old) != 1:
+              raise SystemExit('integer bitwise zero contract changed')
+          path.write_text(text.replace(old, new, 1))
+          PY
+          sudo apt-get update >/dev/null
+          sudo apt-get install -y --no-install-recommends clang-format-18 >/dev/null
+          clang-format-18 -i src/target/riscv64/codegen_function.c
+          clang-format-18 --dry-run --Werror src/frontend/parser_function.c src/target/riscv64/codegen_function.c
+          git diff --check
+
+      - name: Broad C0 sanitizer regression
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=sanitize BUILD_DIR=build/external-array-fixup-sanitize
+          export MINIC="$PWD/build/external-array-fixup-sanitize/bin/minic"
+          export HOST_CC=cc
+          export BUILD_DIR="$PWD/build/external-array-fixup-sanitize"
+          sh tests/compiler/c0/run.sh
+          sh tests/compiler/c0/run-external-array-declarator-routing.sh
+          sh tests/compiler/c0/run-external-pointer-arrays.sh
+          sh tests/compiler/c0/run-extern-fixed-integer-arrays.sh
+          sh tests/compiler/c0/run-integer-constant-bitwise.sh
+
+      - name: Foundation regression
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release BUILD_DIR=build/external-array-fixup-release
+          MINIC="$PWD/build/external-array-fixup-release/bin/minic" BUILD_DIR="$PWD/build/external-array-fixup-release" sh tests/compiler/c0/run-foundation-focused.sh
+
+      - name: Publish validated product patch
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'LiYang Dong'
+          git config user.email '119646676+yituanxing@users.noreply.github.com'
+          git rm .github/workflows/publish-external-array-fixup.yml
+          git add src/target/riscv64/codegen_function.c tests/compiler/c0/run-extern-fixed-integer-arrays.sh tests/compiler/c0/run-integer-constant-bitwise.sh
+          git commit -m 'test: preserve typed zero slots for shared arrays' -m 'Do not infer implicit-vs-explicit initializer provenance in the RV64 emitter. Shared complete-array initializers remain fully materialized typed slots; update partial-array regressions to assert those typed zero slots while preserving explicit trailing-zero output.' -m '中文说明：RV64 emitter 不猜测 initializer 的隐式/显式来源。shared complete-array initializer 保持完整 typed slot 表示；partial-array 回归改为验证 typed zero slot，同时显式尾零继续按 typed directive 输出。'
+          git push origin HEAD:frontend/external-array-routing-fixup-staging
