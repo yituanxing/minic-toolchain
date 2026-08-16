@@ -1023,36 +1023,72 @@ done:
     return success;
 }
 
-static bool parse_static_array_constant(MinicParser *parser,
-                                        MinicGlobalObjectId object_id,
-                                        const MinicArrayType *array_type) {
-    MinicType element_type;
-    size_t element_count;
-    size_t element_index;
+static bool parse_static_forward_array_initializer(MinicParser *parser,
+                                                   MinicGlobalObjectId object_id,
+                                                   MinicType element_type,
+                                                   size_t element_count,
+                                                   bool infer_bound,
+                                                   size_t *parsed_extent) {
+    size_t next_index;
+    size_t extent;
 
-    if (array_type == NULL || array_type->element_count == 0U) {
-        minic_parser_error(parser, "invalid complete static array initializer type");
+    if (parser == NULL || object_id >= parser->program->global_object_count ||
+        (!infer_bound && element_count == 0U) || parser->current.kind != MINIC_TOKEN_LBRACE) {
+        if (parser != NULL) {
+            minic_parser_error(parser, "invalid static aggregate array initializer");
+        }
         return false;
     }
-    element_type = array_type->element_type;
-    element_count = array_type->element_count;
-    if (minic_type_is_integer(element_type) || minic_type_is_pointer(element_type)) {
-        return parse_static_scalar_array_transaction(
-            parser, object_id, element_type, element_count, false);
-    }
-    if (!minic_parser_expect(parser, MINIC_TOKEN_LBRACE, "expected '{' in array initializer")) {
+    next_index = 0U;
+    extent = infer_bound ? 0U : element_count;
+    if (!minic_parser_advance(parser)) {
         return false;
     }
-    element_index = 0U;
     while (parser->current.kind != MINIC_TOKEN_RBRACE) {
-        if (element_index >= element_count) {
-            minic_parser_error(parser, "too many nested static array initializers");
-            return false;
+        size_t first;
+        size_t last;
+
+        if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
+            if (!minic_parser_parse_array_designator(
+                    parser, element_count, infer_bound, &first, &last)) {
+                return false;
+            }
+            if (last != first) {
+                minic_parser_error(
+                    parser,
+                    "GNU range designators for aggregate static arrays are not supported yet");
+                return false;
+            }
+            if (first < next_index) {
+                minic_parser_error(
+                    parser, "backward static aggregate array designator is not supported yet");
+                return false;
+            }
+        } else {
+            first = next_index;
+            if (!infer_bound && first >= element_count) {
+                minic_parser_error(parser, "too many nested static array initializers");
+                return false;
+            }
+        }
+        while (next_index < first) {
+            if (!append_static_constant_zero(parser, object_id, element_type)) {
+                minic_parser_error(parser, "cannot zero-fill skipped static array element");
+                return false;
+            }
+            next_index += 1U;
         }
         if (!minic_parser_parse_static_storage_initializer_value(parser, object_id, element_type)) {
             return false;
         }
-        element_index += 1U;
+        if (first == SIZE_MAX) {
+            minic_parser_error(parser, "static array initializer extent overflows");
+            return false;
+        }
+        next_index = first + 1U;
+        if (next_index > extent) {
+            extent = next_index;
+        }
         if (parser->current.kind == MINIC_TOKEN_COMMA) {
             if (!minic_parser_advance(parser)) {
                 return false;
@@ -1061,18 +1097,73 @@ static bool parse_static_array_constant(MinicParser *parser,
                 break;
             }
         } else if (parser->current.kind != MINIC_TOKEN_RBRACE) {
-            minic_parser_error(parser, "expected ',' or '}' in nested static array initializer");
+            minic_parser_error(parser, "expected ',' or '}' in static array initializer");
             return false;
         }
     }
-    while (element_index < element_count) {
-        if (!append_static_constant_zero(parser, object_id, element_type)) {
-            minic_parser_error(parser, "cannot zero-fill nested static array initializer");
+    if (!minic_parser_expect(
+            parser, MINIC_TOKEN_RBRACE, "expected '}' after static array initializer")) {
+        return false;
+    }
+    if (infer_bound) {
+        if (extent == 0U) {
+            minic_parser_error(parser, "cannot infer static array bound from an empty initializer");
             return false;
         }
-        element_index += 1U;
+    } else {
+        while (next_index < element_count) {
+            if (!append_static_constant_zero(parser, object_id, element_type)) {
+                minic_parser_error(parser, "cannot zero-fill static array initializer tail");
+                return false;
+            }
+            next_index += 1U;
+        }
     }
-    return minic_parser_expect(parser, MINIC_TOKEN_RBRACE, "expected '}' after array initializer");
+    if (parsed_extent != NULL) {
+        *parsed_extent = extent;
+    }
+    return true;
+}
+
+static bool parse_static_array_constant(MinicParser *parser,
+                                        MinicGlobalObjectId object_id,
+                                        const MinicArrayType *array_type) {
+    MinicType element_type;
+    size_t element_count;
+    size_t parsed_extent;
+    bool infer_bound;
+
+    if (array_type == NULL) {
+        minic_parser_error(parser, "invalid static array initializer type");
+        return false;
+    }
+    element_type = array_type->element_type;
+    element_count = array_type->element_count;
+    infer_bound = element_count == 0U && !array_type->is_zero_length;
+    if (element_count == 0U && array_type->is_zero_length) {
+        minic_parser_error(parser, "invalid zero-length static array initializer type");
+        return false;
+    }
+    if (minic_type_is_integer(element_type) || minic_type_is_pointer(element_type)) {
+        return parse_static_scalar_array_transaction(
+            parser, object_id, element_type, element_count, infer_bound);
+    }
+    parsed_extent = 0U;
+    if (!parse_static_forward_array_initializer(
+            parser, object_id, element_type, element_count, infer_bound, &parsed_extent)) {
+        return false;
+    }
+    if (infer_bound) {
+        const MinicGlobalObject *object;
+
+        object = minic_c0_program_global_object(parser->program, object_id);
+        if (object == NULL || !minic_type_is_array(object->type) ||
+            !minic_c0_program_complete_array_type(parser->program, object->type, parsed_extent)) {
+            minic_parser_error(parser, "cannot complete inferred static aggregate array type");
+            return false;
+        }
+    }
+    return true;
 }
 
 static bool parse_static_record_constant(MinicParser *parser,
@@ -1094,7 +1185,6 @@ static bool parse_static_record_constant(MinicParser *parser,
     record_base_slot = parser->program->global_objects[object_id].initializer_count;
     while (parser->current.kind != MINIC_TOKEN_RBRACE) {
         const MinicRecordField *field;
-        size_t element_index;
         bool overwrite_materialized_field;
 
         if (parser->current.kind == MINIC_TOKEN_DOT) {
@@ -1184,47 +1274,9 @@ static bool parse_static_record_constant(MinicParser *parser,
                         parser, object_id, field->element_count)) {
                     return false;
                 }
-            } else {
-                if (!minic_parser_expect(parser,
-                                         MINIC_TOKEN_LBRACE,
-                                         "expected '{' in record field array initializer")) {
-                    return false;
-                }
-                element_index = 0U;
-                while (parser->current.kind != MINIC_TOKEN_RBRACE) {
-                    if (element_index >= field->element_count ||
-                        !minic_parser_parse_static_storage_initializer_value(
-                            parser, object_id, field->type)) {
-                        if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
-                            minic_parser_error(parser, "too many record field array initializers");
-                        }
-                        return false;
-                    }
-                    element_index += 1U;
-                    if (parser->current.kind == MINIC_TOKEN_COMMA) {
-                        if (!minic_parser_advance(parser)) {
-                            return false;
-                        }
-                        if (parser->current.kind == MINIC_TOKEN_RBRACE) {
-                            break;
-                        }
-                    } else if (parser->current.kind != MINIC_TOKEN_RBRACE) {
-                        minic_parser_error(parser,
-                                           "expected ',' or '}' in record field array initializer");
-                        return false;
-                    }
-                }
-                while (element_index < field->element_count) {
-                    if (!append_static_constant_zero(parser, object_id, field->type)) {
-                        return false;
-                    }
-                    element_index += 1U;
-                }
-                if (!minic_parser_expect(parser,
-                                         MINIC_TOKEN_RBRACE,
-                                         "expected '}' after record field array initializer")) {
-                    return false;
-                }
+            } else if (!parse_static_forward_array_initializer(
+                           parser, object_id, field->type, field->element_count, false, NULL)) {
+                return false;
             }
             materialized_field_limit += 1U;
         }
@@ -1264,8 +1316,23 @@ bool minic_parser_parse_static_storage_initializer_value(MinicParser *parser,
     }
     if (minic_type_is_record(type)) {
         if (parser->current.kind == MINIC_TOKEN_LPAREN) {
+            MinicParser probe;
             MinicType explicit_type;
 
+            probe = *parser;
+            if (!minic_parser_advance(&probe)) {
+                return false;
+            }
+            if (probe.current.kind == MINIC_TOKEN_LPAREN) {
+                if (!minic_parser_advance(parser) ||
+                    !minic_parser_parse_static_storage_initializer_value(parser, object_id, type) ||
+                    !minic_parser_expect(parser,
+                                         MINIC_TOKEN_RPAREN,
+                                         "expected ')' after grouped static record initializer")) {
+                    return false;
+                }
+                return true;
+            }
             if (!minic_parser_advance(parser) ||
                 !minic_parser_parse_type_name(parser, &explicit_type) ||
                 !minic_parser_expect(parser,
@@ -1273,7 +1340,8 @@ bool minic_parser_parse_static_storage_initializer_value(MinicParser *parser,
                                      "expected ')' after static compound literal type")) {
                 return false;
             }
-            if (!minic_type_equal(type, explicit_type)) {
+            if (!minic_type_is_record(explicit_type) ||
+                !minic_type_assignment_compatible(type, explicit_type)) {
                 minic_parser_error(parser, "static record compound literal type mismatch");
                 return false;
             }
@@ -1311,11 +1379,46 @@ parse_static_nested_record_object(MinicParser *parser, MinicType type, MinicSour
     return minic_parser_expect(parser, MINIC_TOKEN_SEMICOLON, "expected ';' after global object");
 }
 
-static bool count_static_array_initializer_elements(MinicParser *parser, size_t *element_count) {
+static bool probe_static_array_designator_extent(MinicParser *probe, size_t *first, size_t *last) {
+    MinicC0Program before;
+    MinicC0Program *program;
+
+    if (probe == NULL || first == NULL || last == NULL || probe->program == NULL) {
+        return false;
+    }
+    program = probe->program;
+    before = *program;
+    if (!minic_parser_parse_array_designator(probe, 0U, true, first, last)) {
+        return false;
+    }
+    if (program->local_count != before.local_count ||
+        program->cleanup_context_count != before.cleanup_context_count ||
+        program->statement_count != before.statement_count ||
+        program->inline_asm_count != before.inline_asm_count ||
+        program->file_asm_count != before.file_asm_count ||
+        program->block_count != before.block_count ||
+        program->function_count != before.function_count ||
+        program->record_count != before.record_count ||
+        program->array_type_count != before.array_type_count ||
+        program->function_type_count != before.function_type_count ||
+        program->type_alias_count != before.type_alias_count ||
+        program->enum_count != before.enum_count ||
+        program->enumerator_count != before.enumerator_count ||
+        program->global_object_count != before.global_object_count ||
+        program->fixed_register_binding_count != before.fixed_register_binding_count) {
+        minic_parser_error(probe,
+                           "inferred aggregate array designator probe requires a side-effect-free "
+                           "integer constant expression");
+        return false;
+    }
+    program->expression_count = before.expression_count;
+    return true;
+}
+
+static bool inspect_static_array_initializer_extent(MinicParser *parser, size_t *element_count) {
     MinicParser probe;
-    size_t brace_depth;
-    size_t parenthesis_depth;
-    size_t bracket_depth;
+    size_t extent;
+    size_t next_index;
 
     if (parser == NULL || element_count == NULL || parser->current.kind != MINIC_TOKEN_LBRACE) {
         return false;
@@ -1324,67 +1427,87 @@ static bool count_static_array_initializer_elements(MinicParser *parser, size_t 
     if (!minic_parser_advance(&probe)) {
         return false;
     }
-    *element_count = 0U;
-    if (probe.current.kind == MINIC_TOKEN_RBRACE) {
-        return true;
-    }
+    extent = 0U;
+    next_index = 0U;
+    while (probe.current.kind != MINIC_TOKEN_RBRACE) {
+        size_t first;
+        size_t last;
+        size_t brace_depth;
+        size_t parenthesis_depth;
+        size_t bracket_depth;
 
-    *element_count = 1U;
-    brace_depth = 0U;
-    parenthesis_depth = 0U;
-    bracket_depth = 0U;
-    while (probe.current.kind != MINIC_TOKEN_EOF) {
-        switch (probe.current.kind) {
-        case MINIC_TOKEN_LBRACE:
-            brace_depth += 1U;
-            break;
-        case MINIC_TOKEN_RBRACE:
-            if (brace_depth == 0U) {
-                return parenthesis_depth == 0U && bracket_depth == 0U;
-            }
-            brace_depth -= 1U;
-            break;
-        case MINIC_TOKEN_LPAREN:
-            parenthesis_depth += 1U;
-            break;
-        case MINIC_TOKEN_RPAREN:
-            if (parenthesis_depth == 0U) {
-                return false;
-            }
-            parenthesis_depth -= 1U;
-            break;
-        case MINIC_TOKEN_LBRACKET:
-            bracket_depth += 1U;
-            break;
-        case MINIC_TOKEN_RBRACKET:
-            if (bracket_depth == 0U) {
-                return false;
-            }
-            bracket_depth -= 1U;
-            break;
-        case MINIC_TOKEN_COMMA:
-            if (brace_depth == 0U && parenthesis_depth == 0U && bracket_depth == 0U) {
-                if (!minic_parser_advance(&probe)) {
-                    return false;
-                }
-                if (probe.current.kind == MINIC_TOKEN_RBRACE) {
-                    return true;
-                }
-                if (*element_count == SIZE_MAX) {
-                    return false;
-                }
-                *element_count += 1U;
-                continue;
-            }
-            break;
-        default:
-            break;
+        first = next_index;
+        last = next_index;
+        if (probe.current.kind == MINIC_TOKEN_LBRACKET &&
+            !probe_static_array_designator_extent(&probe, &first, &last)) {
+            return false;
         }
-        if (!minic_parser_advance(&probe)) {
+        if (last == SIZE_MAX) {
+            minic_parser_error(&probe, "inferred aggregate array initializer extent overflows");
+            return false;
+        }
+        next_index = last + 1U;
+        if (next_index > extent) {
+            extent = next_index;
+        }
+
+        brace_depth = 0U;
+        parenthesis_depth = 0U;
+        bracket_depth = 0U;
+        while (probe.current.kind != MINIC_TOKEN_EOF) {
+            if (brace_depth == 0U && parenthesis_depth == 0U && bracket_depth == 0U &&
+                (probe.current.kind == MINIC_TOKEN_COMMA ||
+                 probe.current.kind == MINIC_TOKEN_RBRACE)) {
+                break;
+            }
+            switch (probe.current.kind) {
+            case MINIC_TOKEN_LBRACE:
+                brace_depth += 1U;
+                break;
+            case MINIC_TOKEN_RBRACE:
+                if (brace_depth == 0U) {
+                    return false;
+                }
+                brace_depth -= 1U;
+                break;
+            case MINIC_TOKEN_LPAREN:
+                parenthesis_depth += 1U;
+                break;
+            case MINIC_TOKEN_RPAREN:
+                if (parenthesis_depth == 0U) {
+                    return false;
+                }
+                parenthesis_depth -= 1U;
+                break;
+            case MINIC_TOKEN_LBRACKET:
+                bracket_depth += 1U;
+                break;
+            case MINIC_TOKEN_RBRACKET:
+                if (bracket_depth == 0U) {
+                    return false;
+                }
+                bracket_depth -= 1U;
+                break;
+            default:
+                break;
+            }
+            if (!minic_parser_advance(&probe)) {
+                return false;
+            }
+        }
+        if (probe.current.kind == MINIC_TOKEN_COMMA) {
+            if (!minic_parser_advance(&probe)) {
+                return false;
+            }
+            if (probe.current.kind == MINIC_TOKEN_RBRACE) {
+                break;
+            }
+        } else if (probe.current.kind != MINIC_TOKEN_RBRACE) {
             return false;
         }
     }
-    return false;
+    *element_count = extent;
+    return true;
 }
 
 static bool
@@ -1393,7 +1516,6 @@ parse_static_record_array(MinicParser *parser, MinicType element_type, MinicSour
     MinicType object_type;
     MinicGlobalObjectId object_id;
     size_t declared_count;
-    size_t initializer_count;
     bool inferred_bound;
 
     record = minic_c0_program_record(parser->program, element_type.record_id);
@@ -1420,23 +1542,24 @@ parse_static_record_array(MinicParser *parser, MinicType element_type, MinicSour
         return false;
     }
     if (!minic_parser_expect(parser, MINIC_TOKEN_EQUAL, "expected '=' after static record array") ||
-        parser->current.kind != MINIC_TOKEN_LBRACE ||
-        !count_static_array_initializer_elements(parser, &initializer_count)) {
+        parser->current.kind != MINIC_TOKEN_LBRACE) {
         if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
             minic_parser_error(parser, "cannot inspect static record array initializer");
         }
         return false;
     }
     if (inferred_bound) {
-        if (initializer_count == 0U) {
+        if (!inspect_static_array_initializer_extent(parser, &declared_count)) {
+            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                minic_parser_error(parser, "cannot infer static record array initializer extent");
+            }
+            return false;
+        }
+        if (declared_count == 0U) {
             minic_parser_error(parser,
                                "cannot infer static record array bound from an empty initializer");
             return false;
         }
-        declared_count = initializer_count;
-    } else if (initializer_count > declared_count) {
-        minic_parser_error(parser, "too many static record array initializers");
-        return false;
     }
 
     if (!minic_c0_program_add_array_type(
