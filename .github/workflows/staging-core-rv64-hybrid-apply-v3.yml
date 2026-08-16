@@ -1,0 +1,35 @@
+name: Staging Core RV64 Hybrid Apply V3
+
+on:
+  push:
+    branches:
+      - staging/core-rv64-hybrid-routing-v0
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply hybrid routing
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/staging_core_hybrid_apply.py
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/compiler/compiler.c \
+            src/target/riscv64/codegen.h \
+            src/target/riscv64/codegen_function.c \
+            .github/workflows/lua-stack-abi-validation.yml \
+            tests/target/riscv64/core_hybrid_differential.i \
+            tests/target/riscv64/core_hybrid_differential_runtime.c
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "core: wire opt-in RV64 hybrid routing v0"
+          git push origin HEAD:staging/core-rv64-hybrid-routing-v0
