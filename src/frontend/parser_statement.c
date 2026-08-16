@@ -215,52 +215,9 @@ static bool add_array_object_zero_elements(MinicParser *parser,
     return true;
 }
 
-static bool
-runtime_array_designator_bound(MinicParser *parser, size_t element_count, size_t *bound) {
-    MinicConstValue constant;
-    MinicExpressionId expression_id;
-    int64_t value;
-
-    if (parser == NULL || bound == NULL ||
-        !minic_parser_parse_expression(parser, &expression_id, 0U) ||
-        !minic_const_eval_integer(parser->program, parser->target_info, expression_id, &constant) ||
-        !minic_const_value_as_int64(parser->program, parser->target_info, &constant, &value)) {
-        if (parser != NULL && parser->diagnostic != NULL &&
-            parser->diagnostic->message[0] == '\0') {
-            minic_parser_error(parser, "array designator requires an integer constant expression");
-        }
-        return false;
-    }
-    if (value < 0 || (uint64_t)value >= (uint64_t)element_count) {
-        minic_parser_error(parser, "array designator index is outside the initialized array");
-        return false;
-    }
-    *bound = (size_t)value;
-    return true;
-}
-
 static bool parse_runtime_array_designator(
     MinicParser *parser, size_t element_count, size_t next_index, size_t *first, size_t *last) {
-    if (parser == NULL || first == NULL || last == NULL ||
-        parser->current.kind != MINIC_TOKEN_LBRACKET || !minic_parser_advance(parser) ||
-        !runtime_array_designator_bound(parser, element_count, first)) {
-        return false;
-    }
-
-    *last = *first;
-    if (parser->current.kind == MINIC_TOKEN_ELLIPSIS) {
-        if (!minic_parser_advance(parser) ||
-            !runtime_array_designator_bound(parser, element_count, last)) {
-            return false;
-        }
-        if (*last < *first) {
-            minic_parser_error(parser,
-                               "GNU array range designator upper bound is below lower bound");
-            return false;
-        }
-    }
-    if (!minic_parser_expect(parser, MINIC_TOKEN_RBRACKET, "expected ']' after array designator") ||
-        !minic_parser_expect(parser, MINIC_TOKEN_EQUAL, "expected '=' after array designator")) {
+    if (!minic_parser_parse_array_designator(parser, element_count, false, first, last)) {
         return false;
     }
     if (*first < next_index) {
