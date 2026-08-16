@@ -1,0 +1,147 @@
+name: Diagnostic Core First Emitter Footprint V2
+
+on:
+  push:
+    branches: [diagnostic/core-first-emitter-footprint-v2]
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore pinned Linux source archive
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-cache/linux-6.6.143.tar.xz
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
+      - name: Install Linux Kbuild dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu flex bison bc libelf-dev libssl-dev
+      - name: Instrument Core-OK opcode footprint
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/compiler/compiler.c')
+          s = p.read_text()
+          token = '        minic_core_function_destroy(&core);'
+          assert s.count(token) == 1, s.count(token)
+          pos = s.index(token)
+          marker = '''        if (status == MINIC_CORE_LOWER_OK) {
+              size_t instruction_index;
+              size_t call_count;
+              size_t field_count;
+              size_t max_call_arguments;
+
+              call_count = 0U;
+              field_count = 0U;
+              max_call_arguments = 0U;
+              for (instruction_index = 0U; instruction_index < core.instruction_count;
+                   ++instruction_index) {
+                  const MinicCoreInstruction *instruction;
+
+                  instruction = &core.instructions[instruction_index];
+                  if (instruction->kind == MINIC_CORE_INSTRUCTION_CALL) {
+                      call_count += 1U;
+                      if (instruction->value.call.argument_count > max_call_arguments) {
+                          max_call_arguments = instruction->value.call.argument_count;
+                      }
+                  } else if (instruction->kind == MINIC_CORE_INSTRUCTION_FIELD_ADDRESS) {
+                      field_count += 1U;
+                  }
+              }
+              (void)fprintf(stderr,
+                            "MINIC_CORE_EMITTER_FOOTPRINT function=%s calls=%zu fields=%zu max_call_args=%zu blocks=%zu values=%zu objects=%zu instructions=%zu\\n",
+                            function->name != NULL ? function->name : "<unnamed>",
+                            call_count,
+                            field_count,
+                            max_call_arguments,
+                            core.block_count,
+                            core.value_count,
+                            core.object_count,
+                            core.instruction_count);
+          }
+          '''
+          p.write_text(s[:pos] + marker + s[pos:])
+          PY
+      - name: Build diagnostic compiler
+        run: make -j4 MODE=release BUILD_DIR=build/core-emitter-footprint-compiler
+      - name: Drive fixed first100 with Core shadow
+        continue-on-error: true
+        env:
+          MINIC_CORE_IR: shadow
+        run: |
+          MINIC="$GITHUB_WORKSPACE/build/core-emitter-footprint-compiler/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/core-emitter-footprint-linux" \
+          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-cache/linux-6.6.143.tar.xz" \
+          CROSS_COMPILE=riscv64-linux-gnu- LINUX_BATCH_OFFSET=0 LINUX_BATCH_LIMIT=100 LINUX_BATCH_JOBS=2 \
+            sh tests/external/linux/batch_probe.sh
+      - name: Aggregate emitter footprint
+        if: always()
+        run: |
+          python3 - <<'PY'
+          from collections import Counter
+          from pathlib import Path
+          import re
+          pat = re.compile(r'^MINIC_CORE_EMITTER_FOOTPRINT function=(.*?) calls=(\d+) fields=(\d+) max_call_args=(\d+) blocks=(\d+) values=(\d+) objects=(\d+) instructions=(\d+)$')
+          buckets = Counter()
+          total = 0
+          call_over8 = 0
+          multi_block = 0
+          maxima = Counter()
+          root = Path('build/core-emitter-footprint-linux/minic-stderr')
+          for f in root.rglob('*.stderr') if root.is_dir() else []:
+              for line in f.read_text(errors='replace').splitlines():
+                  m = pat.match(line.strip())
+                  if not m:
+                      continue
+                  _, calls, fields, maxargs, blocks, values, objects, instructions = m.groups()
+                  calls = int(calls); fields = int(fields); maxargs = int(maxargs)
+                  blocks = int(blocks); values = int(values); objects = int(objects); instructions = int(instructions)
+                  total += 1
+                  key = ('call' if calls else 'nocall') + '_' + ('field' if fields else 'nofield')
+                  buckets[key] += 1
+                  if maxargs > 8:
+                      call_over8 += 1
+                  if blocks > 1:
+                      multi_block += 1
+                  maxima['blocks'] = max(maxima['blocks'], blocks)
+                  maxima['values'] = max(maxima['values'], values)
+                  maxima['objects'] = max(maxima['objects'], objects)
+                  maxima['instructions'] = max(maxima['instructions'], instructions)
+                  maxima['call_args'] = max(maxima['call_args'], maxargs)
+          lines = ['MINIC_CORE_FIRST_EMITTER_FOOTPRINT', f'core_ok_functions={total}']
+          for key in ['nocall_nofield','call_nofield','nocall_field','call_field']:
+              count = buckets[key]
+              lines.append(f'{key}={count} ({100.0 * count / total if total else 0:.2f}%)')
+          lines += [
+              f'multi_block={multi_block} ({100.0 * multi_block / total if total else 0:.2f}%)',
+              f'functions_with_call_over8={call_over8}',
+              f'max_blocks={maxima["blocks"]}',
+              f'max_values={maxima["values"]}',
+              f'max_objects={maxima["objects"]}',
+              f'max_instructions={maxima["instructions"]}',
+              f'max_call_args={maxima["call_args"]}',
+          ]
+          out = Path('build/core-emitter-footprint-linux')
+          out.mkdir(parents=True, exist_ok=True)
+          text = '\n'.join(lines) + '\n'
+          (out / 'emitter-footprint.txt').write_text(text)
+          print(text, end='')
+          PY
+          test -s build/core-emitter-footprint-linux/batch-summary.txt && cat build/core-emitter-footprint-linux/batch-summary.txt || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: core-first-emitter-footprint-${{ github.run_id }}
+          path: |
+            build/core-emitter-footprint-linux/emitter-footprint.txt
+            build/core-emitter-footprint-linux/batch-summary.txt
+          retention-days: 7
