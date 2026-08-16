@@ -12,6 +12,6 @@ static MiniInts integer_mask;
 static MiniConstInts readonly_mask;
 
 unsigned long read_preformed_arrays(void) {
-    return plain_mask[0].bits[0] + percpu_mask[0].bits[1] +
-           (unsigned long)integer_mask[3] + (unsigned long)readonly_mask[1];
+    return plain_mask[0].bits[0] + percpu_mask[0].bits[1] + (unsigned long)integer_mask[3] +
+           (unsigned long)readonly_mask[1];
 }
