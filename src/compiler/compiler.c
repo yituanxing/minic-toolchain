@@ -30,6 +30,12 @@ typedef enum MinicCoreShadowMode {
     MINIC_CORE_SHADOW_STRICT
 } MinicCoreShadowMode;
 
+typedef struct MinicCoreCandidates {
+    MinicCoreFunction *functions;
+    MinicCoreLowerStatus *statuses;
+    size_t function_count;
+} MinicCoreCandidates;
+
 static void minic_set_diagnostic(MinicDiagnostic *diagnostic,
                                  const char *path,
                                  size_t line,
@@ -47,6 +53,82 @@ static void minic_set_diagnostic(MinicDiagnostic *diagnostic,
     va_start(arguments, format);
     (void)vsnprintf(diagnostic->message, sizeof(diagnostic->message), format, arguments);
     va_end(arguments);
+}
+
+static void minic_core_candidates_initialize(MinicCoreCandidates *candidates) {
+    if (candidates == NULL) {
+        return;
+    }
+    candidates->functions = NULL;
+    candidates->statuses = NULL;
+    candidates->function_count = 0U;
+}
+
+static void minic_core_candidates_destroy(MinicCoreCandidates *candidates) {
+    size_t function_index;
+
+    if (candidates == NULL) {
+        return;
+    }
+    if (candidates->functions != NULL) {
+        for (function_index = 0U; function_index < candidates->function_count; ++function_index) {
+            minic_core_function_destroy(&candidates->functions[function_index]);
+        }
+    }
+    free(candidates->functions);
+    free(candidates->statuses);
+    minic_core_candidates_initialize(candidates);
+}
+
+static bool minic_prepare_core_candidates(const MinicC0Program *program,
+                                          MinicCoreCandidates *output) {
+    MinicCoreCandidates candidates;
+    size_t function_index;
+
+    if (program == NULL || output == NULL ||
+        program->function_count > SIZE_MAX / sizeof(*candidates.functions) ||
+        program->function_count > SIZE_MAX / sizeof(*candidates.statuses)) {
+        return false;
+    }
+    minic_core_candidates_initialize(&candidates);
+    candidates.function_count = program->function_count;
+    if (candidates.function_count != 0U) {
+        candidates.functions =
+            (MinicCoreFunction *)calloc(candidates.function_count, sizeof(*candidates.functions));
+        candidates.statuses = (MinicCoreLowerStatus *)malloc(candidates.function_count *
+                                                             sizeof(*candidates.statuses));
+        if (candidates.functions == NULL || candidates.statuses == NULL) {
+            free(candidates.functions);
+            free(candidates.statuses);
+            return false;
+        }
+    }
+    for (function_index = 0U; function_index < candidates.function_count; ++function_index) {
+        minic_core_function_initialize(&candidates.functions[function_index]);
+        candidates.statuses[function_index] = MINIC_CORE_LOWER_UNSUPPORTED;
+    }
+    for (function_index = 0U; function_index < candidates.function_count; ++function_index) {
+        const MinicFunction *function;
+        MinicFunctionBodyView body;
+
+        function = minic_c0_program_function(program, function_index);
+        if (function == NULL) {
+            candidates.statuses[function_index] = MINIC_CORE_LOWER_ERROR;
+            continue;
+        }
+        if (!function->is_defined) {
+            continue;
+        }
+        if (!minic_c0_function_body_view(program, function_index, &body)) {
+            candidates.statuses[function_index] = MINIC_CORE_LOWER_ERROR;
+            continue;
+        }
+        candidates.statuses[function_index] =
+            minic_core_lower_function(&body, &candidates.functions[function_index]);
+    }
+    minic_core_candidates_destroy(output);
+    *output = candidates;
+    return true;
 }
 
 static bool minic_core_shadow_mode(const char *input_path,
@@ -75,19 +157,28 @@ static bool minic_core_shadow_mode(const char *input_path,
     return false;
 }
 
-static bool minic_run_core_shadow(const char *input_path,
-                                  const MinicC0Program *program,
-                                  MinicCoreShadowMode mode,
-                                  MinicDiagnostic *diagnostic) {
+static bool minic_validate_core_shadow(const char *input_path,
+                                       const MinicC0Program *program,
+                                       const MinicCoreCandidates *candidates,
+                                       MinicCoreShadowMode mode,
+                                       MinicDiagnostic *diagnostic) {
     size_t function_index;
 
-    if (program == NULL || mode == MINIC_CORE_SHADOW_DISABLED) {
-        return program != NULL;
+    if (program == NULL || candidates == NULL) {
+        return false;
+    }
+    if (mode == MINIC_CORE_SHADOW_DISABLED) {
+        return true;
+    }
+    if (candidates->function_count != program->function_count ||
+        (candidates->function_count != 0U &&
+         (candidates->functions == NULL || candidates->statuses == NULL))) {
+        minic_set_diagnostic(
+            diagnostic, input_path, 1U, 1U, "Core IR candidates do not match source program");
+        return false;
     }
     for (function_index = 0U; function_index < program->function_count; ++function_index) {
         const MinicFunction *function;
-        MinicFunctionBodyView body;
-        MinicCoreFunction core;
         MinicCoreLowerStatus status;
 
         function = minic_c0_program_function(program, function_index);
@@ -99,21 +190,11 @@ static bool minic_run_core_shadow(const char *input_path,
         if (!function->is_defined) {
             continue;
         }
-        if (!minic_c0_function_body_view(program, function_index, &body)) {
-            minic_set_diagnostic(diagnostic,
-                                 input_path,
-                                 1U,
-                                 1U,
-                                 "Core IR shadow cannot view function '%s'",
-                                 function->name);
-            return false;
-        }
-        minic_core_function_initialize(&core);
-        status = minic_core_lower_function(&body, &core);
-        if (status == MINIC_CORE_LOWER_OK && !minic_core_function_verify(&core)) {
+        status = candidates->statuses[function_index];
+        if (status == MINIC_CORE_LOWER_OK &&
+            !minic_core_function_verify(&candidates->functions[function_index])) {
             status = MINIC_CORE_LOWER_ERROR;
         }
-        minic_core_function_destroy(&core);
         if (status == MINIC_CORE_LOWER_OK) {
             continue;
         }
@@ -194,6 +275,7 @@ int minic_compile_preprocessed_file(const char *input_path,
                                     MinicDiagnostic *diagnostic) {
     MinicSourceBuffer buffer;
     MinicC0Program program;
+    MinicCoreCandidates core_candidates;
     const MinicTargetInfo *target_info;
     MinicCoreShadowMode core_shadow_mode;
     bool success;
@@ -219,6 +301,7 @@ int minic_compile_preprocessed_file(const char *input_path,
     }
 
     minic_c0_program_initialize(&program);
+    minic_core_candidates_initialize(&core_candidates);
     target_info = minic_default_target_info();
     success = minic_parse_c0_program(input_path, buffer.data, buffer.size, &program, diagnostic);
     if (success && !minic_c0_program_verify_target(&program, MINIC_C0_AST_PARSED, target_info)) {
@@ -246,8 +329,15 @@ int minic_compile_preprocessed_file(const char *input_path,
             diagnostic, input_path, 1U, 1U, "normalized FunctionBody ownership is invalid");
         success = false;
     }
+    if (success && core_shadow_mode != MINIC_CORE_SHADOW_DISABLED &&
+        !minic_prepare_core_candidates(&program, &core_candidates)) {
+        minic_set_diagnostic(
+            diagnostic, input_path, 1U, 1U, "cannot retain Core IR lowering results");
+        success = false;
+    }
     if (success) {
-        success = minic_run_core_shadow(input_path, &program, core_shadow_mode, diagnostic);
+        success = minic_validate_core_shadow(
+            input_path, &program, &core_candidates, core_shadow_mode, diagnostic);
     }
     if (success) {
         success = minic_riscv64_layout_program(input_path, &program, diagnostic);
@@ -256,6 +346,7 @@ int minic_compile_preprocessed_file(const char *input_path,
         success = minic_riscv64_write_c0_program(output_path, &program, diagnostic);
     }
 
+    minic_core_candidates_destroy(&core_candidates);
     minic_c0_program_destroy(&program);
     free(buffer.data);
     return success ? 0 : 1;
