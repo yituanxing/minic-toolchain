@@ -1,0 +1,359 @@
+name: Diagnostic Core RV64 Hybrid First100 V1
+
+on:
+  push:
+    branches:
+      - diagnostic/core-rv64-hybrid-first100-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: diagnostic-core-rv64-hybrid-first100-v1
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Restore pinned Linux source archive
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-cache/linux-6.6.143.tar.xz
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
+
+      - name: Install Linux Kbuild dependencies
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            flex bison bc libelf-dev libssl-dev
+
+      - name: Build current main-derived compiler
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+          git diff --exit-code -- include src tools/minic
+          make -j4 MODE=release BUILD_DIR=build/hybrid-first100-compiler
+
+      - name: Drive fixed first100 through legacy and hybrid
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/hybrid-first100-compiler/bin/minic"
+          archive="$GITHUB_WORKSPACE/build/linux-cache/linux-6.6.143.tar.xz"
+
+          set +e
+          MINIC="$compiler" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/first100-legacy" \
+          LINUX_ARCHIVE_CACHE="$archive" \
+          CROSS_COMPILE=riscv64-linux-gnu- \
+          LINUX_BATCH_OFFSET=0 LINUX_BATCH_LIMIT=100 LINUX_BATCH_JOBS=2 \
+            sh tests/external/linux/batch_probe.sh \
+              >build/first100-legacy-run.log 2>&1
+          legacy_status=$?
+
+          MINIC="$compiler" \
+          MINIC_CORE_CODEGEN=basic-v0 \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/first100-hybrid" \
+          LINUX_ARCHIVE_CACHE="$archive" \
+          CROSS_COMPILE=riscv64-linux-gnu- \
+          LINUX_BATCH_OFFSET=0 LINUX_BATCH_LIMIT=100 LINUX_BATCH_JOBS=2 \
+            sh tests/external/linux/batch_probe.sh \
+              >build/first100-hybrid-run.log 2>&1
+          hybrid_status=$?
+          set -e
+
+          printf '%s\n' "FIRST100_DRIVER_STATUS legacy=$legacy_status hybrid=$hybrid_status"
+          cat build/first100-legacy/batch-summary.txt || true
+          cat build/first100-hybrid/batch-summary.txt || true
+
+      - name: Measure routing and assemble each hybrid PASS
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from collections import Counter
+          from pathlib import Path
+          import csv
+          import json
+          import re
+          import subprocess
+
+          root = Path.cwd()
+          legacy = root / "build/first100-legacy"
+          hybrid = root / "build/first100-hybrid"
+          legacy_rows = json.loads((legacy / "batch-results.json").read_text())
+          hybrid_rows = json.loads((hybrid / "batch-results.json").read_text())
+          if len(legacy_rows) != len(hybrid_rows):
+              raise SystemExit(
+                  f"FIRST100_AUDIT_ERROR result length mismatch legacy={len(legacy_rows)} hybrid={len(hybrid_rows)}"
+              )
+
+          object_pattern = re.compile(r"(?:^|\s)-o\s+([^\s;]+\.o)(?=\s|;|$)")
+          march_pattern = re.compile(r"(?<!\S)-march=([^\s]+)")
+          mabi_pattern = re.compile(r"(?<!\S)-mabi=([^\s]+)")
+          out_root = (hybrid / "kbuild").resolve()
+          command_by_object = {}
+          for line in (hybrid / "kbuild-plan.raw").read_text(errors="replace").splitlines():
+              if "riscv64-linux-gnu-" not in line or " -c " not in f" {line} ":
+                  continue
+              matches = object_pattern.findall(line)
+              if not matches:
+                  continue
+              raw = matches[-1].strip("'\"")
+              obj = Path(raw)
+              if obj.is_absolute():
+                  try:
+                      rel = obj.resolve().relative_to(out_root)
+                  except ValueError:
+                      continue
+              else:
+                  rel = obj
+              key = rel.as_posix()
+              if key.startswith("./"):
+                  key = key[2:]
+              command_by_object.setdefault(key, []).append(line)
+
+          type_pattern = re.compile(r"^\.type\s+(.+?),\s*@function$")
+          core_label_pattern = re.compile(r"^\.L(.+)_core_bb[0-9]+:$")
+          rows = []
+          object_root = hybrid / "hybrid-objects"
+          object_root.mkdir(parents=True, exist_ok=True)
+
+          for legacy_row, hybrid_row in zip(legacy_rows, hybrid_rows):
+              if legacy_row["index"] != hybrid_row["index"] or legacy_row["input"] != hybrid_row["input"]:
+                  raise SystemExit(
+                      "FIRST100_AUDIT_ERROR selected TU mismatch "
+                      f"legacy={legacy_row['index']}:{legacy_row['input']} "
+                      f"hybrid={hybrid_row['index']}:{hybrid_row['input']}"
+                  )
+
+              defined = 0
+              core = 0
+              fallback = 0
+              object_status = "NOT_RUN"
+              object_message = ""
+              march = ""
+              mabi = ""
+
+              if hybrid_row["status"] == "PASS":
+                  asm_path = hybrid / "minic-out" / f"{hybrid_row['input']}.s"
+                  if not asm_path.is_file() or asm_path.stat().st_size == 0:
+                      raise SystemExit(f"FIRST100_AUDIT_ERROR missing hybrid asm {asm_path}")
+                  lines = asm_path.read_text(errors="replace").splitlines()
+                  defined_symbols = {
+                      match.group(1)
+                      for line in lines
+                      if (match := type_pattern.match(line.strip())) is not None
+                  }
+                  core_symbols = {
+                      match.group(1)
+                      for line in lines
+                      if (match := core_label_pattern.match(line.strip())) is not None
+                  }
+                  core_symbols &= defined_symbols
+                  defined = len(defined_symbols)
+                  core = len(core_symbols)
+                  fallback = defined - core
+
+                  commands = command_by_object.get(hybrid_row["object"], [])
+                  commands = [
+                      command
+                      for command in commands
+                      if hybrid_row["source"] in command or hybrid_row["input"][:-2] + ".c" in command
+                  ] or commands
+                  if len(commands) != 1:
+                      object_status = "COMMAND_MISSING" if not commands else "COMMAND_AMBIGUOUS"
+                      object_message = f"commands={len(commands)}"
+                  else:
+                      command = commands[0]
+                      march_match = march_pattern.search(command)
+                      mabi_match = mabi_pattern.search(command)
+                      if march_match is None or mabi_match is None:
+                          object_status = "FLAGS_MISSING"
+                          object_message = "missing -march or -mabi"
+                      else:
+                          march = march_match.group(1)
+                          mabi = mabi_match.group(1)
+                          object_path = object_root / f"{hybrid_row['index']:03d}.o"
+                          proc = subprocess.run(
+                              [
+                                  "riscv64-linux-gnu-gcc",
+                                  "-c",
+                                  f"-march={march}",
+                                  f"-mabi={mabi}",
+                                  str(asm_path),
+                                  "-o",
+                                  str(object_path),
+                              ],
+                              stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE,
+                              text=True,
+                              errors="replace",
+                          )
+                          object_status = "PASS" if proc.returncode == 0 else "FAIL"
+                          if proc.returncode != 0:
+                              object_message = " | ".join(
+                                  line.strip()
+                                  for line in proc.stderr.splitlines()
+                                  if line.strip()
+                              )[:800]
+
+              rows.append(
+                  {
+                      "index": hybrid_row["index"],
+                      "input": hybrid_row["input"],
+                      "source": hybrid_row["source"],
+                      "legacy_status": legacy_row["status"],
+                      "hybrid_status": hybrid_row["status"],
+                      "legacy_message": legacy_row["message"],
+                      "hybrid_message": hybrid_row["message"],
+                      "defined_functions": defined,
+                      "core_functions": core,
+                      "fallback_functions": fallback,
+                      "route_pct": (100.0 * core / defined) if defined else 0.0,
+                      "object_status": object_status,
+                      "march": march,
+                      "mabi": mabi,
+                      "object_message": object_message,
+                  }
+              )
+
+          legacy_counts = Counter(row["legacy_status"] for row in rows)
+          hybrid_counts = Counter(row["hybrid_status"] for row in rows)
+          mismatches = [row for row in rows if row["legacy_status"] != row["hybrid_status"]]
+          regressions = [
+              row
+              for row in rows
+              if row["legacy_status"] == "PASS" and row["hybrid_status"] != "PASS"
+          ]
+          improvements = [
+              row
+              for row in rows
+              if row["legacy_status"] != "PASS" and row["hybrid_status"] == "PASS"
+          ]
+          hybrid_pass_rows = [row for row in rows if row["hybrid_status"] == "PASS"]
+          object_failures = [row for row in hybrid_pass_rows if row["object_status"] != "PASS"]
+          total_defined = sum(row["defined_functions"] for row in hybrid_pass_rows)
+          total_core = sum(row["core_functions"] for row in hybrid_pass_rows)
+          total_fallback = sum(row["fallback_functions"] for row in hybrid_pass_rows)
+          tus_with_core = sum(row["core_functions"] > 0 for row in hybrid_pass_rows)
+
+          summary = [
+              "LINUX_HYBRID_FIRST100_SUMMARY",
+              f"selected={len(rows)}",
+              f"legacy_pass={legacy_counts['PASS']}",
+              f"legacy_fail={legacy_counts['FAIL']}",
+              f"legacy_preprocess_missing={legacy_counts['PREPROCESS_MISSING']}",
+              f"hybrid_pass={hybrid_counts['PASS']}",
+              f"hybrid_fail={hybrid_counts['FAIL']}",
+              f"hybrid_preprocess_missing={hybrid_counts['PREPROCESS_MISSING']}",
+              f"status_mismatch={len(mismatches)}",
+              f"hybrid_regressions={len(regressions)}",
+              f"hybrid_improvements={len(improvements)}",
+              f"hybrid_object_pass={len(hybrid_pass_rows) - len(object_failures)}",
+              f"hybrid_object_fail={len(object_failures)}",
+              f"tus_with_core={tus_with_core}",
+              f"total_defined_functions={total_defined}",
+              f"core_routed_functions={total_core}",
+              f"legacy_fallback_functions={total_fallback}",
+              f"core_route_pct={100.0 * total_core / total_defined if total_defined else 0.0:.2f}",
+          ]
+
+          ranked = sorted(
+              hybrid_pass_rows,
+              key=lambda row: (row["core_functions"], row["route_pct"], row["defined_functions"]),
+              reverse=True,
+          )
+          summary.append("")
+          summary.append("top_core_routed_tus:")
+          for row in ranked[:15]:
+              summary.append(
+                  f"  index={row['index']} input={row['input']} "
+                  f"defined={row['defined_functions']} core={row['core_functions']} "
+                  f"fallback={row['fallback_functions']} route_pct={row['route_pct']:.2f} "
+                  f"object={row['object_status']}"
+              )
+          summary.append("")
+          summary.append("status_mismatches:")
+          if mismatches:
+              for row in mismatches:
+                  summary.append(
+                      f"  index={row['index']} input={row['input']} "
+                      f"legacy={row['legacy_status']} hybrid={row['hybrid_status']} "
+                      f"legacy_message={row['legacy_message']} hybrid_message={row['hybrid_message']}"
+                  )
+          else:
+              summary.append("  none")
+          summary.append("")
+          summary.append("object_failures:")
+          if object_failures:
+              for row in object_failures:
+                  summary.append(
+                      f"  index={row['index']} input={row['input']} status={row['object_status']} "
+                      f"message={row['object_message']}"
+                  )
+          else:
+              summary.append("  none")
+
+          text = "\n".join(summary) + "\n"
+          (hybrid / "hybrid-first100-summary.txt").write_text(text)
+          print(text, end="")
+
+          with (hybrid / "hybrid-first100-results.tsv").open("w", newline="") as handle:
+              fieldnames = list(rows[0].keys()) if rows else []
+              writer = csv.DictWriter(handle, fieldnames=fieldnames, delimiter="\t")
+              writer.writeheader()
+              writer.writerows(rows)
+          (hybrid / "hybrid-first100-results.json").write_text(
+              json.dumps(rows, indent=2, sort_keys=True)
+          )
+
+          invariant_errors = []
+          if len(rows) != 100:
+              invariant_errors.append(f"selected={len(rows)}")
+          if legacy_counts["PREPROCESS_MISSING"] or hybrid_counts["PREPROCESS_MISSING"]:
+              invariant_errors.append("preprocess_missing")
+          if regressions:
+              invariant_errors.append(f"hybrid_regressions={len(regressions)}")
+          if object_failures:
+              invariant_errors.append(f"hybrid_object_fail={len(object_failures)}")
+          (hybrid / "hybrid-first100-invariants.txt").write_text(
+              "PASS\n" if not invariant_errors else "FAIL " + " ".join(invariant_errors) + "\n"
+          )
+          PY
+
+      - name: Upload first100 hybrid evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-rv64-hybrid-first100-${{ github.run_id }}
+          path: |
+            build/first100-legacy/batch-summary.txt
+            build/first100-legacy/batch-results.tsv
+            build/first100-hybrid/batch-summary.txt
+            build/first100-hybrid/batch-results.tsv
+            build/first100-hybrid/hybrid-first100-summary.txt
+            build/first100-hybrid/hybrid-first100-results.tsv
+            build/first100-hybrid/hybrid-first100-results.json
+            build/first100-hybrid/hybrid-first100-invariants.txt
+            build/first100-legacy-run.log
+            build/first100-hybrid-run.log
+          retention-days: 7
+
+      - name: Enforce audit invariants
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(cat build/first100-hybrid/hybrid-first100-invariants.txt)" = PASS
