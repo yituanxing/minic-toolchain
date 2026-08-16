@@ -115,75 +115,6 @@ bool minic_parser_parse_zero_pointer_constant(MinicParser *parser) {
     return false;
 }
 
-static bool parse_zero_initializer(MinicParser *parser, MinicType type) {
-    if (minic_type_is_integer(type)) {
-        int value;
-
-        if (!minic_parser_parse_integer_value(parser, &value)) {
-            return false;
-        }
-        if (value != 0) {
-            minic_parser_error(parser, "static zero initializer requires integer zero");
-            return false;
-        }
-        return true;
-    }
-    if (minic_type_is_pointer(type)) {
-        return minic_parser_parse_zero_pointer_constant(parser);
-    }
-    if (minic_type_is_record(type)) {
-        const MinicRecord *record;
-        size_t field_index;
-
-        record = minic_c0_program_record(parser->program, type.record_id);
-        if (record == NULL || !record->is_complete) {
-            minic_parser_error(parser, "static record initializer requires a complete record type");
-            return false;
-        }
-        if (!minic_parser_expect(
-                parser, MINIC_TOKEN_LBRACE, "expected '{' in record initializer")) {
-            return false;
-        }
-
-        field_index = 0U;
-        while (parser->current.kind != MINIC_TOKEN_RBRACE) {
-            const MinicRecordField *field;
-
-            if (field_index >= record->field_count) {
-                minic_parser_error(parser, "too many static record initializers");
-                return false;
-            }
-            field = minic_c0_record_field(record, field_index);
-            if (field == NULL || field->element_count != 1U ||
-                (!minic_type_is_integer(field->type) && !minic_type_is_pointer(field->type) &&
-                 !minic_type_is_record(field->type))) {
-                minic_parser_error(parser, "static zero record initializer requires scalar fields");
-                return false;
-            }
-            if (!parse_zero_initializer(parser, field->type)) {
-                return false;
-            }
-            field_index += 1U;
-            if (parser->current.kind == MINIC_TOKEN_COMMA) {
-                if (!minic_parser_advance(parser)) {
-                    return false;
-                }
-                if (parser->current.kind == MINIC_TOKEN_RBRACE) {
-                    break;
-                }
-            } else if (parser->current.kind != MINIC_TOKEN_RBRACE) {
-                minic_parser_error(parser, "expected ',' or '}' in record initializer");
-                return false;
-            }
-        }
-        return minic_parser_expect(
-            parser, MINIC_TOKEN_RBRACE, "expected '}' after record initializer");
-    }
-
-    minic_parser_error(parser, "unsupported static zero initializer type");
-    return false;
-}
-
 static bool function_designator_type(MinicParser *parser,
                                      MinicFunctionId function_id,
                                      MinicType *pointer_type) {
@@ -609,25 +540,6 @@ static bool parse_static_scalar(MinicParser *parser, MinicType type, MinicSource
         return false;
     }
     return minic_parser_expect(parser, MINIC_TOKEN_SEMICOLON, "expected ';' after global object");
-}
-
-static bool static_record_has_direct_function_pointer(const MinicRecord *record) {
-    size_t field_index;
-
-    if (record == NULL) {
-        return false;
-    }
-    for (field_index = 0U; field_index < record->field_count; ++field_index) {
-        const MinicRecordField *field;
-        MinicType pointee;
-
-        field = &record->fields[field_index];
-        if (field->element_count == 1U && minic_type_is_pointer(field->type) &&
-            minic_type_pointee(field->type, &pointee) && minic_type_is_function(pointee)) {
-            return true;
-        }
-    }
-    return false;
 }
 
 static bool
@@ -1088,123 +1000,6 @@ parse_static_nested_record_object(MinicParser *parser, MinicType type, MinicSour
     return minic_parser_expect(parser, MINIC_TOKEN_SEMICOLON, "expected ';' after global object");
 }
 
-static bool ensure_static_record_base_value(MinicParser *parser,
-                                            MinicGlobalObjectId object_id,
-                                            size_t field_index,
-                                            uint64_t bits) {
-    MinicGlobalObject *object;
-
-    if (parser == NULL || object_id >= parser->program->global_object_count) {
-        return false;
-    }
-    object = &parser->program->global_objects[object_id];
-    while (object->initializer_count < field_index) {
-        if (!minic_c0_global_object_add_initializer(parser->program, object_id, 0)) {
-            return false;
-        }
-        object = &parser->program->global_objects[object_id];
-    }
-    return object->initializer_count == field_index &&
-           minic_c0_global_object_add_initializer_bits(parser->program, object_id, bits);
-}
-
-static bool parse_static_record_field_initializer(MinicParser *parser,
-                                                  MinicGlobalObjectId object_id,
-                                                  size_t field_index,
-                                                  const MinicRecordField *field) {
-    MinicType pointee_type;
-    bool function_pointer_field;
-
-    if (field == NULL || field->element_count != 1U) {
-        minic_parser_error(parser, "unsupported static record initializer field");
-        return false;
-    }
-    function_pointer_field = minic_type_is_pointer(field->type) &&
-                             minic_type_pointee(field->type, &pointee_type) &&
-                             minic_type_is_function(pointee_type);
-    if (function_pointer_field && parser->current.kind == MINIC_TOKEN_IDENTIFIER) {
-        MinicFunctionId function_id;
-        MinicType designator_type;
-
-        function_id = minic_parser_find_function(parser, parser->current.span);
-        if (function_id == MINIC_FUNCTION_INVALID ||
-            !function_designator_type(parser, function_id, &designator_type)) {
-            minic_parser_error(parser, "static function initializer requires a declared function");
-            return false;
-        }
-        if (!minic_type_assignment_compatible(field->type, designator_type)) {
-            minic_parser_error(parser, "static function initializer type does not match field");
-            return false;
-        }
-        if (!minic_parser_advance(parser) ||
-            (parser->program->global_objects[object_id].initializer_count != 0U &&
-             !ensure_static_record_base_value(parser, object_id, field_index, 0)) ||
-            !minic_c0_global_object_add_function_relocation(
-                parser->program,
-                object_id,
-                MINIC_GLOBAL_RELOCATION_LOCATION_RECORD_FIELD,
-                field_index,
-                function_id)) {
-            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
-                minic_parser_error(parser, "cannot record static function relocation");
-            }
-            return false;
-        }
-        return true;
-    }
-    if (minic_type_is_pointer(field->type) && !function_pointer_field) {
-        MinicExpressionId initializer_id;
-        MinicGlobalObjectId target_object_id;
-
-        if (!minic_parser_parse_expression(parser, &initializer_id, 0U)) {
-            return false;
-        }
-        if (!minic_c0_assignment_compatible(parser->program, field->type, initializer_id)) {
-            minic_parser_error(parser, "static record pointer initializer type mismatch");
-            return false;
-        }
-        if (minic_c0_expression_is_null_pointer_constant_v0(parser->program, initializer_id)) {
-            return parser->program->global_objects[object_id].initializer_count == 0U ||
-                   ensure_static_record_base_value(parser, object_id, field_index, 0);
-        }
-        if (!static_object_address_relocation_target(
-                parser->program, initializer_id, &target_object_id)) {
-            minic_parser_error(parser,
-                               "static record pointer initializer requires a null or zero-addend "
-                               "object address constant");
-            return false;
-        }
-        if ((parser->program->global_objects[object_id].initializer_count != 0U &&
-             !ensure_static_record_base_value(parser, object_id, field_index, 0)) ||
-            !minic_c0_global_object_add_object_relocation(
-                parser->program,
-                object_id,
-                MINIC_GLOBAL_RELOCATION_LOCATION_RECORD_FIELD,
-                field_index,
-                target_object_id)) {
-            minic_parser_error(parser, "cannot record static record object relocation");
-            return false;
-        }
-        return true;
-    }
-    if (minic_type_is_integer(field->type)) {
-        uint64_t bits;
-
-        if (!minic_parser_parse_integer_initializer_bits(parser, field->type, &bits)) {
-            return false;
-        }
-        if (bits == 0U && parser->program->global_objects[object_id].initializer_count == 0U) {
-            return true;
-        }
-        return ensure_static_record_base_value(parser, object_id, field_index, bits);
-    }
-    if (!parse_zero_initializer(parser, field->type)) {
-        return false;
-    }
-    return parser->program->global_objects[object_id].initializer_count == 0U ||
-           ensure_static_record_base_value(parser, object_id, field_index, 0);
-}
-
 static bool count_static_array_initializer_elements(MinicParser *parser, size_t *element_count) {
     MinicParser probe;
     size_t brace_depth;
@@ -1353,9 +1148,7 @@ parse_static_record_array(MinicParser *parser, MinicType element_type, MinicSour
 }
 
 static bool parse_static_record(MinicParser *parser, MinicType type, MinicSourceSpan name_span) {
-    MinicGlobalObjectId object_id;
     const MinicRecord *record;
-    size_t field_index;
 
     record = minic_c0_program_record(parser->program, type.record_id);
     if (record == NULL || !record->is_complete) {
@@ -1365,71 +1158,7 @@ static bool parse_static_record(MinicParser *parser, MinicType type, MinicSource
     if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
         return parse_static_record_array(parser, type, name_span);
     }
-    if (!static_record_has_direct_function_pointer(record)) {
-        return parse_static_nested_record_object(parser, type, name_span);
-    }
-    if (!minic_c0_program_add_global_object(parser->program,
-                                            parser->source + name_span.begin.offset,
-                                            minic_parser_span_length(name_span),
-                                            type,
-                                            true,
-                                            minic_type_is_const(type),
-                                            &object_id) ||
-        !minic_parser_expect(parser, MINIC_TOKEN_EQUAL, "expected '='") ||
-        !minic_parser_expect(parser, MINIC_TOKEN_LBRACE, "expected '{' in record initializer")) {
-        if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
-            minic_parser_error(parser, "cannot begin static record initializer");
-        }
-        return false;
-    }
-
-    field_index = 0U;
-    while (parser->current.kind != MINIC_TOKEN_RBRACE) {
-        const MinicRecordField *field;
-
-        if (field_index >= record->field_count) {
-            minic_parser_error(parser, "too many static record initializers");
-            return false;
-        }
-        field = minic_c0_record_field(record, field_index);
-        if (!parse_static_record_field_initializer(parser, object_id, field_index, field)) {
-            return false;
-        }
-        field_index += 1U;
-        if (parser->current.kind == MINIC_TOKEN_COMMA) {
-            if (!minic_parser_advance(parser)) {
-                return false;
-            }
-            if (parser->current.kind == MINIC_TOKEN_RBRACE) {
-                break;
-            }
-        } else if (parser->current.kind != MINIC_TOKEN_RBRACE) {
-            minic_parser_error(parser, "expected ',' or '}' in record initializer");
-            return false;
-        }
-    }
-    if (!minic_parser_expect(parser, MINIC_TOKEN_RBRACE, "expected '}' after record initializer")) {
-        return false;
-    }
-    if (parser->program->global_objects[object_id].initializer_count != 0U) {
-        while (parser->program->global_objects[object_id].initializer_count < record->field_count) {
-            size_t next_field;
-
-            next_field = parser->program->global_objects[object_id].initializer_count;
-            if (!ensure_static_record_base_value(parser, object_id, next_field, 0)) {
-                minic_parser_error(parser, "cannot complete static record base initializer");
-                return false;
-            }
-        }
-        if (parser->program->global_objects[object_id].initializer_count != record->field_count) {
-            minic_parser_error(parser, "invalid mixed static record initializer shape");
-            return false;
-        }
-    } else if (!minic_c0_global_object_set_zero_initialized(parser->program, object_id)) {
-        minic_parser_error(parser, "cannot record static record initializer");
-        return false;
-    }
-    return minic_parser_expect(parser, MINIC_TOKEN_SEMICOLON, "expected ';' after global object");
+    return parse_static_nested_record_object(parser, type, name_span);
 }
 
 static bool parse_extern_function_pointer_object_declarator(MinicParser *parser,
