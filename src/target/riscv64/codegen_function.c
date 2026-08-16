@@ -900,7 +900,6 @@ static bool minic_riscv64_emit_function(FILE *file,
     MinicRiscv64FunctionSymbol symbol;
     size_t frame_size;
     bool success;
-    const char *symbol_name;
 
     if (function == NULL || !function->is_defined || function->name_length == 0U ||
         function->body_block >= program->block_count) {
@@ -920,8 +919,6 @@ static bool minic_riscv64_emit_function(FILE *file,
         minic_riscv64_function_layout_destroy(&function_layout);
         return false;
     }
-    symbol_name = symbol.symbol_name;
-
     success = minic_riscv64_emit_function_symbol_begin(file, &symbol);
     if (success) {
         success = minic_riscv64_emit_stack_allocate(file, frame_size);
