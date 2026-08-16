@@ -36,113 +36,109 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
 
+          def replace_once(text, marker, replacement, label):
+              count = text.count(marker)
+              assert count == 1, f'{label}: expected one marker, found {count}'
+              return text.replace(marker, replacement, 1)
+
           p = Path('src/core/core_ir.h')
           s = p.read_text()
-          old = '''    MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION,
-              MINIC_CORE_INSTRUCTION_PARAMETER,'''
-          new = '''    MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION,
-              MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO,
-              MINIC_CORE_INSTRUCTION_PARAMETER,'''
-          assert s.count(old) == 1, s.count(old)
-          p.write_text(s.replace(old, new, 1))
+          marker = "    MINIC_CORE_INSTRUCTION_PARAMETER,\n"
+          insertion = "    MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO,\n"
+          p.write_text(replace_once(s, marker, insertion + marker, 'core_ir.h enum'))
 
           p = Path('src/core/core_ir.c')
           s = p.read_text()
-          old = '''    case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION:
-              return instruction_result_is_valid(function, instruction) &&
-                     minic_type_is_integer(instruction->type) &&
-                     instruction->value.operand < function->value_count &&
-                     available_values[instruction->value.operand] &&
-                     minic_type_is_integer(function->values[instruction->value.operand].type);
-          '''
-          new = '''    case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION:
-              return instruction_result_is_valid(function, instruction) &&
-                     minic_type_is_integer(instruction->type) &&
-                     instruction->value.operand < function->value_count &&
-                     available_values[instruction->value.operand] &&
-                     minic_type_is_integer(function->values[instruction->value.operand].type);
-              case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:
-                  return instruction_result_is_valid(function, instruction) &&
-                         minic_type_equal(instruction->type, minic_type_int()) &&
-                         instruction->value.operand < function->value_count &&
-                         available_values[instruction->value.operand] &&
-                         (minic_type_is_integer(function->values[instruction->value.operand].type) ||
-                          minic_type_is_pointer(function->values[instruction->value.operand].type));
-          '''
-          assert s.count(old) == 1, s.count(old)
-          s = s.replace(old, new, 1)
-          old = '''    case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION:
-              return fprintf(output,
-                             "  %%%" PRIu32 " = iconv %%%" PRIu32 "\\n",
-                             instruction->result,
-                             instruction->value.operand) >= 0;
-          '''
-          new = '''    case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION:
-              return fprintf(output,
-                             "  %%%" PRIu32 " = iconv %%%" PRIu32 "\\n",
-                             instruction->result,
-                             instruction->value.operand) >= 0;
-              case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:
-                  return fprintf(output,
-                                 "  %%%" PRIu32 " = scalar.is_zero %%%" PRIu32 "\\n",
-                                 instruction->result,
-                                 instruction->value.operand) >= 0;
-          '''
-          assert s.count(old) == 1, s.count(old)
-          p.write_text(s.replace(old, new, 1))
+          verifier_marker = (
+              "    case MINIC_CORE_INSTRUCTION_PARAMETER:\n"
+              "        return instruction_result_is_valid(function, instruction) &&\n"
+          )
+          verifier_insertion = (
+              "    case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:\n"
+              "        return instruction_result_is_valid(function, instruction) &&\n"
+              "               minic_type_equal(instruction->type, minic_type_int()) &&\n"
+              "               instruction->value.operand < function->value_count &&\n"
+              "               available_values[instruction->value.operand] &&\n"
+              "               (minic_type_is_integer(function->values[instruction->value.operand].type) ||\n"
+              "                minic_type_is_pointer(function->values[instruction->value.operand].type));\n"
+          )
+          s = replace_once(
+              s,
+              verifier_marker,
+              verifier_insertion + verifier_marker,
+              'core_ir.c verifier',
+          )
+          dump_marker = (
+              "    case MINIC_CORE_INSTRUCTION_PARAMETER:\n"
+              "        return fprintf(output,\n"
+          )
+          dump_insertion = (
+              "    case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:\n"
+              "        return fprintf(output,\n"
+              "                       \"  %%%\" PRIu32 \" = scalar.is_zero %%%\" PRIu32 \"\\n\",\n"
+              "                       instruction->result,\n"
+              "                       instruction->value.operand) >= 0;\n"
+          )
+          p.write_text(
+              replace_once(s, dump_marker, dump_insertion + dump_marker, 'core_ir.c dump')
+          )
 
           p = Path('src/core/core_lower.c')
           s = p.read_text()
-          old = '''    if (expression->kind == MINIC_EXPRESSION_CALL) {
-              return lower_direct_call(context, expression, value_id);
-          }
-          (void)memset(&instruction, 0, sizeof(instruction));'''
-          new = '''    if (expression->kind == MINIC_EXPRESSION_CALL) {
-              return lower_direct_call(context, expression, value_id);
-          }
-          if (expression->kind == MINIC_EXPRESSION_UNARY &&
-              expression->value.unary.operator_kind == MINIC_UNARY_LOGICAL_NOT) {
-              MinicCoreValueId operand_value;
-              MinicCoreLowerStatus status;
-
-              if (!minic_type_equal(expression->type, minic_type_int())) {
-                  return MINIC_CORE_LOWER_ERROR;
-              }
-              status = lower_expression(context, expression->value.unary.operand, &operand_value);
-              if (status != MINIC_CORE_LOWER_OK) {
-                  return status;
-              }
-              if (operand_value >= context->function->value_count ||
-                  !core_memory_scalar_type(context->function->values[operand_value].type)) {
-                  return MINIC_CORE_LOWER_UNSUPPORTED;
-              }
-              (void)memset(&instruction, 0, sizeof(instruction));
-              instruction.kind = MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO;
-              instruction.span = expression->span;
-              instruction.type = expression->type;
-              instruction.result = MINIC_CORE_VALUE_INVALID;
-              instruction.value.operand = operand_value;
-              return minic_core_function_append_value_instruction(
-                         context->function, context->block_id, &instruction, value_id)
-                         ? MINIC_CORE_LOWER_OK
-                         : MINIC_CORE_LOWER_ERROR;
-          }
-          (void)memset(&instruction, 0, sizeof(instruction));'''
-          assert s.count(old) == 1, s.count(old)
-          p.write_text(s.replace(old, new, 1))
+          call_marker = (
+              "    if (expression->kind == MINIC_EXPRESSION_CALL) {\n"
+              "        return lower_direct_call(context, expression, value_id);\n"
+              "    }\n"
+          )
+          logical_not = (
+              "    if (expression->kind == MINIC_EXPRESSION_UNARY &&\n"
+              "        expression->value.unary.operator_kind == MINIC_UNARY_LOGICAL_NOT) {\n"
+              "        MinicCoreValueId operand_value;\n"
+              "        MinicCoreLowerStatus status;\n"
+              "\n"
+              "        if (!minic_type_equal(expression->type, minic_type_int())) {\n"
+              "            return MINIC_CORE_LOWER_ERROR;\n"
+              "        }\n"
+              "        status = lower_expression(context, expression->value.unary.operand, &operand_value);\n"
+              "        if (status != MINIC_CORE_LOWER_OK) {\n"
+              "            return status;\n"
+              "        }\n"
+              "        if (operand_value >= context->function->value_count ||\n"
+              "            !core_memory_scalar_type(context->function->values[operand_value].type)) {\n"
+              "            return MINIC_CORE_LOWER_UNSUPPORTED;\n"
+              "        }\n"
+              "        {\n"
+              "            MinicCoreInstruction instruction;\n"
+              "\n"
+              "            (void)memset(&instruction, 0, sizeof(instruction));\n"
+              "            instruction.kind = MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO;\n"
+              "            instruction.span = expression->span;\n"
+              "            instruction.type = expression->type;\n"
+              "            instruction.result = MINIC_CORE_VALUE_INVALID;\n"
+              "            instruction.value.operand = operand_value;\n"
+              "            return minic_core_function_append_value_instruction(\n"
+              "                       context->function, context->block_id, &instruction, value_id)\n"
+              "                       ? MINIC_CORE_LOWER_OK\n"
+              "                       : MINIC_CORE_LOWER_ERROR;\n"
+              "        }\n"
+              "    }\n"
+          )
+          p.write_text(
+              replace_once(s, call_marker, call_marker + logical_not, 'core_lower.c logical-not')
+          )
 
           p = Path('src/compiler/compiler.c')
           s = p.read_text()
-          anchor = '        minic_core_function_destroy(&core);\n'
-          assert s.count(anchor) == 1, s.count(anchor)
-          marker = '''        (void)fprintf(stderr,
-                        "MINIC_CORE_COVERAGE status=%s function=%s\\n",
-                        status == MINIC_CORE_LOWER_OK
-                            ? "OK"
-                            : (status == MINIC_CORE_LOWER_UNSUPPORTED ? "UNSUPPORTED" : "ERROR"),
-                        function->name != NULL ? function->name : "<unnamed>");
-          '''
-          p.write_text(s.replace(anchor, marker + anchor, 1))
+          marker = "        minic_core_function_destroy(&core);\n"
+          coverage = (
+              "        (void)fprintf(stderr,\n"
+              "                      \"MINIC_CORE_COVERAGE status=%s function=%s\\n\",\n"
+              "                      status == MINIC_CORE_LOWER_OK\n"
+              "                          ? \"OK\"\n"
+              "                          : (status == MINIC_CORE_LOWER_UNSUPPORTED ? \"UNSUPPORTED\" : \"ERROR\"),\n"
+              "                      function->name != NULL ? function->name : \"<unnamed>\");\n"
+          )
+          p.write_text(replace_once(s, marker, coverage + marker, 'compiler.c coverage'))
           PY
 
       - name: Build diagnostic compiler
@@ -167,23 +163,27 @@ jobs:
           from collections import Counter
           from pathlib import Path
           import re
+
           root = Path('build/core-is-zero-linux/minic-stderr')
           pat = re.compile(r'^MINIC_CORE_COVERAGE status=(OK|UNSUPPORTED|ERROR) function=(.*)$')
           counts = Counter()
           for path in root.rglob('*.stderr') if root.is_dir() else []:
               for line in path.read_text(errors='replace').splitlines():
-                  m = pat.match(line.strip())
-                  if m:
-                      counts[m.group(1)] += 1
+                  match = pat.match(line.strip())
+                  if match:
+                      counts[match.group(1)] += 1
           total = sum(counts.values())
           pct = 100.0 * counts['OK'] / total if total else 0.0
-          text = ('MINIC_CORE_SCALAR_IS_ZERO_COVERAGE\n'
-                  f'functions_observed={total}\n'
-                  f'core_ok={counts["OK"]}\n'
-                  f'core_unsupported={counts["UNSUPPORTED"]}\n'
-                  f'core_error={counts["ERROR"]}\n'
-                  f'function_coverage_percent={pct:.2f}\n')
+          text = (
+              'MINIC_CORE_SCALAR_IS_ZERO_COVERAGE\n'
+              f'functions_observed={total}\n'
+              f'core_ok={counts["OK"]}\n'
+              f'core_unsupported={counts["UNSUPPORTED"]}\n'
+              f'core_error={counts["ERROR"]}\n'
+              f'function_coverage_percent={pct:.2f}\n'
+          )
           out = Path('build/core-is-zero-linux/scalar-is-zero-coverage.txt')
+          out.parent.mkdir(parents=True, exist_ok=True)
           out.write_text(text)
           print(text, end='')
           PY
