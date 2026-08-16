@@ -463,6 +463,33 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
     if (expression->kind == MINIC_EXPRESSION_CALL) {
         return lower_direct_call(context, expression, value_id);
     }
+    if (expression->kind == MINIC_EXPRESSION_UNARY &&
+        expression->value.unary.operator_kind == MINIC_UNARY_LOGICAL_NOT) {
+        MinicCoreValueId operand_value;
+        MinicCoreLowerStatus status;
+
+        if (!minic_type_equal(expression->type, minic_type_int())) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        status = lower_expression(context, expression->value.unary.operand, &operand_value);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        if (operand_value >= context->function->value_count ||
+            !core_memory_scalar_type(context->function->values[operand_value].type)) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        (void)memset(&instruction, 0, sizeof(instruction));
+        instruction.kind = MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO;
+        instruction.span = expression->span;
+        instruction.type = expression->type;
+        instruction.result = MINIC_CORE_VALUE_INVALID;
+        instruction.value.operand = operand_value;
+        return minic_core_function_append_value_instruction(
+                   context->function, context->block_id, &instruction, value_id)
+                   ? MINIC_CORE_LOWER_OK
+                   : MINIC_CORE_LOWER_ERROR;
+    }
     (void)memset(&instruction, 0, sizeof(instruction));
     instruction.span = expression->span;
     instruction.type = expression->type;
