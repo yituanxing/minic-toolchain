@@ -1,0 +1,113 @@
+name: Staging Core Frontend RV64 Differential V0
+
+on:
+  push:
+    branches: [staging/core-frontend-rv64-differential-v0]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: staging-core-frontend-rv64-differential-v0
+  cancel-in-progress: true
+
+jobs:
+  differential:
+    runs-on: ubuntu-24.04
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build committed MiniC source
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+          git diff --exit-code -- include src tools/minic tests/target/riscv64
+          make -j4 MODE=release BUILD_DIR=build/core-frontend-diff-compiler
+
+      - name: Restore RISC-V package archives
+        id: rv64-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/minic-apt/archives
+          key: rv64-apt-${{ runner.os }}-${{ runner.arch }}-noble-${{ hashFiles('tools/ci/ubuntu-24.04-packages.txt') }}
+
+      - name: Install RISC-V runtime tools
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          apt_cache="$HOME/.cache/minic-apt/archives"
+          mkdir -p "$apt_cache/partial"
+          mapfile -t packages < <(grep -Ev '^[[:space:]]*(#|$)' tools/ci/ubuntu-24.04-packages.txt)
+          mapfile -d '' -t cached < <(find "$apt_cache" -maxdepth 1 -type f -name '*.deb' -print0 | sort -z)
+          if (( ${#cached[@]} > 0 )); then
+            sudo apt-get install -y --no-install-recommends "${cached[@]}"
+          else
+            sudo apt-get update
+            sudo apt-get \
+              -o Dir::Cache::archives="$apt_cache" \
+              -o APT::Keep-Downloaded-Packages=true \
+              install -y --no-install-recommends "${packages[@]}"
+          fi
+          sudo chown -R "$USER:$USER" "$(dirname "$apt_cache")"
+          sh tools/ci/verify-validation-tools.sh
+
+      - name: Build frontend-derived Core emitter harness
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p build/core-frontend-diff
+          cc -std=c11 \
+            -Wall -Wextra -Wpedantic -Wconversion -Wshadow \
+            -Wstrict-prototypes -Wmissing-prototypes -Werror \
+            -Iinclude -Isrc \
+            $(find src -name '*.c' -print | sort) \
+            tests/target/riscv64/core_frontend_emitter_test.c \
+            -o build/core-frontend-diff/core-frontend-emitter-test
+
+      - name: Generate legacy and Core RV64 from the same frontend source
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          source_file=tests/target/riscv64/core_frontend_differential.i
+          MINIC_CORE_IR=strict \
+            build/core-frontend-diff-compiler/bin/minic \
+              -S "$source_file" \
+              -o build/core-frontend-diff/legacy.s
+          build/core-frontend-diff/core-frontend-emitter-test \
+            "$source_file" \
+            build/core-frontend-diff/core.s
+          test -s build/core-frontend-diff/legacy.s
+          test -s build/core-frontend-diff/core.s
+          for symbol in core_diff_math core_diff_branch core_diff_zero core_diff_ninth core_diff_pointer; do
+            grep -q "^${symbol}:" build/core-frontend-diff/legacy.s
+            grep -q "^${symbol}:" build/core-frontend-diff/core.s
+          done
+          grep -q 'neg t0, t0' build/core-frontend-diff/core.s
+          grep -q 'seqz t0, t0' build/core-frontend-diff/core.s
+          grep -q 'bnez t0, .Lcore_diff_branch_core_bb' build/core-frontend-diff/core.s
+
+      - name: Run GCC legacy and Core semantic differential
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          source_file=tests/target/riscv64/core_frontend_differential.i
+          runtime=tests/target/riscv64/core_frontend_differential_runtime.c
+          riscv64-linux-gnu-gcc -static -O2 \
+            "$source_file" "$runtime" \
+            -o build/core-frontend-diff/reference-rv64
+          riscv64-linux-gnu-gcc -static -O2 \
+            "$runtime" build/core-frontend-diff/legacy.s \
+            -o build/core-frontend-diff/legacy-rv64
+          riscv64-linux-gnu-gcc -static -O2 \
+            "$runtime" build/core-frontend-diff/core.s \
+            -o build/core-frontend-diff/core-rv64
+          qemu-riscv64 build/core-frontend-diff/reference-rv64 > build/core-frontend-diff/reference.out
+          qemu-riscv64 build/core-frontend-diff/legacy-rv64 > build/core-frontend-diff/legacy.out
+          qemu-riscv64 build/core-frontend-diff/core-rv64 > build/core-frontend-diff/core.out
+          cmp build/core-frontend-diff/reference.out build/core-frontend-diff/legacy.out
+          cmp build/core-frontend-diff/reference.out build/core-frontend-diff/core.out
+          cat build/core-frontend-diff/core.out
