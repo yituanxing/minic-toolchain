@@ -1,0 +1,79 @@
+name: Staging Inline Asm Eight Operands V1
+
+on:
+  push:
+    branches: [staging/inline-asm-eight-operands-v1]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: staging-inline-asm-eight-operands-v1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate-and-publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install validation tools
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang-format-18 gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu
+      - name: Apply eight-operand capacity
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/stage-inline-asm-eight-operands-v1.py
+      - name: Canonical formatting
+        run: |
+          set -Eeuo pipefail
+          clang-format-18 -i src/target/riscv64/codegen_inline_asm.c tests/compiler/c0/gnu_inline_asm_eight_operands.c
+      - name: Release Werror build
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/staging-inline-asm-eight
+      - name: Focused eight-operand regression
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/staging-inline-asm-eight/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/staging-inline-asm-eight-focused" \
+          HOST_CC=cc RV_CC=riscv64-linux-gnu-gcc \
+            sh tests/compiler/c0/run-gnu-inline-asm-eight-operands.sh
+      - name: Preserve local fixed-register regression
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/staging-inline-asm-eight/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/staging-inline-asm-eight-local-fixed" \
+          HOST_CC=cc RV_CC=riscv64-linux-gnu-gcc \
+            sh tests/compiler/c0/run-gnu-local-fixed-register-bindings.sh
+      - name: Preserve existing inline-asm operand regression
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/staging-inline-asm-eight/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/staging-inline-asm-eight-existing" \
+          HOST_CC=cc sh tests/compiler/c0/run-gnu-inline-asm-operands.sh
+      - name: Broad C0 suite
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release BUILD_DIR=build/staging-inline-asm-eight check-fast
+      - name: Foundation focused suite
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/staging-inline-asm-eight/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/staging-inline-asm-eight-foundation" \
+          HOST_CC=cc sh tests/compiler/c0/run-foundation-focused.sh
+      - name: Publish validated product diff
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'LiYang Dong'
+          git config user.email '119646676+yituanxing@users.noreply.github.com'
+          git add \
+            src/target/riscv64/codegen_inline_asm.c \
+            tests/compiler/c0/gnu_inline_asm_eight_operands.c \
+            tests/compiler/c0/run-gnu-inline-asm-eight-operands.sh
+          git diff --cached --check
+          git commit -m 'target: allow eight RV64 inline asm operands [publish-v1]'
+          git push origin HEAD:staging/inline-asm-eight-operands-v1
