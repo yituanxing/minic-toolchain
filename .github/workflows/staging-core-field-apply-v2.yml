@@ -1,0 +1,155 @@
+name: Staging Core FIELD Apply V2
+
+on:
+  push:
+    branches:
+      - staging/core-rv64-field-address-v0
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    if: github.actor != 'github-actions[bot]'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Apply program-aware FIELD_ADDRESS emission
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(text, old, new):
+              count = text.count(old)
+              if count != 1:
+                  raise RuntimeError(f'anchor count={count}: {old[:100]!r}')
+              return text.replace(old, new, 1)
+
+          path = Path('src/target/riscv64/core_codegen.h')
+          text = path.read_text()
+          text = replace_once(
+              text,
+              '''bool minic_riscv64_core_function_can_emit_basic_v0(const MinicCoreFunction *function);\n\nbool minic_riscv64_emit_core_function_basic_v0_with_symbol(\n    FILE *file, const MinicCoreFunction *function, const MinicRiscv64FunctionSymbol *symbol);\n''',
+              '''bool minic_riscv64_core_function_can_emit_basic_v0(const MinicCoreFunction *function);\nbool minic_riscv64_core_function_can_emit_basic_v0_for_program(\n    const MinicC0Program *program, const MinicCoreFunction *function);\n\nbool minic_riscv64_emit_core_function_basic_v0_with_symbol(\n    FILE *file, const MinicCoreFunction *function, const MinicRiscv64FunctionSymbol *symbol);\nbool minic_riscv64_emit_core_function_basic_v0_for_program_with_symbol(\n    FILE *file,\n    const MinicC0Program *program,\n    const MinicCoreFunction *function,\n    const MinicRiscv64FunctionSymbol *symbol);\n''',
+          )
+          path.write_text(text)
+
+          path = Path('src/target/riscv64/core_codegen.c')
+          text = path.read_text()
+          text = replace_once(
+              text,
+              '#include "target/riscv64/codegen_internal.h"\n',
+              '#include "target/riscv64/codegen_internal.h"\n#include "target/data_layout.h"\n',
+          )
+
+          support_start = text.index('static bool core_instruction_supported(')
+          support_end = text.index('\n}\n\nbool minic_riscv64_core_function_can_emit_basic_v0', support_start) + 2
+          support_new = '''static bool core_field_address_supported(const MinicC0Program *program,\n                                         const MinicCoreInstruction *instruction,\n                                         size_t *field_offset) {\n    const MinicRecord *record;\n    const MinicRecordField *field;\n    size_t offset;\n\n    if (program == NULL || instruction == NULL ||\n        instruction->kind != MINIC_CORE_INSTRUCTION_FIELD_ADDRESS) {\n        return false;\n    }\n    record = minic_c0_program_record(program, instruction->value.field_address.record_id);\n    field = minic_c0_record_field(record, instruction->value.field_address.field_index);\n    if (record == NULL || field == NULL || field->is_bit_field ||\n        !minic_data_layout_record_field_offset(minic_default_data_layout(),\n                                               program,\n                                               record,\n                                               instruction->value.field_address.field_index,\n                                               &offset)) {\n        return false;\n    }\n    if (field_offset != NULL) {\n        *field_offset = offset;\n    }\n    return true;\n}\n\nstatic bool core_instruction_supported(const MinicC0Program *program,\n                                       const MinicCoreFunction *function,\n                                       const MinicCoreInstruction *instruction) {\n    const MinicCoreCallee *callee;\n\n    if (function == NULL || instruction == NULL) {\n        return false;\n    }\n    switch (instruction->kind) {\n    case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT:\n    case MINIC_CORE_INSTRUCTION_INTEGER_ADD:\n    case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION:\n    case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE:\n    case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:\n    case MINIC_CORE_INSTRUCTION_PARAMETER:\n    case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS:\n    case MINIC_CORE_INSTRUCTION_LOAD:\n    case MINIC_CORE_INSTRUCTION_STORE:\n        return true;\n    case MINIC_CORE_INSTRUCTION_CALL:\n        if (instruction->value.call.callee_id >= function->callee_count ||\n            instruction->value.call.argument_count > 8U) {\n            return false;\n        }\n        callee = &function->callees[instruction->value.call.callee_id];\n        return callee->name != NULL && callee->name_length != 0U && callee->parameter_count <= 8U;\n    case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:\n        return core_field_address_supported(program, instruction, NULL);\n    }\n    return false;\n}'''
+          text = text[:support_start] + support_new + text[support_end:]
+
+          can_start = text.index('bool minic_riscv64_core_function_can_emit_basic_v0(')
+          can_end = text.index('\n}\n\nstatic bool emit_parameter', can_start) + 2
+          can_old = text[can_start:can_end]
+          can_new = can_old.replace(
+              'bool minic_riscv64_core_function_can_emit_basic_v0(const MinicCoreFunction *function) {',
+              'static bool core_function_can_emit_basic_v0(const MinicC0Program *program,\n                                            const MinicCoreFunction *function) {',
+              1,
+          ).replace(
+              'core_instruction_supported(function, &function->instructions[index])',
+              'core_instruction_supported(program, function, &function->instructions[index])',
+              1,
+          )
+          can_new += '''\n\nbool minic_riscv64_core_function_can_emit_basic_v0(const MinicCoreFunction *function) {\n    return core_function_can_emit_basic_v0(NULL, function);\n}\n\nbool minic_riscv64_core_function_can_emit_basic_v0_for_program(\n    const MinicC0Program *program, const MinicCoreFunction *function) {\n    return program != NULL && core_function_can_emit_basic_v0(program, function);\n}'''
+          text = text[:can_start] + can_new + text[can_end:]
+
+          call_start = text.index('static bool emit_call(')
+          call_end = text.index('\n}\n\nstatic bool emit_instruction', call_start) + 2
+          call_text = text[call_start:call_end]
+          call_text = replace_once(
+              call_text,
+              '!core_instruction_supported(function, instruction)) {',
+              '!core_instruction_supported(NULL, function, instruction)) {',
+          )
+          text = text[:call_start] + call_text + text[call_end:]
+
+          instruction_start = text.index('static bool emit_instruction(')
+          field_emitter = '''static bool emit_field_address(FILE *file,\n                               const MinicC0Program *program,\n                               const MinicRiscv64CoreFrame *frame,\n                               const MinicCoreInstruction *instruction) {\n    size_t field_offset;\n\n    if (!core_field_address_supported(program, instruction, &field_offset) ||\n        !load_core_value(file, frame, instruction->value.field_address.base, "t0")) {\n        return false;\n    }\n    if (field_offset != 0U) {\n        if (field_offset <= 2047U) {\n            if (fprintf(file, "  addi t0, t0, %zu\\n", field_offset) < 0) {\n                return false;\n            }\n        } else if (fprintf(file,\n                           "  li t1, %zu\\n"\n                           "  add t0, t0, t1\\n",\n                           field_offset) < 0) {\n            return false;\n        }\n    }\n    return store_core_value(file, frame, instruction->result, "t0");\n}\n\n'''
+          text = text[:instruction_start] + field_emitter + text[instruction_start:]
+          instruction_start = text.index('static bool emit_instruction(')
+          instruction_end = text.index('\n}\n\nstatic bool emit_block_label', instruction_start) + 2
+          instruction_text = text[instruction_start:instruction_end]
+          instruction_text = replace_once(
+              instruction_text,
+              '''static bool emit_instruction(FILE *file,\n                             const MinicCoreFunction *function,\n''',
+              '''static bool emit_instruction(FILE *file,\n                             const MinicC0Program *program,\n                             const MinicCoreFunction *function,\n''',
+          )
+          instruction_text = replace_once(
+              instruction_text,
+              '!core_instruction_supported(function, instruction)) {',
+              '!core_instruction_supported(program, function, instruction)) {',
+          )
+          instruction_text = replace_once(
+              instruction_text,
+              '''    case MINIC_CORE_INSTRUCTION_CALL:\n        return emit_call(file, function, frame, instruction);\n    case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:\n        return false;\n''',
+              '''    case MINIC_CORE_INSTRUCTION_CALL:\n        return emit_call(file, function, frame, instruction);\n    case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:\n        return emit_field_address(file, program, frame, instruction);\n''',
+          )
+          text = text[:instruction_start] + instruction_text + text[instruction_end:]
+
+          text = replace_once(
+              text,
+              '''bool minic_riscv64_emit_core_function_basic_v0_with_symbol(\n    FILE *file, const MinicCoreFunction *function, const MinicRiscv64FunctionSymbol *symbol) {\n''',
+              '''static bool emit_core_function_basic_v0_with_symbol(\n    FILE *file,\n    const MinicC0Program *program,\n    const MinicCoreFunction *function,\n    const MinicRiscv64FunctionSymbol *symbol) {\n''',
+          )
+          text = replace_once(
+              text,
+              '!minic_riscv64_core_function_can_emit_basic_v0(function) ||',
+              '!core_function_can_emit_basic_v0(program, function) ||',
+          )
+          text = replace_once(
+              text,
+              '''                !emit_instruction(\n                    file, function, &frame, &function->instructions[instruction_id])) {\n''',
+              '''                !emit_instruction(\n                    file, program, function, &frame, &function->instructions[instruction_id])) {\n''',
+          )
+          text += '''\n\nbool minic_riscv64_emit_core_function_basic_v0_with_symbol(\n    FILE *file, const MinicCoreFunction *function, const MinicRiscv64FunctionSymbol *symbol) {\n    return emit_core_function_basic_v0_with_symbol(file, NULL, function, symbol);\n}\n\nbool minic_riscv64_emit_core_function_basic_v0_for_program_with_symbol(\n    FILE *file,\n    const MinicC0Program *program,\n    const MinicCoreFunction *function,\n    const MinicRiscv64FunctionSymbol *symbol) {\n    return program != NULL &&\n           emit_core_function_basic_v0_with_symbol(file, program, function, symbol);\n}\n'''
+          path.write_text(text)
+
+          path = Path('src/target/riscv64/codegen_function.c')
+          text = path.read_text()
+          text = replace_once(
+              text,
+              '''        if (core_function != NULL && minic_riscv64_core_function_can_emit_basic_v0(core_function)) {\n            MinicRiscv64FunctionSymbol symbol;\n\n            success =\n                minic_riscv64_function_symbol_from_function(function, &symbol) &&\n                minic_riscv64_emit_core_function_basic_v0_with_symbol(file, core_function, &symbol);\n''',
+              '''        if (core_function != NULL &&\n            minic_riscv64_core_function_can_emit_basic_v0_for_program(program, core_function)) {\n            MinicRiscv64FunctionSymbol symbol;\n\n            success = minic_riscv64_function_symbol_from_function(function, &symbol) &&\n                      minic_riscv64_emit_core_function_basic_v0_for_program_with_symbol(\n                          file, program, core_function, &symbol);\n''',
+          )
+          path.write_text(text)
+
+          path = Path('tests/target/riscv64/core_frontend_emitter_test.c')
+          text = path.read_text()
+          text = replace_once(
+              text,
+              '''        success = status == MINIC_CORE_LOWER_OK && minic_core_function_verify(&core) &&\n                  minic_riscv64_core_function_can_emit_basic_v0(&core) &&\n                  minic_riscv64_function_symbol_from_function(function, &symbol);\n        if (success) {\n            success = minic_riscv64_emit_core_function_basic_v0_with_symbol(file, &core, &symbol);\n        }\n''',
+              '''        success = status == MINIC_CORE_LOWER_OK && minic_core_function_verify(&core) &&\n                  minic_riscv64_core_function_can_emit_basic_v0_for_program(program, &core) &&\n                  minic_riscv64_function_symbol_from_function(function, &symbol);\n        if (success) {\n            success = minic_riscv64_emit_core_function_basic_v0_for_program_with_symbol(\n                file, program, &core, &symbol);\n        }\n''',
+          )
+          path.write_text(text)
+          PY
+
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+          git diff --check -- src/target/riscv64/core_codegen.c src/target/riscv64/core_codegen.h \
+            src/target/riscv64/codegen_function.c tests/target/riscv64/core_frontend_emitter_test.c
+
+      - name: Commit source-only patch
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/target/riscv64/core_codegen.c src/target/riscv64/core_codegen.h \
+            src/target/riscv64/codegen_function.c tests/target/riscv64/core_frontend_emitter_test.c
+          git diff --cached --quiet && exit 0
+          git commit -m 'core: emit RV64 field addresses v0'
+          git push origin HEAD:staging/core-rv64-field-address-v0
