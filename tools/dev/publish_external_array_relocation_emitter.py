@@ -115,4 +115,16 @@ data = replace_once(
     "canonical pointer null slot spelling",
 )
 runner.write_text(data)
+
+runner = Path("tests/compiler/c0/run-extern-fixed-integer-arrays.sh")
+data = runner.read_text()
+data = replace_once(
+    data,
+    '''grep -F '  .zero 2' "$work/extern_fixed_integer_array.s" >/dev/null
+''',
+    '''test "$(grep -Fc '  .byte 0' "$work/extern_fixed_integer_array.s")" -eq 2
+''',
+    "canonical integer zero slots",
+)
+runner.write_text(data)
 print("staged relocation-aware array static-data emission")
