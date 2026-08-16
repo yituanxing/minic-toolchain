@@ -51,8 +51,9 @@ jobs:
           statement_path = Path('src/target/riscv64/codegen_statement.c')
           text = statement_path.read_text()
           old = "                                          break_target)) {\n            return false;\n        }\n"
-          if text.count(old) != 1:
-              raise SystemExit(f'unexpected statement hook count: {text.count(old)}')
+          position = text.rfind(old)
+          if position < 0:
+              raise SystemExit('main statement loop hook not found')
           new = (
               "                                          break_target)) {\n"
               "            const MinicExpression *failed_expression;\n"
@@ -68,7 +69,7 @@ jobs:
               "            return false;\n"
               "        }\n"
           )
-          statement_path.write_text(text.replace(old, new, 1))
+          statement_path.write_text(text[:position] + new + text[position + len(old):])
           PY
 
       - name: Build instrumented MiniC
