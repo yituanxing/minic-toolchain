@@ -317,8 +317,8 @@ bool minic_parser_external_object_types_compatible(const MinicC0Program *program
                                                    MinicType existing_type,
                                                    MinicType declared_type);
 bool minic_parser_merge_external_array_composite_type(MinicC0Program *program,
-                                                       MinicType existing_type,
-                                                       MinicType declared_type);
+                                                      MinicType existing_type,
+                                                      MinicType declared_type);
 bool minic_parser_declare_block_scope_extern_object(MinicParser *parser,
                                                     MinicSourceSpan name_span,
                                                     MinicType object_type,
