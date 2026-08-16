@@ -18,6 +18,6 @@ grep -F '.globl table' "$work/extern_fixed_integer_array.s" >/dev/null
 grep -F '  .byte 1' "$work/extern_fixed_integer_array.s" >/dev/null
 grep -F '  .byte 2' "$work/extern_fixed_integer_array.s" >/dev/null
 grep -F '  .byte 3' "$work/extern_fixed_integer_array.s" >/dev/null
-grep -F '  .zero 2' "$work/extern_fixed_integer_array.s" >/dev/null
+test "$(grep -Fc '  .byte 0' "$work/extern_fixed_integer_array.s")" -eq 2
 grep -F '.size table, 5' "$work/extern_fixed_integer_array.s" >/dev/null
 printf '%s\n' 'PASS compiler/c0/extern_fixed_integer_array extern-merge=1 bound=5 brace=3 zero-fill=2'

@@ -18,6 +18,6 @@ grep -F '.type names, @object' "$asm" >/dev/null
 grep -F '.globl names' "$asm" >/dev/null
 grep -F '  .dword shared_name' "$asm" >/dev/null
 grep -F '  .dword .Lminic_string_' "$asm" >/dev/null
-grep -F '  .zero 8' "$asm" >/dev/null
+grep -F '  .dword 0' "$asm" >/dev/null
 grep -F '.size names, 32' "$asm" >/dev/null
 printf '%s\n' 'PASS compiler/c0/external_pointer_array bound=4 string-reloc=2 object-reloc=1 null=1 storage=32'
