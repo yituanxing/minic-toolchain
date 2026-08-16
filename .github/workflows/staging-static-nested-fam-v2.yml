@@ -1,0 +1,77 @@
+name: Staging Static Nested FAM v2
+
+on:
+  push:
+    branches:
+      - staging/static-nested-fam-v2
+
+permissions:
+  contents: write
+
+jobs:
+  validate-and-publish:
+    if: ${{ !contains(github.event.head_commit.message, '[publish]') }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install formatter
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang-format-18
+
+      - name: Apply Linux-shaped nested FAM fix
+        run: python3 tools/dev/stage-static-nested-fam-v2.py
+
+      - name: Canonical formatting
+        run: |
+          clang-format-18 -i \
+            src/frontend/parser_global.c \
+            src/target/riscv64/codegen_function.c \
+            tests/compiler/c0/static_nested_flexible_array_initializer.c
+
+      - name: Release Werror build
+        run: make -j4 MODE=release BUILD_DIR=build/staging-nested-fam-v2 EXTRA_CFLAGS=-Werror
+
+      - name: Flexible-array focused regression
+        env:
+          MINIC: ${{ github.workspace }}/build/staging-nested-fam-v2/bin/minic
+          HOST_CC: cc
+          BUILD_DIR: ${{ github.workspace }}/build/staging-nested-fam-v2
+        run: sh tests/compiler/c0/run-flexible-array-members.sh
+
+      - name: Static record-array regression
+        env:
+          MINIC: ${{ github.workspace }}/build/staging-nested-fam-v2/bin/minic
+          HOST_CC: cc
+          BUILD_DIR: ${{ github.workspace }}/build/staging-nested-fam-v2
+        run: sh tests/compiler/c0/run-static-record-arrays.sh
+
+      - name: Broad C0 suite
+        env:
+          MINIC: ${{ github.workspace }}/build/staging-nested-fam-v2/bin/minic
+          HOST_CC: cc
+          BUILD_DIR: ${{ github.workspace }}/build/staging-nested-fam-v2
+        run: sh tests/compiler/c0/run.sh
+
+      - name: Foundation focused suite
+        env:
+          MINIC: ${{ github.workspace }}/build/staging-nested-fam-v2/bin/minic
+          HOST_CC: cc
+          BUILD_DIR: ${{ github.workspace }}/build/staging-nested-fam-v2
+        run: sh tests/compiler/c0/run-foundation-focused.sh
+
+      - name: Publish validated product diff
+        run: |
+          git config user.name 'LiYang Dong'
+          git config user.email '119646676+yituanxing@users.noreply.github.com'
+          git add \
+            src/frontend/parser_global.c \
+            src/target/riscv64/codegen_function.c \
+            tests/compiler/c0/run-flexible-array-members.sh \
+            tests/compiler/c0/static_nested_flexible_array_initializer.c
+          git diff --cached --check
+          git commit -m 'frontend: treat Linux nested flexible arrays as zero static slots [publish]'
+          git push origin HEAD:staging/static-nested-fam-v2
