@@ -25,6 +25,6 @@ int core_diff_ninth(int a0,
     return a8;
 }
 
-int core_diff_pointer(int *value) {
-    return *value;
+int core_diff_pointer_zero(int *value) {
+    return !value;
 }
