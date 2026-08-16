@@ -1,0 +1,108 @@
+name: Staging Pure Unary Builtins V2
+
+on:
+  push:
+    branches: [staging/pure-unary-builtins-v2]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: staging-pure-unary-builtins-v2-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate-and-publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install formatter
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang-format-18
+
+      - name: Apply pure unary builtin family
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/stage-pure-unary-builtins.py
+
+      - name: Canonical formatting
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          clang-format-18 -i \
+            src/frontend/ast.h \
+            src/frontend/parser_expression.c \
+            src/frontend/const_eval.c \
+            src/frontend/ast_verifier.c \
+            src/target/riscv64/codegen_expression.c \
+            tests/compiler/c0/builtin_unary_family.c
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('tests/compiler/c0/run.sh')
+          path.write_text(path.read_text().rstrip() + '\n')
+          PY
+
+      - name: Release Werror build
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/staging-pure-unary-v2
+
+      - name: Focused unary builtin regression
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/staging-pure-unary-v2/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/staging-pure-unary-v2-focused" \
+          HOST_CC=cc \
+            sh tests/compiler/c0/run-builtin-unary-family.sh
+
+      - name: Preserve builtin memcpy canonical-call regression
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/staging-pure-unary-v2/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/staging-pure-unary-v2-memcpy" \
+          HOST_CC=cc \
+            sh tests/compiler/c0/run-builtin-memcpy-call.sh
+
+      - name: Broad C0 suite
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release BUILD_DIR=build/staging-pure-unary-v2 check-fast
+
+      - name: Foundation focused suite
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/staging-pure-unary-v2/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/staging-pure-unary-v2-foundation" \
+          HOST_CC=cc \
+            sh tests/compiler/c0/run-foundation-focused.sh
+
+      - name: Publish validated product diff
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'LiYang Dong'
+          git config user.email '119646676+yituanxing@users.noreply.github.com'
+          git add \
+            src/frontend/ast.h \
+            src/frontend/parser_expression.c \
+            src/frontend/const_eval.c \
+            src/frontend/ast_verifier.c \
+            src/target/riscv64/codegen_expression.c \
+            tests/compiler/c0/builtin_unary_family.c \
+            tests/compiler/c0/run-builtin-unary-family.sh \
+            tests/compiler/c0/run.sh
+          git diff --cached --check
+          git commit -m 'frontend: add pure unary builtin family [publish-v2]'
+          git push origin HEAD:staging/pure-unary-builtins-v2
