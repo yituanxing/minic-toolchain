@@ -1,6 +1,7 @@
 #include "target/riscv64/core_codegen.h"
 
 #include "target/riscv64/codegen_internal.h"
+#include "target/data_layout.h"
 
 #include <inttypes.h>
 #include <stddef.h>
@@ -156,7 +157,35 @@ static bool store_core_value(FILE *file,
            minic_riscv64_emit_sp_store64(file, register_name, offset);
 }
 
-static bool core_instruction_supported(const MinicCoreFunction *function,
+static bool core_field_address_supported(const MinicC0Program *program,
+                                         const MinicCoreInstruction *instruction,
+                                         size_t *field_offset) {
+    const MinicRecord *record;
+    const MinicRecordField *field;
+    size_t offset;
+
+    if (program == NULL || instruction == NULL ||
+        instruction->kind != MINIC_CORE_INSTRUCTION_FIELD_ADDRESS) {
+        return false;
+    }
+    record = minic_c0_program_record(program, instruction->value.field_address.record_id);
+    field = minic_c0_record_field(record, instruction->value.field_address.field_index);
+    if (record == NULL || field == NULL || field->is_bit_field ||
+        !minic_data_layout_record_field_offset(minic_default_data_layout(),
+                                               program,
+                                               record,
+                                               instruction->value.field_address.field_index,
+                                               &offset)) {
+        return false;
+    }
+    if (field_offset != NULL) {
+        *field_offset = offset;
+    }
+    return true;
+}
+
+static bool core_instruction_supported(const MinicC0Program *program,
+                                       const MinicCoreFunction *function,
                                        const MinicCoreInstruction *instruction) {
     const MinicCoreCallee *callee;
 
@@ -182,12 +211,13 @@ static bool core_instruction_supported(const MinicCoreFunction *function,
         callee = &function->callees[instruction->value.call.callee_id];
         return callee->name != NULL && callee->name_length != 0U && callee->parameter_count <= 8U;
     case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:
-        return false;
+        return core_field_address_supported(program, instruction, NULL);
     }
     return false;
 }
 
-bool minic_riscv64_core_function_can_emit_basic_v0(const MinicCoreFunction *function) {
+static bool core_function_can_emit_basic_v0(const MinicC0Program *program,
+                                            const MinicCoreFunction *function) {
     size_t index;
 
     if (function == NULL || !minic_core_function_verify(function) ||
@@ -210,11 +240,20 @@ bool minic_riscv64_core_function_can_emit_basic_v0(const MinicCoreFunction *func
         }
     }
     for (index = 0U; index < function->instruction_count; ++index) {
-        if (!core_instruction_supported(function, &function->instructions[index])) {
+        if (!core_instruction_supported(program, function, &function->instructions[index])) {
             return false;
         }
     }
     return true;
+}
+
+bool minic_riscv64_core_function_can_emit_basic_v0(const MinicCoreFunction *function) {
+    return core_function_can_emit_basic_v0(NULL, function);
+}
+
+bool minic_riscv64_core_function_can_emit_basic_v0_for_program(const MinicC0Program *program,
+                                                               const MinicCoreFunction *function) {
+    return program != NULL && core_function_can_emit_basic_v0(program, function);
 }
 
 static bool emit_parameter(FILE *file,
@@ -262,7 +301,7 @@ static bool emit_call(FILE *file,
 
     if (file == NULL || function == NULL || frame == NULL || instruction == NULL ||
         instruction->kind != MINIC_CORE_INSTRUCTION_CALL ||
-        !core_instruction_supported(function, instruction)) {
+        !core_instruction_supported(NULL, function, instruction)) {
         return false;
     }
     callee = &function->callees[instruction->value.call.callee_id];
@@ -290,14 +329,40 @@ static bool emit_call(FILE *file,
     return store_core_value(file, frame, instruction->result, "a0");
 }
 
+static bool emit_field_address(FILE *file,
+                               const MinicC0Program *program,
+                               const MinicRiscv64CoreFrame *frame,
+                               const MinicCoreInstruction *instruction) {
+    size_t field_offset;
+
+    if (!core_field_address_supported(program, instruction, &field_offset) ||
+        !load_core_value(file, frame, instruction->value.field_address.base, "t0")) {
+        return false;
+    }
+    if (field_offset != 0U) {
+        if (field_offset <= 2047U) {
+            if (fprintf(file, "  addi t0, t0, %zu\n", field_offset) < 0) {
+                return false;
+            }
+        } else if (fprintf(file,
+                           "  li t1, %zu\n"
+                           "  add t0, t0, t1\n",
+                           field_offset) < 0) {
+            return false;
+        }
+    }
+    return store_core_value(file, frame, instruction->result, "t0");
+}
+
 static bool emit_instruction(FILE *file,
+                             const MinicC0Program *program,
                              const MinicCoreFunction *function,
                              const MinicRiscv64CoreFrame *frame,
                              const MinicCoreInstruction *instruction) {
     size_t object_offset;
 
     if (file == NULL || function == NULL || frame == NULL || instruction == NULL ||
-        !core_instruction_supported(function, instruction)) {
+        !core_instruction_supported(program, function, instruction)) {
         return false;
     }
     switch (instruction->kind) {
@@ -364,7 +429,7 @@ static bool emit_instruction(FILE *file,
     case MINIC_CORE_INSTRUCTION_CALL:
         return emit_call(file, function, frame, instruction);
     case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:
-        return false;
+        return emit_field_address(file, program, frame, instruction);
     }
     return false;
 }
@@ -409,15 +474,16 @@ static bool emit_terminator(FILE *file,
     return false;
 }
 
-bool minic_riscv64_emit_core_function_basic_v0_with_symbol(
-    FILE *file, const MinicCoreFunction *function, const MinicRiscv64FunctionSymbol *symbol) {
+static bool emit_core_function_basic_v0_with_symbol(FILE *file,
+                                                    const MinicC0Program *program,
+                                                    const MinicCoreFunction *function,
+                                                    const MinicRiscv64FunctionSymbol *symbol) {
     MinicRiscv64CoreFrame frame;
     const char *symbol_name;
     size_t block_index;
 
     if (file == NULL || symbol == NULL || symbol->symbol_name == NULL ||
-        symbol->symbol_name[0] == '\0' ||
-        !minic_riscv64_core_function_can_emit_basic_v0(function) ||
+        symbol->symbol_name[0] == '\0' || !core_function_can_emit_basic_v0(program, function) ||
         !core_frame_initialize(function, &frame)) {
         return false;
     }
@@ -448,7 +514,7 @@ bool minic_riscv64_emit_core_function_basic_v0_with_symbol(
             instruction_id = block->instructions[instruction_index];
             if (instruction_id >= function->instruction_count ||
                 !emit_instruction(
-                    file, function, &frame, &function->instructions[instruction_id])) {
+                    file, program, function, &frame, &function->instructions[instruction_id])) {
                 return false;
             }
         }
@@ -469,4 +535,18 @@ bool minic_riscv64_emit_core_function_basic_v0_with_symbol(
         return false;
     }
     return true;
+}
+
+bool minic_riscv64_emit_core_function_basic_v0_with_symbol(
+    FILE *file, const MinicCoreFunction *function, const MinicRiscv64FunctionSymbol *symbol) {
+    return emit_core_function_basic_v0_with_symbol(file, NULL, function, symbol);
+}
+
+bool minic_riscv64_emit_core_function_basic_v0_for_program_with_symbol(
+    FILE *file,
+    const MinicC0Program *program,
+    const MinicCoreFunction *function,
+    const MinicRiscv64FunctionSymbol *symbol) {
+    return program != NULL &&
+           emit_core_function_basic_v0_with_symbol(file, program, function, symbol);
 }

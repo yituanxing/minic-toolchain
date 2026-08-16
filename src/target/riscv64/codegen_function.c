@@ -1217,12 +1217,13 @@ bool minic_riscv64_write_c0_program_with_core_candidates(const char *path,
             continue;
         }
         core_function = core_functions != NULL ? &core_functions[function_index] : NULL;
-        if (core_function != NULL && minic_riscv64_core_function_can_emit_basic_v0(core_function)) {
+        if (core_function != NULL &&
+            minic_riscv64_core_function_can_emit_basic_v0_for_program(program, core_function)) {
             MinicRiscv64FunctionSymbol symbol;
 
-            success =
-                minic_riscv64_function_symbol_from_function(function, &symbol) &&
-                minic_riscv64_emit_core_function_basic_v0_with_symbol(file, core_function, &symbol);
+            success = minic_riscv64_function_symbol_from_function(function, &symbol) &&
+                      minic_riscv64_emit_core_function_basic_v0_for_program_with_symbol(
+                          file, program, core_function, &symbol);
         } else {
             success = minic_riscv64_emit_function(file, program, function, &label_counter);
         }
