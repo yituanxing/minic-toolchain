@@ -276,10 +276,7 @@ expect_compile_failure \
     "typedef cannot name bare void"
 expect_compile_failure \
     invalid_too_many_global_initializers \
-    "too many global array initializers"
-expect_compile_failure \
-    invalid_writable_static_global \
-    "static global arrays currently require const integer elements"
+    "too many nested static array initializers"
 compile_source static_scalar_global static_scalar_global
 expect_instructions static_scalar_global "la a0, value" "lw a0, 0(a0)"
 grep -F "  .word 7" "$work/static_scalar_global.s" >/dev/null

@@ -1750,8 +1750,8 @@ static bool parse_static_inferred_integer_array(MinicParser *parser,
 
     if (parser == NULL || section_name == NULL || section_capacity == 0U ||
         section_name_length == NULL || has_section == NULL || explicit_alignment == NULL ||
-        !minic_type_is_integer(element_type) || !minic_type_is_const(element_type) ||
-        parser->current.kind != MINIC_TOKEN_LBRACKET || !minic_parser_advance(parser) ||
+        !minic_type_is_integer(element_type) || parser->current.kind != MINIC_TOKEN_LBRACKET ||
+        !minic_parser_advance(parser) ||
         !minic_parser_expect(
             parser, MINIC_TOKEN_RBRACKET, "expected ']' in inferred static integer array") ||
         !minic_parser_parse_gnu_object_attribute_lists(parser,
@@ -1766,7 +1766,7 @@ static bool parse_static_inferred_integer_array(MinicParser *parser,
                                             minic_parser_span_length(name_span),
                                             object_type,
                                             true,
-                                            true,
+                                            minic_type_is_const(element_type),
                                             &object_id) ||
         (*has_section && !minic_c0_global_object_set_section(
                              parser->program, object_id, section_name, *section_name_length)) ||
@@ -1986,13 +1986,6 @@ bool minic_parser_parse_static_global_after_head(MinicParser *parser,
                                                  size_t *explicit_alignment) {
     MinicType object_type;
     MinicGlobalObjectId object_id;
-    size_t bounds[8];
-    size_t bound_count;
-    size_t expected_count;
-    size_t index;
-
-    bound_count = 0U;
-    expected_count = 1U;
     if (parser == NULL ||
         (!minic_type_is_integer(element_type) && !minic_type_is_pointer(element_type) &&
          !minic_type_is_record(element_type))) {
@@ -2033,8 +2026,9 @@ bool minic_parser_parse_static_global_after_head(MinicParser *parser,
                                           has_section,
                                           explicit_alignment);
     }
-    if (!minic_type_is_integer(element_type) || !minic_type_is_const(element_type)) {
-        minic_parser_error(parser, "static global arrays currently require const integer elements");
+    if (!minic_type_is_integer(element_type)) {
+        minic_parser_error(parser,
+                           "static array requires an integer, pointer, or record element type");
         return false;
     }
     {
@@ -2065,33 +2059,15 @@ bool minic_parser_parse_static_global_after_head(MinicParser *parser,
                                                        explicit_alignment);
         }
     }
+    {
+        bool is_array;
 
-    while (parser->current.kind == MINIC_TOKEN_LBRACKET) {
-        if (bound_count >= sizeof(bounds) / sizeof(bounds[0])) {
-            minic_parser_error(parser, "at most eight array dimensions are supported");
-            return false;
-        }
-        if (!minic_parser_advance(parser) ||
-            !minic_parser_parse_fixed_array_bound(parser, &bounds[bound_count])) {
-            return false;
-        }
-        if (expected_count > SIZE_MAX / bounds[bound_count]) {
-            minic_parser_error(parser, "global array element count overflows");
-            return false;
-        }
-        expected_count *= bounds[bound_count];
-        bound_count += 1U;
-    }
-    if (bound_count == 0U) {
-        minic_parser_error(parser, "static global object requires a fixed array declarator");
-        return false;
-    }
-
-    object_type = element_type;
-    for (index = bound_count; index > 0U; --index) {
-        if (!minic_c0_program_add_array_type(
-                parser->program, object_type, bounds[index - 1U], &object_type)) {
-            minic_parser_error(parser, "out of memory while building global array type");
+        if (!minic_parser_parse_array_declarator_suffix(
+                parser, element_type, false, &object_type, &is_array) ||
+            !is_array) {
+            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                minic_parser_error(parser, "cannot build fixed static array type");
+            }
             return false;
         }
     }
@@ -2100,61 +2076,27 @@ bool minic_parser_parse_static_global_after_head(MinicParser *parser,
                                             minic_parser_span_length(name_span),
                                             object_type,
                                             true,
-                                            true,
+                                            minic_type_is_const(element_type),
                                             &object_id)) {
-        minic_parser_error(parser, "cannot add global object");
+        minic_parser_error(parser, "cannot add fixed static array object");
         return false;
     }
-
-    if (!minic_parser_expect(parser, MINIC_TOKEN_EQUAL, "expected '='") ||
-        !minic_parser_expect(parser, MINIC_TOKEN_LBRACE, "expected '{'")) {
+    if (parser->current.kind == MINIC_TOKEN_SEMICOLON) {
+        if (!minic_c0_global_object_set_zero_initialized(parser->program, object_id)) {
+            minic_parser_error(parser, "cannot zero-initialize fixed static array object");
+            return false;
+        }
+        return minic_parser_advance(parser);
+    }
+    if (!minic_parser_expect(parser, MINIC_TOKEN_EQUAL, "expected '=' after static array") ||
+        !minic_parser_parse_static_storage_initializer_value(parser, object_id, object_type)) {
+        if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+            minic_parser_error(parser, "cannot parse fixed static array initializer");
+        }
         return false;
     }
-    while (parser->current.kind != MINIC_TOKEN_RBRACE) {
-        int value;
-        const MinicGlobalObject *object;
-
-        object = minic_c0_program_global_object(parser->program, object_id);
-        if (object == NULL || object->initializer_count >= expected_count) {
-            minic_parser_error(parser, "too many global array initializers");
-            return false;
-        }
-        if (!minic_parser_parse_integer_value(parser, &value) ||
-            !minic_c0_global_object_add_initializer(parser->program, object_id, value)) {
-            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
-                minic_parser_error(parser, "out of memory while adding initializer");
-            }
-            return false;
-        }
-        if (parser->current.kind == MINIC_TOKEN_COMMA) {
-            if (!minic_parser_advance(parser)) {
-                return false;
-            }
-            if (parser->current.kind == MINIC_TOKEN_RBRACE) {
-                break;
-            }
-        } else if (parser->current.kind != MINIC_TOKEN_RBRACE) {
-            minic_parser_error(parser, "expected ',' or '}' in initializer");
-            return false;
-        }
-    }
-    if (!minic_parser_expect(parser, MINIC_TOKEN_RBRACE, "expected '}'")) {
-        return false;
-    }
-
-    {
-        const MinicGlobalObject *object;
-
-        object = minic_c0_program_global_object(parser->program, object_id);
-        while (object != NULL && object->initializer_count < expected_count) {
-            if (!minic_c0_global_object_add_initializer(parser->program, object_id, 0)) {
-                minic_parser_error(parser, "out of memory while zero-filling initializer");
-                return false;
-            }
-            object = minic_c0_program_global_object(parser->program, object_id);
-        }
-    }
-    return minic_parser_expect(parser, MINIC_TOKEN_SEMICOLON, "expected ';' after global object");
+    return minic_parser_expect(
+        parser, MINIC_TOKEN_SEMICOLON, "expected ';' after static array initializer");
 }
 
 bool minic_parser_parse_static_global(MinicParser *parser) {
