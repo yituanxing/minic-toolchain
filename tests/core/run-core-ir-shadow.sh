@@ -210,6 +210,21 @@ void consume_pointer_call(int *value) {
 EOF
 check_strict_case direct-pointer-result-statement-v0
 
+cat >"$work_dir/field-address-v0.i" <<'EOF'
+struct pair {
+    int value;
+    long other;
+};
+
+void consume_int_pointer(int *value);
+
+void pointer_field_address(struct pair *pair) {
+    consume_int_pointer(&pair->value);
+    return;
+}
+EOF
+check_strict_case field-address-v0
+
 cat >"$work_dir/indirect-call-unsupported.i" <<'EOF'
 int indirect_caller(int (*callee)(int), int value) {
     return callee(value);

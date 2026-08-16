@@ -29,6 +29,7 @@ typedef enum MinicCoreInstructionKind {
     MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION,
     MINIC_CORE_INSTRUCTION_PARAMETER,
     MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS,
+    MINIC_CORE_INSTRUCTION_FIELD_ADDRESS,
     MINIC_CORE_INSTRUCTION_LOAD,
     MINIC_CORE_INSTRUCTION_STORE,
     MINIC_CORE_INSTRUCTION_CALL
@@ -72,6 +73,11 @@ typedef struct MinicCoreInstruction {
         MinicCoreValueId operand;
         size_t parameter_index;
         MinicCoreObjectId object_id;
+        struct {
+            MinicCoreValueId base;
+            MinicRecordId record_id;
+            size_t field_index;
+        } field_address;
         struct {
             MinicCoreValueId address;
             bool is_volatile;
