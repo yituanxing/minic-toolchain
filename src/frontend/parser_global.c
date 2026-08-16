@@ -1829,7 +1829,7 @@ static bool parse_static_pointer_array(MinicParser *parser,
     } else if (!minic_parser_parse_fixed_array_bound(parser, &element_count) ||
                !minic_c0_program_add_array_type(
                    parser->program, element_type, element_count, &object_type)) {
-        if (parser->diagnostic != NULL && parser->diagnostic->message[0] == ' ') {
+        if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
             minic_parser_error(parser, "cannot build static pointer array type");
         }
         return false;
@@ -1942,7 +1942,8 @@ static bool parse_static_inferred_integer_array(MinicParser *parser,
                                           parser->program, object_id, *explicit_alignment)) ||
         !minic_parser_expect(parser, MINIC_TOKEN_EQUAL, "expected '=' after static array") ||
         !parse_static_scalar_array_transaction(parser, object_id, element_type, 0U, true)) {
-        if (parser != NULL && parser->diagnostic != NULL && parser->diagnostic->message[0] == ' ') {
+        if (parser != NULL && parser->diagnostic != NULL &&
+            parser->diagnostic->message[0] == '\0') {
             minic_parser_error(parser, "cannot parse inferred static integer array");
         }
         return false;
