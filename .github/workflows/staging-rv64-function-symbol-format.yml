@@ -1,0 +1,24 @@
+name: Staging RV64 Function Symbol Format
+
+on:
+  push:
+    branches:
+      - staging/rv64-function-symbol-contract-v0
+
+permissions:
+  contents: read
+
+jobs:
+  format-probe:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Print canonical clang-format diff
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh format
+          git diff -- src/target/riscv64/core_codegen.c \
+            src/target/riscv64/core_codegen.h \
+            src/target/riscv64/function_symbol.h \
+            tests/target/riscv64/core_frontend_emitter_test.c
