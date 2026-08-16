@@ -11,6 +11,18 @@ t = t.replace(
     'initializer->relocation_target.member_depth)',
     'initializer->relocation_target.member_depth,\n                             initializer->relocation_target.byte_addend)')
 
+old_diagnostic = (
+    '"static pointer initializer requires a null or zero-addend symbol address "\n'
+    '                       "constant"'
+)
+new_diagnostic = (
+    '"static pointer initializer requires a null or static symbol address "\n'
+    '                       "constant"'
+)
+if t.count(old_diagnostic) != 1:
+    raise SystemExit(f'expected one split zero-addend diagnostic, got {t.count(old_diagnostic)}')
+t = t.replace(old_diagnostic, new_diagnostic, 1)
+
 pattern = re.compile(
     r'static bool function_designator_type\(.*?(?=static bool static_pointer_expression_has_explicit_cast)',
     re.S,
