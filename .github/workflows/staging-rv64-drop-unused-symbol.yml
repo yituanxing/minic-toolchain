@@ -1,0 +1,36 @@
+name: Staging RV64 Drop Unused Symbol Local
+
+on:
+  push:
+    branches:
+      - staging/rv64-function-symbol-contract-v0
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Remove obsolete symbol local
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("src/target/riscv64/codegen_function.c")
+          text = path.read_text()
+          text = text.replace("    const char *symbol_name;\n", "", 1)
+          text = text.replace("    symbol_name = symbol.symbol_name;\n\n", "", 1)
+          path.write_text(text)
+          PY
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+          if git diff --quiet -- src/target/riscv64/codegen_function.c; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/target/riscv64/codegen_function.c
+          git commit -m "fix(target): drop obsolete legacy symbol local"
+          git push origin HEAD:staging/rv64-function-symbol-contract-v0
