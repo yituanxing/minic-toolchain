@@ -8,6 +8,9 @@ int verify_variadic(int tag, ...)
     long wide;
     int *pointer;
     double precise;
+    int stack_first;
+    int stack_second;
+    int stack_third;
 
     va_start(arguments, tag);
     first = va_arg(arguments, int);
@@ -15,6 +18,9 @@ int verify_variadic(int tag, ...)
     wide = va_arg(arguments, long);
     pointer = va_arg(arguments, int *);
     precise = va_arg(arguments, double);
+    stack_first = va_arg(arguments, int);
+    stack_second = va_arg(arguments, int);
+    stack_third = va_arg(arguments, int);
     va_end(arguments);
 
     if (tag != 5) {
@@ -34,6 +40,15 @@ int verify_variadic(int tag, ...)
     }
     if (precise != 2.5) {
         return 6;
+    }
+    if (stack_first != 61) {
+        return 7;
+    }
+    if (stack_second != 62) {
+        return 8;
+    }
+    if (stack_third != 63) {
+        return 9;
     }
     return 0;
 }
