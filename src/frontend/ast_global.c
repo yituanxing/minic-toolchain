@@ -564,6 +564,18 @@ bool minic_c0_global_relocation_object_target_compatible(const MinicC0Program *p
                program, slot_type, target_type, relocation->has_explicit_pointer_cast);
 }
 
+bool minic_c0_global_relocation_function_target_compatible(const MinicC0Program *program,
+                                                           MinicType slot_type,
+                                                           MinicFunctionId function_id,
+                                                           bool has_explicit_pointer_cast) {
+    MinicType slot_pointee;
+
+    return program != NULL && function_id < program->function_count &&
+           minic_type_is_pointer(slot_type) && minic_type_pointee(slot_type, &slot_pointee) &&
+           (has_explicit_pointer_cast || minic_type_is_function(slot_pointee) ||
+            minic_type_is_void(slot_pointee));
+}
+
 bool minic_c0_global_relocation_slot_type(const MinicC0Program *program,
                                           const MinicGlobalObject *object,
                                           MinicGlobalRelocationLocationKind location_kind,
@@ -655,8 +667,9 @@ static bool add_global_symbol_relocation(MinicC0Program *program,
     if (!minic_c0_global_relocation_slot_type(
             program, object, location_kind, location_index, &slot_type) ||
         !minic_type_pointee(slot_type, &slot_pointee) ||
-        (target_kind == MINIC_GLOBAL_RELOCATION_FUNCTION && !minic_type_is_function(slot_pointee) &&
-         !has_explicit_pointer_cast) ||
+        (target_kind == MINIC_GLOBAL_RELOCATION_FUNCTION &&
+         !minic_c0_global_relocation_function_target_compatible(
+             program, slot_type, (MinicFunctionId)target_id, has_explicit_pointer_cast)) ||
         (target_kind == MINIC_GLOBAL_RELOCATION_OBJECT && minic_type_is_function(slot_pointee) &&
          !has_explicit_pointer_cast) ||
         (target_kind == MINIC_GLOBAL_RELOCATION_OBJECT &&

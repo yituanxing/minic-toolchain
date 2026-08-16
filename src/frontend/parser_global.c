@@ -267,6 +267,11 @@ typedef struct MinicStaticPointerInitializer {
     MinicStaticObjectRelocationTarget relocation_target;
 } MinicStaticPointerInitializer;
 
+typedef struct MinicStaticArraySlot {
+    uint64_t integer_bits;
+    MinicStaticPointerInitializer pointer_initializer;
+} MinicStaticArraySlot;
+
 static bool static_object_address_relocation_path(const MinicC0Program *program,
                                                   MinicExpressionId expression_id,
                                                   MinicStaticObjectRelocationTarget *target) {
@@ -722,23 +727,293 @@ parse_static_scalar_constant(MinicParser *parser, MinicGlobalObjectId object_id,
     return parse_static_scalar_constant_at(parser, object_id, type, false, 0U);
 }
 
+static bool grow_static_array_slots(MinicParser *parser,
+                                    MinicStaticArraySlot **slots,
+                                    size_t *capacity,
+                                    size_t required) {
+    MinicStaticArraySlot *resized;
+    size_t old_capacity;
+    size_t new_capacity;
+
+    if (parser == NULL || slots == NULL || capacity == NULL) {
+        return false;
+    }
+    if (required <= *capacity) {
+        return true;
+    }
+    old_capacity = *capacity;
+    new_capacity = old_capacity == 0U ? 8U : old_capacity;
+    while (new_capacity < required) {
+        if (new_capacity > SIZE_MAX / 2U) {
+            new_capacity = required;
+            break;
+        }
+        new_capacity *= 2U;
+    }
+    if (new_capacity < required || new_capacity > SIZE_MAX / sizeof(**slots)) {
+        minic_parser_error(parser, "static array initializer slot count overflows");
+        return false;
+    }
+    resized = (MinicStaticArraySlot *)realloc(*slots, new_capacity * sizeof(**slots));
+    if (resized == NULL) {
+        minic_parser_error(parser, "out of memory while planning static array initializer");
+        return false;
+    }
+    (void)memset(resized + old_capacity, 0, (new_capacity - old_capacity) * sizeof(*resized));
+    *slots = resized;
+    *capacity = new_capacity;
+    return true;
+}
+
+static bool parse_static_array_scalar_slot(MinicParser *parser,
+                                           MinicType element_type,
+                                           MinicStaticArraySlot *slot) {
+    bool braced;
+
+    if (parser == NULL || slot == NULL ||
+        (!minic_type_is_integer(element_type) && !minic_type_is_pointer(element_type))) {
+        return false;
+    }
+    (void)memset(slot, 0, sizeof(*slot));
+    braced = parser->current.kind == MINIC_TOKEN_LBRACE;
+    if (braced && !minic_parser_advance(parser)) {
+        return false;
+    }
+    if (minic_type_is_integer(element_type)) {
+        if (!minic_parser_parse_integer_initializer_bits(
+                parser, element_type, &slot->integer_bits)) {
+            return false;
+        }
+    } else if (!parse_static_pointer_initializer(
+                   parser, element_type, &slot->pointer_initializer)) {
+        return false;
+    }
+    if (!braced) {
+        return true;
+    }
+    if (parser->current.kind == MINIC_TOKEN_COMMA && !minic_parser_advance(parser)) {
+        return false;
+    }
+    return minic_parser_expect(parser, MINIC_TOKEN_RBRACE, "expected '}' after scalar initializer");
+}
+
+static bool
+materialize_static_pointer_array_slot(MinicParser *parser,
+                                      MinicGlobalObjectId object_id,
+                                      size_t slot_index,
+                                      const MinicStaticPointerInitializer *initializer) {
+    bool recorded;
+
+    if (parser == NULL || initializer == NULL ||
+        !minic_c0_global_object_add_initializer_bits(
+            parser->program, object_id, initializer->has_relocation ? 0U : initializer->bits)) {
+        return false;
+    }
+    if (!initializer->has_relocation) {
+        return true;
+    }
+    if (initializer->relocation_is_function) {
+        recorded = initializer->has_explicit_pointer_cast
+                       ? minic_c0_global_object_add_function_relocation_cast(
+                             parser->program,
+                             object_id,
+                             MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR,
+                             slot_index,
+                             initializer->function_id)
+                       : minic_c0_global_object_add_function_relocation(
+                             parser->program,
+                             object_id,
+                             MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR,
+                             slot_index,
+                             initializer->function_id);
+    } else {
+        recorded = initializer->has_explicit_pointer_cast
+                       ? minic_c0_global_object_add_object_relocation_path_cast(
+                             parser->program,
+                             object_id,
+                             MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR,
+                             slot_index,
+                             initializer->relocation_target.object_id,
+                             initializer->relocation_target.member_indices,
+                             initializer->relocation_target.member_depth)
+                       : minic_c0_global_object_add_object_relocation_path(
+                             parser->program,
+                             object_id,
+                             MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR,
+                             slot_index,
+                             initializer->relocation_target.object_id,
+                             initializer->relocation_target.member_indices,
+                             initializer->relocation_target.member_depth);
+    }
+    return recorded;
+}
+
+static bool materialize_static_array_slots(MinicParser *parser,
+                                           MinicGlobalObjectId object_id,
+                                           MinicType element_type,
+                                           const MinicStaticArraySlot *slots,
+                                           size_t slot_count) {
+    size_t index;
+
+    if (parser == NULL || slots == NULL ||
+        (!minic_type_is_integer(element_type) && !minic_type_is_pointer(element_type))) {
+        return false;
+    }
+    for (index = 0U; index < slot_count; ++index) {
+        if (minic_type_is_integer(element_type)) {
+            if (!minic_c0_global_object_add_initializer_bits(
+                    parser->program, object_id, slots[index].integer_bits)) {
+                minic_parser_error(parser, "cannot materialize static integer array slot");
+                return false;
+            }
+        } else if (!materialize_static_pointer_array_slot(
+                       parser, object_id, index, &slots[index].pointer_initializer)) {
+            minic_parser_error(parser, "cannot materialize static pointer array slot");
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool parse_static_scalar_array_transaction(MinicParser *parser,
+                                                  MinicGlobalObjectId object_id,
+                                                  MinicType element_type,
+                                                  size_t element_count,
+                                                  bool infer_bound) {
+    MinicStaticArraySlot *slots;
+    const MinicGlobalObject *object;
+    size_t capacity;
+    size_t extent;
+    size_t next_index;
+    bool success;
+
+    slots = NULL;
+    capacity = 0U;
+    extent = infer_bound ? 0U : element_count;
+    next_index = 0U;
+    success = false;
+    if (parser == NULL ||
+        (!minic_type_is_integer(element_type) && !minic_type_is_pointer(element_type)) ||
+        (!infer_bound && element_count == 0U) || parser->current.kind != MINIC_TOKEN_LBRACE) {
+        if (parser != NULL) {
+            minic_parser_error(parser, "invalid static scalar array initializer");
+        }
+        goto done;
+    }
+    if (!infer_bound && !grow_static_array_slots(parser, &slots, &capacity, element_count)) {
+        goto done;
+    }
+    if (!minic_parser_advance(parser)) {
+        goto done;
+    }
+    while (parser->current.kind != MINIC_TOKEN_RBRACE) {
+        MinicStaticArraySlot value;
+        size_t first;
+        size_t last;
+        size_t required;
+        size_t index;
+
+        if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
+            if (!minic_parser_parse_array_designator(
+                    parser, element_count, infer_bound, &first, &last)) {
+                goto done;
+            }
+        } else {
+            first = next_index;
+            last = first;
+            if (!infer_bound && first >= element_count) {
+                minic_parser_error(parser, "too many nested static array initializers");
+                goto done;
+            }
+        }
+        if (last == SIZE_MAX) {
+            minic_parser_error(parser, "static array designator extent overflows");
+            goto done;
+        }
+        required = last + 1U;
+        if (infer_bound) {
+            if (!grow_static_array_slots(parser, &slots, &capacity, required)) {
+                goto done;
+            }
+            if (required > extent) {
+                extent = required;
+            }
+        }
+        if (!parse_static_array_scalar_slot(parser, element_type, &value)) {
+            goto done;
+        }
+        for (index = first;; ++index) {
+            slots[index] = value;
+            if (index == last) {
+                break;
+            }
+        }
+        next_index = required;
+        if (parser->current.kind == MINIC_TOKEN_COMMA) {
+            if (!minic_parser_advance(parser)) {
+                goto done;
+            }
+            if (parser->current.kind == MINIC_TOKEN_RBRACE) {
+                break;
+            }
+        } else if (parser->current.kind != MINIC_TOKEN_RBRACE) {
+            minic_parser_error(parser, "expected ',' or '}' in static array initializer");
+            goto done;
+        }
+    }
+    if (!minic_parser_expect(
+            parser, MINIC_TOKEN_RBRACE, "expected '}' after static array initializer")) {
+        goto done;
+    }
+    if (infer_bound) {
+        if (extent == 0U) {
+            minic_parser_error(parser, "cannot infer static array bound from an empty initializer");
+            goto done;
+        }
+        object = minic_c0_program_global_object(parser->program, object_id);
+        if (object == NULL || !minic_type_is_array(object->type) ||
+            !minic_c0_program_complete_array_type(parser->program, object->type, extent)) {
+            minic_parser_error(parser, "cannot complete inferred static array type");
+            goto done;
+        }
+    }
+    if (!materialize_static_array_slots(parser, object_id, element_type, slots, extent)) {
+        goto done;
+    }
+    success = true;
+
+done:
+    free(slots);
+    return success;
+}
+
 static bool parse_static_array_constant(MinicParser *parser,
                                         MinicGlobalObjectId object_id,
                                         const MinicArrayType *array_type) {
+    MinicType element_type;
+    size_t element_count;
     size_t element_index;
 
-    if (array_type == NULL || array_type->element_count == 0U ||
-        !minic_parser_expect(parser, MINIC_TOKEN_LBRACE, "expected '{' in array initializer")) {
+    if (array_type == NULL || array_type->element_count == 0U) {
+        minic_parser_error(parser, "invalid complete static array initializer type");
+        return false;
+    }
+    element_type = array_type->element_type;
+    element_count = array_type->element_count;
+    if (minic_type_is_integer(element_type) || minic_type_is_pointer(element_type)) {
+        return parse_static_scalar_array_transaction(
+            parser, object_id, element_type, element_count, false);
+    }
+    if (!minic_parser_expect(parser, MINIC_TOKEN_LBRACE, "expected '{' in array initializer")) {
         return false;
     }
     element_index = 0U;
     while (parser->current.kind != MINIC_TOKEN_RBRACE) {
-        if (element_index >= array_type->element_count) {
+        if (element_index >= element_count) {
             minic_parser_error(parser, "too many nested static array initializers");
             return false;
         }
-        if (!minic_parser_parse_static_storage_initializer_value(
-                parser, object_id, array_type->element_type)) {
+        if (!minic_parser_parse_static_storage_initializer_value(parser, object_id, element_type)) {
             return false;
         }
         element_index += 1U;
@@ -754,8 +1029,8 @@ static bool parse_static_array_constant(MinicParser *parser,
             return false;
         }
     }
-    while (element_index < array_type->element_count) {
-        if (!append_static_constant_zero(parser, object_id, array_type->element_type)) {
+    while (element_index < element_count) {
+        if (!append_static_constant_zero(parser, object_id, element_type)) {
             minic_parser_error(parser, "cannot zero-fill nested static array initializer");
             return false;
         }
@@ -1532,37 +1807,36 @@ static bool parse_static_pointer_array(MinicParser *parser,
                                        size_t *section_name_length,
                                        bool *has_section,
                                        size_t *explicit_alignment) {
-    MinicGlobalObjectId *targets;
     MinicType object_type;
-    MinicType string_pointer_type;
     MinicGlobalObjectId object_id;
-    size_t target_count;
-    size_t target_capacity;
     size_t element_count;
     bool inferred_bound;
-    bool success;
 
-    targets = NULL;
-    target_count = 0U;
-    target_capacity = 0U;
     element_count = 0U;
     inferred_bound = false;
-    success = false;
-
-    if (!minic_parser_expect(parser, MINIC_TOKEN_LBRACKET, "expected '['")) {
-        goto done;
+    if (parser == NULL || section_name == NULL || section_capacity == 0U ||
+        section_name_length == NULL || has_section == NULL || explicit_alignment == NULL ||
+        !minic_type_is_pointer(element_type) ||
+        !minic_parser_expect(parser, MINIC_TOKEN_LBRACKET, "expected '['")) {
+        return false;
     }
     if (parser->current.kind == MINIC_TOKEN_RBRACKET) {
         inferred_bound = true;
-        if (!minic_parser_advance(parser)) {
-            goto done;
+        if (!minic_parser_advance(parser) || !minic_c0_program_add_incomplete_array_type(
+                                                 parser->program, element_type, &object_type)) {
+            return false;
         }
-    } else if (!minic_parser_parse_fixed_array_bound(parser, &element_count)) {
-        goto done;
+    } else if (!minic_parser_parse_fixed_array_bound(parser, &element_count) ||
+               !minic_c0_program_add_array_type(
+                   parser->program, element_type, element_count, &object_type)) {
+        if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+            minic_parser_error(parser, "cannot build static pointer array type");
+        }
+        return false;
     }
     if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
         minic_parser_error(parser, "multi-dimensional static pointer arrays are not supported yet");
-        goto done;
+        return false;
     }
     if (!minic_parser_parse_gnu_object_attribute_lists(parser,
                                                        section_name,
@@ -1570,104 +1844,6 @@ static bool parse_static_pointer_array(MinicParser *parser,
                                                        section_name_length,
                                                        has_section,
                                                        explicit_alignment) ||
-        !minic_parser_expect(parser, MINIC_TOKEN_EQUAL, "expected '='") ||
-        !minic_parser_expect(parser, MINIC_TOKEN_LBRACE, "expected '{'")) {
-        goto done;
-    }
-    if (!minic_target_info_plain_char_type(parser->target_info, &string_pointer_type) ||
-        !minic_type_pointer_to(string_pointer_type, &string_pointer_type)) {
-        minic_parser_error(parser, "cannot build string pointer type");
-        goto done;
-    }
-
-    while (parser->current.kind != MINIC_TOKEN_RBRACE) {
-        MinicGlobalObjectId target_id;
-
-        target_id = MINIC_GLOBAL_OBJECT_INVALID;
-        if (parser->current.kind == MINIC_TOKEN_STRING_LITERAL) {
-            MinicType literal_type;
-            MinicSourceSpan literal_span;
-
-            if (!minic_type_assignment_compatible(element_type, string_pointer_type) ||
-                !minic_parser_create_string_literal_object(
-                    parser, &target_id, &literal_type, &literal_span)) {
-                if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
-                    minic_parser_error(
-                        parser, "string literal does not match static pointer array element");
-                }
-                goto done;
-            }
-            (void)literal_type;
-            (void)literal_span;
-        } else if (parser->current.kind == MINIC_TOKEN_IDENTIFIER) {
-            MinicExpressionId value_id;
-
-            if (!minic_parser_parse_expression(parser, &value_id, 0U) ||
-                !minic_c0_assignment_compatible(parser->program, element_type, value_id) ||
-                !static_object_address_relocation_target(parser->program, value_id, &target_id)) {
-                if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
-                    minic_parser_error(parser,
-                                       "static pointer array object initializer requires a "
-                                       "compatible zero-addend object address");
-                }
-                goto done;
-            }
-        } else if (!minic_parser_parse_null_pointer_constant_expression(parser, element_type)) {
-            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
-                minic_parser_error(parser, "static pointer array scalar initializer must be null");
-            }
-            goto done;
-        }
-
-        if (!inferred_bound && target_count >= element_count) {
-            minic_parser_error(parser, "too many global array initializers");
-            goto done;
-        }
-        if (target_count == target_capacity) {
-            size_t new_capacity;
-            MinicGlobalObjectId *resized;
-
-            new_capacity = target_capacity == 0U ? 8U : target_capacity * 2U;
-            if (new_capacity < target_capacity || new_capacity > SIZE_MAX / sizeof(*targets)) {
-                minic_parser_error(parser, "too many static pointer initializers");
-                goto done;
-            }
-            resized = (MinicGlobalObjectId *)realloc(targets, new_capacity * sizeof(*targets));
-            if (resized == NULL) {
-                minic_parser_error(parser, "out of memory while recording pointer initializers");
-                goto done;
-            }
-            targets = resized;
-            target_capacity = new_capacity;
-        }
-        targets[target_count] = target_id;
-        target_count += 1U;
-
-        if (parser->current.kind == MINIC_TOKEN_COMMA) {
-            if (!minic_parser_advance(parser)) {
-                goto done;
-            }
-            if (parser->current.kind == MINIC_TOKEN_RBRACE) {
-                break;
-            }
-        } else if (parser->current.kind != MINIC_TOKEN_RBRACE) {
-            minic_parser_error(parser, "expected ',' or '}' in initializer");
-            goto done;
-        }
-    }
-    if (!minic_parser_expect(parser, MINIC_TOKEN_RBRACE, "expected '}'")) {
-        goto done;
-    }
-    if (target_count == 0U) {
-        minic_parser_error(parser, "static pointer array requires at least one initializer");
-        goto done;
-    }
-    if (inferred_bound) {
-        element_count = target_count;
-    }
-
-    if (!minic_c0_program_add_array_type(
-            parser->program, element_type, element_count, &object_type) ||
         !minic_c0_program_add_global_object(parser->program,
                                             parser->source + name_span.begin.offset,
                                             minic_parser_span_length(name_span),
@@ -1675,36 +1851,29 @@ static bool parse_static_pointer_array(MinicParser *parser,
                                             true,
                                             minic_type_is_const(element_type),
                                             &object_id) ||
-        !minic_c0_global_object_set_zero_initialized(parser->program, object_id) ||
         (*has_section && !minic_c0_global_object_set_section(
                              parser->program, object_id, section_name, *section_name_length)) ||
         (*explicit_alignment != 0U && !minic_c0_global_object_set_explicit_alignment(
                                           parser->program, object_id, *explicit_alignment))) {
         minic_parser_error(parser, "cannot create static pointer array object");
-        goto done;
+        return false;
     }
-    {
-        size_t index;
-
-        for (index = 0U; index < target_count; ++index) {
-            if (targets[index] != MINIC_GLOBAL_OBJECT_INVALID &&
-                !minic_c0_global_object_add_object_relocation(
-                    parser->program,
-                    object_id,
-                    MINIC_GLOBAL_RELOCATION_LOCATION_ARRAY_ELEMENT,
-                    index,
-                    targets[index])) {
-                minic_parser_error(parser, "cannot record static object relocation");
-                goto done;
-            }
+    if (parser->current.kind == MINIC_TOKEN_SEMICOLON) {
+        if (inferred_bound) {
+            minic_parser_error(parser, "incomplete static pointer array requires an initializer");
+            return false;
         }
+        return minic_c0_global_object_set_zero_initialized(parser->program, object_id) &&
+               minic_parser_advance(parser);
     }
-    success =
-        minic_parser_expect(parser, MINIC_TOKEN_SEMICOLON, "expected ';' after global object");
-
-done:
-    free(targets);
-    return success;
+    if (!minic_parser_expect(
+            parser, MINIC_TOKEN_EQUAL, "expected '=' after static pointer array") ||
+        !parse_static_scalar_array_transaction(
+            parser, object_id, element_type, element_count, inferred_bound)) {
+        return false;
+    }
+    return minic_parser_expect(
+        parser, MINIC_TOKEN_SEMICOLON, "expected ';' after static pointer array");
 }
 
 static bool parse_static_zero_definition(MinicParser *parser,
@@ -1746,7 +1915,6 @@ static bool parse_static_inferred_integer_array(MinicParser *parser,
                                                 size_t *explicit_alignment) {
     MinicType object_type;
     MinicGlobalObjectId object_id;
-    size_t initializer_count;
 
     if (parser == NULL || section_name == NULL || section_capacity == 0U ||
         section_name_length == NULL || has_section == NULL || explicit_alignment == NULL ||
@@ -1773,45 +1941,10 @@ static bool parse_static_inferred_integer_array(MinicParser *parser,
         (*explicit_alignment != 0U && !minic_c0_global_object_set_explicit_alignment(
                                           parser->program, object_id, *explicit_alignment)) ||
         !minic_parser_expect(parser, MINIC_TOKEN_EQUAL, "expected '=' after static array") ||
-        !minic_parser_expect(
-            parser, MINIC_TOKEN_LBRACE, "expected '{' in static array initializer")) {
+        !parse_static_scalar_array_transaction(parser, object_id, element_type, 0U, true)) {
         if (parser != NULL && parser->diagnostic != NULL &&
             parser->diagnostic->message[0] == '\0') {
-            minic_parser_error(parser, "cannot begin inferred static integer array");
-        }
-        return false;
-    }
-
-    initializer_count = 0U;
-    while (parser->current.kind != MINIC_TOKEN_RBRACE) {
-        uint64_t bits;
-
-        if (!minic_parser_parse_integer_initializer_bits(parser, element_type, &bits) ||
-            !minic_c0_global_object_add_initializer_bits(parser->program, object_id, bits)) {
-            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
-                minic_parser_error(parser, "cannot record inferred static integer initializer");
-            }
-            return false;
-        }
-        initializer_count += 1U;
-        if (parser->current.kind == MINIC_TOKEN_COMMA) {
-            if (!minic_parser_advance(parser)) {
-                return false;
-            }
-            if (parser->current.kind == MINIC_TOKEN_RBRACE) {
-                break;
-            }
-        } else if (parser->current.kind != MINIC_TOKEN_RBRACE) {
-            minic_parser_error(parser, "expected ',' or '}' in inferred static array initializer");
-            return false;
-        }
-    }
-    if (initializer_count == 0U ||
-        !minic_parser_expect(
-            parser, MINIC_TOKEN_RBRACE, "expected '}' after static array initializer") ||
-        !minic_c0_program_complete_array_type(parser->program, object_type, initializer_count)) {
-        if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
-            minic_parser_error(parser, "cannot infer static integer array bound");
+            minic_parser_error(parser, "cannot parse inferred static integer array");
         }
         return false;
     }
