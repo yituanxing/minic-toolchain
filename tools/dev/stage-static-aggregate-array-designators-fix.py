@@ -2,7 +2,11 @@
 from pathlib import Path
 
 path = Path('src/frontend/parser_global.c')
-text = path.read_text()
+data = path.read_bytes()
+if data.count(b"'\x00'") != 1:
+    raise SystemExit(f'publisher NUL repair: expected one source NUL, found {data.count(bytes([0]))}')
+data = data.replace(b"'\x00'", b"'\\0'", 1)
+text = data.decode()
 old = '''        const MinicRecordField *field;\n        size_t element_index;\n        bool overwrite_materialized_field;\n'''
 new = '''        const MinicRecordField *field;\n        bool overwrite_materialized_field;\n'''
 if text.count(old) != 1:
