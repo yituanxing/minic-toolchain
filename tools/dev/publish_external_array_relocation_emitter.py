@@ -12,21 +12,10 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
 path = Path("src/target/riscv64/codegen_function.c")
 text = path.read_text()
 
-old = '''    if (!minic_riscv64_integer_storage_width(program, type, scalar_width)) {
-        return false;
-    }
-    *scalar_type = type;
-'''
-new = '''    if ((!minic_type_is_integer(type) && !minic_type_is_pointer(type)) ||
-        !minic_riscv64_type_layout(program, type, scalar_width, &alignment) ||
-        (*scalar_width != 1U && *scalar_width != 2U && *scalar_width != 4U &&
-         *scalar_width != 8U)) {
-        return false;
-    }
-    (void)alignment;
-    *scalar_type = type;
-'''
-# Add a local alignment declaration in the helper before using it.
+begin = text.index("static bool\nminic_riscv64_integer_storage_width")
+end = text.index("static const char *minic_riscv64_integer_data_directive", begin)
+text = text[:begin] + text[end:]
+
 text = replace_once(
     text,
     '''    MinicType type;
@@ -40,7 +29,24 @@ text = replace_once(
 ''',
     "global scalar alignment declaration",
 )
-text = replace_once(text, old, new, "global scalar integer-or-pointer layout")
+text = replace_once(
+    text,
+    '''    if (!minic_riscv64_integer_storage_width(program, type, scalar_width)) {
+        return false;
+    }
+    *scalar_type = type;
+''',
+    '''    if ((!minic_type_is_integer(type) && !minic_type_is_pointer(type)) ||
+        !minic_riscv64_type_layout(program, type, scalar_width, &alignment) ||
+        (*scalar_width != 1U && *scalar_width != 2U && *scalar_width != 4U &&
+         *scalar_width != 8U)) {
+        return false;
+    }
+    (void)alignment;
+    *scalar_type = type;
+''',
+    "global scalar integer-or-pointer layout",
+)
 
 text = replace_once(
     text,
@@ -60,7 +66,6 @@ text = replace_once(
 ''',
     "recursive array emitter guard",
 )
-
 text = replace_once(
     text,
     '''    } else if (minic_riscv64_record_array_info(program, object->type, NULL, NULL)) {
@@ -80,7 +85,6 @@ text = replace_once(
 ''',
     "relocation-bearing array validation",
 )
-
 text = replace_once(
     text,
     '''    } else if (minic_riscv64_record_array_info(program, object->type, NULL, NULL) &&
@@ -98,6 +102,17 @@ text = replace_once(
 ''',
     "relocation-bearing array emission dispatch",
 )
-
 path.write_text(text)
+
+runner = Path("tests/compiler/c0/run-external-pointer-arrays.sh")
+data = runner.read_text()
+data = replace_once(
+    data,
+    '''grep -F '  .zero 8' "$asm" >/dev/null
+''',
+    '''grep -F '  .dword 0' "$asm" >/dev/null
+''',
+    "canonical pointer null slot spelling",
+)
+runner.write_text(data)
 print("staged relocation-aware array static-data emission")
