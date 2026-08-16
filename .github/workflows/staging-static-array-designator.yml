@@ -23,11 +23,16 @@ jobs:
           sudo apt-get install -y --no-install-recommends clang-format-18
 
       - name: Apply static array convergence
-        run: python3 tools/dev/stage-static-array-designator.py
+        run: |
+          python3 tools/dev/stage-static-array-designator.py
+          python3 tools/dev/stage-static-array-designator-reloc-fix.py
 
       - name: Canonical formatting
         run: |
           clang-format-18 -i \
+            src/frontend/ast.h \
+            src/frontend/ast_global.c \
+            src/frontend/ast_verifier.c \
             src/frontend/parser_internal.h \
             src/frontend/parser_constant.c \
             src/frontend/parser_statement.c \
@@ -74,6 +79,9 @@ jobs:
           git config user.name 'LiYang Dong'
           git config user.email '119646676+yituanxing@users.noreply.github.com'
           git add \
+            src/frontend/ast.h \
+            src/frontend/ast_global.c \
+            src/frontend/ast_verifier.c \
             src/frontend/parser_internal.h \
             src/frontend/parser_constant.c \
             src/frontend/parser_statement.c \
