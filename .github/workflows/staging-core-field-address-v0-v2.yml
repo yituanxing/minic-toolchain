@@ -284,6 +284,7 @@ jobs:
           cp src/core/core_lower.c /tmp/core-field-product/src/core/core_lower.c
           cp tests/core/run-core-ir-shadow.sh /tmp/core-field-product/tests/core/run-core-ir-shadow.sh
           git fetch origin main
+          git reset --hard HEAD
           git checkout --detach origin/main
           cp /tmp/core-field-product/src/core/core_ir.h src/core/core_ir.h
           cp /tmp/core-field-product/src/core/core_ir.c src/core/core_ir.c
