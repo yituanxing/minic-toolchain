@@ -15,6 +15,7 @@ int core_diff_ninth(int a0,
 int core_diff_pointer_zero(int *value);
 int core_diff_call(int value);
 int core_diff_void_call(int value);
+int core_diff_asm_call(int value);
 
 int main(void) {
     static const int values[] = {-7, -1, 0, 1, 9};
@@ -35,6 +36,7 @@ int main(void) {
         (void)printf("zero %d %d\n", values[left], core_diff_zero(values[left]));
         (void)printf("call %d %d\n", values[left], core_diff_call(values[left]));
         (void)printf("void-call %d %d\n", values[left], core_diff_void_call(values[left]));
+        (void)printf("asm-call %d %d\n", values[left], core_diff_asm_call(values[left]));
     }
     (void)printf("ninth %d\n", core_diff_ninth(1, 2, 3, 4, 5, 6, 7, 8, 91));
     pointed = -1234;
