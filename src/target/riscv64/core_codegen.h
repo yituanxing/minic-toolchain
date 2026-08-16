@@ -8,12 +8,14 @@
 #include <stdio.h>
 
 /*
- * Bounded O0 Core -> RV64 emitter used before production takeover.
- * 第一阶段受限 O0 Core -> RV64 emitter；当前用于 differential 验证，不接管 production。
+ * Bounded O0 Core -> RV64 emitter used by differential validation and the
+ * opt-in hybrid production route.
+ * 受限 O0 Core -> RV64 emitter；用于 differential 验证与显式 hybrid production 路径。
  *
- * v0 accepts the scalar/memory/CFG subset and deliberately rejects CALL and
- * FIELD_ADDRESS. Core values and objects receive backend-owned frame slots;
- * no physical register or stack offset is written back into Core IR.
+ * v0 accepts the scalar/memory/CFG subset plus direct scalar calls with up to
+ * eight register arguments, and deliberately rejects FIELD_ADDRESS. Core
+ * values and objects receive backend-owned frame slots; no physical register
+ * or stack offset is written back into Core IR.
  *
  * Function linkage/visibility/section/assembler-name policy is target-owned
  * metadata carried separately from Core IR through MinicRiscv64FunctionSymbol.
