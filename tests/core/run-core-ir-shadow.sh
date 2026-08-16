@@ -176,6 +176,74 @@ fi
 grep -F "Core IR shadow does not yet support function 'for_shape'" \
     "$work_dir/for-shape-strict.err" >/dev/null
 
+
+cat >"$work_dir/direct-call-v0.i" <<'EOF'
+int direct_callee(int value) {
+    return value + 1;
+}
+
+int direct_caller(int value) {
+    return direct_callee(value);
+}
+EOF
+check_strict_case direct-call-v0
+
+cat >"$work_dir/direct-void-call-v0.i" <<'EOF'
+void direct_sink(int value) {
+    return;
+}
+
+void direct_void_caller(int value) {
+    direct_sink(value);
+    return;
+}
+EOF
+check_strict_case direct-void-call-v0
+
+cat >"$work_dir/direct-pointer-result-statement-v0.i" <<'EOF'
+int *external_pointer_identity(int *value);
+
+void consume_pointer_call(int *value) {
+    external_pointer_identity(value);
+    return;
+}
+EOF
+check_strict_case direct-pointer-result-statement-v0
+
+cat >"$work_dir/indirect-call-unsupported.i" <<'EOF'
+int indirect_caller(int (*callee)(int), int value) {
+    return callee(value);
+}
+EOF
+"$MINIC" -S "$work_dir/indirect-call-unsupported.i" \
+    -o "$work_dir/indirect-call-unsupported-normal.s"
+if MINIC_CORE_IR=strict "$MINIC" -S "$work_dir/indirect-call-unsupported.i" \
+    -o "$work_dir/indirect-call-unsupported-strict.s" \
+    2>"$work_dir/indirect-call-unsupported-strict.err"; then
+    echo "strict Core IR shadow unexpectedly accepted an indirect call" >&2
+    exit 1
+fi
+grep -F "Core IR shadow does not yet support function 'indirect_caller'" \
+    "$work_dir/indirect-call-unsupported-strict.err" >/dev/null
+
+cat >"$work_dir/variadic-call-unsupported.i" <<'EOF'
+int variadic_external(int first, ...);
+
+int variadic_caller(int value) {
+    return variadic_external(value, value);
+}
+EOF
+"$MINIC" -S "$work_dir/variadic-call-unsupported.i" \
+    -o "$work_dir/variadic-call-unsupported-normal.s"
+if MINIC_CORE_IR=strict "$MINIC" -S "$work_dir/variadic-call-unsupported.i" \
+    -o "$work_dir/variadic-call-unsupported-strict.s" \
+    2>"$work_dir/variadic-call-unsupported-strict.err"; then
+    echo "strict Core IR shadow unexpectedly accepted a variadic call" >&2
+    exit 1
+fi
+grep -F "Core IR shadow does not yet support function 'variadic_caller'" \
+    "$work_dir/variadic-call-unsupported-strict.err" >/dev/null
+
 cat >"$work_dir/unsupported.i" <<'EOF'
 int main(void) {
     return 1 - 2;
