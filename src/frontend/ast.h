@@ -102,7 +102,12 @@ typedef enum MinicBinaryOperator {
     MINIC_BINARY_COMMA
 } MinicBinaryOperator;
 
-typedef enum MinicBuiltinUnaryOperator { MINIC_BUILTIN_UNARY_CLZLL = 0 } MinicBuiltinUnaryOperator;
+typedef enum MinicBuiltinUnaryOperator {
+    MINIC_BUILTIN_UNARY_CLZLL = 0,
+    MINIC_BUILTIN_UNARY_CTZL,
+    MINIC_BUILTIN_UNARY_FFSLL,
+    MINIC_BUILTIN_UNARY_ISDIGIT
+} MinicBuiltinUnaryOperator;
 
 typedef enum MinicCallFrameAddressKind {
     MINIC_CALL_FRAME_ADDRESS_RETURN = 0,
