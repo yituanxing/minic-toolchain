@@ -1,0 +1,125 @@
+name: Staging Core RV64 Basic Emitter V0
+
+on:
+  push:
+    branches: [staging/core-rv64-basic-emitter-v0]
+
+permissions:
+  contents: write
+
+jobs:
+  validate-and-publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Register Core emitter in normal build
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('Makefile')
+          s = p.read_text()
+          anchor = '\tsrc/target/riscv64/codegen_support.c \\\n'
+          assert s.count(anchor) == 1, s.count(anchor)
+          p.write_text(s.replace(anchor,
+                                 anchor + '\tsrc/target/riscv64/core_codegen.c \\\n',
+                                 1))
+          PY
+
+      - name: Verify canonical formatting
+        run: |
+          clang-format --dry-run --Werror \
+            src/target/riscv64/core_codegen.h \
+            src/target/riscv64/core_codegen.c \
+            tests/target/riscv64/core_basic_emitter_test.c \
+            tests/target/riscv64/core_basic_emitter_runtime.c
+
+      - name: Build Release compiler with Core emitter and Werror
+        run: make -j4 MODE=release CFLAGS=-Werror
+
+      - name: Build Core emitter generator with Werror
+        run: |
+          set -Eeuo pipefail
+          mkdir -p build/core-rv64-emitter
+          cc -std=c11 \
+            -Wall -Wextra -Wpedantic -Wconversion -Wshadow \
+            -Wstrict-prototypes -Wmissing-prototypes -Werror \
+            -Iinclude -Isrc \
+            $(find src -name '*.c' -print | sort) \
+            tests/target/riscv64/core_basic_emitter_test.c \
+            -o build/core-rv64-emitter/core-basic-emitter-test
+          build/core-rv64-emitter/core-basic-emitter-test \
+            build/core-rv64-emitter/core-basic-v0.s
+          test -s build/core-rv64-emitter/core-basic-v0.s
+          grep -q '^core_basic_math:' build/core-rv64-emitter/core-basic-v0.s
+          grep -q '^core_branch:' build/core-rv64-emitter/core-basic-v0.s
+          grep -q '^core_ninth:' build/core-rv64-emitter/core-basic-v0.s
+          grep -q 'seqz t0, t0' build/core-rv64-emitter/core-basic-v0.s
+          grep -q 'neg t0, t0' build/core-rv64-emitter/core-basic-v0.s
+          grep -q 'bnez t0, .Lcore_branch_core_bb' build/core-rv64-emitter/core-basic-v0.s
+
+      - name: Install RV64 runtime tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu libc6-dev-riscv64-cross qemu-user
+
+      - name: Run generated Core RV64 assembly
+        run: |
+          set -Eeuo pipefail
+          riscv64-linux-gnu-gcc -static -O2 \
+            tests/target/riscv64/core_basic_emitter_runtime.c \
+            build/core-rv64-emitter/core-basic-v0.s \
+            -o build/core-rv64-emitter/core-basic-v0-rv64
+          qemu-riscv64 build/core-rv64-emitter/core-basic-v0-rv64
+
+      - name: Run existing Core shadow contract
+        run: |
+          MINIC="$PWD/build/release/bin/minic" \
+          BUILD_DIR="$PWD/build/core-rv64-emitter-shadow" \
+          bash tests/core/run-core-ir-shadow.sh
+
+      - name: Run broad C0 fast gate
+        run: make check-fast
+
+      - name: Run Foundation focused suite
+        run: |
+          MINIC="$PWD/build/release/bin/minic" \
+          BUILD_DIR="$PWD/build/core-rv64-emitter-foundation" \
+          bash tests/compiler/c0/run-foundation-focused.sh
+
+      - name: Publish clean product branch
+        if: success()
+        run: |
+          set -Eeuo pipefail
+          mkdir -p /tmp/core-rv64-product/src/target/riscv64 \
+                   /tmp/core-rv64-product/tests/target/riscv64
+          cp Makefile /tmp/core-rv64-product/Makefile
+          cp src/target/riscv64/core_codegen.h /tmp/core-rv64-product/src/target/riscv64/core_codegen.h
+          cp src/target/riscv64/core_codegen.c /tmp/core-rv64-product/src/target/riscv64/core_codegen.c
+          cp tests/target/riscv64/core_basic_emitter_test.c /tmp/core-rv64-product/tests/target/riscv64/core_basic_emitter_test.c
+          cp tests/target/riscv64/core_basic_emitter_runtime.c /tmp/core-rv64-product/tests/target/riscv64/core_basic_emitter_runtime.c
+          git fetch origin main
+          git reset --hard HEAD
+          git checkout --detach origin/main
+          cp /tmp/core-rv64-product/Makefile Makefile
+          mkdir -p src/target/riscv64 tests/target/riscv64
+          cp /tmp/core-rv64-product/src/target/riscv64/core_codegen.h src/target/riscv64/core_codegen.h
+          cp /tmp/core-rv64-product/src/target/riscv64/core_codegen.c src/target/riscv64/core_codegen.c
+          cp /tmp/core-rv64-product/tests/target/riscv64/core_basic_emitter_test.c tests/target/riscv64/core_basic_emitter_test.c
+          cp /tmp/core-rv64-product/tests/target/riscv64/core_basic_emitter_runtime.c tests/target/riscv64/core_basic_emitter_runtime.c
+          git config user.name "LiYang Dong"
+          git config user.email "119646676+yituanxing@users.noreply.github.com"
+          git add Makefile \
+            src/target/riscv64/core_codegen.h \
+            src/target/riscv64/core_codegen.c \
+            tests/target/riscv64/core_basic_emitter_test.c \
+            tests/target/riscv64/core_basic_emitter_runtime.c
+          git commit -m "core: add RV64 basic emitter v0 [publish-v1]"
+          git push --force origin HEAD:refs/heads/agent/core-rv64-basic-emitter-v0
