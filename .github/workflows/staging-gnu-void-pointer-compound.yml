@@ -1,0 +1,77 @@
+name: Staging GNU Void Pointer Compound
+
+on:
+  push:
+    branches:
+      - staging/gnu-void-pointer-compound-v1
+
+permissions:
+  contents: write
+
+jobs:
+  validate-and-publish:
+    if: ${{ !contains(github.event.head_commit.message, '[publish]') }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install formatter
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang-format-18
+
+      - name: Apply GNU pointer compound semantic convergence
+        run: python3 tools/dev/stage-gnu-void-pointer-compound.py
+
+      - name: Canonical formatting
+        run: |
+          clang-format-18 -i \
+            src/frontend/parser_expression.c \
+            src/frontend/ast_verifier.c \
+            tests/compiler/c0/compound_assignment_expression.c
+
+      - name: Release Werror build
+        run: make -j4 MODE=release BUILD_DIR=build/staging-gnu-void-compound EXTRA_CFLAGS=-Werror
+
+      - name: Focused compound assignment regression
+        env:
+          MINIC: ${{ github.workspace }}/build/staging-gnu-void-compound/bin/minic
+          HOST_CC: cc
+          BUILD_DIR: ${{ github.workspace }}/build/staging-gnu-void-compound
+        run: sh tests/compiler/c0/run-compound-assignment-expressions.sh
+
+      - name: GNU pointer arithmetic regression
+        env:
+          MINIC: ${{ github.workspace }}/build/staging-gnu-void-compound/bin/minic
+          HOST_CC: cc
+          BUILD_DIR: ${{ github.workspace }}/build/staging-gnu-void-compound
+        run: sh tests/compiler/c0/run-gnu-void-pointer-arithmetic.sh
+
+      - name: Broad C0 suite
+        env:
+          MINIC: ${{ github.workspace }}/build/staging-gnu-void-compound/bin/minic
+          HOST_CC: cc
+          BUILD_DIR: ${{ github.workspace }}/build/staging-gnu-void-compound
+        run: sh tests/compiler/c0/run.sh
+
+      - name: Foundation focused suite
+        env:
+          MINIC: ${{ github.workspace }}/build/staging-gnu-void-compound/bin/minic
+          HOST_CC: cc
+          BUILD_DIR: ${{ github.workspace }}/build/staging-gnu-void-compound
+        run: sh tests/compiler/c0/run-foundation-focused.sh
+
+      - name: Publish validated product diff
+        run: |
+          git config user.name 'LiYang Dong'
+          git config user.email '119646676+yituanxing@users.noreply.github.com'
+          git add \
+            src/frontend/parser_expression.c \
+            src/frontend/ast_verifier.c \
+            tests/compiler/c0/compound_assignment_expression.c \
+            tests/compiler/c0/run-compound-assignment-expressions.sh
+          git diff --cached --check
+          git commit -m 'frontend: reuse GNU pointer arithmetic for compound assignment [publish]'
+          git push origin HEAD:staging/gnu-void-pointer-compound-v1
