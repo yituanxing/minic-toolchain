@@ -254,7 +254,94 @@ typedef struct MinicObjectAttributeContext {
     size_t *section_name_length;
     bool *has_section;
     size_t *explicit_alignment;
+    MinicSymbolVisibility *visibility;
+    bool *has_visibility;
 } MinicObjectAttributeContext;
+
+static bool parse_object_visibility_argument(MinicParser *parser,
+                                             const MinicParsedAttribute *attribute,
+                                             MinicSymbolVisibility *visibility) {
+    size_t cursor;
+    size_t end;
+    size_t value_begin;
+    size_t value_length;
+    const char *value;
+
+    if (parser == NULL || attribute == NULL || visibility == NULL || !attribute->has_arguments ||
+        attribute->arguments_span.end.offset <= attribute->arguments_span.begin.offset + 1U) {
+        return false;
+    }
+    cursor = attribute->arguments_span.begin.offset + 1U;
+    end = attribute->arguments_span.end.offset - 1U;
+    while (cursor < end && (parser->source[cursor] == ' ' || parser->source[cursor] == '\t' ||
+                            parser->source[cursor] == '\n' || parser->source[cursor] == '\r' ||
+                            parser->source[cursor] == '\f' || parser->source[cursor] == '\v')) {
+        cursor += 1U;
+    }
+    if (cursor >= end || parser->source[cursor] != '"') {
+        minic_parser_error(parser, "GNU visibility attribute requires one string literal");
+        return false;
+    }
+    cursor += 1U;
+    value_begin = cursor;
+    while (cursor < end && parser->source[cursor] != '"') {
+        if (parser->source[cursor] == '\\') {
+            minic_parser_error(parser, "escaped GNU visibility values are not supported yet");
+            return false;
+        }
+        cursor += 1U;
+    }
+    if (cursor >= end || parser->source[cursor] != '"') {
+        minic_parser_error(parser, "unterminated GNU visibility value");
+        return false;
+    }
+    value_length = cursor - value_begin;
+    value = parser->source + value_begin;
+    cursor += 1U;
+    while (cursor < end && (parser->source[cursor] == ' ' || parser->source[cursor] == '\t' ||
+                            parser->source[cursor] == '\n' || parser->source[cursor] == '\r' ||
+                            parser->source[cursor] == '\f' || parser->source[cursor] == '\v')) {
+        cursor += 1U;
+    }
+    if (cursor != end) {
+        minic_parser_error(parser, "GNU visibility attribute requires exactly one string literal");
+        return false;
+    }
+    if (value_length == 8U && memcmp(value, "internal", 8U) == 0) {
+        *visibility = MINIC_SYMBOL_VISIBILITY_INTERNAL;
+    } else if (value_length == 6U && memcmp(value, "hidden", 6U) == 0) {
+        *visibility = MINIC_SYMBOL_VISIBILITY_HIDDEN;
+    } else if (value_length == 9U && memcmp(value, "protected", 9U) == 0) {
+        *visibility = MINIC_SYMBOL_VISIBILITY_PROTECTED;
+    } else if (value_length == 7U && memcmp(value, "default", 7U) == 0) {
+        *visibility = MINIC_SYMBOL_VISIBILITY_DEFAULT;
+    } else {
+        minic_parser_error(parser, "unsupported GNU visibility value");
+        return false;
+    }
+    return true;
+}
+
+static bool apply_object_visibility_attribute(MinicParser *parser,
+                                              const MinicParsedAttribute *attribute,
+                                              MinicSymbolVisibility *visibility,
+                                              bool *has_visibility) {
+    MinicSymbolVisibility parsed_visibility;
+
+    if (parser == NULL || attribute == NULL || visibility == NULL || has_visibility == NULL ||
+        attribute->descriptor == NULL ||
+        attribute->descriptor->kind != MINIC_ATTRIBUTE_VISIBILITY ||
+        !parse_object_visibility_argument(parser, attribute, &parsed_visibility)) {
+        return false;
+    }
+    if (*has_visibility && *visibility != parsed_visibility) {
+        minic_parser_error(parser, "conflicting GNU object visibility attributes");
+        return false;
+    }
+    *visibility = parsed_visibility;
+    *has_visibility = true;
+    return true;
+}
 
 static bool object_attribute_class_is_parse_only(MinicAttributeClass semantic_class) {
     return semantic_class == MINIC_ATTRIBUTE_CLASS_INFORMATIONAL ||
@@ -294,6 +381,11 @@ static bool consume_object_attribute(MinicParser *parser,
         return minic_parser_apply_alignment_attribute(
             parser, attribute, "object", context->explicit_alignment);
     }
+    if (descriptor->kind == MINIC_ATTRIBUTE_VISIBILITY && context->visibility != NULL &&
+        context->has_visibility != NULL) {
+        return apply_object_visibility_attribute(
+            parser, attribute, context->visibility, context->has_visibility);
+    }
     minic_parser_error(parser,
                        "unsupported GNU object attribute; symbol/layout attributes require "
                        "explicit object semantics");
@@ -315,6 +407,8 @@ static bool initialize_object_attribute_context(MinicObjectAttributeContext *con
     context->section_name_length = section_name_length;
     context->has_section = has_section;
     context->explicit_alignment = explicit_alignment;
+    context->visibility = NULL;
+    context->has_visibility = NULL;
     return true;
 }
 
@@ -361,6 +455,31 @@ bool minic_parser_parse_gnu_object_attribute_lists(MinicParser *parser,
                                                                explicit_alignment)) {
         return false;
     }
+    return minic_parser_parse_gnu_attribute_lists(parser, consume_object_attribute, &context);
+}
+
+bool minic_parser_parse_gnu_object_attribute_lists_with_visibility(
+    MinicParser *parser,
+    char *section_name,
+    size_t section_capacity,
+    size_t *section_name_length,
+    bool *has_section,
+    size_t *explicit_alignment,
+    MinicSymbolVisibility *visibility,
+    bool *has_visibility) {
+    MinicObjectAttributeContext context;
+
+    if (parser == NULL || visibility == NULL || has_visibility == NULL ||
+        !initialize_object_attribute_context(&context,
+                                             section_name,
+                                             section_capacity,
+                                             section_name_length,
+                                             has_section,
+                                             explicit_alignment)) {
+        return false;
+    }
+    context.visibility = visibility;
+    context.has_visibility = has_visibility;
     return minic_parser_parse_gnu_attribute_lists(parser, consume_object_attribute, &context);
 }
 
