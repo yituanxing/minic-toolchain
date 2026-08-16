@@ -21,7 +21,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends clang-format-18
       - name: Apply product patch
-        run: python3 tools/dev/staging-static-address-addend-v1.py
+        run: |
+          python3 tools/dev/staging-static-address-addend-v1.py
+          python3 tools/dev/staging-static-address-addend-v1-fix.py
       - name: Canonical formatting
         run: |
           clang-format-18 -i \
