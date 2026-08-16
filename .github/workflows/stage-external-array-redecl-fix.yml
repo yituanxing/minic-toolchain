@@ -1,0 +1,197 @@
+name: Stage External Array Redeclaration Fix
+
+on:
+  push:
+    branches:
+      - staging/external-array-routing-redecl-fix
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: staging/external-array-routing-redecl-fix
+          fetch-depth: 0
+
+      - name: Apply canonical redeclaration merge fix
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected exactly one match, found {count}")
+              p.write_text(text.replace(old, new, 1))
+
+          def replace_count(path, old, new, expected):
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != expected:
+                  raise SystemExit(f"{path}: expected {expected} matches, found {count}")
+              p.write_text(text.replace(old, new))
+
+          replace_once(
+              "src/frontend/ast.c",
+              """    return left_array != NULL && right_array != NULL &&\n"
+              "           left_array->element_count == right_array->element_count &&\n"
+              "           left_array->is_zero_length == right_array->is_zero_length &&\n"
+              "           minic_c0_types_compatible(program, left_array->element_type, right_array->element_type);\n""",
+              """    return left_array != NULL && right_array != NULL &&\n"
+              "           left_array->is_zero_length == right_array->is_zero_length &&\n"
+              "           (left_array->element_count == right_array->element_count ||\n"
+              "            (!left_array->is_zero_length &&\n"
+              "             (left_array->element_count == 0U || right_array->element_count == 0U))) &&\n"
+              "           minic_c0_types_compatible(program, left_array->element_type, right_array->element_type);\n""",
+          )
+
+          replace_once(
+              "src/frontend/ast.h",
+              """bool minic_c0_global_object_merge_tentative(MinicC0Program *program,\n"
+              "                                            MinicGlobalObjectId global_object_id);\n""",
+              """bool minic_c0_global_object_merge_declaration_type(MinicC0Program *program,\n"
+              "                                                   MinicGlobalObjectId global_object_id,\n"
+              "                                                   MinicType declared_type);\n"
+              "bool minic_c0_global_object_merge_tentative(MinicC0Program *program,\n"
+              "                                            MinicGlobalObjectId global_object_id);\n""",
+          )
+
+          marker = """static bool global_object_has_definition_payload(const MinicGlobalObject *object) {\n"""
+          helper = """bool minic_c0_global_object_merge_declaration_type(MinicC0Program *program,\n"
+          "                                                   MinicGlobalObjectId global_object_id,\n"
+          "                                                   MinicType declared_type) {\n"
+          "    MinicGlobalObject *object;\n"
+          "    const MinicArrayType *existing_array;\n"
+          "    const MinicArrayType *declared_array;\n\n"
+          "    if (program == NULL || global_object_id >= program->global_object_count) {\n"
+          "        return false;\n"
+          "    }\n"
+          "    object = &program->global_objects[global_object_id];\n"
+          "    if (!minic_c0_types_compatible(program, object->type, declared_type)) {\n"
+          "        return false;\n"
+          "    }\n"
+          "    if (!minic_type_is_array(object->type) || !minic_type_is_array(declared_type)) {\n"
+          "        return true;\n"
+          "    }\n"
+          "    existing_array = minic_c0_program_array_type(program, object->type.array_type_id);\n"
+          "    declared_array = minic_c0_program_array_type(program, declared_type.array_type_id);\n"
+          "    if (existing_array == NULL || declared_array == NULL) {\n"
+          "        return false;\n"
+          "    }\n"
+          "    if (!existing_array->is_zero_length && existing_array->element_count == 0U &&\n"
+          "        !declared_array->is_zero_length && declared_array->element_count != 0U) {\n"
+          "        return minic_c0_program_complete_array_type(\n"
+          "            program, object->type, declared_array->element_count);\n"
+          "    }\n"
+          "    return true;\n"
+          "}\n\n"""
+          replace_once("src/frontend/ast_global.c", marker, helper + marker)
+
+          replace_count(
+              "src/frontend/parser_function.c",
+              "!minic_c0_types_compatible(parser->program, existing->type, object_type) ||",
+              "!minic_c0_global_object_merge_declaration_type(\n"
+              "                parser->program, object_id, object_type) ||",
+              2,
+          )
+
+          replace_once(
+              "src/target/riscv64/codegen_function.c",
+              """    } else {\n"
+              "        size_t emitted_initializer_count;\n\n"
+              "        emitted_initializer_count = object->initializer_count;\n"
+              "        if (minic_type_is_array(object->type)) {\n"
+              "            while (emitted_initializer_count != 0U &&\n"
+              "                   object->initializer_values[emitted_initializer_count - 1U] == 0U) {\n"
+              "                emitted_initializer_count -= 1U;\n"
+              "            }\n"
+              "        }\n"
+              "        for (initializer_index = 0U; initializer_index < emitted_initializer_count;\n"
+              "             ++initializer_index) {\n"
+              "            if (!minic_riscv64_emit_typed_bits(\n"
+              "                    file, program, scalar_type, object->initializer_values[initializer_index])) {\n"
+              "                return false;\n"
+              "            }\n"
+              "        }\n"
+              "        if (!minic_riscv64_emit_zero_bytes(\n"
+              "                file, storage_size - emitted_initializer_count * scalar_width)) {\n"
+              "            return false;\n"
+              "        }\n"
+              "    }\n""",
+              """    } else {\n"
+              "        for (initializer_index = 0U; initializer_index < object->initializer_count;\n"
+              "             ++initializer_index) {\n"
+              "            if (!minic_riscv64_emit_typed_bits(\n"
+              "                    file, program, scalar_type, object->initializer_values[initializer_index])) {\n"
+              "                return false;\n"
+              "            }\n"
+              "        }\n"
+              "        if (!minic_riscv64_emit_zero_bytes(\n"
+              "                file, storage_size - object->initializer_count * scalar_width)) {\n"
+              "            return false;\n"
+              "        }\n"
+              "    }\n""",
+          )
+
+          p = Path("tests/compiler/c0/external_array_declarator_routing.c")
+          text = p.read_text()
+          addition = """
+
+extern unsigned long completed_tentative[];
+unsigned long completed_tentative[4];
+
+extern unsigned long completed_definition[];
+unsigned long completed_definition[4] = {11, 12, 13, 14};
+"""
+          if "completed_tentative" in text:
+              raise SystemExit("external-array regression already present")
+          p.write_text(text.rstrip() + addition)
+
+          replace_once(
+              "tests/compiler/c0/run-external-array-declarator-routing.sh",
+              "for symbol in cpu_ops empty_zero_page purgatory_sha256_digest purgatory_sha_regions initialized_map; do",
+              "for symbol in cpu_ops empty_zero_page purgatory_sha256_digest purgatory_sha_regions initialized_map completed_tentative completed_definition; do",
+          )
+          PY
+
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh apply
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+
+      - name: Validate focused and fast contracts
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release BUILD_DIR=build/stage-external-array
+          MINIC="$PWD/build/stage-external-array/bin/minic" \
+            BUILD_DIR="$PWD/build/stage-external-array" \
+            sh tests/compiler/c0/run-external-array-declarator-routing.sh
+          make -j4 MODE=release BUILD_DIR=build/stage-external-array check-fast
+          MINIC="$PWD/build/stage-external-array/bin/minic" \
+            BUILD_DIR="$PWD/build/stage-external-array" \
+            sh tests/compiler/c0/run-foundation-focused.sh
+
+      - name: Publish product-only patch
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm .github/workflows/stage-external-array-redecl-fix.yml
+          git config user.name 'LiYang Dong'
+          git config user.email '119646676+yituanxing@users.noreply.github.com'
+          git add src/frontend/ast.c src/frontend/ast.h src/frontend/ast_global.c \
+            src/frontend/parser_function.c src/target/riscv64/codegen_function.c \
+            tests/compiler/c0/external_array_declarator_routing.c \
+            tests/compiler/c0/run-external-array-declarator-routing.sh \
+            .github/workflows/stage-external-array-redecl-fix.yml
+          git commit -m 'frontend: preserve array redeclaration compatibility' \
+            -m 'Make incomplete and complete array declarations C-compatible, complete the canonical global-object array descriptor when a later declaration provides the bound, and keep complete external arrays on the ordinary object routing path. Remove unrelated trailing-zero assembly compression so this change does not alter established scalar-array output policy.' \
+            -m '中文说明：补齐不完整数组与完整数组的 C 重声明兼容语义；后续声明给出长度时，在 canonical global-object owner 中完成原数组 descriptor。继续保持 complete external array 走普通 object 路径，并撤掉与本 PR 无关的尾零汇编压缩，避免改变既有输出策略。'
+          git push origin HEAD:staging/external-array-routing-redecl-fix
