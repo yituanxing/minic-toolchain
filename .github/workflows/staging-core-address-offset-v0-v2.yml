@@ -1,0 +1,494 @@
+name: Staging Core Constant Address Offset V0 V2
+
+on:
+  push:
+    branches:
+      - staging/core-address-offset-v0-v2
+
+permissions:
+  contents: write
+
+jobs:
+  validate-and-publish:
+    if: ${{ !contains(github.event.head_commit.message, '[publish-v2]') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply evidence-bounded address algebra v0
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              assert count == 1, (path, count, old[:120])
+              p.write_text(text.replace(old, new, 1))
+
+          replace_once(
+              'src/core/core_ir.h',
+              '''    MINIC_CORE_INSTRUCTION_PARAMETER,
+              MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS,
+              MINIC_CORE_INSTRUCTION_LOAD,''',
+              '''    MINIC_CORE_INSTRUCTION_PARAMETER,
+              MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS,
+              MINIC_CORE_INSTRUCTION_ADDRESS_OFFSET,
+              MINIC_CORE_INSTRUCTION_LOAD,''')
+          replace_once(
+              'src/core/core_ir.h',
+              '''        size_t parameter_index;
+                  MinicCoreObjectId object_id;
+                  struct {
+                      MinicCoreValueId address;''',
+              '''        size_t parameter_index;
+                  MinicCoreObjectId object_id;
+                  struct {
+                      MinicCoreValueId base;
+                      int64_t byte_offset;
+                  } address_offset;
+                  struct {
+                      MinicCoreValueId address;''')
+
+          replace_once(
+              'src/core/core_ir.c',
+              '''    case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS: {
+                  MinicType pointer_type;
+
+                  if (!instruction_result_is_valid(function, instruction) ||
+                      instruction->value.object_id >= function->object_count ||
+                      !minic_type_pointer_to(function->objects[instruction->value.object_id].type,
+                                             &pointer_type)) {
+                      return false;
+                  }
+                  return minic_type_equal(pointer_type, instruction->type);
+              }
+              case MINIC_CORE_INSTRUCTION_LOAD: {''',
+              '''    case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS: {
+                  MinicType pointer_type;
+
+                  if (!instruction_result_is_valid(function, instruction) ||
+                      instruction->value.object_id >= function->object_count ||
+                      !minic_type_pointer_to(function->objects[instruction->value.object_id].type,
+                                             &pointer_type)) {
+                      return false;
+                  }
+                  return minic_type_equal(pointer_type, instruction->type);
+              }
+              case MINIC_CORE_INSTRUCTION_ADDRESS_OFFSET:
+                  return instruction_result_is_valid(function, instruction) &&
+                         minic_type_is_pointer(instruction->type) &&
+                         instruction->value.address_offset.base < function->value_count &&
+                         available_values[instruction->value.address_offset.base] &&
+                         minic_type_is_pointer(
+                             function->values[instruction->value.address_offset.base].type);
+              case MINIC_CORE_INSTRUCTION_LOAD: {''')
+          replace_once(
+              'src/core/core_ir.c',
+              '''    case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS:
+                  return fprintf(output,
+                                 "  %%%" PRIu32 " = object.addr %%o%" PRIu32 "\\n",
+                                 instruction->result,
+                                 instruction->value.object_id) >= 0;
+              case MINIC_CORE_INSTRUCTION_LOAD:''',
+              '''    case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS:
+                  return fprintf(output,
+                                 "  %%%" PRIu32 " = object.addr %%o%" PRIu32 "\\n",
+                                 instruction->result,
+                                 instruction->value.object_id) >= 0;
+              case MINIC_CORE_INSTRUCTION_ADDRESS_OFFSET:
+                  return fprintf(output,
+                                 "  %%%" PRIu32 " = addr.offset %%%" PRIu32 ", %" PRId64 "\\n",
+                                 instruction->result,
+                                 instruction->value.address_offset.base,
+                                 instruction->value.address_offset.byte_offset) >= 0;
+              case MINIC_CORE_INSTRUCTION_LOAD:''')
+
+          replace_once(
+              'src/core/core_lower.c',
+              '#include "frontend/expression_semantics.h"\n',
+              '#include "frontend/expression_semantics.h"\n#include "target/data_layout.h"\n')
+
+          old_address = '''static MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
+                                                    MinicExpressionId expression_id,
+                                                    MinicCoreValueId *address_id) {
+              const MinicExpression *expression;
+              MinicCoreInstruction instruction;
+              MinicCoreObjectId object_id;
+              MinicCoreLowerStatus status;
+
+              if (context == NULL || context->body == NULL || context->body->program == NULL ||
+                  address_id == NULL) {
+                  return MINIC_CORE_LOWER_ERROR;
+              }
+              expression = minic_c0_program_expression(context->body->program, expression_id);
+              if (expression == NULL) {
+                  return MINIC_CORE_LOWER_ERROR;
+              }
+              if (expression->kind != MINIC_EXPRESSION_LOCAL ||
+                  expression->value_category != MINIC_VALUE_LVALUE) {
+                  return MINIC_CORE_LOWER_UNSUPPORTED;
+              }
+              status = lower_local_object(context, expression->value.local_id, &object_id);
+              if (status != MINIC_CORE_LOWER_OK) {
+                  return status;
+              }
+              (void)memset(&instruction, 0, sizeof(instruction));
+              instruction.kind = MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS;
+              instruction.span = expression->span;
+              instruction.result = MINIC_CORE_VALUE_INVALID;
+              instruction.value.object_id = object_id;
+              if (!minic_type_pointer_to(expression->type, &instruction.type)) {
+                  return MINIC_CORE_LOWER_ERROR;
+              }
+              return minic_core_function_append_value_instruction(
+                         context->function, context->block_id, &instruction, address_id)
+                         ? MINIC_CORE_LOWER_OK
+                         : MINIC_CORE_LOWER_ERROR;
+          }
+          '''
+          new_address = '''static MinicCoreLowerStatus append_address_offset(MinicCoreLowerContext *context,
+                                                           MinicSourceSpan span,
+                                                           MinicCoreValueId base_id,
+                                                           MinicType pointee_type,
+                                                           int64_t byte_offset,
+                                                           MinicCoreValueId *address_id) {
+              MinicCoreInstruction instruction;
+
+              if (context == NULL || context->function == NULL || address_id == NULL ||
+                  base_id >= context->function->value_count ||
+                  !minic_type_is_pointer(context->function->values[base_id].type)) {
+                  return MINIC_CORE_LOWER_ERROR;
+              }
+              (void)memset(&instruction, 0, sizeof(instruction));
+              instruction.kind = MINIC_CORE_INSTRUCTION_ADDRESS_OFFSET;
+              instruction.span = span;
+              instruction.result = MINIC_CORE_VALUE_INVALID;
+              instruction.value.address_offset.base = base_id;
+              instruction.value.address_offset.byte_offset = byte_offset;
+              if (!minic_type_pointer_to(pointee_type, &instruction.type)) {
+                  return MINIC_CORE_LOWER_ERROR;
+              }
+              return minic_core_function_append_value_instruction(
+                         context->function, context->block_id, &instruction, address_id)
+                         ? MINIC_CORE_LOWER_OK
+                         : MINIC_CORE_LOWER_ERROR;
+          }
+
+          static bool scaled_constant_byte_offset(int64_t index,
+                                                  size_t element_size,
+                                                  int64_t *byte_offset) {
+              uint64_t magnitude;
+              uint64_t limit;
+
+              if (byte_offset == NULL || element_size == 0U || element_size > (size_t)INT64_MAX) {
+                  return false;
+              }
+              if (index >= 0) {
+                  if ((uint64_t)index > (uint64_t)INT64_MAX / (uint64_t)element_size) {
+                      return false;
+                  }
+                  *byte_offset = index * (int64_t)element_size;
+                  return true;
+              }
+              magnitude = index == INT64_MIN ? (UINT64_C(1) << 63U) : (uint64_t)(-index);
+              limit = (UINT64_C(1) << 63U) / (uint64_t)element_size;
+              if (magnitude > limit) {
+                  return false;
+              }
+              if (magnitude == (UINT64_C(1) << 63U) && element_size == 1U) {
+                  *byte_offset = INT64_MIN;
+                  return true;
+              }
+              *byte_offset = -(int64_t)(magnitude * (uint64_t)element_size);
+              return true;
+          }
+
+          static MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
+                                                    MinicExpressionId expression_id,
+                                                    MinicCoreValueId *address_id) {
+              const MinicExpression *expression;
+              MinicCoreInstruction instruction;
+              MinicCoreObjectId object_id;
+              MinicCoreLowerStatus status;
+
+              if (context == NULL || context->body == NULL || context->body->program == NULL ||
+                  context->function == NULL || address_id == NULL) {
+                  return MINIC_CORE_LOWER_ERROR;
+              }
+              expression = minic_c0_program_expression(context->body->program, expression_id);
+              if (expression == NULL) {
+                  return MINIC_CORE_LOWER_ERROR;
+              }
+              if (expression->value_category != MINIC_VALUE_LVALUE) {
+                  return MINIC_CORE_LOWER_UNSUPPORTED;
+              }
+              if (expression->kind == MINIC_EXPRESSION_LOCAL) {
+                  status = lower_local_object(context, expression->value.local_id, &object_id);
+                  if (status != MINIC_CORE_LOWER_OK) {
+                      return status;
+                  }
+                  (void)memset(&instruction, 0, sizeof(instruction));
+                  instruction.kind = MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS;
+                  instruction.span = expression->span;
+                  instruction.result = MINIC_CORE_VALUE_INVALID;
+                  instruction.value.object_id = object_id;
+                  if (!minic_type_pointer_to(expression->type, &instruction.type)) {
+                      return MINIC_CORE_LOWER_ERROR;
+                  }
+                  return minic_core_function_append_value_instruction(
+                             context->function, context->block_id, &instruction, address_id)
+                             ? MINIC_CORE_LOWER_OK
+                             : MINIC_CORE_LOWER_ERROR;
+              }
+              if (expression->kind == MINIC_EXPRESSION_DEREFERENCE) {
+                  MinicCoreValueId pointer_id;
+                  MinicType expected_pointer;
+
+                  if (!minic_type_pointer_to(expression->type, &expected_pointer)) {
+                      return MINIC_CORE_LOWER_ERROR;
+                  }
+                  status = lower_expression(context, expression->value.unary.operand, &pointer_id);
+                  if (status != MINIC_CORE_LOWER_OK) {
+                      return status;
+                  }
+                  if (pointer_id >= context->function->value_count ||
+                      !minic_type_equal(context->function->values[pointer_id].type, expected_pointer)) {
+                      return MINIC_CORE_LOWER_UNSUPPORTED;
+                  }
+                  *address_id = pointer_id;
+                  return MINIC_CORE_LOWER_OK;
+              }
+              if (expression->kind == MINIC_EXPRESSION_MEMBER) {
+                  const MinicExpression *base;
+                  const MinicRecord *record;
+                  const MinicRecordField *field;
+                  MinicCoreValueId base_id;
+                  MinicType record_type;
+                  size_t field_offset;
+
+                  base = minic_c0_program_expression(context->body->program,
+                                                     expression->value.member.base);
+                  record = minic_c0_program_record(context->body->program,
+                                                   expression->value.member.record_id);
+                  field = minic_c0_record_field(record, expression->value.member.field_index);
+                  if (base == NULL || record == NULL || field == NULL || field->is_bit_field ||
+                      !minic_type_pointee(base->type, &record_type) ||
+                      !minic_type_is_record(record_type) ||
+                      record_type.record_id != expression->value.member.record_id) {
+                      return MINIC_CORE_LOWER_UNSUPPORTED;
+                  }
+                  if (!minic_data_layout_record_field_offset(minic_default_data_layout(),
+                                                             context->body->program,
+                                                             record,
+                                                             expression->value.member.field_index,
+                                                             &field_offset)) {
+                      return MINIC_CORE_LOWER_ERROR;
+                  }
+                  if (field_offset > (size_t)INT64_MAX) {
+                      return MINIC_CORE_LOWER_UNSUPPORTED;
+                  }
+                  status = lower_expression(context, expression->value.member.base, &base_id);
+                  if (status != MINIC_CORE_LOWER_OK) {
+                      return status;
+                  }
+                  return append_address_offset(context,
+                                               expression->span,
+                                               base_id,
+                                               expression->type,
+                                               (int64_t)field_offset,
+                                               address_id);
+              }
+              if (expression->kind == MINIC_EXPRESSION_SUBSCRIPT) {
+                  const MinicExpression *base;
+                  const MinicExpression *index;
+                  MinicArrayObjectInfo array_info;
+                  MinicCoreValueId base_id;
+                  bool base_is_array;
+                  int64_t byte_offset;
+                  size_t element_alignment;
+                  size_t element_size;
+
+                  base = minic_c0_program_expression(context->body->program,
+                                                     expression->value.subscript.base);
+                  index = minic_c0_program_expression(context->body->program,
+                                                      expression->value.subscript.index);
+                  if (base == NULL || index == NULL || index->kind != MINIC_EXPRESSION_INTEGER ||
+                      !minic_type_is_integer(index->type)) {
+                      return MINIC_CORE_LOWER_UNSUPPORTED;
+                  }
+                  base_is_array = minic_c0_expression_array_object_info(
+                      context->body->program, base, &array_info);
+                  if (base_is_array) {
+                      if (!minic_type_equal(array_info.element_type, expression->type)) {
+                          return MINIC_CORE_LOWER_ERROR;
+                      }
+                      status = lower_address(context, expression->value.subscript.base, &base_id);
+                  } else {
+                      MinicType pointee;
+
+                      if (!minic_type_pointee(base->type, &pointee) ||
+                          !minic_type_equal(pointee, expression->type)) {
+                          return MINIC_CORE_LOWER_UNSUPPORTED;
+                      }
+                      status = lower_expression(context, expression->value.subscript.base, &base_id);
+                  }
+                  if (status != MINIC_CORE_LOWER_OK) {
+                      return status;
+                  }
+                  if (!minic_data_layout_type(minic_default_data_layout(),
+                                              context->body->program,
+                                              expression->type,
+                                              &element_size,
+                                              &element_alignment) ||
+                      !scaled_constant_byte_offset(
+                          index->value.integer_value, element_size, &byte_offset)) {
+                      return MINIC_CORE_LOWER_UNSUPPORTED;
+                  }
+                  return append_address_offset(context,
+                                               expression->span,
+                                               base_id,
+                                               expression->type,
+                                               byte_offset,
+                                               address_id);
+              }
+              return MINIC_CORE_LOWER_UNSUPPORTED;
+          }
+          '''
+          replace_once('src/core/core_lower.c', old_address, new_address)
+
+          replace_once(
+              'src/core/core_lower.c',
+              '''    if (expression->value_category != MINIC_VALUE_RVALUE) {
+                  return MINIC_CORE_LOWER_UNSUPPORTED;
+              }
+              if (expression->kind == MINIC_EXPRESSION_CALL) {''',
+              '''    if (expression->value_category != MINIC_VALUE_RVALUE) {
+                  return MINIC_CORE_LOWER_UNSUPPORTED;
+              }
+              if (expression->kind == MINIC_EXPRESSION_ADDRESS_OF) {
+                  MinicCoreLowerStatus status;
+
+                  status = lower_address(context, expression->value.unary.operand, value_id);
+                  if (status != MINIC_CORE_LOWER_OK) {
+                      return status;
+                  }
+                  if (*value_id >= context->function->value_count ||
+                      !minic_type_equal(context->function->values[*value_id].type, expression->type)) {
+                      return MINIC_CORE_LOWER_ERROR;
+                  }
+                  return MINIC_CORE_LOWER_OK;
+              }
+              if (expression->kind == MINIC_EXPRESSION_CALL) {''')
+          PY
+
+      - name: Canonical formatting
+        run: |
+          clang-format -i src/core/core_ir.h src/core/core_ir.c src/core/core_lower.c
+          git diff --check
+
+      - name: Release Werror build
+        run: make -j4 MODE=release BUILD_DIR=build/core-address-offset-v0 CFLAGS=-Werror
+
+      - name: Core IR unit contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p build/core-address-offset-v0-unit
+          cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow \
+            -Wstrict-prototypes -Wmissing-prototypes -Werror \
+            -Iinclude -Isrc \
+            src/core/core_ir.c src/core/core_lower.c \
+            src/frontend/ast.c src/frontend/expression_semantics.c \
+            src/frontend/ast_global.c src/frontend/ast_traversal.c \
+            src/frontend/ast_verifier.c src/frontend/function_body.c \
+            src/frontend/type.c src/target/data_layout.c src/target/target_info.c \
+            tests/core/core_ir_shadow_test.c \
+            -o build/core-address-offset-v0-unit/core-ir-shadow-test
+          build/core-address-offset-v0-unit/core-ir-shadow-test
+
+      - name: Focused address formation contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$PWD/build/core-address-offset-v0-focused"
+          mkdir -p "$work"
+          cat >"$work/address-offset-v0.i" <<'EOF'
+          struct Pair {
+              int first;
+              int second;
+          };
+          struct Outer {
+              int prefix;
+              struct Pair pair;
+          };
+          struct ArrayHolder {
+              int prefix;
+              int values[4];
+          };
+          void sink(int *value);
+          void member_address(struct Pair *value) {
+              sink(&value->second);
+              return;
+          }
+          void nested_member_address(struct Outer *value) {
+              sink(&value->pair.second);
+              return;
+          }
+          void constant_subscript_address(struct ArrayHolder *value) {
+              sink(&value->values[2]);
+              return;
+          }
+          EOF
+          MINIC_CORE_IR=strict "$PWD/build/core-address-offset-v0/bin/minic" \
+            -S "$work/address-offset-v0.i" -o "$work/address-offset-v0.s"
+          test -s "$work/address-offset-v0.s"
+
+          cat >"$work/dynamic-subscript-unsupported.i" <<'EOF'
+          struct DynamicArrayHolder {
+              int values[4];
+          };
+          void sink(int *value);
+          void dynamic_subscript_address(struct DynamicArrayHolder *value, int index) {
+              sink(&value->values[index]);
+              return;
+          }
+          EOF
+          "$PWD/build/core-address-offset-v0/bin/minic" \
+            -S "$work/dynamic-subscript-unsupported.i" -o "$work/dynamic-normal.s"
+          if MINIC_CORE_IR=strict "$PWD/build/core-address-offset-v0/bin/minic" \
+            -S "$work/dynamic-subscript-unsupported.i" -o "$work/dynamic-strict.s" \
+            2>"$work/dynamic-strict.err"; then
+            echo 'strict Core IR unexpectedly accepted dynamic subscript address' >&2
+            exit 1
+          fi
+          grep -F "Core IR shadow does not yet support function 'dynamic_subscript_address'" \
+            "$work/dynamic-strict.err" >/dev/null
+
+      - name: Existing Core pipeline shadow contract
+        shell: bash
+        run: |
+          MINIC="$PWD/build/core-address-offset-v0/bin/minic" \
+          BUILD_DIR="$PWD/build/core-address-offset-v0-shadow" \
+            bash tests/core/run-core-ir-shadow.sh
+
+      - name: Broad fast gate
+        run: make -j4 MODE=release BUILD_DIR=build/core-address-offset-v0-fast check-fast
+
+      - name: Publish validated product diff
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'LiYang Dong'
+          git config user.email '119646676+yituanxing@users.noreply.github.com'
+          git add src/core/core_ir.h src/core/core_ir.c src/core/core_lower.c
+          git commit -m 'core: add constant byte address offset v0 [publish-v2]'
+          git push origin HEAD:staging/core-address-offset-v0-v2
