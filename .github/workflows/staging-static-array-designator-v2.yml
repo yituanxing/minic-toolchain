@@ -23,7 +23,28 @@ jobs:
           sudo apt-get install -y --no-install-recommends clang-format-18
 
       - name: Apply stacked designator patch
-        run: python3 tools/dev/stage-static-array-designator-v2.py
+        run: |
+          set +e
+          output=$(python3 tools/dev/stage-static-array-designator-v2.py 2>&1)
+          status=$?
+          set -e
+          printf '%s\n' "$output"
+          if test "$status" -ne 0; then
+            case "$output" in
+              *"run.sh: static mutable runner anchor not found uniquely"*)
+                cat >> tests/compiler/c0/run.sh <<'EOF'
+
+MINIC="$minic" \
+HOST_CC="$host_cc" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+sh "$root/tests/compiler/c0/run-static-array-designators.sh"
+EOF
+                ;;
+              *)
+                exit "$status"
+                ;;
+            esac
+          fi
 
       - name: Canonical formatting
         run: |
