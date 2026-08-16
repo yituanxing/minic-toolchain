@@ -95,6 +95,61 @@ replace_count(
 )
 
 replace_once(
+    "src/frontend/parser_global.c",
+    """static bool parse_static_array_constant(MinicParser *parser,
+                                        MinicGlobalObjectId object_id,
+                                        const MinicArrayType *array_type) {
+    size_t element_index;
+
+    if (array_type == NULL || array_type->element_count == 0U ||
+        !minic_parser_expect(parser, MINIC_TOKEN_LBRACE, "expected '{' in array initializer")) {
+        return false;
+    }
+    element_index = 0U;
+""",
+    """static bool parse_static_array_constant(MinicParser *parser,
+                                        MinicGlobalObjectId object_id,
+                                        const MinicArrayType *array_type) {
+    const MinicGlobalObject *object;
+    const MinicArrayType *root_array_type;
+    size_t element_index;
+    bool materialize_tail_zeros;
+
+    if (array_type == NULL || array_type->element_count == 0U ||
+        object_id >= parser->program->global_object_count ||
+        !minic_parser_expect(parser, MINIC_TOKEN_LBRACE, "expected '{' in array initializer")) {
+        return false;
+    }
+    object = &parser->program->global_objects[object_id];
+    root_array_type = minic_type_is_array(object->type)
+                          ? minic_c0_program_array_type(parser->program, object->type.array_type_id)
+                          : NULL;
+    materialize_tail_zeros = root_array_type != array_type;
+    element_index = 0U;
+""",
+)
+
+replace_once(
+    "src/frontend/parser_global.c",
+    """    while (element_index < array_type->element_count) {
+        if (!append_static_constant_zero(parser, object_id, array_type->element_type)) {
+            minic_parser_error(parser, "cannot zero-fill nested static array initializer");
+            return false;
+        }
+        element_index += 1U;
+    }
+""",
+    """    while (materialize_tail_zeros && element_index < array_type->element_count) {
+        if (!append_static_constant_zero(parser, object_id, array_type->element_type)) {
+            minic_parser_error(parser, "cannot zero-fill nested static array initializer");
+            return false;
+        }
+        element_index += 1U;
+    }
+""",
+)
+
+replace_once(
     "src/target/riscv64/codegen_function.c",
     """    } else {
         size_t emitted_initializer_count;
