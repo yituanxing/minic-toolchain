@@ -1,0 +1,242 @@
+name: Staging Core Lowered Program Apply
+
+on:
+  push:
+    branches:
+      - staging/core-lowered-program-v0
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Wire retained Core lowering into compiler and differential
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          makefile = Path('Makefile')
+          text = makefile.read_text()
+          needle = '\tsrc/core/core_lower.c \\\n'
+          replacement = needle + '\tsrc/core/core_lower_program.c \\\n'
+          if 'src/core/core_lower_program.c' not in text:
+              if needle not in text:
+                  raise SystemExit('Makefile Core source anchor not found')
+              text = text.replace(needle, replacement, 1)
+              makefile.write_text(text)
+
+          compiler = Path('src/compiler/compiler.c')
+          text = compiler.read_text()
+          include_anchor = '#include "core/core_lower.h"\n'
+          if '#include "core/core_lower_program.h"' not in text:
+              text = text.replace(include_anchor,
+                                  include_anchor + '#include "core/core_lower_program.h"\n',
+                                  1)
+
+          start = text.index('static bool minic_run_core_shadow(')
+          end = text.index('static bool\nminic_read_file', start)
+          replacement = r'''static bool minic_validate_core_shadow(const char *input_path,
+                                       const MinicC0Program *program,
+                                       const MinicCoreLoweredProgram *lowered,
+                                       MinicCoreShadowMode mode,
+                                       MinicDiagnostic *diagnostic) {
+    size_t function_index;
+
+    if (program == NULL || lowered == NULL) {
+        return false;
+    }
+    if (mode == MINIC_CORE_SHADOW_DISABLED) {
+        return true;
+    }
+    if (lowered->function_count != program->function_count ||
+        (lowered->function_count != 0U &&
+         (lowered->functions == NULL || lowered->statuses == NULL))) {
+        minic_set_diagnostic(
+            diagnostic, input_path, 1U, 1U, "Core IR retained program does not match source program");
+        return false;
+    }
+    for (function_index = 0U; function_index < program->function_count; ++function_index) {
+        const MinicFunction *function;
+        MinicCoreLowerStatus status;
+
+        function = minic_c0_program_function(program, function_index);
+        if (function == NULL) {
+            minic_set_diagnostic(
+                diagnostic, input_path, 1U, 1U, "Core IR shadow cannot access function");
+            return false;
+        }
+        if (!function->is_defined) {
+            continue;
+        }
+        status = lowered->statuses[function_index];
+        if (status == MINIC_CORE_LOWER_OK &&
+            !minic_core_function_verify(&lowered->functions[function_index])) {
+            status = MINIC_CORE_LOWER_ERROR;
+        }
+        if (status == MINIC_CORE_LOWER_OK) {
+            continue;
+        }
+        if (status == MINIC_CORE_LOWER_UNSUPPORTED && mode == MINIC_CORE_SHADOW_OPTIONAL) {
+            continue;
+        }
+        if (status == MINIC_CORE_LOWER_UNSUPPORTED) {
+            minic_set_diagnostic(diagnostic,
+                                 input_path,
+                                 1U,
+                                 1U,
+                                 "Core IR shadow does not yet support function '%s'",
+                                 function->name);
+            return false;
+        }
+        minic_set_diagnostic(diagnostic,
+                             input_path,
+                             1U,
+                             1U,
+                             "Core IR shadow lowering failed for function '%s'",
+                             function->name);
+        return false;
+    }
+    return true;
+}
+
+'''
+          text = text[:start] + replacement + text[end:]
+          text = text.replace(
+              '    MinicC0Program program;\n    const MinicTargetInfo *target_info;',
+              '    MinicC0Program program;\n    MinicCoreLoweredProgram core_program;\n    const MinicTargetInfo *target_info;',
+              1,
+          )
+          text = text.replace(
+              '    minic_c0_program_initialize(&program);\n    target_info = minic_default_target_info();',
+              '    minic_c0_program_initialize(&program);\n    minic_core_lowered_program_initialize(&core_program);\n    target_info = minic_default_target_info();',
+              1,
+          )
+          old_shadow = '''    if (success) {
+        success = minic_run_core_shadow(input_path, &program, core_shadow_mode, diagnostic);
+    }
+'''
+          new_shadow = '''    if (success && core_shadow_mode != MINIC_CORE_SHADOW_DISABLED &&
+        !minic_core_lower_program(&program, &core_program)) {
+        minic_set_diagnostic(
+            diagnostic, input_path, 1U, 1U, "cannot retain Core IR lowering results");
+        success = false;
+    }
+    if (success) {
+        success = minic_validate_core_shadow(
+            input_path, &program, &core_program, core_shadow_mode, diagnostic);
+    }
+'''
+          if old_shadow not in text:
+              raise SystemExit('compiler shadow call anchor not found')
+          text = text.replace(old_shadow, new_shadow, 1)
+          text = text.replace(
+              '    minic_c0_program_destroy(&program);\n    free(buffer.data);',
+              '    minic_core_lowered_program_destroy(&core_program);\n    minic_c0_program_destroy(&program);\n    free(buffer.data);',
+              1,
+          )
+          compiler.write_text(text)
+
+          test = Path('tests/target/riscv64/core_frontend_emitter_test.c')
+          text = test.read_text()
+          text = text.replace('#include "core/core_lower.h"\n',
+                              '#include "core/core_lower_program.h"\n', 1)
+          start = text.index('static bool emit_frontend_functions(')
+          end = text.index('\nint main(', start)
+          replacement = r'''static bool emit_frontend_functions(FILE *file,
+                                    const MinicC0Program *program,
+                                    const MinicCoreLoweredProgram *lowered) {
+    size_t function_index;
+    size_t emitted_count;
+
+    if (file == NULL || program == NULL || lowered == NULL ||
+        lowered->function_count != program->function_count) {
+        return false;
+    }
+    emitted_count = 0U;
+    for (function_index = 0U; function_index < program->function_count; ++function_index) {
+        const MinicFunction *function;
+        const MinicCoreFunction *core;
+        MinicCoreLowerStatus status;
+        MinicRiscv64FunctionSymbol symbol;
+        bool success;
+
+        function = minic_c0_program_function(program, function_index);
+        if (function == NULL) {
+            return false;
+        }
+        if (!function->is_defined) {
+            continue;
+        }
+        status = lowered->statuses[function_index];
+        core = &lowered->functions[function_index];
+        success = status == MINIC_CORE_LOWER_OK && minic_core_function_verify(core) &&
+                  minic_riscv64_core_function_can_emit_basic_v0(core) &&
+                  minic_riscv64_function_symbol_from_function(function, &symbol);
+        if (success) {
+            success = minic_riscv64_emit_core_function_basic_v0_with_symbol(file, core, &symbol);
+        }
+        if (!success) {
+            (void)fprintf(stderr,
+                          "frontend Core emitter rejected function '%s' status=%d\n",
+                          function->name != NULL ? function->name : "<unnamed>",
+                          (int)status);
+        }
+        if (!success) {
+            return false;
+        }
+        emitted_count += 1U;
+    }
+    return emitted_count != 0U;
+}
+'''
+          text = text[:start] + replacement + text[end:]
+          text = text.replace(
+              '    MinicC0Program program;\n    MinicDiagnostic diagnostic;',
+              '    MinicC0Program program;\n    MinicCoreLoweredProgram lowered;\n    MinicDiagnostic diagnostic;',
+              1,
+          )
+          text = text.replace(
+              '    minic_c0_program_initialize(&program);\n    success = prepare_program',
+              '    minic_c0_program_initialize(&program);\n    minic_core_lowered_program_initialize(&lowered);\n    success = prepare_program',
+              1,
+          )
+          text = text.replace(
+              '    file = NULL;\n    if (success) {',
+              '    if (success) {\n        success = minic_core_lower_program(&program, &lowered);\n    }\n\n    file = NULL;\n    if (success) {',
+              1,
+          )
+          text = text.replace(
+              '        success = emit_frontend_functions(file, &program);',
+              '        success = emit_frontend_functions(file, &program, &lowered);',
+              1,
+          )
+          text = text.replace(
+              '    minic_c0_program_destroy(&program);\n    free(buffer.data);',
+              '    minic_core_lowered_program_destroy(&lowered);\n    minic_c0_program_destroy(&program);\n    free(buffer.data);',
+              1,
+          )
+          test.write_text(text)
+          PY
+
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+          git diff --check
+          git diff -- Makefile src/compiler/compiler.c \
+            tests/target/riscv64/core_frontend_emitter_test.c \
+            src/core/core_lower_program.c src/core/core_lower_program.h
+          if git diff --quiet -- Makefile src/compiler/compiler.c \
+              tests/target/riscv64/core_frontend_emitter_test.c \
+              src/core/core_lower_program.c src/core/core_lower_program.h; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Makefile src/compiler/compiler.c \
+            tests/target/riscv64/core_frontend_emitter_test.c \
+            src/core/core_lower_program.c src/core/core_lower_program.h
+          git commit -m "refactor(core): retain program lowering results"
+          git push origin HEAD:staging/core-lowered-program-v0
