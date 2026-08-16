@@ -1,7 +1,6 @@
 #include "core/core_lower.h"
 
 #include "frontend/expression_semantics.h"
-
 #include <stdlib.h>
 #include <string.h>
 
@@ -136,6 +135,39 @@ static MinicCoreLowerStatus lower_parameter_ingress(MinicCoreLowerContext *conte
     return MINIC_CORE_LOWER_OK;
 }
 
+static MinicCoreLowerStatus append_field_address(MinicCoreLowerContext *context,
+                                                 MinicSourceSpan span,
+                                                 MinicCoreValueId base_id,
+                                                 MinicRecordId record_id,
+                                                 size_t field_index,
+                                                 MinicType field_type,
+                                                 MinicCoreValueId *address_id) {
+    MinicCoreInstruction instruction;
+    MinicType base_pointee;
+
+    if (context == NULL || context->function == NULL || address_id == NULL ||
+        base_id >= context->function->value_count ||
+        !minic_type_pointee(context->function->values[base_id].type, &base_pointee) ||
+        !minic_type_is_record(base_pointee) || base_pointee.record_id != record_id ||
+        record_id == MINIC_RECORD_INVALID) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    (void)memset(&instruction, 0, sizeof(instruction));
+    instruction.kind = MINIC_CORE_INSTRUCTION_FIELD_ADDRESS;
+    instruction.span = span;
+    instruction.result = MINIC_CORE_VALUE_INVALID;
+    instruction.value.field_address.base = base_id;
+    instruction.value.field_address.record_id = record_id;
+    instruction.value.field_address.field_index = field_index;
+    if (!minic_type_pointer_to(field_type, &instruction.type)) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    return minic_core_function_append_value_instruction(
+               context->function, context->block_id, &instruction, address_id)
+               ? MINIC_CORE_LOWER_OK
+               : MINIC_CORE_LOWER_ERROR;
+}
+
 static MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
                                           MinicExpressionId expression_id,
                                           MinicCoreValueId *address_id) {
@@ -145,33 +177,85 @@ static MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
     MinicCoreLowerStatus status;
 
     if (context == NULL || context->body == NULL || context->body->program == NULL ||
-        address_id == NULL) {
+        context->function == NULL || address_id == NULL) {
         return MINIC_CORE_LOWER_ERROR;
     }
     expression = minic_c0_program_expression(context->body->program, expression_id);
     if (expression == NULL) {
         return MINIC_CORE_LOWER_ERROR;
     }
-    if (expression->kind != MINIC_EXPRESSION_LOCAL ||
-        expression->value_category != MINIC_VALUE_LVALUE) {
+    if (expression->value_category != MINIC_VALUE_LVALUE) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
-    status = lower_local_object(context, expression->value.local_id, &object_id);
-    if (status != MINIC_CORE_LOWER_OK) {
-        return status;
+    if (expression->kind == MINIC_EXPRESSION_LOCAL) {
+        status = lower_local_object(context, expression->value.local_id, &object_id);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        (void)memset(&instruction, 0, sizeof(instruction));
+        instruction.kind = MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS;
+        instruction.span = expression->span;
+        instruction.result = MINIC_CORE_VALUE_INVALID;
+        instruction.value.object_id = object_id;
+        if (!minic_type_pointer_to(expression->type, &instruction.type)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        return minic_core_function_append_value_instruction(
+                   context->function, context->block_id, &instruction, address_id)
+                   ? MINIC_CORE_LOWER_OK
+                   : MINIC_CORE_LOWER_ERROR;
     }
-    (void)memset(&instruction, 0, sizeof(instruction));
-    instruction.kind = MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS;
-    instruction.span = expression->span;
-    instruction.result = MINIC_CORE_VALUE_INVALID;
-    instruction.value.object_id = object_id;
-    if (!minic_type_pointer_to(expression->type, &instruction.type)) {
-        return MINIC_CORE_LOWER_ERROR;
+    if (expression->kind == MINIC_EXPRESSION_DEREFERENCE) {
+        MinicCoreValueId pointer_id;
+        MinicType expected_pointer;
+
+        if (!minic_type_pointer_to(expression->type, &expected_pointer)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        status = lower_expression(context, expression->value.unary.operand, &pointer_id);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        if (pointer_id >= context->function->value_count ||
+            !minic_type_equal(context->function->values[pointer_id].type, expected_pointer)) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        *address_id = pointer_id;
+        return MINIC_CORE_LOWER_OK;
     }
-    return minic_core_function_append_value_instruction(
-               context->function, context->block_id, &instruction, address_id)
-               ? MINIC_CORE_LOWER_OK
-               : MINIC_CORE_LOWER_ERROR;
+    if (expression->kind == MINIC_EXPRESSION_MEMBER) {
+        const MinicExpression *base;
+        const MinicRecord *record;
+        const MinicRecordField *field;
+        MinicCoreValueId base_id;
+        MinicType record_type;
+
+        base = minic_c0_program_expression(context->body->program, expression->value.member.base);
+        record =
+            minic_c0_program_record(context->body->program, expression->value.member.record_id);
+        field = minic_c0_record_field(record, expression->value.member.field_index);
+        if (base == NULL || record == NULL || field == NULL || field->is_bit_field ||
+            !minic_type_pointee(base->type, &record_type) || !minic_type_is_record(record_type) ||
+            record_type.record_id != expression->value.member.record_id) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        status = lower_expression(context, expression->value.member.base, &base_id);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        if (base_id >= context->function->value_count ||
+            !minic_type_equal(context->function->values[base_id].type, base->type)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        return append_field_address(context,
+                                    expression->span,
+                                    base_id,
+                                    expression->value.member.record_id,
+                                    expression->value.member.field_index,
+                                    expression->type,
+                                    address_id);
+    }
+    return MINIC_CORE_LOWER_UNSUPPORTED;
 }
 
 static MinicCoreLowerStatus append_integer_conversion(MinicCoreLowerContext *context,
@@ -362,6 +446,19 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
     }
     if (expression->value_category != MINIC_VALUE_RVALUE) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
+    }
+    if (expression->kind == MINIC_EXPRESSION_ADDRESS_OF) {
+        MinicCoreLowerStatus status;
+
+        status = lower_address(context, expression->value.unary.operand, value_id);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        if (*value_id >= context->function->value_count ||
+            !minic_type_equal(context->function->values[*value_id].type, expression->type)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        return MINIC_CORE_LOWER_OK;
     }
     if (expression->kind == MINIC_EXPRESSION_CALL) {
         return lower_direct_call(context, expression, value_id);

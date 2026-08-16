@@ -439,6 +439,24 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
         }
         return minic_type_equal(pointer_type, instruction->type);
     }
+    case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS: {
+        MinicCoreValueId base;
+        MinicType base_pointee;
+        MinicType field_type;
+
+        base = instruction->value.field_address.base;
+        if (!instruction_result_is_valid(function, instruction) || base >= function->value_count ||
+            !available_values[base] ||
+            !minic_type_pointee(function->values[base].type, &base_pointee) ||
+            !minic_type_is_record(base_pointee) ||
+            base_pointee.record_id != instruction->value.field_address.record_id ||
+            instruction->value.field_address.record_id == MINIC_RECORD_INVALID ||
+            !minic_type_pointee(instruction->type, &field_type) || minic_type_is_void(field_type) ||
+            minic_type_is_function(field_type)) {
+            return false;
+        }
+        return true;
+    }
     case MINIC_CORE_INSTRUCTION_LOAD: {
         MinicType pointee;
         MinicType value_type;
@@ -694,6 +712,13 @@ static bool dump_instruction(FILE *output,
                        "  %%%" PRIu32 " = object.addr %%o%" PRIu32 "\n",
                        instruction->result,
                        instruction->value.object_id) >= 0;
+    case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:
+        return fprintf(output,
+                       "  %%%" PRIu32 " = field.addr %%%" PRIu32 ", record=%zu, field=%zu\n",
+                       instruction->result,
+                       instruction->value.field_address.base,
+                       instruction->value.field_address.record_id,
+                       instruction->value.field_address.field_index) >= 0;
     case MINIC_CORE_INSTRUCTION_LOAD:
         return fprintf(output,
                        "  %%%" PRIu32 " = load%s %%%" PRIu32 "\n",
