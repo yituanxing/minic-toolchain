@@ -46,8 +46,8 @@ jobs:
           HOST_CC=cc \
             sh -x tests/compiler/c0/run-static-object-address-relocation.sh
           status=$?
-          echo '--- generated static object assembly ---'
-          find "$GITHUB_WORKSPACE/build/staging-static-addend-v1-focused" -type f -name '*.s' -print -exec cat {} \; 2>/dev/null || true
+          echo '--- negative diagnostics ---'
+          find "$GITHUB_WORKSPACE/build/staging-static-addend-v1-focused" -type f -name '*.stderr' -print -exec cat {} \; 2>/dev/null || true
           echo '--- symbolic data lines ---'
           grep -R -n -E '\.(dword|word|quad).*address|\.(dword|word|quad).*global_|\.(dword|word|quad).*internal_' "$GITHUB_WORKSPACE/build/staging-static-addend-v1-focused" 2>/dev/null || true
           exit "$status"
