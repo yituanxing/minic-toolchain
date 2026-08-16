@@ -1,0 +1,105 @@
+name: Staging Static Aggregate Array Designators V1
+
+on:
+  push:
+    branches: [staging/static-aggregate-array-designators-v1]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: staging-static-aggregate-array-designators-v1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate-and-publish:
+    if: ${{ !contains(github.event.head_commit.message, '[publish]') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install formatter
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang-format-18
+
+      - name: Apply aggregate array designator capability
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/stage-static-aggregate-array-designators.py
+          python3 tools/dev/stage-static-aggregate-array-designators-fix.py
+
+      - name: Canonical formatting
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          clang-format-18 -i \
+            src/frontend/parser_global.c \
+            tests/compiler/c0/static_aggregate_array_designators.c \
+            tests/compiler/c0/invalid_static_aggregate_array_backward_designator.c \
+            tests/compiler/c0/invalid_static_aggregate_array_range_designator.c
+
+      - name: Release Werror build
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/staging-static-aggregate-array-designators
+
+      - name: Focused aggregate array designator regression
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/staging-static-aggregate-array-designators/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/staging-static-aggregate-array-designators-focused" \
+          HOST_CC=cc \
+            sh tests/compiler/c0/run-static-aggregate-array-designators.sh
+
+      - name: Preserve record-array owners
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/staging-static-aggregate-array-designators/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/staging-static-aggregate-array-designators-records" \
+          HOST_CC=cc \
+            sh tests/compiler/c0/run-static-record-arrays.sh
+          MINIC="$GITHUB_WORKSPACE/build/staging-static-aggregate-array-designators/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/staging-static-aggregate-array-designators-fixed" \
+          HOST_CC=cc \
+            sh tests/compiler/c0/run-static-fixed-record-array-zero.sh
+
+      - name: Broad C0 suite
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release BUILD_DIR=build/staging-static-aggregate-array-designators check-fast
+
+      - name: Foundation focused suite
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/staging-static-aggregate-array-designators/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/staging-static-aggregate-array-designators-foundation" \
+          HOST_CC=cc \
+            sh tests/compiler/c0/run-foundation-focused.sh
+
+      - name: Publish validated product diff
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'LiYang Dong'
+          git config user.email '119646676+yituanxing@users.noreply.github.com'
+          git add \
+            src/frontend/parser_global.c \
+            tests/compiler/c0/static_aggregate_array_designators.c \
+            tests/compiler/c0/invalid_static_aggregate_array_backward_designator.c \
+            tests/compiler/c0/invalid_static_aggregate_array_range_designator.c \
+            tests/compiler/c0/run-static-aggregate-array-designators.sh \
+            tests/compiler/c0/run-foundation-focused.sh
+          git diff --cached --check
+          git commit -m 'frontend: add static aggregate array designators [publish]'
+          git push origin HEAD:staging/static-aggregate-array-designators-v1
