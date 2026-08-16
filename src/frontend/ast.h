@@ -396,6 +396,8 @@ typedef struct MinicFixedRegisterBinding {
     char *register_name;
     size_t register_name_length;
     MinicType type;
+    MinicLocalId local_id;
+    bool is_local;
 } MinicFixedRegisterBinding;
 
 typedef enum MinicGlobalRelocationTargetKind {
@@ -688,6 +690,15 @@ bool minic_c0_program_add_fixed_register_binding(MinicC0Program *program,
                                                  const char *register_name,
                                                  size_t register_name_length,
                                                  MinicFixedRegisterBindingId *binding_id);
+bool minic_c0_program_add_local_fixed_register_binding(MinicC0Program *program,
+                                                       MinicLocalId local_id,
+                                                       const char *name,
+                                                       size_t name_length,
+                                                       const char *register_name,
+                                                       size_t register_name_length,
+                                                       MinicFixedRegisterBindingId *binding_id);
+const MinicFixedRegisterBinding *
+minic_c0_program_local_fixed_register_binding(const MinicC0Program *program, MinicLocalId local_id);
 bool minic_c0_program_add_global_object(MinicC0Program *program,
                                         const char *name,
                                         size_t name_length,

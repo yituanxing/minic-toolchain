@@ -388,6 +388,15 @@ bool minic_target_info_fixed_register_supported(const MinicTargetInfo *target,
            (name_length == 2U && memcmp(name, "sp", 2U) == 0);
 }
 
+bool minic_target_info_local_fixed_register_supported(const MinicTargetInfo *target,
+                                                      const char *name,
+                                                      size_t name_length) {
+    if (target == NULL || name == NULL) {
+        return false;
+    }
+    return name_length == 2U && name[0] == 'a' && name[1] >= '0' && name[1] <= '7';
+}
+
 bool minic_target_info_inline_asm_register_clobber_supported(const MinicTargetInfo *target,
                                                              const char *name,
                                                              size_t name_length) {

@@ -1176,6 +1176,22 @@ bool minic_c0_program_verify_target(const MinicC0Program *program,
             return false;
         }
     }
+    for (index = 0U; index < program->fixed_register_binding_count; ++index) {
+        const MinicFixedRegisterBinding *binding;
+
+        binding = &program->fixed_register_bindings[index];
+        if (binding->is_local) {
+            const MinicLocal *local;
+
+            local = minic_c0_program_local(program, binding->local_id);
+            if (local == NULL || local->is_array || !local->is_register_storage ||
+                !minic_type_equal(local->type, binding->type) ||
+                !minic_target_info_local_fixed_register_supported(
+                    target, binding->register_name, binding->register_name_length)) {
+                return false;
+            }
+        }
+    }
     for (index = 0U; index < program->function_count; ++index) {
         const MinicFunction *function;
         size_t parameter_index;
