@@ -1,0 +1,190 @@
+name: Staging Core Scalar Is Zero V0
+
+on:
+  push:
+    branches:
+      - staging/core-scalar-is-zero-v0
+
+permissions:
+  contents: write
+
+jobs:
+  validate-and-publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Materialize scalar is-zero candidate
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('src/core/core_ir.h')
+          s = p.read_text()
+          token = '    MINIC_CORE_INSTRUCTION_PARAMETER,\n'
+          assert s.count(token) == 1, s.count(token)
+          p.write_text(s.replace(token,
+                                 '    MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO,\n' + token,
+                                 1))
+
+          p = Path('src/core/core_ir.c')
+          s = p.read_text()
+          token = '    case MINIC_CORE_INSTRUCTION_PARAMETER:'
+          positions = []
+          cursor = 0
+          while True:
+              pos = s.find(token, cursor)
+              if pos < 0:
+                  break
+              positions.append(pos)
+              cursor = pos + 1
+          assert len(positions) == 2, positions
+          verifier = '''    case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:
+              return instruction_result_is_valid(function, instruction) &&
+                     minic_type_equal(instruction->type, minic_type_int()) &&
+                     instruction->value.operand < function->value_count &&
+                     available_values[instruction->value.operand] &&
+                     (minic_type_is_integer(function->values[instruction->value.operand].type) ||
+                      minic_type_is_pointer(function->values[instruction->value.operand].type));
+          '''
+          s = s[:positions[0]] + verifier + s[positions[0]:]
+          positions = []
+          cursor = 0
+          while True:
+              pos = s.find(token, cursor)
+              if pos < 0:
+                  break
+              positions.append(pos)
+              cursor = pos + 1
+          assert len(positions) == 2, positions
+          dump = '''    case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:
+              return fprintf(output,
+                             "  %%%" PRIu32 " = scalar.is_zero %%%" PRIu32 "\\n",
+                             instruction->result,
+                             instruction->value.operand) >= 0;
+          '''
+          s = s[:positions[1]] + dump + s[positions[1]:]
+          p.write_text(s)
+
+          p = Path('src/core/core_lower.c')
+          s = p.read_text()
+          call_pos = s.index('    if (expression->kind == MINIC_EXPRESSION_CALL) {')
+          insert_pos = s.index('    (void)memset(&instruction, 0, sizeof(instruction));', call_pos)
+          lowering = '''    if (expression->kind == MINIC_EXPRESSION_UNARY &&
+              expression->value.unary.operator_kind == MINIC_UNARY_LOGICAL_NOT) {
+              MinicCoreValueId operand_value;
+              MinicCoreLowerStatus status;
+
+              if (!minic_type_equal(expression->type, minic_type_int())) {
+                  return MINIC_CORE_LOWER_ERROR;
+              }
+              status = lower_expression(context, expression->value.unary.operand, &operand_value);
+              if (status != MINIC_CORE_LOWER_OK) {
+                  return status;
+              }
+              if (operand_value >= context->function->value_count ||
+                  !core_memory_scalar_type(context->function->values[operand_value].type)) {
+                  return MINIC_CORE_LOWER_UNSUPPORTED;
+              }
+              (void)memset(&instruction, 0, sizeof(instruction));
+              instruction.kind = MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO;
+              instruction.span = expression->span;
+              instruction.type = expression->type;
+              instruction.result = MINIC_CORE_VALUE_INVALID;
+              instruction.value.operand = operand_value;
+              return minic_core_function_append_value_instruction(
+                         context->function, context->block_id, &instruction, value_id)
+                         ? MINIC_CORE_LOWER_OK
+                         : MINIC_CORE_LOWER_ERROR;
+          }
+          '''
+          s = s[:insert_pos] + lowering + s[insert_pos:]
+          p.write_text(s)
+
+          p = Path('tests/core/run-core-ir-shadow.sh')
+          s = p.read_text()
+          anchor = 'cat >"$work_dir/indirect-call-unsupported.i" <<\'EOF\'\n'
+          assert s.count(anchor) == 1, s.count(anchor)
+          fixture = '''cat >"$work_dir/scalar-is-zero-v0.i" <<'EOF'
+          int logical_not_int(int value) {
+              return !value;
+          }
+
+          int logical_not_pointer(int *value) {
+              return !value;
+          }
+
+          int logical_double_not(int value) {
+              return !!value;
+          }
+          EOF
+          check_strict_case scalar-is-zero-v0
+
+          '''
+          p.write_text(s.replace(anchor, fixture + anchor, 1))
+          PY
+          clang-format -i src/core/core_ir.h src/core/core_ir.c src/core/core_lower.c
+
+      - name: Verify canonical formatting
+        run: clang-format --dry-run --Werror src/core/core_ir.h src/core/core_ir.c src/core/core_lower.c
+
+      - name: Build Core IR unit contract with Werror
+        run: |
+          set -Eeuo pipefail
+          mkdir -p build/core-scalar-is-zero
+          cc -std=c11 \
+            -Wall -Wextra -Wpedantic -Wconversion -Wshadow \
+            -Wstrict-prototypes -Wmissing-prototypes -Werror \
+            -Iinclude -Isrc \
+            src/core/core_ir.c src/core/core_lower.c \
+            src/frontend/ast.c src/frontend/expression_semantics.c \
+            src/frontend/ast_global.c src/frontend/ast_traversal.c \
+            src/frontend/ast_verifier.c src/frontend/function_body.c \
+            src/frontend/type.c src/target/data_layout.c src/target/target_info.c \
+            tests/core/core_ir_shadow_test.c \
+            -o build/core-scalar-is-zero/core-ir-shadow-test
+          build/core-scalar-is-zero/core-ir-shadow-test
+
+      - name: Build Release compiler with Werror
+        run: make -j4 MODE=release CFLAGS=-Werror
+
+      - name: Run Core IR strict and shadow contract
+        run: |
+          MINIC="$PWD/build/release/bin/minic" \
+          BUILD_DIR="$PWD/build/core-scalar-is-zero" \
+          bash tests/core/run-core-ir-shadow.sh
+
+      - name: Run broad C0 fast gate
+        run: make check-fast
+
+      - name: Run Foundation focused suite
+        run: |
+          MINIC="$PWD/build/release/bin/minic" \
+          BUILD_DIR="$PWD/build/core-scalar-is-zero-foundation" \
+          bash tests/compiler/c0/run-foundation-focused.sh
+
+      - name: Publish clean product branch
+        if: success()
+        run: |
+          set -Eeuo pipefail
+          mkdir -p /tmp/core-is-zero-product/src/core /tmp/core-is-zero-product/tests/core
+          cp src/core/core_ir.h /tmp/core-is-zero-product/src/core/core_ir.h
+          cp src/core/core_ir.c /tmp/core-is-zero-product/src/core/core_ir.c
+          cp src/core/core_lower.c /tmp/core-is-zero-product/src/core/core_lower.c
+          cp tests/core/run-core-ir-shadow.sh /tmp/core-is-zero-product/tests/core/run-core-ir-shadow.sh
+          git fetch origin main
+          git reset --hard HEAD
+          git checkout --detach origin/main
+          cp /tmp/core-is-zero-product/src/core/core_ir.h src/core/core_ir.h
+          cp /tmp/core-is-zero-product/src/core/core_ir.c src/core/core_ir.c
+          cp /tmp/core-is-zero-product/src/core/core_lower.c src/core/core_lower.c
+          cp /tmp/core-is-zero-product/tests/core/run-core-ir-shadow.sh tests/core/run-core-ir-shadow.sh
+          git config user.name "LiYang Dong"
+          git config user.email "119646676+yituanxing@users.noreply.github.com"
+          git add src/core/core_ir.h src/core/core_ir.c src/core/core_lower.c tests/core/run-core-ir-shadow.sh
+          git commit -m "core: add scalar is-zero v0 [publish-v1]"
+          git push --force origin HEAD:refs/heads/agent/core-scalar-is-zero-v0
