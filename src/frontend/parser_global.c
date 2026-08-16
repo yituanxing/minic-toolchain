@@ -558,6 +558,11 @@ static bool append_static_field_zeros(MinicParser *parser,
     if (field == NULL || field->element_count == 0U) {
         return false;
     }
+    /* A flexible array member participates in the record type and alignment,
+     * but contributes no scalar initializer slot to the fixed object extent. */
+    if (field->is_flexible_array) {
+        return true;
+    }
     for (element_index = 0U; element_index < field->element_count; ++element_index) {
         if (!append_static_constant_zero(parser, object_id, field->type)) {
             return false;

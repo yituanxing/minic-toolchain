@@ -18,6 +18,19 @@ mkdir -p "$work"
 grep -F '  addi a0, a0, 3' "$work/flexible_array_member.s" >/dev/null
 printf '%s\n' 'PASS compiler/c0/flexible_array_member packed-size=3 payload-offset=3'
 
+
+"$host_cc" -E -P -x c \
+    "$root/tests/compiler/c0/static_nested_flexible_array_initializer.c" \
+    -o "$work/static_nested_flexible_array_initializer.i"
+"$minic" -S \
+    "$work/static_nested_flexible_array_initializer.i" \
+    -o "$work/static_nested_flexible_array_initializer.s"
+grep -F '.size nested_fam_rows, 64' \
+    "$work/static_nested_flexible_array_initializer.s" >/dev/null
+grep -F '.dword .Lminic_string_' \
+    "$work/static_nested_flexible_array_initializer.s" >/dev/null
+printf '%s\n' 'PASS compiler/c0/static_nested_flexible_array_initializer linux-wrapper zero-slot-fam + relocation'
+
 expect_failure() {
     name=$1
     expected=$2
