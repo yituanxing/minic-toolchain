@@ -28,3 +28,24 @@ int core_diff_ninth(int a0,
 int core_diff_pointer_zero(int *value) {
     return !value;
 }
+
+static int core_diff_static(int value) {
+    return -value;
+}
+
+int __attribute__((weak)) core_diff_weak(int value) {
+    return value + 1;
+}
+
+__attribute__((visibility("hidden"))) int core_diff_hidden(int value) {
+    return !value;
+}
+
+int __attribute__((section(".core.diff.text"))) core_diff_section(int value) {
+    return value;
+}
+
+int core_diff_asm(int value) __asm__("core_diff_asm_alias");
+int core_diff_asm(int value) {
+    return value;
+}
