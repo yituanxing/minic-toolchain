@@ -30,11 +30,19 @@ jobs:
       - name: Release Werror build
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/staging-preformed-static-array-v1
       - name: Focused preformed array regression
+        shell: bash
         run: |
+          set +e
           MINIC="$GITHUB_WORKSPACE/build/staging-preformed-static-array-v1/bin/minic" \
           BUILD_DIR="$GITHUB_WORKSPACE/build/staging-preformed-static-array-v1-focused" \
           HOST_CC=cc \
-            sh tests/compiler/c0/run-static-preformed-array-zero.sh
+            sh -x tests/compiler/c0/run-static-preformed-array-zero.sh
+          status=$?
+          echo '--- generated assembly ---'
+          find "$GITHUB_WORKSPACE/build/staging-preformed-static-array-v1-focused" -type f -name '*.s' -print -exec cat {} \; 2>/dev/null || true
+          echo '--- diagnostics ---'
+          find "$GITHUB_WORKSPACE/build/staging-preformed-static-array-v1-focused" -type f \( -name '*.err' -o -name '*.stderr' \) -print -exec cat {} \; 2>/dev/null || true
+          exit "$status"
       - name: Existing static array ownership regressions
         run: |
           MINIC="$GITHUB_WORKSPACE/build/staging-preformed-static-array-v1/bin/minic" \
