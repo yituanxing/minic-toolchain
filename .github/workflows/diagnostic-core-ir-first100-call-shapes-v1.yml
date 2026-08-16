@@ -243,3 +243,5 @@ jobs:
             build/core-call-shapes-linux/batch-summary.txt
           if-no-files-found: ignore
           retention-days: 7
+
+# canonical first100 harness attached in the parent diagnostic commit
