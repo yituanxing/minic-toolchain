@@ -1,0 +1,197 @@
+name: Diagnostic Core IR First100 Address Paths V1
+
+on:
+  push:
+    branches:
+      - diagnostic/core-ir-first100-address-paths-v1
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore pinned Linux source archive
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-cache/linux-6.6.143.tar.xz
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
+
+      - name: Install Linux Kbuild dependencies
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            flex bison bc libelf-dev libssl-dev
+
+      - name: Instrument address path shapes
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/core/core_lower.c')
+          s = p.read_text()
+          old = '#include <stdlib.h>\n#include <string.h>\n'
+          assert s.count(old) == 1
+          s = s.replace(old, '#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n', 1)
+          old = '''    return MINIC_CORE_LOWER_UNSUPPORTED;
+          }
+
+          static MinicCoreLowerStatus lower_assignment_pair'''
+          new = '''    if (expression->kind == MINIC_EXPRESSION_ADDRESS_OF) {
+                  const MinicExpression *operand;
+                  const MinicExpression *base;
+                  const MinicExpression *index;
+                  const char *base_type;
+                  const char *index_type;
+                  int base_kind;
+                  int base_category;
+                  int index_kind;
+
+                  operand = minic_c0_program_expression(context->body->program,
+                                                        expression->value.unary.operand);
+                  if (operand == NULL) {
+                      return MINIC_CORE_LOWER_ERROR;
+                  }
+                  base = NULL;
+                  index = NULL;
+                  if (operand->kind == MINIC_EXPRESSION_MEMBER) {
+                      base = minic_c0_program_expression(context->body->program,
+                                                         operand->value.member.base);
+                  } else if (operand->kind == MINIC_EXPRESSION_SUBSCRIPT) {
+                      base = minic_c0_program_expression(context->body->program,
+                                                         operand->value.subscript.base);
+                      index = minic_c0_program_expression(context->body->program,
+                                                          operand->value.subscript.index);
+                  } else if (operand->kind == MINIC_EXPRESSION_DEREFERENCE) {
+                      base = minic_c0_program_expression(context->body->program,
+                                                         operand->value.unary.operand);
+                  }
+                  if ((operand->kind == MINIC_EXPRESSION_MEMBER ||
+                       operand->kind == MINIC_EXPRESSION_SUBSCRIPT ||
+                       operand->kind == MINIC_EXPRESSION_DEREFERENCE) &&
+                      base == NULL) {
+                      return MINIC_CORE_LOWER_ERROR;
+                  }
+                  if (operand->kind == MINIC_EXPRESSION_SUBSCRIPT && index == NULL) {
+                      return MINIC_CORE_LOWER_ERROR;
+                  }
+                  base_kind = base == NULL ? -1 : (int)base->kind;
+                  base_category = base == NULL ? -1 : (int)base->value_category;
+                  index_kind = index == NULL ? -1 : (int)index->kind;
+                  base_type = base == NULL
+                                  ? "none"
+                                  : (minic_type_is_pointer(base->type)
+                                         ? "ptr"
+                                         : (minic_type_is_integer(base->type)
+                                                ? "int"
+                                                : (minic_type_is_record(base->type)
+                                                       ? "record"
+                                                       : (minic_type_is_array(base->type)
+                                                              ? "array"
+                                                              : (minic_type_is_function(base->type)
+                                                                     ? "function"
+                                                                     : "other"))));
+                  index_type = index == NULL
+                                   ? "none"
+                                   : (minic_type_is_integer(index->type)
+                                          ? "int"
+                                          : (minic_type_is_pointer(index->type) ? "ptr" : "other"));
+                  (void)fprintf(stderr,
+                                "MINIC_CORE_ADDRESS_PATH operand_kind=%d base_kind=%d base_category=%d base_type=%s index_kind=%d index_type=%s\\n",
+                                (int)operand->kind,
+                                base_kind,
+                                base_category,
+                                base_type,
+                                index_kind,
+                                index_type);
+              }
+              return MINIC_CORE_LOWER_UNSUPPORTED;
+          }
+
+          static MinicCoreLowerStatus lower_assignment_pair'''
+          assert s.count(old) == 1, s.count(old)
+          p.write_text(s.replace(old, new, 1))
+          PY
+
+      - name: Build diagnostic compiler
+        run: make -j4 MODE=release BUILD_DIR=build/core-address-paths-compiler
+
+      - name: Drive fixed first100 with Core shadow
+        continue-on-error: true
+        env:
+          MINIC_CORE_IR: shadow
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/core-address-paths-compiler/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/core-address-paths-linux" \
+          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-cache/linux-6.6.143.tar.xz" \
+          CROSS_COMPILE=riscv64-linux-gnu- \
+          LINUX_BATCH_OFFSET=0 LINUX_BATCH_LIMIT=100 LINUX_BATCH_JOBS=2 \
+            sh tests/external/linux/batch_probe.sh
+
+      - name: Aggregate address paths
+        if: always()
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from collections import Counter
+          from pathlib import Path
+          import re
+          expression_names = [
+              'INTEGER','FLOATING','LOCAL','GLOBAL_OBJECT','FIXED_REGISTER','FUNCTION',
+              'LABEL_ADDRESS','CALL_FRAME_ADDRESS','BUILTIN_UNREACHABLE','SIZEOF','OFFSETOF',
+              'ADDRESS_OF','DEREFERENCE','CAST','BITCAST','CONVERSION','DISCARD','SUBSCRIPT',
+              'MEMBER','LVALUE_READ','ASSIGNMENT','COMPOUND_ASSIGNMENT','UNARY','BINARY',
+              'CONDITIONAL','CALL','COMPOUND_LITERAL','STATEMENT','BUILTIN_UNARY','BUILTIN_OVERFLOW'
+          ]
+          category_names = ['RVALUE','LVALUE']
+          pat = re.compile(r'^MINIC_CORE_ADDRESS_PATH operand_kind=(-?\d+) base_kind=(-?\d+) base_category=(-?\d+) base_type=(\S+) index_kind=(-?\d+) index_type=(\S+)$')
+          counts = Counter()
+          root = Path('build/core-address-paths-linux/minic-stderr')
+          for path in root.rglob('*.stderr') if root.is_dir() else []:
+              for line in path.read_text(errors='replace').splitlines():
+                  m = pat.match(line.strip())
+                  if not m:
+                      continue
+                  raw_operand, raw_base, raw_category, base_type, raw_index, index_type = m.groups()
+                  operand = int(raw_operand)
+                  base = int(raw_base)
+                  category = int(raw_category)
+                  index = int(raw_index)
+                  oname = expression_names[operand] if 0 <= operand < len(expression_names) else f'EXPR_{operand}'
+                  bname = expression_names[base] if 0 <= base < len(expression_names) else ('NONE' if base < 0 else f'EXPR_{base}')
+                  cname = category_names[category] if 0 <= category < len(category_names) else ('NONE' if category < 0 else f'CAT_{category}')
+                  iname = expression_names[index] if 0 <= index < len(expression_names) else ('NONE' if index < 0 else f'EXPR_{index}')
+                  counts[(oname, bname, cname, base_type, iname, index_type)] += 1
+          total = sum(counts.values())
+          lines = ['MINIC_CORE_FIRST100_ADDRESS_PATHS', f'total_address_of={total}']
+          for key, count in counts.most_common():
+              pct = 100.0 * count / total if total else 0.0
+              oname, bname, cname, base_type, iname, index_type = key
+              lines.append(f'operand={oname} base={bname} base_category={cname} base_type={base_type} index={iname} index_type={index_type} count={count} pct={pct:.2f}')
+          text = '\n'.join(lines) + '\n'
+          out = Path('build/core-address-paths-linux/core-address-paths.txt')
+          out.parent.mkdir(parents=True, exist_ok=True)
+          out.write_text(text)
+          print(text, end='')
+          PY
+          test -s build/core-address-paths-linux/batch-summary.txt && cat build/core-address-paths-linux/batch-summary.txt || true
+
+      - name: Upload address path evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-ir-first100-address-paths-${{ github.run_id }}
+          path: |
+            build/core-address-paths-linux/core-address-paths.txt
+            build/core-address-paths-linux/batch-summary.txt
+          if-no-files-found: ignore
+          retention-days: 7
