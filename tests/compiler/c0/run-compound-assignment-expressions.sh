@@ -18,4 +18,4 @@ test "$(grep -c -F '  call next_slot' "$work/compound_assignment_expression.s")"
 grep -F '  slli a0, a0, 2' "$work/compound_assignment_expression.s" >/dev/null
 grep -F '  divu a0, t0, a0' "$work/compound_assignment_expression.s" >/dev/null
 grep -F '  div a0, t0, a0' "$work/compound_assignment_expression.s" >/dev/null
-printf '%s\n' 'PASS compiler/c0/compound_assignment_expression operators=+=,/= result=value lvalue-evaluation=once pointer-scale=4 divide=signed,unsigned'
+printf '%s\n' 'PASS compiler/c0/compound_assignment_expression operators=+=,/= result=value lvalue-evaluation=once pointer-scale=4 GNU-void-stride=1 divide=signed,unsigned'
