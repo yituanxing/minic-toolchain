@@ -95,8 +95,8 @@ static bool minic_prepare_core_candidates(const MinicC0Program *program,
     if (candidates.function_count != 0U) {
         candidates.functions =
             (MinicCoreFunction *)calloc(candidates.function_count, sizeof(*candidates.functions));
-        candidates.statuses = (MinicCoreLowerStatus *)malloc(
-            candidates.function_count * sizeof(*candidates.statuses));
+        candidates.statuses = (MinicCoreLowerStatus *)malloc(candidates.function_count *
+                                                             sizeof(*candidates.statuses));
         if (candidates.functions == NULL || candidates.statuses == NULL) {
             free(candidates.functions);
             free(candidates.statuses);
