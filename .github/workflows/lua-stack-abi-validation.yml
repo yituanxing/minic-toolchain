@@ -82,6 +82,48 @@ jobs:
             -o build/core-rv64-emitter/core-basic-v0-rv64
           qemu-riscv64 build/core-rv64-emitter/core-basic-v0-rv64
 
+      - name: Run frontend-derived Core RV64 differential
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p build/core-frontend-diff
+          cc -std=c11 \
+            -Wall -Wextra -Wpedantic -Wconversion -Wshadow \
+            -Wstrict-prototypes -Wmissing-prototypes -Werror \
+            -Iinclude -Isrc \
+            $(find src -name '*.c' -print | sort) \
+            tests/target/riscv64/core_frontend_emitter_test.c \
+            -o build/core-frontend-diff/core-frontend-emitter-test
+          source_file=tests/target/riscv64/core_frontend_differential.i
+          runtime=tests/target/riscv64/core_frontend_differential_runtime.c
+          MINIC_CORE_IR=strict \
+            build/rv64-stack-abi-compiler/bin/minic \
+              -S "$source_file" \
+              -o build/core-frontend-diff/legacy.s
+          build/core-frontend-diff/core-frontend-emitter-test \
+            "$source_file" \
+            build/core-frontend-diff/core.s
+          test -s build/core-frontend-diff/legacy.s
+          test -s build/core-frontend-diff/core.s
+          for symbol in core_diff_math core_diff_branch core_diff_zero core_diff_ninth core_diff_pointer_zero; do
+            grep -q "^${symbol}:" build/core-frontend-diff/legacy.s
+            grep -q "^${symbol}:" build/core-frontend-diff/core.s
+          done
+          riscv64-linux-gnu-gcc -static -O2 \
+            "$source_file" "$runtime" \
+            -o build/core-frontend-diff/reference-rv64
+          riscv64-linux-gnu-gcc -static -O2 \
+            "$runtime" build/core-frontend-diff/legacy.s \
+            -o build/core-frontend-diff/legacy-rv64
+          riscv64-linux-gnu-gcc -static -O2 \
+            "$runtime" build/core-frontend-diff/core.s \
+            -o build/core-frontend-diff/core-rv64
+          qemu-riscv64 build/core-frontend-diff/reference-rv64 > build/core-frontend-diff/reference.out
+          qemu-riscv64 build/core-frontend-diff/legacy-rv64 > build/core-frontend-diff/legacy.out
+          qemu-riscv64 build/core-frontend-diff/core-rv64 > build/core-frontend-diff/core.out
+          cmp build/core-frontend-diff/reference.out build/core-frontend-diff/legacy.out
+          cmp build/core-frontend-diff/reference.out build/core-frontend-diff/core.out
+
       - name: Run GCC-MiniC fixed stack-argument differential
         shell: bash
         run: |
