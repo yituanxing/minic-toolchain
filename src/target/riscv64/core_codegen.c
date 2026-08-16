@@ -62,7 +62,7 @@ static bool core_frame_initialize(const MinicCoreFunction *function, MinicRiscv6
 static bool core_object_offset(const MinicRiscv64CoreFrame *frame,
                                MinicCoreObjectId object_id,
                                size_t *offset) {
-    if (frame == NULL || offset == NULL || object_id >= frame->object_count || object_id > SIZE_MAX / 8U) {
+    if (frame == NULL || offset == NULL || object_id >= frame->object_count) {
         return false;
     }
     *offset = (size_t)object_id * 8U;
