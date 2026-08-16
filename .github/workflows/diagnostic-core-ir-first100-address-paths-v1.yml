@@ -86,24 +86,30 @@ jobs:
                   base_kind = base == NULL ? -1 : (int)base->kind;
                   base_category = base == NULL ? -1 : (int)base->value_category;
                   index_kind = index == NULL ? -1 : (int)index->kind;
-                  base_type = base == NULL
-                                  ? "none"
-                                  : (minic_type_is_pointer(base->type)
-                                         ? "ptr"
-                                         : (minic_type_is_integer(base->type)
-                                                ? "int"
-                                                : (minic_type_is_record(base->type)
-                                                       ? "record"
-                                                       : (minic_type_is_array(base->type)
-                                                              ? "array"
-                                                              : (minic_type_is_function(base->type)
-                                                                     ? "function"
-                                                                     : "other"))));
-                  index_type = index == NULL
-                                   ? "none"
-                                   : (minic_type_is_integer(index->type)
-                                          ? "int"
-                                          : (minic_type_is_pointer(index->type) ? "ptr" : "other"));
+                  if (base == NULL) {
+                      base_type = "none";
+                  } else if (minic_type_is_pointer(base->type)) {
+                      base_type = "ptr";
+                  } else if (minic_type_is_integer(base->type)) {
+                      base_type = "int";
+                  } else if (minic_type_is_record(base->type)) {
+                      base_type = "record";
+                  } else if (minic_type_is_array(base->type)) {
+                      base_type = "array";
+                  } else if (minic_type_is_function(base->type)) {
+                      base_type = "function";
+                  } else {
+                      base_type = "other";
+                  }
+                  if (index == NULL) {
+                      index_type = "none";
+                  } else if (minic_type_is_integer(index->type)) {
+                      index_type = "int";
+                  } else if (minic_type_is_pointer(index->type)) {
+                      index_type = "ptr";
+                  } else {
+                      index_type = "other";
+                  }
                   (void)fprintf(stderr,
                                 "MINIC_CORE_ADDRESS_PATH operand_kind=%d base_kind=%d base_category=%d base_type=%s index_kind=%d index_type=%s\\n",
                                 (int)operand->kind,
