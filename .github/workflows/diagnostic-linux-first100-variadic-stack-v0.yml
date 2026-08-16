@@ -1,0 +1,83 @@
+name: Diagnostic Linux First100 Variadic Stack V0
+
+on:
+  push:
+    branches:
+      - diagnostic/linux-first100-variadic-stack-v0
+
+permissions:
+  contents: read
+
+concurrency:
+  group: diagnostic-linux-first100-variadic-stack-v0
+  cancel-in-progress: true
+
+jobs:
+  measure:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Restore pinned Linux source archive
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-cache/linux-6.6.143.tar.xz
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
+
+      - name: Install Linux Kbuild dependencies
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            flex bison bc libelf-dev libssl-dev
+
+      - name: Build compiler
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+          make -j4 MODE=release BUILD_DIR=build/variadic-first100-compiler
+
+      - name: Drive fixed first100
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          set +e
+          MINIC="$GITHUB_WORKSPACE/build/variadic-first100-compiler/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/variadic-first100-linux" \
+          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-cache/linux-6.6.143.tar.xz" \
+          CROSS_COMPILE=riscv64-linux-gnu- \
+          LINUX_BATCH_OFFSET=0 LINUX_BATCH_LIMIT=100 LINUX_BATCH_JOBS=2 \
+            sh tests/external/linux/batch_probe.sh
+          status=$?
+          set -e
+          cat build/variadic-first100-linux/batch-summary.txt
+          test "$status" -eq 1
+
+      - name: Enforce expected frontier movement
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+
+          root = Path('build/variadic-first100-linux')
+          rows = json.loads((root / 'batch-results.json').read_text())
+          by_index = {row['index']: row for row in rows}
+          target = by_index[98]
+          print('VARIADIC_FIRST100_RESULT')
+          print(f"selected={len(rows)}")
+          print(f"pass={sum(row['status'] == 'PASS' for row in rows)}")
+          print(f"fail={sum(row['status'] == 'FAIL' for row in rows)}")
+          print(f"target_index=98 input={target['input']} status={target['status']} line={target['line']} message={target['message']}")
+          assert len(rows) == 100
+          assert target['input'] == 'kernel/sched/build_utility.i'
+          assert 'variadic call supports at most 8 arguments' not in target['message']
+          PY
