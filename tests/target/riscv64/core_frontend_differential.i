@@ -29,6 +29,23 @@ int core_diff_pointer_zero(int *value) {
     return !value;
 }
 
+int core_diff_call_target(int a, int b, int c, int d, int e, int f) {
+    return a + b + c + d + e + f;
+}
+
+int core_diff_call(int value) {
+    return core_diff_call_target(value, 2, 3, 4, 5, 6);
+}
+
+void core_diff_call_nop(void) {
+    return;
+}
+
+int core_diff_void_call(int value) {
+    core_diff_call_nop();
+    return -value;
+}
+
 static int core_diff_static(int value) {
     return -value;
 }
@@ -48,4 +65,8 @@ int __attribute__((section(".core.diff.text"))) core_diff_section(int value) {
 int core_diff_asm(int value) __asm__("core_diff_asm_alias");
 int core_diff_asm(int value) {
     return value;
+}
+
+int core_diff_asm_call(int value) {
+    return core_diff_asm(value);
 }
