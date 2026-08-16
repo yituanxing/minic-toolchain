@@ -578,7 +578,7 @@ bool minic_data_layout_global_relocation_offset(const MinicDataLayout *layout,
 bool minic_data_layout_global_relocation_target_addend(const MinicDataLayout *layout,
                                                        const MinicC0Program *program,
                                                        const MinicGlobalRelocation *relocation,
-                                                       size_t *addend) {
+                                                       int64_t *addend) {
     const MinicGlobalObject *target;
     MinicType type;
     size_t result;
@@ -588,7 +588,7 @@ bool minic_data_layout_global_relocation_target_addend(const MinicDataLayout *la
         return false;
     }
     if (relocation->target_kind == MINIC_GLOBAL_RELOCATION_FUNCTION) {
-        if (relocation->target_member_depth != 0U) {
+        if (relocation->target_member_depth != 0U || relocation->target_byte_addend != 0) {
             return false;
         }
         *addend = 0U;
@@ -624,6 +624,11 @@ bool minic_data_layout_global_relocation_target_addend(const MinicDataLayout *la
         result += field_offset;
         type = field->type;
     }
-    *addend = result;
+    if (result > (size_t)INT64_MAX ||
+        (relocation->target_byte_addend > 0 &&
+         (uint64_t)relocation->target_byte_addend > (uint64_t)INT64_MAX - (uint64_t)result)) {
+        return false;
+    }
+    *addend = (int64_t)result + relocation->target_byte_addend;
     return true;
 }

@@ -1302,7 +1302,7 @@ bool minic_c0_program_verify_target(const MinicC0Program *program,
                     return false;
                 }
                 {
-                    size_t target_addend;
+                    int64_t target_addend;
 
                     if (!minic_data_layout_global_relocation_target_addend(
                             minic_target_info_data_layout(target),
