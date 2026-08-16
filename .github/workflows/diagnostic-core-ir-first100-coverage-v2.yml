@@ -1,0 +1,130 @@
+name: Diagnostic Core IR First100 Coverage V2
+
+on:
+  push:
+    branches:
+      - diagnostic/core-ir-first100-coverage-v2
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore pinned Linux source archive
+        id: linux-source-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-cache/linux-6.6.143.tar.xz
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
+
+      - name: Install Linux Kbuild dependencies
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            flex bison bc libelf-dev libssl-dev
+
+      - name: Instrument Core shadow status
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/compiler/compiler.c')
+          s = p.read_text()
+          anchor = '        minic_core_function_destroy(&core);\n'
+          assert s.count(anchor) == 1, s.count(anchor)
+          marker = '''        (void)fprintf(stderr,
+                        "MINIC_CORE_COVERAGE status=%s function=%s\\n",
+                        status == MINIC_CORE_LOWER_OK
+                            ? "OK"
+                            : (status == MINIC_CORE_LOWER_UNSUPPORTED ? "UNSUPPORTED" : "ERROR"),
+                        function->name != NULL ? function->name : "<unnamed>");
+          '''
+          p.write_text(s.replace(anchor, marker + anchor, 1))
+          PY
+
+      - name: Build diagnostic compiler
+        run: make -j4 MODE=release BUILD_DIR=build/core-coverage-compiler
+
+      - name: Drive fixed first100 with Core shadow
+        continue-on-error: true
+        env:
+          MINIC_CORE_IR: shadow
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/core-coverage-compiler/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/core-coverage-linux" \
+          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-cache/linux-6.6.143.tar.xz" \
+          CROSS_COMPILE=riscv64-linux-gnu- \
+          LINUX_BATCH_OFFSET=0 LINUX_BATCH_LIMIT=100 LINUX_BATCH_JOBS=2 \
+            sh tests/external/linux/batch_probe.sh
+
+      - name: Aggregate Core coverage
+        if: always()
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from collections import Counter
+          from pathlib import Path
+          import re
+          out = Path('build/core-coverage-linux')
+          out.mkdir(parents=True, exist_ok=True)
+          root = out / 'minic-stderr'
+          pattern = re.compile(r'^MINIC_CORE_COVERAGE status=(OK|UNSUPPORTED|ERROR) function=(.*)$')
+          counts = Counter()
+          tu_counts = Counter()
+          files_with_markers = 0
+          for path in root.rglob('*.stderr') if root.is_dir() else []:
+              local = Counter()
+              for line in path.read_text(errors='replace').splitlines():
+                  match = pattern.match(line.strip())
+                  if match:
+                      local[match.group(1)] += 1
+                      counts[match.group(1)] += 1
+              if local:
+                  files_with_markers += 1
+                  if local['ERROR']:
+                      tu_counts['ERROR_PRESENT'] += 1
+                  elif local['UNSUPPORTED']:
+                      tu_counts['UNSUPPORTED_PRESENT'] += 1
+                  else:
+                      tu_counts['ALL_OK'] += 1
+          total = sum(counts.values())
+          coverage = 100.0 * counts['OK'] / total if total else 0.0
+          text = (
+              'MINIC_CORE_FIRST100_COVERAGE\n'
+              f'functions_observed={total}\n'
+              f'core_ok={counts["OK"]}\n'
+              f'core_unsupported={counts["UNSUPPORTED"]}\n'
+              f'core_error={counts["ERROR"]}\n'
+              f'function_coverage_percent={coverage:.2f}\n'
+              f'tus_with_core_markers={files_with_markers}\n'
+              f'tus_all_defined_functions_core_ok={tu_counts["ALL_OK"]}\n'
+              f'tus_with_unsupported={tu_counts["UNSUPPORTED_PRESENT"]}\n'
+              f'tus_with_core_error={tu_counts["ERROR_PRESENT"]}\n'
+          )
+          (out / 'core-coverage-summary.txt').write_text(text)
+          print(text, end='')
+          PY
+          test -s build/core-coverage-linux/batch-summary.txt && cat build/core-coverage-linux/batch-summary.txt || true
+
+      - name: Upload Core coverage evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-ir-first100-coverage-${{ github.run_id }}
+          path: |
+            build/core-coverage-linux/core-coverage-summary.txt
+            build/core-coverage-linux/batch-summary.txt
+            build/core-coverage-linux/batch-results.json
+            build/core-coverage-linux/minic-stderr/**/*.stderr
+          if-no-files-found: ignore
+          retention-days: 7
