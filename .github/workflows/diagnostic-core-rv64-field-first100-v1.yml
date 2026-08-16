@@ -1,0 +1,185 @@
+name: Diagnostic Core RV64 FIELD First100 V1
+
+on:
+  push:
+    branches:
+      - diagnostic/core-rv64-field-first100-v1
+
+permissions:
+  contents: read
+
+concurrency:
+  group: diagnostic-core-rv64-field-first100-v1
+  cancel-in-progress: true
+
+jobs:
+  measure:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Restore pinned Linux source archive
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-cache/linux-6.6.143.tar.xz
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
+
+      - name: Install Linux Kbuild dependencies
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            flex bison bc libelf-dev libssl-dev
+
+      - name: Build compiler
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+          make -j4 MODE=release BUILD_DIR=build/field-first100-compiler
+
+      - name: Drive fixed first100 through hybrid
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          set +e
+          MINIC="$GITHUB_WORKSPACE/build/field-first100-compiler/bin/minic" \
+          MINIC_CORE_CODEGEN=basic-v0 \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/field-first100-linux" \
+          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-cache/linux-6.6.143.tar.xz" \
+          CROSS_COMPILE=riscv64-linux-gnu- \
+          LINUX_BATCH_OFFSET=0 LINUX_BATCH_LIMIT=100 LINUX_BATCH_JOBS=2 \
+            sh tests/external/linux/batch_probe.sh
+          status=$?
+          set -e
+          test "$status" -eq 1
+          grep -q '^pass=80$' build/field-first100-linux/batch-summary.txt
+          grep -q '^fail=20$' build/field-first100-linux/batch-summary.txt
+          grep -q '^preprocess_missing=0$' build/field-first100-linux/batch-summary.txt
+
+      - name: Prove Core emitter parity and assemble every hybrid PASS
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          import re
+          import subprocess
+
+          root = Path('build/field-first100-linux')
+          rows = json.loads((root / 'batch-results.json').read_text())
+          type_pattern = re.compile(r'^\.type\s+(.+?),\s*@function$')
+          core_pattern = re.compile(r'^\.L(.+)_core_bb[0-9]+:$')
+          object_pattern = re.compile(r'(?:^|\s)-o\s+([^\s;]+\.o)(?=\s|;|$)')
+          march_pattern = re.compile(r'(?<!\S)-march=([^\s]+)')
+          mabi_pattern = re.compile(r'(?<!\S)-mabi=([^\s]+)')
+
+          out_root = (root / 'kbuild').resolve()
+          commands = {}
+          for line in (root / 'kbuild-plan.raw').read_text(errors='replace').splitlines():
+              if 'riscv64-linux-gnu-' not in line or ' -c ' not in f' {line} ':
+                  continue
+              matches = object_pattern.findall(line)
+              if not matches:
+                  continue
+              obj = Path(matches[-1].strip("'\""))
+              if obj.is_absolute():
+                  try:
+                      rel = obj.resolve().relative_to(out_root)
+                  except ValueError:
+                      continue
+              else:
+                  rel = obj
+              key = rel.as_posix().removeprefix('./')
+              commands.setdefault(key, []).append(line)
+
+          total_defined = 0
+          total_core = 0
+          pass_count = 0
+          tus_with_core = 0
+          object_failures = []
+          ranked = []
+          object_dir = root / 'hybrid-objects'
+          object_dir.mkdir(parents=True, exist_ok=True)
+
+          for row in rows:
+              if row['status'] != 'PASS':
+                  continue
+              pass_count += 1
+              asm = root / 'minic-out' / f"{row['input']}.s"
+              lines = asm.read_text(errors='replace').splitlines()
+              defined = {
+                  m.group(1)
+                  for line in lines
+                  if (m := type_pattern.match(line.strip())) is not None
+              }
+              core = {
+                  m.group(1)
+                  for line in lines
+                  if (m := core_pattern.match(line.strip())) is not None
+              } & defined
+              total_defined += len(defined)
+              total_core += len(core)
+              tus_with_core += bool(core)
+              ranked.append((len(core), len(defined), row['input']))
+
+              candidates = commands.get(row['object'], [])
+              candidates = [
+                  command for command in candidates
+                  if row['source'] in command or row['input'][:-2] + '.c' in command
+              ] or candidates
+              if len(candidates) != 1:
+                  object_failures.append((row['input'], f'commands={len(candidates)}'))
+                  continue
+              command = candidates[0]
+              march = march_pattern.search(command)
+              mabi = mabi_pattern.search(command)
+              if march is None or mabi is None:
+                  object_failures.append((row['input'], 'missing -march/-mabi'))
+                  continue
+              proc = subprocess.run(
+                  [
+                      'riscv64-linux-gnu-gcc', '-c',
+                      f'-march={march.group(1)}', f'-mabi={mabi.group(1)}',
+                      str(asm), '-o', str(object_dir / f"{row['index']:03d}.o"),
+                  ],
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.PIPE,
+                  text=True,
+                  errors='replace',
+              )
+              if proc.returncode != 0:
+                  object_failures.append((row['input'], proc.stderr.strip()[:500]))
+
+          pct = 100.0 * total_core / total_defined if total_defined else 0.0
+          print('CORE_FIELD_FIRST100_SUMMARY')
+          print(f'pass={pass_count}')
+          print(f'tus_with_core={tus_with_core}')
+          print(f'total_defined_functions={total_defined}')
+          print(f'core_routed_functions={total_core}')
+          print(f'legacy_fallback_functions={total_defined-total_core}')
+          print(f'core_route_pct={pct:.2f}')
+          print(f'hybrid_object_pass={pass_count-len(object_failures)}')
+          print(f'hybrid_object_fail={len(object_failures)}')
+          print('top_core_routed_tus:')
+          for core, defined, name in sorted(ranked, reverse=True)[:10]:
+              route = 100.0 * core / defined if defined else 0.0
+              print(f'  input={name} defined={defined} core={core} route_pct={route:.2f}')
+          if object_failures:
+              print('object_failures:')
+              for name, message in object_failures:
+                  print(f'  input={name} message={message}')
+
+          assert pass_count == 80, pass_count
+          assert tus_with_core == 80, tus_with_core
+          assert total_defined == 303434, total_defined
+          assert total_core == 74492, total_core
+          assert not object_failures, object_failures
+          PY
