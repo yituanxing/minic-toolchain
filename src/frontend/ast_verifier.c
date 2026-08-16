@@ -602,7 +602,7 @@ static bool verify_expression(const MinicC0Program *program,
             return (operator_kind == MINIC_BINARY_ADD || operator_kind == MINIC_BINARY_SUBTRACT) &&
                    minic_type_is_integer(right->type) &&
                    minic_type_pointee(left->type, &pointee_type) &&
-                   minic_c0_type_is_complete_object(program, pointee_type);
+                   minic_c0_pointer_arithmetic_pointee_allowed(program, pointee_type);
         }
         if (minic_type_is_double(left->type)) {
             return (operator_kind == MINIC_BINARY_ADD || operator_kind == MINIC_BINARY_SUBTRACT ||

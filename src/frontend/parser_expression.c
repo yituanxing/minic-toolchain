@@ -2807,7 +2807,7 @@ static bool parse_expression_internal(MinicParser *parser,
                  compound_operator != MINIC_BINARY_SUBTRACT) ||
                 !minic_type_is_integer(value_expression->type) ||
                 !minic_type_pointee(target_type, &pointee_type) ||
-                !minic_c0_type_is_complete_object(parser->program, pointee_type)) {
+                !minic_c0_pointer_arithmetic_pointee_allowed(parser->program, pointee_type)) {
                 minic_parser_error(
                     parser,
                     "pointer compound assignment expression requires += or -= with an integer");
