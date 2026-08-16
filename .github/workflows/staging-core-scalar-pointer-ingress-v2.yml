@@ -43,7 +43,7 @@ jobs:
 
           s, n1 = re.subn(
               r'if \(local->is_array \|\| local->is_register_storage \|\| !minic_type_is_integer\(local->type\)\) \{\n\s*return MINIC_CORE_LOWER_UNSUPPORTED;\n\s*\}',
-              'if (local->is_array || local->is_register_storage ||\\n        !core_memory_scalar_type(local->type)) {\\n        return MINIC_CORE_LOWER_UNSUPPORTED;\\n    }',
+              'if (local->is_array || local->is_register_storage ||\n        !core_memory_scalar_type(local->type)) {\n        return MINIC_CORE_LOWER_UNSUPPORTED;\n    }',
               s,
               count=1,
           )
@@ -51,7 +51,7 @@ jobs:
 
           s, n2 = re.subn(
               r'if \(!minic_type_is_integer\(parameter->type\) \|\| minic_type_is_const\(parameter->type\) \|\|\n\s*minic_type_is_volatile\(parameter->type\) \|\| parameter->is_array \|\|\n\s*parameter->is_register_storage\) \{\n\s*return MINIC_CORE_LOWER_UNSUPPORTED;\n\s*\}',
-              'if (!core_memory_scalar_type(parameter->type) || minic_type_is_const(parameter->type) ||\\n            minic_type_is_volatile(parameter->type) || parameter->is_array ||\\n            parameter->is_register_storage) {\\n            return MINIC_CORE_LOWER_UNSUPPORTED;\\n        }',
+              'if (!core_memory_scalar_type(parameter->type) || minic_type_is_const(parameter->type) ||\n            minic_type_is_volatile(parameter->type) || parameter->is_array ||\n            parameter->is_register_storage) {\n            return MINIC_CORE_LOWER_UNSUPPORTED;\n        }',
               s,
               count=1,
           )
@@ -62,7 +62,7 @@ jobs:
           s = p.read_text()
           anchor = 'check_strict_case parameter\n'
           assert s.count(anchor) == 1
-          addition = anchor + '''\ncat >"$work_dir/pointer-parameter.i" <<'EOF'\nint pointer_parameter(int *value) {\n    return value != 0;\n}\nEOF\n\n"$MINIC" -S "$work_dir/pointer-parameter.i" -o "$work_dir/pointer-parameter-normal.s"\nMINIC_CORE_IR=shadow "$MINIC" -S "$work_dir/pointer-parameter.i" \\\n    -o "$work_dir/pointer-parameter-shadow.s"\ncmp "$work_dir/pointer-parameter-normal.s" "$work_dir/pointer-parameter-shadow.s"\nMINIC_CORE_IR=strict "$MINIC" -S "$work_dir/pointer-parameter.i" \\\n    -o "$work_dir/pointer-parameter-strict.s"\ncmp "$work_dir/pointer-parameter-normal.s" "$work_dir/pointer-parameter-strict.s"\n'''
+          addition = anchor + '''\ncat >"$work_dir/pointer-parameter.i" <<'EOF'\nint pointer_parameter(int *value) {\n    return 7;\n}\nEOF\n\n"$MINIC" -S "$work_dir/pointer-parameter.i" -o "$work_dir/pointer-parameter-normal.s"\nMINIC_CORE_IR=shadow "$MINIC" -S "$work_dir/pointer-parameter.i" \\\n    -o "$work_dir/pointer-parameter-shadow.s"\ncmp "$work_dir/pointer-parameter-normal.s" "$work_dir/pointer-parameter-shadow.s"\nMINIC_CORE_IR=strict "$MINIC" -S "$work_dir/pointer-parameter.i" \\\n    -o "$work_dir/pointer-parameter-strict.s"\ncmp "$work_dir/pointer-parameter-normal.s" "$work_dir/pointer-parameter-strict.s"\n'''
           p.write_text(s.replace(anchor, addition, 1))
           PY
 
