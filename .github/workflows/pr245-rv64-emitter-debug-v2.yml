@@ -1,0 +1,52 @@
+name: PR245 RV64 Emitter Debug V2
+
+on:
+  push:
+    branches:
+      - tests/pr245-rv64-emitter-debug
+
+permissions:
+  contents: read
+
+jobs:
+  linux-frontier:
+    name: riscv-defconfig-init-main-debug
+    runs-on: ubuntu-24.04
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Restore pinned Linux source archive
+        id: linux-source-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-cache/linux-6.6.143.tar.xz
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
+
+      - name: Build instrumented MiniC
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/pr245-rv64-emitter-debug.py
+          make -j4 MODE=release BUILD_DIR=build/linux-debug-compiler
+
+      - name: Install RISC-V Linux Kbuild dependencies
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu flex bison bc libelf-dev libssl-dev
+
+      - name: Drive instrumented init main probe
+        shell: bash
+        run: |
+          set +e
+          MINIC="$GITHUB_WORKSPACE/build/linux-debug-compiler/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/linux-emitter-debug" LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-cache/linux-6.6.143.tar.xz" CROSS_COMPILE=riscv64-linux-gnu- sh tests/external/linux/probe.sh
+          status=$?
+          printf '%s\n' "PROBE_STATUS=$status"
+          if test -s build/linux-emitter-debug/minic.stderr; then
+            cat build/linux-emitter-debug/minic.stderr
+          fi
+          exit 0
