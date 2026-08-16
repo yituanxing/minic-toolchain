@@ -21,12 +21,11 @@
 bool minic_riscv64_core_function_can_emit_basic_v0(const MinicCoreFunction *function);
 
 bool minic_riscv64_emit_core_function_basic_v0_with_symbol(
-    FILE *file,
-    const MinicCoreFunction *function,
-    const MinicRiscv64FunctionSymbol *symbol);
+    FILE *file, const MinicCoreFunction *function, const MinicRiscv64FunctionSymbol *symbol);
 
-static inline bool minic_riscv64_emit_core_function_basic_v0(
-    FILE *file, const MinicCoreFunction *function, const char *symbol_name) {
+static inline bool minic_riscv64_emit_core_function_basic_v0(FILE *file,
+                                                             const MinicCoreFunction *function,
+                                                             const char *symbol_name) {
     MinicRiscv64FunctionSymbol symbol;
 
     symbol.symbol_name = symbol_name;

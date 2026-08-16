@@ -333,9 +333,7 @@ static bool emit_terminator(FILE *file,
 }
 
 bool minic_riscv64_emit_core_function_basic_v0_with_symbol(
-    FILE *file,
-    const MinicCoreFunction *function,
-    const MinicRiscv64FunctionSymbol *symbol) {
+    FILE *file, const MinicCoreFunction *function, const MinicRiscv64FunctionSymbol *symbol) {
     MinicRiscv64CoreFrame frame;
     const char *symbol_name;
     size_t block_index;
@@ -377,8 +375,7 @@ bool minic_riscv64_emit_core_function_basic_v0_with_symbol(
         }
     }
     if (fprintf(file, ".L%s_core_return:\n", symbol_name) < 0 ||
-        !minic_riscv64_emit_stack_release(file, frame.frame_size) ||
-        fprintf(file, "  ret\n") < 0 ||
+        !minic_riscv64_emit_stack_release(file, frame.frame_size) || fprintf(file, "  ret\n") < 0 ||
         !minic_riscv64_emit_function_symbol_end(file, symbol)) {
         return false;
     }
