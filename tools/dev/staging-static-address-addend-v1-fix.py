@@ -20,3 +20,11 @@ if count != 1:
     raise SystemExit(f'expected one obsolete function-pointer helper block, got {count}')
 
 p.write_text(t)
+
+p = Path('tests/compiler/c0/run-static-object-address-relocation.sh')
+t = p.read_text()
+old = 'test "$count" -eq 2\n'
+if t.count(old) != 1:
+    raise SystemExit(f'expected one old internal-address count, got {t.count(old)}')
+t = t.replace(old, 'test "$count" -eq 3\n', 1)
+p.write_text(t)
