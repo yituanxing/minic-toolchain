@@ -1424,20 +1424,59 @@ bool minic_c0_record_value_is_address_backed(const MinicC0Program *program,
     return false;
 }
 
-bool minic_c0_record_value_is_copy_source(const MinicC0Program *program,
-                                          MinicExpressionId expression_id) {
+static bool minic_c0_record_value_is_copy_source_bounded(const MinicC0Program *program,
+                                                         MinicExpressionId expression_id,
+                                                         size_t remaining) {
     const MinicExpression *expression;
 
-    if (program == NULL) {
+    if (program == NULL || remaining == 0U) {
         return false;
     }
     if (minic_c0_record_value_is_address_backed(program, expression_id)) {
         return true;
     }
     expression = minic_c0_program_expression(program, expression_id);
-    return expression != NULL && expression->kind == MINIC_EXPRESSION_CALL &&
-           expression->value_category == MINIC_VALUE_RVALUE &&
-           minic_type_is_record(expression->type);
+    if (expression == NULL || expression->value_category != MINIC_VALUE_RVALUE ||
+        !minic_type_is_record(expression->type)) {
+        return false;
+    }
+    if (expression->kind == MINIC_EXPRESSION_CALL) {
+        return true;
+    }
+    if (expression->kind == MINIC_EXPRESSION_CONDITIONAL) {
+        const MinicExpression *when_true;
+        const MinicExpression *when_false;
+        MinicExpressionId when_true_id;
+        MinicExpressionId when_false_id;
+
+        if (expression->value.conditional.uses_condition_value) {
+            return false;
+        }
+        when_true_id = expression->value.conditional.when_true;
+        when_false_id = expression->value.conditional.when_false;
+        if (when_true_id >= expression_id || when_false_id >= expression_id) {
+            return false;
+        }
+        when_true = minic_c0_program_expression(program, when_true_id);
+        when_false = minic_c0_program_expression(program, when_false_id);
+        return when_true != NULL && when_false != NULL && minic_type_is_record(when_true->type) &&
+               minic_type_is_record(when_false->type) &&
+               when_true->type.record_id == expression->type.record_id &&
+               when_false->type.record_id == expression->type.record_id &&
+               minic_c0_record_value_is_copy_source_bounded(
+                   program, when_true_id, remaining - 1U) &&
+               minic_c0_record_value_is_copy_source_bounded(program, when_false_id, remaining - 1U);
+    }
+    return false;
+}
+
+bool minic_c0_record_value_is_copy_source(const MinicC0Program *program,
+                                          MinicExpressionId expression_id) {
+    if (program == NULL || program->expression_count == SIZE_MAX) {
+        return false;
+    }
+    return minic_c0_record_value_is_copy_source_bounded(
+        program, expression_id, program->expression_count + 1U);
 }
 
 bool minic_c0_expression_is_null_pointer_constant_v0(const MinicC0Program *program,

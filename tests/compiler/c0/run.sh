@@ -344,6 +344,11 @@ sh "$root/tests/compiler/c0/run-record-rvalue-member.sh"
 MINIC="$minic" \
 HOST_CC="$host_cc" \
 BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+sh "$root/tests/compiler/c0/run-record-conditional-materialization.sh"
+
+MINIC="$minic" \
+HOST_CC="$host_cc" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
 sh "$root/tests/compiler/c0/run-gnu-packed-record-field.sh"
 
 MINIC="$minic" \
