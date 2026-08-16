@@ -48,22 +48,8 @@ jobs:
           needle = "        if (!success) {\n        }\n"
           if text.count(needle) != 2:
               raise SystemExit(f'unexpected empty writer-failure hook count: {text.count(needle)}')
-          global_hook = '''        if (!success) {
-            const MinicGlobalObject *failed_object = &program->global_objects[global_index];
-            fprintf(stderr,
-                    "RV64_WRITER_FAIL kind=global index=%zu name=%s\\n",
-                    global_index,
-                    failed_object->name != NULL ? failed_object->name : "<null>");
-        }
-'''
-          function_hook = '''        if (!success) {
-            const char *failed_name = minic_c0_function_symbol_name(function);
-            fprintf(stderr,
-                    "RV64_WRITER_FAIL kind=function index=%zu name=%s\\n",
-                    function_index,
-                    failed_name != NULL ? failed_name : "<null>");
-        }
-'''
+          global_hook = "        if (!success) {\n            const MinicGlobalObject *failed_object = &program->global_objects[global_index];\n            fprintf(stderr,\n                    \"RV64_WRITER_FAIL kind=global index=%zu name=%s\\\\n\",\n                    global_index,\n                    failed_object->name != NULL ? failed_object->name : \"<null>\");\n        }\n"
+          function_hook = "        if (!success) {\n            const char *failed_name = minic_c0_function_symbol_name(function);\n            fprintf(stderr,\n                    \"RV64_WRITER_FAIL kind=function index=%zu name=%s\\\\n\",\n                    function_index,\n                    failed_name != NULL ? failed_name : \"<null>\");\n        }\n"
           text = text.replace(needle, global_hook, 1)
           text = text.replace(needle, function_hook, 1)
           path.write_text(text)
