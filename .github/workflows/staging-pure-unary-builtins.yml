@@ -43,6 +43,11 @@ jobs:
             src/frontend/ast_verifier.c \
             src/target/riscv64/codegen_expression.c \
             tests/compiler/c0/builtin_unary_family.c
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('tests/compiler/c0/run.sh')
+          path.write_text(path.read_text().rstrip() + '\n')
+          PY
 
       - name: Release Werror build
         shell: bash
