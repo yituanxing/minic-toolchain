@@ -42,12 +42,16 @@ int core_diff_call(int value) {
     return core_diff_call_target(value, 2, 3, 4, 5, 6);
 }
 
-int core_diff_field(struct CoreDiffLayout *item) {
-    return item->value;
+int *core_diff_field(struct CoreDiffLayout *item) {
+    return &item->value;
+}
+
+int core_diff_pointer_call_target(int *value) {
+    return !value;
 }
 
 int core_diff_field_call(struct CoreDiffLayout *item) {
-    return core_diff_call_target(item->value, 2, 3, 4, 5, 6);
+    return core_diff_pointer_call_target(&item->value);
 }
 
 void core_diff_call_nop(void) {
