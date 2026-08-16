@@ -63,6 +63,9 @@ bool minic_target_info_integer_literal_type(const MinicTargetInfo *target,
 bool minic_target_info_fixed_register_supported(const MinicTargetInfo *target,
                                                 const char *name,
                                                 size_t name_length);
+bool minic_target_info_local_fixed_register_supported(const MinicTargetInfo *target,
+                                                      const char *name,
+                                                      size_t name_length);
 bool minic_target_info_inline_asm_register_clobber_supported(const MinicTargetInfo *target,
                                                              const char *name,
                                                              size_t name_length);

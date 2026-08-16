@@ -1170,10 +1170,24 @@ bool minic_c0_program_verify_target(const MinicC0Program *program,
         }
     }
     for (index = 0U; index < program->local_count; ++index) {
-        if (program->locals[index].element_count == 0U ||
-            !type_is_valid(program, target, program->locals[index].type) ||
-            minic_type_is_function(program->locals[index].type)) {
+        const MinicLocal *local;
+
+        local = &program->locals[index];
+        if (local->element_count == 0U || !type_is_valid(program, target, local->type) ||
+            minic_type_is_function(local->type)) {
             return false;
+        }
+        if (local->has_fixed_register_binding) {
+            const MinicFixedRegisterBinding *binding;
+
+            binding =
+                minic_c0_program_fixed_register_binding(program, local->fixed_register_binding_id);
+            if (!local->is_register_storage || local->is_array || binding == NULL ||
+                !binding->is_local || !minic_type_equal(binding->type, local->type) ||
+                !minic_target_info_local_fixed_register_supported(
+                    target, binding->register_name, binding->register_name_length)) {
+                return false;
+            }
         }
     }
     for (index = 0U; index < program->function_count; ++index) {
