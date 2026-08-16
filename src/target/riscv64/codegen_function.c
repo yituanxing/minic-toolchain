@@ -32,21 +32,6 @@ static bool minic_riscv64_alignment_power(size_t alignment, unsigned int *power)
     return true;
 }
 
-static bool
-minic_riscv64_integer_storage_width(const MinicC0Program *program, MinicType type, size_t *width) {
-    size_t alignment;
-    size_t size;
-
-    if (program == NULL || width == NULL || !minic_type_is_integer(type) ||
-        !minic_riscv64_type_layout(program, type, &size, &alignment) ||
-        (size != 1U && size != 2U && size != 4U && size != 8U)) {
-        return false;
-    }
-    (void)alignment;
-    *width = size;
-    return true;
-}
-
 static const char *minic_riscv64_integer_data_directive(size_t width) {
     return width == 1U   ? ".byte"
            : width == 2U ? ".half"
@@ -107,6 +92,7 @@ static bool minic_riscv64_global_scalar_type(const MinicC0Program *program,
                                              MinicType *scalar_type,
                                              size_t *scalar_width) {
     MinicType type;
+    size_t alignment;
 
     if (program == NULL || scalar_type == NULL || scalar_width == NULL) {
         return false;
@@ -121,9 +107,13 @@ static bool minic_riscv64_global_scalar_type(const MinicC0Program *program,
         }
         type = array_type->element_type;
     }
-    if (!minic_riscv64_integer_storage_width(program, type, scalar_width)) {
+    if ((!minic_type_is_integer(type) && !minic_type_is_pointer(type)) ||
+        !minic_riscv64_type_layout(program, type, scalar_width, &alignment) ||
+        (*scalar_width != 1U && *scalar_width != 2U && *scalar_width != 4U &&
+         *scalar_width != 8U)) {
         return false;
     }
+    (void)alignment;
     *scalar_type = type;
     return true;
 }
@@ -688,9 +678,9 @@ static bool minic_riscv64_record_array_info(const MinicC0Program *program,
     return true;
 }
 
-static bool minic_riscv64_emit_record_array_values(FILE *file,
-                                                   const MinicC0Program *program,
-                                                   const MinicGlobalObject *object) {
+static bool minic_riscv64_emit_recursive_array_values(FILE *file,
+                                                      const MinicC0Program *program,
+                                                      const MinicGlobalObject *object) {
     size_t object_alignment;
     size_t storage_size;
     size_t emitted_size;
@@ -698,7 +688,7 @@ static bool minic_riscv64_emit_record_array_values(FILE *file,
     size_t relocation_index;
 
     if (file == NULL || program == NULL || object == NULL || object->is_zero_initialized ||
-        !minic_riscv64_record_array_info(program, object->type, NULL, NULL) ||
+        !minic_type_is_array(object->type) ||
         !minic_data_layout_global_object(
             minic_default_data_layout(), program, object, &storage_size, &object_alignment)) {
         return false;
@@ -793,7 +783,8 @@ static bool minic_riscv64_emit_global_object(FILE *file,
             (object->initializer_count == 0U && !zero_size_record_definition)) {
             return false;
         }
-    } else if (minic_riscv64_record_array_info(program, object->type, NULL, NULL)) {
+    } else if (minic_riscv64_record_array_info(program, object->type, NULL, NULL) ||
+               (minic_type_is_array(object->type) && object->relocation_count != 0U)) {
         if (object->initializer_count == 0U) {
             return false;
         }
@@ -847,9 +838,10 @@ static bool minic_riscv64_emit_global_object(FILE *file,
         if (!minic_riscv64_emit_record_values(file, program, object)) {
             return false;
         }
-    } else if (minic_riscv64_record_array_info(program, object->type, NULL, NULL) &&
+    } else if ((minic_riscv64_record_array_info(program, object->type, NULL, NULL) ||
+                (minic_type_is_array(object->type) && object->relocation_count != 0U)) &&
                object->initializer_count != 0U) {
-        if (!minic_riscv64_emit_record_array_values(file, program, object)) {
+        if (!minic_riscv64_emit_recursive_array_values(file, program, object)) {
             return false;
         }
     } else if (object->relocation_count != 0U) {
@@ -865,7 +857,16 @@ static bool minic_riscv64_emit_global_object(FILE *file,
             return false;
         }
     } else {
-        for (initializer_index = 0U; initializer_index < object->initializer_count;
+        size_t emitted_initializer_count;
+
+        emitted_initializer_count = object->initializer_count;
+        if (minic_type_is_array(object->type)) {
+            while (emitted_initializer_count != 0U &&
+                   object->initializer_values[emitted_initializer_count - 1U] == 0U) {
+                emitted_initializer_count -= 1U;
+            }
+        }
+        for (initializer_index = 0U; initializer_index < emitted_initializer_count;
              ++initializer_index) {
             if (!minic_riscv64_emit_typed_bits(
                     file, program, scalar_type, object->initializer_values[initializer_index])) {
@@ -873,7 +874,7 @@ static bool minic_riscv64_emit_global_object(FILE *file,
             }
         }
         if (!minic_riscv64_emit_zero_bytes(
-                file, storage_size - object->initializer_count * scalar_width)) {
+                file, storage_size - emitted_initializer_count * scalar_width)) {
             return false;
         }
     }
