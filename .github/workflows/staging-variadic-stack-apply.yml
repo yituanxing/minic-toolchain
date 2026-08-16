@@ -1,0 +1,46 @@
+name: Staging Variadic Stack Apply
+
+on:
+  push:
+    branches:
+      - staging/linux-first100-variadic-stack-v0
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    if: github.actor != 'github-actions[bot]'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Remove stale eight-argument variadic parser cap
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('src/frontend/parser_expression.c')
+          text = path.read_text()
+          old = '''    while (parser->current.kind == MINIC_TOKEN_COMMA) {\n        if (argument_count >= 8U) {\n            minic_parser_error(parser, "variadic call supports at most 8 arguments");\n            return false;\n        }\n        if (!minic_parser_advance(parser) ||\n            !parse_call_argument(parser, call_expression, callee, argument_count)) {\n'''
+          new = '''    while (parser->current.kind == MINIC_TOKEN_COMMA) {\n        if (argument_count >= MINIC_MAX_FUNCTION_PARAMETERS) {\n            minic_parser_error(parser, "call argument count exceeds implementation limit");\n            return false;\n        }\n        if (!minic_parser_advance(parser) ||\n            !parse_call_argument(parser, call_expression, callee, argument_count)) {\n'''
+          assert text.count(old) == 1, text.count(old)
+          path.write_text(text.replace(old, new, 1))
+          PY
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+          git diff --check -- src/frontend/parser_expression.c
+
+      - name: Commit source-only patch
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/frontend/parser_expression.c
+          git diff --cached --quiet && exit 0
+          git commit -m 'frontend: allow variadic stack arguments'
+          git push origin HEAD:staging/linux-first100-variadic-stack-v0
