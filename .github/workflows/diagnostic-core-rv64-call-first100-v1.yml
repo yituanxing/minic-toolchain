@@ -1,0 +1,119 @@
+name: Diagnostic Core RV64 CALL First100 V1
+
+on:
+  push:
+    branches:
+      - diagnostic/core-rv64-call-first100-v1
+
+permissions:
+  contents: read
+
+concurrency:
+  group: diagnostic-core-rv64-call-first100-v1
+  cancel-in-progress: true
+
+jobs:
+  measure:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Restore pinned Linux source archive
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-cache/linux-6.6.143.tar.xz
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
+
+      - name: Install Linux Kbuild dependencies
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            flex bison bc libelf-dev libssl-dev
+
+      - name: Build compiler
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+          make -j4 MODE=release BUILD_DIR=build/call-first100-compiler
+
+      - name: Drive fixed first100 through hybrid
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          set +e
+          MINIC="$GITHUB_WORKSPACE/build/call-first100-compiler/bin/minic" \
+          MINIC_CORE_CODEGEN=basic-v0 \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/call-first100-linux" \
+          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-cache/linux-6.6.143.tar.xz" \
+          CROSS_COMPILE=riscv64-linux-gnu- \
+          LINUX_BATCH_OFFSET=0 LINUX_BATCH_LIMIT=100 LINUX_BATCH_JOBS=2 \
+            sh tests/external/linux/batch_probe.sh
+          status=$?
+          set -e
+          test "$status" -eq 1
+          grep -q '^pass=80$' build/call-first100-linux/batch-summary.txt
+          grep -q '^fail=20$' build/call-first100-linux/batch-summary.txt
+
+      - name: Measure Core production routing
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          import re
+
+          root = Path('build/call-first100-linux')
+          rows = json.loads((root / 'batch-results.json').read_text())
+          type_pattern = re.compile(r'^\.type\s+(.+?),\s*@function$')
+          core_pattern = re.compile(r'^\.L(.+)_core_bb[0-9]+:$')
+          total_defined = 0
+          total_core = 0
+          pass_count = 0
+          tus_with_core = 0
+          ranked = []
+          for row in rows:
+              if row['status'] != 'PASS':
+                  continue
+              pass_count += 1
+              asm = root / 'minic-out' / f"{row['input']}.s"
+              lines = asm.read_text(errors='replace').splitlines()
+              defined = {
+                  m.group(1)
+                  for line in lines
+                  if (m := type_pattern.match(line.strip())) is not None
+              }
+              core = {
+                  m.group(1)
+                  for line in lines
+                  if (m := core_pattern.match(line.strip())) is not None
+              } & defined
+              total_defined += len(defined)
+              total_core += len(core)
+              tus_with_core += bool(core)
+              ranked.append((len(core), len(defined), row['input']))
+          pct = 100.0 * total_core / total_defined if total_defined else 0.0
+          print('CORE_CALL_FIRST100_SUMMARY')
+          print(f'pass={pass_count}')
+          print(f'tus_with_core={tus_with_core}')
+          print(f'total_defined_functions={total_defined}')
+          print(f'core_routed_functions={total_core}')
+          print(f'legacy_fallback_functions={total_defined-total_core}')
+          print(f'core_route_pct={pct:.2f}')
+          print('top_core_routed_tus:')
+          for core, defined, name in sorted(ranked, reverse=True)[:10]:
+              route = 100.0 * core / defined if defined else 0.0
+              print(f'  input={name} defined={defined} core={core} route_pct={route:.2f}')
+          if pass_count != 80 or tus_with_core != 80 or total_defined != 303434:
+              raise SystemExit('unexpected fixed-first100 baseline')
+          if total_core < 63000:
+              raise SystemExit(f'CALL routing gain too small: {total_core}')
+          PY
