@@ -178,26 +178,60 @@ static bool eval_builtin_unary(const MinicC0Program *program,
                                unsigned int depth,
                                MinicConstValue *value) {
     MinicConstValue operand;
+    MinicBuiltinUnaryOperator operator_kind;
     uint64_t bits;
     uint64_t count;
     unsigned int width;
 
     if (program == NULL || target == NULL || expression == NULL || value == NULL ||
         expression->kind != MINIC_EXPRESSION_BUILTIN_UNARY ||
-        expression->value.builtin_unary.operator_kind != MINIC_BUILTIN_UNARY_CLZLL ||
         !eval_expression(
             program, target, expression->value.builtin_unary.operand, depth + 1U, &operand) ||
         !minic_type_is_integer(operand.type) ||
         !integer_width(program, target, operand.type, &width) || width == 0U || width > 64U ||
-        !normalize_bits(program, target, operand.type, operand.bits, &bits) || bits == 0U) {
+        !normalize_bits(program, target, operand.type, operand.bits, &bits)) {
         return false;
     }
 
+    operator_kind = expression->value.builtin_unary.operator_kind;
     count = 0U;
-    while ((bits & (UINT64_C(1) << (width - 1U))) == 0U) {
-        count += 1U;
-        bits <<= 1U;
+    switch (operator_kind) {
+    case MINIC_BUILTIN_UNARY_CLZLL:
+        if (bits == 0U) {
+            return false;
+        }
+        while ((bits & (UINT64_C(1) << (width - 1U))) == 0U) {
+            count += 1U;
+            bits <<= 1U;
+        }
+        break;
+    case MINIC_BUILTIN_UNARY_CTZL:
+        if (bits == 0U) {
+            return false;
+        }
+        while ((bits & UINT64_C(1)) == 0U) {
+            count += 1U;
+            bits >>= 1U;
+        }
+        break;
+    case MINIC_BUILTIN_UNARY_FFSLL:
+        if (bits == 0U) {
+            count = 0U;
+            break;
+        }
+        count = 1U;
+        while ((bits & UINT64_C(1)) == 0U) {
+            count += 1U;
+            bits >>= 1U;
+        }
+        break;
+    case MINIC_BUILTIN_UNARY_ISDIGIT:
+        count = bits >= UINT64_C(48) && bits <= UINT64_C(57) ? 1U : 0U;
+        break;
+    default:
+        return false;
     }
+
     value->type = expression->type;
     return normalize_bits(program, target, value->type, count, &value->bits);
 }
