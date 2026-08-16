@@ -1,0 +1,130 @@
+name: Staging Core Scalar Pointer Ingress V1
+
+on:
+  push:
+    branches:
+      - staging/core-scalar-pointer-ingress-v1
+
+permissions:
+  contents: write
+
+jobs:
+  validate-and-publish:
+    if: ${{ !contains(github.event.head_commit.message, '[publish-v1]') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install validation tools
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang-format gcc-riscv64-linux-gnu libc6-dev-riscv64-cross qemu-user
+
+      - name: Apply scalar pointer ingress
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('src/core/core_lower.c')
+          s = p.read_text()
+
+          anchor = '''static MinicCoreLowerStatus
+          lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool *terminated);
+          '''
+          assert s.count(anchor) == 1
+          s = s.replace(anchor, anchor + '''
+          static bool core_memory_scalar_type(MinicType type) {
+              return minic_type_is_integer(type) || minic_type_is_pointer(type);
+          }
+          ''', 1)
+
+          old = '''    if (local->is_array || local->is_register_storage || !minic_type_is_integer(local->type)) {
+              return MINIC_CORE_LOWER_UNSUPPORTED;
+          }
+          '''
+          new = '''    if (local->is_array || local->is_register_storage ||
+              !core_memory_scalar_type(local->type)) {
+              return MINIC_CORE_LOWER_UNSUPPORTED;
+          }
+          '''
+          assert s.count(old) == 1
+          s = s.replace(old, new, 1)
+
+          old = '''        if (!minic_type_is_integer(parameter->type) || minic_type_is_const(parameter->type) ||
+              minic_type_is_volatile(parameter->type) || parameter->is_array ||
+              parameter->is_register_storage) {
+              return MINIC_CORE_LOWER_UNSUPPORTED;
+          }
+          '''
+          new = '''        if (!core_memory_scalar_type(parameter->type) || minic_type_is_const(parameter->type) ||
+              minic_type_is_volatile(parameter->type) || parameter->is_array ||
+              parameter->is_register_storage) {
+              return MINIC_CORE_LOWER_UNSUPPORTED;
+          }
+          '''
+          assert s.count(old) == 1
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+
+          p = Path('tests/core/run-core-ir-shadow.sh')
+          s = p.read_text()
+          anchor = '''check_strict_case parameter
+          '''
+          assert s.count(anchor) == 1
+          addition = anchor + '''
+          cat >"$work_dir/pointer-parameter.i" <<'EOF'
+          int pointer_parameter(int *value) {
+              return 7;
+          }
+          EOF
+
+          "$MINIC" -S "$work_dir/pointer-parameter.i" -o "$work_dir/pointer-parameter-normal.s"
+          MINIC_CORE_IR=shadow "$MINIC" -S "$work_dir/pointer-parameter.i" \
+              -o "$work_dir/pointer-parameter-shadow.s"
+          cmp "$work_dir/pointer-parameter-normal.s" "$work_dir/pointer-parameter-shadow.s"
+          MINIC_CORE_IR=strict "$MINIC" -S "$work_dir/pointer-parameter.i" \
+              -o "$work_dir/pointer-parameter-strict.s"
+          cmp "$work_dir/pointer-parameter-normal.s" "$work_dir/pointer-parameter-strict.s"
+          '''
+          p.write_text(s.replace(anchor, addition, 1))
+          PY
+
+      - name: Canonical formatting
+        run: clang-format -i src/core/core_lower.c
+
+      - name: Release Werror build
+        run: make -j4 MODE=release BUILD_DIR=build/staging-core-pointer CFLAGS_EXTRA='-Werror'
+
+      - name: Core shadow pointer ingress regression
+        env:
+          MINIC: ${{ github.workspace }}/build/staging-core-pointer/bin/minic
+          BUILD_DIR: ${{ github.workspace }}/build/staging-core-pointer
+        run: bash tests/core/run-core-ir-shadow.sh
+
+      - name: Official full compiler C0 gate
+        run: bash .github/scripts/compiler-c0-full-gate.sh
+
+      - name: Foundation focused suite
+        env:
+          MINIC: ${{ github.workspace }}/build/staging-core-pointer/bin/minic
+          HOST_CC: cc
+          BUILD_DIR: ${{ github.workspace }}/build/staging-core-pointer-foundation
+        run: sh tests/compiler/c0/run-foundation-focused.sh
+
+      - name: Publish validated product diff
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'LiYang Dong'
+          git config user.email '119646676+yituanxing@users.noreply.github.com'
+          git add src/core/core_lower.c tests/core/run-core-ir-shadow.sh
+          git diff --cached --check
+          git commit -m 'core: admit scalar pointer ingress [publish-v1]'
+          git push origin HEAD:staging/core-scalar-pointer-ingress-v1
