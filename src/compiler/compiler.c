@@ -30,6 +30,11 @@ typedef enum MinicCoreShadowMode {
     MINIC_CORE_SHADOW_STRICT
 } MinicCoreShadowMode;
 
+typedef enum MinicCoreCodegenMode {
+    MINIC_CORE_CODEGEN_DISABLED = 0,
+    MINIC_CORE_CODEGEN_BASIC_V0
+} MinicCoreCodegenMode;
+
 typedef struct MinicCoreCandidates {
     MinicCoreFunction *functions;
     MinicCoreLowerStatus *statuses;
@@ -157,6 +162,28 @@ static bool minic_core_shadow_mode(const char *input_path,
     return false;
 }
 
+static bool minic_core_codegen_mode(const char *input_path,
+                                    MinicDiagnostic *diagnostic,
+                                    MinicCoreCodegenMode *mode) {
+    const char *value;
+
+    if (mode == NULL) {
+        return false;
+    }
+    value = getenv("MINIC_CORE_CODEGEN");
+    if (value == NULL || value[0] == '\0') {
+        *mode = MINIC_CORE_CODEGEN_DISABLED;
+        return true;
+    }
+    if (strcmp(value, "basic-v0") == 0) {
+        *mode = MINIC_CORE_CODEGEN_BASIC_V0;
+        return true;
+    }
+    minic_set_diagnostic(
+        diagnostic, input_path, 1U, 1U, "MINIC_CORE_CODEGEN must be unset or 'basic-v0'");
+    return false;
+}
+
 static bool minic_validate_core_shadow(const char *input_path,
                                        const MinicC0Program *program,
                                        const MinicCoreCandidates *candidates,
@@ -277,7 +304,9 @@ int minic_compile_preprocessed_file(const char *input_path,
     MinicC0Program program;
     MinicCoreCandidates core_candidates;
     const MinicTargetInfo *target_info;
+    MinicCoreCodegenMode core_codegen_mode;
     MinicCoreShadowMode core_shadow_mode;
+    MinicCoreShadowMode core_validation_mode;
     bool success;
 
     if (input_path == NULL || output_path == NULL) {
@@ -292,6 +321,14 @@ int minic_compile_preprocessed_file(const char *input_path,
     }
     if (!minic_core_shadow_mode(input_path, diagnostic, &core_shadow_mode)) {
         return 1;
+    }
+    if (!minic_core_codegen_mode(input_path, diagnostic, &core_codegen_mode)) {
+        return 1;
+    }
+    core_validation_mode = core_shadow_mode;
+    if (core_codegen_mode != MINIC_CORE_CODEGEN_DISABLED &&
+        core_validation_mode == MINIC_CORE_SHADOW_DISABLED) {
+        core_validation_mode = MINIC_CORE_SHADOW_OPTIONAL;
     }
 
     buffer.data = NULL;
@@ -329,7 +366,7 @@ int minic_compile_preprocessed_file(const char *input_path,
             diagnostic, input_path, 1U, 1U, "normalized FunctionBody ownership is invalid");
         success = false;
     }
-    if (success && core_shadow_mode != MINIC_CORE_SHADOW_DISABLED &&
+    if (success && core_validation_mode != MINIC_CORE_SHADOW_DISABLED &&
         !minic_prepare_core_candidates(&program, &core_candidates)) {
         minic_set_diagnostic(
             diagnostic, input_path, 1U, 1U, "cannot retain Core IR lowering results");
@@ -337,12 +374,19 @@ int minic_compile_preprocessed_file(const char *input_path,
     }
     if (success) {
         success = minic_validate_core_shadow(
-            input_path, &program, &core_candidates, core_shadow_mode, diagnostic);
+            input_path, &program, &core_candidates, core_validation_mode, diagnostic);
     }
     if (success) {
         success = minic_riscv64_layout_program(input_path, &program, diagnostic);
     }
-    if (success) {
+    if (success && core_codegen_mode == MINIC_CORE_CODEGEN_BASIC_V0) {
+        success =
+            minic_riscv64_write_c0_program_with_core_candidates(output_path,
+                                                                &program,
+                                                                core_candidates.functions,
+                                                                core_candidates.function_count,
+                                                                diagnostic);
+    } else if (success) {
         success = minic_riscv64_write_c0_program(output_path, &program, diagnostic);
     }
 
