@@ -65,6 +65,7 @@ for test_script in \
     run-static-inferred-integer-array.sh \
     run-static-mutable-arrays.sh \
     run-static-preformed-array-zero.sh \
+    run-static-fixed-record-array-zero.sh \
     run-prefix-update-expressions.sh \
     run-function-designator-calls.sh \
     run-function-address-expressions.sh \
