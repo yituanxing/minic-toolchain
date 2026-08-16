@@ -532,8 +532,16 @@ static bool minic_riscv64_emit_constant_value(FILE *file,
             size_t field_offset;
 
             field = minic_c0_record_field(record, field_index);
-            if (field == NULL || field->element_count == 0U || field->is_flexible_array) {
+            if (field == NULL || field->element_count == 0U) {
                 return false;
+            }
+            if (field->is_flexible_array) {
+                /* DataLayout gives a trailing FAM zero storage bytes. Its semantic
+                 * initializer likewise owns zero scalar slots, so emit nothing. */
+                if (record->is_union || field_index + 1U != field_limit) {
+                    return false;
+                }
+                continue;
             }
             if (field->is_bit_field) {
                 if (!minic_riscv64_emit_record_bit_field_run(file,
