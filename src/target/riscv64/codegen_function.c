@@ -496,6 +496,15 @@ static bool minic_riscv64_emit_constant_value(FILE *file,
         for (element_index = 0U; element_index < array_type->element_count; ++element_index) {
             size_t element_emitted;
 
+            if (*initializer_index == object->initializer_count &&
+                *relocation_index == object->relocation_count) {
+                if (cursor > type_size ||
+                    !minic_riscv64_emit_zero_bytes(file, type_size - cursor)) {
+                    return false;
+                }
+                *emitted_size = type_size;
+                return true;
+            }
             if (!minic_riscv64_emit_constant_value(file,
                                                    program,
                                                    object,

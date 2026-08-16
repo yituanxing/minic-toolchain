@@ -6,3 +6,9 @@ const char *const names[4] = {
     0,
     "four"
 };
+
+const char *envp_init[32 + 2] = {
+    "HOME=/",
+    "TERM=linux",
+    (void *)0,
+};
