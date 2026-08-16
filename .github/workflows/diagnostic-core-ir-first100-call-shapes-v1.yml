@@ -1,0 +1,245 @@
+name: Diagnostic Core IR First100 Call Shapes V1
+
+on:
+  push:
+    branches:
+      - diagnostic/core-ir-first100-call-shapes-v1
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore pinned Linux source archive
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-cache/linux-6.6.143.tar.xz
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
+
+      - name: Install Linux Kbuild dependencies
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            flex bison bc libelf-dev libssl-dev
+
+      - name: Instrument call-shape blockers
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('src/core/core_lower.c')
+          s = p.read_text()
+          old = '#include <stdlib.h>\n#include <string.h>\n'
+          assert s.count(old) == 1
+          s = s.replace(old, '#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n', 1)
+
+          anchor = '''static bool core_memory_scalar_type(MinicType type) {
+              return minic_type_is_integer(type) || minic_type_is_pointer(type);
+          }
+          '''
+          helper = '''static bool core_memory_scalar_type(MinicType type) {
+              return minic_type_is_integer(type) || minic_type_is_pointer(type);
+          }
+
+          static const char *diagnostic_type_class(MinicType type) {
+              if (minic_type_is_pointer(type)) {
+                  return "ptr";
+              }
+              if (minic_type_is_integer(type)) {
+                  return "int";
+              }
+              if (minic_type_is_void(type)) {
+                  return "void";
+              }
+              if (minic_type_is_record(type)) {
+                  return "record";
+              }
+              if (minic_type_is_array(type)) {
+                  return "array";
+              }
+              if (minic_type_is_float(type) || minic_type_is_double(type)) {
+                  return "float";
+              }
+              return "other";
+          }
+
+          static void diagnostic_call_shape(const MinicC0Program *program,
+                                            const MinicExpression *expression,
+                                            const char *domain) {
+              const MinicFunction *callee;
+              size_t argument_index;
+              size_t scalar_args;
+              size_t record_args;
+              size_t other_args;
+              int direct;
+              int variadic;
+
+              if (program == NULL || expression == NULL || domain == NULL ||
+                  expression->kind != MINIC_EXPRESSION_CALL) {
+                  return;
+              }
+              direct = expression->value.call.function_id != MINIC_FUNCTION_INVALID ? 1 : 0;
+              callee = direct != 0
+                           ? minic_c0_program_function(program, expression->value.call.function_id)
+                           : NULL;
+              variadic = callee == NULL ? -1 : (callee->is_variadic ? 1 : 0);
+              scalar_args = 0U;
+              record_args = 0U;
+              other_args = 0U;
+              for (argument_index = 0U; argument_index < expression->value.call.argument_count;
+                   ++argument_index) {
+                  const MinicExpression *argument;
+
+                  argument = minic_c0_program_expression(
+                      program, expression->value.call.arguments[argument_index]);
+                  if (argument == NULL) {
+                      other_args += 1U;
+                  } else if (core_memory_scalar_type(argument->type)) {
+                      scalar_args += 1U;
+                  } else if (minic_type_is_record(argument->type)) {
+                      record_args += 1U;
+                  } else {
+                      other_args += 1U;
+                  }
+              }
+              (void)fprintf(stderr,
+                            "MINIC_CORE_CALL_SHAPE domain=%s direct=%d variadic=%d ret=%s argc=%zu scalar=%zu record=%zu other=%zu\\n",
+                            domain,
+                            direct,
+                            variadic,
+                            diagnostic_type_class(expression->type),
+                            expression->value.call.argument_count,
+                            scalar_args,
+                            record_args,
+                            other_args);
+          }
+          '''
+          assert s.count(anchor) == 1, s.count(anchor)
+          s = s.replace(anchor, helper, 1)
+
+          old = '''    return MINIC_CORE_LOWER_UNSUPPORTED;
+          }
+
+          static MinicCoreLowerStatus lower_assignment_pair'''
+          new = '''    if (expression->kind == MINIC_EXPRESSION_CALL) {
+                  diagnostic_call_shape(context->body->program, expression, "value");
+              }
+              return MINIC_CORE_LOWER_UNSUPPORTED;
+          }
+
+          static MinicCoreLowerStatus lower_assignment_pair'''
+          assert s.count(old) == 1, s.count(old)
+          s = s.replace(old, new, 1)
+
+          old = '''    if (expression->kind != MINIC_EXPRESSION_ASSIGNMENT) {
+                  return MINIC_CORE_LOWER_UNSUPPORTED;
+              }
+          '''
+          new = '''    if (expression->kind != MINIC_EXPRESSION_ASSIGNMENT) {
+                  if (expression->kind == MINIC_EXPRESSION_CALL) {
+                      diagnostic_call_shape(context->body->program, expression, "statement");
+                  }
+                  return MINIC_CORE_LOWER_UNSUPPORTED;
+              }
+          '''
+          assert s.count(old) == 1, s.count(old)
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+          PY
+
+      - name: Build diagnostic compiler
+        run: make -j4 MODE=release BUILD_DIR=build/core-call-shapes-compiler
+
+      - name: Drive fixed first100 with Core shadow
+        continue-on-error: true
+        env:
+          MINIC_CORE_IR: shadow
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/core-call-shapes-compiler/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/core-call-shapes-linux" \
+          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-cache/linux-6.6.143.tar.xz" \
+          CROSS_COMPILE=riscv64-linux-gnu- \
+          LINUX_BATCH_OFFSET=0 LINUX_BATCH_LIMIT=100 LINUX_BATCH_JOBS=2 \
+            sh tests/external/linux/batch_probe.sh
+
+      - name: Aggregate call shapes
+        if: always()
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from collections import Counter
+          from pathlib import Path
+          import re
+
+          pat = re.compile(
+              r'^MINIC_CORE_CALL_SHAPE domain=(\S+) direct=(-?\d+) variadic=(-?\d+) '
+              r'ret=(\S+) argc=(\d+) scalar=(\d+) record=(\d+) other=(\d+)$'
+          )
+          groups = Counter()
+          totals = Counter()
+          root = Path('build/core-call-shapes-linux/minic-stderr')
+          for path in root.rglob('*.stderr') if root.is_dir() else []:
+              for line in path.read_text(errors='replace').splitlines():
+                  match = pat.match(line.strip())
+                  if not match:
+                      continue
+                  domain, direct, variadic, ret, argc, scalar, record, other = match.groups()
+                  argc = int(argc)
+                  scalar = int(scalar)
+                  record = int(record)
+                  other = int(other)
+                  arg_class = 'scalar' if scalar == argc else ('record' if record != 0 and other == 0 else 'mixed')
+                  key = (domain, int(direct), int(variadic), ret, arg_class)
+                  groups[key] += 1
+                  totals['all'] += 1
+                  if int(direct) == 1:
+                      totals['direct'] += 1
+                  else:
+                      totals['indirect'] += 1
+                  if int(direct) == 1 and int(variadic) == 0 and ret in ('void', 'int', 'ptr') and arg_class == 'scalar':
+                      totals['direct_fixed_scalar_v0'] += 1
+
+          total = totals['all']
+          lines = [
+              'MINIC_CORE_FIRST100_CALL_SHAPES',
+              f'total_calls={total}',
+              f'direct={totals["direct"]}',
+              f'indirect={totals["indirect"]}',
+              f'direct_fixed_scalar_v0={totals["direct_fixed_scalar_v0"]}',
+          ]
+          for key, count in groups.most_common():
+              domain, direct, variadic, ret, arg_class = key
+              pct = 100.0 * count / total if total else 0.0
+              lines.append(
+                  f'domain={domain} direct={direct} variadic={variadic} ret={ret} args={arg_class} '
+                  f'count={count} pct={pct:.2f}'
+              )
+          text = '\n'.join(lines) + '\n'
+          out = Path('build/core-call-shapes-linux/core-call-shapes.txt')
+          out.parent.mkdir(parents=True, exist_ok=True)
+          out.write_text(text)
+          print(text, end='')
+          PY
+          test -s build/core-call-shapes-linux/batch-summary.txt && cat build/core-call-shapes-linux/batch-summary.txt || true
+
+      - name: Upload call-shape evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-ir-first100-call-shapes-${{ github.run_id }}
+          path: |
+            build/core-call-shapes-linux/core-call-shapes.txt
+            build/core-call-shapes-linux/batch-summary.txt
+          if-no-files-found: ignore
+          retention-days: 7
