@@ -1,0 +1,114 @@
+name: Diagnostic Core IR Post Is Zero Shapes V1
+on:
+  push:
+    branches: [diagnostic/core-ir-post-is-zero-shapes-v1]
+permissions:
+  contents: read
+jobs:
+  measure:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache/restore@v4
+        name: Restore pinned Linux source archive
+        with:
+          path: build/linux-cache/linux-6.6.143.tar.xz
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
+      - name: Install Linux Kbuild dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu flex bison bc libelf-dev libssl-dev
+      - name: Instrument generic execution fallbacks
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('src/core/core_lower.c'); s=p.read_text()
+          old='#include <stdlib.h>\n#include <string.h>\n'; assert s.count(old)==1
+          s=s.replace(old,'#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n',1)
+          marker='''    return MINIC_CORE_LOWER_UNSUPPORTED;
+          }
+
+          static MinicCoreLowerStatus lower_assignment_pair'''
+          repl='''    (void)fprintf(stderr,
+                        "MINIC_CORE_SHAPE domain=expression kind=%d op=%d\\n",
+                        (int)expression->kind,
+                        expression->kind == MINIC_EXPRESSION_BINARY
+                            ? (int)expression->value.binary.operator_kind : -1);
+              return MINIC_CORE_LOWER_UNSUPPORTED;
+          }
+
+          static MinicCoreLowerStatus lower_assignment_pair'''
+          assert s.count(marker)==1, s.count(marker); s=s.replace(marker,repl,1)
+          marker='''    if (expression->kind != MINIC_EXPRESSION_ASSIGNMENT) {
+                  return MINIC_CORE_LOWER_UNSUPPORTED;
+              }
+          '''
+          repl='''    if (expression->kind != MINIC_EXPRESSION_ASSIGNMENT) {
+                  (void)fprintf(stderr,
+                                "MINIC_CORE_SHAPE domain=expression_statement kind=%d op=%d\\n",
+                                (int)expression->kind,
+                                expression->kind == MINIC_EXPRESSION_BINARY
+                                    ? (int)expression->value.binary.operator_kind : -1);
+                  return MINIC_CORE_LOWER_UNSUPPORTED;
+              }
+          '''
+          assert s.count(marker)==1, s.count(marker); s=s.replace(marker,repl,1)
+          marker='''            default:
+                          return MINIC_CORE_LOWER_UNSUPPORTED;
+          '''
+          repl='''            default:
+                          (void)fprintf(stderr,
+                                        "MINIC_CORE_SHAPE domain=statement kind=%d op=-1\\n",
+                                        (int)statement->kind);
+                          return MINIC_CORE_LOWER_UNSUPPORTED;
+          '''
+          assert s.count(marker)==1, s.count(marker); p.write_text(s.replace(marker,repl,1))
+          PY
+      - name: Build diagnostic compiler
+        run: make -j4 MODE=release BUILD_DIR=build/core-post-is-zero-compiler
+      - name: Drive fixed first100 with Core shadow
+        continue-on-error: true
+        env:
+          MINIC_CORE_IR: shadow
+        run: |
+          MINIC="$GITHUB_WORKSPACE/build/core-post-is-zero-compiler/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/core-post-is-zero-linux" LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-cache/linux-6.6.143.tar.xz" CROSS_COMPILE=riscv64-linux-gnu- LINUX_BATCH_OFFSET=0 LINUX_BATCH_LIMIT=100 LINUX_BATCH_JOBS=2 sh tests/external/linux/batch_probe.sh
+      - name: Aggregate shapes
+        if: always()
+        run: |
+          python3 - <<'PY'
+          from collections import Counter
+          from pathlib import Path
+          import re
+          expr=['INTEGER','FLOATING','LOCAL','GLOBAL_OBJECT','FIXED_REGISTER','FUNCTION','LABEL_ADDRESS','CALL_FRAME_ADDRESS','BUILTIN_UNREACHABLE','SIZEOF','OFFSETOF','ADDRESS_OF','DEREFERENCE','CAST','BITCAST','CONVERSION','DISCARD','SUBSCRIPT','MEMBER','LVALUE_READ','ASSIGNMENT','COMPOUND_ASSIGNMENT','UNARY','BINARY','CONDITIONAL','CALL','COMPOUND_LITERAL','STATEMENT','BUILTIN_UNARY','BUILTIN_OVERFLOW']
+          binary=['ADD','SUBTRACT','MULTIPLY','DIVIDE','REMAINDER','SHIFT_LEFT','SHIFT_RIGHT','BITWISE_AND','BITWISE_XOR','BITWISE_OR','EQUAL','NOT_EQUAL','LESS','LESS_EQUAL','GREATER','GREATER_EQUAL','LOGICAL_AND','LOGICAL_OR','COMMA']
+          stmt=['ASSIGN','RECORD_COPY','XOR_ASSIGN','EXPRESSION','INLINE_ASM','RETURN','BREAK','GOTO','LABEL','IF','WHILE','SWITCH','CASE','DEFAULT']
+          pat=re.compile(r'^MINIC_CORE_SHAPE domain=(\S+) kind=(-?\d+) op=(-?\d+)$'); c=Counter()
+          root=Path('build/core-post-is-zero-linux/minic-stderr')
+          for f in root.rglob('*.stderr') if root.is_dir() else []:
+              for line in f.read_text(errors='replace').splitlines():
+                  m=pat.match(line.strip())
+                  if not m: continue
+                  d,k,o=m.groups(); k=int(k); o=int(o)
+                  if d in ('expression','expression_statement'):
+                      n=expr[k] if 0<=k<len(expr) else f'EXPR_{k}'
+                      shape=f'{d}:BINARY_{binary[o]}' if n=='BINARY' and 0<=o<len(binary) else f'{d}:{n}'
+                  else:
+                      n=stmt[k] if 0<=k<len(stmt) else f'STMT_{k}'; shape=f'{d}:{n}'
+                  c[shape]+=1
+          total=sum(c.values()); lines=['MINIC_CORE_POST_IS_ZERO_SHAPES',f'total_shape_blockers={total}']
+          for shape,count in c.most_common(): lines.append(f'{shape}={count} ({100.0*count/total if total else 0:.2f}%)')
+          out=Path('build/core-post-is-zero-linux'); out.mkdir(parents=True,exist_ok=True); text='\n'.join(lines)+'\n'; (out/'core-execution-shapes.txt').write_text(text); print(text,end='')
+          PY
+          test -s build/core-post-is-zero-linux/batch-summary.txt && cat build/core-post-is-zero-linux/batch-summary.txt || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: core-post-is-zero-shapes-${{ github.run_id }}
+          path: |
+            build/core-post-is-zero-linux/core-execution-shapes.txt
+            build/core-post-is-zero-linux/batch-summary.txt
+          retention-days: 7
