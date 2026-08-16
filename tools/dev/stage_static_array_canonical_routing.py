@@ -37,7 +37,6 @@ new = """                                            object_type,
                                             &object_id) ||
         (*has_section && !minic_c0_global_object_set_section(
 """
-# Restrict replacement to the inferred-integer helper region.
 helper_start = text.index("static bool parse_static_inferred_integer_array(")
 helper_end = text.index("static bool parse_static_inferred_char_array(", helper_start)
 helper = text[helper_start:helper_end]
@@ -45,6 +44,25 @@ if helper.count(old) != 1:
     raise SystemExit(f"inferred integer read-only anchor count={helper.count(old)}")
 helper = helper.replace(old, new, 1)
 text = text[:helper_start] + helper + text[helper_end:]
+
+# The fixed-array legacy mini-parser owned these counters.  The canonical
+# declarator/initializer path below makes them dead state, so remove them.
+old = """    MinicType object_type;
+    MinicGlobalObjectId object_id;
+    size_t bounds[8];
+    size_t bound_count;
+    size_t expected_count;
+    size_t index;
+
+    bound_count = 0U;
+    expected_count = 1U;
+"""
+new = """    MinicType object_type;
+    MinicGlobalObjectId object_id;
+"""
+if text.count(old) != 1:
+    raise SystemExit(f"static array legacy locals anchor count={text.count(old)}")
+text = text.replace(old, new, 1)
 
 # Replace the legacy fixed integer-array mini-parser with the canonical array
 # declarator and shared static-storage initializer owners.  Keep inferred []
@@ -187,3 +205,22 @@ new = """    run-static-inferred-integer-array.sh \\
 if foundation_text.count(old) != 1:
     raise SystemExit("foundation static-array insertion anchor changed")
 foundation.write_text(foundation_text.replace(old, new, 1))
+
+# The same invalid program remains rejected by the shared initializer owner;
+# move the diagnostic contract to that canonical owner.  Writable static
+# integer arrays are now valid C, so remove the stale negative fixture.
+replace_once(
+    "tests/compiler/c0/run.sh",
+    """expect_compile_failure \\
+    invalid_too_many_global_initializers \\
+    "too many global array initializers"
+expect_compile_failure \\
+    invalid_writable_static_global \\
+    "static global arrays currently require const integer elements"
+""",
+    """expect_compile_failure \\
+    invalid_too_many_global_initializers \\
+    "too many nested static array initializers"
+""",
+)
+Path("tests/compiler/c0/invalid_writable_static_global.c").unlink()
