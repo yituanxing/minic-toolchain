@@ -46,7 +46,8 @@ static bool name_conflicts(const MinicC0Program *program, const char *name, size
         const MinicFixedRegisterBinding *binding;
 
         binding = &program->fixed_register_bindings[index];
-        if (binding->name_length == name_length && memcmp(binding->name, name, name_length) == 0) {
+        if (!binding->is_local && binding->name_length == name_length &&
+            memcmp(binding->name, name, name_length) == 0) {
             return true;
         }
     }
@@ -70,19 +71,21 @@ static bool name_conflicts(const MinicC0Program *program, const char *name, size
     return false;
 }
 
-bool minic_c0_program_add_fixed_register_binding(MinicC0Program *program,
-                                                 const char *name,
-                                                 size_t name_length,
-                                                 MinicType type,
-                                                 const char *register_name,
-                                                 size_t register_name_length,
-                                                 MinicFixedRegisterBindingId *binding_id) {
+static bool add_fixed_register_binding(MinicC0Program *program,
+                                       const char *name,
+                                       size_t name_length,
+                                       MinicType type,
+                                       const char *register_name,
+                                       size_t register_name_length,
+                                       MinicLocalId local_id,
+                                       bool is_local,
+                                       MinicFixedRegisterBindingId *binding_id) {
     MinicFixedRegisterBinding binding;
 
     if (program == NULL || name == NULL || register_name == NULL || binding_id == NULL ||
         register_name_length == 0U ||
         (!minic_type_is_integer(type) && !minic_type_is_pointer(type)) ||
-        name_conflicts(program, name, name_length) ||
+        (!is_local && name_conflicts(program, name, name_length)) ||
         !grow_array((void **)&program->fixed_register_bindings,
                     &program->fixed_register_binding_capacity,
                     program->fixed_register_binding_count,
@@ -100,10 +103,74 @@ bool minic_c0_program_add_fixed_register_binding(MinicC0Program *program,
     binding.name_length = name_length;
     binding.register_name_length = register_name_length;
     binding.type = type;
+    binding.local_id = local_id;
+    binding.is_local = is_local;
     *binding_id = program->fixed_register_binding_count;
     program->fixed_register_bindings[program->fixed_register_binding_count] = binding;
     program->fixed_register_binding_count += 1U;
     return true;
+}
+
+const MinicFixedRegisterBinding *
+minic_c0_program_local_fixed_register_binding(const MinicC0Program *program,
+                                              MinicLocalId local_id) {
+    size_t index;
+
+    if (program == NULL || local_id >= program->local_count) {
+        return NULL;
+    }
+    for (index = 0U; index < program->fixed_register_binding_count; ++index) {
+        const MinicFixedRegisterBinding *binding;
+
+        binding = &program->fixed_register_bindings[index];
+        if (binding->is_local && binding->local_id == local_id) {
+            return binding;
+        }
+    }
+    return NULL;
+}
+
+bool minic_c0_program_add_fixed_register_binding(MinicC0Program *program,
+                                                 const char *name,
+                                                 size_t name_length,
+                                                 MinicType type,
+                                                 const char *register_name,
+                                                 size_t register_name_length,
+                                                 MinicFixedRegisterBindingId *binding_id) {
+    return add_fixed_register_binding(program,
+                                      name,
+                                      name_length,
+                                      type,
+                                      register_name,
+                                      register_name_length,
+                                      MINIC_LOCAL_INVALID,
+                                      false,
+                                      binding_id);
+}
+
+bool minic_c0_program_add_local_fixed_register_binding(MinicC0Program *program,
+                                                       MinicLocalId local_id,
+                                                       const char *name,
+                                                       size_t name_length,
+                                                       const char *register_name,
+                                                       size_t register_name_length,
+                                                       MinicFixedRegisterBindingId *binding_id) {
+    const MinicLocal *local;
+
+    local = minic_c0_program_local(program, local_id);
+    if (local == NULL || local->is_array ||
+        minic_c0_program_local_fixed_register_binding(program, local_id) != NULL) {
+        return false;
+    }
+    return add_fixed_register_binding(program,
+                                      name,
+                                      name_length,
+                                      local->type,
+                                      register_name,
+                                      register_name_length,
+                                      local_id,
+                                      true,
+                                      binding_id);
 }
 
 static bool add_global_object_entity(MinicC0Program *program,
