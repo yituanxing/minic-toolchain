@@ -74,15 +74,17 @@ static MinicCoreLowerStatus lower_parameter_ingress(MinicCoreLowerContext *conte
 
         local_id = context->source_function->local_begin + parameter_index;
         parameter = minic_c0_program_local(context->body->program, local_id);
-        if (parameter == NULL ||
-            !minic_type_equal(parameter->type,
-                              context->source_function->parameter_types[parameter_index])) {
+        if (parameter == NULL) {
             return MINIC_CORE_LOWER_ERROR;
         }
         if (!minic_type_is_integer(parameter->type) || minic_type_is_const(parameter->type) ||
             minic_type_is_volatile(parameter->type) || parameter->is_array ||
             parameter->is_register_storage) {
             return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        if (!minic_type_equal(parameter->type,
+                              context->source_function->parameter_types[parameter_index])) {
+            return MINIC_CORE_LOWER_ERROR;
         }
         status = lower_local_object(context, local_id, &object_id);
         if (status != MINIC_CORE_LOWER_OK) {
