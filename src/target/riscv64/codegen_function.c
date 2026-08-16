@@ -521,8 +521,15 @@ static bool minic_riscv64_emit_constant_value(FILE *file,
         size_t field_limit;
 
         record = minic_c0_program_record(program, type.record_id);
-        if (record == NULL || !record->is_complete || record->field_count == 0U) {
+        if (record == NULL || !record->is_complete) {
             return false;
+        }
+        if (record->field_count == 0U) {
+            if (type_size != 0U) {
+                return false;
+            }
+            *emitted_size = 0U;
+            return true;
         }
         cursor = 0U;
         field_limit = record->is_union ? 1U : record->field_count;
