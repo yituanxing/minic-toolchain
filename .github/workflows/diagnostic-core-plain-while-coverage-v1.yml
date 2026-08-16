@@ -1,0 +1,110 @@
+name: Diagnostic Core Plain While Coverage V1
+
+on:
+  push:
+    branches:
+      - diagnostic/core-plain-while-coverage-v1
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore pinned Linux source archive
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-cache/linux-6.6.143.tar.xz
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
+      - name: Install Linux Kbuild dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu flex bison bc libelf-dev libssl-dev
+      - name: Route plain while and instrument coverage
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/core/core_lower.c')
+          s = p.read_text()
+          old = '''            case MINIC_STATEMENT_IF:
+                          status = lower_if(context, statement, &statement_terminated);
+                          break;
+                      default:'''
+          new = '''            case MINIC_STATEMENT_IF:
+                          status = lower_if(context, statement, &statement_terminated);
+                          break;
+                      case MINIC_STATEMENT_WHILE:
+                          status = lower_while(context, statement, &statement_terminated);
+                          break;
+                      default:'''
+          assert s.count(old) == 1, s.count(old)
+          p.write_text(s.replace(old, new, 1))
+
+          p = Path('src/compiler/compiler.c')
+          s = p.read_text()
+          anchor = '        minic_core_function_destroy(&core);\n'
+          assert s.count(anchor) == 1, s.count(anchor)
+          marker = '''        (void)fprintf(stderr,
+                        "MINIC_CORE_COVERAGE status=%s function=%s\\n",
+                        status == MINIC_CORE_LOWER_OK
+                            ? "OK"
+                            : (status == MINIC_CORE_LOWER_UNSUPPORTED ? "UNSUPPORTED" : "ERROR"),
+                        function->name != NULL ? function->name : "<unnamed>");
+          '''
+          p.write_text(s.replace(anchor, marker + anchor, 1))
+          PY
+      - name: Build diagnostic compiler
+        run: make -j4 MODE=release BUILD_DIR=build/core-plain-while-compiler
+      - name: Drive fixed first100 with Core shadow
+        continue-on-error: true
+        env:
+          MINIC_CORE_IR: shadow
+        run: |
+          MINIC="$GITHUB_WORKSPACE/build/core-plain-while-compiler/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/core-plain-while-linux" \
+          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-cache/linux-6.6.143.tar.xz" \
+          CROSS_COMPILE=riscv64-linux-gnu- LINUX_BATCH_OFFSET=0 LINUX_BATCH_LIMIT=100 LINUX_BATCH_JOBS=2 \
+            sh tests/external/linux/batch_probe.sh
+      - name: Aggregate coverage
+        if: always()
+        run: |
+          python3 - <<'PY'
+          from collections import Counter
+          from pathlib import Path
+          import re
+          root = Path('build/core-plain-while-linux/minic-stderr')
+          pat = re.compile(r'^MINIC_CORE_COVERAGE status=(OK|UNSUPPORTED|ERROR) function=(.*)$')
+          counts = Counter()
+          for path in root.rglob('*.stderr') if root.is_dir() else []:
+              for line in path.read_text(errors='replace').splitlines():
+                  m = pat.match(line.strip())
+                  if m:
+                      counts[m.group(1)] += 1
+          total = sum(counts.values())
+          pct = 100.0 * counts['OK'] / total if total else 0.0
+          text = ('MINIC_CORE_PLAIN_WHILE_COVERAGE\n'
+                  f'functions_observed={total}\n'
+                  f'core_ok={counts["OK"]}\n'
+                  f'core_unsupported={counts["UNSUPPORTED"]}\n'
+                  f'core_error={counts["ERROR"]}\n'
+                  f'function_coverage_percent={pct:.2f}\n')
+          out = Path('build/core-plain-while-linux/plain-while-coverage.txt')
+          out.write_text(text)
+          print(text, end='')
+          PY
+          test -s build/core-plain-while-linux/batch-summary.txt && cat build/core-plain-while-linux/batch-summary.txt || true
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-plain-while-coverage-${{ github.run_id }}
+          path: |
+            build/core-plain-while-linux/plain-while-coverage.txt
+            build/core-plain-while-linux/batch-summary.txt
+          retention-days: 7
