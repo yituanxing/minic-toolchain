@@ -1,0 +1,173 @@
+name: Diagnostic Core Scalar Is Zero Coverage V3
+
+on:
+  push:
+    branches: [diagnostic/core-scalar-is-zero-coverage-v3]
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore pinned Linux source archive
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-cache/linux-6.6.143.tar.xz
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
+      - name: Install Linux Kbuild dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu flex bison bc libelf-dev libssl-dev
+      - name: Materialize scalar is-zero experiment
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('src/core/core_ir.h')
+          s = p.read_text()
+          token = '    MINIC_CORE_INSTRUCTION_PARAMETER,\n'
+          assert s.count(token) == 1, s.count(token)
+          p.write_text(s.replace(token, '    MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO,\n' + token, 1))
+
+          p = Path('src/core/core_ir.c')
+          s = p.read_text()
+          token = '    case MINIC_CORE_INSTRUCTION_PARAMETER:'
+          positions = []
+          cursor = 0
+          while True:
+              pos = s.find(token, cursor)
+              if pos < 0:
+                  break
+              positions.append(pos)
+              cursor = pos + 1
+          assert len(positions) == 2, positions
+          verifier = '''    case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:
+              return instruction_result_is_valid(function, instruction) &&
+                     minic_type_equal(instruction->type, minic_type_int()) &&
+                     instruction->value.operand < function->value_count &&
+                     available_values[instruction->value.operand] &&
+                     (minic_type_is_integer(function->values[instruction->value.operand].type) ||
+                      minic_type_is_pointer(function->values[instruction->value.operand].type));
+          '''
+          s = s[:positions[0]] + verifier + s[positions[0]:]
+          positions = []
+          cursor = 0
+          while True:
+              pos = s.find(token, cursor)
+              if pos < 0:
+                  break
+              positions.append(pos)
+              cursor = pos + 1
+          assert len(positions) == 2, positions
+          dump = '''    case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:
+              return fprintf(output,
+                             "  %%%" PRIu32 " = scalar.is_zero %%%" PRIu32 "\\n",
+                             instruction->result,
+                             instruction->value.operand) >= 0;
+          '''
+          s = s[:positions[1]] + dump + s[positions[1]:]
+          p.write_text(s)
+
+          p = Path('src/core/core_lower.c')
+          s = p.read_text()
+          call = '    if (expression->kind == MINIC_EXPRESSION_CALL) {'
+          call_pos = s.index(call)
+          insert_pos = s.index('    (void)memset(&instruction, 0, sizeof(instruction));', call_pos)
+          lowering = '''    if (expression->kind == MINIC_EXPRESSION_UNARY &&
+              expression->value.unary.operator_kind == MINIC_UNARY_LOGICAL_NOT) {
+              MinicCoreValueId operand_value;
+              MinicCoreLowerStatus status;
+
+              if (!minic_type_equal(expression->type, minic_type_int())) {
+                  return MINIC_CORE_LOWER_ERROR;
+              }
+              status = lower_expression(context, expression->value.unary.operand, &operand_value);
+              if (status != MINIC_CORE_LOWER_OK) {
+                  return status;
+              }
+              if (operand_value >= context->function->value_count ||
+                  !core_memory_scalar_type(context->function->values[operand_value].type)) {
+                  return MINIC_CORE_LOWER_UNSUPPORTED;
+              }
+              (void)memset(&instruction, 0, sizeof(instruction));
+              instruction.kind = MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO;
+              instruction.span = expression->span;
+              instruction.type = expression->type;
+              instruction.result = MINIC_CORE_VALUE_INVALID;
+              instruction.value.operand = operand_value;
+              return minic_core_function_append_value_instruction(
+                         context->function, context->block_id, &instruction, value_id)
+                         ? MINIC_CORE_LOWER_OK
+                         : MINIC_CORE_LOWER_ERROR;
+          }
+          '''
+          s = s[:insert_pos] + lowering + s[insert_pos:]
+          p.write_text(s)
+
+          p = Path('src/compiler/compiler.c')
+          s = p.read_text()
+          anchor = '        minic_core_function_destroy(&core);\n'
+          assert s.count(anchor) == 1, s.count(anchor)
+          marker = '''        (void)fprintf(stderr,
+                        "MINIC_CORE_COVERAGE status=%s function=%s\\n",
+                        status == MINIC_CORE_LOWER_OK ? "OK" :
+                        (status == MINIC_CORE_LOWER_UNSUPPORTED ? "UNSUPPORTED" : "ERROR"),
+                        function->name != NULL ? function->name : "<unnamed>");
+          '''
+          p.write_text(s.replace(anchor, marker + anchor, 1))
+          PY
+      - name: Build diagnostic compiler
+        run: make -j4 MODE=release BUILD_DIR=build/core-is-zero-compiler
+      - name: Drive fixed first100 with Core shadow
+        continue-on-error: true
+        env:
+          MINIC_CORE_IR: shadow
+        run: |
+          MINIC="$GITHUB_WORKSPACE/build/core-is-zero-compiler/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/core-is-zero-linux" \
+          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-cache/linux-6.6.143.tar.xz" \
+          CROSS_COMPILE=riscv64-linux-gnu- LINUX_BATCH_OFFSET=0 LINUX_BATCH_LIMIT=100 LINUX_BATCH_JOBS=2 \
+            sh tests/external/linux/batch_probe.sh
+      - name: Aggregate coverage
+        if: always()
+        run: |
+          python3 - <<'PY'
+          from collections import Counter
+          from pathlib import Path
+          import re
+          out = Path('build/core-is-zero-linux')
+          out.mkdir(parents=True, exist_ok=True)
+          pat = re.compile(r'^MINIC_CORE_COVERAGE status=(OK|UNSUPPORTED|ERROR) function=(.*)$')
+          counts = Counter()
+          root = out / 'minic-stderr'
+          for path in root.rglob('*.stderr') if root.is_dir() else []:
+              for line in path.read_text(errors='replace').splitlines():
+                  m = pat.match(line.strip())
+                  if m:
+                      counts[m.group(1)] += 1
+          total = sum(counts.values())
+          pct = 100.0 * counts['OK'] / total if total else 0.0
+          text = ('MINIC_CORE_SCALAR_IS_ZERO_COVERAGE\n'
+                  f'functions_observed={total}\ncore_ok={counts["OK"]}\n'
+                  f'core_unsupported={counts["UNSUPPORTED"]}\ncore_error={counts["ERROR"]}\n'
+                  f'function_coverage_percent={pct:.2f}\n')
+          (out / 'scalar-is-zero-coverage.txt').write_text(text)
+          print(text, end='')
+          PY
+          test -s build/core-is-zero-linux/batch-summary.txt && cat build/core-is-zero-linux/batch-summary.txt || true
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-scalar-is-zero-coverage-${{ github.run_id }}
+          path: |
+            build/core-is-zero-linux/scalar-is-zero-coverage.txt
+            build/core-is-zero-linux/batch-summary.txt
+          retention-days: 7
