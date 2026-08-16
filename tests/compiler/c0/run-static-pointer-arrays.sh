@@ -28,6 +28,6 @@ if test "$string_relocations" -ne 2; then
     cat "$work/static_pointer_array.s" >&2
     exit 1
 fi
-grep -F '  .zero 8' "$work/static_pointer_array.s" >/dev/null
+grep -F '  .dword 0' "$work/static_pointer_array.s" >/dev/null
 grep -F '.size names, 24' "$work/static_pointer_array.s" >/dev/null
-printf '%s\n' 'PASS compiler/c0/static_pointer_array inferred-bound=3 object-relocations=2 null-tail=1 suffix-section=1 extern-array-decay=2'
+printf '%s\n' 'PASS compiler/c0/static_pointer_array inferred-bound=3 object-relocations=2 null-tail=typed-pointer-zero suffix-section=1 extern-array-decay=2'
