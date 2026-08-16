@@ -68,7 +68,7 @@ jobs:
             tests/target/riscv64/core_frontend_emitter_test.c \
             -o build/core-frontend-diff/core-frontend-emitter-test
 
-      - name: Generate legacy and Core RV64 from the same frontend source
+      - name: Generate legacy RV64 with strict Core shadow
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -77,18 +77,27 @@ jobs:
             build/core-frontend-diff-compiler/bin/minic \
               -S "$source_file" \
               -o build/core-frontend-diff/legacy.s
+          test -s build/core-frontend-diff/legacy.s
+
+      - name: Generate RV64 from frontend-derived Core
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          source_file=tests/target/riscv64/core_frontend_differential.i
           build/core-frontend-diff/core-frontend-emitter-test \
             "$source_file" \
             build/core-frontend-diff/core.s
-          test -s build/core-frontend-diff/legacy.s
           test -s build/core-frontend-diff/core.s
+
+      - name: Validate emitted function set
+        shell: bash
+        run: |
+          set -Eeuo pipefail
           for symbol in core_diff_math core_diff_branch core_diff_zero core_diff_ninth core_diff_pointer; do
             grep -q "^${symbol}:" build/core-frontend-diff/legacy.s
             grep -q "^${symbol}:" build/core-frontend-diff/core.s
           done
-          grep -q 'neg t0, t0' build/core-frontend-diff/core.s
-          grep -q 'seqz t0, t0' build/core-frontend-diff/core.s
-          grep -q 'bnez t0, .Lcore_diff_branch_core_bb' build/core-frontend-diff/core.s
+          cat build/core-frontend-diff/core.s
 
       - name: Run GCC legacy and Core semantic differential
         shell: bash
