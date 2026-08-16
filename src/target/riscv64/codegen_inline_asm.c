@@ -45,6 +45,17 @@ static bool constraint_is_immediate(const MinicInlineAsmOperand *operand) {
     return constraint_is(operand, "i") || constraint_is(operand, "I");
 }
 
+/*
+ * +r and +&r are both read-write register outputs. The '&' form also
+ * forbids overlap with unrelated inputs. The current RV64 allocator is
+ * deliberately more conservative: every unmatched register operand gets
+ * a distinct physical register, so that early-clobber non-overlap is
+ * already satisfied. Keep that invariant explicit if allocation changes.
+ */
+static bool constraint_is_readwrite_register(const MinicInlineAsmOperand *operand) {
+    return constraint_is(operand, "+r") || constraint_is(operand, "+&r");
+}
+
 static bool constraint_matching_output(const MinicInlineAsm *inline_asm,
                                        const MinicInlineAsmOperand *operand,
                                        size_t *output_index) {
@@ -75,7 +86,7 @@ static bool matching_output_is_register(const MinicInlineAsm *inline_asm, size_t
     }
     output = &inline_asm->outputs[output_index];
     return constraint_is(output, "=r") || constraint_is(output, "=&r") ||
-           constraint_is(output, "+r");
+           constraint_is_readwrite_register(output);
 }
 
 static const MinicInlineAsmOperand *operand_at(const MinicInlineAsm *inline_asm,
@@ -155,7 +166,7 @@ static bool validate_output(const MinicC0Program *program, const MinicInlineAsmO
     if (constraint_is(operand, "=m")) {
         return operand->access == MINIC_INLINE_ASM_OPERAND_WRITE_ONLY;
     }
-    if (constraint_is(operand, "+r")) {
+    if (constraint_is_readwrite_register(operand)) {
         return operand->access == MINIC_INLINE_ASM_OPERAND_READ_WRITE &&
                expression->kind == MINIC_EXPRESSION_LOCAL &&
                (minic_type_is_integer(expression->type) || minic_type_is_pointer(expression->type));
@@ -317,7 +328,7 @@ operand_local_fixed_register_binding(const MinicC0Program *program,
 static bool operand_accepts_register(const MinicInlineAsmOperand *operand) {
     return constraint_is(operand, "r") || constraint_is(operand, "rJ") ||
            constraint_is(operand, "rK") || constraint_is(operand, "=r") ||
-           constraint_is(operand, "=&r") || constraint_is(operand, "+r");
+           constraint_is(operand, "=&r") || constraint_is_readwrite_register(operand);
 }
 
 static bool assign_operand_registers(const MinicInlineAsm *inline_asm,
@@ -863,7 +874,7 @@ bool minic_riscv64_emit_inline_asm(FILE *file,
                 !minic_riscv64_emit_sp_store64(file, "a0", index * 8U)) {
                 return false;
             }
-        } else if (constraint_is(operand, "+r")) {
+        } else if (constraint_is_readwrite_register(operand)) {
             const MinicExpression *expression;
 
             expression = minic_c0_program_expression(program, operand->expression);
@@ -902,7 +913,7 @@ bool minic_riscv64_emit_inline_asm(FILE *file,
     for (index = 0U; index < inline_asm->output_count; ++index) {
         if ((constraint_is(&inline_asm->outputs[index], "+A") ||
              constraint_is(&inline_asm->outputs[index], "=m") ||
-             constraint_is(&inline_asm->outputs[index], "+r")) &&
+             constraint_is_readwrite_register(&inline_asm->outputs[index])) &&
             !minic_riscv64_emit_sp_load64(file, operand_registers[index], index * 8U)) {
             return false;
         }
@@ -929,14 +940,14 @@ bool minic_riscv64_emit_inline_asm(FILE *file,
 
         operand = &inline_asm->outputs[index];
         if (!constraint_is(operand, "=r") && !constraint_is(operand, "=&r") &&
-            !constraint_is(operand, "+r")) {
+            !constraint_is_readwrite_register(operand)) {
             continue;
         }
         expression = minic_c0_program_expression(program, operand->expression);
         if (expression == NULL) {
             return false;
         }
-        if (constraint_is(operand, "+r")) {
+        if (constraint_is_readwrite_register(operand)) {
             if (expression->kind != MINIC_EXPRESSION_LOCAL ||
                 !minic_riscv64_emit_object_store_register(file,
                                                           program,
