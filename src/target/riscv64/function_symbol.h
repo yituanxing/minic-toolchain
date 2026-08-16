@@ -50,7 +50,11 @@ static inline bool minic_riscv64_emit_function_symbol_begin(
         symbol->symbol_name[0] == '\0') {
         return false;
     }
-    if (fprintf(file, "%s\n", symbol->section_name != NULL ? symbol->section_name : ".text") < 0) {
+    if (symbol->section_name != NULL) {
+        if (fprintf(file, ".section %s\n", symbol->section_name) < 0) {
+            return false;
+        }
+    } else if (fprintf(file, ".text\n") < 0) {
         return false;
     }
     if (!symbol->is_internal) {
