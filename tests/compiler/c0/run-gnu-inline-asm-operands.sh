@@ -45,6 +45,29 @@ EOF
 "$minic" -S "$work/argument-clobber.i" -o "$work/argument-clobber.s"
 grep -F 'add t0, t0, zero' "$work/argument-clobber.s" >/dev/null
 
+cat >"$work/callee-saved-fallback.c" <<'EOF'
+long f(long left, long right) {
+    long result;
+
+    __asm__ __volatile__("add %0, %1, %2"
+                         : "=r"(result)
+                         : "r"(left), "r"(right)
+                         : "a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7",
+                           "t0", "t1", "t2", "t3", "t4", "t5", "t6");
+    return result;
+}
+EOF
+"$host_cc" -E -P -std=gnu11 -x c "$work/callee-saved-fallback.c" \
+    -o "$work/callee-saved-fallback.i"
+"$minic" -S "$work/callee-saved-fallback.i" -o "$work/callee-saved-fallback.s"
+grep -F '  sd s1, 24(sp)' "$work/callee-saved-fallback.s" >/dev/null
+grep -F '  sd s2, 32(sp)' "$work/callee-saved-fallback.s" >/dev/null
+grep -F '  sd s3, 40(sp)' "$work/callee-saved-fallback.s" >/dev/null
+grep -F 'add s1, s2, s3' "$work/callee-saved-fallback.s" >/dev/null
+grep -F '  ld s1, 24(sp)' "$work/callee-saved-fallback.s" >/dev/null
+grep -F '  ld s2, 32(sp)' "$work/callee-saved-fallback.s" >/dev/null
+grep -F '  ld s3, 40(sp)' "$work/callee-saved-fallback.s" >/dev/null
+
 cat >"$work/unsupported-clobber.c" <<'EOF'
 int f(int value) {
     __asm__ __volatile__("add %0, %0, zero" : "+r"(value) : : "s1");
@@ -76,4 +99,4 @@ grep -F "GNU asm 'I' input requires a signed 12-bit integer constant" \
     "$work/out-of-range-I.stderr" >/dev/null
 
 printf '%s\n' \
-    'PASS compiler/c0/gnu_inline_asm_operands outputs=+A,=m,=r,+r register-lvalue=local+member inputs=r,rJ,I,m memory-input=lvalue clobber=memory,t3 reservation=t3->t4 immediates=rv64-I placeholders=0,1,2 staging=stack target=RV64'
+    'PASS compiler/c0/gnu_inline_asm_operands outputs=+A,=m,=r,+r register-lvalue=local+member inputs=r,rJ,I,m memory-input=lvalue clobber=memory,t3 reservation=t3->t4 callee-saved-fallback=s1-s3 immediates=rv64-I placeholders=0,1,2 staging=stack target=RV64'
