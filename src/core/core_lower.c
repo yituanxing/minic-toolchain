@@ -464,6 +464,33 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         return lower_direct_call(context, expression, value_id);
     }
     if (expression->kind == MINIC_EXPRESSION_UNARY &&
+        expression->value.unary.operator_kind == MINIC_UNARY_NEGATE) {
+        MinicCoreValueId operand_value;
+        MinicCoreLowerStatus status;
+
+        if (!minic_type_is_integer(expression->type)) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        status = lower_expression(context, expression->value.unary.operand, &operand_value);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        if (operand_value >= context->function->value_count ||
+            !minic_type_equal(context->function->values[operand_value].type, expression->type)) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        (void)memset(&instruction, 0, sizeof(instruction));
+        instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_NEGATE;
+        instruction.span = expression->span;
+        instruction.type = expression->type;
+        instruction.result = MINIC_CORE_VALUE_INVALID;
+        instruction.value.operand = operand_value;
+        return minic_core_function_append_value_instruction(
+                   context->function, context->block_id, &instruction, value_id)
+                   ? MINIC_CORE_LOWER_OK
+                   : MINIC_CORE_LOWER_ERROR;
+    }
+    if (expression->kind == MINIC_EXPRESSION_UNARY &&
         expression->value.unary.operator_kind == MINIC_UNARY_LOGICAL_NOT) {
         MinicCoreValueId operand_value;
         MinicCoreLowerStatus status;
