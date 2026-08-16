@@ -423,6 +423,13 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
                instruction->value.operand < function->value_count &&
                available_values[instruction->value.operand] &&
                minic_type_is_integer(function->values[instruction->value.operand].type);
+    case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:
+        return instruction_result_is_valid(function, instruction) &&
+               minic_type_equal(instruction->type, minic_type_int()) &&
+               instruction->value.operand < function->value_count &&
+               available_values[instruction->value.operand] &&
+               (minic_type_is_integer(function->values[instruction->value.operand].type) ||
+                minic_type_is_pointer(function->values[instruction->value.operand].type));
     case MINIC_CORE_INSTRUCTION_PARAMETER:
         return instruction_result_is_valid(function, instruction) &&
                instruction->value.parameter_index < function->parameter_count &&
@@ -700,6 +707,11 @@ static bool dump_instruction(FILE *output,
     case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION:
         return fprintf(output,
                        "  %%%" PRIu32 " = convert.int %%%" PRIu32 "\n",
+                       instruction->result,
+                       instruction->value.operand) >= 0;
+    case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:
+        return fprintf(output,
+                       "  %%%" PRIu32 " = scalar.is_zero %%%" PRIu32 "\n",
                        instruction->result,
                        instruction->value.operand) >= 0;
     case MINIC_CORE_INSTRUCTION_PARAMETER:

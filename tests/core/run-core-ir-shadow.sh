@@ -225,6 +225,21 @@ void pointer_field_address(struct pair *pair) {
 EOF
 check_strict_case field-address-v0
 
+cat >"$work_dir/scalar-is-zero-v0.i" <<'EOF'
+int logical_not_int(int value) {
+    return !value;
+}
+
+int logical_not_pointer(int *value) {
+    return !value;
+}
+
+int logical_double_not(int value) {
+    return !!value;
+}
+EOF
+check_strict_case scalar-is-zero-v0
+
 cat >"$work_dir/indirect-call-unsupported.i" <<'EOF'
 int indirect_caller(int (*callee)(int), int value) {
     return callee(value);
