@@ -1,0 +1,136 @@
+name: Diagnostic RV64 Statement Owner V3
+
+on:
+  push:
+    branches: [diagnostic/rv64-statement-owner-v3]
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Restore pinned Linux source archive
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-cache/linux-6.6.143.tar.xz
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
+
+      - name: Install RISC-V Linux Kbuild dependencies
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            flex bison bc libelf-dev libssl-dev
+
+      - name: Instrument RV64 function and statement failures
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          function_path = Path('src/target/riscv64/codegen_function.c')
+          text = function_path.read_text()
+          needle = "        if (!success) {\n        }\n"
+          if text.count(needle) != 2:
+              raise SystemExit(f'unexpected writer hook count: {text.count(needle)}')
+          global_hook = "        if (!success) {\n            const MinicGlobalObject *failed_object = &program->global_objects[global_index];\n            fprintf(stderr, \"RV64_WRITER_FAIL kind=global index=%zu name=%s\\n\", global_index, failed_object->name != NULL ? failed_object->name : \"<null>\");\n        }\n"
+          function_hook = "        if (!success) {\n            const char *failed_name = minic_c0_function_symbol_name(function);\n            fprintf(stderr, \"RV64_WRITER_FAIL kind=function index=%zu name=%s\\n\", function_index, failed_name != NULL ? failed_name : \"<null>\");\n        }\n"
+          text = text.replace(needle, global_hook, 1).replace(needle, function_hook, 1)
+          function_path.write_text(text)
+
+          statement_path = Path('src/target/riscv64/codegen_statement.c')
+          text = statement_path.read_text()
+          old = """        if (!minic_riscv64_emit_statement(file,
+                                          program,
+                                          function,
+                                          function_layout,
+                                          statement_id,
+                                          statement,
+                                          label_counter,
+                                          break_target)) {
+            return false;
+        }
+"""
+          new = """        if (!minic_riscv64_emit_statement(file,
+                                          program,
+                                          function,
+                                          function_layout,
+                                          statement_id,
+                                          statement,
+                                          label_counter,
+                                          break_target)) {
+            const MinicExpression *failed_expression;
+            const MinicExpression *failed_target;
+
+            failed_expression = statement != NULL && statement->expression != MINIC_EXPRESSION_INVALID
+                                    ? minic_c0_program_expression(program, statement->expression)
+                                    : NULL;
+            failed_target = statement != NULL && statement->target_expression != MINIC_EXPRESSION_INVALID
+                                ? minic_c0_program_expression(program, statement->target_expression)
+                                : NULL;
+            fprintf(stderr,
+                    "RV64_STATEMENT_FAIL function=%s statement_id=%zu statement_kind=%u expression_id=%zu expression_kind=%d target_id=%zu target_kind=%d\\n",
+                    function != NULL && function->name != NULL ? function->name : "<null>",
+                    (size_t)statement_id,
+                    statement != NULL ? (unsigned int)statement->kind : 999U,
+                    statement != NULL ? (size_t)statement->expression : (size_t)MINIC_EXPRESSION_INVALID,
+                    failed_expression != NULL ? (int)failed_expression->kind : -1,
+                    statement != NULL ? (size_t)statement->target_expression : (size_t)MINIC_EXPRESSION_INVALID,
+                    failed_target != NULL ? (int)failed_target->kind : -1);
+            return false;
+        }
+"""
+          if text.count(old) != 1:
+              raise SystemExit(f'unexpected statement hook count: {text.count(old)}')
+          statement_path.write_text(text.replace(old, new, 1))
+          PY
+
+      - name: Build instrumented MiniC
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release BUILD_DIR=build/rv64-statement-diagnostic
+
+      - name: Drive focused Linux window
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/rv64-statement-diagnostic/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/rv64-statement-diagnostic-batch" \
+          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-cache/linux-6.6.143.tar.xz" \
+          CROSS_COMPILE=riscv64-linux-gnu- \
+          LINUX_BATCH_OFFSET=17 \
+          LINUX_BATCH_LIMIT=35 \
+          LINUX_BATCH_JOBS=2 \
+            sh tests/external/linux/batch_probe.sh
+
+      - name: Show failure identities
+        if: always()
+        shell: bash
+        run: |
+          grep -R -H -E 'RV64_(STATEMENT|WRITER)_FAIL' build/rv64-statement-diagnostic-batch/minic-stderr || true
+          cat build/rv64-statement-diagnostic-batch/batch-summary.txt || true
+
+      - name: Upload diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rv64-statement-owner-v3-${{ github.run_id }}
+          path: |
+            build/rv64-statement-diagnostic-batch/batch-summary.txt
+            build/rv64-statement-diagnostic-batch/failure-contexts.txt
+            build/rv64-statement-diagnostic-batch/minic-stderr/**/*.stderr
+          if-no-files-found: ignore
+          retention-days: 3
