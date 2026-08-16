@@ -93,7 +93,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          for symbol in core_diff_math core_diff_branch core_diff_zero core_diff_ninth core_diff_pointer; do
+          for symbol in core_diff_math core_diff_branch core_diff_zero core_diff_ninth core_diff_pointer_zero; do
             grep -q "^${symbol}:" build/core-frontend-diff/legacy.s
             grep -q "^${symbol}:" build/core-frontend-diff/core.s
           done
