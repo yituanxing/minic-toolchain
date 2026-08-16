@@ -1,0 +1,106 @@
+name: Diagnostic Core Integer Negate Coverage V2
+on:
+  push:
+    branches: [diagnostic/core-integer-negate-coverage-v2]
+permissions:
+  contents: read
+jobs:
+  measure:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache/restore@v4
+        name: Restore pinned Linux source archive
+        with:
+          path: build/linux-cache/linux-6.6.143.tar.xz
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
+      - name: Install Linux Kbuild dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu flex bison bc libelf-dev libssl-dev
+      - name: Materialize integer-negate experiment
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('src/core/core_ir.h')
+          s = p.read_text()
+          token = '    MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO,\n'
+          assert s.count(token) == 1
+          p.write_text(s.replace(token, '    MINIC_CORE_INSTRUCTION_INTEGER_NEGATE,\n' + token, 1))
+
+          p = Path('src/core/core_ir.c')
+          s = p.read_text()
+          token = '    case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:'
+          positions=[]; cur=0
+          while True:
+              q=s.find(token,cur)
+              if q<0: break
+              positions.append(q); cur=q+1
+          assert len(positions)==2, positions
+          verifier='''    case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE:\n        return instruction_result_is_valid(function, instruction) &&\n               minic_type_is_integer(instruction->type) &&\n               instruction->value.operand < function->value_count &&\n               available_values[instruction->value.operand] &&\n               minic_type_equal(function->values[instruction->value.operand].type,\n                                instruction->type);\n'''
+          s=s[:positions[0]]+verifier+s[positions[0]:]
+          positions=[]; cur=0
+          while True:
+              q=s.find(token,cur)
+              if q<0: break
+              positions.append(q); cur=q+1
+          assert len(positions)==2, positions
+          dump='''    case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE:\n        return fprintf(output,\n                       "  %%%" PRIu32 " = ineg %%%" PRIu32 "\\n",\n                       instruction->result,\n                       instruction->value.operand) >= 0;\n'''
+          s=s[:positions[1]]+dump+s[positions[1]:]
+          p.write_text(s)
+
+          p=Path('src/core/core_lower.c')
+          s=p.read_text()
+          op='expression->value.unary.operator_kind == MINIC_UNARY_LOGICAL_NOT'
+          op_pos=s.index(op)
+          insert_pos=s.rfind('    if (',0,op_pos)
+          assert insert_pos>=0
+          lowering='''    if (expression->kind == MINIC_EXPRESSION_UNARY &&\n        expression->value.unary.operator_kind == MINIC_UNARY_NEGATE) {\n        MinicCoreValueId operand_value;\n        MinicCoreLowerStatus status;\n\n        if (!minic_type_is_integer(expression->type)) {\n            return MINIC_CORE_LOWER_UNSUPPORTED;\n        }\n        status = lower_expression(context, expression->value.unary.operand, &operand_value);\n        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n        if (operand_value >= context->function->value_count ||\n            !minic_type_equal(context->function->values[operand_value].type, expression->type)) {\n            return MINIC_CORE_LOWER_UNSUPPORTED;\n        }\n        (void)memset(&instruction, 0, sizeof(instruction));\n        instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_NEGATE;\n        instruction.span = expression->span;\n        instruction.type = expression->type;\n        instruction.result = MINIC_CORE_VALUE_INVALID;\n        instruction.value.operand = operand_value;\n        return minic_core_function_append_value_instruction(\n                   context->function, context->block_id, &instruction, value_id)\n                   ? MINIC_CORE_LOWER_OK\n                   : MINIC_CORE_LOWER_ERROR;\n    }\n'''
+          p.write_text(s[:insert_pos]+lowering+s[insert_pos:])
+
+          p=Path('src/compiler/compiler.c')
+          s=p.read_text(); anchor='        minic_core_function_destroy(&core);\n'
+          assert s.count(anchor)==1
+          marker='''        (void)fprintf(stderr,\n                      "MINIC_CORE_COVERAGE status=%s function=%s\\n",\n                      status == MINIC_CORE_LOWER_OK ? "OK" :\n                      (status == MINIC_CORE_LOWER_UNSUPPORTED ? "UNSUPPORTED" : "ERROR"),\n                      function->name != NULL ? function->name : "<unnamed>");\n'''
+          p.write_text(s.replace(anchor,marker+anchor,1))
+          PY
+      - name: Build diagnostic compiler
+        run: make -j4 MODE=release BUILD_DIR=build/core-negate-compiler
+      - name: Drive fixed first100 with Core shadow
+        continue-on-error: true
+        env:
+          MINIC_CORE_IR: shadow
+        run: |
+          MINIC="$GITHUB_WORKSPACE/build/core-negate-compiler/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/core-negate-linux" LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-cache/linux-6.6.143.tar.xz" CROSS_COMPILE=riscv64-linux-gnu- LINUX_BATCH_OFFSET=0 LINUX_BATCH_LIMIT=100 LINUX_BATCH_JOBS=2 sh tests/external/linux/batch_probe.sh
+      - name: Aggregate coverage
+        if: always()
+        run: |
+          python3 - <<'PY'
+          from collections import Counter
+          from pathlib import Path
+          import re
+          out=Path('build/core-negate-linux'); out.mkdir(parents=True,exist_ok=True)
+          pat=re.compile(r'^MINIC_CORE_COVERAGE status=(OK|UNSUPPORTED|ERROR) function=(.*)$')
+          c=Counter(); root=out/'minic-stderr'
+          for f in root.rglob('*.stderr') if root.is_dir() else []:
+              for line in f.read_text(errors='replace').splitlines():
+                  m=pat.match(line.strip())
+                  if m: c[m.group(1)]+=1
+          total=sum(c.values()); pct=100.0*c['OK']/total if total else 0.0
+          text=f'MINIC_CORE_INTEGER_NEGATE_COVERAGE\nfunctions_observed={total}\ncore_ok={c["OK"]}\ncore_unsupported={c["UNSUPPORTED"]}\ncore_error={c["ERROR"]}\nfunction_coverage_percent={pct:.2f}\n'
+          (out/'integer-negate-coverage.txt').write_text(text); print(text,end='')
+          PY
+          test -s build/core-negate-linux/batch-summary.txt && cat build/core-negate-linux/batch-summary.txt || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: core-integer-negate-coverage-${{ github.run_id }}
+          path: |
+            build/core-negate-linux/integer-negate-coverage.txt
+            build/core-negate-linux/batch-summary.txt
+          retention-days: 7
