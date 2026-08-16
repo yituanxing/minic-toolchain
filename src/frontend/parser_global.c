@@ -1205,9 +1205,9 @@ static bool parse_extern_object_declarator(MinicParser *parser,
     return minic_parser_advance(parser);
 }
 
-static bool extern_object_types_compatible(const MinicC0Program *program,
-                                           MinicType existing_type,
-                                           MinicType declared_type) {
+bool minic_parser_external_object_types_compatible(const MinicC0Program *program,
+                                                   MinicType existing_type,
+                                                   MinicType declared_type) {
     const MinicArrayType *existing_array;
     const MinicArrayType *declared_array;
 
@@ -1221,7 +1221,7 @@ static bool extern_object_types_compatible(const MinicC0Program *program,
     existing_array = minic_c0_program_array_type(program, existing_type.array_type_id);
     declared_array = minic_c0_program_array_type(program, declared_type.array_type_id);
     if (existing_array == NULL || declared_array == NULL ||
-        !extern_object_types_compatible(
+        !minic_parser_external_object_types_compatible(
             program, existing_array->element_type, declared_array->element_type)) {
         return false;
     }
@@ -1233,9 +1233,9 @@ static bool extern_object_types_compatible(const MinicC0Program *program,
            existing_array->element_count == declared_array->element_count;
 }
 
-static bool merge_extern_array_composite_type(MinicC0Program *program,
-                                              MinicType existing_type,
-                                              MinicType declared_type) {
+bool minic_parser_merge_external_array_composite_type(MinicC0Program *program,
+                                                      MinicType existing_type,
+                                                      MinicType declared_type) {
     const MinicArrayType *existing_array;
     const MinicArrayType *declared_array;
     MinicType existing_element;
@@ -1257,8 +1257,10 @@ static bool merge_extern_array_composite_type(MinicC0Program *program,
     existing_element = existing_array->element_type;
     declared_element = declared_array->element_type;
     declared_count = declared_array->element_count;
-    if (!extern_object_types_compatible(program, existing_element, declared_element) ||
-        !merge_extern_array_composite_type(program, existing_element, declared_element)) {
+    if (!minic_parser_external_object_types_compatible(
+            program, existing_element, declared_element) ||
+        !minic_parser_merge_external_array_composite_type(
+            program, existing_element, declared_element)) {
         return false;
     }
     existing_array = minic_c0_program_array_type(program, existing_type.array_type_id);
@@ -1297,12 +1299,13 @@ static bool merge_extern_object_declaration(MinicParser *parser,
         return false;
     }
     object = &parser->program->global_objects[object_id];
-    if (!extern_object_types_compatible(parser->program, object->type, declared_type)) {
+    if (!minic_parser_external_object_types_compatible(
+            parser->program, object->type, declared_type)) {
         minic_parser_error(parser, "conflicting extern object redeclaration");
         return false;
     }
-    if (minic_type_is_array(object->type) &&
-        !merge_extern_array_composite_type(parser->program, object->type, declared_type)) {
+    if (minic_type_is_array(object->type) && !minic_parser_merge_external_array_composite_type(
+                                                 parser->program, object->type, declared_type)) {
         minic_parser_error(parser, "conflicting extern object array redeclaration");
         return false;
     }

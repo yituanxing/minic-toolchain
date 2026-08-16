@@ -313,6 +313,12 @@ MinicGlobalObjectId minic_parser_find_global_object(const MinicParser *parser,
                                                     MinicSourceSpan name_span);
 MinicGlobalObjectId minic_parser_find_global_object_entity(const MinicParser *parser,
                                                            MinicSourceSpan name_span);
+bool minic_parser_external_object_types_compatible(const MinicC0Program *program,
+                                                   MinicType existing_type,
+                                                   MinicType declared_type);
+bool minic_parser_merge_external_array_composite_type(MinicC0Program *program,
+                                                      MinicType existing_type,
+                                                      MinicType declared_type);
 bool minic_parser_declare_block_scope_extern_object(MinicParser *parser,
                                                     MinicSourceSpan name_span,
                                                     MinicType object_type,
