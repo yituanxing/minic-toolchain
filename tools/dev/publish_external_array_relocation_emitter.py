@@ -102,6 +102,47 @@ text = replace_once(
 ''',
     "relocation-bearing array emission dispatch",
 )
+text = replace_once(
+    text,
+    '''    } else {
+        for (initializer_index = 0U; initializer_index < object->initializer_count;
+             ++initializer_index) {
+            if (!minic_riscv64_emit_typed_bits(
+                    file, program, scalar_type, object->initializer_values[initializer_index])) {
+                return false;
+            }
+        }
+        if (!minic_riscv64_emit_zero_bytes(
+                file, storage_size - object->initializer_count * scalar_width)) {
+            return false;
+        }
+    }
+''',
+    '''    } else {
+        size_t emitted_initializer_count;
+
+        emitted_initializer_count = object->initializer_count;
+        if (minic_type_is_array(object->type)) {
+            while (emitted_initializer_count != 0U &&
+                   object->initializer_values[emitted_initializer_count - 1U] == 0U) {
+                emitted_initializer_count -= 1U;
+            }
+        }
+        for (initializer_index = 0U; initializer_index < emitted_initializer_count;
+             ++initializer_index) {
+            if (!minic_riscv64_emit_typed_bits(
+                    file, program, scalar_type, object->initializer_values[initializer_index])) {
+                return false;
+            }
+        }
+        if (!minic_riscv64_emit_zero_bytes(
+                file, storage_size - emitted_initializer_count * scalar_width)) {
+            return false;
+        }
+    }
+''',
+    "flat array trailing zero compression",
+)
 path.write_text(text)
 
 runner = Path("tests/compiler/c0/run-external-pointer-arrays.sh")
@@ -113,18 +154,6 @@ data = replace_once(
     '''grep -F '  .dword 0' "$asm" >/dev/null
 ''',
     "canonical pointer null slot spelling",
-)
-runner.write_text(data)
-
-runner = Path("tests/compiler/c0/run-extern-fixed-integer-arrays.sh")
-data = runner.read_text()
-data = replace_once(
-    data,
-    '''grep -F '  .zero 2' "$work/extern_fixed_integer_array.s" >/dev/null
-''',
-    '''test "$(grep -Fc '  .byte 0' "$work/extern_fixed_integer_array.s")" -eq 2
-''',
-    "canonical integer zero slots",
 )
 runner.write_text(data)
 print("staged relocation-aware array static-data emission")
