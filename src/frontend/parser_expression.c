@@ -605,8 +605,8 @@ static bool parse_call_arguments(MinicParser *parser,
     }
 
     while (parser->current.kind == MINIC_TOKEN_COMMA) {
-        if (argument_count >= 8U) {
-            minic_parser_error(parser, "variadic call supports at most 8 arguments");
+        if (argument_count >= MINIC_MAX_FUNCTION_PARAMETERS) {
+            minic_parser_error(parser, "call argument count exceeds implementation limit");
             return false;
         }
         if (!minic_parser_advance(parser) ||
