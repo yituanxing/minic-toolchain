@@ -55,6 +55,33 @@ jobs:
           sudo chown -R "$USER:$USER" "$(dirname "$apt_cache")"
           sh tools/ci/verify-validation-tools.sh
 
+      - name: Run Core RV64 basic emitter runtime
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p build/core-rv64-emitter
+          cc -std=c11 \
+            -Wall -Wextra -Wpedantic -Wconversion -Wshadow \
+            -Wstrict-prototypes -Wmissing-prototypes -Werror \
+            -Iinclude -Isrc \
+            $(find src -name '*.c' -print | sort) \
+            tests/target/riscv64/core_basic_emitter_test.c \
+            -o build/core-rv64-emitter/core-basic-emitter-test
+          build/core-rv64-emitter/core-basic-emitter-test \
+            build/core-rv64-emitter/core-basic-v0.s
+          test -s build/core-rv64-emitter/core-basic-v0.s
+          grep -q '^core_basic_math:' build/core-rv64-emitter/core-basic-v0.s
+          grep -q '^core_branch:' build/core-rv64-emitter/core-basic-v0.s
+          grep -q '^core_ninth:' build/core-rv64-emitter/core-basic-v0.s
+          grep -q 'seqz t0, t0' build/core-rv64-emitter/core-basic-v0.s
+          grep -q 'neg t0, t0' build/core-rv64-emitter/core-basic-v0.s
+          grep -q 'bnez t0, .Lcore_branch_core_bb' build/core-rv64-emitter/core-basic-v0.s
+          riscv64-linux-gnu-gcc -static -O2 \
+            tests/target/riscv64/core_basic_emitter_runtime.c \
+            build/core-rv64-emitter/core-basic-v0.s \
+            -o build/core-rv64-emitter/core-basic-v0-rv64
+          qemu-riscv64 build/core-rv64-emitter/core-basic-v0-rv64
+
       - name: Run GCC-MiniC fixed stack-argument differential
         shell: bash
         run: |
