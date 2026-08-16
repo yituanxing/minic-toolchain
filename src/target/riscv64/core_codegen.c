@@ -332,7 +332,7 @@ static bool emit_terminator(FILE *file,
     return false;
 }
 
-bool minic_riscv64_emit_core_function_basic_v0(
+bool minic_riscv64_emit_core_function_basic_v0_with_symbol(
     FILE *file,
     const MinicCoreFunction *function,
     const MinicRiscv64FunctionSymbol *symbol) {
