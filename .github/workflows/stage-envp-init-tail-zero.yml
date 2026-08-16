@@ -1,0 +1,46 @@
+name: Stage envp init tail zero
+
+on:
+  push:
+    branches:
+      - staging/envp-init-recursive-tail-zero
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: staging/envp-init-recursive-tail-zero
+          fetch-depth: 0
+
+      - name: Apply product patch
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/stage_envp_init_tail_zero.py
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh write
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
+
+      - name: Validate focused and foundation
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release BUILD_DIR=build/envp-stage
+          MINIC="$PWD/build/envp-stage/bin/minic" BUILD_DIR="$PWD/build/envp-stage" HOST_CC=cc sh tests/compiler/c0/run-external-pointer-arrays.sh
+          make -j4 MODE=release BUILD_DIR=build/envp-stage check-fast
+          MINIC="$PWD/build/envp-stage/bin/minic" BUILD_DIR="$PWD/build/envp-stage" HOST_CC=cc sh tests/compiler/c0/run-foundation-focused.sh
+
+      - name: Publish product-only tree
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          rm .github/workflows/stage-envp-init-tail-zero.yml
+          rm tools/dev/stage_envp_init_tail_zero.py
+          git config user.name 'LiYang Dong'
+          git config user.email '119646676+yituanxing@users.noreply.github.com'
+          git add -A
+          git commit -m 'target: zero-fill omitted recursive array tail' -m 'Allow the typed recursive static-data emitter to serialize an aggregate array whose explicit initializer and relocation streams are exhausted at an element boundary by zero-filling the remaining array storage. This matches the canonical root trailing implicit-zero representation and keeps missing interior scalar slots fail-closed.' -m '中文说明：typed recursive static-data emitter 在数组元素边界已经消费完全部显式 initializer 与 relocation 后，可直接将剩余数组 storage 补零；与 canonical root trailing implicit-zero 表示保持一致，同时内部缺失 scalar slot 仍然 fail-closed。'
+          git push origin HEAD:staging/envp-init-recursive-tail-zero
