@@ -26,34 +26,23 @@ jobs:
 
           p = Path('src/core/core_ir.h')
           s = p.read_text()
-          old = '    MINIC_CORE_INSTRUCTION_ADDRESS_OFFSET,\n'
-          new = '    MINIC_CORE_INSTRUCTION_FIELD_ADDRESS,\n'
-          assert s.count(old) == 1, s.count(old)
-          s = s.replace(old, new, 1)
-          old = '''        struct {
-              MinicCoreValueId base;
-              int64_t byte_offset;
-          } address_offset;
-          '''
-          new = '''        struct {
-              MinicCoreValueId base;
-              MinicRecordId record_id;
-              size_t field_index;
-          } field_address;
-          '''
-          assert s.count(old) == 1, s.count(old)
-          p.write_text(s.replace(old, new, 1))
+          assert s.count('MINIC_CORE_INSTRUCTION_ADDRESS_OFFSET') == 1
+          assert s.count('int64_t byte_offset;') == 1
+          assert s.count('} address_offset;') == 1
+          s = s.replace('MINIC_CORE_INSTRUCTION_ADDRESS_OFFSET',
+                        'MINIC_CORE_INSTRUCTION_FIELD_ADDRESS', 1)
+          s = s.replace('int64_t byte_offset;',
+                        'MinicRecordId record_id;\n            size_t field_index;', 1)
+          s = s.replace('} address_offset;', '} field_address;', 1)
+          p.write_text(s)
 
           p = Path('src/core/core_ir.c')
           s = p.read_text()
-          old = '''    case MINIC_CORE_INSTRUCTION_ADDRESS_OFFSET:
-              return instruction_result_is_valid(function, instruction) &&
-                     minic_type_is_pointer(instruction->type) &&
-                     instruction->value.address_offset.base < function->value_count &&
-                     available_values[instruction->value.address_offset.base] &&
-                     minic_type_is_pointer(function->values[instruction->value.address_offset.base].type);
-          '''
-          new = '''    case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS: {
+          marker = '    case MINIC_CORE_INSTRUCTION_ADDRESS_OFFSET:'
+          assert s.count(marker) == 2, s.count(marker)
+          start = s.index(marker)
+          end = s.index('    case MINIC_CORE_INSTRUCTION_LOAD:', start)
+          verifier = '''    case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS: {
               MinicCoreValueId base;
               MinicType base_pointee;
               MinicType field_type;
@@ -72,25 +61,20 @@ jobs:
               return true;
           }
           '''
-          assert s.count(old) == 1, s.count(old)
-          s = s.replace(old, new, 1)
-          old = '''    case MINIC_CORE_INSTRUCTION_ADDRESS_OFFSET:
+          s = s[:start] + verifier + s[end:]
+          start = s.index(marker)
+          end = s.index('    case MINIC_CORE_INSTRUCTION_LOAD:', start)
+          dump = '''    case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:
               return fprintf(output,
-                             "  %%%" PRIu32 " = addr.offset %%%" PRIu32 ", %" PRId64 "\\n",
-                             instruction->result,
-                             instruction->value.address_offset.base,
-                             instruction->value.address_offset.byte_offset) >= 0;
-          '''
-          new = '''    case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:
-              return fprintf(output,
-                             "  %%%" PRIu32 " = field.addr %%%" PRIu32 ", record=%zu, field=%zu\\n",
+                             "  %%%" PRIu32 " = field.addr %%%" PRIu32
+                             ", record=%zu, field=%zu\\n",
                              instruction->result,
                              instruction->value.field_address.base,
                              instruction->value.field_address.record_id,
                              instruction->value.field_address.field_index) >= 0;
           '''
-          assert s.count(old) == 1, s.count(old)
-          p.write_text(s.replace(old, new, 1))
+          s = s[:start] + dump + s[end:]
+          p.write_text(s)
 
           p = Path('src/core/core_lower.c')
           s = p.read_text()
@@ -230,9 +214,9 @@ jobs:
 
           p = Path('tests/core/run-core-ir-shadow.sh')
           s = p.read_text()
-          anchor = '''cat >"$work_dir/indirect-call-unsupported.i" <<'EOF'
-          int indirect_caller(int (*callee)(int), int value) {'''
-          insert = '''cat >"$work_dir/field-address-v0.i" <<'EOF'
+          anchor = 'cat >"$work_dir/indirect-call-unsupported.i" <<\'EOF\'\n'
+          assert s.count(anchor) == 1, s.count(anchor)
+          fixture = '''cat >"$work_dir/field-address-v0.i" <<'EOF'
           struct pair {
               int value;
               long other;
@@ -247,10 +231,8 @@ jobs:
           EOF
           check_strict_case field-address-v0
 
-          cat >"$work_dir/indirect-call-unsupported.i" <<'EOF'
-          int indirect_caller(int (*callee)(int), int value) {'''
-          assert s.count(anchor) == 1, s.count(anchor)
-          p.write_text(s.replace(anchor, insert, 1))
+          '''
+          p.write_text(s.replace(anchor, fixture + anchor, 1))
           PY
           clang-format -i src/core/core_ir.h src/core/core_ir.c src/core/core_lower.c
 
