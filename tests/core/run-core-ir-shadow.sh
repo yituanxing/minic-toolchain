@@ -45,6 +45,21 @@ int add_one(int value) {
 EOF
 check_strict_case parameter
 
+cat >"$work_dir/qualified-parameter.i" <<'EOF'
+unsigned long qualified_parameter(const unsigned long value) {
+    return value;
+}
+EOF
+
+"$MINIC" -S "$work_dir/qualified-parameter.i" -o "$work_dir/qualified-parameter-normal.s"
+MINIC_CORE_IR=shadow "$MINIC" -S "$work_dir/qualified-parameter.i"     -o "$work_dir/qualified-parameter-shadow.s"
+cmp "$work_dir/qualified-parameter-normal.s" "$work_dir/qualified-parameter-shadow.s"
+if MINIC_CORE_IR=strict "$MINIC" -S "$work_dir/qualified-parameter.i"     -o "$work_dir/qualified-parameter-strict.s" 2>"$work_dir/qualified-parameter-strict.err"; then
+    echo "strict Core IR shadow unexpectedly accepted a qualified parameter" >&2
+    exit 1
+fi
+grep -F "Core IR shadow does not yet support function 'qualified_parameter'"     "$work_dir/qualified-parameter-strict.err" >/dev/null
+
 cat >"$work_dir/mixed-add.i" <<'EOF'
 int add_mixed(signed char value) {
     return value + 1;
