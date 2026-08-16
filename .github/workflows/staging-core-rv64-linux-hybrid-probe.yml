@@ -57,8 +57,11 @@ jobs:
           CROSS_COMPILE=riscv64-linux-gnu- \
             sh tests/external/linux/probe.sh
 
-          asm="$GITHUB_WORKSPACE/build/linux-hybrid/init-main.s"
+          work="$GITHUB_WORKSPACE/build/linux-hybrid"
+          asm="$work/init-main.s"
+          reference_log="$work/gcc-reference.log"
           test -s "$asm"
+          test -s "$reference_log"
           core_functions=$(grep -Ec '^\.L.*_core_bb0:$' "$asm" || true)
           function_symbols=$(grep -Ec '^\.type .*@function$' "$asm" || true)
           if test "$core_functions" -le 0; then
@@ -67,8 +70,37 @@ jobs:
           fi
           printf '%s\n' \
             "LINUX_HYBRID_ROUTING core_functions=$core_functions function_symbols=$function_symbols"
-          riscv64-linux-gnu-gcc -c "$asm" -o "$GITHUB_WORKSPACE/build/linux-hybrid/init-main-hybrid.o"
-          test -s "$GITHUB_WORKSPACE/build/linux-hybrid/init-main-hybrid.o"
+
+          printf '%s\n' 'LINUX_HYBRID_KBUILD_COMMAND_BEGIN'
+          grep -m1 -- 'riscv64-linux-gnu-gcc.*init/main\.c' "$reference_log" || true
+          printf '%s\n' 'LINUX_HYBRID_KBUILD_COMMAND_END'
+
+          mapfile -t target_flags < <(
+            python3 - "$reference_log" <<'PY'
+          import re
+          import sys
+          from pathlib import Path
+
+          text = Path(sys.argv[1]).read_text(errors="replace")
+          for option in ("march", "mabi"):
+              matches = re.findall(rf"(?<!\S)-{option}=([^\s]+)", text)
+              if not matches:
+                  raise SystemExit(f"missing -{option} in Kbuild reference log")
+              values = list(dict.fromkeys(matches))
+              if len(values) != 1:
+                  raise SystemExit(f"ambiguous -{option} values: {values}")
+              print(f"-{option}={values[0]}")
+          PY
+          )
+          if test "${#target_flags[@]}" -ne 2; then
+            printf '%s\n' 'LINUX_HYBRID_ERROR failed to recover Kbuild target flags' >&2
+            exit 1
+          fi
+          printf '%s\n' "LINUX_HYBRID_ASSEMBLER_FLAGS ${target_flags[*]}"
+          riscv64-linux-gnu-gcc -c "${target_flags[@]}" \
+            "$asm" -o "$work/init-main-hybrid.o"
+          test -s "$work/init-main-hybrid.o"
+          printf '%s\n' 'LINUX_HYBRID_ASSEMBLY PASS'
 
       - name: Upload hybrid routing evidence
         if: always()
@@ -80,5 +112,6 @@ jobs:
             build/linux-hybrid/init-main-hybrid.o
             build/linux-hybrid/minic.stderr
             build/linux-hybrid/main-i-inventory.txt
+            build/linux-hybrid/gcc-reference.log
           if-no-files-found: ignore
           retention-days: 7
