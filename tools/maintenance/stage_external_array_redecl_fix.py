@@ -95,6 +95,33 @@ replace_count(
 )
 
 replace_once(
+    "src/frontend/parser_function.c",
+    """        if (existing == NULL ||
+            !minic_c0_global_object_merge_declaration_type(
+                parser->program, object_id, object_type) ||
+            !minic_c0_global_object_begin_definition(parser->program, object_id)) {
+            minic_parser_error(parser, "conflicting external object definition");
+            return false;
+        }
+    }
+    if (!apply_external_object_metadata(parser,
+""",
+    """        if (existing == NULL ||
+            !minic_c0_global_object_merge_declaration_type(
+                parser->program, object_id, object_type) ||
+            !minic_c0_global_object_begin_definition(parser->program, object_id)) {
+            minic_parser_error(parser, "conflicting external object definition");
+            return false;
+        }
+    }
+    if (minic_type_is_array(object_type)) {
+        object_type = parser->program->global_objects[object_id].type;
+    }
+    if (!apply_external_object_metadata(parser,
+""",
+)
+
+replace_once(
     "src/frontend/parser_global.c",
     """static bool parse_static_array_constant(MinicParser *parser,
                                         MinicGlobalObjectId object_id,
