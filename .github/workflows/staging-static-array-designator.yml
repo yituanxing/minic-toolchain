@@ -1,0 +1,89 @@
+name: Staging Static Array Designator
+
+on:
+  push:
+    branches:
+      - staging/static-array-designator-v1
+
+permissions:
+  contents: write
+
+jobs:
+  validate-and-publish:
+    if: ${{ !contains(github.event.head_commit.message, '[publish]') }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install formatter
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang-format-18
+
+      - name: Apply static array convergence
+        run: python3 tools/dev/stage-static-array-designator.py
+
+      - name: Canonical formatting
+        run: |
+          clang-format-18 -i \
+            src/frontend/parser_internal.h \
+            src/frontend/parser_constant.c \
+            src/frontend/parser_statement.c \
+            src/frontend/parser_global.c \
+            tests/compiler/c0/static_array_designators.c \
+            tests/compiler/c0/invalid_static_array_designator_oob.c \
+            tests/compiler/c0/invalid_static_array_designator_range.c \
+            tests/compiler/c0/invalid_static_array_designator_nonconstant.c
+          chmod +x tests/compiler/c0/run-static-array-designators.sh
+
+      - name: Build sanitizer compiler
+        run: make -j4 MODE=sanitize BUILD_DIR=build/staging-static-array
+
+      - name: Run focused static array designator regression
+        env:
+          MINIC: ${{ github.workspace }}/build/staging-static-array/bin/minic
+          HOST_CC: cc
+          BUILD_DIR: ${{ github.workspace }}/build/staging-static-array
+        run: sh tests/compiler/c0/run-static-array-designators.sh
+
+      - name: Preserve runtime range designator semantics
+        env:
+          MINIC: ${{ github.workspace }}/build/staging-static-array/bin/minic
+          HOST_CC: cc
+          BUILD_DIR: ${{ github.workspace }}/build/staging-static-array
+        run: sh tests/compiler/c0/run-gnu-array-range-initializer.sh
+
+      - name: Run broad C0 source suite
+        env:
+          MINIC: ${{ github.workspace }}/build/staging-static-array/bin/minic
+          HOST_CC: cc
+          BUILD_DIR: ${{ github.workspace }}/build/staging-static-array
+        run: sh tests/compiler/c0/run.sh
+
+      - name: Run Foundation focused suite
+        env:
+          MINIC: ${{ github.workspace }}/build/staging-static-array/bin/minic
+          HOST_CC: cc
+          BUILD_DIR: ${{ github.workspace }}/build/staging-static-array
+        run: sh tests/compiler/c0/run-foundation-focused.sh
+
+      - name: Publish validated product diff
+        run: |
+          git config user.name 'LiYang Dong'
+          git config user.email '119646676+yituanxing@users.noreply.github.com'
+          git add \
+            src/frontend/parser_internal.h \
+            src/frontend/parser_constant.c \
+            src/frontend/parser_statement.c \
+            src/frontend/parser_global.c \
+            tests/compiler/c0/run.sh \
+            tests/compiler/c0/static_array_designators.c \
+            tests/compiler/c0/invalid_static_array_designator_oob.c \
+            tests/compiler/c0/invalid_static_array_designator_range.c \
+            tests/compiler/c0/invalid_static_array_designator_nonconstant.c \
+            tests/compiler/c0/run-static-array-designators.sh
+          git diff --cached --check
+          git commit -m 'frontend: unify scalar static arrays and designators [publish]'
+          git push origin HEAD:staging/static-array-designator-v1
