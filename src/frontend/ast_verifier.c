@@ -961,9 +961,12 @@ static bool verify_statement(const MinicC0Program *program,
                statement->then_block < program->block_count &&
                statement->else_block == MINIC_BLOCK_INVALID;
     case MINIC_STATEMENT_CASE:
-        return statement->target_expression == MINIC_EXPRESSION_INVALID && expression != NULL &&
-               expression->kind == MINIC_EXPRESSION_INTEGER &&
+        return expression != NULL && expression->kind == MINIC_EXPRESSION_INTEGER &&
                minic_type_is_integer(expression->type) &&
+               (statement->target_expression == MINIC_EXPRESSION_INVALID ||
+                (target != NULL && target->kind == MINIC_EXPRESSION_INTEGER &&
+                 minic_type_equal(target->type, expression->type) &&
+                 target->value.integer_value >= expression->value.integer_value)) &&
                statement->then_block == MINIC_BLOCK_INVALID &&
                statement->else_block == MINIC_BLOCK_INVALID;
     case MINIC_STATEMENT_DEFAULT:

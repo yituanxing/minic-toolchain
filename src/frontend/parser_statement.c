@@ -3105,8 +3105,6 @@ static bool parse_case(MinicParser *parser) {
     MinicSourceSpan constant_span;
     int64_t lower_value;
     int64_t upper_value;
-    int64_t candidate;
-    size_t range_count;
     size_t index;
     bool is_range;
 
@@ -3158,24 +3156,16 @@ static bool parse_case(MinicParser *parser) {
         constant_span.end = upper_constant->span.end;
     }
 
-    range_count = 0U;
-    candidate = lower_value;
-    for (;;) {
-        if (context->case_count + range_count >= MINIC_PARSER_MAX_SWITCH_CASES) {
-            minic_parser_error(parser, "switch case count exceeds implementation limit");
+    if (context->case_count >= MINIC_PARSER_MAX_SWITCH_CASES) {
+        minic_parser_error(parser, "switch case label count exceeds implementation limit");
+        return false;
+    }
+    for (index = 0U; index < context->case_count; ++index) {
+        if (lower_value <= context->case_upper_values[index] &&
+            context->case_lower_values[index] <= upper_value) {
+            minic_parser_error(parser, "duplicate or overlapping case value range");
             return false;
         }
-        for (index = 0U; index < context->case_count; ++index) {
-            if (context->case_values[index] == candidate) {
-                minic_parser_error(parser, "duplicate case value");
-                return false;
-            }
-        }
-        range_count += 1U;
-        if (candidate == upper_value) {
-            break;
-        }
-        candidate += 1;
     }
 
     if (!minic_parser_expect(parser, MINIC_TOKEN_COLON, "expected ':' after case value")) {
@@ -3183,29 +3173,32 @@ static bool parse_case(MinicParser *parser) {
     }
     statement.span.end = parser->current.span.begin;
 
-    candidate = lower_value;
-    for (;;) {
-        MinicStatement case_statement;
-
+    (void)memset(&folded_constant, 0, sizeof(folded_constant));
+    folded_constant.kind = MINIC_EXPRESSION_INTEGER;
+    folded_constant.span = lower_constant->span;
+    folded_constant.type = constant_type;
+    folded_constant.value_category = MINIC_VALUE_RVALUE;
+    folded_constant.value.integer_value = lower_value;
+    if (!minic_parser_add_expression(parser, &folded_constant, &statement.expression)) {
+        return false;
+    }
+    if (is_range) {
         (void)memset(&folded_constant, 0, sizeof(folded_constant));
         folded_constant.kind = MINIC_EXPRESSION_INTEGER;
-        folded_constant.span = constant_span;
+        folded_constant.span = upper_constant->span;
         folded_constant.type = constant_type;
         folded_constant.value_category = MINIC_VALUE_RVALUE;
-        folded_constant.value.integer_value = candidate;
-
-        case_statement = statement;
-        if (!minic_parser_add_expression(parser, &folded_constant, &case_statement.expression) ||
-            !minic_parser_add_statement(parser, &case_statement)) {
+        folded_constant.value.integer_value = upper_value;
+        if (!minic_parser_add_expression(parser, &folded_constant, &statement.target_expression)) {
             return false;
         }
-        context->case_values[context->case_count] = candidate;
-        context->case_count += 1U;
-        if (candidate == upper_value) {
-            break;
-        }
-        candidate += 1;
     }
+    if (!minic_parser_add_statement(parser, &statement)) {
+        return false;
+    }
+    context->case_lower_values[context->case_count] = lower_value;
+    context->case_upper_values[context->case_count] = upper_value;
+    context->case_count += 1U;
     return true;
 }
 
