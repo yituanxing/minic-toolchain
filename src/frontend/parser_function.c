@@ -745,11 +745,30 @@ bool minic_parser_parse_parameter_list(MinicParser *parser,
                 parameter_name_spans[*parameter_count] = declarator_name_span;
             }
         } else if (parser->current.kind == MINIC_TOKEN_IDENTIFIER) {
+            MinicSourceSpan parameter_name_span;
+
+            parameter_name_span = parser->current.span;
             if (parameter_name_spans != NULL) {
-                parameter_name_spans[*parameter_count] = parser->current.span;
+                parameter_name_spans[*parameter_count] = parameter_name_span;
             }
             if (!minic_parser_advance(parser)) {
                 return false;
+            }
+            if (parser->current.kind == MINIC_TOKEN_LPAREN) {
+                MinicParsedFunctionDeclarator direct_function;
+
+                (void)memset(&direct_function, 0, sizeof(direct_function));
+                direct_function.name_span = parameter_name_span;
+                direct_function.has_name = true;
+                if (!minic_parser_parse_function_parameter_suffix(parser, &direct_function) ||
+                    !minic_parser_build_function_declarator_type(
+                        parser, parameter_type, &direct_function, &parameter_type)) {
+                    if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                        minic_parser_error(parser,
+                                           "cannot build direct function parameter declarator");
+                    }
+                    return false;
+                }
             }
         } else if (require_names) {
             minic_parser_error(parser, "expected parameter name");
