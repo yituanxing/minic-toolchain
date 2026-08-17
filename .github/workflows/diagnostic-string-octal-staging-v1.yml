@@ -1,0 +1,58 @@
+name: Diagnostic String Octal Staging V1
+
+on:
+  push:
+    branches:
+      - staging/string-octal-v1
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Checkout staging head
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Linux probe tools
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu flex bison bc libelf-dev libssl-dev
+
+      - name: Build MiniC and materialize probe helper
+        run: |
+          set -Eeuo pipefail
+          mkdir -p tests/external/linux
+          git show origin/diagnostic/linux-first100-variadic-stack-v0:tests/external/linux/batch_probe.sh > tests/external/linux/batch_probe.sh
+          chmod +x tests/external/linux/batch_probe.sh
+          make -j4 MODE=debug BUILD_DIR=build/string-octal-compiler
+
+      - name: Probe unchanged VDSO
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/string-octal-compiler/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/string-octal-vdso" \
+          CROSS_COMPILE=riscv64-linux-gnu- LINUX_BATCH_OFFSET=32 LINUX_BATCH_LIMIT=1 LINUX_BATCH_JOBS=1 \
+            sh tests/external/linux/batch_probe.sh
+          cat build/string-octal-vdso/batch-summary.txt
+
+      - name: Probe fixed Linux first100
+        run: |
+          set -Eeuo pipefail
+          set +e
+          MINIC="$GITHUB_WORKSPACE/build/string-octal-compiler/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/string-octal-first100" \
+          CROSS_COMPILE=riscv64-linux-gnu- LINUX_BATCH_OFFSET=0 LINUX_BATCH_LIMIT=100 LINUX_BATCH_JOBS=4 \
+            sh tests/external/linux/batch_probe.sh
+          status=$?
+          set -e
+          cat build/string-octal-first100/batch-summary.txt
+          echo "FIRST100_PROBE_STATUS=$status"
+          exit 0
