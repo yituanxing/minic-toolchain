@@ -1859,9 +1859,9 @@ static bool parse_static_local_record_initializer(MinicParser *parser,
                                             true,
                                             minic_type_is_const(declared_type),
                                             &object_id) ||
+        !minic_parser_bind_scoped_global_object(parser, name_span, object_id) ||
         !minic_parser_expect(parser, MINIC_TOKEN_EQUAL, "expected '=' after static record") ||
-        !minic_parser_parse_static_storage_initializer_value(parser, object_id, declared_type) ||
-        !minic_parser_bind_scoped_global_object(parser, name_span, object_id)) {
+        !minic_parser_parse_static_storage_initializer_value(parser, object_id, declared_type)) {
         if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
             minic_parser_error(parser, "cannot initialize static local record storage");
         }
