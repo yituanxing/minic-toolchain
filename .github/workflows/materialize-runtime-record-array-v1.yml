@@ -20,7 +20,12 @@ jobs:
           set -Eeuo pipefail
           python3 tools/dev/materialize-runtime-record-array-v1.py
           python3 tools/dev/materialize-fixed-call-character-pointer-v1.py
-          clang-format-18 -i src/frontend/parser_statement.c src/frontend/parser_expression.c
+          python3 tools/dev/materialize-function-pointer-array-declarator-v1.py
+          clang-format-18 -i \
+            src/frontend/parser_statement.c \
+            src/frontend/parser_expression.c \
+            src/frontend/parser_declarator.c \
+            src/frontend/parser_internal.h
           git diff --check
           make -j4 MODE=debug BUILD_DIR=build/runtime-record-array
       - name: Focused runtime record array semantics
@@ -57,6 +62,22 @@ jobs:
           long reject_rank_mismatch(int *p) { return sink(p); }
           EOF
           ! build/runtime-record-array/bin/minic -S /tmp/char-call-rank-mismatch.c -o /tmp/char-call-rank-mismatch.s
+      - name: Focused function pointer array declarators
+        run: |
+          set -Eeuo pipefail
+          cat > /tmp/function-pointer-array.c <<'EOF'
+          static int zero(void) { return 0; }
+          static int one(void) { return 1; }
+          static int (*actions[])(void) = { [0] = zero, [1] = one };
+          static int (*fixed[2])(void) = { zero, one };
+          static int (*matrix[2][3])(void);
+          int main(void) {
+              return actions[1]() == 1 && fixed[0]() == 0 && matrix[0][0] == 0 ? 0 : 1;
+          }
+          EOF
+          build/runtime-record-array/bin/minic -S /tmp/function-pointer-array.c -o /tmp/function-pointer-array.s
+          test -s /tmp/function-pointer-array.s
+          printf '%s\n' 'PASS function-pointer-array declarator incomplete+fixed+multidimensional'
       - name: Install Linux probe tools
         run: |
           set -Eeuo pipefail
@@ -65,27 +86,30 @@ jobs:
           mkdir -p tests/external/linux
           git show origin/diagnostic/linux-first100-variadic-stack-v0:tests/external/linux/batch_probe.sh > tests/external/linux/batch_probe.sh
           chmod +x tests/external/linux/batch_probe.sh
-      - name: Diagnose unchanged initramfs.i declarator frontier
+      - name: Probe unchanged initramfs.i
         run: |
-          set +e
+          set -Eeuo pipefail
           MINIC="$GITHUB_WORKSPACE/build/runtime-record-array/bin/minic" \
           BUILD_DIR="$GITHUB_WORKSPACE/build/runtime-record-array-linux" \
           LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-6.6.143.tar.xz" \
           CROSS_COMPILE=riscv64-linux-gnu- LINUX_BATCH_OFFSET=4 LINUX_BATCH_LIMIT=1 LINUX_BATCH_JOBS=1 \
             sh tests/external/linux/batch_probe.sh
+          cat build/runtime-record-array-linux/batch-summary.txt
+      - name: Probe unchanged module.i declarator
+        if: always()
+        run: |
+          set +e
+          MINIC="$GITHUB_WORKSPACE/build/runtime-record-array/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/function-pointer-array-module" \
+          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-6.6.143.tar.xz" \
+          CROSS_COMPILE=riscv64-linux-gnu- LINUX_BATCH_OFFSET=37 LINUX_BATCH_LIMIT=1 LINUX_BATCH_JOBS=1 \
+            sh tests/external/linux/batch_probe.sh
           status=$?
           set -e
-          cat build/runtime-record-array-linux/batch-summary.txt
-          input=build/runtime-record-array-linux/kbuild/init/initramfs.i
-          echo '--- compiler diagnostic ---'
-          cat build/runtime-record-array-linux/minic-stderr/init/initramfs.i.stderr || true
-          echo '--- exact source context 59395..59455 ---'
-          nl -ba "$input" | sed -n '59395,59455p'
-          echo '--- declarator-like lines nearby ---'
-          sed -n '59370,59480p' "$input" | grep -n -E '\(\*|\[[^]]*\][[:space:]]*\(|typedef|static|extern' || true
-          exit "$status"
+          cat build/function-pointer-array-module/batch-summary.txt || true
+          cat build/function-pointer-array-module/minic-stderr/arch/riscv/kernel/module.i.stderr || true
+          echo "MODULE_PROBE_STATUS=$status"
       - name: Probe fixed Linux first100
-        if: success()
         run: |
           set +e
           MINIC="$GITHUB_WORKSPACE/build/runtime-record-array/bin/minic" \
@@ -98,18 +122,24 @@ jobs:
           cat build/runtime-record-array-first100/batch-summary.txt
           test "$status" -eq 1 || test "$status" -eq 0
       - name: Commit product only
-        if: success()
         run: |
           set -Eeuo pipefail
-          rm -f tools/dev/materialize-runtime-record-array-v1.py \
-                tools/dev/materialize-fixed-call-character-pointer-v1.py \
-                .github/workflows/materialize-runtime-record-array-v1.yml
+          rm -f \
+            tools/dev/materialize-runtime-record-array-v1.py \
+            tools/dev/materialize-fixed-call-character-pointer-v1.py \
+            tools/dev/materialize-function-pointer-array-declarator-v1.py \
+            .github/workflows/materialize-runtime-record-array-v1.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add src/frontend/parser_statement.c src/frontend/parser_expression.c \
-                  tools/dev/materialize-runtime-record-array-v1.py \
-                  tools/dev/materialize-fixed-call-character-pointer-v1.py \
-                  .github/workflows/materialize-runtime-record-array-v1.yml
+          git add \
+            src/frontend/parser_statement.c \
+            src/frontend/parser_expression.c \
+            src/frontend/parser_declarator.c \
+            src/frontend/parser_internal.h \
+            tools/dev/materialize-runtime-record-array-v1.py \
+            tools/dev/materialize-fixed-call-character-pointer-v1.py \
+            tools/dev/materialize-function-pointer-array-declarator-v1.py \
+            .github/workflows/materialize-runtime-record-array-v1.yml
           git diff --cached --check
-          git commit -m 'frontend: complete initramfs runtime initializer semantics'
+          git commit -m 'frontend: complete initramfs initializer and declarator semantics'
           git push origin HEAD:staging/string-octal-v1
