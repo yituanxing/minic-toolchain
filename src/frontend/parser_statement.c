@@ -491,10 +491,12 @@ static bool add_zero_initialized_record_lvalue(MinicParser *parser,
         MinicExpressionId member_id;
 
         field = minic_c0_record_field(record, field_index);
-        if (field == NULL || field->is_flexible_array) {
-            minic_parser_error(
-                parser, "flexible array members in aggregate initialization are unsupported");
+        if (field == NULL) {
+            minic_parser_error(parser, "invalid record field in aggregate initialization");
             return false;
+        }
+        if (field->is_flexible_array) {
+            continue;
         }
         (void)memset(&member, 0, sizeof(member));
         member.kind = MINIC_EXPRESSION_MEMBER;
@@ -722,6 +724,10 @@ static bool parse_positional_runtime_record_initializer(MinicParser *parser,
     while (field_index < record->field_count) {
         MinicExpressionId member_id;
 
+        if (record->fields[field_index].is_flexible_array) {
+            field_index += 1U;
+            continue;
+        }
         if (!add_record_field_lvalue(
                 parser, target_id, record_id, field_index, initializer_span, &member_id)) {
             return false;

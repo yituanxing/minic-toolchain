@@ -95,3 +95,29 @@ int nested_designated_braces(int value)
     };
     return (int)(item.inner.first + item.inner.second) + item.count;
 }
+
+struct FlexibleRuntime {
+    int tag;
+    unsigned long count;
+    unsigned char payload[];
+};
+
+void assign_flexible_prefix(struct FlexibleRuntime *out, int tag, unsigned long count)
+{
+    *out = (struct FlexibleRuntime) {
+        .tag = tag,
+        .count = count,
+    };
+}
+
+void assign_flexible_prefix_positional(struct FlexibleRuntime *out,
+                                       int tag,
+                                       unsigned long count)
+{
+    *out = (struct FlexibleRuntime) { tag, count };
+}
+
+void clear_flexible_prefix(struct FlexibleRuntime *out)
+{
+    *out = (struct FlexibleRuntime) { };
+}

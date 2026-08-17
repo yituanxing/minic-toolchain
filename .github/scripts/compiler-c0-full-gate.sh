@@ -206,6 +206,16 @@ runtime_record_array_initializer_focused() {
         sh tests/compiler/c0/run-runtime-record-array-initializers.sh
 }
 
+runtime_record_fam_prefix_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" \
+    HOST_CC=cc \
+    BUILD_DIR="$root/build/ci-runtime-record-fam-prefix" \
+    RISCV_CC=riscv64-linux-gnu-gcc \
+    QEMU_RISCV64=qemu-riscv64 \
+    REQUIRE_RISCV_RUNTIME=1 \
+        sh tests/compiler/c0/run-gnu-record-compound-literal.sh
+}
+
 linenoise_driven_focused() {
     local script
     for script in \
@@ -342,6 +352,7 @@ start_gate static-object-address-focused static_object_address_focused
 start_gate file-scope-basic-asm-focused file_scope_basic_asm_focused
 start_gate wide-string-focused wide_string_focused
 start_gate record-array-init-focused runtime_record_array_initializer_focused
+start_gate record-fam-prefix-focused runtime_record_fam_prefix_focused
 start_gate linenoise-driven-focused linenoise_driven_focused
 start_gate sds-driven-focused sds_driven_focused
 start_gate rv64-focused rv64_focused
