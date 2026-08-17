@@ -433,6 +433,10 @@ bool minic_parser_add_string_literal_initializer(MinicParser *parser,
 bool minic_parser_add_bounded_string_literal_initializer(MinicParser *parser,
                                                          MinicGlobalObjectId object_id,
                                                          size_t element_capacity);
+bool minic_parser_replace_zero_bounded_string_literal_initializer(MinicParser *parser,
+                                                                  MinicGlobalObjectId object_id,
+                                                                  size_t first_slot,
+                                                                  size_t element_capacity);
 bool minic_parser_parse_string_literal(MinicParser *parser, MinicExpressionId *expression_id);
 bool minic_parser_parse_string_text(MinicParser *parser,
                                     char **text,
