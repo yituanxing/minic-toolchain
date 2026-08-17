@@ -1,0 +1,65 @@
+name: Productize Static Local Self Reference V1
+on:
+  push:
+    branches: [product/static-local-self-reference-v1]
+permissions:
+  contents: write
+jobs:
+  productize:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: product/static-local-self-reference-v1
+          fetch-depth: 0
+      - name: Materialize source and permanent contract
+        run: |
+          set -Eeuo pipefail
+          git show origin/staging/string-octal-v1:tools/dev/materialize-static-local-self-reference-v1.py > tools/dev/.productize-static-local-self-reference-v1.py
+          python3 tools/dev/.productize-static-local-self-reference-v1.py
+          rm tools/dev/.productize-static-local-self-reference-v1.py
+          cat > tests/compiler/c0/run-static-local-self-reference.sh <<'EOF'
+          #!/bin/sh
+          set -eu
+          root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+          minic=${MINIC:-"$root/build/debug/bin/minic"}
+          work=${BUILD_DIR:-"$root/build/debug"}/tests/static-local-self-reference
+          mkdir -p "$work"
+          cat > "$work/input.c" <<'SRC'
+          struct Node { struct Node *self; int value; };
+          static int probe(void) {
+              static struct Node node = { .self = &node, .value = 7 };
+              return node.self == &node && node.value == 7 ? 0 : 1;
+          }
+          int main(void) { return probe(); }
+          SRC
+          "$minic" -S "$work/input.c" -o "$work/output.s"
+          grep -Fq '  .dword ' "$work/output.s"
+          grep -Fq '  .word 7' "$work/output.s"
+          printf '%s\n' 'PASS compiler/c0/static-local-self-reference'
+          EOF
+          chmod +x tests/compiler/c0/run-static-local-self-reference.sh
+          cat >> tests/compiler/c0/run.sh <<'EOF'
+
+          MINIC="$minic" \
+          BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+          sh "$root/tests/compiler/c0/run-static-local-self-reference.sh"
+          EOF
+          clang-format-18 -i src/frontend/parser_statement.c
+          git diff --check
+      - name: Validate Werror focused and fast gates
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/product-static-self
+          MINIC="$GITHUB_WORKSPACE/build/product-static-self/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/product-static-self" sh tests/compiler/c0/run-static-local-self-reference.sh
+          make -j4 check-fast MODE=release BUILD_DIR=build/product-static-self-fast
+      - name: Commit clean product diff
+        run: |
+          set -Eeuo pipefail
+          git rm .github/workflows/productize-static-local-self-reference-v1.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m 'frontend: bind static locals before self-referential initialization'
+          git push origin HEAD:product/static-local-self-reference-v1
