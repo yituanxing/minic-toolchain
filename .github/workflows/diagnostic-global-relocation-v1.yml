@@ -138,6 +138,10 @@ jobs:
             sh tests/external/linux/batch_probe.sh
           status=$?
           set -e
+          if [ -f "$build/kbuild/init/init_task.i" ]; then
+            echo '--- init_task.i 63288..63308 ---'
+            sed -n '63288,63308p' "$build/kbuild/init/init_task.i" | nl -ba -v63288
+          fi
           mkdir -p build/relocation-artifact
           cp "$build/batch-summary.txt" build/relocation-artifact/ 2>/dev/null || true
           cp -R "$build/minic-stderr" build/relocation-artifact/ 2>/dev/null || true
