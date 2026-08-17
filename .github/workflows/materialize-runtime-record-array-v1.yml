@@ -26,9 +26,13 @@ jobs:
           python3 tools/dev/materialize-top-level-braced-static-scalar-v1.py
           python3 tools/dev/materialize-parenthesized-pointer-array-v1.py
           python3 tools/dev/materialize-record-pointer-array-v1.py
-          clang-format-18 -i src/frontend/parser_statement.c src/frontend/parser_expression.c \
-            src/frontend/parser_declarator.c src/frontend/parser_internal.h src/frontend/parser_global.c \
-            src/frontend/parser_record.c
+          python3 tools/dev/materialize-gnu-function-void-pointer-equality-v1.py
+          python3 tools/dev/materialize-gnu-signed-left-shift-ice-v1.py
+          clang-format-18 -i \
+            src/frontend/parser_statement.c src/frontend/parser_expression.c \
+            src/frontend/parser_declarator.c src/frontend/parser_internal.h \
+            src/frontend/parser_global.c src/frontend/parser_record.c \
+            src/frontend/ast.c src/frontend/const_eval.c
           git diff --check
           make -j4 MODE=release BUILD_DIR=build/convergence
       - name: Focused declarator regression seams
@@ -47,7 +51,62 @@ jobs:
           EOF
           build/convergence/bin/minic -S /tmp/seams.c -o /tmp/seams.s
           test -s /tmp/seams.s
-          printf '%s\n' 'PASS local+record pointer-to-array declarators and existing function-pointer arrays'
+      - name: Focused GNU function-void pointer equality
+        run: |
+          set -Eeuo pipefail
+          cat > /tmp/pointer-equality-positive.c <<'EOF'
+          static void fn(void) {}
+          int eq(void (*p)(void)) {
+              return p == (void *)fn || (void *)fn != p;
+          }
+          EOF
+          build/convergence/bin/minic -S /tmp/pointer-equality-positive.c -o /tmp/pointer-equality-positive.s
+          test -s /tmp/pointer-equality-positive.s
+          cat > /tmp/pointer-relational-negative.c <<'EOF'
+          static void fn(void) {}
+          int bad(void (*p)(void)) { return p < (void *)fn; }
+          EOF
+          if build/convergence/bin/minic -S /tmp/pointer-relational-negative.c -o /tmp/pointer-relational-negative.s; then
+            echo 'expected function/void pointer relational comparison to fail' >&2
+            exit 1
+          fi
+          cat > /tmp/pointer-equality-negative.c <<'EOF'
+          static void fn(void) {}
+          int bad(void (*p)(void), int *q) { return p == q; }
+          EOF
+          if build/convergence/bin/minic -S /tmp/pointer-equality-negative.c -o /tmp/pointer-equality-negative.s; then
+            echo 'expected incompatible function/object pointer equality to fail without void bridge' >&2
+            exit 1
+          fi
+          printf '%s\n' 'PASS GNU function<->void pointer equality only; relational/incompatible object pointer rejected'
+      - name: Focused GNU signed left-shift ICE
+        run: |
+          set -Eeuo pipefail
+          cat > /tmp/gnu-shift-ice-positive.c <<'EOF'
+          enum transport {
+              TCP = 6,
+              BC_TCP = TCP | (1 << 31),
+          };
+          static int value = BC_TCP;
+          int main(void) { return value == (int)0x80000006U ? 0 : 1; }
+          EOF
+          build/convergence/bin/minic -S /tmp/gnu-shift-ice-positive.c -o /tmp/gnu-shift-ice-positive.s
+          test -s /tmp/gnu-shift-ice-positive.s
+          cat > /tmp/gnu-shift-negative-lhs.c <<'EOF'
+          enum bad { X = (-1) << 1 };
+          EOF
+          if build/convergence/bin/minic -S /tmp/gnu-shift-negative-lhs.c -o /tmp/gnu-shift-negative-lhs.s; then
+            echo 'expected negative signed left-shift ICE to fail' >&2
+            exit 1
+          fi
+          cat > /tmp/gnu-shift-width.c <<'EOF'
+          enum bad { X = 1 << 32 };
+          EOF
+          if build/convergence/bin/minic -S /tmp/gnu-shift-width.c -o /tmp/gnu-shift-width.s; then
+            echo 'expected out-of-width left shift ICE to fail' >&2
+            exit 1
+          fi
+          printf '%s\n' 'PASS GNU signed left-shift ICE sign-bit target pattern; negative/count>=width rejected'
       - name: Install Linux probe tools
         run: |
           set -Eeuo pipefail
@@ -76,7 +135,7 @@ jobs:
             nl -ba "$input" | sed -n "${start},${end}p"
           fi
           echo "DO_MOUNTS_PROBE_STATUS=$status"
-      - name: Diagnose unchanged kvm_main.i
+      - name: Probe unchanged kvm_main.i
         run: |
           set +e
           MINIC="$GITHUB_WORKSPACE/build/convergence/bin/minic" \
@@ -92,8 +151,20 @@ jobs:
           input=build/kvm-main/kbuild/virt/kvm/kvm_main.i
           frontier=$(sed -n 's/.*kvm_main\.i:\([0-9][0-9]*\):.*/\1/p' "$stderr" | head -n 1)
           if test -n "$frontier"; then
-            start=$((frontier > 50 ? frontier - 50 : 1)); end=$((frontier + 50));
-            echo "--- exact source context ${start}..${end} ---"
+            start=$((frontier > 40 ? frontier - 40 : 1)); end=$((frontier + 40));
             nl -ba "$input" | sed -n "${start},${end}p"
           fi
           echo "KVM_MAIN_PROBE_STATUS=$status"
+      - name: Probe fixed Linux first100
+        run: |
+          set +e
+          MINIC="$GITHUB_WORKSPACE/build/convergence/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/first100" \
+          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-6.6.143.tar.xz" \
+          CROSS_COMPILE=riscv64-linux-gnu- LINUX_BATCH_OFFSET=0 LINUX_BATCH_LIMIT=100 LINUX_BATCH_JOBS=4 \
+            sh tests/external/linux/batch_probe.sh
+          status=$?
+          set -e
+          cat build/first100/batch-summary.txt
+          echo "FIRST100_STATUS=$status"
+          test "$status" -eq 0 || test "$status" -eq 1
