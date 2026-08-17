@@ -1,0 +1,43 @@
+name: Productize GNU Signed Left Shift ICE V3
+on:
+  push:
+    branches: [product/gnu-signed-left-shift-ice-v3]
+permissions:
+  contents: write
+jobs:
+  productize:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: product/gnu-signed-left-shift-ice-v3
+          fetch-depth: 0
+      - name: Materialize exact validated source and contract
+        run: |
+          set -Eeuo pipefail
+          git show origin/product/gnu-signed-left-shift-ice-v2:src/frontend/const_eval.c > src/frontend/const_eval.c
+          git show origin/product/gnu-signed-left-shift-ice-v2:tests/compiler/c0/run-gnu-signed-left-shift-ice.sh > tests/compiler/c0/run-gnu-signed-left-shift-ice.sh
+          chmod +x tests/compiler/c0/run-gnu-signed-left-shift-ice.sh
+          cat >> tests/compiler/c0/run.sh <<'EOF'
+
+          MINIC="$minic" \
+          BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+          sh "$root/tests/compiler/c0/run-gnu-signed-left-shift-ice.sh"
+          EOF
+          git diff --check
+      - name: Validate Werror focused and fast gates
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/product-shift-ice
+          MINIC="$GITHUB_WORKSPACE/build/product-shift-ice/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/product-shift-ice" sh tests/compiler/c0/run-gnu-signed-left-shift-ice.sh
+          make -j4 check-fast MODE=release BUILD_DIR=build/product-shift-ice-fast
+      - name: Commit clean product diff
+        run: |
+          set -Eeuo pipefail
+          git rm .github/workflows/productize-gnu-signed-left-shift-ice-v3.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m 'frontend: fold GNU signed left-shift ICE bit patterns'
+          git push origin HEAD:product/gnu-signed-left-shift-ice-v3
