@@ -1,0 +1,62 @@
+name: Productize GNU Function Void Pointer Equality V1
+on:
+  push:
+    branches: [product/gnu-function-void-pointer-equality-v1]
+permissions:
+  contents: write
+jobs:
+  productize:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: product/gnu-function-void-pointer-equality-v1
+          fetch-depth: 0
+      - name: Materialize source and permanent contract
+        run: |
+          set -Eeuo pipefail
+          git show origin/staging/string-octal-v1:tools/dev/materialize-gnu-function-void-pointer-equality-v1.py > tools/dev/.productize-gnu-function-void-pointer-equality-v1.py
+          python3 tools/dev/.productize-gnu-function-void-pointer-equality-v1.py
+          rm tools/dev/.productize-gnu-function-void-pointer-equality-v1.py
+          cat > tests/compiler/c0/gnu_function_void_pointer_equality.c <<'EOF'
+          static int target(void) { return 7; }
+
+          int main(void) {
+              int (*function_pointer)(void) = target;
+              void *opaque = function_pointer;
+              if (opaque != function_pointer) {
+                  return 1;
+              }
+              if (function_pointer != opaque) {
+                  return 2;
+              }
+              return opaque == target && target == opaque ? 0 : 3;
+          }
+          EOF
+          cat >> tests/compiler/c0/run-gnu-function-pointer-bridge-call.sh <<'EOF'
+
+          "$host_cc" -E -P -std=gnu11 -x c \
+              "$root/tests/compiler/c0/gnu_function_void_pointer_equality.c" \
+              -o "$work/function-void-equality.i"
+          "$minic" -S "$work/function-void-equality.i" -o "$work/function-void-equality.s"
+          grep -F 'main:' "$work/function-void-equality.s" >/dev/null
+          printf '%s\n' 'PASS compiler/c0/gnu_function_void_pointer_equality bidirectional=1 direct-function=1'
+          EOF
+          clang-format-18 -i src/frontend/ast.c tests/compiler/c0/gnu_function_void_pointer_equality.c
+          git diff --check
+      - name: Validate Werror focused and fast gates
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/product-function-void-equality
+          MINIC="$GITHUB_WORKSPACE/build/product-function-void-equality/bin/minic" HOST_CC=cc BUILD_DIR="$GITHUB_WORKSPACE/build/product-function-void-equality" sh tests/compiler/c0/run-gnu-function-pointer-bridge-call.sh
+          make -j4 check-fast MODE=release BUILD_DIR=build/product-function-void-equality-fast
+      - name: Commit clean product diff
+        run: |
+          set -Eeuo pipefail
+          git rm .github/workflows/productize-gnu-function-void-pointer-equality-v1.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m 'frontend: allow GNU function and void pointer equality'
+          git push origin HEAD:product/gnu-function-void-pointer-equality-v1
