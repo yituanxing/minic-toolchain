@@ -69,7 +69,7 @@ expect_failure \
     "default label requires an enclosing switch"
 expect_failure \
     invalid_duplicate_case \
-    "duplicate case value"
+    "duplicate or overlapping case value range"
 expect_failure \
     invalid_duplicate_default \
     "duplicate default label"

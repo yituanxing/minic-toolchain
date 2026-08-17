@@ -375,13 +375,45 @@ static bool minic_riscv64_emit_switch(FILE *file,
             return false;
         }
         case_expression = minic_c0_program_expression(program, case_statement->expression);
-        if (case_expression == NULL || case_expression->kind != MINIC_EXPRESSION_INTEGER ||
-            fprintf(file,
-                    "  li t1, %" PRId64 "\n"
-                    "  beq t0, t1, .Lswitch_case_%zu\n",
-                    case_expression->value.integer_value,
-                    (size_t)case_id) < 0) {
+        if (case_expression == NULL || case_expression->kind != MINIC_EXPRESSION_INTEGER) {
             return false;
+        }
+        if (case_statement->target_expression == MINIC_EXPRESSION_INVALID) {
+            if (fprintf(file,
+                        "  li t1, %" PRId64 "\n"
+                        "  beq t0, t1, .Lswitch_case_%zu\n",
+                        case_expression->value.integer_value,
+                        (size_t)case_id) < 0) {
+                return false;
+            }
+        } else {
+            const MinicExpression *upper_expression;
+            const char *less_than;
+            const char *greater_equal;
+
+            upper_expression =
+                minic_c0_program_expression(program, case_statement->target_expression);
+            if (upper_expression == NULL || upper_expression->kind != MINIC_EXPRESSION_INTEGER ||
+                !minic_type_equal(upper_expression->type, case_expression->type)) {
+                return false;
+            }
+            less_than = minic_type_is_unsigned_integer(selector->type) ? "bltu" : "blt";
+            greater_equal = minic_type_is_unsigned_integer(selector->type) ? "bgeu" : "bge";
+            if (fprintf(file,
+                        "  li t1, %" PRId64 "\n"
+                        "  %s t0, t1, .Lswitch_range_next_%zu\n"
+                        "  li t1, %" PRId64 "\n"
+                        "  %s t1, t0, .Lswitch_case_%zu\n"
+                        ".Lswitch_range_next_%zu:\n",
+                        case_expression->value.integer_value,
+                        less_than,
+                        (size_t)case_id,
+                        upper_expression->value.integer_value,
+                        greater_equal,
+                        (size_t)case_id,
+                        (size_t)case_id) < 0) {
+                return false;
+            }
         }
     }
     if (labels.default_statement != MINIC_STATEMENT_INVALID) {
