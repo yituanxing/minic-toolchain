@@ -54,25 +54,24 @@ jobs:
           test "$status" -eq 1
           cat build/duplicate-context-linux/batch-summary.txt
 
-      - name: Print exact frontier context and repeated identifiers
+      - name: Print sched_debug_sops declaration history
         shell: bash
         run: |
           set -Eeuo pipefail
           file=build/duplicate-context-linux/kbuild/kernel/sched/build_utility.i
           test -s "$file"
-          printf '%s\n' 'BUILD_UTILITY_CONTEXT_BEGIN'
-          sed -n '69980,70030p' "$file"
-          printf '%s\n' 'BUILD_UTILITY_CONTEXT_END'
           python3 - <<'PY'
           from pathlib import Path
           import re
           path = Path('build/duplicate-context-linux/kbuild/kernel/sched/build_utility.i')
           lines = path.read_text(errors='replace').splitlines()
-          target = lines[70009] if len(lines) >= 70010 else ''
-          print(f'TARGET_LINE={target}')
-          ids = re.findall(r'\b[A-Za-z_][A-Za-z0-9_]*\b', target)
-          for name in sorted(set(ids)):
-              hits = [i + 1 for i, line in enumerate(lines) if re.search(rf'\b{re.escape(name)}\b', line)]
-              if len(hits) > 1:
-                  print(f'REPEATED name={name} count={len(hits)} lines={hits[-12:]}')
+          matches = [i for i, line in enumerate(lines) if re.search(r'\bsched_debug_sops\b', line)]
+          print(f'SCHED_DEBUG_SOPS_OCCURRENCES count={len(matches)} lines={[i + 1 for i in matches]}')
+          for ordinal, index in enumerate(matches, 1):
+              begin = max(0, index - 8)
+              end = min(len(lines), index + 9)
+              print(f'SCHED_DEBUG_SOPS_CONTEXT_{ordinal}_BEGIN line={index + 1}')
+              for line_number in range(begin, end):
+                  print(f'{line_number + 1}: {lines[line_number]}')
+              print(f'SCHED_DEBUG_SOPS_CONTEXT_{ordinal}_END')
           PY
