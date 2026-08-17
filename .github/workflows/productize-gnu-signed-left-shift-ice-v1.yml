@@ -1,0 +1,71 @@
+name: Productize GNU Signed Left Shift ICE V1
+on:
+  push:
+    branches: [product/gnu-signed-left-shift-ice-v1]
+permissions:
+  contents: write
+jobs:
+  productize:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: product/gnu-signed-left-shift-ice-v1
+          fetch-depth: 0
+      - name: Materialize source and permanent contracts
+        run: |
+          set -Eeuo pipefail
+          git show origin/staging/string-octal-v1:tools/dev/materialize-gnu-signed-left-shift-ice-v1.py > tools/dev/.productize-gnu-signed-left-shift-ice-v1.py
+          python3 tools/dev/.productize-gnu-signed-left-shift-ice-v1.py
+          rm tools/dev/.productize-gnu-signed-left-shift-ice-v1.py
+          cat > tests/compiler/c0/run-gnu-signed-left-shift-ice.sh <<'EOF'
+          #!/bin/sh
+          set -eu
+          root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+          minic=${MINIC:-"$root/build/debug/bin/minic"}
+          work=${BUILD_DIR:-"$root/build/debug"}/tests/gnu-signed-left-shift-ice
+          mkdir -p "$work"
+          cat > "$work/positive.c" <<'SRC'
+          enum { SIGN_BIT = 1 << 31 };
+          static unsigned int value = (unsigned int)SIGN_BIT;
+          int main(void) { return value == 0x80000000U ? 0 : 1; }
+          SRC
+          "$minic" -S "$work/positive.c" -o "$work/positive.s"
+          grep -Fq 'value:' "$work/positive.s"
+          grep -Eq '2147483648|0x80000000|-2147483648' "$work/positive.s"
+          cat > "$work/negative.c" <<'SRC'
+          enum { BAD_SHIFT = (-1) << 1 };
+          int main(void) { return BAD_SHIFT; }
+          SRC
+          if "$minic" -S "$work/negative.c" -o "$work/negative.s" 2>"$work/negative.err"; then
+              echo 'FAIL compiler/c0/gnu-signed-left-shift-ice: negative signed shift accepted as ICE' >&2
+              exit 1
+          fi
+          grep -Fq 'integer constant expression' "$work/negative.err"
+          printf '%s\n' 'PASS compiler/c0/gnu-signed-left-shift-ice'
+          EOF
+          chmod +x tests/compiler/c0/run-gnu-signed-left-shift-ice.sh
+          cat >> tests/compiler/c0/run.sh <<'EOF'
+
+          MINIC="$minic" \
+          BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+          sh "$root/tests/compiler/c0/run-gnu-signed-left-shift-ice.sh"
+          EOF
+          clang-format-18 -i src/frontend/const_eval.c
+          git diff --check
+      - name: Validate Werror focused and fast gates
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/product-shift-ice
+          MINIC="$GITHUB_WORKSPACE/build/product-shift-ice/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/product-shift-ice" sh tests/compiler/c0/run-gnu-signed-left-shift-ice.sh
+          make -j4 check-fast MODE=release BUILD_DIR=build/product-shift-ice-fast
+      - name: Commit clean product diff
+        run: |
+          set -Eeuo pipefail
+          git rm .github/workflows/productize-gnu-signed-left-shift-ice-v1.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m 'frontend: fold GNU signed left-shift ICE bit patterns'
+          git push origin HEAD:product/gnu-signed-left-shift-ice-v1
