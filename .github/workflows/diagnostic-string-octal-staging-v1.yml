@@ -57,12 +57,13 @@ jobs:
           root = Path('build/first100-convergence')
           summary = root / 'batch-summary.txt'
           lines = summary.read_text(errors='replace').splitlines()
-          rx = re.compile(r'^\s*index=(\d+)\s+status=FAIL\s+input=(\S+)\s+line=(\d+)\s+message=(.*)$')
+          rx = re.compile(r'^\s*index=(\d+)\s+status=FAIL\s+input=(\S+)\s+line=(\d+)\b')
           failures = []
           for line in lines:
               m = rx.match(line)
               if m:
-                  failures.append((int(m.group(1)), m.group(2), int(m.group(3)), m.group(4)))
+                  message = line.split(' message=', 1)[1] if ' message=' in line else ''
+                  failures.append((int(m.group(1)), m.group(2), int(m.group(3)), message))
           print(f'CONTEXT_FAILURE_COUNT={len(failures)}')
           for index, rel, line_no, message in failures:
               matches = list(root.rglob(Path(rel).name))
