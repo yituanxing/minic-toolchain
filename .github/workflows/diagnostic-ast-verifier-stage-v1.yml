@@ -19,7 +19,7 @@ jobs:
         with:
           ref: staging/string-octal-v1
           fetch-depth: 0
-      - name: Materialize convergence compiler plus canonical array owner fix
+      - name: Materialize convergence compiler with array ownership fixes
         run: |
           set -Eeuo pipefail
           python3 tools/dev/materialize-runtime-record-array-v1.py
@@ -43,9 +43,6 @@ jobs:
           python3 tools/dev/materialize-static-pointer-constant-conditional-v1.py
           python3 tools/dev/materialize-canonical-array-redeclaration-owner-v1.py
           python3 tools/dev/materialize-query-incomplete-array-v1.py
-          python3 tools/dev/materialize-incomplete-array-create-trace-v1.py
-          python3 tools/dev/materialize-ast-verifier-stage-trace-v1.py
-          python3 tools/dev/materialize-ast-array-verifier-fail-trace-v1.py
           clang-format-18 -i \
             src/frontend/ast.h src/frontend/ast.c src/frontend/ast_verifier.c \
             src/frontend/const_eval.h src/frontend/const_eval.c \
