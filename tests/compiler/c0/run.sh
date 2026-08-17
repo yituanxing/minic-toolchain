@@ -281,9 +281,9 @@ compile_source static_scalar_global static_scalar_global
 expect_instructions static_scalar_global "la a0, value" "lw a0, 0(a0)"
 grep -F "  .word 7" "$work/static_scalar_global.s" >/dev/null
 
-expect_compile_failure \
-    invalid_braced_scalar_static_global \
-    "expected integer constant expression"
+compile_source braced_scalar_static_global invalid_braced_scalar_static_global
+grep -F "  .word 1" "$work/braced_scalar_static_global.s" >/dev/null
+printf '%s\n' "PASS compiler/c0/braced_scalar_static_global"
 expect_compile_failure invalid_return "expected expression"
 
 MINIC="$minic" \
@@ -430,3 +430,7 @@ sh "$root/tests/compiler/c0/run-static-local-self-reference.sh"
 MINIC="$minic" \
 BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
 sh "$root/tests/compiler/c0/run-record-value-initialize.sh"
+
+MINIC="$minic" HOST_CC="$host_cc" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+sh "$root/tests/compiler/c0/run-braced-static-scalar.sh"
