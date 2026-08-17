@@ -46,16 +46,27 @@ jobs:
           mkdir -p tests/external/linux
           git show origin/diagnostic/linux-first100-variadic-stack-v0:tests/external/linux/batch_probe.sh > tests/external/linux/batch_probe.sh
           chmod +x tests/external/linux/batch_probe.sh
-      - name: Probe unchanged initramfs.i
+      - name: Diagnose unchanged initramfs.i frontier
         run: |
-          set -Eeuo pipefail
+          set +e
           MINIC="$GITHUB_WORKSPACE/build/runtime-record-array/bin/minic" \
           BUILD_DIR="$GITHUB_WORKSPACE/build/runtime-record-array-linux" \
           LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-6.6.143.tar.xz" \
           CROSS_COMPILE=riscv64-linux-gnu- LINUX_BATCH_OFFSET=4 LINUX_BATCH_LIMIT=1 LINUX_BATCH_JOBS=1 \
             sh tests/external/linux/batch_probe.sh
+          status=$?
+          set -e
           cat build/runtime-record-array-linux/batch-summary.txt
+          echo '--- stderr files ---'
+          find build/runtime-record-array-linux -type f \( -name '*.stderr' -o -name 'minic.stderr' \) -print -exec sh -c 'echo "--- $1"; sed -n "1,160p" "$1"' _ {} \;
+          input=build/runtime-record-array-linux/kbuild/init/initramfs.i
+          echo '--- exact source context 59360..59420 ---'
+          nl -ba "$input" | sed -n '59360,59420p'
+          echo '--- nearby declarations/calls ---'
+          sed -n '59320,59440p' "$input" | grep -n -E '^[[:space:]]*(static|extern|void|int|long|unsigned|struct|const|char)|\(' || true
+          exit "$status"
       - name: Probe fixed Linux first100
+        if: success()
         run: |
           set +e
           MINIC="$GITHUB_WORKSPACE/build/runtime-record-array/bin/minic" \
@@ -68,6 +79,7 @@ jobs:
           cat build/runtime-record-array-first100/batch-summary.txt
           test "$status" -eq 1 || test "$status" -eq 0
       - name: Commit product only
+        if: success()
         run: |
           set -Eeuo pipefail
           rm -f tools/dev/materialize-runtime-record-array-v1.py .github/workflows/materialize-runtime-record-array-v1.yml
