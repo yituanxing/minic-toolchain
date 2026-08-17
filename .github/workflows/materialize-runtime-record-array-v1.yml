@@ -22,6 +22,7 @@ jobs:
           python3 tools/dev/materialize-fixed-call-character-pointer-v1.py
           python3 tools/dev/materialize-function-pointer-array-declarator-v1.py
           python3 tools/dev/materialize-preformed-static-array-v1.py
+          python3 tools/dev/materialize-static-local-prefix-attributes-v1.py
           clang-format-18 -i \
             src/frontend/parser_statement.c \
             src/frontend/parser_expression.c \
@@ -30,7 +31,32 @@ jobs:
             src/frontend/parser_global.c
           git diff --check
           make -j4 MODE=debug BUILD_DIR=build/runtime-record-array
-      - name: Recheck focused function pointer arrays
+      - name: Focused static-local prefix attribute semantics
+        run: |
+          set -Eeuo pipefail
+          cat > /tmp/static-prefix-positive.c <<'EOF'
+          struct key { unsigned long value; };
+          int f(void) {
+              static __attribute__((section(".minic.prefix"))) char msg[64];
+              static __attribute__((unused)) struct key k;
+              msg[0] = 1;
+              return (int)msg[0] + (int)k.value;
+          }
+          EOF
+          build/runtime-record-array/bin/minic -S /tmp/static-prefix-positive.c -o /tmp/static-prefix-positive.s
+          grep -F '.minic.prefix' /tmp/static-prefix-positive.s >/dev/null
+          cat > /tmp/static-prefix-negative.c <<'EOF'
+          int f(void) {
+              static __attribute__((noreturn)) int bad;
+              return bad;
+          }
+          EOF
+          if build/runtime-record-array/bin/minic -S /tmp/static-prefix-negative.c -o /tmp/static-prefix-negative.s; then
+            echo 'expected non-object GNU prefix attribute to fail on static local' >&2
+            exit 1
+          fi
+          printf '%s\n' 'PASS static-local prefix attrs section=persisted unused=informational invalid-target=rejected'
+      - name: Recheck function pointer array routing
         run: |
           set -Eeuo pipefail
           cat > /tmp/function-pointer-array.c <<'EOF'
@@ -51,7 +77,7 @@ jobs:
           mkdir -p tests/external/linux
           git show origin/diagnostic/linux-first100-variadic-stack-v0:tests/external/linux/batch_probe.sh > tests/external/linux/batch_probe.sh
           chmod +x tests/external/linux/batch_probe.sh
-      - name: Diagnose unchanged initramfs.i after 59425
+      - name: Probe unchanged initramfs.i
         run: |
           set +e
           MINIC="$GITHUB_WORKSPACE/build/runtime-record-array/bin/minic" \
@@ -61,13 +87,39 @@ jobs:
             sh tests/external/linux/batch_probe.sh
           status=$?
           set -e
-          echo "$status" > /tmp/initramfs-status
           cat build/runtime-record-array-linux/batch-summary.txt
           cat build/runtime-record-array-linux/minic-stderr/init/initramfs.i.stderr || true
           input=build/runtime-record-array-linux/kbuild/init/initramfs.i
-          echo '--- initramfs exact context 59460..59525 ---'
-          nl -ba "$input" | sed -n '59460,59525p'
-      - name: Probe unchanged module.i with same declarator slice
+          if test -f "$input"; then
+            frontier=$(sed -n 's/.*initramfs\.i:\([0-9][0-9]*\):.*/\1/p' build/runtime-record-array-linux/minic-stderr/init/initramfs.i.stderr | head -n 1)
+            if test -n "$frontier"; then
+              start=$((frontier > 25 ? frontier - 25 : 1)); end=$((frontier + 25));
+              nl -ba "$input" | sed -n "${start},${end}p"
+            fi
+          fi
+          echo "INITRAMFS_PROBE_STATUS=$status"
+      - name: Probe unchanged eventfd.i
+        run: |
+          set +e
+          MINIC="$GITHUB_WORKSPACE/build/runtime-record-array/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/static-prefix-eventfd" \
+          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-6.6.143.tar.xz" \
+          CROSS_COMPILE=riscv64-linux-gnu- LINUX_BATCH_OFFSET=69 LINUX_BATCH_LIMIT=1 LINUX_BATCH_JOBS=1 \
+            sh tests/external/linux/batch_probe.sh
+          status=$?
+          set -e
+          cat build/static-prefix-eventfd/batch-summary.txt || true
+          cat build/static-prefix-eventfd/minic-stderr/virt/kvm/eventfd.i.stderr || true
+          input=build/static-prefix-eventfd/kbuild/virt/kvm/eventfd.i
+          if test -f "$input"; then
+            frontier=$(sed -n 's/.*eventfd\.i:\([0-9][0-9]*\):.*/\1/p' build/static-prefix-eventfd/minic-stderr/virt/kvm/eventfd.i.stderr | head -n 1)
+            if test -n "$frontier"; then
+              start=$((frontier > 25 ? frontier - 25 : 1)); end=$((frontier + 25));
+              nl -ba "$input" | sed -n "${start},${end}p"
+            fi
+          fi
+          echo "EVENTFD_PROBE_STATUS=$status"
+      - name: Recheck unchanged module.i
         run: |
           set +e
           MINIC="$GITHUB_WORKSPACE/build/runtime-record-array/bin/minic" \
@@ -78,17 +130,17 @@ jobs:
           status=$?
           set -e
           cat build/function-pointer-array-module/batch-summary.txt || true
-          cat build/function-pointer-array-module/minic-stderr/arch/riscv/kernel/module.i.stderr || true
-          input=build/function-pointer-array-module/kbuild/arch/riscv/kernel/module.i
-          if test -f "$input"; then
-            frontier=$(sed -n 's/.*module\.i:\([0-9][0-9]*\):.*/\1/p' build/function-pointer-array-module/minic-stderr/arch/riscv/kernel/module.i.stderr | head -n 1)
-            if test -n "$frontier"; then
-              start=$((frontier > 25 ? frontier - 25 : 1)); end=$((frontier + 25));
-              nl -ba "$input" | sed -n "${start},${end}p"
-            fi
-          fi
           echo "MODULE_PROBE_STATUS=$status"
-      - name: Preserve initramfs failure status
+      - name: Probe fixed Linux first100
         run: |
-          status=$(cat /tmp/initramfs-status)
-          exit "$status"
+          set +e
+          MINIC="$GITHUB_WORKSPACE/build/runtime-record-array/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/static-prefix-first100" \
+          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-6.6.143.tar.xz" \
+          CROSS_COMPILE=riscv64-linux-gnu- LINUX_BATCH_OFFSET=0 LINUX_BATCH_LIMIT=100 LINUX_BATCH_JOBS=4 \
+            sh tests/external/linux/batch_probe.sh
+          status=$?
+          set -e
+          cat build/static-prefix-first100/batch-summary.txt
+          echo "FIRST100_STATUS=$status"
+          test "$status" -eq 0 || test "$status" -eq 1
