@@ -2069,6 +2069,44 @@ static bool current_is_alignof(const MinicParser *parser) {
     return parser->current.kind == MINIC_TOKEN_KW_ALIGNOF;
 }
 
+static bool alignof_expression_alignment(MinicParser *parser,
+                                         MinicExpressionId operand_id,
+                                         const MinicExpression *operand,
+                                         size_t *alignment) {
+    const MinicDataLayout *layout;
+    MinicArrayObjectInfo array_info;
+    size_t size;
+
+    if (parser == NULL || operand == NULL || alignment == NULL) {
+        return false;
+    }
+    layout = minic_target_info_data_layout(parser->target_info);
+    if (operand->kind == MINIC_EXPRESSION_MEMBER) {
+        const MinicRecord *record;
+
+        record = minic_c0_program_record(parser->program, operand->value.member.record_id);
+        return minic_data_layout_record_field_alignment(
+            layout, parser->program, record, operand->value.member.field_index, alignment);
+    }
+    if (operand->kind == MINIC_EXPRESSION_GLOBAL_OBJECT) {
+        const MinicGlobalObject *object;
+
+        object = minic_c0_program_global_object(parser->program, operand->value.global_object_id);
+        if (object == NULL ||
+            !minic_data_layout_global_object(layout, parser->program, object, &size, alignment) ||
+            *alignment == 0U) {
+            return false;
+        }
+        return true;
+    }
+    if (minic_c0_expression_array_object_info(parser->program, operand, &array_info)) {
+        return minic_data_layout_type(
+            layout, parser->program, array_info.element_type, &size, alignment);
+    }
+    (void)operand_id;
+    return minic_data_layout_type(layout, parser->program, operand->type, &size, alignment);
+}
+
 static bool parse_alignof(MinicParser *parser, MinicExpressionId *expression_id) {
     MinicExpression expression;
     MinicSourcePosition begin;
@@ -2095,9 +2133,18 @@ static bool parse_alignof(MinicParser *parser, MinicExpressionId *expression_id)
             return false;
         }
         end = parser->current.span.end;
-        if (!minic_parser_advance(parser)) {
+        if (!minic_parser_advance(parser) ||
+            !minic_data_layout_type(minic_target_info_data_layout(parser->target_info),
+                                    parser->program,
+                                    measured_type,
+                                    &measured_size,
+                                    &measured_alignment)) {
+            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                minic_parser_error(parser, "alignof requires a supported type");
+            }
             return false;
         }
+        (void)measured_size;
     } else {
         MinicExpressionId operand_id;
         const MinicExpression *operand;
@@ -2106,31 +2153,19 @@ static bool parse_alignof(MinicParser *parser, MinicExpressionId *expression_id)
             return false;
         }
         operand = minic_c0_program_expression(parser->program, operand_id);
-        if (operand == NULL) {
-            minic_parser_error(parser, "invalid alignof operand");
-            return false;
-        }
-        measured_type = operand->type;
-        if (minic_c0_expression_array_object_info(parser->program, operand, NULL) &&
-            !minic_parser_materialize_array_object_type(parser, operand_id, &measured_type)) {
-            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == ' ') {
-                minic_parser_error(parser, "cannot preserve array object type for alignof");
+        if (operand == NULL ||
+            !alignof_expression_alignment(parser, operand_id, operand, &measured_alignment)) {
+            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                minic_parser_error(parser, "alignof requires an alignable expression");
             }
             return false;
         }
         end = operand->span.end;
     }
-
-    if (!minic_data_layout_type(minic_target_info_data_layout(parser->target_info),
-                                parser->program,
-                                measured_type,
-                                &measured_size,
-                                &measured_alignment) ||
-        measured_alignment > (size_t)INT64_MAX) {
-        minic_parser_error(parser, "alignof requires a complete object type");
+    if (measured_alignment > (size_t)INT64_MAX) {
+        minic_parser_error(parser, "alignof result is not representable");
         return false;
     }
-    (void)measured_size;
 
     (void)memset(&expression, 0, sizeof(expression));
     expression.kind = MINIC_EXPRESSION_INTEGER;

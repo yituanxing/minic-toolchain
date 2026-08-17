@@ -372,6 +372,40 @@ bool minic_data_layout_global_object(const MinicDataLayout *layout,
     return true;
 }
 
+bool minic_data_layout_record_field_alignment(const MinicDataLayout *layout,
+                                              const MinicC0Program *program,
+                                              const MinicRecord *record,
+                                              size_t field_index,
+                                              size_t *alignment) {
+    const MinicRecordField *field;
+    size_t field_size;
+    size_t field_alignment;
+
+    if (layout == NULL || program == NULL || record == NULL || alignment == NULL ||
+        field_index >= record->field_count) {
+        return false;
+    }
+    field = &record->fields[field_index];
+    if (field->is_bit_field ||
+        !minic_data_layout_type(layout, program, field->type, &field_size, &field_alignment)) {
+        return false;
+    }
+    (void)field_size;
+    if (field->is_packed || (record->is_packed && field->explicit_alignment == 0U)) {
+        field_alignment = 1U;
+    }
+    if (field->explicit_alignment != 0U) {
+        if ((field->explicit_alignment & (field->explicit_alignment - 1U)) != 0U) {
+            return false;
+        }
+        if (field->explicit_alignment > field_alignment) {
+            field_alignment = field->explicit_alignment;
+        }
+    }
+    *alignment = field_alignment;
+    return true;
+}
+
 bool minic_data_layout_record_field_layout(const MinicDataLayout *layout,
                                            const MinicC0Program *program,
                                            const MinicRecord *record,
