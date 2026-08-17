@@ -1011,11 +1011,6 @@ static bool parse_external_object_definition(MinicParser *parser,
                                              MinicSymbolVisibility visibility,
                                              bool has_visibility) {
     MinicGlobalObjectId object_id;
-    MinicGlobalObjectId target_id;
-    MinicSourceSpan literal_span;
-    MinicType literal_type;
-    MinicType literal_pointer_type;
-    const MinicArrayType *literal_array;
     const MinicGlobalObject *existing;
 
     if (parser == NULL || parser->current.kind != MINIC_TOKEN_EQUAL ||
@@ -1081,30 +1076,13 @@ static bool parse_external_object_definition(MinicParser *parser,
             }
             return false;
         }
-        return minic_parser_expect(
-            parser, MINIC_TOKEN_SEMICOLON, "expected ';' after external object definition");
-    }
-
-    if (parser->current.kind != MINIC_TOKEN_STRING_LITERAL ||
-        !minic_parser_create_string_literal_object(
-            parser, &target_id, &literal_type, &literal_span)) {
-        if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
-            minic_parser_error(parser,
-                               "external pointer definition requires a string literal initializer");
+    } else if (minic_type_is_pointer(object_type)) {
+        if (!minic_parser_parse_static_pointer_object_initializer(parser, object_id, object_type)) {
+            return false;
         }
+    } else {
         return false;
     }
-    literal_array = minic_c0_program_array_type(parser->program, literal_type.array_type_id);
-    if (literal_array == NULL || !minic_type_is_array(literal_type) ||
-        !minic_type_pointer_to(literal_array->element_type, &literal_pointer_type) ||
-        !minic_type_assignment_compatible(object_type, literal_pointer_type) ||
-        !minic_c0_global_object_set_zero_initialized(parser->program, object_id) ||
-        !minic_c0_global_object_add_object_relocation(
-            parser->program, object_id, MINIC_GLOBAL_RELOCATION_LOCATION_SCALAR, 0U, target_id)) {
-        minic_parser_error(parser, "external pointer initializer type mismatch");
-        return false;
-    }
-    (void)literal_span;
     return minic_parser_expect(
         parser, MINIC_TOKEN_SEMICOLON, "expected ';' after external object definition");
 }

@@ -351,6 +351,9 @@ bool minic_parser_parse_record_definition(MinicParser *parser);
 bool minic_parser_parse_enum_definition(MinicParser *parser);
 bool minic_parser_parse_typedef(MinicParser *parser);
 bool minic_parser_parse_static_global(MinicParser *parser);
+bool minic_parser_parse_static_pointer_object_initializer(MinicParser *parser,
+                                                          MinicGlobalObjectId object_id,
+                                                          MinicType pointer_type);
 bool minic_parser_parse_static_global_after_head(MinicParser *parser,
                                                  MinicType object_type,
                                                  MinicSourceSpan name_span,
