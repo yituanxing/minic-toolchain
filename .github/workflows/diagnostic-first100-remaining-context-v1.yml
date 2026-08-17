@@ -1,0 +1,109 @@
+name: Diagnostic First100 Remaining Context V1
+on:
+  push:
+    branches: [staging/string-octal-v1]
+permissions:
+  contents: read
+jobs:
+  context:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-24.04
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: staging/string-octal-v1
+          fetch-depth: 0
+      - name: Materialize current convergence compiler
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/materialize-runtime-record-array-v1.py
+          python3 tools/dev/materialize-fixed-call-character-pointer-v1.py
+          python3 tools/dev/materialize-function-pointer-array-declarator-v1.py
+          python3 tools/dev/materialize-preformed-static-array-v1.py
+          python3 tools/dev/materialize-static-local-prefix-attributes-v1.py
+          python3 tools/dev/materialize-top-level-braced-static-scalar-v1.py
+          python3 tools/dev/materialize-parenthesized-pointer-array-v1.py
+          python3 tools/dev/materialize-record-pointer-array-v1.py
+          python3 tools/dev/materialize-gnu-function-void-pointer-equality-v1.py
+          python3 tools/dev/materialize-gnu-signed-left-shift-ice-v1.py
+          python3 tools/dev/materialize-record-value-initialize-v1.py
+          python3 tools/dev/materialize-record-value-initialize-v1b.py
+          python3 tools/dev/materialize-static-local-self-reference-v1.py
+          python3 tools/dev/materialize-record-conditional-type-v1.py
+          python3 tools/dev/materialize-direct-function-parameter-v1.py
+          python3 tools/dev/materialize-parameter-suffix-informational-attributes-v1.py
+          python3 tools/dev/materialize-overflow-result-range-v1.py
+          python3 tools/dev/materialize-overflow-constant-value-v1.py
+          clang-format-18 -i \
+            src/frontend/ast.h src/frontend/ast.c src/frontend/ast_verifier.c \
+            src/frontend/const_eval.h src/frontend/const_eval.c \
+            src/frontend/expression_semantics.h src/frontend/expression_semantics.c \
+            src/frontend/function_body.c src/frontend/parser_statement.c \
+            src/frontend/parser_expression.c src/frontend/parser_declarator.c \
+            src/frontend/parser_function.c src/frontend/parser_internal.h \
+            src/frontend/parser_global.c src/frontend/parser_record.c \
+            src/target/riscv64/codegen_expression.c src/target/riscv64/codegen_statement.c
+          git diff --check
+          make -j4 MODE=release BUILD_DIR=build/convergence
+      - name: Install Linux probe tools
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu flex bison bc libelf-dev libssl-dev
+          mkdir -p tests/external/linux
+          git show origin/diagnostic/linux-first100-variadic-stack-v0:tests/external/linux/batch_probe.sh > tests/external/linux/batch_probe.sh
+          chmod +x tests/external/linux/batch_probe.sh
+      - name: Probe init_task nested relocation context
+        run: |
+          set +e
+          MINIC="$GITHUB_WORKSPACE/build/convergence/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/init-task-context" \
+          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-6.6.143.tar.xz" CROSS_COMPILE=riscv64-linux-gnu- \
+          LINUX_BATCH_OFFSET=6 LINUX_BATCH_LIMIT=1 LINUX_BATCH_JOBS=1 sh tests/external/linux/batch_probe.sh
+          set -e
+          cat build/init-task-context/batch-summary.txt
+          stderr=build/init-task-context/minic-stderr/init/init_task.i.stderr
+          input=build/init-task-context/kbuild/init/init_task.i
+          cat "$stderr" || true
+          frontier=$(sed -n 's/.*init_task\.i:\([0-9][0-9]*\):.*/\1/p' "$stderr" | head -n1)
+          if test -n "$frontier"; then start=$((frontier>55?frontier-55:1)); end=$((frontier+55)); nl -ba "$input" | sed -n "${start},${end}p"; fi
+      - name: Probe kvm_main static pointer context
+        run: |
+          set +e
+          MINIC="$GITHUB_WORKSPACE/build/convergence/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/kvm-main-context" \
+          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-6.6.143.tar.xz" CROSS_COMPILE=riscv64-linux-gnu- \
+          LINUX_BATCH_OFFSET=68 LINUX_BATCH_LIMIT=1 LINUX_BATCH_JOBS=1 sh tests/external/linux/batch_probe.sh
+          set -e
+          cat build/kvm-main-context/batch-summary.txt
+          stderr=build/kvm-main-context/minic-stderr/virt/kvm/kvm_main.i.stderr
+          input=build/kvm-main-context/kbuild/arch/riscv/kvm/../../../virt/kvm/kvm_main.i
+          cat "$stderr" || true
+          frontier=$(sed -n 's/.*kvm_main\.i:\([0-9][0-9]*\):.*/\1/p' "$stderr" | head -n1)
+          if test -n "$frontier"; then start=$((frontier>55?frontier-55:1)); end=$((frontier+55)); nl -ba "$input" | sed -n "${start},${end}p"; fi
+      - name: Probe kvm main function attribute context
+        run: |
+          set +e
+          MINIC="$GITHUB_WORKSPACE/build/convergence/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/kvm-function-attr-context" \
+          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-6.6.143.tar.xz" CROSS_COMPILE=riscv64-linux-gnu- \
+          LINUX_BATCH_OFFSET=73 LINUX_BATCH_LIMIT=1 LINUX_BATCH_JOBS=1 sh tests/external/linux/batch_probe.sh
+          set -e
+          cat build/kvm-function-attr-context/batch-summary.txt
+          stderr=build/kvm-function-attr-context/minic-stderr/arch/riscv/kvm/main.i.stderr
+          input=build/kvm-function-attr-context/kbuild/arch/riscv/kvm/main.i
+          cat "$stderr" || true
+          frontier=$(sed -n 's/.*main\.i:\([0-9][0-9]*\):.*/\1/p' "$stderr" | head -n1)
+          if test -n "$frontier"; then start=$((frontier>55?frontier-55:1)); end=$((frontier+55)); nl -ba "$input" | sed -n "${start},${end}p"; fi
+      - name: Probe AIA IMSIC switch context
+        run: |
+          set +e
+          MINIC="$GITHUB_WORKSPACE/build/convergence/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/aia-switch-context" \
+          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-6.6.143.tar.xz" CROSS_COMPILE=riscv64-linux-gnu- \
+          LINUX_BATCH_OFFSET=94 LINUX_BATCH_LIMIT=1 LINUX_BATCH_JOBS=1 sh tests/external/linux/batch_probe.sh
+          set -e
+          cat build/aia-switch-context/batch-summary.txt
+          stderr=build/aia-switch-context/minic-stderr/arch/riscv/kvm/aia_imsic.i.stderr
+          input=build/aia-switch-context/kbuild/arch/riscv/kvm/aia_imsic.i
+          cat "$stderr" || true
+          frontier=$(sed -n 's/.*aia_imsic\.i:\([0-9][0-9]*\):.*/\1/p' "$stderr" | head -n1)
+          if test -n "$frontier"; then start=$((frontier>55?frontier-55:1)); end=$((frontier+55)); nl -ba "$input" | sed -n "${start},${end}p"; fi
