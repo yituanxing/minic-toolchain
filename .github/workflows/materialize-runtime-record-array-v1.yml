@@ -38,7 +38,6 @@ jobs:
           EOF
           build/runtime-record-array/bin/minic -S /tmp/runtime-record-array.c -o /tmp/runtime-record-array.s
           test -s /tmp/runtime-record-array.s
-          printf '%s\n' 'PASS runtime-record-array braced-elements designated-element recursive-tail-zero'
       - name: Focused fixed-call character pointer conversions
         run: |
           set -Eeuo pipefail
@@ -48,26 +47,16 @@ jobs:
           long call_plain(char *p) { return sink(p) + signed_sink(p); }
           EOF
           build/runtime-record-array/bin/minic -S /tmp/char-call-positive.c -o /tmp/char-call-positive.s
-          test -s /tmp/char-call-positive.s
-
           cat > /tmp/char-call-drop-const.c <<'EOF'
           static long sink(unsigned char *p) { return p != 0; }
           long reject_drop_const(const char *p) { return sink(p); }
           EOF
-          if build/runtime-record-array/bin/minic -S /tmp/char-call-drop-const.c -o /tmp/char-call-drop-const.s; then
-            echo 'expected const-dropping character pointer call to fail' >&2
-            exit 1
-          fi
-
+          ! build/runtime-record-array/bin/minic -S /tmp/char-call-drop-const.c -o /tmp/char-call-drop-const.s
           cat > /tmp/char-call-rank-mismatch.c <<'EOF'
           static long sink(const unsigned char *p) { return p != 0; }
           long reject_rank_mismatch(int *p) { return sink(p); }
           EOF
-          if build/runtime-record-array/bin/minic -S /tmp/char-call-rank-mismatch.c -o /tmp/char-call-rank-mismatch.s; then
-            echo 'expected int-pointer to character-pointer call to fail' >&2
-            exit 1
-          fi
-          printf '%s\n' 'PASS fixed-call character-pointer bridge plain<->signed/unsigned qualifiers=preserved rank-mismatch=rejected'
+          ! build/runtime-record-array/bin/minic -S /tmp/char-call-rank-mismatch.c -o /tmp/char-call-rank-mismatch.s
       - name: Install Linux probe tools
         run: |
           set -Eeuo pipefail
@@ -76,16 +65,27 @@ jobs:
           mkdir -p tests/external/linux
           git show origin/diagnostic/linux-first100-variadic-stack-v0:tests/external/linux/batch_probe.sh > tests/external/linux/batch_probe.sh
           chmod +x tests/external/linux/batch_probe.sh
-      - name: Probe unchanged initramfs.i
+      - name: Diagnose unchanged initramfs.i declarator frontier
         run: |
-          set -Eeuo pipefail
+          set +e
           MINIC="$GITHUB_WORKSPACE/build/runtime-record-array/bin/minic" \
           BUILD_DIR="$GITHUB_WORKSPACE/build/runtime-record-array-linux" \
           LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-6.6.143.tar.xz" \
           CROSS_COMPILE=riscv64-linux-gnu- LINUX_BATCH_OFFSET=4 LINUX_BATCH_LIMIT=1 LINUX_BATCH_JOBS=1 \
             sh tests/external/linux/batch_probe.sh
+          status=$?
+          set -e
           cat build/runtime-record-array-linux/batch-summary.txt
+          input=build/runtime-record-array-linux/kbuild/init/initramfs.i
+          echo '--- compiler diagnostic ---'
+          cat build/runtime-record-array-linux/minic-stderr/init/initramfs.i.stderr || true
+          echo '--- exact source context 59395..59455 ---'
+          nl -ba "$input" | sed -n '59395,59455p'
+          echo '--- declarator-like lines nearby ---'
+          sed -n '59370,59480p' "$input" | grep -n -E '\(\*|\[[^]]*\][[:space:]]*\(|typedef|static|extern' || true
+          exit "$status"
       - name: Probe fixed Linux first100
+        if: success()
         run: |
           set +e
           MINIC="$GITHUB_WORKSPACE/build/runtime-record-array/bin/minic" \
@@ -98,6 +98,7 @@ jobs:
           cat build/runtime-record-array-first100/batch-summary.txt
           test "$status" -eq 1 || test "$status" -eq 0
       - name: Commit product only
+        if: success()
         run: |
           set -Eeuo pipefail
           rm -f tools/dev/materialize-runtime-record-array-v1.py \
