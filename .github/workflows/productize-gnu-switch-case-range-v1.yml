@@ -52,16 +52,12 @@ jobs:
           printf '%s\n' 'PASS compiler/c0/gnu-switch-case-range'
           EOF
           chmod +x tests/compiler/c0/run-gnu-switch-case-range.sh
-          python3 - <<'PY'
-          from pathlib import Path
-          path = Path('tests/compiler/c0/run.sh')
-          text = path.read_text()
-          anchor = 'compile_source switch switch\n'
-          addition = anchor + '''\nMINIC="$minic" \\\nBUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \\\nsh "$root/tests/compiler/c0/run-gnu-switch-case-range.sh"\n'''
-          if text.count(anchor) != 1:
-              raise SystemExit(f'run.sh switch anchor count={text.count(anchor)}')
-          path.write_text(text.replace(anchor, addition, 1))
-          PY
+          cat >> tests/compiler/c0/run.sh <<'EOF'
+
+          MINIC="$minic" \
+          BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+          sh "$root/tests/compiler/c0/run-gnu-switch-case-range.sh"
+          EOF
           files=$(git diff --name-only -- '*.c' '*.h')
           test -z "$files" || clang-format-18 -i $files
           git diff --check
