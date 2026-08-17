@@ -60,11 +60,8 @@ jobs:
           input=build/runtime-record-array-linux/kbuild/init/initramfs.i
           echo '--- compiler diagnostic ---'
           cat build/runtime-record-array-linux/minic-stderr/init/initramfs.i.stderr || true
-          echo '--- xwrite source context ---'
-          nl -ba "$input" | sed -n '58970,59180p'
-          nl -ba "$input" | sed -n '59320,59450p'
-          echo '--- every victim/wfile/buf occurrence near initramfs state ---'
-          grep -n -C 2 -E '\b(victim|wfile|wfile_pos|buf|body_len)\b' "$input" | sed -n '1,500p' || true
+          echo '--- exact initramfs state declarations 59170..59325 ---'
+          nl -ba "$input" | sed -n '59170,59325p'
           echo '--- xwrite declaration and calls ---'
           grep -n -C 3 -E '(^|[^[:alnum:]_])xwrite[[:space:]]*\(' "$input" || true
           exit "$status"
