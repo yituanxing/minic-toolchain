@@ -3,14 +3,14 @@ from pathlib import Path
 path = Path('src/frontend/parser_function.c')
 text = path.read_text()
 
-def replace_once(old, new, label):
-    global text
-    count = text.count(old)
+def replace_once(haystack, old, new, label):
+    count = haystack.count(old)
     if count != 1:
         raise SystemExit(f'{label}: expected one anchor, got {count}')
-    text = text.replace(old, new, 1)
+    return haystack.replace(old, new, 1)
 
-replace_once(
+text = replace_once(
+    text,
 '''static bool parse_visible_external_array(MinicParser *parser,
                                          MinicType element_type,
                                          MinicSourceSpan name_span,
@@ -29,74 +29,77 @@ replace_once(
                                          size_t *section_name_length,
                                          bool *has_section,
                                          size_t *explicit_alignment,
-                                         MinicSymbolVisibility *visibility,
-                                         bool *has_visibility,
+                                         MinicSymbolVisibility visibility,
+                                         bool has_visibility,
                                          bool *is_weak) {''',
-'visible external array signature')
+    'visible external array signature')
 
-replace_once(
+start = text.find('static bool parse_visible_external_array(')
+end = text.find('typedef struct MinicParsedDeclarationPrefix', start)
+if start < 0 or end < 0:
+    raise SystemExit('visible external array function boundary changed')
+region = text[start:end]
+region = replace_once(
+    region,
 '''    if (parser == NULL || parser->current.kind != MINIC_TOKEN_LBRACKET || section_name == NULL ||
         section_name_length == NULL || has_section == NULL || explicit_alignment == NULL) {''',
 '''    if (parser == NULL || parser->current.kind != MINIC_TOKEN_LBRACKET || section_name == NULL ||
         section_name_length == NULL || has_section == NULL || explicit_alignment == NULL ||
-        visibility == NULL || has_visibility == NULL || is_weak == NULL) {''',
-'visible external array validation')
+        is_weak == NULL) {''',
+    'visible external array validation')
 
-replace_once(
-'''            !minic_parser_parse_gnu_object_attribute_lists(parser,
-                                                           section_name,
-                                                           section_name_capacity,
-                                                           section_name_length,
-                                                           has_section,
-                                                           explicit_alignment)) {''',
-'''            !minic_parser_parse_gnu_object_attribute_lists_with_symbol_metadata(
-                parser,
-                section_name,
-                section_name_capacity,
-                section_name_length,
-                has_section,
-                explicit_alignment,
-                visibility,
-                has_visibility,
-                is_weak)) {''',
-'tentative incomplete array symbol attrs')
+normal_call = 'minic_parser_parse_gnu_object_attribute_lists(parser,'
+call_count = region.count(normal_call)
+if call_count != 2:
+    raise SystemExit(f'visible external array normal suffix parser count changed: {call_count}')
+region = region.replace(normal_call,
+                        'minic_parser_parse_gnu_object_attribute_lists_with_symbol_metadata(parser,')
 
-# In the complete-array branch, external linkage also owns symbol suffix metadata.
-replace_once(
-'''        !minic_parser_parse_gnu_object_attribute_lists(parser,
-                                                       section_name,
-                                                       section_name_capacity,
-                                                       section_name_length,
-                                                       has_section,
-                                                       explicit_alignment)) {''',
-'''        !minic_parser_parse_gnu_object_attribute_lists_with_symbol_metadata(
-            parser,
-            section_name,
-            section_name_capacity,
-            section_name_length,
-            has_section,
-            explicit_alignment,
-            visibility,
-            has_visibility,
-            is_weak)) {''',
-'complete external array symbol attrs')
+tail = '''                                                           explicit_alignment))'''
+replacement = '''                                                           explicit_alignment,
+                                                           &visibility,
+                                                           &has_visibility,
+                                                           is_weak))'''
+# clang-format normalizes both calls to the same argument indentation after materialization.
+tail_count = region.count(tail)
+if tail_count != 2:
+    # Accept the shorter indentation used by the complete-array branch before clang-format.
+    tail = '''                                                       explicit_alignment))'''
+    replacement = '''                                                       explicit_alignment,
+                                                       &visibility,
+                                                       &has_visibility,
+                                                       is_weak))'''
+    tail_count = region.count(tail)
+if tail_count != 2:
+    # Rewrite each parser call structurally instead of touching code outside this function.
+    marker = 'explicit_alignment))'
+    if region.count(marker) < 2:
+        raise SystemExit('visible external array attribute-call tail changed')
+    pieces = region.split(marker)
+    rebuilt = pieces[0]
+    replacements_left = 2
+    for piece in pieces[1:]:
+        if replacements_left > 0 and rebuilt.rstrip().endswith('explicit_alignment') is False:
+            pass
+        if replacements_left > 0:
+            rebuilt += 'explicit_alignment,\n                                                           &visibility,\n                                                           &has_visibility,\n                                                           is_weak))'
+            replacements_left -= 1
+        else:
+            rebuilt += marker
+        rebuilt += piece
+    region = rebuilt
+else:
+    region = region.replace(tail, replacement)
 
-# Dereference shared metadata state when handing canonical metadata to object owners.
-text = text.replace('''                                               visibility,
-                                               has_visibility);''',
-                    '''                                               *visibility,
-                                               *has_visibility);''')
-text = text.replace('''                                            visibility,
-                                            has_visibility);''',
-                    '''                                            *visibility,
-                                            *has_visibility);''')
+text = text[:start] + region + text[end:]
 
-replace_once(
+text = replace_once(
+    text,
 '''                                              visibility,
                                               has_visibility)) {''',
-'''                                              &visibility,
-                                              &has_visibility,
+'''                                              visibility,
+                                              has_visibility,
                                               &object_is_weak)) {''',
-'top-level external array call')
+    'top-level external array call')
 
 path.write_text(text)
