@@ -43,6 +43,7 @@ jobs:
           python3 tools/dev/materialize-backward-record-compound-literal-v1.py
           python3 tools/dev/materialize-backward-static-array-overlay-v1.py
           python3 tools/dev/materialize-static-integer-address-relocation-v1.py
+          python3 tools/dev/materialize-static-union-zero-designator-v1.py
           python3 tools/dev/materialize-global-relocation-fail-trace-v1.py
           clang-format-18 -i src/frontend/ast.h src/frontend/ast.c src/frontend/ast_global.c \
             src/frontend/ast_verifier.c src/frontend/const_eval.h src/frontend/const_eval.c \
@@ -70,6 +71,7 @@ jobs:
           EOF
           build/convergence/bin/minic -S /tmp/zero-slot-reloc.c -o /tmp/zero-slot-reloc.s
           test -s /tmp/zero-slot-reloc.s
+
           cat > /tmp/backward-record-compound.c <<'EOF'
           struct atom { unsigned long value; };
           struct child { struct atom atom; };
@@ -89,6 +91,7 @@ jobs:
             grep -Fq 'cannot write RISC-V assembly' /tmp/backward-record-compound.err
             ! grep -Fq "expected '{' in record initializer" /tmp/backward-record-compound.err
           fi
+
           cat > /tmp/backward-record-array.c <<'EOF'
           struct timer_base { unsigned long nextevt; };
           struct timers { struct timer_base bases[3]; unsigned int active; };
@@ -108,6 +111,7 @@ jobs:
             grep -Fq 'cannot write RISC-V assembly' /tmp/backward-record-array.err
             ! grep -Fq 'backward aggregate designator requires a supported zero subobject' /tmp/backward-record-array.err
           fi
+
           cat > /tmp/integer-address-reloc.c <<'EOF'
           static char storage[16];
           struct stack_slot { unsigned long sp; };
@@ -119,6 +123,32 @@ jobs:
           build/convergence/bin/minic -S /tmp/integer-address-reloc.c -o /tmp/integer-address-reloc.s
           test -s /tmp/integer-address-reloc.s
           grep -Eq '\.dword[[:space:]]+storage\+16' /tmp/integer-address-reloc.s
+
+          cat > /tmp/noncanonical-union-zero.c <<'EOF'
+          typedef unsigned char u8;
+          typedef unsigned int u32;
+          union special {
+              struct { u8 blocked; u8 need_qs; u8 exp_hint; u8 need_mb; } b;
+              u32 s;
+          };
+          struct union_holder { int before; union special special; int after; };
+          static struct union_holder good = {
+              .before = 1,
+              .special.s = 0,
+              .after = 2,
+          };
+          int main(void) { return 0; }
+          EOF
+          build/convergence/bin/minic -S /tmp/noncanonical-union-zero.c -o /tmp/noncanonical-union-zero.s
+          test -s /tmp/noncanonical-union-zero.s
+
+          sed 's/\.special\.s = 0/\.special.s = 1/' /tmp/noncanonical-union-zero.c > /tmp/noncanonical-union-nonzero.c
+          set +e
+          build/convergence/bin/minic -S /tmp/noncanonical-union-nonzero.c -o /tmp/noncanonical-union-nonzero.s 2>/tmp/noncanonical-union-nonzero.err
+          status=$?
+          set -e
+          test "$status" -ne 0
+          grep -Fq 'noncanonical static union member requires a representable zero scalar' /tmp/noncanonical-union-nonzero.err
       - name: Install Linux probe tools
         run: |
           set -Eeuo pipefail
@@ -138,10 +168,6 @@ jobs:
             sh tests/external/linux/batch_probe.sh
           status=$?
           set -e
-          if [ -f "$build/kbuild/init/init_task.i" ]; then
-            echo '--- init_task.i 63288..63308 ---'
-            sed -n '63288,63308p' "$build/kbuild/init/init_task.i" | nl -ba -v63288
-          fi
           mkdir -p build/relocation-artifact
           cp "$build/batch-summary.txt" build/relocation-artifact/ 2>/dev/null || true
           cp -R "$build/minic-stderr" build/relocation-artifact/ 2>/dev/null || true
