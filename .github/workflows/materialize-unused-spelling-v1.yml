@@ -1,0 +1,71 @@
+name: Materialize Plain Unused Spelling V1
+
+on:
+  push:
+    branches:
+      - staging/string-octal-v1
+    paths:
+      - tools/dev/materialize-unused-spelling-v1.py
+      - .github/workflows/materialize-unused-spelling-v1.yml
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Checkout staging head
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Materialize plain GNU unused spelling
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/materialize-unused-spelling-v1.py
+          clang-format-18 -i src/frontend/attribute.c
+          git diff --check
+
+      - name: Build MiniC
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=debug BUILD_DIR=build/unused-spelling
+
+      - name: Install Linux probe tools
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu flex bison bc libelf-dev libssl-dev
+
+      - name: Probe unchanged init/version.i
+        run: |
+          set -Eeuo pipefail
+          mkdir -p tests/external/linux
+          git show origin/diagnostic/linux-first100-variadic-stack-v0:tests/external/linux/batch_probe.sh > tests/external/linux/batch_probe.sh
+          chmod +x tests/external/linux/batch_probe.sh
+          set +e
+          MINIC="$GITHUB_WORKSPACE/build/unused-spelling/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/unused-spelling-version" \
+          CROSS_COMPILE=riscv64-linux-gnu- LINUX_BATCH_OFFSET=1 LINUX_BATCH_LIMIT=1 LINUX_BATCH_JOBS=1 \
+            sh tests/external/linux/batch_probe.sh
+          status=$?
+          set -e
+          cat build/unused-spelling-version/batch-summary.txt
+          echo "VERSION_PROBE_STATUS=$status"
+
+      - name: Commit product files only
+        run: |
+          set -Eeuo pipefail
+          rm -f tools/dev/materialize-unused-spelling-v1.py \
+                .github/workflows/materialize-unused-spelling-v1.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/frontend/attribute.c \
+                  tools/dev/materialize-unused-spelling-v1.py \
+                  .github/workflows/materialize-unused-spelling-v1.yml
+          git commit -m 'frontend: accept plain GNU unused spelling'
+          git push origin HEAD:staging/string-octal-v1
