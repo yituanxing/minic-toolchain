@@ -19,15 +19,8 @@ replace_once(
     """bool minic_riscv64_emit_record_return_value(FILE *file,\n                                            const MinicC0Program *program,\n                                            const MinicFunction *function,\n                                            const MinicRiscv64FunctionLayout *function_layout,\n                                            MinicExpressionId source_id,\n                                            size_t result_pointer_offset);\nbool minic_riscv64_emit_small_record_return_value(\n    FILE *file,\n    const MinicC0Program *program,\n    const MinicFunction *function,\n    const MinicRiscv64FunctionLayout *function_layout,\n    MinicExpressionId source_id,\n    size_t slot_count);\n""",
 )
 
-# Keep the temporary materializer aligned with the canonical copy-source predicate.
-# Assignment expressions are record producers too: evaluating one leaves the written
-# target address in a0, which can then be copied into the shared temporary shape.
-replace_once(
-    "src/target/riscv64/codegen_expression.c",
-    """    if (minic_c0_record_value_is_address_backed(program, expression_id)) {\n        if (!minic_riscv64_emit_address_backed_record_value(\n                file, program, function, function_layout, expression_id) ||\n""",
-    """    if (minic_c0_record_value_is_address_backed(program, expression_id) ||\n        expression->kind == MINIC_EXPRESSION_ASSIGNMENT) {\n        if (!minic_riscv64_emit_address_backed_record_value(\n                file, program, function, function_layout, expression_id) ||\n""",
-)
-
+# Record producer materialization (including assignment expressions) is owned by the
+# earlier record-value seam.  This layer only adds the small aggregate ABI return sink.
 replace_once(
     "src/target/riscv64/codegen_expression.c",
     """bool minic_riscv64_emit_record_copy_value(FILE *file,\n                                          const MinicC0Program *program,\n""",
