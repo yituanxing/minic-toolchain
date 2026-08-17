@@ -1,0 +1,37 @@
+name: Productize Braced Static Scalar V2B
+on:
+  push:
+    branches: [product/top-level-braced-static-scalar-v2]
+permissions:
+  contents: write
+jobs:
+  productize:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: product/top-level-braced-static-scalar-v2
+          fetch-depth: 0
+      - name: Materialize clean product slice
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/materialize-braced-static-scalar-product-v2.py
+          clang-format-18 -i src/frontend/parser_global.c tests/compiler/c0/braced_static_scalar.c tests/compiler/c0/invalid_braced_static_scalar_extra.c
+          git diff --check
+      - name: Validate focused and fast gates
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/product-braced-scalar-v2b
+          MINIC="$GITHUB_WORKSPACE/build/product-braced-scalar-v2b/bin/minic" HOST_CC=cc BUILD_DIR="$GITHUB_WORKSPACE/build/product-braced-scalar-v2b" sh tests/compiler/c0/run-braced-static-scalar.sh
+          make -j4 check-fast MODE=release BUILD_DIR=build/product-braced-scalar-v2b-fast
+      - name: Commit clean product diff
+        run: |
+          set -Eeuo pipefail
+          git rm .github/workflows/productize-braced-static-scalar-v2b.yml tools/dev/materialize-braced-static-scalar-product-v2.py
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --check
+          git commit -m 'frontend: accept braced static scalar initializers'
+          git push origin HEAD:product/top-level-braced-static-scalar-v2
