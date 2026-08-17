@@ -42,6 +42,7 @@ jobs:
           python3 tools/dev/materialize-zero-slot-aggregate-relocation-v1.py
           python3 tools/dev/materialize-backward-record-compound-literal-v1.py
           python3 tools/dev/materialize-backward-static-array-overlay-v1.py
+          python3 tools/dev/materialize-static-integer-address-relocation-v1.py
           python3 tools/dev/materialize-global-relocation-fail-trace-v1.py
           clang-format-18 -i src/frontend/ast.h src/frontend/ast.c src/frontend/ast_global.c \
             src/frontend/ast_verifier.c src/frontend/const_eval.h src/frontend/const_eval.c \
@@ -50,6 +51,7 @@ jobs:
             src/frontend/parser_expression.c src/frontend/parser_declarator.c \
             src/frontend/parser_function.c src/frontend/parser_internal.h \
             src/frontend/parser_global.c src/frontend/parser_record.c src/frontend/parser_postfix.c \
+            src/target/data_layout.c src/target/riscv64/codegen_function.c \
             src/target/riscv64/codegen_expression.c src/target/riscv64/codegen_statement.c
           git diff --check
           make -j4 MODE=release BUILD_DIR=build/convergence
@@ -104,9 +106,19 @@ jobs:
           if [ "$status" -ne 0 ]; then
             cat /tmp/backward-record-array.err
             grep -Fq 'cannot write RISC-V assembly' /tmp/backward-record-array.err
-            ! grep -Fq 'backward aggregate designator currently requires scalar, record, or character-array zero subobjects' /tmp/backward-record-array.err
             ! grep -Fq 'backward aggregate designator requires a supported zero subobject' /tmp/backward-record-array.err
           fi
+          cat > /tmp/integer-address-reloc.c <<'EOF'
+          static char storage[16];
+          struct stack_slot { unsigned long sp; };
+          static struct stack_slot slot = {
+              .sp = sizeof(storage) + (long)&storage,
+          };
+          int main(void) { return 0; }
+          EOF
+          build/convergence/bin/minic -S /tmp/integer-address-reloc.c -o /tmp/integer-address-reloc.s
+          test -s /tmp/integer-address-reloc.s
+          grep -Eq '\.dword[[:space:]]+storage\+16' /tmp/integer-address-reloc.s
       - name: Install Linux probe tools
         run: |
           set -Eeuo pipefail
@@ -126,10 +138,6 @@ jobs:
             sh tests/external/linux/batch_probe.sh
           status=$?
           set -e
-          if [ -f "$build/kbuild/init/init_task.i" ]; then
-            echo '--- init_task.i 63245..63285 ---'
-            sed -n '63245,63285p' "$build/kbuild/init/init_task.i" | nl -ba -v63245
-          fi
           mkdir -p build/relocation-artifact
           cp "$build/batch-summary.txt" build/relocation-artifact/ 2>/dev/null || true
           cp -R "$build/minic-stderr" build/relocation-artifact/ 2>/dev/null || true
