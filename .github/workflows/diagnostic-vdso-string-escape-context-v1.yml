@@ -1,0 +1,64 @@
+name: Diagnostic VDSO String Escape Context V1
+
+on:
+  push:
+    branches:
+      - diagnostic/vdso-string-escape-context-v1
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Checkout diagnostic branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Linux probe tools
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu flex bison bc libelf-dev libssl-dev
+
+      - name: Checkout clean pointer product head
+        run: |
+          set -Eeuo pipefail
+          git checkout --detach a426b4a3713c7e26fe98a7a421a09290b735be73
+          mkdir -p tests/external/linux
+          git show origin/diagnostic/linux-first100-variadic-stack-v0:tests/external/linux/batch_probe.sh > tests/external/linux/batch_probe.sh
+          chmod +x tests/external/linux/batch_probe.sh
+          make -j4 MODE=debug BUILD_DIR=build/vdso-context-compiler
+
+      - name: Materialize unchanged vdso and capture frontier
+        run: |
+          set -Eeuo pipefail
+          set +e
+          MINIC="$GITHUB_WORKSPACE/build/vdso-context-compiler/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/vdso-context-linux" \
+          CROSS_COMPILE=riscv64-linux-gnu- LINUX_BATCH_OFFSET=32 LINUX_BATCH_LIMIT=1 LINUX_BATCH_JOBS=1 \
+            sh tests/external/linux/batch_probe.sh
+          status=$?
+          set -e
+          cat build/vdso-context-linux/batch-summary.txt
+          echo "VDSO_PROBE_STATUS=$status"
+          input=$(find build/vdso-context-linux -type f -name 'vdso.i' | head -n 1)
+          test -n "$input"
+          echo "VDSO_INPUT=$input"
+          echo '=== VDSO CONTEXT 47990..48015 ==='
+          nl -ba "$input" | sed -n '47990,48015p'
+          echo '=== EXACT LINE REPR ==='
+          python3 - "$input" <<'PY'
+          from pathlib import Path
+          import sys
+          p = Path(sys.argv[1])
+          lines = p.read_text(errors='replace').splitlines()
+          for no in range(47998, 48009):
+              if 1 <= no <= len(lines):
+                  print(f'{no}: {lines[no-1]!r}')
+          PY
