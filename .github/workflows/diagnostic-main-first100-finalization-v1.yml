@@ -1,0 +1,55 @@
+name: Diagnostic Main First100 Finalization V1
+on:
+  push:
+    branches: [diagnostic/main-first100-finalization-v1]
+permissions:
+  contents: read
+jobs:
+  first100:
+    runs-on: ubuntu-24.04
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: diagnostic/main-first100-finalization-v1
+          fetch-depth: 0
+      - name: Build exact product compiler
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD^)" = "5ee4075838afee762af4a946fa119f43f780391e"
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/product-main
+          make -j4 check-fast MODE=release BUILD_DIR=build/product-main-fast
+      - name: Install Linux probe tools
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu flex bison bc libelf-dev libssl-dev
+          mkdir -p tests/external/linux
+          git show origin/diagnostic/linux-first100-variadic-stack-v0:tests/external/linux/batch_probe.sh > tests/external/linux/batch_probe.sh
+          chmod +x tests/external/linux/batch_probe.sh
+      - name: Probe materializer-free Linux first100
+        run: |
+          set -Eeuo pipefail
+          build="$GITHUB_WORKSPACE/build/linux-main-first100-finalization"
+          set +e
+          MINIC="$GITHUB_WORKSPACE/build/product-main/bin/minic" \
+          BUILD_DIR="$build" \
+          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-6.6.143.tar.xz" \
+          CROSS_COMPILE=riscv64-linux-gnu- \
+          LINUX_BATCH_OFFSET=0 LINUX_BATCH_LIMIT=100 LINUX_BATCH_JOBS=4 \
+            sh tests/external/linux/batch_probe.sh
+          status=$?
+          set -e
+          mkdir -p build/first100-artifact
+          cp "$build/batch-summary.txt" build/first100-artifact/ 2>/dev/null || true
+          cp -R "$build/minic-stderr" build/first100-artifact/ 2>/dev/null || true
+          echo "$status" > build/first100-artifact/status.txt
+          exit "$status"
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: main-first100-finalization
+          path: build/first100-artifact
+          if-no-files-found: warn
