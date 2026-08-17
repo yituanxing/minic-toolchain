@@ -86,12 +86,14 @@ static const MinicAttributeDescriptor minic_attribute_descriptors[] = {
                           MINIC_ATTRIBUTE_UNUSED,
                           MINIC_ATTRIBUTE_CLASS_INFORMATIONAL,
                           MINIC_ATTRIBUTE_TARGET_FUNCTION | MINIC_ATTRIBUTE_TARGET_OBJECT |
-                              MINIC_ATTRIBUTE_TARGET_TYPE | MINIC_ATTRIBUTE_TARGET_FIELD),
+                              MINIC_ATTRIBUTE_TARGET_TYPE | MINIC_ATTRIBUTE_TARGET_FIELD |
+                              MINIC_ATTRIBUTE_TARGET_STATEMENT),
     MINIC_ATTRIBUTE_ENTRY("__unused__",
                           MINIC_ATTRIBUTE_UNUSED,
                           MINIC_ATTRIBUTE_CLASS_INFORMATIONAL,
                           MINIC_ATTRIBUTE_TARGET_FUNCTION | MINIC_ATTRIBUTE_TARGET_OBJECT |
-                              MINIC_ATTRIBUTE_TARGET_TYPE | MINIC_ATTRIBUTE_TARGET_FIELD),
+                              MINIC_ATTRIBUTE_TARGET_TYPE | MINIC_ATTRIBUTE_TARGET_FIELD |
+                              MINIC_ATTRIBUTE_TARGET_STATEMENT),
     {
         "used",
         sizeof("used") - 1U,
