@@ -36,3 +36,11 @@ fi
 grep -F 'GNU parameter declarator attribute requires explicit language/layout semantics' \
     "$work/parameter-suffix-aligned.err" >/dev/null
 printf '%s\n' 'PASS compiler/c0/parameter_suffix_informational_attribute informational=1 layout=fail-closed'
+
+"$host_cc" -E -P -std=gnu11 -x c \
+    "$root/tests/compiler/c0/direct_function_parameter.c" \
+    -o "$work/direct-function.i"
+"$minic" -S "$work/direct-function.i" -o "$work/direct-function.s"
+grep -F 'apply:' "$work/direct-function.s" >/dev/null
+grep -F 'jalr' "$work/direct-function.s" >/dev/null
+printf '%s\n' 'PASS compiler/c0/direct_function_parameter declarator=function-adjusted-to-pointer'
