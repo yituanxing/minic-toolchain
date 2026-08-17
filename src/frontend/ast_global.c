@@ -482,11 +482,15 @@ static bool aggregate_scalar_slot_type(const MinicC0Program *program,
         }
         for (element_index = 0U; element_index < array_type->element_count; ++element_index) {
             size_t before = *slot_index;
+            size_t element_slots;
+
             if (aggregate_scalar_slot_type(
                     program, array_type->element_type, slot_index, slot_type)) {
                 return true;
             }
-            if (*slot_index == before) {
+            if (*slot_index == before &&
+                (!aggregate_scalar_slot_count(program, array_type->element_type, &element_slots) ||
+                 element_slots != 0U)) {
                 return false;
             }
         }
@@ -512,10 +516,14 @@ static bool aggregate_scalar_slot_type(const MinicC0Program *program,
             }
             for (element_index = 0U; element_index < field->element_count; ++element_index) {
                 size_t before = *slot_index;
+                size_t field_slots;
+
                 if (aggregate_scalar_slot_type(program, field->type, slot_index, slot_type)) {
                     return true;
                 }
-                if (*slot_index == before) {
+                if (*slot_index == before &&
+                    (!aggregate_scalar_slot_count(program, field->type, &field_slots) ||
+                     field_slots != 0U)) {
                     return false;
                 }
             }
