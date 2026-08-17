@@ -24,7 +24,7 @@ replace_once(
 replace_once(
     'src/frontend/parser_statement.c',
     '''    if (descriptor->kind != MINIC_ATTRIBUTE_FALLTHROUGH ||\n        descriptor->semantic_class != MINIC_ATTRIBUTE_CLASS_DIAGNOSTIC) {\n        minic_parser_error(parser, "GNU statement attribute semantics are not implemented");\n        return false;\n    }\n    context->saw_fallthrough = true;\n    return true;\n''',
-    '''    if (descriptor->kind == MINIC_ATTRIBUTE_UNUSED &&\n        descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_INFORMATIONAL) {\n        /* MiniC has no unused-label diagnostic state yet.  GNU unused at statement/label\n         * position is therefore parse-time informational metadata with no runtime AST edge. */\n        context->saw_informational = true;\n        return true;\n    }\n    if (descriptor->kind == MINIC_ATTRIBUTE_FALLTHROUGH &&\n        descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_DIAGNOSTIC) {\n        context->saw_fallthrough = true;\n        return true;\n    }\n    minic_parser_error(parser, "GNU statement attribute semantics are not implemented");\n    return false;\n''',
+    '''    if (descriptor->kind == MINIC_ATTRIBUTE_UNUSED &&\n        descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_INFORMATIONAL) {\n        /* MiniC has no unused-label diagnostic state yet. GNU unused at statement/label\n         * position is parse-time informational metadata with no runtime AST edge. */\n        context->saw_informational = true;\n        return true;\n    }\n    if (descriptor->kind == MINIC_ATTRIBUTE_FALLTHROUGH &&\n        descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_DIAGNOSTIC) {\n        context->saw_fallthrough = true;\n        return true;\n    }\n    minic_parser_error(parser, "GNU statement attribute semantics are not implemented");\n    return false;\n''',
     'statement attribute semantics')
 
 replace_once(
@@ -32,3 +32,9 @@ replace_once(
     '''    if (!minic_parser_parse_gnu_attribute_lists(parser, consume_statement_attribute, &context) ||\n        !context.saw_fallthrough ||\n        !minic_parser_expect(\n            parser, MINIC_TOKEN_SEMICOLON, "expected ';' after GNU statement attribute")) {\n''',
     '''    if (!minic_parser_parse_gnu_attribute_lists(parser, consume_statement_attribute, &context) ||\n        (!context.saw_fallthrough && !context.saw_informational) ||\n        !minic_parser_expect(\n            parser, MINIC_TOKEN_SEMICOLON, "expected ';' after GNU statement attribute")) {\n''',
     'statement attribute acceptance')
+
+replace_once(
+    'src/frontend/parser_statement.c',
+    '''    if (parser->switch_depth == 0U) {\n        minic_parser_error(parser,\n                           "GNU fallthrough statement attribute requires an enclosing switch");\n        return false;\n    }\n''',
+    '''    if (context.saw_fallthrough && parser->switch_depth == 0U) {\n        minic_parser_error(parser,\n                           "GNU fallthrough statement attribute requires an enclosing switch");\n        return false;\n    }\n''',
+    'fallthrough-only control-flow validation')
