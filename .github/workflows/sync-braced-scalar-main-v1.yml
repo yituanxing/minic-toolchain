@@ -1,0 +1,63 @@
+name: Sync Braced Scalar Slice With Main
+on:
+  push:
+    branches: [product/top-level-braced-static-scalar-v1]
+permissions:
+  contents: write
+jobs:
+  sync:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: product/top-level-braced-static-scalar-v1
+          fetch-depth: 0
+      - name: Merge latest main and replay product test contract
+        run: |
+          set -Eeuo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git fetch origin main
+          if ! git merge --no-commit --no-ff origin/main; then
+            unresolved=$(git diff --name-only --diff-filter=U)
+            if test "$unresolved" != "tests/compiler/c0/run.sh"; then
+              printf '%s\n' "unexpected merge conflicts:" "$unresolved" >&2
+              exit 1
+            fi
+            git checkout --theirs tests/compiler/c0/run.sh
+          fi
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('tests/compiler/c0/run.sh')
+          text = path.read_text()
+          old = '''expect_compile_failure \\
+    invalid_braced_scalar_static_global \\
+    "expected integer constant expression"\n'''
+          new = '''compile_source braced_scalar_static_global invalid_braced_scalar_static_global\ngrep -F "  .word 1" "$work/braced_scalar_static_global.s" >/dev/null\nprintf '%s\\n' "PASS compiler/c0/braced_scalar_static_global"\n'''
+          if old in text:
+              text = text.replace(old, new, 1)
+          elif new not in text:
+              raise SystemExit('braced scalar main contract anchor missing')
+          call = '''\nMINIC="$minic" HOST_CC="$host_cc" \\
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \\
+sh "$root/tests/compiler/c0/run-braced-static-scalar.sh"\n'''
+          if call not in text:
+              text += call
+          path.write_text(text)
+          PY
+          test -z "$(git diff --name-only --diff-filter=U)"
+          git rm .github/workflows/sync-braced-scalar-main-v1.yml
+          git add -A
+          git diff --cached --check
+      - name: Validate merged product slice
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/product-braced-sync
+          MINIC="$GITHUB_WORKSPACE/build/product-braced-sync/bin/minic" HOST_CC=cc BUILD_DIR="$GITHUB_WORKSPACE/build/product-braced-sync" sh tests/compiler/c0/run-braced-static-scalar.sh
+          make -j4 check-fast MODE=release BUILD_DIR=build/product-braced-sync-fast
+      - name: Commit and push synchronized slice
+        run: |
+          set -Eeuo pipefail
+          git commit -m 'chore: sync braced scalar slice with main'
+          git push origin HEAD:product/top-level-braced-static-scalar-v1
