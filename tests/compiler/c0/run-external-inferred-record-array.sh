@@ -20,6 +20,8 @@ grep -F 'kvm_stats:' "$asm" >/dev/null
 grep -F '.size kvm_stats, 72' "$asm" >/dev/null
 grep -F 'fixed_record_array:' "$asm" >/dev/null
 grep -F '.size fixed_record_array, 24' "$asm" >/dev/null
+grep -F 'designated_ext:' "$asm" >/dev/null
+grep -F '.size designated_ext, 96' "$asm" >/dev/null
 
 test "$(grep -c '^  \.dword \.Lminic_string_' "$asm")" -ge 4
 
@@ -35,8 +37,7 @@ if "$minic" -S "$work/invalid.i" -o "$work/invalid.s" \
     printf '%s\n' 'FAIL compiler/c0/invalid_external_inferred_record_array_brace_elision: unexpectedly succeeded' >&2
     exit 1
 fi
-grep -F 'inferred external record array requires braced record elements' \
-    "$work/invalid.stderr" >/dev/null
+grep -F "expected '{' in record initializer" "$work/invalid.stderr" >/dev/null
 
 printf '%s\n' \
-    'PASS compiler/c0/external_inferred_record_array bound=shape-prepass record=nested+designated pointer-reloc=1 char-array-string=1 fixed-path=unchanged brace-elision=fail-closed'
+    'PASS compiler/c0/external_inferred_record_array bound=shared-shape-prepass record=nested+designated array-designator=enum+inferred pointer-reloc=1 char-array-string=1 fixed-path=unchanged brace-elision=fail-closed'

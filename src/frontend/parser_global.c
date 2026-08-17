@@ -1435,7 +1435,7 @@ static bool probe_static_array_designator_extent(MinicParser *probe, size_t *fir
     return true;
 }
 
-static bool inspect_static_array_initializer_extent(MinicParser *parser, size_t *element_count) {
+bool minic_parser_inspect_array_initializer_extent(MinicParser *parser, size_t *element_count) {
     MinicParser probe;
     size_t extent;
     size_t next_index;
@@ -1569,7 +1569,7 @@ parse_static_record_array(MinicParser *parser, MinicType element_type, MinicSour
         return false;
     }
     if (inferred_bound) {
-        if (!inspect_static_array_initializer_extent(parser, &declared_count)) {
+        if (!minic_parser_inspect_array_initializer_extent(parser, &declared_count)) {
             if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
                 minic_parser_error(parser, "cannot infer static record array initializer extent");
             }
