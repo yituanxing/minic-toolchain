@@ -1,0 +1,80 @@
+name: Productize Canonical Array Redeclaration Owner V1
+on:
+  push:
+    branches: [product/canonical-array-redeclaration-owner-v1]
+permissions:
+  contents: write
+jobs:
+  productize:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: product/canonical-array-redeclaration-owner-v1
+          fetch-depth: 0
+      - name: Materialize product source and regression
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/frontend/parser_function.c')
+          text = path.read_text()
+
+          old_tentative = '''    } else {\n        existing = minic_c0_program_global_object(parser->program, object_id);\n        if (existing == NULL ||\n            !minic_parser_external_object_types_compatible(\n                parser->program, existing->type, object_type) ||\n            (minic_type_is_array(existing->type) &&\n             !minic_parser_merge_external_array_composite_type(\n                 parser->program, existing->type, object_type)) ||\n            !minic_c0_global_object_merge_tentative(parser->program, object_id)) {\n            minic_parser_error(parser, "conflicting external tentative definition");\n            return false;\n        }\n    }\n'''
+          new_tentative = '''    } else {\n        bool discard_declared_array;\n\n        existing = minic_c0_program_global_object(parser->program, object_id);\n        discard_declared_array =\n            existing != NULL && minic_type_is_array(existing->type) &&\n            minic_type_is_array(object_type) &&\n            existing->type.array_type_id != object_type.array_type_id &&\n            object_type.array_type_id + 1U == parser->program->array_type_count;\n        if (existing == NULL ||\n            !minic_parser_external_object_types_compatible(\n                parser->program, existing->type, object_type) ||\n            (minic_type_is_array(existing->type) &&\n             !minic_parser_merge_external_array_composite_type(\n                 parser->program, existing->type, object_type)) ||\n            !minic_c0_global_object_merge_tentative(parser->program, object_id)) {\n            minic_parser_error(parser, "conflicting external tentative definition");\n            return false;\n        }\n        /* The declaration descriptor is only a parser-side candidate once a canonical\n         * external entity already exists. Keep the canonical descriptor and retire a\n         * newly-created outer array descriptor after its composite information has been\n         * merged, otherwise an incomplete `name[]` redeclaration survives ownerless in\n         * the Program array arena and correctly trips the AST verifier. */\n        if (discard_declared_array &&\n            !minic_c0_program_discard_last_array_type(parser->program, object_type)) {\n            minic_parser_error(parser, "cannot retire transient external array declaration");\n            return false;\n        }\n    }\n'''
+
+          old_definition_head = '''static bool parse_external_object_definition(MinicParser *parser,\n                                             MinicType object_type,\n                                             MinicSourceSpan name_span,\n                                             const char *section_name,\n                                             size_t section_name_length,\n                                             bool has_section,\n                                             size_t explicit_alignment,\n                                             MinicSymbolVisibility visibility,\n                                             bool has_visibility) {\n    MinicGlobalObjectId object_id;\n    const MinicGlobalObject *existing;\n'''
+          new_definition_head = '''static bool parse_external_object_definition(MinicParser *parser,\n                                             MinicType object_type,\n                                             MinicSourceSpan name_span,\n                                             const char *section_name,\n                                             size_t section_name_length,\n                                             bool has_section,\n                                             size_t explicit_alignment,\n                                             MinicSymbolVisibility visibility,\n                                             bool has_visibility) {\n    MinicGlobalObjectId object_id;\n    const MinicGlobalObject *existing;\n    MinicType declared_object_type;\n\n    declared_object_type = object_type;\n'''
+
+          old_definition_else = '''    } else {\n        existing = minic_c0_program_global_object(parser->program, object_id);\n        if (existing == NULL ||\n            !minic_parser_external_object_types_compatible(\n                parser->program, existing->type, object_type) ||\n            (minic_type_is_array(existing->type) &&\n             !minic_parser_merge_external_array_composite_type(\n                 parser->program, existing->type, object_type)) ||\n            !minic_c0_global_object_begin_definition(parser->program, object_id)) {\n            minic_parser_error(parser, "conflicting external object definition");\n            return false;\n        }\n    }\n    if (!apply_external_object_metadata(parser,\n'''
+          new_definition_else = '''    } else {\n        bool discard_declared_array;\n\n        existing = minic_c0_program_global_object(parser->program, object_id);\n        discard_declared_array =\n            existing != NULL && minic_type_is_array(existing->type) &&\n            minic_type_is_array(object_type) &&\n            existing->type.array_type_id != object_type.array_type_id &&\n            object_type.array_type_id + 1U == parser->program->array_type_count;\n        if (existing == NULL ||\n            !minic_parser_external_object_types_compatible(\n                parser->program, existing->type, object_type) ||\n            (minic_type_is_array(existing->type) &&\n             !minic_parser_merge_external_array_composite_type(\n                 parser->program, existing->type, object_type)) ||\n            !minic_c0_global_object_begin_definition(parser->program, object_id)) {\n            minic_parser_error(parser, "conflicting external object definition");\n            return false;\n        }\n        if (discard_declared_array) {\n            object_type = parser->program->global_objects[object_id].type;\n            if (!minic_c0_program_discard_last_array_type(\n                    parser->program, declared_object_type)) {\n                minic_parser_error(parser, "cannot retire transient external array definition");\n                return false;\n            }\n        }\n    }\n    if (!apply_external_object_metadata(parser,\n'''
+
+          for old, new, label in [
+              (old_tentative, new_tentative, 'tentative redeclaration'),
+              (old_definition_head, new_definition_head, 'definition head'),
+              (old_definition_else, new_definition_else, 'definition redeclaration'),
+          ]:
+              if text.count(old) != 1:
+                  raise SystemExit(f'{label} anchor count={text.count(old)}')
+              text = text.replace(old, new, 1)
+          path.write_text(text)
+
+          test = Path('tests/compiler/c0/external_array_redeclaration_owner.c')
+          test.write_text('''int tentative_values[4];\nint tentative_values[];\n\nint defined_values[4];\nint defined_values[4] = {1, 2, 3, 4};\n\nint main(void) {\n    return tentative_values[0] + defined_values[3] - 4;\n}\n''')
+
+          runner = Path('tests/compiler/c0/run-external-array-redeclaration-owner.sh')
+          runner.write_text('''#!/bin/sh\nset -eu\n\nroot=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)\nminic=${MINIC:-"$root/build/debug/bin/minic"}\nhost_cc=${HOST_CC:-${CC:-cc}}\nwork=${BUILD_DIR:-"$root/build/debug"}/tests/external-array-redeclaration-owner\n\nmkdir -p "$work"\n"$host_cc" -E -P -x c "$root/tests/compiler/c0/external_array_redeclaration_owner.c" \\\n    -o "$work/input.i"\n"$minic" -S "$work/input.i" -o "$work/output.s"\n\ngrep -F '.globl tentative_values' "$work/output.s" >/dev/null\ngrep -F '.size tentative_values, 16' "$work/output.s" >/dev/null\ngrep -F '.globl defined_values' "$work/output.s" >/dev/null\ngrep -F '.size defined_values, 16' "$work/output.s" >/dev/null\ngrep -F '  .word 4' "$work/output.s" >/dev/null\nprintf '%s\\n' 'PASS compiler/c0/external-array-redeclaration-owner'\n''')
+          runner.chmod(0o755)
+
+          run_sh = Path('tests/compiler/c0/run.sh')
+          run_text = run_sh.read_text()
+          anchor = '''compile_source array_declaration array_declaration\nexpect_instructions array_declaration "mv s0, sp" "li a0, 0" "j .Lmain_return"\n'''
+          addition = anchor + '''\nMINIC="$minic" \\\nHOST_CC="$host_cc" \\\nBUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \\\nsh "$root/tests/compiler/c0/run-external-array-redeclaration-owner.sh"\n'''
+          if run_text.count(anchor) != 1:
+              raise SystemExit(f'run.sh array anchor count={run_text.count(anchor)}')
+          run_sh.write_text(run_text.replace(anchor, addition, 1))
+          PY
+          clang-format-18 -i src/frontend/parser_function.c tests/compiler/c0/external_array_redeclaration_owner.c
+          git diff --check
+      - name: Validate focused and fast gates
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release BUILD_DIR=build/product-array-owner
+          MINIC="$GITHUB_WORKSPACE/build/product-array-owner/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/product-array-owner" \
+            sh tests/compiler/c0/run-external-array-redeclaration-owner.sh
+          make -j4 check-fast MODE=release BUILD_DIR=build/product-array-owner
+      - name: Commit clean product diff
+        run: |
+          set -Eeuo pipefail
+          git rm .github/workflows/productize-canonical-array-redeclaration-owner-v1.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/frontend/parser_function.c \
+                  tests/compiler/c0/external_array_redeclaration_owner.c \
+                  tests/compiler/c0/run-external-array-redeclaration-owner.sh \
+                  tests/compiler/c0/run.sh
+          git commit -m 'frontend: retire transient external array redeclarations'
+          git push origin HEAD:product/canonical-array-redeclaration-owner-v1
