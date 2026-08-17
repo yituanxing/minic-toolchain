@@ -1,0 +1,110 @@
+name: Diagnostic Static Local Self Reference V1
+on:
+  push:
+    branches: [staging/string-octal-v1]
+permissions:
+  contents: read
+jobs:
+  probe:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-24.04
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: staging/string-octal-v1
+          fetch-depth: 0
+      - name: Materialize current convergence compiler plus self binding
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/materialize-runtime-record-array-v1.py
+          python3 tools/dev/materialize-fixed-call-character-pointer-v1.py
+          python3 tools/dev/materialize-function-pointer-array-declarator-v1.py
+          python3 tools/dev/materialize-preformed-static-array-v1.py
+          python3 tools/dev/materialize-static-local-prefix-attributes-v1.py
+          python3 tools/dev/materialize-top-level-braced-static-scalar-v1.py
+          python3 tools/dev/materialize-parenthesized-pointer-array-v1.py
+          python3 tools/dev/materialize-record-pointer-array-v1.py
+          python3 tools/dev/materialize-gnu-function-void-pointer-equality-v1.py
+          python3 tools/dev/materialize-gnu-signed-left-shift-ice-v1.py
+          python3 tools/dev/materialize-record-value-initialize-v1.py
+          python3 tools/dev/materialize-record-value-initialize-v1b.py
+          python3 tools/dev/materialize-static-local-self-reference-v1.py
+          clang-format-18 -i \
+            src/frontend/ast.h src/frontend/ast.c src/frontend/ast_verifier.c \
+            src/frontend/function_body.c src/frontend/parser_statement.c \
+            src/frontend/parser_expression.c src/frontend/parser_declarator.c \
+            src/frontend/parser_internal.h src/frontend/parser_global.c \
+            src/frontend/parser_record.c src/frontend/const_eval.c \
+            src/target/riscv64/codegen_expression.c src/target/riscv64/codegen_statement.c
+          git diff --check
+          make -j4 MODE=release BUILD_DIR=build/convergence
+      - name: Focused top-level static record self-reference
+        run: |
+          set -Eeuo pipefail
+          cat > /tmp/static-self.c <<'EOF'
+          struct node { struct node *self; unsigned value; };
+          unsigned f(void)
+          {
+              static struct node n = { .self = &n, .value = 7U };
+              return n.self == &n ? n.value : 0U;
+          }
+          EOF
+          build/convergence/bin/minic -S /tmp/static-self.c -o /tmp/static-self.s
+          test -s /tmp/static-self.s
+          printf '%s\n' 'PASS block-scope static record name is visible in its initializer'
+      - name: Focused nested self-reference diagnostic
+        run: |
+          set +e
+          cat > /tmp/static-self-nested.c <<'EOF'
+          struct list { struct list *next; struct list *prev; };
+          struct lock { struct list wait; struct lock *magic; };
+          void f(void)
+          {
+              static struct lock lock = {
+                  .wait = { .next = &lock.wait, .prev = &lock.wait },
+                  .magic = &lock,
+              };
+              (void)lock.magic;
+          }
+          EOF
+          build/convergence/bin/minic -S /tmp/static-self-nested.c -o /tmp/static-self-nested.s
+          status=$?
+          set -e
+          echo "NESTED_SELF_STATUS=$status"
+      - name: Install Linux probe tools
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu flex bison bc libelf-dev libssl-dev
+          mkdir -p tests/external/linux
+          git show origin/diagnostic/linux-first100-variadic-stack-v0:tests/external/linux/batch_probe.sh > tests/external/linux/batch_probe.sh
+          chmod +x tests/external/linux/batch_probe.sh
+      - name: Probe init_task nested relocation
+        run: |
+          set +e
+          MINIC="$GITHUB_WORKSPACE/build/convergence/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/init-task-self" \
+          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-6.6.143.tar.xz" CROSS_COMPILE=riscv64-linux-gnu- \
+          LINUX_BATCH_OFFSET=6 LINUX_BATCH_LIMIT=1 LINUX_BATCH_JOBS=1 sh tests/external/linux/batch_probe.sh
+          set -e
+          cat build/init-task-self/batch-summary.txt
+          cat build/init-task-self/minic-stderr/init/init_task.i.stderr || true
+      - name: Probe kvm_main self-reference
+        run: |
+          set +e
+          MINIC="$GITHUB_WORKSPACE/build/convergence/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/kvm-main-self" \
+          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-6.6.143.tar.xz" CROSS_COMPILE=riscv64-linux-gnu- \
+          LINUX_BATCH_OFFSET=68 LINUX_BATCH_LIMIT=1 LINUX_BATCH_JOBS=1 sh tests/external/linux/batch_probe.sh
+          set -e
+          cat build/kvm-main-self/batch-summary.txt
+          cat build/kvm-main-self/minic-stderr/virt/kvm/kvm_main.i.stderr || true
+      - name: Probe build_policy self-reference
+        run: |
+          set +e
+          MINIC="$GITHUB_WORKSPACE/build/convergence/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/build-policy-self" \
+          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-6.6.143.tar.xz" CROSS_COMPILE=riscv64-linux-gnu- \
+          LINUX_BATCH_OFFSET=97 LINUX_BATCH_LIMIT=1 LINUX_BATCH_JOBS=1 sh tests/external/linux/batch_probe.sh
+          set -e
+          cat build/build-policy-self/batch-summary.txt
+          cat build/build-policy-self/minic-stderr/kernel/sched/build_policy.i.stderr || true
