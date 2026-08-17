@@ -1109,82 +1109,6 @@ static bool parse_external_object_definition(MinicParser *parser,
         parser, MINIC_TOKEN_SEMICOLON, "expected ';' after external object definition");
 }
 
-static bool probe_braced_external_record_array_element_count(MinicParser *parser,
-                                                             size_t *element_count) {
-    MinicParser probe;
-    size_t count;
-
-    if (parser == NULL || element_count == NULL || parser->current.kind != MINIC_TOKEN_EQUAL) {
-        return false;
-    }
-    probe = *parser;
-    if (!minic_parser_advance(&probe) || probe.current.kind != MINIC_TOKEN_LBRACE ||
-        !minic_parser_advance(&probe)) {
-        minic_parser_error(parser, "inferred external record array requires a braced initializer");
-        return false;
-    }
-
-    count = 0U;
-    while (probe.current.kind != MINIC_TOKEN_RBRACE) {
-        size_t brace_depth;
-
-        if (probe.current.kind != MINIC_TOKEN_LBRACE) {
-            minic_parser_error(parser,
-                               "inferred external record array requires braced record elements");
-            return false;
-        }
-        brace_depth = 0U;
-        for (;;) {
-            if (probe.current.kind == MINIC_TOKEN_EOF) {
-                minic_parser_error(parser,
-                                   "unterminated inferred external record array initializer");
-                return false;
-            }
-            if (probe.current.kind == MINIC_TOKEN_LBRACE) {
-                brace_depth += 1U;
-            } else if (probe.current.kind == MINIC_TOKEN_RBRACE) {
-                if (brace_depth == 0U) {
-                    minic_parser_error(parser, "invalid inferred external record array shape");
-                    return false;
-                }
-                brace_depth -= 1U;
-                if (brace_depth == 0U) {
-                    if (!minic_parser_advance(&probe)) {
-                        return false;
-                    }
-                    break;
-                }
-            }
-            if (!minic_parser_advance(&probe)) {
-                return false;
-            }
-        }
-        if (count == SIZE_MAX) {
-            minic_parser_error(parser, "inferred external record array element count overflows");
-            return false;
-        }
-        count += 1U;
-        if (probe.current.kind == MINIC_TOKEN_COMMA) {
-            if (!minic_parser_advance(&probe)) {
-                return false;
-            }
-            if (probe.current.kind == MINIC_TOKEN_RBRACE) {
-                break;
-            }
-        } else if (probe.current.kind != MINIC_TOKEN_RBRACE) {
-            minic_parser_error(parser,
-                               "expected ',' or '}' after inferred external record array element");
-            return false;
-        }
-    }
-    if (count == 0U) {
-        minic_parser_error(parser, "inferred external record array requires at least one element");
-        return false;
-    }
-    *element_count = count;
-    return true;
-}
-
 static bool parse_inferred_external_record_array_definition(MinicParser *parser,
                                                             MinicType element_type,
                                                             MinicSourceSpan name_span,
@@ -1196,6 +1120,7 @@ static bool parse_inferred_external_record_array_definition(MinicParser *parser,
                                                             MinicSymbolVisibility visibility,
                                                             bool has_visibility) {
     const MinicRecord *record;
+    MinicParser initializer_probe;
     MinicType array_type;
     size_t element_count;
 
@@ -1225,7 +1150,9 @@ static bool parse_inferred_external_record_array_definition(MinicParser *parser,
         minic_parser_error(parser, "incomplete external tentative array is not implemented yet");
         return false;
     }
-    if (!probe_braced_external_record_array_element_count(parser, &element_count) ||
+    initializer_probe = *parser;
+    if (!minic_parser_advance(&initializer_probe) ||
+        !minic_parser_inspect_array_initializer_extent(&initializer_probe, &element_count) ||
         !minic_c0_program_add_array_type(
             parser->program, element_type, element_count, &array_type)) {
         if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {

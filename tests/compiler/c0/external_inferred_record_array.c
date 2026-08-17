@@ -62,3 +62,15 @@ const struct riscv_isa_ext_data fixed_record_array[1] = {
         .id = 3,
     },
 };
+
+enum designated_ext_slot {
+    DESIGNATED_EXT_SLOT = 3,
+};
+
+const struct riscv_isa_ext_data designated_ext[] = {
+    [DESIGNATED_EXT_SLOT] = {
+        .name = "designated",
+        .property = 0,
+        .id = 9,
+    },
+};
