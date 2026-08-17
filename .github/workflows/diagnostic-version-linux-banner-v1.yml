@@ -1,0 +1,31 @@
+name: Diagnostic Version Linux Banner V1
+on:
+  push:
+    branches: [staging/string-octal-v1]
+    paths: [.github/workflows/diagnostic-version-linux-banner-v1.yml]
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - name: Install Linux probe tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu flex bison bc libelf-dev libssl-dev
+      - name: Materialize version.i and inspect linux_banner
+        run: |
+          set -Eeuo pipefail
+          mkdir -p tests/external/linux
+          git show origin/diagnostic/linux-first100-variadic-stack-v0:tests/external/linux/batch_probe.sh > tests/external/linux/batch_probe.sh
+          chmod +x tests/external/linux/batch_probe.sh
+          make -j4 MODE=debug BUILD_DIR=build/version-banner-compiler
+          set +e
+          MINIC="$GITHUB_WORKSPACE/build/version-banner-compiler/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/version-banner" CROSS_COMPILE=riscv64-linux-gnu- LINUX_BATCH_OFFSET=1 LINUX_BATCH_LIMIT=1 LINUX_BATCH_JOBS=1 sh tests/external/linux/batch_probe.sh
+          set -e
+          echo '=== linux_banner occurrences ==='
+          grep -R -n -C 2 --include='*.i' 'linux_banner' build/version-banner || true
+          echo '=== incomplete array/tentative source files ==='
+          find build/version-banner -type f -name '*.i' -print
