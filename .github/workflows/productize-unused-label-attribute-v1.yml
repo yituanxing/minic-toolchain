@@ -18,12 +18,21 @@ jobs:
           set -Eeuo pipefail
           python3 - <<'PY'
           from pathlib import Path
+
           path = Path('src/frontend/attribute.c')
           text = path.read_text()
           old = '''    MINIC_ATTRIBUTE_ENTRY("__unused__",\n                          MINIC_ATTRIBUTE_UNUSED,\n                          MINIC_ATTRIBUTE_CLASS_INFORMATIONAL,\n                          MINIC_ATTRIBUTE_TARGET_FUNCTION | MINIC_ATTRIBUTE_TARGET_OBJECT |\n                              MINIC_ATTRIBUTE_TARGET_TYPE | MINIC_ATTRIBUTE_TARGET_FIELD),\n'''
           new = '''    MINIC_ATTRIBUTE_ENTRY("__unused__",\n                          MINIC_ATTRIBUTE_UNUSED,\n                          MINIC_ATTRIBUTE_CLASS_INFORMATIONAL,\n                          MINIC_ATTRIBUTE_TARGET_FUNCTION | MINIC_ATTRIBUTE_TARGET_OBJECT |\n                              MINIC_ATTRIBUTE_TARGET_TYPE | MINIC_ATTRIBUTE_TARGET_FIELD |\n                              MINIC_ATTRIBUTE_TARGET_STATEMENT),\n'''
           if text.count(old) != 1:
               raise SystemExit(f'unused attribute anchor count={text.count(old)}')
+          path.write_text(text.replace(old, new, 1))
+
+          path = Path('src/frontend/parser_statement.c')
+          text = path.read_text()
+          old = '''    if (descriptor->kind != MINIC_ATTRIBUTE_FALLTHROUGH ||\n        descriptor->semantic_class != MINIC_ATTRIBUTE_CLASS_DIAGNOSTIC) {\n        minic_parser_error(parser, "GNU statement attribute semantics are not implemented");\n        return false;\n    }\n    context->saw_fallthrough = true;\n    return true;\n'''
+          new = '''    if (descriptor->kind == MINIC_ATTRIBUTE_UNUSED &&\n        descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_INFORMATIONAL) {\n        context->saw_informational = true;\n        return true;\n    }\n    if (descriptor->kind == MINIC_ATTRIBUTE_FALLTHROUGH &&\n        descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_DIAGNOSTIC) {\n        context->saw_fallthrough = true;\n        return true;\n    }\n    minic_parser_error(parser, "GNU statement attribute semantics are not implemented");\n    return false;\n'''
+          if text.count(old) != 1:
+              raise SystemExit(f'statement consumer anchor count={text.count(old)}')
           path.write_text(text.replace(old, new, 1))
           PY
           cat > tests/compiler/c0/gnu_unused_label_attribute.c <<'EOF'
@@ -47,7 +56,8 @@ jobs:
           grep -F 'probe:' "$work/gnu_unused_label_attribute.s" >/dev/null
           printf '%s\n' 'PASS compiler/c0/gnu_unused_label_attribute label-statement=informational'
           EOF
-          clang-format-18 -i src/frontend/attribute.c tests/compiler/c0/gnu_unused_label_attribute.c
+          clang-format-18 -i src/frontend/attribute.c src/frontend/parser_statement.c \
+            tests/compiler/c0/gnu_unused_label_attribute.c
           git diff --check
       - name: Validate Werror focused and fast gates
         run: |
