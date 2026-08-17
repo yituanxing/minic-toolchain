@@ -1,0 +1,228 @@
+name: Staging Inferred Record Array Designators V1
+
+on:
+  push:
+    branches:
+      - staging/inferred-record-array-designators-v1
+
+permissions:
+  contents: write
+
+jobs:
+  materialize-and-probe:
+    if: "${{ github.event.head_commit.message != 'inferred record array designators product v1' }}"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Share aggregate extent inspector with external arrays
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          header = Path('src/frontend/parser_internal.h')
+          text = header.read_text()
+          anchor = '''bool minic_parser_parse_array_designator(
+              MinicParser *parser, size_t element_count, bool infer_bound, size_t *first, size_t *last);
+          '''
+          replacement = anchor + '''bool minic_parser_inspect_array_initializer_extent(MinicParser *parser,
+                                                           size_t *element_count);
+          '''
+          if anchor not in text:
+              raise SystemExit('parser internal array-designator anchor not found')
+          header.write_text(text.replace(anchor, replacement, 1))
+
+          global_path = Path('src/frontend/parser_global.c')
+          text = global_path.read_text()
+          old = 'static bool inspect_static_array_initializer_extent(MinicParser *parser, size_t *element_count) {'
+          new = 'bool minic_parser_inspect_array_initializer_extent(MinicParser *parser, size_t *element_count) {'
+          if old not in text:
+              raise SystemExit('aggregate extent inspector definition not found')
+          text = text.replace(old, new, 1)
+          old = 'if (!inspect_static_array_initializer_extent(parser, &declared_count)) {'
+          new = 'if (!minic_parser_inspect_array_initializer_extent(parser, &declared_count)) {'
+          if old not in text:
+              raise SystemExit('static record-array inspector call not found')
+          global_path.write_text(text.replace(old, new, 1))
+
+          function_path = Path('src/frontend/parser_function.c')
+          text = function_path.read_text()
+          start = text.find('static bool probe_braced_external_record_array_element_count(')
+          end = text.find('static bool parse_inferred_external_record_array_definition(', start)
+          if start < 0 or end < 0:
+              raise SystemExit('legacy external record-array probe block not found')
+          text = text[:start] + text[end:]
+
+          old = '''    const MinicRecord *record;
+              MinicType array_type;
+              size_t element_count;
+          '''
+          new = '''    const MinicRecord *record;
+              MinicParser initializer_probe;
+              MinicType array_type;
+              size_t element_count;
+          '''
+          if old not in text:
+              raise SystemExit('inferred external record-array locals anchor not found')
+          text = text.replace(old, new, 1)
+
+          old = '''    if (!probe_braced_external_record_array_element_count(parser, &element_count) ||
+                  !minic_c0_program_add_array_type(
+                      parser->program, element_type, element_count, &array_type)) {
+          '''
+          new = '''    initializer_probe = *parser;
+              if (!minic_parser_advance(&initializer_probe) ||
+                  !minic_parser_inspect_array_initializer_extent(&initializer_probe, &element_count) ||
+                  !minic_c0_program_add_array_type(
+                      parser->program, element_type, element_count, &array_type)) {
+          '''
+          if old not in text:
+              raise SystemExit('legacy external record-array probe call not found')
+          function_path.write_text(text.replace(old, new, 1))
+          PY
+          clang-format -i src/frontend/parser_internal.h src/frontend/parser_global.c src/frontend/parser_function.c || true
+          git diff --check
+          git diff -- src/frontend/parser_internal.h src/frontend/parser_global.c src/frontend/parser_function.c
+
+      - name: Extend inferred record-array regression with designators
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('tests/compiler/c0/external_inferred_record_array.c')
+          text = path.read_text()
+          anchor = '''const struct riscv_isa_ext_data fixed_record_array[1] = {
+              {
+                  .name = "fixed",
+                  .property = 0,
+                  .id = 3,
+              },
+          };
+          '''
+          addition = anchor + '''
+          enum designated_ext_slot {
+              DESIGNATED_EXT_SLOT = 3,
+          };
+
+          const struct riscv_isa_ext_data designated_ext[] = {
+              [DESIGNATED_EXT_SLOT] = {
+                  .name = "designated",
+                  .property = 0,
+                  .id = 9,
+              },
+          };
+          '''
+          if anchor not in text:
+              raise SystemExit('external inferred record-array corpus anchor not found')
+          path.write_text(text.replace(anchor, addition, 1))
+
+          runner = Path('tests/compiler/c0/run-external-inferred-record-array.sh')
+          text = runner.read_text()
+          anchor = '''grep -F 'fixed_record_array:' "$asm" >/dev/null
+          grep -F '.size fixed_record_array, 24' "$asm" >/dev/null
+          '''
+          replacement = anchor + '''grep -F 'designated_ext:' "$asm" >/dev/null
+          grep -F '.size designated_ext, 96' "$asm" >/dev/null
+          '''
+          if anchor not in text:
+              raise SystemExit('external inferred record-array runner size anchor not found')
+          text = text.replace(anchor, replacement, 1)
+          old = '''grep -F 'inferred external record array requires braced record elements' \\
+              "$work/invalid.stderr" >/dev/null
+
+          printf '%s\\n' \\
+              'PASS compiler/c0/external_inferred_record_array bound=shape-prepass record=nested+designated pointer-reloc=1 char-array-string=1 fixed-path=unchanged brace-elision=fail-closed'
+          '''
+          new = '''grep -F "expected '{' in record initializer" "$work/invalid.stderr" >/dev/null
+
+          printf '%s\\n' \\
+              'PASS compiler/c0/external_inferred_record_array bound=shared-shape-prepass record=nested+designated array-designator=enum+inferred pointer-reloc=1 char-array-string=1 fixed-path=unchanged brace-elision=fail-closed'
+          '''
+          if old not in text:
+              raise SystemExit('external inferred record-array negative/PASS anchor not found')
+          runner.write_text(text.replace(old, new, 1))
+          PY
+          git diff --check
+
+      - name: Build and run focused regression
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=debug BUILD_DIR=build/inferred-record-designators
+          MINIC="$GITHUB_WORKSPACE/build/inferred-record-designators/bin/minic" \
+          HOST_CC=cc \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/inferred-record-designators-focused" \
+            sh tests/compiler/c0/run-external-inferred-record-array.sh
+
+      - name: Run broad C0 regression
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/inferred-record-designators/bin/minic" \
+          HOST_CC=cc \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/inferred-record-designators-c0" \
+            sh tests/compiler/c0/run.sh
+
+      - name: Commit staging product and tests
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'LiYang Dong'
+          git config user.email '119646676+yituanxing@users.noreply.github.com'
+          git add src/frontend/parser_internal.h \
+            src/frontend/parser_global.c \
+            src/frontend/parser_function.c \
+            tests/compiler/c0/external_inferred_record_array.c \
+            tests/compiler/c0/run-external-inferred-record-array.sh
+          git commit -m 'inferred record array designators product v1'
+          git push origin HEAD:staging/inferred-record-array-designators-v1
+
+      - name: Restore diagnostic-only Linux batch probe
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p tests/external/linux
+          git show origin/diagnostic/linux-first100-variadic-stack-v0:tests/external/linux/batch_probe.sh \
+            > tests/external/linux/batch_probe.sh
+          chmod +x tests/external/linux/batch_probe.sh
+
+      - name: Restore pinned Linux source archive
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-cache/linux-6.6.143.tar.xz
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
+
+      - name: Install Linux probe dependencies
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            flex bison bc libelf-dev libssl-dev
+
+      - name: Probe unchanged build_utility frontier
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          set +e
+          MINIC="$GITHUB_WORKSPACE/build/inferred-record-designators/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/inferred-record-designators-linux" \
+          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-cache/linux-6.6.143.tar.xz" \
+          CROSS_COMPILE=riscv64-linux-gnu- \
+          LINUX_BATCH_OFFSET=98 LINUX_BATCH_LIMIT=1 LINUX_BATCH_JOBS=1 \
+            sh tests/external/linux/batch_probe.sh
+          status=$?
+          set -e
+          cat build/inferred-record-designators-linux/batch-summary.txt
+          test "$status" -eq 0 -o "$status" -eq 1
