@@ -1,0 +1,91 @@
+name: Diagnostic Record Conditional Type V1
+on:
+  push:
+    branches: [staging/string-octal-v1]
+permissions:
+  contents: read
+jobs:
+  probe:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-24.04
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: staging/string-octal-v1
+          fetch-depth: 0
+      - name: Materialize current convergence compiler plus record conditional type
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/materialize-runtime-record-array-v1.py
+          python3 tools/dev/materialize-fixed-call-character-pointer-v1.py
+          python3 tools/dev/materialize-function-pointer-array-declarator-v1.py
+          python3 tools/dev/materialize-preformed-static-array-v1.py
+          python3 tools/dev/materialize-static-local-prefix-attributes-v1.py
+          python3 tools/dev/materialize-top-level-braced-static-scalar-v1.py
+          python3 tools/dev/materialize-parenthesized-pointer-array-v1.py
+          python3 tools/dev/materialize-record-pointer-array-v1.py
+          python3 tools/dev/materialize-gnu-function-void-pointer-equality-v1.py
+          python3 tools/dev/materialize-gnu-signed-left-shift-ice-v1.py
+          python3 tools/dev/materialize-record-value-initialize-v1.py
+          python3 tools/dev/materialize-record-value-initialize-v1b.py
+          python3 tools/dev/materialize-static-local-self-reference-v1.py
+          python3 tools/dev/materialize-record-conditional-type-v1.py
+          clang-format-18 -i \
+            src/frontend/ast.h src/frontend/ast.c src/frontend/ast_verifier.c \
+            src/frontend/expression_semantics.c src/frontend/function_body.c \
+            src/frontend/parser_statement.c src/frontend/parser_expression.c \
+            src/frontend/parser_declarator.c src/frontend/parser_internal.h \
+            src/frontend/parser_global.c src/frontend/parser_record.c src/frontend/const_eval.c \
+            src/target/riscv64/codegen_expression.c src/target/riscv64/codegen_statement.c
+          git diff --check
+          make -j4 MODE=release BUILD_DIR=build/convergence
+      - name: Focused compatible record conditional
+        run: |
+          set -Eeuo pipefail
+          cat > /tmp/record-conditional.c <<'EOF'
+          typedef struct { unsigned value; } kuid_t;
+          static kuid_t make_kuid(unsigned value)
+          {
+              kuid_t result = { .value = value };
+              return result;
+          }
+          unsigned choose(int condition, const kuid_t *stored)
+          {
+              kuid_t result;
+              result = condition ? *stored : make_kuid(7U);
+              return result.value;
+          }
+          EOF
+          build/convergence/bin/minic -S /tmp/record-conditional.c -o /tmp/record-conditional.s
+          test -s /tmp/record-conditional.s
+          printf '%s\n' 'PASS compatible qualified/unqualified record conditional rvalue'
+      - name: Install Linux probe tools
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu flex bison bc libelf-dev libssl-dev
+          mkdir -p tests/external/linux
+          git show origin/diagnostic/linux-first100-variadic-stack-v0:tests/external/linux/batch_probe.sh > tests/external/linux/batch_probe.sh
+          chmod +x tests/external/linux/batch_probe.sh
+      - name: Probe unchanged do_mounts.i
+        run: |
+          set +e
+          MINIC="$GITHUB_WORKSPACE/build/convergence/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/do-mounts-record-conditional" \
+          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-6.6.143.tar.xz" \
+          CROSS_COMPILE=riscv64-linux-gnu- LINUX_BATCH_OFFSET=2 LINUX_BATCH_LIMIT=1 LINUX_BATCH_JOBS=1 \
+            sh tests/external/linux/batch_probe.sh
+          status=$?
+          set -e
+          cat build/do-mounts-record-conditional/batch-summary.txt
+          stderr=build/do-mounts-record-conditional/minic-stderr/init/do_mounts.i.stderr
+          cat "$stderr" || true
+          input=build/do-mounts-record-conditional/kbuild/init/do_mounts.i
+          frontier=$(sed -n 's/.*do_mounts\.i:\([0-9][0-9]*\):.*/\1/p' "$stderr" | head -n1)
+          if test -n "$frontier"; then
+            start=$((frontier > 40 ? frontier - 40 : 1)); end=$((frontier + 40));
+            nl -ba "$input" | sed -n "${start},${end}p"
+          fi
+          echo "DO_MOUNTS_RECORD_CONDITIONAL_STATUS=$status"
