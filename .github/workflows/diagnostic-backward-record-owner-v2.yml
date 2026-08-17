@@ -1,0 +1,21 @@
+name: Diagnostic Backward Record Owner V2
+on:
+  push:
+    branches: [product/backward-record-compound-literal-v2]
+permissions:
+  contents: read
+jobs:
+  context:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: product/backward-record-compound-literal-v2
+      - name: Show owner context
+        run: |
+          set -Eeuo pipefail
+          line=$(grep -n -F 'backward static record designator currently requires a direct scalar field' src/frontend/parser_global.c | cut -d: -f1)
+          echo "owner_line=$line"
+          start=$((line-90)); if test "$start" -lt 1; then start=1; fi
+          end=$((line+100))
+          nl -ba src/frontend/parser_global.c | sed -n "${start},${end}p"
