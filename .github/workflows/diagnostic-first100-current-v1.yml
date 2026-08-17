@@ -1,0 +1,91 @@
+name: Diagnostic Linux First100 Current V1
+on:
+  push:
+    branches: [staging/string-octal-v1]
+permissions:
+  contents: read
+jobs:
+  first100:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-24.04
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: staging/string-octal-v1
+          fetch-depth: 0
+      - name: Materialize current convergence compiler
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/materialize-runtime-record-array-v1.py
+          python3 tools/dev/materialize-fixed-call-character-pointer-v1.py
+          python3 tools/dev/materialize-function-pointer-array-declarator-v1.py
+          python3 tools/dev/materialize-preformed-static-array-v1.py
+          python3 tools/dev/materialize-static-local-prefix-attributes-v1.py
+          python3 tools/dev/materialize-top-level-braced-static-scalar-v1.py
+          python3 tools/dev/materialize-parenthesized-pointer-array-v1.py
+          python3 tools/dev/materialize-record-pointer-array-v1.py
+          python3 tools/dev/materialize-gnu-function-void-pointer-equality-v1.py
+          python3 tools/dev/materialize-gnu-signed-left-shift-ice-v1.py
+          python3 tools/dev/materialize-record-value-initialize-v1.py
+          python3 tools/dev/materialize-record-value-initialize-v1b.py
+          python3 tools/dev/materialize-static-local-self-reference-v1.py
+          python3 tools/dev/materialize-record-conditional-type-v1.py
+          python3 tools/dev/materialize-direct-function-parameter-v1.py
+          python3 tools/dev/materialize-parameter-suffix-informational-attributes-v1.py
+          python3 tools/dev/materialize-overflow-result-range-v1.py
+          python3 tools/dev/materialize-overflow-constant-value-v1.py
+          python3 tools/dev/materialize-static-pointer-constant-conditional-v1.py
+          python3 tools/dev/materialize-canonical-array-redeclaration-owner-v1.py
+          python3 tools/dev/materialize-query-incomplete-array-v1.py
+          python3 tools/dev/materialize-zero-slot-aggregate-relocation-v1.py
+          python3 tools/dev/materialize-backward-record-compound-literal-v1.py
+          python3 tools/dev/materialize-backward-static-array-overlay-v1.py
+          python3 tools/dev/materialize-static-integer-address-relocation-v1.py
+          python3 tools/dev/materialize-static-union-zero-designator-v1.py
+          python3 tools/dev/materialize-backward-static-union-zero-overlay-v1.py
+          clang-format-18 -i src/frontend/ast.h src/frontend/ast.c src/frontend/ast_global.c \
+            src/frontend/ast_verifier.c src/frontend/const_eval.h src/frontend/const_eval.c \
+            src/frontend/expression_semantics.h src/frontend/expression_semantics.c \
+            src/frontend/function_body.c src/frontend/parser_statement.c \
+            src/frontend/parser_expression.c src/frontend/parser_declarator.c \
+            src/frontend/parser_function.c src/frontend/parser_internal.h \
+            src/frontend/parser_global.c src/frontend/parser_record.c src/frontend/parser_postfix.c \
+            src/target/data_layout.c src/target/riscv64/codegen_function.c \
+            src/target/riscv64/codegen_expression.c src/target/riscv64/codegen_statement.c
+          git diff --check
+          make -j4 MODE=release BUILD_DIR=build/convergence
+      - name: Install Linux probe tools
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu flex bison bc libelf-dev libssl-dev
+          mkdir -p tests/external/linux
+          git show origin/diagnostic/linux-first100-variadic-stack-v0:tests/external/linux/batch_probe.sh > tests/external/linux/batch_probe.sh
+          chmod +x tests/external/linux/batch_probe.sh
+      - name: Probe unchanged Linux first100
+        run: |
+          set -Eeuo pipefail
+          build="$GITHUB_WORKSPACE/build/linux-first100-current"
+          set +e
+          MINIC="$GITHUB_WORKSPACE/build/convergence/bin/minic" \
+          BUILD_DIR="$build" \
+          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-6.6.143.tar.xz" \
+          CROSS_COMPILE=riscv64-linux-gnu- \
+          LINUX_BATCH_OFFSET=0 LINUX_BATCH_LIMIT=100 LINUX_BATCH_JOBS=4 \
+            sh tests/external/linux/batch_probe.sh
+          status=$?
+          set -e
+          mkdir -p build/first100-artifact
+          cp "$build/batch-summary.txt" build/first100-artifact/ 2>/dev/null || true
+          cp -R "$build/minic-stderr" build/first100-artifact/ 2>/dev/null || true
+          echo "$status" > build/first100-artifact/status.txt
+          exit "$status"
+      - name: Upload first100 diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-first100-current
+          path: build/first100-artifact
+          if-no-files-found: warn
