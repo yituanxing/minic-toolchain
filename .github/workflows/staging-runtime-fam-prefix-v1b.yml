@@ -1,0 +1,377 @@
+name: Staging Runtime FAM Prefix V1B
+
+on:
+  push:
+    branches:
+      - staging/runtime-fam-prefix-v1b
+
+permissions:
+  contents: write
+
+jobs:
+  probe:
+    if: "${{ github.event.head_commit.message != 'runtime FAM prefix product v1b' }}"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Materialize product patch and permanent tests
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/frontend/parser_statement.c')
+          text = path.read_text()
+          old = '''        field = minic_c0_record_field(record, field_index);
+                  if (field == NULL || field->is_flexible_array) {
+                      minic_parser_error(
+                          parser, "flexible array members in aggregate initialization are unsupported");
+                      return false;
+                  }
+          '''
+          new = '''        field = minic_c0_record_field(record, field_index);
+                  if (field == NULL) {
+                      minic_parser_error(parser, "invalid record field in aggregate initialization");
+                      return false;
+                  }
+                  if (field->is_flexible_array) {
+                      continue;
+                  }
+          '''
+          if old not in text:
+              raise SystemExit('designated zero-fill FAM anchor not found')
+          text = text.replace(old, new, 1)
+
+          old = '''    while (field_index < record->field_count) {
+                  MinicExpressionId member_id;
+
+                  if (!add_record_field_lvalue(
+                          parser, target_id, record_id, field_index, initializer_span, &member_id)) {
+                      return false;
+                  }
+          '''
+          new = '''    while (field_index < record->field_count) {
+                  MinicExpressionId member_id;
+
+                  if (record->fields[field_index].is_flexible_array) {
+                      field_index += 1U;
+                      continue;
+                  }
+                  if (!add_record_field_lvalue(
+                          parser, target_id, record_id, field_index, initializer_span, &member_id)) {
+                      return false;
+                  }
+          '''
+          if old not in text:
+              raise SystemExit('positional trailing zero-fill FAM anchor not found')
+          path.write_text(text.replace(old, new, 1))
+
+          fixture = Path('tests/compiler/c0/gnu_record_compound_literal.c')
+          text = fixture.read_text()
+          if 'struct FlexibleRuntime {' in text:
+              raise SystemExit('FAM fixture already present')
+          text += r'''
+
+          struct FlexibleRuntime {
+              int tag;
+              unsigned long count;
+              unsigned char payload[];
+          };
+
+          void assign_flexible_prefix(struct FlexibleRuntime *out, int tag, unsigned long count)
+          {
+              *out = (struct FlexibleRuntime) {
+                  .tag = tag,
+                  .count = count,
+              };
+          }
+
+          void assign_flexible_prefix_positional(struct FlexibleRuntime *out,
+                                                 int tag,
+                                                 unsigned long count)
+          {
+              *out = (struct FlexibleRuntime) { tag, count };
+          }
+
+          void clear_flexible_prefix(struct FlexibleRuntime *out)
+          {
+              *out = (struct FlexibleRuntime) { };
+          }
+          '''
+          fixture.write_text(text)
+
+          Path('tests/compiler/c0/gnu_record_compound_literal_runtime.c').write_text(r'''extern void *malloc(unsigned long size);
+          extern void free(void *pointer);
+
+          struct FlexibleRuntime {
+              int tag;
+              unsigned long count;
+              unsigned char payload[];
+          };
+
+          void assign_flexible_prefix(struct FlexibleRuntime *out, int tag, unsigned long count);
+          void assign_flexible_prefix_positional(struct FlexibleRuntime *out,
+                                                 int tag,
+                                                 unsigned long count);
+          void clear_flexible_prefix(struct FlexibleRuntime *out);
+
+          static int payload_unchanged(const struct FlexibleRuntime *value)
+          {
+              return value->payload[0] == 0xA5U && value->payload[1] == 0x5AU &&
+                     value->payload[2] == 0x3CU && value->payload[3] == 0xC3U;
+          }
+
+          static void seed_payload(struct FlexibleRuntime *value)
+          {
+              value->payload[0] = 0xA5U;
+              value->payload[1] = 0x5AU;
+              value->payload[2] = 0x3CU;
+              value->payload[3] = 0xC3U;
+          }
+
+          int main(void)
+          {
+              struct FlexibleRuntime *value;
+
+              value = (struct FlexibleRuntime *)malloc(sizeof(*value) + 4U);
+              if (value == (void *)0) {
+                  return 90;
+              }
+
+              seed_payload(value);
+              value->tag = -1;
+              value->count = 99U;
+              assign_flexible_prefix(value, 7, 41U);
+              if (value->tag != 7 || value->count != 41U || !payload_unchanged(value)) {
+                  free(value);
+                  return 1;
+              }
+
+              seed_payload(value);
+              value->tag = -2;
+              value->count = 98U;
+              assign_flexible_prefix_positional(value, 8, 42U);
+              if (value->tag != 8 || value->count != 42U || !payload_unchanged(value)) {
+                  free(value);
+                  return 2;
+              }
+
+              seed_payload(value);
+              value->tag = 9;
+              value->count = 43U;
+              clear_flexible_prefix(value);
+              if (value->tag != 0 || value->count != 0U || !payload_unchanged(value)) {
+                  free(value);
+                  return 3;
+              }
+
+              free(value);
+              return 0;
+          }
+          ''')
+
+          runner = Path('tests/compiler/c0/run-gnu-record-compound-literal.sh')
+          text = runner.read_text()
+          old = '''grep -F 'nested_designated_braces:' "$work/output.s" >/dev/null
+          left_call=$(grep -n -m1 -F '  call left_effect' "$work/output.s" | cut -d: -f1)
+          '''
+          new = '''grep -F 'nested_designated_braces:' "$work/output.s" >/dev/null
+          grep -F 'assign_flexible_prefix:' "$work/output.s" >/dev/null
+          grep -F 'assign_flexible_prefix_positional:' "$work/output.s" >/dev/null
+          grep -F 'clear_flexible_prefix:' "$work/output.s" >/dev/null
+          left_call=$(grep -n -m1 -F '  call left_effect' "$work/output.s" | cut -d: -f1)
+          '''
+          if old not in text:
+              raise SystemExit('compound literal symbol-check anchor not found')
+          text = text.replace(old, new, 1)
+
+          old = '''grep -F 'compound literals currently require a block-scope record type' "$work/scalar.stderr" >/dev/null
+
+          printf '%s\\n' 'PASS compiler/c0/gnu_record_compound_literal record-lvalue=1 hidden-auto-local=1 initializer-block=expression-owned empty-aggregate=compound+local promoted-designators=1 record-copy=1 member-postfix=1 address-of=1 positional-runtime=1 nested-designated-braces=1 remaining-zero-fill=1 evaluation-order=preserved scalar=bounded-reject'
+          '''
+          new = '''grep -F 'compound literals currently require a block-scope record type' "$work/scalar.stderr" >/dev/null
+
+          cat >"$work/fam-designated.c" <<'EOF'
+          struct FlexibleRuntime { int tag; unsigned long count; unsigned char payload[]; };
+          void bad_designated(struct FlexibleRuntime *out)
+          {
+              *out = (struct FlexibleRuntime) { .payload = { 1 } };
+          }
+          EOF
+          "$host_cc" -E -P -std=gnu11 -x c "$work/fam-designated.c" -o "$work/fam-designated.i"
+          if "$minic" -S "$work/fam-designated.i" -o "$work/fam-designated.s" 2>"$work/fam-designated.stderr"; then
+              printf '%s\\n' 'FAIL compiler/c0/gnu_record_compound_literal: designated FAM initializer accepted' >&2
+              exit 1
+          fi
+          grep -F 'unsupported designated record array initializer' "$work/fam-designated.stderr" >/dev/null
+
+          cat >"$work/fam-positional.c" <<'EOF'
+          struct FlexibleRuntime { int tag; unsigned long count; unsigned char payload[]; };
+          void bad_positional(struct FlexibleRuntime *out)
+          {
+              *out = (struct FlexibleRuntime) { 1, 2, { 3 } };
+          }
+          EOF
+          "$host_cc" -E -P -std=gnu11 -x c "$work/fam-positional.c" -o "$work/fam-positional.i"
+          if "$minic" -S "$work/fam-positional.i" -o "$work/fam-positional.s" 2>"$work/fam-positional.stderr"; then
+              printf '%s\\n' 'FAIL compiler/c0/gnu_record_compound_literal: positional FAM initializer accepted' >&2
+              exit 1
+          fi
+          grep -F 'unsupported positional record initializer field' "$work/fam-positional.stderr" >/dev/null
+
+          riscv_cc=${RISCV_CC:-riscv64-linux-gnu-gcc}
+          qemu_riscv64=${QEMU_RISCV64:-qemu-riscv64}
+          require_runtime=${REQUIRE_RISCV_RUNTIME:-0}
+          if command -v "$riscv_cc" >/dev/null 2>&1 && command -v "$qemu_riscv64" >/dev/null 2>&1; then
+              "$riscv_cc" -static "$work/output.s" \\
+                  "$root/tests/compiler/c0/gnu_record_compound_literal_runtime.c" \\
+                  -o "$work/minic-runtime"
+              "$riscv_cc" -std=gnu11 -static \\
+                  "$root/tests/compiler/c0/gnu_record_compound_literal.c" \\
+                  "$root/tests/compiler/c0/gnu_record_compound_literal_runtime.c" \\
+                  -o "$work/gcc-runtime"
+              set +e
+              "$qemu_riscv64" "$work/gcc-runtime"
+              gcc_status=$?
+              "$qemu_riscv64" "$work/minic-runtime"
+              minic_status=$?
+              set -e
+              test "$gcc_status" -eq 0
+              test "$minic_status" -eq "$gcc_status"
+              printf '%s\\n' 'PASS compiler/c0/gnu_record_compound_literal FAM-fixed-prefix-differential=gcc tail=preserved'
+          elif test "$require_runtime" = 1; then
+              printf '%s\\n' 'missing required RISC-V runtime tools for FAM differential' >&2
+              exit 1
+          else
+              printf '%s\\n' 'SKIP compiler/c0/gnu_record_compound_literal FAM-fixed-prefix-differential tools=missing'
+          fi
+
+          printf '%s\\n' 'PASS compiler/c0/gnu_record_compound_literal record-lvalue=1 hidden-auto-local=1 initializer-block=expression-owned empty-aggregate=compound+local promoted-designators=1 record-copy=1 member-postfix=1 address-of=1 positional-runtime=1 nested-designated-braces=1 remaining-zero-fill=1 flexible-tail=excluded-from-zero-fill+copy-tail-preserved flexible-explicit-init=fail-closed evaluation-order=preserved scalar=bounded-reject'
+          '''
+          if old not in text:
+              raise SystemExit('compound literal runner tail anchor not found')
+          runner.write_text(text.replace(old, new, 1))
+
+          gate = Path('.github/scripts/compiler-c0-full-gate.sh')
+          text = gate.read_text()
+          anchor = '''runtime_record_array_initializer_focused() {
+              MINIC="$root/build/ci-debug/bin/minic" \\
+              HOST_CC=cc \\
+              BUILD_DIR="$root/build/ci-runtime-record-array-initializer" \\
+                  sh tests/compiler/c0/run-runtime-record-array-initializers.sh
+          }
+          '''
+          addition = anchor + '''
+          runtime_record_fam_prefix_focused() {
+              MINIC="$root/build/ci-debug/bin/minic" \\
+              HOST_CC=cc \\
+              BUILD_DIR="$root/build/ci-runtime-record-fam-prefix" \\
+              RISCV_CC=riscv64-linux-gnu-gcc \\
+              QEMU_RISCV64=qemu-riscv64 \\
+              REQUIRE_RISCV_RUNTIME=1 \\
+                  sh tests/compiler/c0/run-gnu-record-compound-literal.sh
+          }
+          '''
+          if anchor not in text:
+              raise SystemExit('C0 focused helper anchor not found')
+          text = text.replace(anchor, addition, 1)
+          old = '''start_gate record-array-init-focused runtime_record_array_initializer_focused
+          start_gate linenoise-driven-focused linenoise_driven_focused
+          '''
+          new = '''start_gate record-array-init-focused runtime_record_array_initializer_focused
+          start_gate record-fam-prefix-focused runtime_record_fam_prefix_focused
+          start_gate linenoise-driven-focused linenoise_driven_focused
+          '''
+          if old not in text:
+              raise SystemExit('C0 focused gate anchor not found')
+          gate.write_text(text.replace(old, new, 1))
+          PY
+
+          clang-format -i src/frontend/parser_statement.c \
+            tests/compiler/c0/gnu_record_compound_literal.c \
+            tests/compiler/c0/gnu_record_compound_literal_runtime.c || true
+          git diff --check
+
+      - name: Install runtime and Linux probe tools
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu libc6-dev-riscv64-cross qemu-user \
+            binutils-riscv64-linux-gnu flex bison bc libelf-dev libssl-dev
+
+      - name: Build and run focused GCC MiniC differential
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=debug BUILD_DIR=build/runtime-fam-prefix
+          MINIC="$GITHUB_WORKSPACE/build/runtime-fam-prefix/bin/minic" \
+          HOST_CC=cc \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/runtime-fam-prefix-focused" \
+          RISCV_CC=riscv64-linux-gnu-gcc \
+          QEMU_RISCV64=qemu-riscv64 \
+          REQUIRE_RISCV_RUNTIME=1 \
+            sh tests/compiler/c0/run-gnu-record-compound-literal.sh
+
+      - name: Run broad C0 regression
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/runtime-fam-prefix/bin/minic" \
+          HOST_CC=cc \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/runtime-fam-prefix-c0" \
+            sh tests/compiler/c0/run.sh
+
+      - name: Commit staging product and tests
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'LiYang Dong'
+          git config user.email '119646676+yituanxing@users.noreply.github.com'
+          git add src/frontend/parser_statement.c \
+            tests/compiler/c0/gnu_record_compound_literal.c \
+            tests/compiler/c0/gnu_record_compound_literal_runtime.c \
+            tests/compiler/c0/run-gnu-record-compound-literal.sh \
+            .github/scripts/compiler-c0-full-gate.sh
+          git commit -m 'runtime FAM prefix product v1b'
+          git push origin HEAD:staging/runtime-fam-prefix-v1b
+
+      - name: Restore diagnostic-only Linux batch probe
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p tests/external/linux
+          git show origin/diagnostic/linux-first100-variadic-stack-v0:tests/external/linux/batch_probe.sh \
+            > tests/external/linux/batch_probe.sh
+          chmod +x tests/external/linux/batch_probe.sh
+
+      - name: Restore pinned Linux archive
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-cache/linux-6.6.143.tar.xz
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
+
+      - name: Probe unchanged build_utility frontier
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          set +e
+          MINIC="$GITHUB_WORKSPACE/build/runtime-fam-prefix/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/runtime-fam-prefix-linux" \
+          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-cache/linux-6.6.143.tar.xz" \
+          CROSS_COMPILE=riscv64-linux-gnu- \
+          LINUX_BATCH_OFFSET=98 LINUX_BATCH_LIMIT=1 LINUX_BATCH_JOBS=1 \
+            sh tests/external/linux/batch_probe.sh
+          status=$?
+          set -e
+          cat build/runtime-fam-prefix-linux/batch-summary.txt
+          test "$status" -eq 0 -o "$status" -eq 1
