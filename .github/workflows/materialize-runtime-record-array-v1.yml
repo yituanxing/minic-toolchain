@@ -60,14 +60,13 @@ jobs:
           input=build/runtime-record-array-linux/kbuild/init/initramfs.i
           echo '--- compiler diagnostic ---'
           cat build/runtime-record-array-linux/minic-stderr/init/initramfs.i.stderr || true
-          echo '--- exact source context 59360..59420 ---'
-          nl -ba "$input" | sed -n '59360,59420p'
-          echo '--- all xwrite occurrences ---'
+          echo '--- xwrite source context ---'
+          nl -ba "$input" | sed -n '58970,59180p'
+          nl -ba "$input" | sed -n '59320,59450p'
+          echo '--- every victim/wfile/buf occurrence near initramfs state ---'
+          grep -n -C 2 -E '\b(victim|wfile|wfile_pos|buf|body_len)\b' "$input" | sed -n '1,500p' || true
+          echo '--- xwrite declaration and calls ---'
           grep -n -C 3 -E '(^|[^[:alnum:]_])xwrite[[:space:]]*\(' "$input" || true
-          echo '--- relevant object declarations ---'
-          grep -n -E '(^|[;{}])[[:space:]]*(static[[:space:]]+)?([^;{}]*[[:space:]])?(wfile|wfile_pos|victim|body_len)[[:space:];=\[,*]' "$input" | tail -n 80 || true
-          echo '--- relevant typedefs ---'
-          grep -n -E 'typedef .*\b(loff_t|size_t|ssize_t)\b' "$input" | head -n 80 || true
           exit "$status"
       - name: Probe fixed Linux first100
         if: success()
