@@ -21,8 +21,8 @@ replace_once(
 
 replace_once(
     "src/frontend/expression_semantics.c",
-    """#include \"frontend/expression_semantics.h\"\n\n#include <stddef.h>\n""",
-    """#include \"frontend/expression_semantics.h\"\n#include \"frontend/const_eval.h\"\n\n#include <limits.h>\n#include <stddef.h>\n""",
+    """#include \"frontend/expression_semantics.h\"\n""",
+    """#include \"frontend/expression_semantics.h\"\n#include \"frontend/const_eval.h\"\n\n#include <limits.h>\n""",
 )
 
 replace_once(
