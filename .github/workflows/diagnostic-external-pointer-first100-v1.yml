@@ -1,0 +1,63 @@
+name: Diagnostic External Pointer First100 V1
+
+on:
+  push:
+    branches:
+      - diagnostic/external-pointer-first100-v1
+
+permissions:
+  contents: read
+
+jobs:
+  first100:
+    runs-on: ubuntu-24.04
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Linux probe tools
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu flex bison bc libelf-dev libssl-dev
+
+      - name: Restore fixed Linux probe and build compiler
+        run: |
+          set -Eeuo pipefail
+          mkdir -p tests/external/linux
+          git show origin/diagnostic/linux-first100-variadic-stack-v0:tests/external/linux/batch_probe.sh > tests/external/linux/batch_probe.sh
+          chmod +x tests/external/linux/batch_probe.sh
+          make -j4 MODE=debug BUILD_DIR=build/first100-compiler
+
+      - name: Run fixed first100
+        run: |
+          set -Eeuo pipefail
+          set +e
+          MINIC="$GITHUB_WORKSPACE/build/first100-compiler/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/first100-linux" \
+          CROSS_COMPILE=riscv64-linux-gnu- \
+          LINUX_BATCH_OFFSET=0 LINUX_BATCH_LIMIT=100 LINUX_BATCH_JOBS=4 \
+            sh tests/external/linux/batch_probe.sh
+          status=$?
+          set -e
+          cat build/first100-linux/batch-summary.txt
+          echo "FIRST100_STATUS=$status"
+          python3 - <<'PY'
+          from pathlib import Path
+          text = Path('build/first100-linux/batch-summary.txt').read_text()
+          values = {}
+          for line in text.splitlines():
+              if '=' in line and line.split('=', 1)[0] in {'selected_c_tus','pass','fail','preprocess_missing'}:
+                  k, v = line.split('=', 1)
+                  values[k] = int(v)
+          print('FIRST100_PARSED', values)
+          assert values.get('selected_c_tus') == 100
+          assert values.get('pass') == 82
+          assert values.get('fail') == 18
+          assert values.get('preprocess_missing') == 0
+          PY
