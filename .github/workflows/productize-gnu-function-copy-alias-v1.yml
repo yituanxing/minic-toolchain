@@ -1,0 +1,98 @@
+name: Productize GNU Function Copy Alias V1
+on:
+  push:
+    branches: [product/gnu-function-copy-alias-v1]
+permissions:
+  contents: write
+jobs:
+  productize:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: product/gnu-function-copy-alias-v1
+          fetch-depth: 0
+      - name: Materialize source and permanent contracts
+        run: |
+          set -Eeuo pipefail
+          git show origin/staging/string-octal-v1:tools/dev/materialize-gnu-function-copy-alias-v1.py > tools/dev/.productize-gnu-function-copy-alias-v1.py
+          python3 tools/dev/.productize-gnu-function-copy-alias-v1.py
+          rm tools/dev/.productize-gnu-function-copy-alias-v1.py
+          cat > tests/compiler/c0/run-gnu-function-copy-alias.sh <<'EOF'
+          #!/bin/sh
+          set -eu
+          root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+          minic=${MINIC:-"$root/build/debug/bin/minic"}
+          work=${BUILD_DIR:-"$root/build/debug"}/tests/gnu-function-copy-alias
+          mkdir -p "$work"
+
+          cat > "$work/positive.c" <<'SRC'
+          static int target(void) { return 7; }
+          static inline __attribute__((__copy__(target))) __attribute__((alias("target"))) int alias_fn(void);
+          int main(void) { return alias_fn() == 7 ? 0 : 1; }
+          SRC
+          "$minic" -S "$work/positive.c" -o "$work/positive.s"
+          grep -Fq '.set alias_fn, target' "$work/positive.s"
+
+          cat > "$work/mismatch.c" <<'SRC'
+          static int target(int value) { return value; }
+          static inline __attribute__((alias("target"))) int alias_fn(void);
+          SRC
+          if "$minic" -S "$work/mismatch.c" -o "$work/mismatch.s" 2>"$work/mismatch.err"; then
+              echo 'FAIL compiler/c0/gnu-function-copy-alias: mismatched alias accepted' >&2
+              exit 1
+          fi
+          grep -Fq 'GNU function alias requires a defined same-TU target with matching signature' "$work/mismatch.err"
+
+          cat > "$work/copy-unknown.c" <<'SRC'
+          static inline __attribute__((__copy__(missing_target))) int alias_fn(void);
+          SRC
+          if "$minic" -S "$work/copy-unknown.c" -o "$work/copy-unknown.s" 2>"$work/copy-unknown.err"; then
+              echo 'FAIL compiler/c0/gnu-function-copy-alias: unknown copy target accepted' >&2
+              exit 1
+          fi
+          grep -Fq 'GNU copy requires a previously declared function' "$work/copy-unknown.err"
+
+          cat > "$work/undefined.c" <<'SRC'
+          static int target(void);
+          static inline __attribute__((alias("target"))) int alias_fn(void);
+          SRC
+          if "$minic" -S "$work/undefined.c" -o "$work/undefined.s" 2>"$work/undefined.err"; then
+              echo 'FAIL compiler/c0/gnu-function-copy-alias: undefined alias target accepted' >&2
+              exit 1
+          fi
+          grep -Fq 'GNU function alias requires a defined same-TU target with matching signature' "$work/undefined.err"
+          printf '%s\n' 'PASS compiler/c0/gnu-function-copy-alias'
+          EOF
+          chmod +x tests/compiler/c0/run-gnu-function-copy-alias.sh
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('tests/compiler/c0/run.sh')
+          text = path.read_text()
+          anchor = '''MINIC="$minic" \\\nHOST_CC="$host_cc" \\\nBUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \\\nsh "$root/tests/compiler/c0/run-gnu-function-pointer-bridge-call.sh"\n'''
+          addition = anchor + '''\nMINIC="$minic" \\\nBUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \\\nsh "$root/tests/compiler/c0/run-gnu-function-copy-alias.sh"\n'''
+          if text.count(anchor) != 1:
+              raise SystemExit(f'run.sh function attribute anchor count={text.count(anchor)}')
+          path.write_text(text.replace(anchor, addition, 1))
+          PY
+          files=$(git diff --name-only -- '*.c' '*.h')
+          test -z "$files" || clang-format-18 -i $files
+          git diff --check
+      - name: Validate focused and fast gates
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release BUILD_DIR=build/product-copy-alias
+          MINIC="$GITHUB_WORKSPACE/build/product-copy-alias/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/product-copy-alias" \
+            sh tests/compiler/c0/run-gnu-function-copy-alias.sh
+          make -j4 check-fast MODE=release BUILD_DIR=build/product-copy-alias
+      - name: Commit clean product diff
+        run: |
+          set -Eeuo pipefail
+          git rm .github/workflows/productize-gnu-function-copy-alias-v1.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m 'frontend: support GNU function copy and alias attributes'
+          git push origin HEAD:product/gnu-function-copy-alias-v1
