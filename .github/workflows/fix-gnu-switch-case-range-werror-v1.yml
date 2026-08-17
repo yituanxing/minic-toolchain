@@ -1,0 +1,46 @@
+name: Fix GNU Switch Case Range Werror V1
+on:
+  push:
+    branches: [product/gnu-switch-case-range-v1]
+permissions:
+  contents: write
+jobs:
+  fix:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: product/gnu-switch-case-range-v1
+      - name: Fix parser lifetime and validate
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('src/frontend/parser_statement.c')
+          text = path.read_text()
+          text = text.replace('''    const MinicExpression *upper_constant;\n''', '''    const MinicExpression *upper_constant;\n''', 1)
+          text = text.replace('''    MinicType constant_type;\n    MinicSourceSpan constant_span;\n''', '''    MinicType constant_type;\n''', 1)
+          text = text.replace('''    constant_type = lower_constant->type;\n    constant_span = lower_constant->span;\n    upper_value = lower_value;\n''', '''    constant_type = lower_constant->type;\n    upper_constant = NULL;\n    upper_value = lower_value;\n''', 1)
+          text = text.replace('''        constant_span.end = upper_constant->span.end;\n''', '', 1)
+          old = '''        folded_constant.span = upper_constant->span;\n'''
+          new = '''        if (upper_constant == NULL) {\n            minic_parser_error(parser, "invalid GNU case range upper bound");\n            return false;\n        }\n        folded_constant.span = upper_constant->span;\n'''
+          if text.count(old) != 1:
+              raise SystemExit(f'upper span anchor count={text.count(old)}')
+          text = text.replace(old, new, 1)
+          path.write_text(text)
+          PY
+          clang-format-18 -i src/frontend/parser_statement.c
+          git diff --check
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/product-switch-range-werror
+          MINIC="$GITHUB_WORKSPACE/build/product-switch-range-werror/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/product-switch-range-werror" sh tests/compiler/c0/run-gnu-switch-case-range.sh
+          make -j4 check-fast MODE=release BUILD_DIR=build/product-switch-range-fast
+      - name: Commit clean fix
+        run: |
+          set -Eeuo pipefail
+          git rm .github/workflows/fix-gnu-switch-case-range-werror-v1.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/frontend/parser_statement.c
+          git commit -m 'frontend: harden GNU case range parser state'
+          git push origin HEAD:product/gnu-switch-case-range-v1
