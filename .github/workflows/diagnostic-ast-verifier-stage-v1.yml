@@ -15,7 +15,7 @@ jobs:
         with:
           ref: staging/string-octal-v1
           fetch-depth: 0
-      - name: Materialize convergence compiler plus verifier trace
+      - name: Materialize convergence compiler plus canonical array owner fix
         run: |
           set -Eeuo pipefail
           python3 tools/dev/materialize-runtime-record-array-v1.py
@@ -37,6 +37,7 @@ jobs:
           python3 tools/dev/materialize-overflow-result-range-v1.py
           python3 tools/dev/materialize-overflow-constant-value-v1.py
           python3 tools/dev/materialize-static-pointer-constant-conditional-v1.py
+          python3 tools/dev/materialize-canonical-array-redeclaration-owner-v1.py
           python3 tools/dev/materialize-ast-verifier-stage-trace-v1.py
           python3 tools/dev/materialize-ast-array-verifier-fail-trace-v1.py
           clang-format-18 -i \
@@ -50,6 +51,20 @@ jobs:
             src/target/riscv64/codegen_expression.c src/target/riscv64/codegen_statement.c
           git diff --check
           make -j4 MODE=release BUILD_DIR=build/convergence
+      - name: Focused canonical array redeclaration contracts
+        run: |
+          set -Eeuo pipefail
+          cat > /tmp/array-redecl.c <<'EOF'
+          int canonical_a[];
+          int canonical_a[4];
+          int canonical_b[3];
+          int canonical_b[];
+          extern int canonical_c[];
+          int canonical_c[2];
+          int main(void) { return canonical_a[0] + canonical_b[0] + canonical_c[0]; }
+          EOF
+          build/convergence/bin/minic -S /tmp/array-redecl.c -o /tmp/array-redecl.s
+          test -s /tmp/array-redecl.s
       - name: Install Linux probe tools
         run: |
           set -Eeuo pipefail
