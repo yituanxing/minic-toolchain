@@ -42,6 +42,7 @@ jobs:
           python3 tools/dev/materialize-overflow-constant-value-v1.py
           python3 tools/dev/materialize-static-pointer-constant-conditional-v1.py
           python3 tools/dev/materialize-canonical-array-redeclaration-owner-v1.py
+          python3 tools/dev/materialize-incomplete-array-create-trace-v1.py
           python3 tools/dev/materialize-ast-verifier-stage-trace-v1.py
           python3 tools/dev/materialize-ast-array-verifier-fail-trace-v1.py
           clang-format-18 -i \
