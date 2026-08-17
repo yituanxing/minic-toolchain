@@ -8,6 +8,10 @@ jobs:
   probe:
     if: ${{ github.actor != 'github-actions[bot]' }}
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        offset: [50, 68, 72]
     env:
       DEBIAN_FRONTEND: noninteractive
     steps:
@@ -73,21 +77,28 @@ jobs:
           mkdir -p tests/external/linux
           git show origin/diagnostic/linux-first100-variadic-stack-v0:tests/external/linux/batch_probe.sh > tests/external/linux/batch_probe.sh
           chmod +x tests/external/linux/batch_probe.sh
-      - name: Probe verifier cluster
+      - name: Probe verifier TU ${{ matrix.offset }}
         run: |
           set -Eeuo pipefail
-          for offset in 50 68 72; do
-            build="$GITHUB_WORKSPACE/build/verifier-stage-$offset"
-            echo "=== VERIFIER_PROBE offset=$offset ==="
-            set +e
-            MINIC="$GITHUB_WORKSPACE/build/convergence/bin/minic" \
-            BUILD_DIR="$build" \
-            LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-6.6.143.tar.xz" \
-            CROSS_COMPILE=riscv64-linux-gnu- LINUX_BATCH_OFFSET="$offset" LINUX_BATCH_LIMIT=1 LINUX_BATCH_JOBS=1 \
-              sh tests/external/linux/batch_probe.sh
-            status=$?
-            set -e
-            cat "$build/batch-summary.txt" || true
-            find "$build/minic-stderr" -type f -print -exec sh -c 'echo "--- $1"; cat "$1"' _ {} \; || true
-            echo "VERIFIER_PROBE_STATUS offset=$offset status=$status"
-          done
+          offset='${{ matrix.offset }}'
+          build="$GITHUB_WORKSPACE/build/verifier-stage-$offset"
+          set +e
+          MINIC="$GITHUB_WORKSPACE/build/convergence/bin/minic" \
+          BUILD_DIR="$build" \
+          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-6.6.143.tar.xz" \
+          CROSS_COMPILE=riscv64-linux-gnu- LINUX_BATCH_OFFSET="$offset" LINUX_BATCH_LIMIT=1 LINUX_BATCH_JOBS=1 \
+            sh tests/external/linux/batch_probe.sh
+          status=$?
+          set -e
+          mkdir -p "build/verifier-artifact-$offset"
+          cp "$build/batch-summary.txt" "build/verifier-artifact-$offset/" 2>/dev/null || true
+          cp -R "$build/minic-stderr" "build/verifier-artifact-$offset/" 2>/dev/null || true
+          echo "$status" > "build/verifier-artifact-$offset/status.txt"
+          exit "$status"
+      - name: Upload verifier diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verifier-${{ matrix.offset }}
+          path: build/verifier-artifact-${{ matrix.offset }}
+          if-no-files-found: warn
