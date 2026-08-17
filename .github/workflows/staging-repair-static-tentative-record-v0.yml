@@ -1,0 +1,42 @@
+name: Staging Repair Static Tentative Record V0
+
+on:
+  push:
+    branches:
+      - staging/static-tentative-record-v0
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Repair workflow expression quoting
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          file=.github/workflows/staging-static-tentative-record-v0.yml
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('.github/workflows/staging-static-tentative-record-v0.yml')
+          text = path.read_text()
+          old = "    if: ${{ !contains(github.event.head_commit.message, 'staging: static tentative record product v0') }}\n"
+          new = "    if: \"${{ !contains(github.event.head_commit.message, 'staging: static tentative record product v0') }}\"\n"
+          if old in text:
+              path.write_text(text.replace(old, new, 1))
+          PY
+          if git diff --quiet -- "$file"; then
+            echo 'workflow already repaired'
+            exit 0
+          fi
+          git config user.name 'LiYang Dong'
+          git config user.email '119646676+yituanxing@users.noreply.github.com'
+          git add "$file"
+          git commit -m 'staging: quote static tentative workflow condition'
+          git push origin HEAD:staging/static-tentative-record-v0
