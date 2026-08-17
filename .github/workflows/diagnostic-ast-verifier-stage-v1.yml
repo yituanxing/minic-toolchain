@@ -38,6 +38,7 @@ jobs:
           python3 tools/dev/materialize-overflow-constant-value-v1.py
           python3 tools/dev/materialize-static-pointer-constant-conditional-v1.py
           python3 tools/dev/materialize-ast-verifier-stage-trace-v1.py
+          python3 tools/dev/materialize-ast-array-verifier-fail-trace-v1.py
           clang-format-18 -i \
             src/frontend/ast.h src/frontend/ast.c src/frontend/ast_verifier.c \
             src/frontend/const_eval.h src/frontend/const_eval.c \
