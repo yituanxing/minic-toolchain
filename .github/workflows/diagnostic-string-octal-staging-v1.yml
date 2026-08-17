@@ -1,4 +1,4 @@
-name: Diagnostic String Octal Staging V1
+name: Diagnostic First100 Convergence V1
 
 on:
   push:
@@ -32,46 +32,52 @@ jobs:
           mkdir -p tests/external/linux
           git show origin/diagnostic/linux-first100-variadic-stack-v0:tests/external/linux/batch_probe.sh > tests/external/linux/batch_probe.sh
           chmod +x tests/external/linux/batch_probe.sh
-          make -j4 MODE=debug BUILD_DIR=build/string-octal-compiler
-
-      - name: Probe unchanged VDSO and print next frontier
-        run: |
-          set -Eeuo pipefail
-          set +e
-          MINIC="$GITHUB_WORKSPACE/build/string-octal-compiler/bin/minic" \
-          BUILD_DIR="$GITHUB_WORKSPACE/build/string-octal-vdso" \
-          CROSS_COMPILE=riscv64-linux-gnu- LINUX_BATCH_OFFSET=32 LINUX_BATCH_LIMIT=1 LINUX_BATCH_JOBS=1 \
-            sh tests/external/linux/batch_probe.sh
-          status=$?
-          set -e
-          cat build/string-octal-vdso/batch-summary.txt
-          echo "VDSO_PROBE_STATUS=$status"
-          input=$(find build/string-octal-vdso -type f -name 'vdso.i' | head -n 1)
-          test -n "$input"
-          echo "VDSO_INPUT=$input"
-          echo '=== VDSO CONTEXT 48072..48104 ==='
-          nl -ba "$input" | sed -n '48072,48104p'
-          echo '=== EXACT LINE REPR ==='
-          python3 - "$input" <<'PY'
-          from pathlib import Path
-          import sys
-          p = Path(sys.argv[1])
-          lines = p.read_text(errors='replace').splitlines()
-          for no in range(48080, 48097):
-              if 1 <= no <= len(lines):
-                  print(f'{no}: {lines[no-1]!r}')
-          PY
+          make -j4 MODE=debug BUILD_DIR=build/first100-convergence-compiler
 
       - name: Probe fixed Linux first100
         run: |
           set -Eeuo pipefail
           set +e
-          MINIC="$GITHUB_WORKSPACE/build/string-octal-compiler/bin/minic" \
-          BUILD_DIR="$GITHUB_WORKSPACE/build/string-octal-first100" \
+          MINIC="$GITHUB_WORKSPACE/build/first100-convergence-compiler/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/first100-convergence" \
           CROSS_COMPILE=riscv64-linux-gnu- LINUX_BATCH_OFFSET=0 LINUX_BATCH_LIMIT=100 LINUX_BATCH_JOBS=4 \
             sh tests/external/linux/batch_probe.sh
           status=$?
           set -e
-          cat build/string-octal-first100/batch-summary.txt
+          cat build/first100-convergence/batch-summary.txt
           echo "FIRST100_PROBE_STATUS=$status"
-          exit 0
+
+      - name: Print source context for every remaining failure
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          root = Path('build/first100-convergence')
+          summary = root / 'batch-summary.txt'
+          lines = summary.read_text(errors='replace').splitlines()
+          rx = re.compile(r'^\s*index=(\d+)\s+status=FAIL\s+input=(\S+)\s+line=(\d+)\s+message=(.*)$')
+          failures = []
+          for line in lines:
+              m = rx.match(line)
+              if m:
+                  failures.append((int(m.group(1)), m.group(2), int(m.group(3)), m.group(4)))
+          print(f'CONTEXT_FAILURE_COUNT={len(failures)}')
+          for index, rel, line_no, message in failures:
+              matches = list(root.rglob(Path(rel).name))
+              exact = [p for p in matches if str(p).endswith(rel)]
+              path = exact[0] if exact else (matches[0] if matches else None)
+              print(f'=== FAILURE index={index} input={rel} line={line_no} message={message} ===')
+              if path is None:
+                  print('SOURCE_NOT_FOUND')
+                  continue
+              source = path.read_text(errors='replace').splitlines()
+              if line_no <= 1:
+                  lo, hi = 1, min(len(source), 30)
+              else:
+                  lo, hi = max(1, line_no - 10), min(len(source), line_no + 10)
+              for no in range(lo, hi + 1):
+                  marker = '>>' if no == line_no else '  '
+                  print(f'{marker} {no:6d}: {source[no-1]}')
+          PY
