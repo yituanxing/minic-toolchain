@@ -1,0 +1,46 @@
+name: Productize GNU Switch Case Range V3
+on:
+  push:
+    branches: [product/gnu-switch-case-range-v3]
+permissions:
+  contents: write
+jobs:
+  productize:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: product/gnu-switch-case-range-v3
+          fetch-depth: 0
+      - name: Materialize exact validated product files
+        run: |
+          set -Eeuo pipefail
+          for path in \
+            src/frontend/ast.h \
+            src/frontend/parser_internal.h \
+            src/frontend/parser_statement.c \
+            src/frontend/ast_verifier.c \
+            src/target/riscv64/codegen_statement.c \
+            tests/compiler/c0/run.sh \
+            tests/compiler/c0/run-gnu-switch-case-range.sh \
+            tests/compiler/c0/run-switch-control-flow.sh; do
+            git show origin/product/gnu-switch-case-range-v2:"$path" > "$path"
+          done
+          git diff --check
+      - name: Validate Werror focused and fast gates
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/product-switch-range
+          MINIC="$GITHUB_WORKSPACE/build/product-switch-range/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/product-switch-range" sh tests/compiler/c0/run-gnu-switch-case-range.sh
+          MINIC="$GITHUB_WORKSPACE/build/product-switch-range/bin/minic" HOST_CC=cc BUILD_DIR="$GITHUB_WORKSPACE/build/product-switch-range" sh tests/compiler/c0/run-switch-control-flow.sh
+          make -j4 check-fast MODE=release BUILD_DIR=build/product-switch-range-fast
+      - name: Commit clean product diff
+        run: |
+          set -Eeuo pipefail
+          git rm .github/workflows/productize-gnu-switch-case-range-v3.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m 'frontend: preserve GNU switch case ranges semantically'
+          git push origin HEAD:product/gnu-switch-case-range-v3
