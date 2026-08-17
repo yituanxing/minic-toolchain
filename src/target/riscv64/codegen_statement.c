@@ -311,6 +311,7 @@ static bool minic_riscv64_collect_switch_labels(const MinicC0Program *program,
             break;
         case MINIC_STATEMENT_ASSIGN:
         case MINIC_STATEMENT_RECORD_COPY:
+        case MINIC_STATEMENT_RECORD_INITIALIZE:
         case MINIC_STATEMENT_XOR_ASSIGN:
         case MINIC_STATEMENT_EXPRESSION:
         case MINIC_STATEMENT_INLINE_ASM:
@@ -453,6 +454,7 @@ static bool minic_riscv64_emit_statement(FILE *file,
         return minic_riscv64_emit_assignment(file, program, function, function_layout, statement);
 
     case MINIC_STATEMENT_RECORD_COPY:
+    case MINIC_STATEMENT_RECORD_INITIALIZE:
         return minic_riscv64_emit_record_copy(file, program, function, function_layout, statement);
 
     case MINIC_STATEMENT_XOR_ASSIGN:

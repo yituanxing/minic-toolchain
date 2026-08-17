@@ -1444,6 +1444,26 @@ static bool minic_c0_record_value_is_copy_source_bounded(const MinicC0Program *p
     if (expression->kind == MINIC_EXPRESSION_CALL) {
         return true;
     }
+    if (expression->kind == MINIC_EXPRESSION_ASSIGNMENT) {
+        const MinicExpression *left;
+        const MinicExpression *right;
+        MinicExpressionId left_id;
+        MinicExpressionId right_id;
+
+        left_id = expression->value.binary.left;
+        right_id = expression->value.binary.right;
+        if (left_id >= expression_id || right_id >= expression_id) {
+            return false;
+        }
+        left = minic_c0_program_expression(program, left_id);
+        right = minic_c0_program_expression(program, right_id);
+        return left != NULL && right != NULL && left->value_category == MINIC_VALUE_LVALUE &&
+               !minic_type_is_const(left->type) && minic_type_is_record(left->type) &&
+               minic_type_is_record(right->type) &&
+               left->type.record_id == expression->type.record_id &&
+               right->type.record_id == expression->type.record_id &&
+               minic_c0_record_value_is_copy_source_bounded(program, right_id, remaining - 1U);
+    }
     if (expression->kind == MINIC_EXPRESSION_CONDITIONAL) {
         const MinicExpression *when_true;
         const MinicExpression *when_false;
