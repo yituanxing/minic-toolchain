@@ -37,8 +37,8 @@ jobs:
           "$minic" -S "$work/input.i" -o "$work/output.s"
           grep -F 'selected:' "$work/output.s" >/dev/null
           grep -F 'null_selected:' "$work/output.s" >/dev/null
-          grep -F '  .quad value' "$work/output.s" >/dev/null
-          grep -F '  .quad 0' "$work/output.s" >/dev/null
+          grep -F '  .dword value' "$work/output.s" >/dev/null
+          grep -F '  .dword 0' "$work/output.s" >/dev/null
           printf '%s\n' 'PASS compiler/c0/static-pointer-constant-conditional symbol+null selected-by-ICE'
           EOF
           chmod +x tests/compiler/c0/run-static-pointer-constant-conditional.sh
