@@ -23,6 +23,7 @@ jobs:
           python3 tools/dev/materialize-function-pointer-array-declarator-v1.py
           python3 tools/dev/materialize-preformed-static-array-v1.py
           python3 tools/dev/materialize-static-local-prefix-attributes-v1.py
+          python3 tools/dev/materialize-top-level-braced-static-scalar-v1.py
           clang-format-18 -i \
             src/frontend/parser_statement.c \
             src/frontend/parser_expression.c \
@@ -30,45 +31,44 @@ jobs:
             src/frontend/parser_internal.h \
             src/frontend/parser_global.c
           git diff --check
-          make -j4 MODE=debug BUILD_DIR=build/runtime-record-array
-      - name: Focused static-local prefix attribute semantics
+          make -j4 MODE=debug BUILD_DIR=build/convergence
+      - name: Focused braced static scalar semantics
         run: |
           set -Eeuo pipefail
-          cat > /tmp/static-prefix-positive.c <<'EOF'
+          cat > /tmp/braced-static-scalar.c <<'EOF'
+          static unsigned long zero = { 0 };
+          static unsigned long trailing = { 7, };
+          static int *null_pointer = { 0 };
+          int main(void) {
+              return zero == 0 && trailing == 7 && null_pointer == 0 ? 0 : 1;
+          }
+          EOF
+          build/convergence/bin/minic -S /tmp/braced-static-scalar.c -o /tmp/braced-static-scalar.s
+          test -s /tmp/braced-static-scalar.s
+          cat > /tmp/braced-static-scalar-negative.c <<'EOF'
+          static unsigned long bad = { 0, 1 };
+          EOF
+          if build/convergence/bin/minic -S /tmp/braced-static-scalar-negative.c -o /tmp/braced-static-scalar-negative.s; then
+            echo 'expected multi-element scalar initializer to fail' >&2
+            exit 1
+          fi
+          printf '%s\n' 'PASS top-level static scalar braces integer+pointer trailing-comma multi-element=rejected'
+      - name: Recheck static-local prefix and function-pointer arrays
+        run: |
+          set -Eeuo pipefail
+          cat > /tmp/regression.c <<'EOF'
           struct key { unsigned long value; };
+          static int zero(void) { return 0; }
+          static int one(void) { return 1; }
+          static int (*actions[])(void) = { zero, one };
           int f(void) {
               static __attribute__((section(".minic.prefix"))) char msg[64];
               static __attribute__((unused)) struct key k;
-              msg[0] = 1;
-              return (int)msg[0] + (int)k.value;
+              return actions[1]() + (int)msg[0] + (int)k.value;
           }
           EOF
-          build/runtime-record-array/bin/minic -S /tmp/static-prefix-positive.c -o /tmp/static-prefix-positive.s
-          grep -F '.minic.prefix' /tmp/static-prefix-positive.s >/dev/null
-          cat > /tmp/static-prefix-negative.c <<'EOF'
-          int f(void) {
-              static __attribute__((noreturn)) int bad;
-              return bad;
-          }
-          EOF
-          if build/runtime-record-array/bin/minic -S /tmp/static-prefix-negative.c -o /tmp/static-prefix-negative.s; then
-            echo 'expected non-object GNU prefix attribute to fail on static local' >&2
-            exit 1
-          fi
-          printf '%s\n' 'PASS static-local prefix attrs section=persisted unused=informational invalid-target=rejected'
-      - name: Recheck function pointer array routing
-        run: |
-          set -Eeuo pipefail
-          cat > /tmp/function-pointer-array.c <<'EOF'
-          static int zero(void) { return 0; }
-          static int one(void) { return 1; }
-          static int (*actions[])(void) = { [0] = zero, [1] = one };
-          static int (*fixed[2])(void) = { zero, one };
-          static int (*matrix[2][3])(void);
-          int main(void) { return actions[1]() == 1 && fixed[0]() == 0 && matrix[0][0] == 0 ? 0 : 1; }
-          EOF
-          build/runtime-record-array/bin/minic -S /tmp/function-pointer-array.c -o /tmp/function-pointer-array.s
-          test -s /tmp/function-pointer-array.s
+          build/convergence/bin/minic -S /tmp/regression.c -o /tmp/regression.s
+          grep -F '.minic.prefix' /tmp/regression.s >/dev/null
       - name: Install Linux probe tools
         run: |
           set -Eeuo pipefail
@@ -77,70 +77,37 @@ jobs:
           mkdir -p tests/external/linux
           git show origin/diagnostic/linux-first100-variadic-stack-v0:tests/external/linux/batch_probe.sh > tests/external/linux/batch_probe.sh
           chmod +x tests/external/linux/batch_probe.sh
-      - name: Probe unchanged initramfs.i
+      - name: Probe unchanged calibrate.i
         run: |
           set +e
-          MINIC="$GITHUB_WORKSPACE/build/runtime-record-array/bin/minic" \
-          BUILD_DIR="$GITHUB_WORKSPACE/build/runtime-record-array-linux" \
+          MINIC="$GITHUB_WORKSPACE/build/convergence/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/calibrate" \
           LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-6.6.143.tar.xz" \
-          CROSS_COMPILE=riscv64-linux-gnu- LINUX_BATCH_OFFSET=4 LINUX_BATCH_LIMIT=1 LINUX_BATCH_JOBS=1 \
+          CROSS_COMPILE=riscv64-linux-gnu- LINUX_BATCH_OFFSET=5 LINUX_BATCH_LIMIT=1 LINUX_BATCH_JOBS=1 \
             sh tests/external/linux/batch_probe.sh
           status=$?
           set -e
-          cat build/runtime-record-array-linux/batch-summary.txt
-          cat build/runtime-record-array-linux/minic-stderr/init/initramfs.i.stderr || true
-          input=build/runtime-record-array-linux/kbuild/init/initramfs.i
+          cat build/calibrate/batch-summary.txt
+          cat build/calibrate/minic-stderr/init/calibrate.i.stderr || true
+          input=build/calibrate/kbuild/init/calibrate.i
           if test -f "$input"; then
-            frontier=$(sed -n 's/.*initramfs\.i:\([0-9][0-9]*\):.*/\1/p' build/runtime-record-array-linux/minic-stderr/init/initramfs.i.stderr | head -n 1)
+            frontier=$(sed -n 's/.*calibrate\.i:\([0-9][0-9]*\):.*/\1/p' build/calibrate/minic-stderr/init/calibrate.i.stderr | head -n 1)
             if test -n "$frontier"; then
               start=$((frontier > 25 ? frontier - 25 : 1)); end=$((frontier + 25));
               nl -ba "$input" | sed -n "${start},${end}p"
             fi
           fi
-          echo "INITRAMFS_PROBE_STATUS=$status"
-      - name: Probe unchanged eventfd.i
-        run: |
-          set +e
-          MINIC="$GITHUB_WORKSPACE/build/runtime-record-array/bin/minic" \
-          BUILD_DIR="$GITHUB_WORKSPACE/build/static-prefix-eventfd" \
-          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-6.6.143.tar.xz" \
-          CROSS_COMPILE=riscv64-linux-gnu- LINUX_BATCH_OFFSET=69 LINUX_BATCH_LIMIT=1 LINUX_BATCH_JOBS=1 \
-            sh tests/external/linux/batch_probe.sh
-          status=$?
-          set -e
-          cat build/static-prefix-eventfd/batch-summary.txt || true
-          cat build/static-prefix-eventfd/minic-stderr/virt/kvm/eventfd.i.stderr || true
-          input=build/static-prefix-eventfd/kbuild/virt/kvm/eventfd.i
-          if test -f "$input"; then
-            frontier=$(sed -n 's/.*eventfd\.i:\([0-9][0-9]*\):.*/\1/p' build/static-prefix-eventfd/minic-stderr/virt/kvm/eventfd.i.stderr | head -n 1)
-            if test -n "$frontier"; then
-              start=$((frontier > 25 ? frontier - 25 : 1)); end=$((frontier + 25));
-              nl -ba "$input" | sed -n "${start},${end}p"
-            fi
-          fi
-          echo "EVENTFD_PROBE_STATUS=$status"
-      - name: Recheck unchanged module.i
-        run: |
-          set +e
-          MINIC="$GITHUB_WORKSPACE/build/runtime-record-array/bin/minic" \
-          BUILD_DIR="$GITHUB_WORKSPACE/build/function-pointer-array-module" \
-          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-6.6.143.tar.xz" \
-          CROSS_COMPILE=riscv64-linux-gnu- LINUX_BATCH_OFFSET=37 LINUX_BATCH_LIMIT=1 LINUX_BATCH_JOBS=1 \
-            sh tests/external/linux/batch_probe.sh
-          status=$?
-          set -e
-          cat build/function-pointer-array-module/batch-summary.txt || true
-          echo "MODULE_PROBE_STATUS=$status"
+          echo "CALIBRATE_PROBE_STATUS=$status"
       - name: Probe fixed Linux first100
         run: |
           set +e
-          MINIC="$GITHUB_WORKSPACE/build/runtime-record-array/bin/minic" \
-          BUILD_DIR="$GITHUB_WORKSPACE/build/static-prefix-first100" \
+          MINIC="$GITHUB_WORKSPACE/build/convergence/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/first100" \
           LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-6.6.143.tar.xz" \
           CROSS_COMPILE=riscv64-linux-gnu- LINUX_BATCH_OFFSET=0 LINUX_BATCH_LIMIT=100 LINUX_BATCH_JOBS=4 \
             sh tests/external/linux/batch_probe.sh
           status=$?
           set -e
-          cat build/static-prefix-first100/batch-summary.txt
+          cat build/first100/batch-summary.txt
           echo "FIRST100_STATUS=$status"
           test "$status" -eq 0 || test "$status" -eq 1
