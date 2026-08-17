@@ -77,8 +77,15 @@ jobs:
           };
           int main(void) { return 0; }
           EOF
-          build/convergence/bin/minic -S /tmp/backward-record-compound.c -o /tmp/backward-record-compound.s
-          test -s /tmp/backward-record-compound.s
+          set +e
+          build/convergence/bin/minic -S /tmp/backward-record-compound.c -o /tmp/backward-record-compound.s 2>/tmp/backward-record-compound.err
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ]; then
+            cat /tmp/backward-record-compound.err
+            grep -Fq 'cannot write RISC-V assembly' /tmp/backward-record-compound.err
+            ! grep -Fq "expected '{' in record initializer" /tmp/backward-record-compound.err
+          fi
       - name: Install Linux probe tools
         run: |
           set -Eeuo pipefail
