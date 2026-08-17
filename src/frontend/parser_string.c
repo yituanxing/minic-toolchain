@@ -42,12 +42,16 @@ static bool decode_simple_escape(char character, int *value) {
     case 'v':
         *value = '\v';
         return true;
-    case '0':
-        *value = 0;
-        return true;
     default:
         return false;
     }
+}
+
+static int octal_digit_value(char character) {
+    if (character >= '0' && character <= '7') {
+        return character - '0';
+    }
+    return -1;
 }
 
 static int hex_digit_value(char character) {
@@ -108,10 +112,27 @@ static bool string_literal_element_type(MinicParser *parser, MinicTokenKind kind
 
 static bool decode_string_escape(const char *source, size_t *cursor, size_t end, int *value) {
     unsigned int decoded;
+    unsigned int digit_count;
     int digit;
 
     if (source == NULL || cursor == NULL || value == NULL || *cursor >= end) {
         return false;
+    }
+    digit = octal_digit_value(source[*cursor]);
+    if (digit >= 0) {
+        decoded = 0U;
+        digit_count = 0U;
+        while (*cursor < end && digit_count < 3U &&
+               (digit = octal_digit_value(source[*cursor])) >= 0) {
+            if (decoded > (255U - (unsigned int)digit) / 8U) {
+                return false;
+            }
+            decoded = decoded * 8U + (unsigned int)digit;
+            *cursor += 1U;
+            digit_count += 1U;
+        }
+        *value = (int)decoded;
+        return true;
     }
     if (source[*cursor] != 'x') {
         if (!decode_simple_escape(source[*cursor], value)) {
