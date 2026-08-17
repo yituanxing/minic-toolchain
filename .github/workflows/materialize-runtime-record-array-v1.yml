@@ -57,13 +57,17 @@ jobs:
           status=$?
           set -e
           cat build/runtime-record-array-linux/batch-summary.txt
-          echo '--- stderr files ---'
-          find build/runtime-record-array-linux -type f \( -name '*.stderr' -o -name 'minic.stderr' \) -print -exec sh -c 'echo "--- $1"; sed -n "1,160p" "$1"' _ {} \;
           input=build/runtime-record-array-linux/kbuild/init/initramfs.i
+          echo '--- compiler diagnostic ---'
+          cat build/runtime-record-array-linux/minic-stderr/init/initramfs.i.stderr || true
           echo '--- exact source context 59360..59420 ---'
           nl -ba "$input" | sed -n '59360,59420p'
-          echo '--- nearby declarations/calls ---'
-          sed -n '59320,59440p' "$input" | grep -n -E '^[[:space:]]*(static|extern|void|int|long|unsigned|struct|const|char)|\(' || true
+          echo '--- all xwrite occurrences ---'
+          grep -n -C 3 -E '(^|[^[:alnum:]_])xwrite[[:space:]]*\(' "$input" || true
+          echo '--- relevant object declarations ---'
+          grep -n -E '(^|[;{}])[[:space:]]*(static[[:space:]]+)?([^;{}]*[[:space:]])?(wfile|wfile_pos|victim|body_len)[[:space:];=\[,*]' "$input" | tail -n 80 || true
+          echo '--- relevant typedefs ---'
+          grep -n -E 'typedef .*\b(loff_t|size_t|ssize_t)\b' "$input" | head -n 80 || true
           exit "$status"
       - name: Probe fixed Linux first100
         if: success()
