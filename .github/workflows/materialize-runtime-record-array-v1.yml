@@ -15,7 +15,7 @@ jobs:
         with:
           ref: staging/string-octal-v1
           fetch-depth: 0
-      - name: Materialize, format and build
+      - name: Materialize, format and build release compiler
         run: |
           set -Eeuo pipefail
           python3 tools/dev/materialize-runtime-record-array-v1.py
@@ -32,7 +32,7 @@ jobs:
             src/frontend/parser_internal.h \
             src/frontend/parser_global.c
           git diff --check
-          make -j4 MODE=debug BUILD_DIR=build/convergence
+          make -j4 MODE=release BUILD_DIR=build/convergence
       - name: Focused parenthesized pointer-to-array semantics
         run: |
           set -Eeuo pipefail
