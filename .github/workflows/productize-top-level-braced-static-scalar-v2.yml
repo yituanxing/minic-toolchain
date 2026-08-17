@@ -1,0 +1,103 @@
+name: Productize Top Level Braced Static Scalar V2
+on:
+  push:
+    branches: [product/top-level-braced-static-scalar-v2]
+permissions:
+  contents: write
+jobs:
+  productize:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: product/top-level-braced-static-scalar-v2
+          fetch-depth: 0
+      - name: Materialize source and permanent contracts
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/frontend/parser_global.c')
+          text = path.read_text()
+          old = '''static bool parse_static_scalar(MinicParser *parser, MinicType type, MinicSourceSpan name_span) {\n    MinicGlobalObjectId object_id;\n'''
+          new = '''static bool parse_static_scalar(MinicParser *parser, MinicType type, MinicSourceSpan name_span) {\n    MinicGlobalObjectId object_id;\n    bool braced;\n'''
+          if text.count(old) != 1:
+              raise SystemExit(f'scalar declaration anchor count={text.count(old)}')
+          text = text.replace(old, new, 1)
+
+          old = '''    if (minic_type_is_integer(type)) {\n        uint64_t bits;\n\n        if (parser->current.kind == MINIC_TOKEN_LBRACE) {\n            minic_parser_error(parser, "expected integer constant expression");\n            return false;\n        }\n'''
+          new = '''    braced = parser->current.kind == MINIC_TOKEN_LBRACE;\n    if (braced && !minic_parser_advance(parser)) {\n        return false;\n    }\n    if (minic_type_is_integer(type)) {\n        uint64_t bits;\n\n'''
+          if text.count(old) != 1:
+              raise SystemExit(f'scalar brace reject anchor count={text.count(old)}')
+          text = text.replace(old, new, 1)
+
+          old = '''    } else {\n        minic_parser_error(parser, "unsupported static scalar type");\n        return false;\n    }\n    return minic_parser_expect(parser, MINIC_TOKEN_SEMICOLON, "expected ';' after global object");\n}\n'''
+          new = '''    } else {\n        minic_parser_error(parser, "unsupported static scalar type");\n        return false;\n    }\n    if (braced) {\n        if (parser->current.kind == MINIC_TOKEN_COMMA && !minic_parser_advance(parser)) {\n            return false;\n        }\n        if (!minic_parser_expect(\n                parser, MINIC_TOKEN_RBRACE, "expected '}' after static scalar initializer")) {\n            return false;\n        }\n    }\n    return minic_parser_expect(parser, MINIC_TOKEN_SEMICOLON, "expected ';' after global object");\n}\n'''
+          if text.count(old) != 1:
+              raise SystemExit(f'scalar finalize anchor count={text.count(old)}')
+          path.write_text(text.replace(old, new, 1))
+
+          path = Path('tests/compiler/c0/run.sh')
+          text = path.read_text()
+          old = '''expect_compile_failure \\
+    invalid_braced_scalar_static_global \\
+    "expected integer constant expression"\n'''
+          new = '''compile_source braced_scalar_static_global invalid_braced_scalar_static_global\ngrep -F "  .word 1" "$work/braced_scalar_static_global.s" >/dev/null\nprintf '%s\\n' "PASS compiler/c0/braced_scalar_static_global"\n'''
+          if text.count(old) != 1:
+              raise SystemExit(f'old braced scalar contract count={text.count(old)}')
+          path.write_text(text.replace(old, new, 1))
+          PY
+          cat > tests/compiler/c0/braced_static_scalar.c <<'EOF'
+          static unsigned long value = {7};
+          static int *pointer = {
+              0,
+          };
+          int main(void) { return value == 7 && pointer == 0 ? 0 : 1; }
+          EOF
+          cat > tests/compiler/c0/invalid_braced_static_scalar_extra.c <<'EOF'
+          static int value = {1, 2};
+          EOF
+          cat > tests/compiler/c0/run-braced-static-scalar.sh <<'EOF'
+          #!/bin/sh
+          set -eu
+          root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+          minic=${MINIC:-"$root/build/debug/bin/minic"}
+          cc=${HOST_CC:-cc}
+          work=${BUILD_DIR:-"$root/build/debug"}/tests/braced-static-scalar
+          mkdir -p "$work"
+          "$cc" -E -P -std=gnu11 -x c "$root/tests/compiler/c0/braced_static_scalar.c" -o "$work/positive.i"
+          "$minic" -S "$work/positive.i" -o "$work/positive.s"
+          grep -F 'value:' "$work/positive.s" >/dev/null
+          grep -F 'pointer:' "$work/positive.s" >/dev/null
+          "$cc" -E -P -std=gnu11 -x c "$root/tests/compiler/c0/invalid_braced_static_scalar_extra.c" -o "$work/negative.i"
+          if "$minic" -S "$work/negative.i" -o "$work/negative.s" 2>"$work/negative.err"; then exit 1; fi
+          grep -F "expected '}' after static scalar initializer" "$work/negative.err" >/dev/null
+          printf '%s\n' 'PASS compiler/c0/braced-static-scalar scalar=integer,pointer trailing-comma=1 excess=reject'
+          EOF
+          chmod +x tests/compiler/c0/run-braced-static-scalar.sh
+          cat >> tests/compiler/c0/run.sh <<'EOF'
+
+          MINIC="$minic" HOST_CC="$host_cc" \
+          BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+          sh "$root/tests/compiler/c0/run-braced-static-scalar.sh"
+          EOF
+          clang-format-18 -i src/frontend/parser_global.c tests/compiler/c0/braced_static_scalar.c \
+            tests/compiler/c0/invalid_braced_static_scalar_extra.c
+          git diff --check
+      - name: Validate focused and fast gates
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/product-braced-scalar-v2
+          MINIC="$GITHUB_WORKSPACE/build/product-braced-scalar-v2/bin/minic" HOST_CC=cc BUILD_DIR="$GITHUB_WORKSPACE/build/product-braced-scalar-v2" sh tests/compiler/c0/run-braced-static-scalar.sh
+          make -j4 check-fast MODE=release BUILD_DIR=build/product-braced-scalar-v2-fast
+      - name: Commit clean product diff
+        run: |
+          set -Eeuo pipefail
+          git rm .github/workflows/productize-top-level-braced-static-scalar-v2.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m 'frontend: accept braced static scalar initializers'
+          git push origin HEAD:product/top-level-braced-static-scalar-v2
