@@ -751,6 +751,24 @@ static bool parse_positional_runtime_record_initializer(MinicParser *parser,
     return minic_parser_advance(parser);
 }
 
+static bool runtime_record_initializer_is_single_zero(const MinicParser *parser) {
+    MinicParser probe;
+    uint64_t value;
+
+    if (parser == NULL || parser->current.kind != MINIC_TOKEN_INTEGER_CONSTANT) {
+        return false;
+    }
+    probe = *parser;
+    probe.diagnostic = NULL;
+    if (!minic_parser_parse_unsigned_integer_value64(&probe, &value) || value != 0U) {
+        return false;
+    }
+    if (probe.current.kind == MINIC_TOKEN_COMMA && !minic_parser_advance(&probe)) {
+        return false;
+    }
+    return probe.current.kind == MINIC_TOKEN_RBRACE;
+}
+
 bool minic_parser_parse_runtime_record_initializer(MinicParser *parser,
                                                    MinicExpressionId target_id) {
     MinicSourceSpan initializer_span;
@@ -766,6 +784,24 @@ bool minic_parser_parse_runtime_record_initializer(MinicParser *parser,
     }
     if (parser->current.kind != MINIC_TOKEN_DOT) {
         if (parser->current.kind == MINIC_TOKEN_RBRACE) {
+            initializer_span.end = parser->current.span.end;
+            return minic_parser_advance(parser) &&
+                   add_zero_initialized_record_lvalue(parser, target_id, initializer_span);
+        }
+        if (runtime_record_initializer_is_single_zero(parser)) {
+            uint64_t zero_value;
+
+            if (!minic_parser_parse_unsigned_integer_value64(parser, &zero_value) ||
+                zero_value != 0U) {
+                return false;
+            }
+            if (parser->current.kind == MINIC_TOKEN_COMMA && !minic_parser_advance(parser)) {
+                return false;
+            }
+            if (parser->current.kind != MINIC_TOKEN_RBRACE) {
+                minic_parser_error(parser, "expected '}' after aggregate zero initializer");
+                return false;
+            }
             initializer_span.end = parser->current.span.end;
             return minic_parser_advance(parser) &&
                    add_zero_initialized_record_lvalue(parser, target_id, initializer_span);
