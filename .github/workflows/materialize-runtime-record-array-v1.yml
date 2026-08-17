@@ -25,24 +25,29 @@ jobs:
           python3 tools/dev/materialize-static-local-prefix-attributes-v1.py
           python3 tools/dev/materialize-top-level-braced-static-scalar-v1.py
           python3 tools/dev/materialize-parenthesized-pointer-array-v1.py
+          python3 tools/dev/materialize-record-pointer-array-v1.py
           clang-format-18 -i src/frontend/parser_statement.c src/frontend/parser_expression.c \
-            src/frontend/parser_declarator.c src/frontend/parser_internal.h src/frontend/parser_global.c
+            src/frontend/parser_declarator.c src/frontend/parser_internal.h src/frontend/parser_global.c \
+            src/frontend/parser_record.c
           git diff --check
           make -j4 MODE=release BUILD_DIR=build/convergence
-      - name: Focused regression seams
+      - name: Focused declarator regression seams
         run: |
           set -Eeuo pipefail
           cat > /tmp/seams.c <<'EOF'
-          static int zero(void) { return 0; }
-          static int (*actions[])(void) = { zero };
+          struct holder { char (*zero)[0]; char (*fixed)[4]; };
+          static unsigned long key = { 0 };
+          static int zero_fn(void) { return 0; }
+          static int (*actions[])(void) = { zero_fn };
           int main(void) {
               char (*p)[0] = 0;
-              static __attribute__((unused)) unsigned long key = { 0 };
-              return p == 0 && actions[0]() == 0 && key == 0 ? 0 : 1;
+              struct holder h = { .zero = 0, .fixed = 0 };
+              return p == 0 && h.zero == 0 && h.fixed == 0 && actions[0]() == 0 && key == 0 ? 0 : 1;
           }
           EOF
           build/convergence/bin/minic -S /tmp/seams.c -o /tmp/seams.s
           test -s /tmp/seams.s
+          printf '%s\n' 'PASS local+record pointer-to-array declarators and existing function-pointer arrays'
       - name: Install Linux probe tools
         run: |
           set -Eeuo pipefail
@@ -51,6 +56,26 @@ jobs:
           mkdir -p tests/external/linux
           git show origin/diagnostic/linux-first100-variadic-stack-v0:tests/external/linux/batch_probe.sh > tests/external/linux/batch_probe.sh
           chmod +x tests/external/linux/batch_probe.sh
+      - name: Probe unchanged do_mounts.i
+        run: |
+          set +e
+          MINIC="$GITHUB_WORKSPACE/build/convergence/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/do-mounts" \
+          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-6.6.143.tar.xz" \
+          CROSS_COMPILE=riscv64-linux-gnu- LINUX_BATCH_OFFSET=2 LINUX_BATCH_LIMIT=1 LINUX_BATCH_JOBS=1 \
+            sh tests/external/linux/batch_probe.sh
+          status=$?
+          set -e
+          cat build/do-mounts/batch-summary.txt
+          stderr=build/do-mounts/minic-stderr/init/do_mounts.i.stderr
+          cat "$stderr" || true
+          input=build/do-mounts/kbuild/init/do_mounts.i
+          frontier=$(sed -n 's/.*do_mounts\.i:\([0-9][0-9]*\):.*/\1/p' "$stderr" | head -n 1)
+          if test -n "$frontier"; then
+            start=$((frontier > 35 ? frontier - 35 : 1)); end=$((frontier + 35));
+            nl -ba "$input" | sed -n "${start},${end}p"
+          fi
+          echo "DO_MOUNTS_PROBE_STATUS=$status"
       - name: Diagnose unchanged kvm_main.i
         run: |
           set +e
@@ -67,7 +92,7 @@ jobs:
           input=build/kvm-main/kbuild/virt/kvm/kvm_main.i
           frontier=$(sed -n 's/.*kvm_main\.i:\([0-9][0-9]*\):.*/\1/p' "$stderr" | head -n 1)
           if test -n "$frontier"; then
-            start=$((frontier > 45 ? frontier - 45 : 1)); end=$((frontier + 45));
+            start=$((frontier > 50 ? frontier - 50 : 1)); end=$((frontier + 50));
             echo "--- exact source context ${start}..${end} ---"
             nl -ba "$input" | sed -n "${start},${end}p"
           fi
