@@ -35,6 +35,30 @@ test "$(grep -c '^extern_then_tentative:' "$assembly")" -eq 1
 test "$(grep -c '^tentative_then_extern:' "$assembly")" -eq 1
 test "$(grep -c '^tentative_then_full:' "$assembly")" -eq 1
 test "$(grep -c '^full_then_tentative:' "$assembly")" -eq 1
+test "$(grep -c '^static_repeated_tentative:' "$assembly")" -eq 1
+test "$(grep -c '^static_tentative_then_full:' "$assembly")" -eq 1
+test "$(grep -c '^static_full_then_tentative:' "$assembly")" -eq 1
+test "$(grep -c '^static_pointer_tentative:' "$assembly")" -eq 1
+test "$(grep -c '^static_pointer_then_full:' "$assembly")" -eq 1
+test "$(grep -c '^static_record_only:' "$assembly")" -eq 1
+test "$(grep -c '^static_record_then_full:' "$assembly")" -eq 1
+grep -F '.word 11' "$assembly" >/dev/null
+grep -F '.word 13' "$assembly" >/dev/null
+grep -F '.dword static_pointer_target' "$assembly" >/dev/null
+
+if "$minic" -S "$root/tests/compiler/c0/invalid_static_tentative_redeclaration.c" \
+    -o "$work/invalid-static-redecl.s" 2>"$work/invalid-static-redecl.stderr"; then
+    printf '%s\n' 'conflicting static tentative redeclaration unexpectedly accepted' >&2
+    exit 1
+fi
+grep -F 'conflicting static tentative definition' "$work/invalid-static-redecl.stderr" >/dev/null
+
+if "$minic" -S "$root/tests/compiler/c0/invalid_static_duplicate_definition.c" \
+    -o "$work/invalid-static-definition.s" 2>"$work/invalid-static-definition.stderr"; then
+    printf '%s\n' 'duplicate static definition unexpectedly accepted' >&2
+    exit 1
+fi
+grep -F 'conflicting static object definition' "$work/invalid-static-definition.stderr" >/dev/null
 
 if "$minic" -S "$root/tests/compiler/c0/invalid_external_tentative_incomplete_array.c" \
     -o "$work/invalid-incomplete.s" 2>"$work/invalid-incomplete.stderr"; then
@@ -59,4 +83,4 @@ fi
 grep -F 'conflicting external tentative definition' \
     "$work/invalid-array-bound.stderr" >/dev/null
 
-printf '%s\n' 'PASS compiler/c0/external_tentative_definitions state=extern|tentative|defined array-composite=incomplete-to-complete zero=end-of-tu fixed-array=1 attrs=section suffix=1 incomplete-array=fail-closed'
+printf '%s\n' 'PASS compiler/c0/external_tentative_definitions state=extern|tentative|defined linkage=external|static static-types=int|pointer|record array-composite=incomplete-to-complete zero=end-of-tu conflicts=fail-closed'
