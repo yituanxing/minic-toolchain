@@ -4259,6 +4259,7 @@ static bool parse_gnu_inline_asm_statement(MinicParser *parser) {
 
 typedef struct MinicStatementAttributeContext {
     bool saw_fallthrough;
+    bool saw_informational;
 } MinicStatementAttributeContext;
 
 static bool consume_statement_attribute(MinicParser *parser,
@@ -4280,13 +4281,18 @@ static bool consume_statement_attribute(MinicParser *parser,
         minic_parser_error(parser, "GNU attribute is not valid on a statement");
         return false;
     }
-    if (descriptor->kind != MINIC_ATTRIBUTE_FALLTHROUGH ||
-        descriptor->semantic_class != MINIC_ATTRIBUTE_CLASS_DIAGNOSTIC) {
-        minic_parser_error(parser, "GNU statement attribute semantics are not implemented");
-        return false;
+    if (descriptor->kind == MINIC_ATTRIBUTE_UNUSED &&
+        descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_INFORMATIONAL) {
+        context->saw_informational = true;
+        return true;
     }
-    context->saw_fallthrough = true;
-    return true;
+    if (descriptor->kind == MINIC_ATTRIBUTE_FALLTHROUGH &&
+        descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_DIAGNOSTIC) {
+        context->saw_fallthrough = true;
+        return true;
+    }
+    minic_parser_error(parser, "GNU statement attribute semantics are not implemented");
+    return false;
 }
 
 static bool gnu_attribute_list_has_statement_shape(const MinicParser *parser) {
@@ -4314,12 +4320,12 @@ static bool parse_gnu_statement_attribute(MinicParser *parser) {
 
     (void)memset(&context, 0, sizeof(context));
     if (!minic_parser_parse_gnu_attribute_lists(parser, consume_statement_attribute, &context) ||
-        !context.saw_fallthrough ||
+        (!context.saw_fallthrough && !context.saw_informational) ||
         !minic_parser_expect(
             parser, MINIC_TOKEN_SEMICOLON, "expected ';' after GNU statement attribute")) {
         return false;
     }
-    if (parser->switch_depth == 0U) {
+    if (context.saw_fallthrough && parser->switch_depth == 0U) {
         minic_parser_error(parser,
                            "GNU fallthrough statement attribute requires an enclosing switch");
         return false;

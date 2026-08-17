@@ -86,3 +86,11 @@ expect_failure \
 expect_failure \
     invalid_statement_attribute_target \
     "GNU attribute is not valid on a statement"
+
+"$host_cc" -E -P -std=gnu11 -x c \
+    "$root/tests/compiler/c0/gnu_unused_label_attribute.c" \
+    -o "$work/gnu_unused_label_attribute.i"
+"$minic" -S "$work/gnu_unused_label_attribute.i" \
+    -o "$work/gnu_unused_label_attribute.s"
+grep -F 'probe:' "$work/gnu_unused_label_attribute.s" >/dev/null
+printf '%s\n' 'PASS compiler/c0/gnu_unused_label_attribute label-statement=informational'
