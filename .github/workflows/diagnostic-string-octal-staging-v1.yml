@@ -34,14 +34,33 @@ jobs:
           chmod +x tests/external/linux/batch_probe.sh
           make -j4 MODE=debug BUILD_DIR=build/string-octal-compiler
 
-      - name: Probe unchanged VDSO
+      - name: Probe unchanged VDSO and print next frontier
         run: |
           set -Eeuo pipefail
+          set +e
           MINIC="$GITHUB_WORKSPACE/build/string-octal-compiler/bin/minic" \
           BUILD_DIR="$GITHUB_WORKSPACE/build/string-octal-vdso" \
           CROSS_COMPILE=riscv64-linux-gnu- LINUX_BATCH_OFFSET=32 LINUX_BATCH_LIMIT=1 LINUX_BATCH_JOBS=1 \
             sh tests/external/linux/batch_probe.sh
+          status=$?
+          set -e
           cat build/string-octal-vdso/batch-summary.txt
+          echo "VDSO_PROBE_STATUS=$status"
+          input=$(find build/string-octal-vdso -type f -name 'vdso.i' | head -n 1)
+          test -n "$input"
+          echo "VDSO_INPUT=$input"
+          echo '=== VDSO CONTEXT 48072..48104 ==='
+          nl -ba "$input" | sed -n '48072,48104p'
+          echo '=== EXACT LINE REPR ==='
+          python3 - "$input" <<'PY'
+          from pathlib import Path
+          import sys
+          p = Path(sys.argv[1])
+          lines = p.read_text(errors='replace').splitlines()
+          for no in range(48080, 48097):
+              if 1 <= no <= len(lines):
+                  print(f'{no}: {lines[no-1]!r}')
+          PY
 
       - name: Probe fixed Linux first100
         run: |
