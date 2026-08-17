@@ -418,3 +418,7 @@ sh "$root/tests/compiler/c0/run-gnu-switch-case-range.sh"
 MINIC="$minic" \
 BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
 sh "$root/tests/compiler/c0/run-string-octal-escape.sh"
+
+MINIC="$minic" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+sh "$root/tests/compiler/c0/run-gnu-signed-left-shift-ice.sh"

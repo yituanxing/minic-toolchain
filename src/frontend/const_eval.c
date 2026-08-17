@@ -390,13 +390,15 @@ static bool eval_binary(const MinicC0Program *program,
         if (expression->value.binary.operator_kind == MINIC_BINARY_SHIFT_LEFT) {
             if (minic_type_is_signed_integer(operation_type)) {
                 int64_t signed_left;
-                int64_t minimum;
-                int64_t maximum;
 
+                /* GNU C folds nonnegative signed left shifts in integer constant
+                   expressions using target-width bits even when the result sets
+                   the sign bit (for example 1 << 31 on a 32-bit int). Keep
+                   negative operands and out-of-width counts rejected above, but
+                   preserve the target bit pattern instead of rejecting this GNU
+                   extension as signed overflow. */
                 if (!value_signed(program, target, &converted_left, &signed_left) ||
-                    signed_left < 0 ||
-                    !signed_range(program, target, operation_type, &minimum, &maximum) ||
-                    (count != 0U && signed_left > (maximum >> count))) {
+                    signed_left < 0) {
                     return false;
                 }
             }
