@@ -67,13 +67,36 @@ old = r'''    /* Incomplete top-level array definitions still need the legacy bo
         if (minic_type_is_record(element_type)) {
 '''
 new = r'''    /* An incomplete external-linkage array may be a tentative declaration that a later
-     * declaration/definition completes. Record that canonical entity now; inferred definitions
-     * still stay with their existing initializer-shape owners below. */
+     * declaration/definition completes. Reuse an existing compatible canonical array descriptor
+     * instead of creating an ownerless descriptor for each `name[];` redeclaration. */
     if (incomplete_array_declarator_is_tentative(parser)) {
-        if (!minic_parser_parse_array_declarator_suffix(
-                parser, element_type, true, &array_type, &is_array) ||
-            !is_array || !minic_type_is_array(array_type) ||
-            !minic_parser_parse_gnu_object_attribute_lists(parser,
+        MinicGlobalObjectId existing_id;
+        const MinicGlobalObject *existing;
+        const MinicArrayType *existing_array;
+
+        existing_id = minic_parser_find_global_object_entity(parser, name_span);
+        existing = existing_id == MINIC_GLOBAL_OBJECT_INVALID
+                       ? NULL
+                       : minic_c0_program_global_object(parser->program, existing_id);
+        existing_array = existing != NULL && minic_type_is_array(existing->type)
+                             ? minic_c0_program_array_type(parser->program,
+                                                           existing->type.array_type_id)
+                             : NULL;
+        if (existing_array != NULL &&
+            minic_parser_external_object_types_compatible(
+                parser->program, existing_array->element_type, element_type)) {
+            if (!minic_parser_expect(parser, MINIC_TOKEN_LBRACKET, "expected '['") ||
+                !minic_parser_expect(parser, MINIC_TOKEN_RBRACKET, "expected ']'")) {
+                return false;
+            }
+            array_type = existing->type;
+            is_array = true;
+        } else if (!minic_parser_parse_array_declarator_suffix(
+                       parser, element_type, true, &array_type, &is_array) ||
+                   !is_array || !minic_type_is_array(array_type)) {
+            return false;
+        }
+        if (!minic_parser_parse_gnu_object_attribute_lists(parser,
                                                            section_name,
                                                            section_name_capacity,
                                                            section_name_length,
