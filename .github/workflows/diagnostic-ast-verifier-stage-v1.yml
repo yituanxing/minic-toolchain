@@ -42,6 +42,7 @@ jobs:
           python3 tools/dev/materialize-overflow-constant-value-v1.py
           python3 tools/dev/materialize-static-pointer-constant-conditional-v1.py
           python3 tools/dev/materialize-canonical-array-redeclaration-owner-v1.py
+          python3 tools/dev/materialize-query-incomplete-array-v1.py
           python3 tools/dev/materialize-incomplete-array-create-trace-v1.py
           python3 tools/dev/materialize-ast-verifier-stage-trace-v1.py
           python3 tools/dev/materialize-ast-array-verifier-fail-trace-v1.py
@@ -52,11 +53,11 @@ jobs:
             src/frontend/function_body.c src/frontend/parser_statement.c \
             src/frontend/parser_expression.c src/frontend/parser_declarator.c \
             src/frontend/parser_function.c src/frontend/parser_internal.h \
-            src/frontend/parser_global.c src/frontend/parser_record.c \
+            src/frontend/parser_global.c src/frontend/parser_record.c src/frontend/parser_postfix.c \
             src/target/riscv64/codegen_expression.c src/target/riscv64/codegen_statement.c
           git diff --check
           make -j4 MODE=release BUILD_DIR=build/convergence
-      - name: Focused canonical array redeclaration contracts
+      - name: Focused array ownership contracts
         run: |
           set -Eeuo pipefail
           cat > /tmp/array-redecl.c <<'EOF'
@@ -70,6 +71,15 @@ jobs:
           EOF
           build/convergence/bin/minic -S /tmp/array-redecl.c -o /tmp/array-redecl.s
           test -s /tmp/array-redecl.s
+          cat > /tmp/array-query.c <<'EOF'
+          struct item { int value; };
+          struct holder { int count; struct item items[]; };
+          int same_flexible_array_type(struct holder *holder) {
+              return __builtin_types_compatible_p(typeof(holder->items), typeof(holder->items));
+          }
+          EOF
+          build/convergence/bin/minic -S /tmp/array-query.c -o /tmp/array-query.s
+          test -s /tmp/array-query.s
       - name: Install Linux probe tools
         run: |
           set -Eeuo pipefail
