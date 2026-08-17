@@ -323,6 +323,7 @@ typedef struct MinicFunction {
     size_t local_begin;
     size_t local_count;
     MinicBlockId body_block;
+    MinicFunctionId alias_target;
     bool is_defined;
     bool is_internal;
     bool is_variadic;
@@ -598,6 +599,9 @@ bool minic_c0_program_set_function_internal(MinicC0Program *program,
 bool minic_c0_program_set_function_weak(MinicC0Program *program,
                                         MinicFunctionId function_id,
                                         bool is_weak);
+bool minic_c0_program_set_function_alias(MinicC0Program *program,
+                                         MinicFunctionId function_id,
+                                         MinicFunctionId target_function_id);
 bool minic_c0_program_set_function_assembler_name(MinicC0Program *program,
                                                   MinicFunctionId function_id,
                                                   const char *name,
