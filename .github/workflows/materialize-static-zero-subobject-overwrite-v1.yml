@@ -1,0 +1,85 @@
+name: Materialize Static Zero Subobject Overwrite V1
+on:
+  push:
+    branches: [staging/string-octal-v1]
+    paths:
+      - tools/dev/materialize-static-zero-subobject-overwrite-v1.py
+      - .github/workflows/materialize-static-zero-subobject-overwrite-v1.yml
+permissions:
+  contents: write
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - name: Materialize, format and build
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/materialize-static-zero-subobject-overwrite-v1.py
+          clang-format-18 -i src/frontend/parser_string.c src/frontend/parser_internal.h src/frontend/parser_global.c
+          git diff --check
+          make -j4 MODE=debug BUILD_DIR=build/static-zero-overwrite
+      - name: Focused backward record/string/scalar overwrite
+        run: |
+          set -Eeuo pipefail
+          cat > /tmp/static-zero-overwrite.c <<'EOF'
+          struct Name { char sysname[8]; char release[8]; };
+          struct Ns { int count; int inum; void *ops; };
+          struct Outer { struct Name name; void *owner; struct Ns ns; };
+          static int target;
+          static struct Outer state = {
+              .ns.count = 2,
+              .name = { .sysname = "Linux", .release = "6.6" },
+              .owner = &target,
+              .ns.inum = 9,
+              .ns.ops = &target,
+          };
+          int main(void) {
+              return state.name.sysname[0] == 'L' && state.name.release[0] == '6' &&
+                     state.ns.count == 2 && state.ns.inum == 9 &&
+                     state.owner == &target && state.ns.ops == &target ? 0 : 1;
+          }
+          EOF
+          build/static-zero-overwrite/bin/minic -S /tmp/static-zero-overwrite.c -o /tmp/static-zero-overwrite.s
+          grep -F 'Linux' /tmp/static-zero-overwrite.s >/dev/null || true
+          grep -F 'target' /tmp/static-zero-overwrite.s >/dev/null
+      - name: Explicit nonzero aggregate overwrite remains fail-closed
+        run: |
+          set -Eeuo pipefail
+          cat > /tmp/static-zero-overwrite-bad.c <<'EOF'
+          struct Inner { int a; int b; };
+          struct Outer { struct Inner inner; int tail; };
+          static struct Outer state = { .inner = { 1, 2 }, .tail = 3, .inner = { 4, 5 } };
+          int main(void) { return state.inner.a; }
+          EOF
+          if build/static-zero-overwrite/bin/minic -S /tmp/static-zero-overwrite-bad.c -o /tmp/bad.s > /tmp/bad.out 2> /tmp/bad.err; then
+            echo 'explicit aggregate overwrite unexpectedly accepted' >&2
+            exit 1
+          fi
+      - name: Install Linux probe tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu flex bison bc libelf-dev libssl-dev
+      - name: Probe unchanged version.i
+        run: |
+          set -Eeuo pipefail
+          mkdir -p tests/external/linux
+          git show origin/diagnostic/linux-first100-variadic-stack-v0:tests/external/linux/batch_probe.sh > tests/external/linux/batch_probe.sh
+          chmod +x tests/external/linux/batch_probe.sh
+          set +e
+          MINIC="$GITHUB_WORKSPACE/build/static-zero-overwrite/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/static-zero-version" CROSS_COMPILE=riscv64-linux-gnu- LINUX_BATCH_OFFSET=1 LINUX_BATCH_LIMIT=1 LINUX_BATCH_JOBS=1 sh tests/external/linux/batch_probe.sh
+          status=$?
+          set -e
+          cat build/static-zero-version/batch-summary.txt
+          echo "VERSION_PROBE_STATUS=$status"
+      - name: Commit product only
+        run: |
+          set -Eeuo pipefail
+          rm -f tools/dev/materialize-static-zero-subobject-overwrite-v1.py .github/workflows/materialize-static-zero-subobject-overwrite-v1.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/frontend/parser_string.c src/frontend/parser_internal.h src/frontend/parser_global.c tools/dev/materialize-static-zero-subobject-overwrite-v1.py .github/workflows/materialize-static-zero-subobject-overwrite-v1.yml
+          git diff --cached --check
+          git commit -m 'frontend: overwrite implicit-zero static subobjects'
+          git push origin HEAD:staging/string-octal-v1
