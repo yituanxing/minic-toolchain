@@ -434,3 +434,7 @@ sh "$root/tests/compiler/c0/run-record-value-initialize.sh"
 MINIC="$minic" HOST_CC="$host_cc" \
 BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
 sh "$root/tests/compiler/c0/run-braced-static-scalar.sh"
+
+MINIC="$minic" HOST_CC="$host_cc" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+sh "$root/tests/compiler/c0/run-static-pointer-constant-conditional.sh"
