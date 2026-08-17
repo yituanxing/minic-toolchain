@@ -1,0 +1,129 @@
+name: Diagnostic Direct Function Parameter V1
+on:
+  push:
+    branches: [staging/string-octal-v1]
+permissions:
+  contents: read
+jobs:
+  probe:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-24.04
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: staging/string-octal-v1
+          fetch-depth: 0
+      - name: Materialize convergence compiler plus direct function parameters
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/materialize-runtime-record-array-v1.py
+          python3 tools/dev/materialize-fixed-call-character-pointer-v1.py
+          python3 tools/dev/materialize-function-pointer-array-declarator-v1.py
+          python3 tools/dev/materialize-preformed-static-array-v1.py
+          python3 tools/dev/materialize-static-local-prefix-attributes-v1.py
+          python3 tools/dev/materialize-top-level-braced-static-scalar-v1.py
+          python3 tools/dev/materialize-parenthesized-pointer-array-v1.py
+          python3 tools/dev/materialize-record-pointer-array-v1.py
+          python3 tools/dev/materialize-gnu-function-void-pointer-equality-v1.py
+          python3 tools/dev/materialize-gnu-signed-left-shift-ice-v1.py
+          python3 tools/dev/materialize-record-value-initialize-v1.py
+          python3 tools/dev/materialize-record-value-initialize-v1b.py
+          python3 tools/dev/materialize-static-local-self-reference-v1.py
+          python3 tools/dev/materialize-record-conditional-type-v1.py
+          python3 tools/dev/materialize-direct-function-parameter-v1.py
+          clang-format-18 -i \
+            src/frontend/ast.h src/frontend/ast.c src/frontend/ast_verifier.c \
+            src/frontend/expression_semantics.c src/frontend/function_body.c \
+            src/frontend/parser_statement.c src/frontend/parser_expression.c \
+            src/frontend/parser_declarator.c src/frontend/parser_function.c \
+            src/frontend/parser_internal.h src/frontend/parser_global.c \
+            src/frontend/parser_record.c src/frontend/const_eval.c \
+            src/target/riscv64/codegen_expression.c src/target/riscv64/codegen_statement.c
+          git diff --check
+          make -j4 MODE=release BUILD_DIR=build/convergence
+      - name: Focused direct function parameter declaration
+        run: |
+          set -Eeuo pipefail
+          cat > /tmp/direct-function-parameter.c <<'EOF'
+          struct sk_buff;
+          typedef int getfrag_pointer_t(void *from, char *to, int offset, int len,
+                                        int odd, struct sk_buff *skb);
+
+          int append_data(int getfrag(void *from, char *to, int offset, int len,
+                                      int odd, struct sk_buff *skb),
+                          void *from);
+
+          int call_frag(int getfrag(void *from, char *to, int offset, int len,
+                                    int odd, struct sk_buff *skb),
+                        void *from)
+          {
+              return getfrag(from, (char *)0, 0, 0, 0, (struct sk_buff *)0);
+          }
+
+          int declaration_compat(getfrag_pointer_t getfrag, void *from)
+          {
+              return call_frag(getfrag, from);
+          }
+          EOF
+          build/convergence/bin/minic -S /tmp/direct-function-parameter.c -o /tmp/direct-function-parameter.s
+          test -s /tmp/direct-function-parameter.s
+          grep -F 'call_frag:' /tmp/direct-function-parameter.s >/dev/null
+          grep -F 'jalr' /tmp/direct-function-parameter.s >/dev/null
+          printf '%s\n' 'PASS direct function parameter declarator adjusts to function pointer'
+      - name: Install Linux probe tools
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu flex bison bc libelf-dev libssl-dev
+          mkdir -p tests/external/linux
+          git show origin/diagnostic/linux-first100-variadic-stack-v0:tests/external/linux/batch_probe.sh > tests/external/linux/batch_probe.sh
+          chmod +x tests/external/linux/batch_probe.sh
+      - name: Probe unchanged do_mounts.i
+        run: |
+          set +e
+          MINIC="$GITHUB_WORKSPACE/build/convergence/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/do-mounts-direct-fn-param" \
+          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-6.6.143.tar.xz" \
+          CROSS_COMPILE=riscv64-linux-gnu- LINUX_BATCH_OFFSET=2 LINUX_BATCH_LIMIT=1 LINUX_BATCH_JOBS=1 \
+            sh tests/external/linux/batch_probe.sh
+          status=$?
+          set -e
+          cat build/do-mounts-direct-fn-param/batch-summary.txt
+          stderr=build/do-mounts-direct-fn-param/minic-stderr/init/do_mounts.i.stderr
+          cat "$stderr" || true
+          input=build/do-mounts-direct-fn-param/kbuild/init/do_mounts.i
+          frontier=$(sed -n 's/.*do_mounts\.i:\([0-9][0-9]*\):.*/\1/p' "$stderr" | head -n1)
+          if test -n "$frontier"; then start=$((frontier>45?frontier-45:1)); end=$((frontier+45)); nl -ba "$input" | sed -n "${start},${end}p"; fi
+          echo "DO_MOUNTS_DIRECT_FN_PARAM_STATUS=$status"
+      - name: Probe unchanged build_policy.i
+        run: |
+          set +e
+          MINIC="$GITHUB_WORKSPACE/build/convergence/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/build-policy-direct-fn-param" \
+          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-6.6.143.tar.xz" \
+          CROSS_COMPILE=riscv64-linux-gnu- LINUX_BATCH_OFFSET=97 LINUX_BATCH_LIMIT=1 LINUX_BATCH_JOBS=1 \
+            sh tests/external/linux/batch_probe.sh
+          status=$?
+          set -e
+          cat build/build-policy-direct-fn-param/batch-summary.txt
+          stderr=build/build-policy-direct-fn-param/minic-stderr/kernel/sched/build_policy.i.stderr
+          cat "$stderr" || true
+          input=build/build-policy-direct-fn-param/kbuild/kernel/sched/build_policy.i
+          frontier=$(sed -n 's/.*build_policy\.i:\([0-9][0-9]*\):.*/\1/p' "$stderr" | head -n1)
+          if test -n "$frontier"; then start=$((frontier>45?frontier-45:1)); end=$((frontier+45)); nl -ba "$input" | sed -n "${start},${end}p"; fi
+          echo "BUILD_POLICY_DIRECT_FN_PARAM_STATUS=$status"
+      - name: Probe fixed Linux first100
+        run: |
+          set +e
+          MINIC="$GITHUB_WORKSPACE/build/convergence/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/first100-direct-fn-param" \
+          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-6.6.143.tar.xz" \
+          CROSS_COMPILE=riscv64-linux-gnu- LINUX_BATCH_OFFSET=0 LINUX_BATCH_LIMIT=100 LINUX_BATCH_JOBS=4 \
+            sh tests/external/linux/batch_probe.sh
+          status=$?
+          set -e
+          cat build/first100-direct-fn-param/batch-summary.txt
+          echo "FIRST100_DIRECT_FN_PARAM_STATUS=$status"
+          test "$status" -eq 0 || test "$status" -eq 1
