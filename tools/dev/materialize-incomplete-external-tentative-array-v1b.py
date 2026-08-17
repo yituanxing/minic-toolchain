@@ -1,5 +1,6 @@
 from pathlib import Path
 
+# Rerun after v1 learned to reuse the canonical incomplete-array descriptor.
 path = Path('src/frontend/parser_function.c')
 text = path.read_text()
 
@@ -60,10 +61,8 @@ replacement = '''                                                           expl
                                                            &visibility,
                                                            &has_visibility,
                                                            is_weak))'''
-# clang-format normalizes both calls to the same argument indentation after materialization.
 tail_count = region.count(tail)
 if tail_count != 2:
-    # Accept the shorter indentation used by the complete-array branch before clang-format.
     tail = '''                                                       explicit_alignment))'''
     replacement = '''                                                       explicit_alignment,
                                                        &visibility,
@@ -71,7 +70,6 @@ if tail_count != 2:
                                                        is_weak))'''
     tail_count = region.count(tail)
 if tail_count != 2:
-    # Rewrite each parser call structurally instead of touching code outside this function.
     marker = 'explicit_alignment))'
     if region.count(marker) < 2:
         raise SystemExit('visible external array attribute-call tail changed')
@@ -79,8 +77,6 @@ if tail_count != 2:
     rebuilt = pieces[0]
     replacements_left = 2
     for piece in pieces[1:]:
-        if replacements_left > 0 and rebuilt.rstrip().endswith('explicit_alignment') is False:
-            pass
         if replacements_left > 0:
             rebuilt += 'explicit_alignment,\n                                                           &visibility,\n                                                           &has_visibility,\n                                                           is_weak))'
             replacements_left -= 1
