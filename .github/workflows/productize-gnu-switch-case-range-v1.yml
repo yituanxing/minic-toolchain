@@ -1,0 +1,82 @@
+name: Productize GNU Switch Case Range V1
+on:
+  push:
+    branches: [product/gnu-switch-case-range-v1]
+permissions:
+  contents: write
+jobs:
+  productize:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: product/gnu-switch-case-range-v1
+          fetch-depth: 0
+      - name: Materialize source and permanent contracts
+        run: |
+          set -Eeuo pipefail
+          git show origin/staging/string-octal-v1:tools/dev/materialize-gnu-switch-case-range-v1.py > tools/dev/.productize-gnu-switch-case-range-v1.py
+          python3 tools/dev/.productize-gnu-switch-case-range-v1.py
+          rm tools/dev/.productize-gnu-switch-case-range-v1.py
+          cat > tests/compiler/c0/run-gnu-switch-case-range.sh <<'EOF'
+          #!/bin/sh
+          set -eu
+          root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+          minic=${MINIC:-"$root/build/debug/bin/minic"}
+          work=${BUILD_DIR:-"$root/build/debug"}/tests/gnu-switch-case-range
+          mkdir -p "$work"
+          cat > "$work/positive.c" <<'SRC'
+          int classify(unsigned int v) {
+              switch (v) {
+              case 0x40 ... 0x7f: return 8;
+              case 0x80 ... 0xbf: return 16;
+              case 0xc0 ... 0xff: return 32;
+              default: return 4;
+              }
+          }
+          int main(void) { return classify(0x40) == 8 && classify(0xbf) == 16 && classify(0xff) == 32 && classify(3) == 4 ? 0 : 1; }
+          SRC
+          "$minic" -S "$work/positive.c" -o "$work/positive.s"
+          grep -Fq '.Lswitch_range_next_' "$work/positive.s"
+          cat > "$work/overlap.c" <<'SRC'
+          int f(int v) { switch (v) { case 1 ... 5: return 1; case 5 ... 9: return 2; default: return 0; } }
+          SRC
+          if "$minic" -S "$work/overlap.c" -o "$work/overlap.s" 2>"$work/overlap.err"; then exit 1; fi
+          grep -Fq 'duplicate or overlapping case value range' "$work/overlap.err"
+          cat > "$work/descending.c" <<'SRC'
+          int f(int v) { switch (v) { case 9 ... 1: return 1; default: return 0; } }
+          SRC
+          if "$minic" -S "$work/descending.c" -o "$work/descending.s" 2>"$work/descending.err"; then exit 1; fi
+          grep -Fq 'GNU case range upper bound is below lower bound' "$work/descending.err"
+          printf '%s\n' 'PASS compiler/c0/gnu-switch-case-range'
+          EOF
+          chmod +x tests/compiler/c0/run-gnu-switch-case-range.sh
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('tests/compiler/c0/run.sh')
+          text = path.read_text()
+          anchor = 'compile_source switch switch\n'
+          addition = anchor + '''\nMINIC="$minic" \\\nBUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \\\nsh "$root/tests/compiler/c0/run-gnu-switch-case-range.sh"\n'''
+          if text.count(anchor) != 1:
+              raise SystemExit(f'run.sh switch anchor count={text.count(anchor)}')
+          path.write_text(text.replace(anchor, addition, 1))
+          PY
+          files=$(git diff --name-only -- '*.c' '*.h')
+          test -z "$files" || clang-format-18 -i $files
+          git diff --check
+      - name: Validate focused and fast gates
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release BUILD_DIR=build/product-switch-range
+          MINIC="$GITHUB_WORKSPACE/build/product-switch-range/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/product-switch-range" sh tests/compiler/c0/run-gnu-switch-case-range.sh
+          make -j4 check-fast MODE=release BUILD_DIR=build/product-switch-range
+      - name: Commit clean product diff
+        run: |
+          set -Eeuo pipefail
+          git rm .github/workflows/productize-gnu-switch-case-range-v1.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m 'frontend: preserve GNU switch case ranges semantically'
+          git push origin HEAD:product/gnu-switch-case-range-v1
