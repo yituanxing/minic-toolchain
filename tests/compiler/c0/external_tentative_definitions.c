@@ -37,6 +37,25 @@ struct tentative_record {
 
 struct tentative_record record_state;
 
+static int static_repeated_tentative;
+static int static_repeated_tentative;
+
+static int static_tentative_then_full;
+static int static_tentative_then_full = 11;
+
+static int static_full_then_tentative = 13;
+static int static_full_then_tentative;
+
+static int static_pointer_target;
+static int *static_pointer_tentative;
+static int *static_pointer_tentative;
+static int *static_pointer_then_full;
+static int *static_pointer_then_full = &static_pointer_target;
+
+static struct tentative_record static_record_only;
+static const struct tentative_record static_record_then_full;
+static const struct tentative_record static_record_then_full = {3, 17};
+
 extern unsigned long composite_page_table[];
 unsigned long composite_page_table[4] __attribute__((__section__(".bss..page_aligned")))
 __attribute__((__aligned__(4096)));
