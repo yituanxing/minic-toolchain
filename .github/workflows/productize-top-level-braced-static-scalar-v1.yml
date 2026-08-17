@@ -45,12 +45,18 @@ jobs:
           printf '%s\n' 'PASS compiler/c0/braced-static-scalar scalar=integer,pointer trailing-comma=1 excess=reject'
           EOF
           chmod +x tests/compiler/c0/run-braced-static-scalar.sh
-          cat >> tests/compiler/c0/run.sh <<'EOF'
-
-          MINIC="$minic" HOST_CC="$host_cc" \
-          BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-          sh "$root/tests/compiler/c0/run-braced-static-scalar.sh"
-          EOF
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('tests/compiler/c0/run.sh')
+          text = path.read_text()
+          old = '''expect_compile_failure \\\n    invalid_braced_scalar_static_global \\\n    "expected integer constant expression"\n'''
+          new = '''compile_source braced_scalar_static_global invalid_braced_scalar_static_global\ngrep -F "  .word 1" "$work/braced_scalar_static_global.s" >/dev/null\nprintf '%s\\n' "PASS compiler/c0/braced_scalar_static_global"\n'''
+          if text.count(old) != 1:
+              raise SystemExit(f'legacy braced scalar contract count={text.count(old)}')
+          text = text.replace(old, new, 1)
+          text += '''\nMINIC="$minic" HOST_CC="$host_cc" \\\nBUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \\\nsh "$root/tests/compiler/c0/run-braced-static-scalar.sh"\n'''
+          path.write_text(text)
+          PY
           clang-format-18 -i src/frontend/parser_global.c tests/compiler/c0/braced_static_scalar.c tests/compiler/c0/invalid_braced_static_scalar_extra.c
           git diff --check
       - name: Validate Werror focused and fast gates
