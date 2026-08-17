@@ -728,18 +728,22 @@ bool minic_riscv64_emit_address_backed_record_value(
     MinicExpressionId expression_id) {
     const MinicExpression *expression;
 
-    if (!minic_c0_record_value_is_address_backed(program, expression_id)) {
-        return false;
-    }
     expression = minic_c0_program_expression(program, expression_id);
-    if (expression == NULL) {
+    if (expression == NULL || !minic_type_is_record(expression->type)) {
         return false;
     }
-    if (expression->value_category == MINIC_VALUE_LVALUE) {
-        return minic_riscv64_emit_lvalue_address(
-            file, program, function, function_layout, expression_id);
+    if (minic_c0_record_value_is_address_backed(program, expression_id)) {
+        if (expression->value_category == MINIC_VALUE_LVALUE) {
+            return minic_riscv64_emit_lvalue_address(
+                file, program, function, function_layout, expression_id);
+        }
+        return expression->kind == MINIC_EXPRESSION_STATEMENT &&
+               minic_riscv64_emit_expression(
+                   file, program, function, function_layout, expression_id);
     }
-    return expression->kind == MINIC_EXPRESSION_STATEMENT &&
+    return expression->kind == MINIC_EXPRESSION_ASSIGNMENT &&
+           expression->value_category == MINIC_VALUE_RVALUE &&
+           minic_c0_record_value_is_copy_source(program, expression_id) &&
            minic_riscv64_emit_expression(file, program, function, function_layout, expression_id);
 }
 
@@ -758,7 +762,8 @@ minic_riscv64_emit_record_value_temporary(FILE *file,
         !minic_c0_record_value_is_copy_source(program, source_id)) {
         return false;
     }
-    if (minic_c0_record_value_is_address_backed(program, source_id)) {
+    if (minic_c0_record_value_is_address_backed(program, source_id) ||
+        source->kind == MINIC_EXPRESSION_ASSIGNMENT) {
         size_t index;
 
         if (!minic_riscv64_emit_address_backed_record_value(
@@ -981,8 +986,8 @@ bool minic_riscv64_emit_record_copy_value(FILE *file,
     target = minic_c0_program_expression(program, target_id);
     source = minic_c0_program_expression(program, source_id);
     if (target == NULL || source == NULL || target->value_category != MINIC_VALUE_LVALUE ||
-        minic_type_is_const(target->type) || !minic_type_is_record(target->type) ||
-        !minic_type_is_record(source->type) || target->type.record_id != source->type.record_id ||
+        !minic_type_is_record(target->type) || !minic_type_is_record(source->type) ||
+        target->type.record_id != source->type.record_id ||
         !minic_c0_record_value_is_copy_source(program, source_id)) {
         return false;
     }

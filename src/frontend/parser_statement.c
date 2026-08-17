@@ -502,6 +502,10 @@ static bool add_zero_initialized_record_lvalue(MinicParser *parser,
         member.kind = MINIC_EXPRESSION_MEMBER;
         member.span = initializer_span;
         member.type = field->type;
+        if (minic_type_is_const(base_type) && !minic_type_add_const(member.type, &member.type)) {
+            minic_parser_error(parser, "cannot propagate const to zero-initialized record member");
+            return false;
+        }
         member.value_category = MINIC_VALUE_LVALUE;
         member.value.member.base = address_id;
         member.value.member.record_id = record_id;
@@ -526,6 +530,10 @@ static bool add_zero_initialized_record_lvalue(MinicParser *parser,
 }
 
 static bool add_record_copy_assignments(MinicParser *parser,
+                                        MinicExpressionId target_id,
+                                        MinicExpressionId source_id,
+                                        MinicSourceSpan span);
+static bool add_record_initializer_copy(MinicParser *parser,
                                         MinicExpressionId target_id,
                                         MinicExpressionId source_id,
                                         MinicSourceSpan span);
@@ -620,7 +628,7 @@ static bool add_runtime_record_member_assignment(MinicParser *parser,
                                "record initializer member requires a matching record copy source");
             return false;
         }
-        return add_record_copy_assignments(parser, member_id, value_id, value->span);
+        return add_record_initializer_copy(parser, member_id, value_id, value->span);
     }
 
     (void)memset(&statement, 0, sizeof(statement));
@@ -1284,7 +1292,7 @@ parse_local_declarator(MinicParser *parser, MinicType base_type, bool is_registe
                         parser, "record local initializer requires a matching record copy source");
                     return false;
                 }
-                if (!add_record_copy_assignments(parser, target_id, source_id, source->span)) {
+                if (!add_record_initializer_copy(parser, target_id, source_id, source->span)) {
                     return false;
                 }
                 return finalize_local_cleanup(parser, &attributes, &local, local_id);
@@ -1388,7 +1396,7 @@ static bool parse_auto_type_local_declaration(MinicParser *parser) {
 
     if (minic_type_is_record(local.type)) {
         if (!minic_c0_record_value_is_copy_source(parser->program, initializer_id) ||
-            !add_record_copy_assignments(parser, target_id, initializer_id, initializer_span)) {
+            !add_record_initializer_copy(parser, target_id, initializer_id, initializer_span)) {
             if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
                 minic_parser_error(
                     parser,
@@ -2233,32 +2241,44 @@ static bool parse_static_local_declaration(MinicParser *parser) {
     return minic_parser_expect(parser, MINIC_TOKEN_SEMICOLON, "expected ';'");
 }
 
-static bool add_record_copy_assignments(MinicParser *parser,
-                                        MinicExpressionId target_id,
-                                        MinicExpressionId source_id,
-                                        MinicSourceSpan span) {
+static bool add_record_copy_statement(MinicParser *parser,
+                                      MinicExpressionId target_id,
+                                      MinicExpressionId source_id,
+                                      MinicSourceSpan span,
+                                      MinicStatementKind statement_kind) {
     const MinicExpression *target;
     const MinicExpression *source;
     const MinicRecord *record;
     MinicStatement statement;
+    bool is_initializer;
 
+    is_initializer = statement_kind == MINIC_STATEMENT_RECORD_INITIALIZE;
+    if (!is_initializer && statement_kind != MINIC_STATEMENT_RECORD_COPY) {
+        return false;
+    }
     target = minic_c0_program_expression(parser->program, target_id);
     source = minic_c0_program_expression(parser->program, source_id);
     if (target == NULL || source == NULL || target->value_category != MINIC_VALUE_LVALUE ||
         !minic_c0_record_value_is_copy_source(parser->program, source_id) ||
         !minic_type_is_record(target->type) || !minic_type_is_record(source->type) ||
-        target->type.record_id != source->type.record_id || minic_type_is_const(target->type)) {
-        minic_parser_error(parser, "record assignment requires a matching record copy source");
+        target->type.record_id != source->type.record_id ||
+        (!is_initializer && minic_type_is_const(target->type))) {
+        minic_parser_error(parser,
+                           is_initializer
+                               ? "record initializer requires a matching record copy source"
+                               : "record assignment requires a matching record copy source");
         return false;
     }
     record = minic_c0_program_record(parser->program, target->type.record_id);
     if (record == NULL || !record->is_complete) {
-        minic_parser_error(parser, "record assignment requires a complete record");
+        minic_parser_error(parser,
+                           is_initializer ? "record initializer requires a complete record"
+                                          : "record assignment requires a complete record");
         return false;
     }
 
     (void)memset(&statement, 0, sizeof(statement));
-    statement.kind = MINIC_STATEMENT_RECORD_COPY;
+    statement.kind = statement_kind;
     statement.span = span;
     statement.target_expression = target_id;
     statement.expression = source_id;
@@ -2266,6 +2286,22 @@ static bool add_record_copy_assignments(MinicParser *parser,
     statement.then_block = MINIC_BLOCK_INVALID;
     statement.else_block = MINIC_BLOCK_INVALID;
     return minic_parser_add_statement(parser, &statement);
+}
+
+static bool add_record_copy_assignments(MinicParser *parser,
+                                        MinicExpressionId target_id,
+                                        MinicExpressionId source_id,
+                                        MinicSourceSpan span) {
+    return add_record_copy_statement(
+        parser, target_id, source_id, span, MINIC_STATEMENT_RECORD_COPY);
+}
+
+static bool add_record_initializer_copy(MinicParser *parser,
+                                        MinicExpressionId target_id,
+                                        MinicExpressionId source_id,
+                                        MinicSourceSpan span) {
+    return add_record_copy_statement(
+        parser, target_id, source_id, span, MINIC_STATEMENT_RECORD_INITIALIZE);
 }
 
 static bool assignment_chain_expression_is_stable(const MinicParser *parser,

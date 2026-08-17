@@ -832,11 +832,13 @@ static bool verify_statement(const MinicC0Program *program,
                target->value_category == MINIC_VALUE_LVALUE &&
                minic_c0_assignment_compatible(program, target->type, statement->expression);
     case MINIC_STATEMENT_RECORD_COPY:
+    case MINIC_STATEMENT_RECORD_INITIALIZE:
         return target != NULL && expression != NULL &&
                target->value_category == MINIC_VALUE_LVALUE &&
                minic_c0_record_value_is_copy_source(program, statement->expression) &&
-               !minic_type_is_const(target->type) && minic_type_is_record(target->type) &&
-               minic_type_is_record(expression->type) &&
+               (statement->kind == MINIC_STATEMENT_RECORD_INITIALIZE ||
+                !minic_type_is_const(target->type)) &&
+               minic_type_is_record(target->type) && minic_type_is_record(expression->type) &&
                target->type.record_id == expression->type.record_id;
     case MINIC_STATEMENT_XOR_ASSIGN: {
         MinicType common_type;

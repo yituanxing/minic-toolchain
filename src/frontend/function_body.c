@@ -433,6 +433,7 @@ static bool process_statement(MinicFunctionBodyValidation *validation,
         return claim_block(validation, statement->then_block);
     case MINIC_STATEMENT_ASSIGN:
     case MINIC_STATEMENT_RECORD_COPY:
+    case MINIC_STATEMENT_RECORD_INITIALIZE:
     case MINIC_STATEMENT_XOR_ASSIGN:
     case MINIC_STATEMENT_EXPRESSION:
     case MINIC_STATEMENT_INLINE_ASM:
