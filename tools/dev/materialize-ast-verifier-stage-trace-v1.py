@@ -35,7 +35,9 @@ for anchor, label in anchors:
         raise SystemExit(f"verifier stage anchor {label} count={count}")
     body = body.replace(
         anchor,
-        f'    (void)fprintf(stderr, "VERIFY_STAGE {label}\\n");\n' + anchor,
+        f'    (void)fprintf(stderr, "VERIFY_STAGE {label}\\n");\n'
+        + anchor
+        + f'        (void)fprintf(stderr, "VERIFY_ITEM {label} index=%zu\\n", index);\n',
         1,
     )
 
