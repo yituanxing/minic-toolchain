@@ -1476,6 +1476,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     size_t object_explicit_alignment;
     MinicSymbolVisibility visibility;
     bool has_visibility;
+    bool object_is_weak;
 
     body_block = MINIC_BLOCK_INVALID;
     parameter_count = 0U;
@@ -1496,6 +1497,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     object_explicit_alignment = 0U;
     visibility = MINIC_SYMBOL_VISIBILITY_DEFAULT;
     has_visibility = false;
+    object_is_weak = false;
     (void)memset(assembler_name, 0, sizeof(assembler_name));
     (void)memset(section_name, 0, sizeof(section_name));
     (void)memset(parameter_name_spans, 0, sizeof(parameter_name_spans));
@@ -1772,20 +1774,28 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
             minic_parser_error(parser, "inline specifier requires a function declarator");
             return false;
         }
-        if (!minic_parser_apply_object_attribute_list(parser,
-                                                      &deferred_attributes,
-                                                      section_name,
-                                                      sizeof(section_name),
-                                                      &section_name_length,
-                                                      &has_section,
-                                                      &object_explicit_alignment) ||
-            !minic_parser_apply_object_attribute_list(parser,
-                                                      &declarator_attributes,
-                                                      section_name,
-                                                      sizeof(section_name),
-                                                      &section_name_length,
-                                                      &has_section,
-                                                      &object_explicit_alignment)) {
+        if (!minic_parser_apply_object_attribute_list_with_symbol_metadata(
+                parser,
+                &deferred_attributes,
+                section_name,
+                sizeof(section_name),
+                &section_name_length,
+                &has_section,
+                &object_explicit_alignment,
+                &visibility,
+                &has_visibility,
+                &object_is_weak) ||
+            !minic_parser_apply_object_attribute_list_with_symbol_metadata(
+                parser,
+                &declarator_attributes,
+                section_name,
+                sizeof(section_name),
+                &section_name_length,
+                &has_section,
+                &object_explicit_alignment,
+                &visibility,
+                &has_visibility,
+                &object_is_weak)) {
             return false;
         }
         if (is_extern_declaration) {
@@ -1800,46 +1810,65 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                                                                visibility,
                                                                has_visibility);
         }
-        if (!minic_parser_parse_gnu_object_attribute_lists(parser,
-                                                           section_name,
-                                                           sizeof(section_name),
-                                                           &section_name_length,
-                                                           &has_section,
-                                                           &object_explicit_alignment)) {
+        if (!minic_parser_parse_gnu_object_attribute_lists_with_symbol_metadata(
+                parser,
+                section_name,
+                sizeof(section_name),
+                &section_name_length,
+                &has_section,
+                &object_explicit_alignment,
+                &visibility,
+                &has_visibility,
+                &object_is_weak)) {
             return false;
         }
         if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
-            return parse_visible_external_array(parser,
-                                                return_type,
-                                                name_span,
-                                                section_name,
-                                                sizeof(section_name),
-                                                &section_name_length,
-                                                &has_section,
-                                                &object_explicit_alignment,
-                                                visibility,
-                                                has_visibility);
+            if (!parse_visible_external_array(parser,
+                                              return_type,
+                                              name_span,
+                                              section_name,
+                                              sizeof(section_name),
+                                              &section_name_length,
+                                              &has_section,
+                                              &object_explicit_alignment,
+                                              visibility,
+                                              has_visibility)) {
+                return false;
+            }
+        } else if (parser->current.kind == MINIC_TOKEN_SEMICOLON) {
+            if (!parse_external_tentative_object(parser,
+                                                 return_type,
+                                                 name_span,
+                                                 section_name,
+                                                 section_name_length,
+                                                 has_section,
+                                                 object_explicit_alignment,
+                                                 visibility,
+                                                 has_visibility)) {
+                return false;
+            }
+        } else if (!parse_external_object_definition(parser,
+                                                     return_type,
+                                                     name_span,
+                                                     section_name,
+                                                     section_name_length,
+                                                     has_section,
+                                                     object_explicit_alignment,
+                                                     visibility,
+                                                     has_visibility)) {
+            return false;
         }
-        if (parser->current.kind == MINIC_TOKEN_SEMICOLON) {
-            return parse_external_tentative_object(parser,
-                                                   return_type,
-                                                   name_span,
-                                                   section_name,
-                                                   section_name_length,
-                                                   has_section,
-                                                   object_explicit_alignment,
-                                                   visibility,
-                                                   has_visibility);
+        if (object_is_weak) {
+            MinicGlobalObjectId object_id;
+
+            object_id = minic_parser_find_global_object_entity(parser, name_span);
+            if (object_id == MINIC_GLOBAL_OBJECT_INVALID ||
+                !minic_c0_global_object_set_weak(parser->program, object_id, true)) {
+                minic_parser_error(parser, "GNU weak requires external object linkage");
+                return false;
+            }
         }
-        return parse_external_object_definition(parser,
-                                                return_type,
-                                                name_span,
-                                                section_name,
-                                                section_name_length,
-                                                has_section,
-                                                object_explicit_alignment,
-                                                visibility,
-                                                has_visibility);
+        return true;
     }
     if (!apply_function_attribute_list(
             parser,

@@ -440,6 +440,7 @@ typedef struct MinicGlobalObject {
     size_t explicit_alignment;
     MinicSymbolVisibility visibility;
     bool is_internal;
+    bool is_weak;
     bool is_read_only;
     bool is_zero_initialized;
     bool is_extern;
@@ -806,6 +807,9 @@ bool minic_c0_global_object_set_zero_initialized(MinicC0Program *program,
                                                  MinicGlobalObjectId global_object_id);
 bool minic_c0_global_object_set_extern(MinicC0Program *program,
                                        MinicGlobalObjectId global_object_id);
+bool minic_c0_global_object_set_weak(MinicC0Program *program,
+                                     MinicGlobalObjectId global_object_id,
+                                     bool is_weak);
 bool minic_c0_global_object_set_visibility(MinicC0Program *program,
                                            MinicGlobalObjectId global_object_id,
                                            MinicSymbolVisibility visibility);

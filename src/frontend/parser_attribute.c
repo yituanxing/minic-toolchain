@@ -256,6 +256,7 @@ typedef struct MinicObjectAttributeContext {
     size_t *explicit_alignment;
     MinicSymbolVisibility *visibility;
     bool *has_visibility;
+    bool *is_weak;
 } MinicObjectAttributeContext;
 
 static bool parse_object_visibility_argument(MinicParser *parser,
@@ -369,6 +370,10 @@ static bool consume_object_attribute(MinicParser *parser,
     if (object_attribute_class_is_parse_only(descriptor->semantic_class)) {
         return true;
     }
+    if (descriptor->kind == MINIC_ATTRIBUTE_WEAK && context->is_weak != NULL) {
+        *context->is_weak = true;
+        return true;
+    }
     if (descriptor->kind == MINIC_ATTRIBUTE_SECTION) {
         return minic_parser_apply_section_attribute(parser,
                                                     attribute,
@@ -409,6 +414,7 @@ static bool initialize_object_attribute_context(MinicObjectAttributeContext *con
     context->explicit_alignment = explicit_alignment;
     context->visibility = NULL;
     context->has_visibility = NULL;
+    context->is_weak = NULL;
     return true;
 }
 
@@ -480,6 +486,68 @@ bool minic_parser_parse_gnu_object_attribute_lists_with_visibility(
     }
     context.visibility = visibility;
     context.has_visibility = has_visibility;
+    return minic_parser_parse_gnu_attribute_lists(parser, consume_object_attribute, &context);
+}
+
+bool minic_parser_apply_object_attribute_list_with_symbol_metadata(
+    MinicParser *parser,
+    const MinicParsedAttributeList *attributes,
+    char *section_name,
+    size_t section_capacity,
+    size_t *section_name_length,
+    bool *has_section,
+    size_t *explicit_alignment,
+    MinicSymbolVisibility *visibility,
+    bool *has_visibility,
+    bool *is_weak) {
+    MinicObjectAttributeContext context;
+    size_t index;
+
+    if (parser == NULL || attributes == NULL || visibility == NULL || has_visibility == NULL ||
+        is_weak == NULL ||
+        !initialize_object_attribute_context(&context,
+                                             section_name,
+                                             section_capacity,
+                                             section_name_length,
+                                             has_section,
+                                             explicit_alignment)) {
+        return false;
+    }
+    context.visibility = visibility;
+    context.has_visibility = has_visibility;
+    context.is_weak = is_weak;
+    for (index = 0U; index < attributes->count; ++index) {
+        if (!consume_object_attribute(parser, &attributes->values[index], &context)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool minic_parser_parse_gnu_object_attribute_lists_with_symbol_metadata(
+    MinicParser *parser,
+    char *section_name,
+    size_t section_capacity,
+    size_t *section_name_length,
+    bool *has_section,
+    size_t *explicit_alignment,
+    MinicSymbolVisibility *visibility,
+    bool *has_visibility,
+    bool *is_weak) {
+    MinicObjectAttributeContext context;
+
+    if (parser == NULL || visibility == NULL || has_visibility == NULL || is_weak == NULL ||
+        !initialize_object_attribute_context(&context,
+                                             section_name,
+                                             section_capacity,
+                                             section_name_length,
+                                             has_section,
+                                             explicit_alignment)) {
+        return false;
+    }
+    context.visibility = visibility;
+    context.has_visibility = has_visibility;
+    context.is_weak = is_weak;
     return minic_parser_parse_gnu_attribute_lists(parser, consume_object_attribute, &context);
 }
 

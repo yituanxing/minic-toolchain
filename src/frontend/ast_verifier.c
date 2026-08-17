@@ -1228,7 +1228,7 @@ bool minic_c0_program_verify_target(const MinicC0Program *program,
 
         object = &program->global_objects[index];
         if (object->name == NULL || !type_is_valid(program, target, object->type) ||
-            minic_type_is_function(object->type) ||
+            minic_type_is_function(object->type) || (object->is_internal && object->is_weak) ||
             (minic_type_is_void(object->type) && !object->is_extern) ||
             (object->is_extern &&
              (object->is_tentative || object->is_internal || object->is_zero_initialized ||

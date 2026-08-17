@@ -251,6 +251,27 @@ bool minic_parser_parse_gnu_object_attribute_lists_with_visibility(
     size_t *explicit_alignment,
     MinicSymbolVisibility *visibility,
     bool *has_visibility);
+bool minic_parser_apply_object_attribute_list_with_symbol_metadata(
+    MinicParser *parser,
+    const MinicParsedAttributeList *attributes,
+    char *section_name,
+    size_t section_capacity,
+    size_t *section_name_length,
+    bool *has_section,
+    size_t *explicit_alignment,
+    MinicSymbolVisibility *visibility,
+    bool *has_visibility,
+    bool *is_weak);
+bool minic_parser_parse_gnu_object_attribute_lists_with_symbol_metadata(
+    MinicParser *parser,
+    char *section_name,
+    size_t section_capacity,
+    size_t *section_name_length,
+    bool *has_section,
+    size_t *explicit_alignment,
+    MinicSymbolVisibility *visibility,
+    bool *has_visibility,
+    bool *is_weak);
 bool minic_parser_apply_alignment_attribute(MinicParser *parser,
                                             const MinicParsedAttribute *attribute,
                                             const char *subject,

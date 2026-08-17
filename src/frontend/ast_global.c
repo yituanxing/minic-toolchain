@@ -972,6 +972,22 @@ minic_c0_program_fixed_register_binding(const MinicC0Program *program,
     return &program->fixed_register_bindings[binding_id];
 }
 
+bool minic_c0_global_object_set_weak(MinicC0Program *program,
+                                     MinicGlobalObjectId global_object_id,
+                                     bool is_weak) {
+    MinicGlobalObject *object;
+
+    if (program == NULL || global_object_id >= program->global_object_count) {
+        return false;
+    }
+    object = &program->global_objects[global_object_id];
+    if (is_weak && object->is_internal) {
+        return false;
+    }
+    object->is_weak = is_weak;
+    return true;
+}
+
 bool minic_c0_global_object_set_visibility(MinicC0Program *program,
                                            MinicGlobalObjectId global_object_id,
                                            MinicSymbolVisibility visibility) {

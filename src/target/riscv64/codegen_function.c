@@ -828,7 +828,7 @@ static bool minic_riscv64_emit_global_object(FILE *file,
         return false;
     }
     if (!object->is_internal) {
-        if (fprintf(file, ".globl %s\n", object->name) < 0) {
+        if (fprintf(file, object->is_weak ? ".weak %s\n" : ".globl %s\n", object->name) < 0) {
             return false;
         }
         if (object->visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT) {
@@ -1181,6 +1181,13 @@ bool minic_riscv64_write_c0_program_with_core_candidates(const char *path,
     for (global_index = 0U; success && global_index < program->global_object_count;
          ++global_index) {
         if (program->global_objects[global_index].is_extern) {
+            const MinicGlobalObject *object;
+
+            object = &program->global_objects[global_index];
+            if (object->is_weak && !object->is_internal &&
+                fprintf(file, ".weak %s\n", object->name) < 0) {
+                success = false;
+            }
             continue;
         }
         success =

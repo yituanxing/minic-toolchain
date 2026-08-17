@@ -1888,6 +1888,7 @@ bool minic_parser_parse_extern_global_after_head(MinicParser *parser,
         bool declarator_has_section;
         MinicSymbolVisibility declarator_visibility;
         bool declarator_has_visibility;
+        bool declarator_is_weak;
         bool is_array;
         MinicType declarator_element_type;
         size_t array_type_begin;
@@ -1897,6 +1898,7 @@ bool minic_parser_parse_extern_global_after_head(MinicParser *parser,
         declarator_has_section = has_section;
         declarator_visibility = visibility;
         declarator_has_visibility = has_visibility;
+        declarator_is_weak = false;
         (void)memset(declarator_section_name, 0, sizeof(declarator_section_name));
         if (has_section) {
             if (section_name == NULL ||
@@ -1915,7 +1917,7 @@ bool minic_parser_parse_extern_global_after_head(MinicParser *parser,
             return false;
         }
         declarator_element_type = object_type;
-        if (!minic_parser_parse_gnu_object_attribute_lists_with_visibility(
+        if (!minic_parser_parse_gnu_object_attribute_lists_with_symbol_metadata(
                 parser,
                 declarator_section_name,
                 sizeof(declarator_section_name),
@@ -1923,7 +1925,8 @@ bool minic_parser_parse_extern_global_after_head(MinicParser *parser,
                 &declarator_has_section,
                 &declarator_explicit_alignment,
                 &declarator_visibility,
-                &declarator_has_visibility)) {
+                &declarator_has_visibility,
+                &declarator_is_weak)) {
             return false;
         }
         if (minic_type_is_function(object_type)) {
@@ -1933,7 +1936,7 @@ bool minic_parser_parse_extern_global_after_head(MinicParser *parser,
         array_type_begin = parser->program->array_type_count;
         if (!minic_parser_parse_array_declarator_suffix(
                 parser, object_type, true, &object_type, &is_array) ||
-            !minic_parser_parse_gnu_object_attribute_lists_with_visibility(
+            !minic_parser_parse_gnu_object_attribute_lists_with_symbol_metadata(
                 parser,
                 declarator_section_name,
                 sizeof(declarator_section_name),
@@ -1941,7 +1944,8 @@ bool minic_parser_parse_extern_global_after_head(MinicParser *parser,
                 &declarator_has_section,
                 &declarator_explicit_alignment,
                 &declarator_visibility,
-                &declarator_has_visibility)) {
+                &declarator_has_visibility,
+                &declarator_is_weak)) {
             return false;
         }
 
@@ -1980,6 +1984,11 @@ bool minic_parser_parse_extern_global_after_head(MinicParser *parser,
             if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
                 minic_parser_error(parser, "cannot declare extern object");
             }
+            return false;
+        }
+        if (declarator_is_weak &&
+            !minic_c0_global_object_set_weak(parser->program, object_id, true)) {
+            minic_parser_error(parser, "GNU weak requires external object linkage");
             return false;
         }
         parser->program->global_objects[object_id].is_block_scope_extern_only = false;
