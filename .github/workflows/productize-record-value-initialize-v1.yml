@@ -1,0 +1,68 @@
+name: Productize Record Value Initialize V1
+on:
+  push:
+    branches: [product/record-value-initialize-v1]
+permissions:
+  contents: write
+jobs:
+  productize:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: product/record-value-initialize-v1
+          fetch-depth: 0
+      - name: Materialize source and permanent contract
+        run: |
+          set -Eeuo pipefail
+          git show origin/staging/string-octal-v1:tools/dev/materialize-record-value-initialize-v1.py > tools/dev/.productize-record-value-initialize-v1.py
+          git show origin/staging/string-octal-v1:tools/dev/materialize-record-value-initialize-v1b.py > tools/dev/.productize-record-value-initialize-v1b.py
+          python3 tools/dev/.productize-record-value-initialize-v1.py
+          python3 tools/dev/.productize-record-value-initialize-v1b.py
+          rm tools/dev/.productize-record-value-initialize-v1.py tools/dev/.productize-record-value-initialize-v1b.py
+          cat > tests/compiler/c0/run-record-value-initialize.sh <<'EOF'
+          #!/bin/sh
+          set -eu
+          root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+          minic=${MINIC:-"$root/build/debug/bin/minic"}
+          work=${BUILD_DIR:-"$root/build/debug"}/tests/record-value-initialize
+          mkdir -p "$work"
+          cat > "$work/positive.c" <<'SRC'
+          struct Pair { int left; int right; };
+          int main(void) {
+              struct Pair source = { 7, 9 };
+              struct Pair scratch = { 0, 0 };
+              const struct Pair frozen = (scratch = source);
+              return frozen.left + frozen.right + scratch.left + scratch.right - 32;
+          }
+          SRC
+          "$minic" -S "$work/positive.c" -o "$work/positive.s"
+          grep -Fq 'main:' "$work/positive.s"
+          printf '%s\n' 'PASS compiler/c0/record-value-initialize assignment-rvalue=1 const-destination=initializer-only'
+          EOF
+          chmod +x tests/compiler/c0/run-record-value-initialize.sh
+          cat >> tests/compiler/c0/run.sh <<'EOF'
+
+          MINIC="$minic" \
+          BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+          sh "$root/tests/compiler/c0/run-record-value-initialize.sh"
+          EOF
+          files=$(git diff --name-only -- '*.c' '*.h')
+          test -z "$files" || clang-format-18 -i $files
+          git diff --check
+      - name: Validate Werror focused and fast gates
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/product-record-init
+          MINIC="$GITHUB_WORKSPACE/build/product-record-init/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/product-record-init" sh tests/compiler/c0/run-record-value-initialize.sh
+          make -j4 check-fast MODE=release BUILD_DIR=build/product-record-init-fast
+      - name: Commit clean product diff
+        run: |
+          set -Eeuo pipefail
+          git rm .github/workflows/productize-record-value-initialize-v1.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m 'frontend: distinguish record initialization from assignment'
+          git push origin HEAD:product/record-value-initialize-v1
