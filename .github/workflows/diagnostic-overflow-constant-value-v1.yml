@@ -1,0 +1,128 @@
+name: Diagnostic Overflow Constant Value V1
+on:
+  push:
+    branches: [staging/string-octal-v1]
+permissions:
+  contents: read
+jobs:
+  probe:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-24.04
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: staging/string-octal-v1
+          fetch-depth: 0
+      - name: Materialize convergence compiler plus ICE overflow operands
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/materialize-runtime-record-array-v1.py
+          python3 tools/dev/materialize-fixed-call-character-pointer-v1.py
+          python3 tools/dev/materialize-function-pointer-array-declarator-v1.py
+          python3 tools/dev/materialize-preformed-static-array-v1.py
+          python3 tools/dev/materialize-static-local-prefix-attributes-v1.py
+          python3 tools/dev/materialize-top-level-braced-static-scalar-v1.py
+          python3 tools/dev/materialize-parenthesized-pointer-array-v1.py
+          python3 tools/dev/materialize-record-pointer-array-v1.py
+          python3 tools/dev/materialize-gnu-function-void-pointer-equality-v1.py
+          python3 tools/dev/materialize-gnu-signed-left-shift-ice-v1.py
+          python3 tools/dev/materialize-record-value-initialize-v1.py
+          python3 tools/dev/materialize-record-value-initialize-v1b.py
+          python3 tools/dev/materialize-static-local-self-reference-v1.py
+          python3 tools/dev/materialize-record-conditional-type-v1.py
+          python3 tools/dev/materialize-direct-function-parameter-v1.py
+          python3 tools/dev/materialize-parameter-suffix-informational-attributes-v1.py
+          python3 tools/dev/materialize-overflow-result-range-v1.py
+          python3 tools/dev/materialize-overflow-constant-value-v1.py
+          clang-format-18 -i \
+            src/frontend/ast.h src/frontend/ast.c src/frontend/ast_verifier.c \
+            src/frontend/const_eval.h src/frontend/const_eval.c \
+            src/frontend/expression_semantics.h src/frontend/expression_semantics.c \
+            src/frontend/function_body.c src/frontend/parser_statement.c \
+            src/frontend/parser_expression.c src/frontend/parser_declarator.c \
+            src/frontend/parser_function.c src/frontend/parser_internal.h \
+            src/frontend/parser_global.c src/frontend/parser_record.c \
+            src/target/riscv64/codegen_expression.c src/target/riscv64/codegen_statement.c
+          git diff --check
+          make -j4 MODE=release BUILD_DIR=build/convergence
+      - name: Focused exact-value overflow contracts
+        run: |
+          set -Eeuo pipefail
+          cat > /tmp/overflow-constant-positive.c <<'EOF'
+          static int root_wait;
+          int scale_seconds(int sec)
+          {
+              return __builtin_mul_overflow(sec, 1000L, &root_wait);
+          }
+          static unsigned int mask;
+          int add_small(unsigned int value)
+          {
+              return __builtin_add_overflow(value, 7UL, &mask);
+          }
+          EOF
+          gcc -std=gnu11 -S /tmp/overflow-constant-positive.c -o /tmp/overflow-constant-positive-gcc.s
+          build/convergence/bin/minic -S /tmp/overflow-constant-positive.c -o /tmp/overflow-constant-positive.s
+          test -s /tmp/overflow-constant-positive.s
+
+          cat > /tmp/overflow-runtime-narrow-negative.c <<'EOF'
+          static int narrowed;
+          int unsupported(long value)
+          {
+              return __builtin_add_overflow(value, 1L, &narrowed);
+          }
+          EOF
+          if build/convergence/bin/minic -S /tmp/overflow-runtime-narrow-negative.c \
+              -o /tmp/overflow-runtime-narrow-negative.s \
+              > /tmp/overflow-runtime-narrow-negative.stdout \
+              2> /tmp/overflow-runtime-narrow-negative.stderr; then
+            echo 'runtime narrowing overflow operand unexpectedly succeeded' >&2
+            exit 1
+          fi
+          cat /tmp/overflow-runtime-narrow-negative.stderr
+
+          cat > /tmp/overflow-constant-narrow-negative.c <<'EOF'
+          static int narrowed;
+          int unsupported(void)
+          {
+              return __builtin_add_overflow(1, 2147483648L, &narrowed);
+          }
+          EOF
+          if build/convergence/bin/minic -S /tmp/overflow-constant-narrow-negative.c \
+              -o /tmp/overflow-constant-narrow-negative.s \
+              > /tmp/overflow-constant-narrow-negative.stdout \
+              2> /tmp/overflow-constant-narrow-negative.stderr; then
+            echo 'out-of-range ICE overflow operand unexpectedly succeeded' >&2
+            exit 1
+          fi
+          cat /tmp/overflow-constant-narrow-negative.stderr
+          printf '%s\n' 'PASS lossless ICE overflow operands; runtime and out-of-range narrowing remain fail-closed'
+      - name: Install Linux probe tools
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu flex bison bc libelf-dev libssl-dev
+          mkdir -p tests/external/linux
+          git show origin/diagnostic/linux-first100-variadic-stack-v0:tests/external/linux/batch_probe.sh > tests/external/linux/batch_probe.sh
+          chmod +x tests/external/linux/batch_probe.sh
+      - name: Probe unchanged do_mounts.i
+        run: |
+          set +e
+          MINIC="$GITHUB_WORKSPACE/build/convergence/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/do-mounts-overflow-constant" \
+          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-6.6.143.tar.xz" \
+          CROSS_COMPILE=riscv64-linux-gnu- LINUX_BATCH_OFFSET=2 LINUX_BATCH_LIMIT=1 LINUX_BATCH_JOBS=1 \
+            sh tests/external/linux/batch_probe.sh
+          status=$?
+          set -e
+          cat build/do-mounts-overflow-constant/batch-summary.txt
+          stderr=build/do-mounts-overflow-constant/minic-stderr/init/do_mounts.i.stderr
+          cat "$stderr" || true
+          input=build/do-mounts-overflow-constant/kbuild/init/do_mounts.i
+          frontier=$(sed -n 's/.*do_mounts\.i:\([0-9][0-9]*\):.*/\1/p' "$stderr" | head -n1)
+          if test -n "$frontier"; then
+            start=$((frontier > 45 ? frontier - 45 : 1)); end=$((frontier + 45));
+            nl -ba "$input" | sed -n "${start},${end}p"
+          fi
+          echo "DO_MOUNTS_OVERFLOW_CONSTANT_STATUS=$status"
