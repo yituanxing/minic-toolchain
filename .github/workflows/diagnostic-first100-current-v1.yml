@@ -45,7 +45,11 @@ jobs:
           python3 tools/dev/materialize-static-integer-address-relocation-v1.py
           python3 tools/dev/materialize-static-union-zero-designator-v1.py
           python3 tools/dev/materialize-backward-static-union-zero-overlay-v1.py
-          clang-format-18 -i src/frontend/ast.h src/frontend/ast.c src/frontend/ast_global.c \
+          python3 tools/dev/materialize-gnu-function-copy-alias-v1.py
+          python3 tools/dev/materialize-gnu-switch-case-range-v1.py
+          python3 tools/dev/materialize-rv64-small-record-copy-return-v1.py
+          clang-format-18 -i src/frontend/attribute.h src/frontend/attribute.c \
+            src/frontend/ast.h src/frontend/ast.c src/frontend/ast_function.c src/frontend/ast_global.c \
             src/frontend/ast_verifier.c src/frontend/const_eval.h src/frontend/const_eval.c \
             src/frontend/expression_semantics.h src/frontend/expression_semantics.c \
             src/frontend/function_body.c src/frontend/parser_statement.c \
