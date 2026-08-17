@@ -1,0 +1,129 @@
+name: Diagnostic Record Value Initialize V1
+on:
+  push:
+    branches: [staging/string-octal-v1]
+permissions:
+  contents: read
+jobs:
+  probe:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-24.04
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: staging/string-octal-v1
+          fetch-depth: 0
+      - name: Materialize convergence compiler plus record seam
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/materialize-runtime-record-array-v1.py
+          python3 tools/dev/materialize-fixed-call-character-pointer-v1.py
+          python3 tools/dev/materialize-function-pointer-array-declarator-v1.py
+          python3 tools/dev/materialize-preformed-static-array-v1.py
+          python3 tools/dev/materialize-static-local-prefix-attributes-v1.py
+          python3 tools/dev/materialize-top-level-braced-static-scalar-v1.py
+          python3 tools/dev/materialize-parenthesized-pointer-array-v1.py
+          python3 tools/dev/materialize-record-pointer-array-v1.py
+          python3 tools/dev/materialize-gnu-function-void-pointer-equality-v1.py
+          python3 tools/dev/materialize-gnu-signed-left-shift-ice-v1.py
+          python3 tools/dev/materialize-record-value-initialize-v1.py
+          clang-format-18 -i \
+            src/frontend/ast.h src/frontend/ast.c src/frontend/ast_verifier.c \
+            src/frontend/parser_statement.c src/frontend/parser_expression.c \
+            src/frontend/parser_declarator.c src/frontend/parser_internal.h \
+            src/frontend/parser_global.c src/frontend/parser_record.c \
+            src/frontend/const_eval.c \
+            src/target/riscv64/codegen_expression.c \
+            src/target/riscv64/codegen_statement.c
+          git diff --check
+          make -j4 MODE=release BUILD_DIR=build/convergence
+      - name: Focused record producer and initializer contracts
+        run: |
+          set -Eeuo pipefail
+          cat > /tmp/record-positive.c <<'EOF'
+          struct sample { unsigned t; unsigned v; };
+          struct box { struct sample s[3]; };
+          union note { unsigned long value; void *pointer; };
+          struct range { unsigned long start; union note arg; };
+
+          unsigned chain(struct box *m, unsigned t, unsigned v)
+          {
+              struct sample val = { .t = t, .v = v };
+              m->s[2] = m->s[1] = m->s[0] = val;
+              return m->s[2].v;
+          }
+
+          unsigned long initialize_const(union note arg)
+          {
+              const struct range range = { .start = 7UL, .arg = arg };
+              return range.arg.value;
+          }
+          EOF
+          build/convergence/bin/minic -S /tmp/record-positive.c -o /tmp/record-positive.s
+          test -s /tmp/record-positive.s
+
+          cat > /tmp/record-const-negative.c <<'EOF'
+          struct sample { unsigned t; unsigned v; };
+          void bad(const struct sample *target, struct sample value)
+          {
+              *target = value;
+          }
+          EOF
+          if build/convergence/bin/minic -S /tmp/record-const-negative.c -o /tmp/record-const-negative.s \
+              > /tmp/record-const-negative.stdout 2> /tmp/record-const-negative.stderr; then
+            echo 'ordinary assignment to const record unexpectedly succeeded' >&2
+            exit 1
+          fi
+          cat /tmp/record-const-negative.stderr
+          printf '%s\n' 'PASS record assignment-expression producer + const initialization sink; const reassignment rejected'
+      - name: Install Linux probe tools
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu flex bison bc libelf-dev libssl-dev
+          mkdir -p tests/external/linux
+          git show origin/diagnostic/linux-first100-variadic-stack-v0:tests/external/linux/batch_probe.sh > tests/external/linux/batch_probe.sh
+          chmod +x tests/external/linux/batch_probe.sh
+      - name: Probe unchanged do_mounts.i
+        run: |
+          set +e
+          MINIC="$GITHUB_WORKSPACE/build/convergence/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/do-mounts-record" \
+          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-6.6.143.tar.xz" \
+          CROSS_COMPILE=riscv64-linux-gnu- LINUX_BATCH_OFFSET=2 LINUX_BATCH_LIMIT=1 LINUX_BATCH_JOBS=1 \
+            sh tests/external/linux/batch_probe.sh
+          status=$?
+          set -e
+          cat build/do-mounts-record/batch-summary.txt
+          stderr=build/do-mounts-record/minic-stderr/init/do_mounts.i.stderr
+          cat "$stderr" || true
+          echo "DO_MOUNTS_RECORD_STATUS=$status"
+      - name: Probe unchanged kvm_main.i
+        run: |
+          set +e
+          MINIC="$GITHUB_WORKSPACE/build/convergence/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/kvm-main-record" \
+          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-6.6.143.tar.xz" \
+          CROSS_COMPILE=riscv64-linux-gnu- LINUX_BATCH_OFFSET=68 LINUX_BATCH_LIMIT=1 LINUX_BATCH_JOBS=1 \
+            sh tests/external/linux/batch_probe.sh
+          status=$?
+          set -e
+          cat build/kvm-main-record/batch-summary.txt
+          stderr=build/kvm-main-record/minic-stderr/virt/kvm/kvm_main.i.stderr
+          cat "$stderr" || true
+          echo "KVM_MAIN_RECORD_STATUS=$status"
+      - name: Probe fixed Linux first100
+        run: |
+          set +e
+          MINIC="$GITHUB_WORKSPACE/build/convergence/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/first100-record" \
+          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-6.6.143.tar.xz" \
+          CROSS_COMPILE=riscv64-linux-gnu- LINUX_BATCH_OFFSET=0 LINUX_BATCH_LIMIT=100 LINUX_BATCH_JOBS=4 \
+            sh tests/external/linux/batch_probe.sh
+          status=$?
+          set -e
+          cat build/first100-record/batch-summary.txt
+          echo "FIRST100_RECORD_STATUS=$status"
+          test "$status" -eq 0 || test "$status" -eq 1
