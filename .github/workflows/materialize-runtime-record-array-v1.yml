@@ -21,11 +21,13 @@ jobs:
           python3 tools/dev/materialize-runtime-record-array-v1.py
           python3 tools/dev/materialize-fixed-call-character-pointer-v1.py
           python3 tools/dev/materialize-function-pointer-array-declarator-v1.py
+          python3 tools/dev/materialize-preformed-static-array-v1.py
           clang-format-18 -i \
             src/frontend/parser_statement.c \
             src/frontend/parser_expression.c \
             src/frontend/parser_declarator.c \
-            src/frontend/parser_internal.h
+            src/frontend/parser_internal.h \
+            src/frontend/parser_global.c
           git diff --check
           make -j4 MODE=debug BUILD_DIR=build/runtime-record-array
       - name: Focused runtime record array semantics
@@ -62,7 +64,7 @@ jobs:
           long reject_rank_mismatch(int *p) { return sink(p); }
           EOF
           ! build/runtime-record-array/bin/minic -S /tmp/char-call-rank-mismatch.c -o /tmp/char-call-rank-mismatch.s
-      - name: Focused function pointer array declarators
+      - name: Focused function pointer array declarators and static relocations
         run: |
           set -Eeuo pipefail
           cat > /tmp/function-pointer-array.c <<'EOF'
@@ -76,8 +78,12 @@ jobs:
           }
           EOF
           build/runtime-record-array/bin/minic -S /tmp/function-pointer-array.c -o /tmp/function-pointer-array.s
-          test -s /tmp/function-pointer-array.s
-          printf '%s\n' 'PASS function-pointer-array declarator incomplete+fixed+multidimensional'
+          grep -F 'zero' /tmp/function-pointer-array.s >/dev/null
+          grep -F 'one' /tmp/function-pointer-array.s >/dev/null
+          grep -F 'actions' /tmp/function-pointer-array.s >/dev/null
+          grep -F 'fixed' /tmp/function-pointer-array.s >/dev/null
+          grep -F 'matrix' /tmp/function-pointer-array.s >/dev/null
+          printf '%s\n' 'PASS function-pointer-array declarator+preformed-static-array+function-relocations'
       - name: Install Linux probe tools
         run: |
           set -Eeuo pipefail
@@ -96,7 +102,6 @@ jobs:
             sh tests/external/linux/batch_probe.sh
           cat build/runtime-record-array-linux/batch-summary.txt
       - name: Probe unchanged module.i declarator
-        if: always()
         run: |
           set +e
           MINIC="$GITHUB_WORKSPACE/build/runtime-record-array/bin/minic" \
@@ -128,6 +133,7 @@ jobs:
             tools/dev/materialize-runtime-record-array-v1.py \
             tools/dev/materialize-fixed-call-character-pointer-v1.py \
             tools/dev/materialize-function-pointer-array-declarator-v1.py \
+            tools/dev/materialize-preformed-static-array-v1.py \
             .github/workflows/materialize-runtime-record-array-v1.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
@@ -136,9 +142,11 @@ jobs:
             src/frontend/parser_expression.c \
             src/frontend/parser_declarator.c \
             src/frontend/parser_internal.h \
+            src/frontend/parser_global.c \
             tools/dev/materialize-runtime-record-array-v1.py \
             tools/dev/materialize-fixed-call-character-pointer-v1.py \
             tools/dev/materialize-function-pointer-array-declarator-v1.py \
+            tools/dev/materialize-preformed-static-array-v1.py \
             .github/workflows/materialize-runtime-record-array-v1.yml
           git diff --cached --check
           git commit -m 'frontend: complete initramfs initializer and declarator semantics'
