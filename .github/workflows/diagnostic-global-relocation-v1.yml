@@ -40,6 +40,7 @@ jobs:
           python3 tools/dev/materialize-canonical-array-redeclaration-owner-v1.py
           python3 tools/dev/materialize-query-incomplete-array-v1.py
           python3 tools/dev/materialize-zero-slot-aggregate-relocation-v1.py
+          python3 tools/dev/materialize-backward-record-compound-literal-v1.py
           python3 tools/dev/materialize-global-relocation-fail-trace-v1.py
           clang-format-18 -i src/frontend/ast.h src/frontend/ast.c src/frontend/ast_global.c \
             src/frontend/ast_verifier.c src/frontend/const_eval.h src/frontend/const_eval.c \
@@ -51,7 +52,7 @@ jobs:
             src/target/riscv64/codegen_expression.c src/target/riscv64/codegen_statement.c
           git diff --check
           make -j4 MODE=release BUILD_DIR=build/convergence
-      - name: Focused zero-slot aggregate relocation contract
+      - name: Focused aggregate relocation contracts
         run: |
           set -Eeuo pipefail
           cat > /tmp/zero-slot-reloc.c <<'EOF'
@@ -66,6 +67,18 @@ jobs:
           EOF
           build/convergence/bin/minic -S /tmp/zero-slot-reloc.c -o /tmp/zero-slot-reloc.s
           test -s /tmp/zero-slot-reloc.s
+          cat > /tmp/backward-record-compound.c <<'EOF'
+          struct atom { unsigned long value; };
+          struct child { struct atom atom; };
+          struct outer { int first; struct child child; int last; };
+          static struct outer object = {
+              .last = 7,
+              .child = { .atom = (struct atom) { .value = 3 } },
+          };
+          int main(void) { return object.child.atom.value == 3 && object.last == 7 ? 0 : 1; }
+          EOF
+          build/convergence/bin/minic -S /tmp/backward-record-compound.c -o /tmp/backward-record-compound.s
+          test -s /tmp/backward-record-compound.s
       - name: Install Linux probe tools
         run: |
           set -Eeuo pipefail
