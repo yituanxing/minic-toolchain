@@ -15,7 +15,7 @@ jobs:
         with:
           ref: staging/string-octal-v1
           fetch-depth: 0
-      - name: Materialize convergence compiler and relocation trace
+      - name: Materialize convergence compiler and relocation fix
         run: |
           set -Eeuo pipefail
           python3 tools/dev/materialize-runtime-record-array-v1.py
@@ -39,6 +39,7 @@ jobs:
           python3 tools/dev/materialize-static-pointer-constant-conditional-v1.py
           python3 tools/dev/materialize-canonical-array-redeclaration-owner-v1.py
           python3 tools/dev/materialize-query-incomplete-array-v1.py
+          python3 tools/dev/materialize-zero-slot-aggregate-relocation-v1.py
           python3 tools/dev/materialize-global-relocation-fail-trace-v1.py
           clang-format-18 -i src/frontend/ast.h src/frontend/ast.c src/frontend/ast_global.c \
             src/frontend/ast_verifier.c src/frontend/const_eval.h src/frontend/const_eval.c \
@@ -50,6 +51,21 @@ jobs:
             src/target/riscv64/codegen_expression.c src/target/riscv64/codegen_statement.c
           git diff --check
           make -j4 MODE=release BUILD_DIR=build/convergence
+      - name: Focused zero-slot aggregate relocation contract
+        run: |
+          set -Eeuo pipefail
+          cat > /tmp/zero-slot-reloc.c <<'EOF'
+          struct empty {};
+          struct holder {
+              struct empty pad;
+              int *value;
+          };
+          static int target;
+          static struct holder holder = { .value = &target };
+          int main(void) { return holder.value == &target ? 0 : 1; }
+          EOF
+          build/convergence/bin/minic -S /tmp/zero-slot-reloc.c -o /tmp/zero-slot-reloc.s
+          test -s /tmp/zero-slot-reloc.s
       - name: Install Linux probe tools
         run: |
           set -Eeuo pipefail
@@ -73,7 +89,7 @@ jobs:
           cp "$build/batch-summary.txt" build/relocation-artifact/ 2>/dev/null || true
           cp -R "$build/minic-stderr" build/relocation-artifact/ 2>/dev/null || true
           echo "$status" > build/relocation-artifact/status.txt
-          exit 0
+          exit "$status"
       - name: Upload relocation diagnostics
         if: always()
         uses: actions/upload-artifact@v4
