@@ -1,0 +1,90 @@
+name: Diagnostic build_utility 72818 Context
+
+on:
+  push:
+    branches:
+      - diagnostic/build-utility-72818-context
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Restore diagnostic batch probe
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p tests/external/linux
+          git show origin/diagnostic/linux-first100-variadic-stack-v0:tests/external/linux/batch_probe.sh \
+            > tests/external/linux/batch_probe.sh
+          chmod +x tests/external/linux/batch_probe.sh
+
+      - name: Restore pinned Linux source archive
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-cache/linux-6.6.143.tar.xz
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            flex bison bc libelf-dev libssl-dev
+
+      - name: Build compiler and materialize build_utility
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release BUILD_DIR=build/frontier-compiler
+          set +e
+          MINIC="$GITHUB_WORKSPACE/build/frontier-compiler/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/frontier-linux" \
+          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-cache/linux-6.6.143.tar.xz" \
+          CROSS_COMPILE=riscv64-linux-gnu- \
+          LINUX_BATCH_OFFSET=98 LINUX_BATCH_LIMIT=1 LINUX_BATCH_JOBS=1 \
+            sh tests/external/linux/batch_probe.sh
+          status=$?
+          set -e
+          cat build/frontier-linux/batch-summary.txt
+          test "$status" -eq 1
+
+      - name: Print exact FAM frontier context
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          file=build/frontier-linux/kbuild/kernel/sched/build_utility.i
+          test -s "$file"
+          printf '%s\n' 'FAM_72818_CONTEXT_BEGIN'
+          sed -n '72760,72880p' "$file"
+          printf '%s\n' 'FAM_72818_CONTEXT_END'
+          python3 - <<'PY'
+          from pathlib import Path
+          lines = Path('build/frontier-linux/kbuild/kernel/sched/build_utility.i').read_text(errors='replace').splitlines()
+          target = 72818
+          print('TARGET_LINE=' + lines[target - 1])
+          # Print likely enclosing aggregate declaration plus previous record definition context.
+          start = max(0, target - 1 - 220)
+          end = min(len(lines), target - 1 + 180)
+          for i in range(target - 2, start - 1, -1):
+              s = lines[i].strip()
+              if ('=' in s and '{' in s) or s.startswith('static struct ') or s.startswith('const struct '):
+                  start = i
+                  break
+          print('ENCLOSING_WINDOW_BEGIN')
+          for i in range(start, end):
+              print(f'{i+1}: {lines[i]}')
+          print('ENCLOSING_WINDOW_END')
+          PY
