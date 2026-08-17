@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from pathlib import Path
+import re
 
 root = Path(__file__).resolve().parents[2]
 
@@ -46,8 +47,26 @@ path.write_text(text.replace(old, new, 1))
 
 path = root / "src/frontend/ast_verifier.c"
 text = path.read_text()
-old = '''        if ((array_type->element_count == 0U &&\n             !incomplete_array_has_semantic_owner(program, index)) ||\n            !type_is_valid(program, target, array_type->element_type) ||\n            minic_type_is_function(array_type->element_type)) {\n'''
-new = '''        if ((array_type->element_count == 0U && !array_type->is_query_materialized &&\n             !incomplete_array_has_semantic_owner(program, index)) ||\n            (array_type->is_query_materialized &&\n             (array_type->element_count != 0U || array_type->is_zero_length)) ||\n            !type_is_valid(program, target, array_type->element_type) ||\n            minic_type_is_function(array_type->element_type)) {\n'''
-if text.count(old) != 1:
-    raise SystemExit(f"array verifier anchor count={text.count(old)}")
-path.write_text(text.replace(old, new, 1))
+pattern = re.compile(
+    r'''(?P<indent>\s*)if \(\(array_type->element_count == 0U\s*&&\s*'''
+    r'''!incomplete_array_has_semantic_owner\(program, index\)\) \|\|\s*'''
+    r'''!type_is_valid\(program, target, array_type->element_type\) \|\|\s*'''
+    r'''minic_type_is_function\(array_type->element_type\)\) \{''',
+    re.MULTILINE,
+)
+match = pattern.search(text)
+if match is None:
+    raise SystemExit("array verifier failure anchor count=0")
+indent = match.group("indent")
+replacement = (
+    f"{indent}if ((array_type->element_count == 0U && !array_type->is_query_materialized &&\n"
+    f"{indent}     !incomplete_array_has_semantic_owner(program, index)) ||\n"
+    f"{indent}    (array_type->is_query_materialized &&\n"
+    f"{indent}     (array_type->element_count != 0U || array_type->is_zero_length)) ||\n"
+    f"{indent}    !type_is_valid(program, target, array_type->element_type) ||\n"
+    f"{indent}    minic_type_is_function(array_type->element_type)) {{"
+)
+text, count = pattern.subn(replacement, text, count=1)
+if count != 1:
+    raise SystemExit(f"array verifier replacement count={count}")
+path.write_text(text)
