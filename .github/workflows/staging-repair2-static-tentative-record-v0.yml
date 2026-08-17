@@ -1,0 +1,56 @@
+name: Staging Repair2 Static Tentative Record V0
+
+on:
+  push:
+    branches:
+      - staging/static-tentative-record-v0
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Repair literal Actions expression
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('.github/workflows/staging-static-tentative-record-v0.yml')
+          text = path.read_text()
+          lines = text.splitlines()
+          changed = False
+          for index, line in enumerate(lines):
+              if line.startswith('    if: '):
+                  expression = '$' + "{{ github.event.head_commit.message != 'static tentative product v0' }}"
+                  replacement = '    if: "' + expression + '"'
+                  if line != replacement:
+                      lines[index] = replacement
+                      changed = True
+                  break
+          old_commit = "          git commit -m 'staging: static tentative record product v0'"
+          new_commit = "          git commit -m 'static tentative product v0'"
+          repaired = '\n'.join(lines) + '\n'
+          if old_commit in repaired:
+              repaired = repaired.replace(old_commit, new_commit, 1)
+              changed = True
+          if changed:
+              path.write_text(repaired)
+          PY
+          file=.github/workflows/staging-static-tentative-record-v0.yml
+          if git diff --quiet -- "$file"; then
+            echo 'literal workflow expression already repaired'
+            exit 0
+          fi
+          git config user.name 'LiYang Dong'
+          git config user.email '119646676+yituanxing@users.noreply.github.com'
+          git add "$file"
+          git commit -m 'repair static tentative workflow condition'
+          git push origin HEAD:staging/static-tentative-record-v0
