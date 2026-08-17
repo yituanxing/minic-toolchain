@@ -38,3 +38,10 @@ if "$minic" -S "$work/$name.i" -o "$work/$name.s" \
 fi
 grep -F 'call argument type does not match declaration' "$work/$name.stderr" >/dev/null
 printf '%s\n' "PASS compiler/c0/$name"
+
+"$host_cc" -E -P -std=gnu11 -x c \
+    "$root/tests/compiler/c0/gnu_function_void_pointer_equality.c" \
+    -o "$work/function-void-equality.i"
+"$minic" -S "$work/function-void-equality.i" -o "$work/function-void-equality.s"
+grep -F 'main:' "$work/function-void-equality.s" >/dev/null
+printf '%s\n' 'PASS compiler/c0/gnu_function_void_pointer_equality bidirectional=1 direct-function=1'

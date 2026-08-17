@@ -1634,7 +1634,9 @@ bool minic_c0_pointer_equality_compatible(const MinicC0Program *program,
     if (left == NULL || right == NULL) {
         return false;
     }
-    if (minic_type_pointer_equality_compatible(left->type, right->type)) {
+    if (minic_type_pointer_equality_compatible(left->type, right->type) ||
+        (minic_type_is_pointer(left->type) && minic_type_is_pointer(right->type) &&
+         minic_c0_gnu_void_function_pointer_assignment_compatible(left->type, right->type))) {
         return true;
     }
     return (minic_type_is_pointer(left->type) &&
