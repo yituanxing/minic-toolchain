@@ -1,0 +1,67 @@
+name: Productize Backward Record Compound Literal V2
+on:
+  push:
+    branches: [product/backward-record-compound-literal-v2]
+permissions:
+  contents: write
+jobs:
+  productize:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: product/backward-record-compound-literal-v2
+          fetch-depth: 0
+      - name: Materialize clean source and contract
+        run: |
+          set -Eeuo pipefail
+          git show origin/staging/string-octal-v1:tools/dev/materialize-backward-record-compound-literal-v1.py > tools/dev/.productize-backward-record-compound-literal-v2.py
+          python3 tools/dev/.productize-backward-record-compound-literal-v2.py
+          rm tools/dev/.productize-backward-record-compound-literal-v2.py
+          cat > tests/compiler/c0/run-backward-record-compound-literal.sh <<'EOF'
+          #!/bin/sh
+          set -eu
+          root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+          minic=${MINIC:-"$root/build/debug/bin/minic"}
+          work=${BUILD_DIR:-"$root/build/debug"}/tests/backward-record-compound-literal
+          mkdir -p "$work"
+          cat > "$work/input.c" <<'SRC'
+          struct Inner { int value; };
+          struct Outer { struct Inner inner; int tail; };
+          static struct Outer object = {
+              .tail = 9,
+              .inner = (struct Inner){ .value = 7 },
+          };
+          int main(void) { return object.inner.value + object.tail - 16; }
+          SRC
+          "$minic" -S "$work/input.c" -o "$work/output.s"
+          grep -Fq 'object:' "$work/output.s"
+          grep -Fq '  .word 7' "$work/output.s"
+          grep -Fq '  .word 9' "$work/output.s"
+          printf '%s\n' 'PASS compiler/c0/backward-record-compound-literal'
+          EOF
+          chmod +x tests/compiler/c0/run-backward-record-compound-literal.sh
+          cat >> tests/compiler/c0/run.sh <<'EOF'
+
+          MINIC="$minic" \
+          BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+          sh "$root/tests/compiler/c0/run-backward-record-compound-literal.sh"
+          EOF
+          clang-format-18 -i src/frontend/parser_global.c
+          git diff --check
+      - name: Validate Werror focused and fast gates
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/product-backward-record-v2
+          MINIC="$GITHUB_WORKSPACE/build/product-backward-record-v2/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/product-backward-record-v2" sh tests/compiler/c0/run-backward-record-compound-literal.sh
+          make -j4 check-fast MODE=release BUILD_DIR=build/product-backward-record-v2-fast
+      - name: Commit clean product diff
+        run: |
+          set -Eeuo pipefail
+          git rm .github/workflows/productize-backward-record-compound-literal-v2.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m 'frontend: support backward static record compound literals'
+          git push origin HEAD:product/backward-record-compound-literal-v2
