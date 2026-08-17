@@ -1,0 +1,76 @@
+name: Materialize Unused Statement Attribute V1
+on:
+  push:
+    branches: [staging/string-octal-v1]
+    paths:
+      - tools/dev/materialize-unused-statement-attribute-v1.py
+      - .github/workflows/materialize-unused-statement-attribute-v1.yml
+permissions:
+  contents: write
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - name: Materialize, format and build
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/materialize-unused-statement-attribute-v1.py
+          clang-format-18 -i src/frontend/attribute.c src/frontend/parser_statement.c
+          git diff --check
+          make -j4 MODE=debug BUILD_DIR=build/unused-statement
+      - name: Focused informational statement attribute semantics
+        run: |
+          set -Eeuo pipefail
+          cat > /tmp/unused-statement.c <<'EOF'
+          int f(int x) {
+              if (x) goto done;
+          done: __attribute__((__unused__));
+              return 0;
+          }
+          int main(void) { return f(1); }
+          EOF
+          build/unused-statement/bin/minic -S /tmp/unused-statement.c -o /tmp/unused-statement.s
+          cat > /tmp/bad-statement.c <<'EOF'
+          int main(void) { __attribute__((cold)); return 0; }
+          EOF
+          if build/unused-statement/bin/minic -S /tmp/bad-statement.c -o /tmp/bad.s > /tmp/bad.out 2> /tmp/bad.err; then
+            echo 'unsupported statement attribute unexpectedly accepted' >&2
+            exit 1
+          fi
+      - name: Install Linux probe tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu flex bison bc libelf-dev libssl-dev
+      - name: Probe unchanged fair.i
+        run: |
+          set -Eeuo pipefail
+          mkdir -p tests/external/linux
+          git show origin/diagnostic/linux-first100-variadic-stack-v0:tests/external/linux/batch_probe.sh > tests/external/linux/batch_probe.sh
+          chmod +x tests/external/linux/batch_probe.sh
+          set +e
+          MINIC="$GITHUB_WORKSPACE/build/unused-statement/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/unused-fair" CROSS_COMPILE=riscv64-linux-gnu- LINUX_BATCH_OFFSET=96 LINUX_BATCH_LIMIT=1 LINUX_BATCH_JOBS=1 sh tests/external/linux/batch_probe.sh
+          status=$?
+          set -e
+          cat build/unused-fair/batch-summary.txt
+          test "$status" -eq 0
+      - name: Probe full fixed Linux first100
+        run: |
+          set -Eeuo pipefail
+          set +e
+          MINIC="$GITHUB_WORKSPACE/build/unused-statement/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/unused-first100" CROSS_COMPILE=riscv64-linux-gnu- LINUX_BATCH_OFFSET=0 LINUX_BATCH_LIMIT=100 LINUX_BATCH_JOBS=4 sh tests/external/linux/batch_probe.sh
+          status=$?
+          set -e
+          cat build/unused-first100/batch-summary.txt
+          echo "FIRST100_STATUS=$status"
+      - name: Commit product only
+        run: |
+          set -Eeuo pipefail
+          rm -f tools/dev/materialize-unused-statement-attribute-v1.py .github/workflows/materialize-unused-statement-attribute-v1.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/frontend/attribute.c src/frontend/parser_statement.c tools/dev/materialize-unused-statement-attribute-v1.py .github/workflows/materialize-unused-statement-attribute-v1.yml
+          git diff --cached --check
+          git commit -m 'frontend: accept informational unused statement attributes'
+          git push origin HEAD:staging/string-octal-v1
