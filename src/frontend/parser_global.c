@@ -514,6 +514,67 @@ static bool begin_static_object_definition(MinicParser *parser,
     return true;
 }
 
+bool minic_parser_parse_static_pointer_object_initializer(MinicParser *parser,
+                                                          MinicGlobalObjectId object_id,
+                                                          MinicType pointer_type) {
+    MinicStaticPointerInitializer initializer;
+    bool recorded;
+
+    if (parser == NULL || object_id >= parser->program->global_object_count ||
+        !minic_type_is_pointer(pointer_type) ||
+        !parse_static_pointer_initializer(parser, pointer_type, &initializer)) {
+        return false;
+    }
+    if (!initializer.has_relocation) {
+        if (!minic_c0_global_object_add_initializer_bits(
+                parser->program, object_id, initializer.bits)) {
+            minic_parser_error(parser, "cannot record static pointer constant bits");
+            return false;
+        }
+        return true;
+    }
+    if (initializer.relocation_is_function) {
+        recorded = initializer.has_explicit_pointer_cast
+                       ? minic_c0_global_object_add_function_relocation_cast(
+                             parser->program,
+                             object_id,
+                             MINIC_GLOBAL_RELOCATION_LOCATION_SCALAR,
+                             0U,
+                             initializer.function_id)
+                       : minic_c0_global_object_add_function_relocation(
+                             parser->program,
+                             object_id,
+                             MINIC_GLOBAL_RELOCATION_LOCATION_SCALAR,
+                             0U,
+                             initializer.function_id);
+    } else {
+        recorded = initializer.has_explicit_pointer_cast
+                       ? minic_c0_global_object_add_object_relocation_path_addend_cast(
+                             parser->program,
+                             object_id,
+                             MINIC_GLOBAL_RELOCATION_LOCATION_SCALAR,
+                             0U,
+                             initializer.relocation_target.object_id,
+                             initializer.relocation_target.member_indices,
+                             initializer.relocation_target.member_depth,
+                             initializer.relocation_target.byte_addend)
+                       : minic_c0_global_object_add_object_relocation_path_addend(
+                             parser->program,
+                             object_id,
+                             MINIC_GLOBAL_RELOCATION_LOCATION_SCALAR,
+                             0U,
+                             initializer.relocation_target.object_id,
+                             initializer.relocation_target.member_indices,
+                             initializer.relocation_target.member_depth,
+                             initializer.relocation_target.byte_addend);
+    }
+    if (!recorded || !minic_c0_global_object_set_zero_initialized(parser->program, object_id)) {
+        minic_parser_error(parser, "cannot record static symbolic pointer relocation");
+        return false;
+    }
+    return true;
+}
+
 static bool parse_static_scalar(MinicParser *parser, MinicType type, MinicSourceSpan name_span) {
     MinicGlobalObjectId object_id;
 
@@ -540,57 +601,7 @@ static bool parse_static_scalar(MinicParser *parser, MinicType type, MinicSource
             return false;
         }
     } else if (minic_type_is_pointer(type)) {
-        MinicStaticPointerInitializer initializer;
-
-        if (!parse_static_pointer_initializer(parser, type, &initializer)) {
-            return false;
-        }
-        if (initializer.has_relocation) {
-            bool recorded;
-
-            if (initializer.relocation_is_function) {
-                recorded = initializer.has_explicit_pointer_cast
-                               ? minic_c0_global_object_add_function_relocation_cast(
-                                     parser->program,
-                                     object_id,
-                                     MINIC_GLOBAL_RELOCATION_LOCATION_SCALAR,
-                                     0U,
-                                     initializer.function_id)
-                               : minic_c0_global_object_add_function_relocation(
-                                     parser->program,
-                                     object_id,
-                                     MINIC_GLOBAL_RELOCATION_LOCATION_SCALAR,
-                                     0U,
-                                     initializer.function_id);
-            } else {
-                recorded = initializer.has_explicit_pointer_cast
-                               ? minic_c0_global_object_add_object_relocation_path_addend_cast(
-                                     parser->program,
-                                     object_id,
-                                     MINIC_GLOBAL_RELOCATION_LOCATION_SCALAR,
-                                     0U,
-                                     initializer.relocation_target.object_id,
-                                     initializer.relocation_target.member_indices,
-                                     initializer.relocation_target.member_depth,
-                                     initializer.relocation_target.byte_addend)
-                               : minic_c0_global_object_add_object_relocation_path_addend(
-                                     parser->program,
-                                     object_id,
-                                     MINIC_GLOBAL_RELOCATION_LOCATION_SCALAR,
-                                     0U,
-                                     initializer.relocation_target.object_id,
-                                     initializer.relocation_target.member_indices,
-                                     initializer.relocation_target.member_depth,
-                                     initializer.relocation_target.byte_addend);
-            }
-            if (!recorded ||
-                !minic_c0_global_object_set_zero_initialized(parser->program, object_id)) {
-                minic_parser_error(parser, "cannot record static symbolic pointer relocation");
-                return false;
-            }
-        } else if (!minic_c0_global_object_add_initializer_bits(
-                       parser->program, object_id, initializer.bits)) {
-            minic_parser_error(parser, "cannot record static pointer constant bits");
+        if (!minic_parser_parse_static_pointer_object_initializer(parser, object_id, type)) {
             return false;
         }
     } else {
