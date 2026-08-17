@@ -1,0 +1,307 @@
+name: Staging Static Tentative Object V1
+
+on:
+  push:
+    branches:
+      - staging/static-tentative-object-v1
+
+permissions:
+  contents: write
+
+jobs:
+  refine-and-probe:
+    if: "${{ github.event.head_commit.message != 'static tentative object product v1' }}"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Refine common static definition lifecycle
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/frontend/parser_global.c')
+          text = path.read_text()
+
+          anchor = '''static bool parse_static_scalar(MinicParser *parser, MinicType type, MinicSourceSpan name_span) {
+              MinicGlobalObjectId object_id;
+
+              if (!minic_c0_program_add_global_object(parser->program,
+                                                      parser->source + name_span.begin.offset,
+                                                      minic_parser_span_length(name_span),
+                                                      type,
+                                                      true,
+                                                      minic_type_is_const(type),
+                                                      &object_id) ||
+                  !minic_parser_expect(parser, MINIC_TOKEN_EQUAL, "expected '='")) {
+                  if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\\0') {
+                      minic_parser_error(parser, "cannot begin static scalar initializer");
+                  }
+                  return false;
+              }
+          '''
+          replacement = '''static bool begin_static_object_definition(MinicParser *parser,
+                                                     MinicType type,
+                                                     MinicSourceSpan name_span,
+                                                     MinicGlobalObjectId *object_id) {
+              const MinicGlobalObject *existing;
+
+              if (parser == NULL || object_id == NULL) {
+                  return false;
+              }
+              *object_id = minic_parser_find_global_object_entity(parser, name_span);
+              if (*object_id == MINIC_GLOBAL_OBJECT_INVALID) {
+                  if (!minic_c0_program_add_global_object(parser->program,
+                                                          parser->source + name_span.begin.offset,
+                                                          minic_parser_span_length(name_span),
+                                                          type,
+                                                          true,
+                                                          minic_type_is_const(type),
+                                                          object_id)) {
+                      minic_parser_error(parser, "cannot create static object definition");
+                      return false;
+                  }
+                  return true;
+              }
+              existing = minic_c0_program_global_object(parser->program, *object_id);
+              if (existing == NULL || !existing->is_internal || !minic_type_equal(existing->type, type) ||
+                  !minic_c0_global_object_begin_definition(parser->program, *object_id)) {
+                  minic_parser_error(parser, "conflicting static object definition");
+                  return false;
+              }
+              return true;
+          }
+
+          static bool parse_static_scalar(MinicParser *parser, MinicType type, MinicSourceSpan name_span) {
+              MinicGlobalObjectId object_id;
+
+              if (!begin_static_object_definition(parser, type, name_span, &object_id) ||
+                  !minic_parser_expect(parser, MINIC_TOKEN_EQUAL, "expected '='")) {
+                  if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\\0') {
+                      minic_parser_error(parser, "cannot begin static scalar initializer");
+                  }
+                  return false;
+              }
+          '''
+          if anchor not in text:
+              raise SystemExit('static scalar definition anchor not found')
+          text = text.replace(anchor, replacement, 1)
+
+          anchor = '''static bool
+          parse_static_nested_record_object(MinicParser *parser, MinicType type, MinicSourceSpan name_span) {
+              MinicGlobalObjectId object_id;
+              const MinicGlobalObject *existing;
+
+              object_id = minic_parser_find_global_object_entity(parser, name_span);
+              if (object_id == MINIC_GLOBAL_OBJECT_INVALID) {
+                  if (!minic_c0_program_add_global_object(parser->program,
+                                                          parser->source + name_span.begin.offset,
+                                                          minic_parser_span_length(name_span),
+                                                          type,
+                                                          true,
+                                                          minic_type_is_const(type),
+                                                          &object_id)) {
+                      minic_parser_error(parser, "cannot create static record definition");
+                      return false;
+                  }
+              } else {
+                  existing = minic_c0_program_global_object(parser->program, object_id);
+                  if (existing == NULL || !existing->is_internal ||
+                      !minic_type_equal(existing->type, type) ||
+                      !minic_c0_global_object_begin_definition(parser->program, object_id)) {
+                      minic_parser_error(parser, "conflicting static record definition");
+                      return false;
+                  }
+              }
+              if (!minic_parser_expect(parser, MINIC_TOKEN_EQUAL, "expected '='") ||
+          '''
+          replacement = '''static bool
+          parse_static_nested_record_object(MinicParser *parser, MinicType type, MinicSourceSpan name_span) {
+              MinicGlobalObjectId object_id;
+
+              if (!begin_static_object_definition(parser, type, name_span, &object_id) ||
+                  !minic_parser_expect(parser, MINIC_TOKEN_EQUAL, "expected '='") ||
+          '''
+          if anchor not in text:
+              raise SystemExit('static record definition anchor not found')
+          text = text.replace(anchor, replacement, 1)
+
+          anchor = '''    if (existing_object_id != MINIC_GLOBAL_OBJECT_INVALID &&
+                  !(minic_type_is_record(element_type) &&
+                    parser->current.kind != MINIC_TOKEN_LBRACKET)) {
+                  minic_parser_error(parser, "duplicate global object");
+                  return false;
+              }
+          '''
+          replacement = '''    if (existing_object_id != MINIC_GLOBAL_OBJECT_INVALID &&
+                  (minic_type_is_array(element_type) || parser->current.kind == MINIC_TOKEN_LBRACKET)) {
+                  minic_parser_error(parser, "duplicate global object");
+                  return false;
+              }
+          '''
+          if anchor not in text:
+              raise SystemExit('static duplicate routing anchor not found')
+          text = text.replace(anchor, replacement, 1)
+          path.write_text(text)
+          PY
+          clang-format -i src/frontend/parser_global.c || true
+          git diff --check
+
+      - name: Extend permanent tentative-definition corpus
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('tests/compiler/c0/external_tentative_definitions.c')
+          text = path.read_text()
+          anchor = '''struct tentative_record record_state;
+
+          extern unsigned long composite_page_table[];
+          '''
+          replacement = '''struct tentative_record record_state;
+
+          static int static_repeated_tentative;
+          static int static_repeated_tentative;
+
+          static int static_tentative_then_full;
+          static int static_tentative_then_full = 11;
+
+          static int static_full_then_tentative = 13;
+          static int static_full_then_tentative;
+
+          static int static_pointer_target;
+          static int *static_pointer_tentative;
+          static int *static_pointer_tentative;
+          static int *static_pointer_then_full;
+          static int *static_pointer_then_full = &static_pointer_target;
+
+          static struct tentative_record static_record_only;
+          static const struct tentative_record static_record_then_full;
+          static const struct tentative_record static_record_then_full = {3, 17};
+
+          extern unsigned long composite_page_table[];
+          '''
+          if anchor not in text:
+              raise SystemExit('tentative corpus anchor not found')
+          path.write_text(text.replace(anchor, replacement, 1))
+
+          path = Path('tests/compiler/c0/run-external-tentative-definitions.sh')
+          text = path.read_text()
+          anchor = '''test "$(grep -c '^full_then_tentative:' "$assembly")" -eq 1
+
+          if "$minic" -S "$root/tests/compiler/c0/invalid_external_tentative_incomplete_array.c" \\
+          '''
+          replacement = '''test "$(grep -c '^full_then_tentative:' "$assembly")" -eq 1
+          test "$(grep -c '^static_repeated_tentative:' "$assembly")" -eq 1
+          test "$(grep -c '^static_tentative_then_full:' "$assembly")" -eq 1
+          test "$(grep -c '^static_full_then_tentative:' "$assembly")" -eq 1
+          test "$(grep -c '^static_pointer_tentative:' "$assembly")" -eq 1
+          test "$(grep -c '^static_pointer_then_full:' "$assembly")" -eq 1
+          test "$(grep -c '^static_record_only:' "$assembly")" -eq 1
+          test "$(grep -c '^static_record_then_full:' "$assembly")" -eq 1
+          grep -F '.word 11' "$assembly" >/dev/null
+          grep -F '.word 13' "$assembly" >/dev/null
+          grep -F '.dword static_pointer_target' "$assembly" >/dev/null
+
+          if "$minic" -S "$root/tests/compiler/c0/invalid_static_tentative_redeclaration.c" \\
+              -o "$work/invalid-static-redecl.s" 2>"$work/invalid-static-redecl.stderr"; then
+              printf '%s\\n' 'conflicting static tentative redeclaration unexpectedly accepted' >&2
+              exit 1
+          fi
+          grep -F 'conflicting static tentative definition' "$work/invalid-static-redecl.stderr" >/dev/null
+
+          if "$minic" -S "$root/tests/compiler/c0/invalid_static_duplicate_definition.c" \\
+              -o "$work/invalid-static-definition.s" 2>"$work/invalid-static-definition.stderr"; then
+              printf '%s\\n' 'duplicate static definition unexpectedly accepted' >&2
+              exit 1
+          fi
+          grep -F 'conflicting static object definition' "$work/invalid-static-definition.stderr" >/dev/null
+
+          if "$minic" -S "$root/tests/compiler/c0/invalid_external_tentative_incomplete_array.c" \\
+          '''
+          if anchor not in text:
+              raise SystemExit('tentative runner anchor not found')
+          text = text.replace(anchor, replacement, 1)
+          old = "PASS compiler/c0/external_tentative_definitions state=extern|tentative|defined array-composite=incomplete-to-complete zero=end-of-tu fixed-array=1 attrs=section suffix=1 incomplete-array=fail-closed"
+          new = "PASS compiler/c0/external_tentative_definitions state=extern|tentative|defined linkage=external|static static-types=int|pointer|record array-composite=incomplete-to-complete zero=end-of-tu conflicts=fail-closed"
+          if old not in text:
+              raise SystemExit('tentative PASS line anchor not found')
+          path.write_text(text.replace(old, new, 1))
+          PY
+          cat > tests/compiler/c0/invalid_static_tentative_redeclaration.c <<'EOF'
+          static int conflicting_static;
+          static long conflicting_static;
+          EOF
+          cat > tests/compiler/c0/invalid_static_duplicate_definition.c <<'EOF'
+          static int duplicate_static = 1;
+          static int duplicate_static = 2;
+          EOF
+          git diff --check
+
+      - name: Build and run focused tentative lifecycle gate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=debug BUILD_DIR=build/static-tentative-v1
+          MINIC="$GITHUB_WORKSPACE/build/static-tentative-v1/bin/minic" \
+          HOST_CC=cc \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/static-tentative-v1-focused" \
+            sh tests/compiler/c0/run-external-tentative-definitions.sh
+
+      - name: Commit staging product and tests
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'LiYang Dong'
+          git config user.email '119646676+yituanxing@users.noreply.github.com'
+          git add src/frontend/parser_global.c \
+            tests/compiler/c0/external_tentative_definitions.c \
+            tests/compiler/c0/run-external-tentative-definitions.sh \
+            tests/compiler/c0/invalid_static_tentative_redeclaration.c \
+            tests/compiler/c0/invalid_static_duplicate_definition.c
+          git commit -m 'static tentative object product v1'
+          git push origin HEAD:staging/static-tentative-object-v1
+
+      - name: Restore diagnostic-only Linux batch probe
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p tests/external/linux
+          git show origin/diagnostic/linux-first100-variadic-stack-v0:tests/external/linux/batch_probe.sh \
+            > tests/external/linux/batch_probe.sh
+          chmod +x tests/external/linux/batch_probe.sh
+
+      - name: Install Linux probe dependencies
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            flex bison bc libelf-dev libssl-dev
+
+      - name: Probe unchanged build_utility after common lifecycle refinement
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          set +e
+          MINIC="$GITHUB_WORKSPACE/build/static-tentative-v1/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/static-tentative-v1-linux" \
+          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-cache/linux-6.6.143.tar.xz" \
+          CROSS_COMPILE=riscv64-linux-gnu- \
+          LINUX_BATCH_OFFSET=98 LINUX_BATCH_LIMIT=1 LINUX_BATCH_JOBS=1 \
+            sh tests/external/linux/batch_probe.sh
+          status=$?
+          set -e
+          cat build/static-tentative-v1-linux/batch-summary.txt
+          test "$status" -eq 0 -o "$status" -eq 1
