@@ -29,10 +29,22 @@ jobs:
 
           path = Path('src/frontend/parser_statement.c')
           text = path.read_text()
+          old = '''typedef struct MinicStatementAttributeContext {\n    bool saw_fallthrough;\n} MinicStatementAttributeContext;\n'''
+          new = '''typedef struct MinicStatementAttributeContext {\n    bool saw_fallthrough;\n    bool saw_informational;\n} MinicStatementAttributeContext;\n'''
+          if text.count(old) != 1:
+              raise SystemExit(f'statement context anchor count={text.count(old)}')
+          text = text.replace(old, new, 1)
+
           old = '''    if (descriptor->kind != MINIC_ATTRIBUTE_FALLTHROUGH ||\n        descriptor->semantic_class != MINIC_ATTRIBUTE_CLASS_DIAGNOSTIC) {\n        minic_parser_error(parser, "GNU statement attribute semantics are not implemented");\n        return false;\n    }\n    context->saw_fallthrough = true;\n    return true;\n'''
           new = '''    if (descriptor->kind == MINIC_ATTRIBUTE_UNUSED &&\n        descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_INFORMATIONAL) {\n        context->saw_informational = true;\n        return true;\n    }\n    if (descriptor->kind == MINIC_ATTRIBUTE_FALLTHROUGH &&\n        descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_DIAGNOSTIC) {\n        context->saw_fallthrough = true;\n        return true;\n    }\n    minic_parser_error(parser, "GNU statement attribute semantics are not implemented");\n    return false;\n'''
           if text.count(old) != 1:
               raise SystemExit(f'statement consumer anchor count={text.count(old)}')
+          text = text.replace(old, new, 1)
+
+          old = '''    if (!minic_parser_parse_gnu_attribute_lists(parser, consume_statement_attribute, &context) ||\n        !context.saw_fallthrough ||\n        !minic_parser_expect(\n            parser, MINIC_TOKEN_SEMICOLON, "expected ';' after GNU statement attribute")) {\n        return false;\n    }\n    if (parser->switch_depth == 0U) {\n        minic_parser_error(parser,\n                           "GNU fallthrough statement attribute requires an enclosing switch");\n        return false;\n    }\n    return true;\n'''
+          new = '''    if (!minic_parser_parse_gnu_attribute_lists(parser, consume_statement_attribute, &context) ||\n        (!context.saw_fallthrough && !context.saw_informational) ||\n        !minic_parser_expect(\n            parser, MINIC_TOKEN_SEMICOLON, "expected ';' after GNU statement attribute")) {\n        return false;\n    }\n    if (context.saw_fallthrough && parser->switch_depth == 0U) {\n        minic_parser_error(parser,\n                           "GNU fallthrough statement attribute requires an enclosing switch");\n        return false;\n    }\n    return true;\n'''
+          if text.count(old) != 1:
+              raise SystemExit(f'statement parser anchor count={text.count(old)}')
           path.write_text(text.replace(old, new, 1))
           PY
           cat > tests/compiler/c0/gnu_unused_label_attribute.c <<'EOF'
