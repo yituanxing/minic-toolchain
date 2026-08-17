@@ -413,4 +413,4 @@ sh "$root/tests/compiler/c0/run-builtin-unary-family.sh"
 
 MINIC="$minic" \
 BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-sh "$root/tests/compiler/c0/run-zero-slot-aggregate-relocation.sh"
+sh "$root/tests/compiler/c0/run-gnu-switch-case-range.sh"
