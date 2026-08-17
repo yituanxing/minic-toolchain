@@ -1300,12 +1300,12 @@ static bool parse_static_record_constant(MinicParser *parser,
                 minic_parser_error(parser, "internal error: invalid static record materialization");
                 return false;
             }
-            if (field->element_count == 1U) {
+            if (field->element_count == 1U && !field->is_array) {
                 if (!minic_parser_parse_static_storage_initializer_value(
                         parser, object_id, field->type)) {
                     return false;
                 }
-            } else if (minic_type_is_char_integer(field->type) &&
+            } else if (field->is_array && minic_type_is_char_integer(field->type) &&
                        parser->current.kind == MINIC_TOKEN_STRING_LITERAL) {
                 if (!minic_parser_add_bounded_string_literal_initializer(
                         parser, object_id, field->element_count)) {
