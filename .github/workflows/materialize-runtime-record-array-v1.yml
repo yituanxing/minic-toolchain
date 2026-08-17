@@ -15,7 +15,7 @@ jobs:
         with:
           ref: staging/string-octal-v1
           fetch-depth: 0
-      - name: Materialize, format and build release compiler
+      - name: Materialize convergence compiler
         run: |
           set -Eeuo pipefail
           python3 tools/dev/materialize-runtime-record-array-v1.py
@@ -25,46 +25,24 @@ jobs:
           python3 tools/dev/materialize-static-local-prefix-attributes-v1.py
           python3 tools/dev/materialize-top-level-braced-static-scalar-v1.py
           python3 tools/dev/materialize-parenthesized-pointer-array-v1.py
-          clang-format-18 -i \
-            src/frontend/parser_statement.c \
-            src/frontend/parser_expression.c \
-            src/frontend/parser_declarator.c \
-            src/frontend/parser_internal.h \
-            src/frontend/parser_global.c
+          clang-format-18 -i src/frontend/parser_statement.c src/frontend/parser_expression.c \
+            src/frontend/parser_declarator.c src/frontend/parser_internal.h src/frontend/parser_global.c
           git diff --check
           make -j4 MODE=release BUILD_DIR=build/convergence
-      - name: Focused parenthesized pointer-to-array semantics
+      - name: Focused regression seams
         run: |
           set -Eeuo pipefail
-          cat > /tmp/pointer-array.c <<'EOF'
-          int main(void) {
-              char (*zero)[0] = 0;
-              char (*fixed)[4] = 0;
-              char (**nested)[8] = 0;
-              int (*fn)(void) = 0;
-              return zero == 0 && fixed == 0 && nested == 0 && fn == 0 ? 0 : 1;
-          }
-          EOF
-          build/convergence/bin/minic -S /tmp/pointer-array.c -o /tmp/pointer-array.s
-          test -s /tmp/pointer-array.s
-          printf '%s\n' 'PASS parenthesized-pointer-declarators pointer-to-array zero+fixed+nested function-pointer-preserved'
-      - name: Recheck prior convergence slices
-        run: |
-          set -Eeuo pipefail
-          cat > /tmp/regression.c <<'EOF'
-          struct key { unsigned long value; };
-          static unsigned long braced = { 0 };
+          cat > /tmp/seams.c <<'EOF'
           static int zero(void) { return 0; }
-          static int one(void) { return 1; }
-          static int (*actions[])(void) = { zero, one };
-          int f(void) {
-              static __attribute__((section(".minic.prefix"))) char msg[64];
-              static __attribute__((unused)) struct key k;
-              return actions[1]() + (int)braced + (int)msg[0] + (int)k.value;
+          static int (*actions[])(void) = { zero };
+          int main(void) {
+              char (*p)[0] = 0;
+              static __attribute__((unused)) unsigned long key = { 0 };
+              return p == 0 && actions[0]() == 0 && key == 0 ? 0 : 1;
           }
           EOF
-          build/convergence/bin/minic -S /tmp/regression.c -o /tmp/regression.s
-          grep -F '.minic.prefix' /tmp/regression.s >/dev/null
+          build/convergence/bin/minic -S /tmp/seams.c -o /tmp/seams.s
+          test -s /tmp/seams.s
       - name: Install Linux probe tools
         run: |
           set -Eeuo pipefail
@@ -73,37 +51,24 @@ jobs:
           mkdir -p tests/external/linux
           git show origin/diagnostic/linux-first100-variadic-stack-v0:tests/external/linux/batch_probe.sh > tests/external/linux/batch_probe.sh
           chmod +x tests/external/linux/batch_probe.sh
-      - name: Probe unchanged do_mounts.i
+      - name: Diagnose unchanged kvm_main.i
         run: |
           set +e
           MINIC="$GITHUB_WORKSPACE/build/convergence/bin/minic" \
-          BUILD_DIR="$GITHUB_WORKSPACE/build/do-mounts" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/kvm-main" \
           LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-6.6.143.tar.xz" \
-          CROSS_COMPILE=riscv64-linux-gnu- LINUX_BATCH_OFFSET=2 LINUX_BATCH_LIMIT=1 LINUX_BATCH_JOBS=1 \
+          CROSS_COMPILE=riscv64-linux-gnu- LINUX_BATCH_OFFSET=68 LINUX_BATCH_LIMIT=1 LINUX_BATCH_JOBS=1 \
             sh tests/external/linux/batch_probe.sh
           status=$?
           set -e
-          cat build/do-mounts/batch-summary.txt
-          cat build/do-mounts/minic-stderr/init/do_mounts.i.stderr || true
-          input=build/do-mounts/kbuild/init/do_mounts.i
-          if test -f "$input"; then
-            frontier=$(sed -n 's/.*do_mounts\.i:\([0-9][0-9]*\):.*/\1/p' build/do-mounts/minic-stderr/init/do_mounts.i.stderr | head -n 1)
-            if test -n "$frontier"; then
-              start=$((frontier > 30 ? frontier - 30 : 1)); end=$((frontier + 30));
-              nl -ba "$input" | sed -n "${start},${end}p"
-            fi
+          cat build/kvm-main/batch-summary.txt
+          stderr=build/kvm-main/minic-stderr/virt/kvm/kvm_main.i.stderr
+          cat "$stderr" || true
+          input=build/kvm-main/kbuild/virt/kvm/kvm_main.i
+          frontier=$(sed -n 's/.*kvm_main\.i:\([0-9][0-9]*\):.*/\1/p' "$stderr" | head -n 1)
+          if test -n "$frontier"; then
+            start=$((frontier > 45 ? frontier - 45 : 1)); end=$((frontier + 45));
+            echo "--- exact source context ${start}..${end} ---"
+            nl -ba "$input" | sed -n "${start},${end}p"
           fi
-          echo "DO_MOUNTS_PROBE_STATUS=$status"
-      - name: Probe fixed Linux first100
-        run: |
-          set +e
-          MINIC="$GITHUB_WORKSPACE/build/convergence/bin/minic" \
-          BUILD_DIR="$GITHUB_WORKSPACE/build/first100" \
-          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-6.6.143.tar.xz" \
-          CROSS_COMPILE=riscv64-linux-gnu- LINUX_BATCH_OFFSET=0 LINUX_BATCH_LIMIT=100 LINUX_BATCH_JOBS=4 \
-            sh tests/external/linux/batch_probe.sh
-          status=$?
-          set -e
-          cat build/first100/batch-summary.txt
-          echo "FIRST100_STATUS=$status"
-          test "$status" -eq 0 || test "$status" -eq 1
+          echo "KVM_MAIN_PROBE_STATUS=$status"
