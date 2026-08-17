@@ -80,3 +80,5 @@ jobs:
                   marker = '>>' if no == line_no else '  '
                   print(f'{marker} {no:6d}: {source[no-1]}')
           PY
+
+      # Refresh marker: canonical incomplete-array reuse is now part of the probed code.
