@@ -1086,6 +1086,27 @@ static bool incomplete_array_has_semantic_owner(const MinicC0Program *program,
     return false;
 }
 
+static bool function_alias_signature_matches(const MinicC0Program *program,
+                                             const MinicFunction *alias,
+                                             const MinicFunction *target) {
+    size_t parameter_index;
+
+    if (program == NULL || alias == NULL || target == NULL ||
+        alias->parameter_count != target->parameter_count ||
+        alias->is_variadic != target->is_variadic ||
+        !minic_c0_types_compatible(program, alias->return_type, target->return_type)) {
+        return false;
+    }
+    for (parameter_index = 0U; parameter_index < alias->parameter_count; ++parameter_index) {
+        if (!minic_c0_types_compatible(program,
+                                       alias->parameter_types[parameter_index],
+                                       target->parameter_types[parameter_index])) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool minic_c0_program_verify_target(const MinicC0Program *program,
                                     MinicC0AstForm form,
                                     const MinicTargetInfo *target) {
@@ -1197,6 +1218,16 @@ bool minic_c0_program_verify_target(const MinicC0Program *program,
         size_t parameter_index;
 
         function = &program->functions[index];
+        if (function->alias_target != MINIC_FUNCTION_INVALID) {
+            const MinicFunction *alias_target_function;
+
+            alias_target_function = minic_c0_program_function(program, function->alias_target);
+            if (alias_target_function == NULL || !alias_target_function->is_defined ||
+                function->is_defined || function->section_name != NULL ||
+                !function_alias_signature_matches(program, function, alias_target_function)) {
+                return false;
+            }
+        }
         if (function->name == NULL || function->parameter_count > MINIC_MAX_FUNCTION_PARAMETERS ||
             !type_is_valid(program, target, function->return_type) ||
             minic_type_is_function(function->return_type) ||

@@ -26,6 +26,26 @@ bool minic_c0_program_set_function_weak(MinicC0Program *program,
     return true;
 }
 
+bool minic_c0_program_set_function_alias(MinicC0Program *program,
+                                         MinicFunctionId function_id,
+                                         MinicFunctionId target_function_id) {
+    MinicFunction *function;
+
+    if (program == NULL || function_id >= program->function_count ||
+        target_function_id >= program->function_count || function_id == target_function_id) {
+        return false;
+    }
+    function = &program->functions[function_id];
+    if (function->is_defined) {
+        return false;
+    }
+    if (function->alias_target != MINIC_FUNCTION_INVALID) {
+        return function->alias_target == target_function_id;
+    }
+    function->alias_target = target_function_id;
+    return true;
+}
+
 bool minic_c0_program_set_function_variadic(MinicC0Program *program,
                                             MinicFunctionId function_id,
                                             bool is_variadic) {

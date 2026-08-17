@@ -814,6 +814,7 @@ bool minic_c0_program_add_function(MinicC0Program *program,
     function.local_count = local_count;
     function.parameter_count = 0U;
     function.body_block = body_block;
+    function.alias_target = MINIC_FUNCTION_INVALID;
     function.is_defined = body_block != MINIC_BLOCK_INVALID;
 
     *function_id = program->function_count;
@@ -889,7 +890,7 @@ bool minic_c0_program_define_function(MinicC0Program *program,
         return false;
     }
     function = &program->functions[function_id];
-    if (function->is_defined) {
+    if (function->is_defined || function->alias_target != MINIC_FUNCTION_INVALID) {
         return false;
     }
     function->local_begin = local_begin;
