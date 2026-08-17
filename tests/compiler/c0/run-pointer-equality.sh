@@ -42,6 +42,11 @@ name=gnu_void_pointer_function_member_assignment
 grep -F 'assign_object_pointer:' "$work/$name.s" >/dev/null
 printf '%s\n' 'PASS compiler/c0/gnu_void_pointer_function_member_assignment assignment-conversion=1'
 
+name=gnu_function_pointer_void_comparison
+"$host_cc" -E -P -std=gnu11 -x c "$root/tests/compiler/c0/$name.c" -o "$work/$name.i"
+"$minic" -S "$work/$name.i" -o "$work/$name.s"
+grep -F 'compare_object_pointer:' "$work/$name.s" >/dev/null
+printf '%s\n' 'PASS compiler/c0/gnu_function_pointer_void_comparison equality=gnu-extension member-function-pointer=1'
+
 compile_failure invalid_pointer_equality_nonzero_integer 'binary operator requires int operands'
 compile_failure invalid_pointer_equality_incompatible 'binary operator requires int operands'
-compile_failure invalid_function_pointer_void_comparison 'binary operator requires int operands'
