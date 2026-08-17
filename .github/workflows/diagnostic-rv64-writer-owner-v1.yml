@@ -1,0 +1,77 @@
+name: Diagnostic RV64 Writer Owner V1
+on:
+  push:
+    branches: [staging/string-octal-v1]
+permissions:
+  contents: read
+jobs:
+  probe:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-24.04
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: staging/string-octal-v1
+          fetch-depth: 0
+      - name: Materialize current convergence compiler plus writer trace
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/materialize-runtime-record-array-v1.py
+          python3 tools/dev/materialize-fixed-call-character-pointer-v1.py
+          python3 tools/dev/materialize-function-pointer-array-declarator-v1.py
+          python3 tools/dev/materialize-preformed-static-array-v1.py
+          python3 tools/dev/materialize-static-local-prefix-attributes-v1.py
+          python3 tools/dev/materialize-top-level-braced-static-scalar-v1.py
+          python3 tools/dev/materialize-parenthesized-pointer-array-v1.py
+          python3 tools/dev/materialize-record-pointer-array-v1.py
+          python3 tools/dev/materialize-gnu-function-void-pointer-equality-v1.py
+          python3 tools/dev/materialize-gnu-signed-left-shift-ice-v1.py
+          python3 tools/dev/materialize-record-value-initialize-v1.py
+          python3 tools/dev/materialize-record-value-initialize-v1b.py
+          python3 tools/dev/materialize-static-local-self-reference-v1.py
+          python3 tools/dev/materialize-record-conditional-type-v1.py
+          python3 tools/dev/materialize-direct-function-parameter-v1.py
+          python3 tools/dev/materialize-parameter-suffix-informational-attributes-v1.py
+          python3 tools/dev/materialize-overflow-result-range-v1.py
+          python3 tools/dev/materialize-overflow-constant-value-v1.py
+          python3 tools/dev/materialize-rv64-writer-owner-trace-v1.py
+          clang-format-18 -i \
+            src/frontend/ast.h src/frontend/ast.c src/frontend/ast_verifier.c \
+            src/frontend/const_eval.h src/frontend/const_eval.c \
+            src/frontend/expression_semantics.h src/frontend/expression_semantics.c \
+            src/frontend/function_body.c src/frontend/parser_statement.c \
+            src/frontend/parser_expression.c src/frontend/parser_declarator.c \
+            src/frontend/parser_function.c src/frontend/parser_internal.h \
+            src/frontend/parser_global.c src/frontend/parser_record.c \
+            src/target/riscv64/codegen_expression.c src/target/riscv64/codegen_statement.c \
+            src/target/riscv64/codegen_function.c
+          git diff --check
+          make -j4 MODE=release BUILD_DIR=build/convergence
+      - name: Install Linux probe tools
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu flex bison bc libelf-dev libssl-dev
+          mkdir -p tests/external/linux
+          git show origin/diagnostic/linux-first100-variadic-stack-v0:tests/external/linux/batch_probe.sh > tests/external/linux/batch_probe.sh
+          chmod +x tests/external/linux/batch_probe.sh
+      - name: Trace unchanged do_mounts writer failure
+        run: |
+          set +e
+          MINIC="$GITHUB_WORKSPACE/build/convergence/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/do-mounts-writer-owner" \
+          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-6.6.143.tar.xz" \
+          CROSS_COMPILE=riscv64-linux-gnu- LINUX_BATCH_OFFSET=2 LINUX_BATCH_LIMIT=1 LINUX_BATCH_JOBS=1 \
+            sh tests/external/linux/batch_probe.sh
+          status=$?
+          set -e
+          cat build/do-mounts-writer-owner/batch-summary.txt
+          stderr=build/do-mounts-writer-owner/minic-stderr/init/do_mounts.i.stderr
+          output=build/do-mounts-writer-owner/minic-out/init/do_mounts.i.s
+          echo '--- minic stderr ---'
+          cat "$stderr" || true
+          echo '--- partial assembly tail ---'
+          tail -n 160 "$output" || true
+          echo "DO_MOUNTS_WRITER_OWNER_STATUS=$status"
