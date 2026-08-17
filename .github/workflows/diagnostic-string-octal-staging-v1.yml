@@ -74,10 +74,8 @@ jobs:
                   print('SOURCE_NOT_FOUND')
                   continue
               source = path.read_text(errors='replace').splitlines()
-              if line_no <= 1:
-                  lo, hi = 1, min(len(source), 30)
-              else:
-                  lo, hi = max(1, line_no - 10), min(len(source), line_no + 10)
+              lo, hi = ((1, min(len(source), 30)) if line_no <= 1
+                        else (max(1, line_no - 12), min(len(source), line_no + 12)))
               for no in range(lo, hi + 1):
                   marker = '>>' if no == line_no else '  '
                   print(f'{marker} {no:6d}: {source[no-1]}')
