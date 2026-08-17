@@ -1,0 +1,150 @@
+name: Diagnostic External Pointer Shared Shapes V1
+
+on:
+  push:
+    branches:
+      - diagnostic/external-pointer-shared-shapes-v1
+
+permissions:
+  contents: read
+
+jobs:
+  isolate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Apply shared external pointer routing
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('src/frontend/parser_function.c')
+          text = path.read_text()
+          old = '''    MinicGlobalObjectId object_id;
+              MinicGlobalObjectId target_id;
+              MinicSourceSpan literal_span;
+              MinicType literal_type;
+              MinicType literal_pointer_type;
+              const MinicArrayType *literal_array;
+              const MinicGlobalObject *existing;
+          '''
+          new = '''    MinicGlobalObjectId object_id;
+              const MinicGlobalObject *existing;
+          '''
+          if old not in text:
+              raise SystemExit('external object locals anchor not found')
+          text = text.replace(old, new, 1)
+          old = '''    if (minic_type_is_record(object_type) || minic_type_is_array(object_type)) {
+                  if (!minic_parser_parse_static_storage_initializer_value(parser, object_id, object_type)) {
+                      if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\\0') {
+                          minic_parser_error(parser, "cannot record external record initializer");
+                      }
+                      return false;
+                  }
+                  return minic_parser_expect(
+                      parser, MINIC_TOKEN_SEMICOLON, "expected ';' after external object definition");
+              }
+
+              if (parser->current.kind != MINIC_TOKEN_STRING_LITERAL ||
+                  !minic_parser_create_string_literal_object(
+                      parser, &target_id, &literal_type, &literal_span)) {
+                  if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\\0') {
+                      minic_parser_error(parser,
+                                         "external pointer definition requires a string literal initializer");
+                  }
+                  return false;
+              }
+              literal_array = minic_c0_program_array_type(parser->program, literal_type.array_type_id);
+              if (literal_array == NULL || !minic_type_is_array(literal_type) ||
+                  !minic_type_pointer_to(literal_array->element_type, &literal_pointer_type) ||
+                  !minic_type_assignment_compatible(object_type, literal_pointer_type) ||
+                  !minic_c0_global_object_set_zero_initialized(parser->program, object_id) ||
+                  !minic_c0_global_object_add_object_relocation(
+                      parser->program, object_id, MINIC_GLOBAL_RELOCATION_LOCATION_SCALAR, 0U, target_id)) {
+                  minic_parser_error(parser, "external pointer initializer type mismatch");
+                  return false;
+              }
+              (void)literal_span;
+              return minic_parser_expect(
+                  parser, MINIC_TOKEN_SEMICOLON, "expected ';' after external object definition");
+          '''
+          new = '''    if (minic_type_is_pointer(object_type) || minic_type_is_record(object_type) ||
+                  minic_type_is_array(object_type)) {
+                  if (!minic_parser_parse_static_storage_initializer_value(parser, object_id, object_type)) {
+                      if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\\0') {
+                          minic_parser_error(parser, "cannot record external static-storage initializer");
+                      }
+                      return false;
+                  }
+                  return minic_parser_expect(
+                      parser, MINIC_TOKEN_SEMICOLON, "expected ';' after external object definition");
+              }
+              return false;
+          '''
+          if old not in text:
+              raise SystemExit('external pointer private initializer anchor not found')
+          path.write_text(text.replace(old, new, 1))
+          PY
+          git diff --check
+
+      - name: Build compiler
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=debug BUILD_DIR=build/shape-compiler
+
+      - name: Compile isolated pointer shapes
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work=build/external-pointer-shapes
+          mkdir -p "$work"
+
+          cat >"$work/string.c" <<'EOF'
+          char *p = "hello";
+          int main(void) { return 0; }
+          EOF
+
+          cat >"$work/function_null.c" <<'EOF'
+          void (*p)(void) = ((void *)0);
+          int main(void) { return 0; }
+          EOF
+
+          cat >"$work/object_address.c" <<'EOF'
+          int x;
+          int *p = &x;
+          int main(void) { return 0; }
+          EOF
+
+          cat >"$work/member_address.c" <<'EOF'
+          struct Pair { int a; int b; };
+          struct Pair x;
+          int *p = &x.b;
+          int main(void) { return 0; }
+          EOF
+
+          cat >"$work/function_address.c" <<'EOF'
+          int f(void) { return 1; }
+          int (*p)(void) = f;
+          int main(void) { return 0; }
+          EOF
+
+          for name in string function_null object_address member_address function_address; do
+            cc -E -P -x c "$work/$name.c" -o "$work/$name.i"
+            set +e
+            build/shape-compiler/bin/minic -S "$work/$name.i" -o "$work/$name.s" \
+              >"$work/$name.stdout" 2>"$work/$name.stderr"
+            status=$?
+            set -e
+            printf 'SHAPE name=%s status=%s\n' "$name" "$status"
+            if test -s "$work/$name.stderr"; then
+              sed 's/^/DIAG /' "$work/$name.stderr"
+            fi
+            if test "$status" -eq 0; then
+              grep -E '^(p:|  \.dword|  \.zero)' "$work/$name.s" | head -n 20 || true
+            fi
+          done
