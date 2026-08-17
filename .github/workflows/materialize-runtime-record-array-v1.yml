@@ -24,6 +24,7 @@ jobs:
           python3 tools/dev/materialize-preformed-static-array-v1.py
           python3 tools/dev/materialize-static-local-prefix-attributes-v1.py
           python3 tools/dev/materialize-top-level-braced-static-scalar-v1.py
+          python3 tools/dev/materialize-parenthesized-pointer-array-v1.py
           clang-format-18 -i \
             src/frontend/parser_statement.c \
             src/frontend/parser_expression.c \
@@ -32,39 +33,34 @@ jobs:
             src/frontend/parser_global.c
           git diff --check
           make -j4 MODE=debug BUILD_DIR=build/convergence
-      - name: Focused braced static scalar semantics
+      - name: Focused parenthesized pointer-to-array semantics
         run: |
           set -Eeuo pipefail
-          cat > /tmp/braced-static-scalar.c <<'EOF'
-          static unsigned long zero = { 0 };
-          static unsigned long trailing = { 7, };
-          static int *null_pointer = { 0 };
+          cat > /tmp/pointer-array.c <<'EOF'
           int main(void) {
-              return zero == 0 && trailing == 7 && null_pointer == 0 ? 0 : 1;
+              char (*zero)[0] = 0;
+              char (*fixed)[4] = 0;
+              char (**nested)[8] = 0;
+              int (*fn)(void) = 0;
+              return zero == 0 && fixed == 0 && nested == 0 && fn == 0 ? 0 : 1;
           }
           EOF
-          build/convergence/bin/minic -S /tmp/braced-static-scalar.c -o /tmp/braced-static-scalar.s
-          test -s /tmp/braced-static-scalar.s
-          cat > /tmp/braced-static-scalar-negative.c <<'EOF'
-          static unsigned long bad = { 0, 1 };
-          EOF
-          if build/convergence/bin/minic -S /tmp/braced-static-scalar-negative.c -o /tmp/braced-static-scalar-negative.s; then
-            echo 'expected multi-element scalar initializer to fail' >&2
-            exit 1
-          fi
-          printf '%s\n' 'PASS top-level static scalar braces integer+pointer trailing-comma multi-element=rejected'
-      - name: Recheck static-local prefix and function-pointer arrays
+          build/convergence/bin/minic -S /tmp/pointer-array.c -o /tmp/pointer-array.s
+          test -s /tmp/pointer-array.s
+          printf '%s\n' 'PASS parenthesized-pointer-declarators pointer-to-array zero+fixed+nested function-pointer-preserved'
+      - name: Recheck prior convergence slices
         run: |
           set -Eeuo pipefail
           cat > /tmp/regression.c <<'EOF'
           struct key { unsigned long value; };
+          static unsigned long braced = { 0 };
           static int zero(void) { return 0; }
           static int one(void) { return 1; }
           static int (*actions[])(void) = { zero, one };
           int f(void) {
               static __attribute__((section(".minic.prefix"))) char msg[64];
               static __attribute__((unused)) struct key k;
-              return actions[1]() + (int)msg[0] + (int)k.value;
+              return actions[1]() + (int)braced + (int)msg[0] + (int)k.value;
           }
           EOF
           build/convergence/bin/minic -S /tmp/regression.c -o /tmp/regression.s
@@ -77,27 +73,27 @@ jobs:
           mkdir -p tests/external/linux
           git show origin/diagnostic/linux-first100-variadic-stack-v0:tests/external/linux/batch_probe.sh > tests/external/linux/batch_probe.sh
           chmod +x tests/external/linux/batch_probe.sh
-      - name: Probe unchanged calibrate.i
+      - name: Probe unchanged do_mounts.i
         run: |
           set +e
           MINIC="$GITHUB_WORKSPACE/build/convergence/bin/minic" \
-          BUILD_DIR="$GITHUB_WORKSPACE/build/calibrate" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/do-mounts" \
           LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-6.6.143.tar.xz" \
-          CROSS_COMPILE=riscv64-linux-gnu- LINUX_BATCH_OFFSET=5 LINUX_BATCH_LIMIT=1 LINUX_BATCH_JOBS=1 \
+          CROSS_COMPILE=riscv64-linux-gnu- LINUX_BATCH_OFFSET=2 LINUX_BATCH_LIMIT=1 LINUX_BATCH_JOBS=1 \
             sh tests/external/linux/batch_probe.sh
           status=$?
           set -e
-          cat build/calibrate/batch-summary.txt
-          cat build/calibrate/minic-stderr/init/calibrate.i.stderr || true
-          input=build/calibrate/kbuild/init/calibrate.i
+          cat build/do-mounts/batch-summary.txt
+          cat build/do-mounts/minic-stderr/init/do_mounts.i.stderr || true
+          input=build/do-mounts/kbuild/init/do_mounts.i
           if test -f "$input"; then
-            frontier=$(sed -n 's/.*calibrate\.i:\([0-9][0-9]*\):.*/\1/p' build/calibrate/minic-stderr/init/calibrate.i.stderr | head -n 1)
+            frontier=$(sed -n 's/.*do_mounts\.i:\([0-9][0-9]*\):.*/\1/p' build/do-mounts/minic-stderr/init/do_mounts.i.stderr | head -n 1)
             if test -n "$frontier"; then
-              start=$((frontier > 25 ? frontier - 25 : 1)); end=$((frontier + 25));
+              start=$((frontier > 30 ? frontier - 30 : 1)); end=$((frontier + 30));
               nl -ba "$input" | sed -n "${start},${end}p"
             fi
           fi
-          echo "CALIBRATE_PROBE_STATUS=$status"
+          echo "DO_MOUNTS_PROBE_STATUS=$status"
       - name: Probe fixed Linux first100
         run: |
           set +e
