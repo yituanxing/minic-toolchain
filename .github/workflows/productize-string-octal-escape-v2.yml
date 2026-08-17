@@ -1,0 +1,43 @@
+name: Productize String Octal Escape V2
+on:
+  push:
+    branches: [product/string-octal-escape-v2]
+permissions:
+  contents: write
+jobs:
+  productize:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: product/string-octal-escape-v2
+          fetch-depth: 0
+      - name: Materialize exact validated source and contract
+        run: |
+          set -Eeuo pipefail
+          git show origin/product/string-octal-escape-v1:src/frontend/parser_string.c > src/frontend/parser_string.c
+          git show origin/product/string-octal-escape-v1:tests/compiler/c0/run-string-octal-escape.sh > tests/compiler/c0/run-string-octal-escape.sh
+          chmod +x tests/compiler/c0/run-string-octal-escape.sh
+          cat >> tests/compiler/c0/run.sh <<'EOF'
+
+          MINIC="$minic" \
+          BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+          sh "$root/tests/compiler/c0/run-string-octal-escape.sh"
+          EOF
+          git diff --check
+      - name: Validate Werror focused and fast gates
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/product-string-octal
+          MINIC="$GITHUB_WORKSPACE/build/product-string-octal/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/product-string-octal" sh tests/compiler/c0/run-string-octal-escape.sh
+          make -j4 check-fast MODE=release BUILD_DIR=build/product-string-octal-fast
+      - name: Commit clean product diff
+        run: |
+          set -Eeuo pipefail
+          git rm .github/workflows/productize-string-octal-escape-v2.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m 'frontend: decode octal string escapes'
+          git push origin HEAD:product/string-octal-escape-v2
