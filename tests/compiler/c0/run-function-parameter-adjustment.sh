@@ -18,3 +18,21 @@ grep -F 'jalr' "$work/output.s" >/dev/null
 
 printf '%s
 '   'PASS compiler/c0/function_parameter_adjustment typedef-function=pointer-adjusted declaration-pointer-redeclaration=compatible definition=1 indirect-call=1 sizeof=pointer'
+
+"$host_cc" -E -P -std=gnu11 -x c \
+    "$root/tests/compiler/c0/parameter_suffix_informational_attribute.c" \
+    -o "$work/parameter-suffix-info.i"
+"$minic" -S "$work/parameter-suffix-info.i" -o "$work/parameter-suffix-info.s"
+grep -F 'add_one:' "$work/parameter-suffix-info.s" >/dev/null
+
+"$host_cc" -E -P -std=gnu11 -x c \
+    "$root/tests/compiler/c0/invalid_parameter_suffix_aligned.c" \
+    -o "$work/parameter-suffix-aligned.i"
+if "$minic" -S "$work/parameter-suffix-aligned.i" -o "$work/parameter-suffix-aligned.s" \
+    >"$work/parameter-suffix-aligned.out" 2>"$work/parameter-suffix-aligned.err"; then
+    echo 'FAIL compiler/c0/invalid_parameter_suffix_aligned' >&2
+    exit 1
+fi
+grep -F 'GNU parameter declarator attribute requires explicit language/layout semantics' \
+    "$work/parameter-suffix-aligned.err" >/dev/null
+printf '%s\n' 'PASS compiler/c0/parameter_suffix_informational_attribute informational=1 layout=fail-closed'

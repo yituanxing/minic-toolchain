@@ -658,6 +658,36 @@ static bool adjust_function_parameter_type(MinicParser *parser, MinicType *param
     return true;
 }
 
+static bool parameter_attribute_class_is_parse_only(MinicAttributeClass semantic_class) {
+    return semantic_class == MINIC_ATTRIBUTE_CLASS_INFORMATIONAL ||
+           semantic_class == MINIC_ATTRIBUTE_CLASS_DIAGNOSTIC ||
+           semantic_class == MINIC_ATTRIBUTE_CLASS_OPTIMIZATION ||
+           semantic_class == MINIC_ATTRIBUTE_CLASS_CONTROL_FLOW;
+}
+
+static bool consume_parameter_declarator_attribute(MinicParser *parser,
+                                                   const MinicParsedAttribute *attribute,
+                                                   void *opaque_context) {
+    const MinicAttributeDescriptor *descriptor;
+
+    (void)opaque_context;
+    if (parser == NULL || attribute == NULL) {
+        return false;
+    }
+    descriptor = attribute->descriptor;
+    if (descriptor == NULL ||
+        !minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_OBJECT)) {
+        minic_parser_error(parser, "unsupported GNU parameter declarator attribute");
+        return false;
+    }
+    if (parameter_attribute_class_is_parse_only(descriptor->semantic_class)) {
+        return true;
+    }
+    minic_parser_error(
+        parser, "GNU parameter declarator attribute requires explicit language/layout semantics");
+    return false;
+}
+
 bool minic_parser_parse_parameter_list(MinicParser *parser,
                                        MinicSourceSpan *parameter_name_spans,
                                        MinicType *parameter_types,
@@ -723,6 +753,11 @@ bool minic_parser_parse_parameter_list(MinicParser *parser,
             }
         } else if (require_names) {
             minic_parser_error(parser, "expected parameter name");
+            return false;
+        }
+
+        if (!minic_parser_parse_gnu_attribute_lists(
+                parser, consume_parameter_declarator_attribute, NULL)) {
             return false;
         }
 
