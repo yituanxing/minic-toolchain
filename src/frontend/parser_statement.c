@@ -3102,7 +3102,6 @@ static bool parse_case(MinicParser *parser) {
     MinicExpressionId lower_expression_id;
     MinicExpressionId upper_expression_id;
     MinicType constant_type;
-    MinicSourceSpan constant_span;
     int64_t lower_value;
     int64_t upper_value;
     size_t index;
@@ -3133,7 +3132,7 @@ static bool parse_case(MinicParser *parser) {
         return false;
     }
     constant_type = lower_constant->type;
-    constant_span = lower_constant->span;
+    upper_constant = NULL;
     upper_value = lower_value;
     upper_expression_id = MINIC_EXPRESSION_INVALID;
     is_range = parser->current.kind == MINIC_TOKEN_ELLIPSIS;
@@ -3153,7 +3152,6 @@ static bool parse_case(MinicParser *parser) {
             minic_parser_error(parser, "GNU case range upper bound is below lower bound");
             return false;
         }
-        constant_span.end = upper_constant->span.end;
     }
 
     if (context->case_count >= MINIC_PARSER_MAX_SWITCH_CASES) {
@@ -3185,6 +3183,10 @@ static bool parse_case(MinicParser *parser) {
     if (is_range) {
         (void)memset(&folded_constant, 0, sizeof(folded_constant));
         folded_constant.kind = MINIC_EXPRESSION_INTEGER;
+        if (upper_constant == NULL) {
+            minic_parser_error(parser, "invalid GNU case range upper bound");
+            return false;
+        }
         folded_constant.span = upper_constant->span;
         folded_constant.type = constant_type;
         folded_constant.value_category = MINIC_VALUE_RVALUE;
