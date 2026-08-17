@@ -1,0 +1,66 @@
+name: Productize GNU Unused Label Attribute V1
+on:
+  push:
+    branches: [product/unused-label-attribute-v1]
+permissions:
+  contents: write
+jobs:
+  productize:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: product/unused-label-attribute-v1
+          fetch-depth: 0
+      - name: Materialize source and permanent contract
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('src/frontend/attribute.c')
+          text = path.read_text()
+          old = '''    MINIC_ATTRIBUTE_ENTRY("__unused__",\n                          MINIC_ATTRIBUTE_UNUSED,\n                          MINIC_ATTRIBUTE_CLASS_INFORMATIONAL,\n                          MINIC_ATTRIBUTE_TARGET_FUNCTION | MINIC_ATTRIBUTE_TARGET_OBJECT |\n                              MINIC_ATTRIBUTE_TARGET_TYPE | MINIC_ATTRIBUTE_TARGET_FIELD),\n'''
+          new = '''    MINIC_ATTRIBUTE_ENTRY("__unused__",\n                          MINIC_ATTRIBUTE_UNUSED,\n                          MINIC_ATTRIBUTE_CLASS_INFORMATIONAL,\n                          MINIC_ATTRIBUTE_TARGET_FUNCTION | MINIC_ATTRIBUTE_TARGET_OBJECT |\n                              MINIC_ATTRIBUTE_TARGET_TYPE | MINIC_ATTRIBUTE_TARGET_FIELD |\n                              MINIC_ATTRIBUTE_TARGET_STATEMENT),\n'''
+          if text.count(old) != 1:
+              raise SystemExit(f'unused attribute anchor count={text.count(old)}')
+          path.write_text(text.replace(old, new, 1))
+          PY
+          cat > tests/compiler/c0/gnu_unused_label_attribute.c <<'EOF'
+          static int probe(int value) {
+              if (value) {
+                  goto done;
+              }
+              value = 7;
+          done: __attribute__((__unused__));
+              return value;
+          }
+          int main(void) { return probe(0) == 7 ? 0 : 1; }
+          EOF
+          cat >> tests/compiler/c0/run-switch-control-flow.sh <<'EOF'
+
+          "$host_cc" -E -P -std=gnu11 -x c \
+              "$root/tests/compiler/c0/gnu_unused_label_attribute.c" \
+              -o "$work/gnu_unused_label_attribute.i"
+          "$minic" -S "$work/gnu_unused_label_attribute.i" \
+              -o "$work/gnu_unused_label_attribute.s"
+          grep -F 'probe:' "$work/gnu_unused_label_attribute.s" >/dev/null
+          printf '%s\n' 'PASS compiler/c0/gnu_unused_label_attribute label-statement=informational'
+          EOF
+          clang-format-18 -i src/frontend/attribute.c tests/compiler/c0/gnu_unused_label_attribute.c
+          git diff --check
+      - name: Validate Werror focused and fast gates
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/product-unused-label
+          MINIC="$GITHUB_WORKSPACE/build/product-unused-label/bin/minic" HOST_CC=cc BUILD_DIR="$GITHUB_WORKSPACE/build/product-unused-label" sh tests/compiler/c0/run-switch-control-flow.sh
+          make -j4 check-fast MODE=release BUILD_DIR=build/product-unused-label-fast
+      - name: Commit clean product diff
+        run: |
+          set -Eeuo pipefail
+          git rm .github/workflows/productize-unused-label-attribute-v1.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m 'frontend: accept GNU unused on labels'
+          git push origin HEAD:product/unused-label-attribute-v1
