@@ -17,7 +17,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           python3 tools/dev/materialize-alignof-expression-v1.py
-          clang-format-18 -i src/frontend/parser_expression.c
+          clang-format-18 -i src/frontend/parser_expression.c src/target/data_layout.c src/target/data_layout.h
           git diff --check
           make -j4 MODE=debug BUILD_DIR=build/alignof-expression
       - name: Focused alignof expression semantics
@@ -25,11 +25,14 @@ jobs:
           set -Eeuo pipefail
           cat > /tmp/alignof-expression.c <<'EOF'
           struct Pair { char c; long x; };
+          struct Flexible { int n; void *tail[] __attribute__((aligned(16))); };
           int main(void) {
               struct Pair p;
+              struct Flexible *f;
               long a[3];
               return (__alignof__(p.x) == __alignof__(long) &&
-                      __alignof__(a) == __alignof__(long)) ? 0 : 1;
+                      __alignof__(a) == __alignof__(long) &&
+                      __alignof__(f->tail) == 16) ? 0 : 1;
           }
           EOF
           build/alignof-expression/bin/minic -S /tmp/alignof-expression.c -o /tmp/alignof-expression.s
@@ -55,6 +58,6 @@ jobs:
           rm -f tools/dev/materialize-alignof-expression-v1.py .github/workflows/materialize-alignof-expression-v1.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add src/frontend/parser_expression.c tools/dev/materialize-alignof-expression-v1.py .github/workflows/materialize-alignof-expression-v1.yml
-          git commit -m 'frontend: support GNU alignof expression operands'
+          git add src/frontend/parser_expression.c src/target/data_layout.c src/target/data_layout.h tools/dev/materialize-alignof-expression-v1.py .github/workflows/materialize-alignof-expression-v1.yml
+          git commit -m 'frontend: preserve GNU alignof member alignment'
           git push origin HEAD:staging/string-octal-v1
