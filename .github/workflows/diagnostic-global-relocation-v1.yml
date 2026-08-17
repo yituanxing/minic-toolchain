@@ -44,6 +44,7 @@ jobs:
           python3 tools/dev/materialize-backward-static-array-overlay-v1.py
           python3 tools/dev/materialize-static-integer-address-relocation-v1.py
           python3 tools/dev/materialize-static-union-zero-designator-v1.py
+          python3 tools/dev/materialize-backward-static-union-zero-overlay-v1.py
           python3 tools/dev/materialize-global-relocation-fail-trace-v1.py
           clang-format-18 -i src/frontend/ast.h src/frontend/ast.c src/frontend/ast_global.c \
             src/frontend/ast_verifier.c src/frontend/const_eval.h src/frontend/const_eval.c \
@@ -149,6 +150,31 @@ jobs:
           set -e
           test "$status" -ne 0
           grep -Fq 'noncanonical static union member requires a representable zero scalar' /tmp/noncanonical-union-nonzero.err
+
+          cat > /tmp/backward-noncanonical-union-zero.c <<'EOF'
+          typedef unsigned char u8;
+          typedef unsigned int u32;
+          union special {
+              struct { u8 blocked; u8 need_qs; u8 exp_hint; u8 need_mb; } b;
+              u32 s;
+          };
+          struct union_holder { union special special; int after; };
+          static struct union_holder good = {
+              .after = 2,
+              .special.s = 0,
+          };
+          int main(void) { return 0; }
+          EOF
+          build/convergence/bin/minic -S /tmp/backward-noncanonical-union-zero.c -o /tmp/backward-noncanonical-union-zero.s
+          test -s /tmp/backward-noncanonical-union-zero.s
+
+          sed 's/\.special\.s = 0/\.special.s = 1/' /tmp/backward-noncanonical-union-zero.c > /tmp/backward-noncanonical-union-nonzero.c
+          set +e
+          build/convergence/bin/minic -S /tmp/backward-noncanonical-union-nonzero.c -o /tmp/backward-noncanonical-union-nonzero.s 2>/tmp/backward-noncanonical-union-nonzero.err
+          status=$?
+          set -e
+          test "$status" -ne 0
+          grep -Fq 'backward noncanonical static union member requires a zero initializer' /tmp/backward-noncanonical-union-nonzero.err
       - name: Install Linux probe tools
         run: |
           set -Eeuo pipefail
