@@ -482,16 +482,42 @@ static bool parse_static_pointer_initializer(MinicParser *parser,
     return false;
 }
 
+static bool begin_static_object_definition(MinicParser *parser,
+                                           MinicType type,
+                                           MinicSourceSpan name_span,
+                                           MinicGlobalObjectId *object_id) {
+    const MinicGlobalObject *existing;
+
+    if (parser == NULL || object_id == NULL) {
+        return false;
+    }
+    *object_id = minic_parser_find_global_object_entity(parser, name_span);
+    if (*object_id == MINIC_GLOBAL_OBJECT_INVALID) {
+        if (!minic_c0_program_add_global_object(parser->program,
+                                                parser->source + name_span.begin.offset,
+                                                minic_parser_span_length(name_span),
+                                                type,
+                                                true,
+                                                minic_type_is_const(type),
+                                                object_id)) {
+            minic_parser_error(parser, "cannot create static object definition");
+            return false;
+        }
+        return true;
+    }
+    existing = minic_c0_program_global_object(parser->program, *object_id);
+    if (existing == NULL || !existing->is_internal || !minic_type_equal(existing->type, type) ||
+        !minic_c0_global_object_begin_definition(parser->program, *object_id)) {
+        minic_parser_error(parser, "conflicting static object definition");
+        return false;
+    }
+    return true;
+}
+
 static bool parse_static_scalar(MinicParser *parser, MinicType type, MinicSourceSpan name_span) {
     MinicGlobalObjectId object_id;
 
-    if (!minic_c0_program_add_global_object(parser->program,
-                                            parser->source + name_span.begin.offset,
-                                            minic_parser_span_length(name_span),
-                                            type,
-                                            true,
-                                            minic_type_is_const(type),
-                                            &object_id) ||
+    if (!begin_static_object_definition(parser, type, name_span, &object_id) ||
         !minic_parser_expect(parser, MINIC_TOKEN_EQUAL, "expected '='")) {
         if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
             minic_parser_error(parser, "cannot begin static scalar initializer");
@@ -1362,13 +1388,7 @@ static bool
 parse_static_nested_record_object(MinicParser *parser, MinicType type, MinicSourceSpan name_span) {
     MinicGlobalObjectId object_id;
 
-    if (!minic_c0_program_add_global_object(parser->program,
-                                            parser->source + name_span.begin.offset,
-                                            minic_parser_span_length(name_span),
-                                            type,
-                                            true,
-                                            minic_type_is_const(type),
-                                            &object_id) ||
+    if (!begin_static_object_definition(parser, type, name_span, &object_id) ||
         !minic_parser_expect(parser, MINIC_TOKEN_EQUAL, "expected '='") ||
         !minic_parser_parse_static_storage_initializer_value(parser, object_id, type)) {
         if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
@@ -2060,6 +2080,7 @@ static bool parse_static_zero_definition(MinicParser *parser,
                                          MinicType object_type,
                                          MinicSourceSpan name_span) {
     MinicGlobalObjectId object_id;
+    const MinicGlobalObject *existing;
 
     if (parser == NULL || parser->current.kind != MINIC_TOKEN_SEMICOLON ||
         (!minic_type_is_integer(object_type) && !minic_type_is_pointer(object_type) &&
@@ -2070,17 +2091,27 @@ static bool parse_static_zero_definition(MinicParser *parser,
         minic_parser_error(parser, "static object requires a complete object type");
         return false;
     }
-    if (!minic_c0_program_add_global_object(
-            parser->program,
-            parser->source + name_span.begin.offset,
-            minic_parser_span_length(name_span),
-            object_type,
-            true,
-            static_object_type_is_read_only(parser->program, object_type),
-            &object_id) ||
-        !minic_c0_global_object_set_zero_initialized(parser->program, object_id)) {
-        minic_parser_error(parser, "cannot create zero-initialized static object");
-        return false;
+    object_id = minic_parser_find_global_object_entity(parser, name_span);
+    if (object_id == MINIC_GLOBAL_OBJECT_INVALID) {
+        if (!minic_c0_program_add_tentative_global_object(
+                parser->program,
+                parser->source + name_span.begin.offset,
+                minic_parser_span_length(name_span),
+                object_type,
+                true,
+                static_object_type_is_read_only(parser->program, object_type),
+                &object_id)) {
+            minic_parser_error(parser, "cannot create static tentative definition");
+            return false;
+        }
+    } else {
+        existing = minic_c0_program_global_object(parser->program, object_id);
+        if (existing == NULL || !existing->is_internal ||
+            !minic_type_equal(existing->type, object_type) ||
+            !minic_c0_global_object_merge_tentative(parser->program, object_id)) {
+            minic_parser_error(parser, "conflicting static tentative definition");
+            return false;
+        }
     }
     return minic_parser_advance(parser);
 }
@@ -2299,6 +2330,7 @@ bool minic_parser_parse_static_global_after_head(MinicParser *parser,
                                                  size_t *explicit_alignment) {
     MinicType object_type;
     MinicGlobalObjectId object_id;
+    MinicGlobalObjectId existing_object_id;
     if (parser == NULL ||
         (!minic_type_is_integer(element_type) && !minic_type_is_pointer(element_type) &&
          !minic_type_is_record(element_type) && !minic_type_is_array(element_type))) {
@@ -2307,10 +2339,7 @@ bool minic_parser_parse_static_global_after_head(MinicParser *parser,
         }
         return false;
     }
-    if (minic_parser_find_global_object(parser, name_span) != MINIC_GLOBAL_OBJECT_INVALID) {
-        minic_parser_error(parser, "duplicate global object");
-        return false;
-    }
+    existing_object_id = minic_parser_find_global_object_entity(parser, name_span);
     if (!minic_parser_parse_gnu_object_attribute_lists(parser,
                                                        section_name,
                                                        section_capacity,
@@ -2322,6 +2351,11 @@ bool minic_parser_parse_static_global_after_head(MinicParser *parser,
 
     if (parser->current.kind == MINIC_TOKEN_SEMICOLON) {
         return parse_static_zero_definition(parser, element_type, name_span);
+    }
+    if (existing_object_id != MINIC_GLOBAL_OBJECT_INVALID &&
+        (minic_type_is_array(element_type) || parser->current.kind == MINIC_TOKEN_LBRACKET)) {
+        minic_parser_error(parser, "duplicate global object");
+        return false;
     }
     if (minic_type_is_array(element_type)) {
         minic_parser_error(parser, "pre-formed static array initializer is not supported yet");
