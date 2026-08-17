@@ -1,0 +1,97 @@
+name: Diagnostic Historical Candidate Lab V1
+
+on:
+  push:
+    branches:
+      - staging/string-octal-v1
+    paths:
+      - .github/workflows/diagnostic-historical-candidate-lab-v1.yml
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: version-record-string
+            branch: compiler/record-field-string-initializer-v1
+            offset: 1
+          - name: initramfs-runtime-record-array
+            branch: agent/runtime-record-array-initializer-v0
+            offset: 4
+          - name: suspend-runtime-record
+            branch: agent/runtime-record-initializer-v0
+            offset: 39
+          - name: kvm-void-function-pointer
+            branch: frontend/gnu-void-function-pointer-assignment-v4
+            offset: 68
+          - name: build-policy-static-local-record
+            branch: compiler/static-local-record-shared-initializer-v1
+            offset: 97
+          - name: sha256-alignof
+            branch: agent/alignment-typed-consteval-v1
+            offset: 65
+    runs-on: ubuntu-24.04
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply historical candidate on current staging
+        id: candidate
+        shell: bash
+        run: |
+          set -uo pipefail
+          git fetch origin '+refs/heads/*:refs/remotes/origin/*'
+          candidate=$(git rev-parse "origin/${{ matrix.branch }}")
+          echo "CANDIDATE_BRANCH=${{ matrix.branch }}"
+          echo "CANDIDATE_SHA=$candidate"
+          git show --stat --oneline --decorate --no-renames "$candidate"
+          set +e
+          git cherry-pick "$candidate"
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ]; then
+            echo "CHERRY_PICK_STATUS=CONFLICT"
+            git status --short
+            git diff --name-only --diff-filter=U
+            git cherry-pick --abort || true
+            echo 'usable=false' >> "$GITHUB_OUTPUT"
+          else
+            echo "CHERRY_PICK_STATUS=APPLIED"
+            echo 'usable=true' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build candidate
+        if: steps.candidate.outputs.usable == 'true'
+        run: make -j4 MODE=debug BUILD_DIR="build/candidate-${{ matrix.name }}"
+
+      - name: Install Linux probe tools
+        if: steps.candidate.outputs.usable == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu flex bison bc libelf-dev libssl-dev
+
+      - name: Probe unchanged TU
+        if: steps.candidate.outputs.usable == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p tests/external/linux
+          git show origin/diagnostic/linux-first100-variadic-stack-v0:tests/external/linux/batch_probe.sh > tests/external/linux/batch_probe.sh
+          chmod +x tests/external/linux/batch_probe.sh
+          set +e
+          MINIC="$GITHUB_WORKSPACE/build/candidate-${{ matrix.name }}/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/probe-${{ matrix.name }}" \
+          CROSS_COMPILE=riscv64-linux-gnu- LINUX_BATCH_OFFSET=${{ matrix.offset }} LINUX_BATCH_LIMIT=1 LINUX_BATCH_JOBS=1 \
+            sh tests/external/linux/batch_probe.sh
+          status=$?
+          set -e
+          cat "build/probe-${{ matrix.name }}/batch-summary.txt"
+          echo "CANDIDATE_PROBE_STATUS=$status"
