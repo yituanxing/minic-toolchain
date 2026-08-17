@@ -206,6 +206,7 @@ bool minic_parser_parse_integer_constant_expression_value(MinicParser *parser, i
 bool minic_parser_parse_fixed_array_bound(MinicParser *parser, size_t *element_count);
 bool minic_parser_parse_array_designator(
     MinicParser *parser, size_t element_count, bool infer_bound, size_t *first, size_t *last);
+bool minic_parser_inspect_array_initializer_extent(MinicParser *parser, size_t *element_count);
 bool minic_parser_parse_record_array_bound(MinicParser *parser,
                                            size_t *element_count,
                                            bool *is_zero_length);
