@@ -1,8 +1,9 @@
-# retrigger on an already-present branch workflow
 name: Productize Function Pointer Array Declarator V4
 on:
   push:
     branches: [product/function-pointer-array-declarator-v4]
+  pull_request:
+    branches: [main]
 permissions:
   contents: write
 jobs:
@@ -12,6 +13,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: product/function-pointer-array-declarator-v4
           fetch-depth: 0
       - name: Apply proven function pointer array declarator semantics
         run: |
