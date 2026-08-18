@@ -16,6 +16,7 @@ jobs:
       - name: Apply validated static-array support
         run: |
           set -Eeuo pipefail
+          git fetch origin staging/string-octal-v1 --no-tags
           mat=tools/dev/.productize-preformed-static-array-v3.py
           git show origin/staging/string-octal-v1:tools/dev/materialize-preformed-static-array-v1.py > "$mat"
           python3 "$mat"
