@@ -2205,6 +2205,8 @@ static bool parse_static_local_declaration(MinicParser *parser) {
     (void)memset(&declaration_attributes, 0, sizeof(declaration_attributes));
     if (parser->current_function == MINIC_FUNCTION_INVALID ||
         !minic_parser_expect(parser, MINIC_TOKEN_KW_STATIC, "expected keyword 'static'") ||
+        !minic_parser_parse_gnu_attribute_lists(
+            parser, consume_static_local_interleaved_attribute, &declaration_attributes) ||
         !minic_parser_parse_type_specifiers(parser, &base_type) ||
         !minic_parser_parse_gnu_attribute_lists(
             parser, consume_static_local_interleaved_attribute, &declaration_attributes)) {
