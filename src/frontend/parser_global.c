@@ -2410,6 +2410,78 @@ bool minic_parser_parse_static_zero_declaration_list_after_head(MinicParser *par
     }
 }
 
+static bool parse_preformed_static_array_definition(MinicParser *parser,
+                                                    MinicType object_type,
+                                                    MinicSourceSpan name_span,
+                                                    const char *section_name,
+                                                    size_t section_name_length,
+                                                    bool has_section,
+                                                    size_t explicit_alignment) {
+    const MinicArrayType *array_type;
+    MinicGlobalObjectId object_id;
+
+    if (parser == NULL || !minic_type_is_array(object_type) ||
+        parser->current.kind != MINIC_TOKEN_EQUAL) {
+        if (parser != NULL) {
+            minic_parser_error(parser, "pre-formed static array definition requires '='");
+        }
+        return false;
+    }
+    array_type = minic_c0_program_array_type(parser->program, object_type.array_type_id);
+    if (array_type == NULL || (array_type->element_count == 0U && array_type->is_zero_length)) {
+        minic_parser_error(parser, "invalid pre-formed static array definition type");
+        return false;
+    }
+    if (!minic_c0_program_add_global_object(
+            parser->program,
+            parser->source + name_span.begin.offset,
+            minic_parser_span_length(name_span),
+            object_type,
+            true,
+            static_object_type_is_read_only(parser->program, object_type),
+            &object_id) ||
+        (has_section && !minic_c0_global_object_set_section(
+                            parser->program, object_id, section_name, section_name_length)) ||
+        (explicit_alignment != 0U && !minic_c0_global_object_set_explicit_alignment(
+                                         parser->program, object_id, explicit_alignment)) ||
+        !minic_parser_advance(parser)) {
+        if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+            minic_parser_error(parser, "cannot begin pre-formed static array definition");
+        }
+        return false;
+    }
+
+    array_type = minic_c0_program_array_type(parser->program, object_type.array_type_id);
+    if (array_type == NULL) {
+        minic_parser_error(parser, "invalid pre-formed static array descriptor");
+        return false;
+    }
+    if (minic_type_is_char_integer(array_type->element_type) &&
+        parser->current.kind == MINIC_TOKEN_STRING_LITERAL) {
+        size_t string_count;
+        bool infer_bound;
+
+        infer_bound = array_type->element_count == 0U && !array_type->is_zero_length;
+        if (infer_bound) {
+            if (!minic_parser_add_string_literal_initializer(parser, object_id, &string_count) ||
+                !minic_c0_program_complete_array_type(parser->program, object_type, string_count)) {
+                if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                    minic_parser_error(parser, "cannot infer pre-formed character array extent");
+                }
+                return false;
+            }
+        } else if (!minic_parser_add_bounded_string_literal_initializer(
+                       parser, object_id, array_type->element_count)) {
+            return false;
+        }
+    } else if (!minic_parser_parse_static_storage_initializer_value(
+                   parser, object_id, object_type)) {
+        return false;
+    }
+    return minic_parser_expect(
+        parser, MINIC_TOKEN_SEMICOLON, "expected ';' after pre-formed static array definition");
+}
+
 bool minic_parser_parse_static_global_after_head(MinicParser *parser,
                                                  MinicType element_type,
                                                  MinicSourceSpan name_span,
@@ -2448,8 +2520,13 @@ bool minic_parser_parse_static_global_after_head(MinicParser *parser,
         return false;
     }
     if (minic_type_is_array(element_type)) {
-        minic_parser_error(parser, "pre-formed static array initializer is not supported yet");
-        return false;
+        return parse_preformed_static_array_definition(parser,
+                                                       element_type,
+                                                       name_span,
+                                                       section_name,
+                                                       *section_name_length,
+                                                       *has_section,
+                                                       *explicit_alignment);
     }
     if (minic_type_is_record(element_type) && parser->current.kind != MINIC_TOKEN_LBRACKET) {
         return parse_static_record(parser,
