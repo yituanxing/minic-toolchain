@@ -424,6 +424,12 @@ aggregate_scalar_slot_count(const MinicC0Program *program, MinicType type, size_
     return false;
 }
 
+bool minic_c0_global_initializer_slot_count(const MinicC0Program *program,
+                                            MinicType type,
+                                            size_t *slot_count) {
+    return aggregate_scalar_slot_count(program, type, slot_count);
+}
+
 bool minic_c0_global_record_field_initializer_slot(const MinicC0Program *program,
                                                    const MinicRecord *record,
                                                    size_t field_index,

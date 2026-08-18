@@ -45,15 +45,17 @@ int main(void) {
 }
 EOF
 
-if "$minic" -S \
+"$minic" -S \
     "$work/backward-aggregate.c" \
-    -o "$work/backward-aggregate.s" \
-    >"$work/backward-aggregate.stdout" 2>"$work/backward-aggregate.stderr"; then
-    printf '%s\n' 'FAIL compiler/c0/static-nested-record-designator-backward-aggregate: unexpectedly succeeded' >&2
-    exit 1
-fi
-grep -F 'backward static record designator currently requires a direct scalar field' \
-    "$work/backward-aggregate.stderr" >/dev/null
+    -o "$work/backward-aggregate.s"
+x_line=$(grep -n -F '  .word 2' "$work/backward-aggregate.s" | head -n 1 | cut -d: -f1)
+y_line=$(grep -n -F '  .word 3' "$work/backward-aggregate.s" | head -n 1 | cut -d: -f1)
+marker_line=$(grep -n -F '  .word 1' "$work/backward-aggregate.s" | head -n 1 | cut -d: -f1)
+test -n "$x_line"
+test -n "$y_line"
+test -n "$marker_line"
+test "$x_line" -lt "$y_line"
+test "$y_line" -lt "$marker_line"
 
 printf '%s\n' \
-    'PASS compiler/c0/static-nested-record-designator direct-member=1 skipped-fields=zero continuation=next-field backward-direct-scalar=1 declaration-order=canonical backward-aggregate=fail-closed'
+    'PASS compiler/c0/static-nested-record-designator direct-member=1 skipped-fields=zero continuation=next-field backward-direct-scalar=1 declaration-order=canonical backward-aggregate=record-overlay'
