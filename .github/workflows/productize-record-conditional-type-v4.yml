@@ -1,3 +1,4 @@
+# registration sync
 name: Productize Record Conditional Type V4
 on:
   pull_request:
