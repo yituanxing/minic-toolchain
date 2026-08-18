@@ -453,3 +453,6 @@ MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" 
 
 MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
   sh "$root/tests/compiler/c0/run-alignof-expression.sh"
+
+MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+  sh "$root/tests/compiler/c0/run-static-record-array-suffix-attributes.sh"
