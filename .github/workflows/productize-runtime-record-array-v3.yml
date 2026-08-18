@@ -1,3 +1,4 @@
+# registration sync
 name: Productize Runtime Record Array V3
 on:
   pull_request:
