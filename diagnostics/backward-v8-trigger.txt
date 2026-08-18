@@ -1,0 +1,1 @@
+trigger registered backward aggregate productizer
