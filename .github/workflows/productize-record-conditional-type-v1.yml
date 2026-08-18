@@ -16,7 +16,11 @@ jobs:
       - name: Apply and validate record conditional semantics
         run: |
           set -Eeuo pipefail
-          python3 tools/dev/materialize-record-conditional-type-v1.py
+          git fetch origin staging/string-octal-v1 --no-tags
+          mat=tools/dev/.productize-record-conditional-type-v1.py
+          git show origin/staging/string-octal-v1:tools/dev/materialize-record-conditional-type-v1.py > "$mat"
+          python3 "$mat"
+          rm "$mat"
           cat > tests/compiler/c0/record_conditional_type.c <<'EOF'
           typedef struct { unsigned int value; } id_t;
           static id_t make_id(unsigned int value) {
