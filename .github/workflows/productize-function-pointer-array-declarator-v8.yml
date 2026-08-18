@@ -1,4 +1,5 @@
 name: Productize Function Pointer Array Declarator V8
+# second push registers the branch-local workflow
 on:
   push:
     branches: [product/function-pointer-array-declarator-v8]
