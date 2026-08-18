@@ -1,8 +1,9 @@
-# retrigger on an already-present branch workflow
 name: Productize Record Conditional Type V2
 on:
   push:
     branches: [product/record-conditional-type-v2]
+  pull_request:
+    branches: [main]
 permissions:
   contents: write
 jobs:
@@ -12,6 +13,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: product/record-conditional-type-v2
           fetch-depth: 0
       - name: Apply proven record conditional type semantics
         run: |
