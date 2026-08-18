@@ -1,0 +1,65 @@
+name: Productize Function Pointer Array Declarator V5
+on:
+  push:
+    branches: [product/function-pointer-array-declarator-v5]
+  pull_request:
+    branches: [main]
+permissions:
+  contents: write
+jobs:
+  productize:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: product/function-pointer-array-declarator-v5
+          fetch-depth: 0
+      - name: Apply proven function pointer array declarator semantics
+        run: |
+          set -Eeuo pipefail
+          git fetch origin staging/string-octal-v1 --no-tags
+          git show origin/staging/string-octal-v1:tools/dev/materialize-function-pointer-array-declarator-v1.py > tools/dev/.productize-function-pointer-array-v1.py
+          python3 tools/dev/.productize-function-pointer-array-v1.py
+          rm tools/dev/.productize-function-pointer-array-v1.py
+      - name: Extend permanent focused contract
+        run: |
+          set -Eeuo pipefail
+          cat >> tests/compiler/c0/function_pointer_qualifiers.c <<'EOF'
+
+extern int (*external_handlers[])(int value);
+static int (*static_handlers[1])(int value) = {0};
+
+int function_pointer_array_shape(void)
+{
+    return static_handlers[0] == 0;
+}
+EOF
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('tests/compiler/c0/run-function-pointer-qualifiers.sh')
+          s = p.read_text()
+          anchor = "grep -F 'call_typedef:' \"$work/output.s\" >/dev/null\n"
+          if anchor not in s:
+              raise SystemExit('function-pointer runner anchor missing')
+          p.write_text(s.replace(anchor, anchor + "grep -F 'function_pointer_array_shape:' \"$work/output.s\" >/dev/null\n", 1))
+          PY
+      - name: Validate product slice
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/product-fp-array
+          MINIC="$GITHUB_WORKSPACE/build/product-fp-array/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/product-fp-array-focused" \
+            sh tests/compiler/c0/run-function-pointer-qualifiers.sh
+          make -j4 check-fast MODE=release BUILD_DIR=build/product-fp-array-fast
+      - name: Commit clean product diff
+        run: |
+          set -Eeuo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git rm .github/workflows/productize-function-pointer-array-declarator-v5.yml
+          git add src/frontend/parser_internal.h src/frontend/parser_declarator.c \
+                  tests/compiler/c0/function_pointer_qualifiers.c \
+                  tests/compiler/c0/run-function-pointer-qualifiers.sh
+          git commit -m 'frontend: parse function pointer array declarators'
+          git push origin HEAD:product/function-pointer-array-declarator-v5
