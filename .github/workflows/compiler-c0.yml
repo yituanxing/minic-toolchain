@@ -19,67 +19,13 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: compiler-c0-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  productize-fixed-call-character-pointer:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Checkout PR head
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.ref }}
-          fetch-depth: 0
-      - name: Materialize clean product slice
-        run: |
-          set -Eeuo pipefail
-          git fetch origin main staging/string-octal-v1
-          git show origin/staging/string-octal-v1:tools/dev/materialize-fixed-call-character-pointer-v1.py > tools/dev/.productize-fixed-call-character-pointer-v3.py
-          python3 tools/dev/.productize-fixed-call-character-pointer-v3.py
-          rm tools/dev/.productize-fixed-call-character-pointer-v3.py
-          cat > tests/compiler/c0/fixed_call_character_pointer.c <<'EOF'
-          static long take_unsigned(const unsigned char *p) { return p[0]; }
-          static long take_signed(const signed char *p) { return p[0]; }
-          int main(void) {
-              char bytes[1] = {0};
-              return (int)(take_unsigned(bytes) + take_signed(bytes));
-          }
-          EOF
-          cat > tests/compiler/c0/run-fixed-call-character-pointer.sh <<'EOF'
-          #!/bin/sh
-          set -eu
-          root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
-          minic=${MINIC:-"$root/build/debug/bin/minic"}
-          work=${BUILD_DIR:-"$root/build/debug"}/tests/fixed-call-character-pointer
-          mkdir -p "$work"
-          "$minic" -S "$root/tests/compiler/c0/fixed_call_character_pointer.c" -o "$work/output.s"
-          test -s "$work/output.s"
-          EOF
-          chmod +x tests/compiler/c0/run-fixed-call-character-pointer.sh
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('tests/compiler/c0/run.sh')
-          s = p.read_text()
-          if 'run-fixed-call-character-pointer.sh' not in s:
-              p.write_text(s + '\nMINIC="$minic" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \\\n  sh "$root/tests/compiler/c0/run-fixed-call-character-pointer.sh"\n')
-          PY
-          git show origin/main:.github/workflows/compiler-c0.yml > .github/workflows/compiler-c0.yml
-          clang-format-18 -i src/frontend/parser_expression.c tests/compiler/c0/fixed_call_character_pointer.c
-          git diff --check
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/fixed-char-call-v3
-          MINIC="$GITHUB_WORKSPACE/build/fixed-char-call-v3/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/fixed-char-call-v3-focused" sh tests/compiler/c0/run-fixed-call-character-pointer.sh
-          make -j4 check-fast MODE=release BUILD_DIR=build/fixed-char-call-v3-fast
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add src/frontend/parser_expression.c tests/compiler/c0/fixed_call_character_pointer.c tests/compiler/c0/run-fixed-call-character-pointer.sh tests/compiler/c0/run.sh .github/workflows/compiler-c0.yml
-          git commit -m 'frontend: allow character-pointer conversions at fixed calls'
-          git push origin HEAD:${{ github.event.pull_request.head.ref }}
-
   full-validation:
     name: Full compiler validation
     runs-on: ubuntu-24.04
