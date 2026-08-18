@@ -1,0 +1,107 @@
+=== index=1 input=init/version.i line=20739 message=unsupported GNU object attribute ===
+    20736:  " (" "runner" "@" "runnervmzvulz" ")"
+    20737:  " (" "riscv64-linux-gnu-gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, GNU ld (GNU Binutils for Ubuntu) 2.42" ") %s\n";
+    20738: 
+>   20739: static const struct { struct elf32_note _nhdr; unsigned char _name[sizeof("Linux")] __attribute__((aligned(sizeof(Elf32_Word)))); typeof("") _desc __attribute__((aligned(sizeof(Elf32_Word)))); } _note_40 __attribute__((__used__)) __attribute__((section(".note." "Linux"), aligned(sizeof(Elf32_Word)), unused)) = { { sizeof("Linux"), sizeof(""), 0x100, }, "Linux", "" };
+    20740: static const struct { struct elf32_note _nhdr; unsigned char _name[sizeof("Linux")] __attribute__((aligned(sizeof(Elf32_Word)))); typeof(0) _desc __attribute__((aligned(sizeof(Elf32_Word)))); } _note_41 __attribute__((__used__)) __attribute__((section(".note." "Linux"), aligned(sizeof(Elf32_Word)), unused)) = { { sizeof("Linux"), sizeof(0), 0x101, }, "Linux", 0 };
+    20741: 
+    20742: 
+
+=== index=2 input=init/do_mounts.i line=49166 message=expected '(' before function parameter list ===
+    49163:  void *data;
+    49164: };
+    49165: # 83 "/home/runner/work/minic-toolchain/minic-toolchain/build/linux-main-first100-finalization-v7/linux-6.6.143/include/linux/kfifo.h"
+>   49166: struct kfifo { union { struct __kfifo kfifo; unsigned char *type; const unsigned char *const_type; char (*rectype)[0]; void *ptr; void const *ptr_const; }; unsigned char buf[0]; };
+    49167: # 94 "/home/runner/work/minic-toolchain/minic-toolchain/build/linux-main-first100-finalization-v7/linux-6.6.143/include/linux/kfifo.h"
+    49168: struct kfifo_rec_ptr_1 { union { struct __kfifo kfifo; unsigned char *type; const unsigned char *const_type; char (*rectype)[1]; void *ptr; void const *ptr_const; }; unsigned char buf[0]; };
+    49169: struct kfifo_rec_ptr_2 { union { struct __kfifo kfifo; unsigned char *type; const unsigned char *const_type; char (*rectype)[2]; void *ptr; void const *ptr_const; }; unsigned char buf[0]; };
+
+=== index=3 input=init/do_mounts_initrd.i line=62265 message=unsupported external object definition ===
+    62262: bool __attribute__((__section__(".init.text"))) __attribute__((__cold__)) initrd_load(char *root_device_name);
+    62263: # 14 "/home/runner/work/minic-toolchain/minic-toolchain/build/linux-main-first100-finalization-v7/linux-6.6.143/init/do_mounts_initrd.c" 2
+    62264: 
+>   62265: unsigned long initrd_start, initrd_end;
+    62266: int initrd_below_start_ok;
+    62267: static unsigned int real_root_dev;
+    62268: static int __attribute__((__section__(".init.data"))) mount_initrd = 1;
+
+=== index=4 input=init/initramfs.i line=59102 message=expected expression ===
+    59099: 
+    59100: static void __attribute__((__section__(".init.text"))) __attribute__((__cold__)) do_utime(char *filename, time64_t mtime)
+    59101: {
+>   59102:  struct timespec64 t[2] = { { .tv_sec = mtime }, { .tv_sec = mtime } };
+    59103:  init_utimes(filename, t);
+    59104: }
+    59105: 
+
+=== index=6 input=init/init_task.i line=63193 message=backward static record designator currently requires a direct scalar field ===
+    63190:  .cred_guard_mutex = { .owner = { (0) } , .wait_lock = (raw_spinlock_t) { .raw_lock = { (0) }, .magic = 0xdead4ead, .owner_cpu = -1, .owner = ((void *)-1L), } , .wait_list = { &(init_signals.cred_guard_mutex.wait_list), &(init_signals.cred_guard_mutex.wait_list) } , .magic = &init_signals.cred_guard_mutex },
+    63191:  .exec_update_lock = { .count = { (0L) }, .owner = { (0) }, .osq = { { ((0)) } }, .wait_lock = (raw_spinlock_t) { .raw_lock = { (0) }, .magic = 0xdead4ead, .owner_cpu = -1, .owner = ((void *)-1L), }, .wait_list = { &((init_signals.exec_update_lock).wait_list), &((init_signals.exec_update_lock).wait_list) }, .magic = &init_signals.exec_update_lock, },
+    63192: 
+>   63193:  .posix_timers = { &(init_signals.posix_timers), &(init_signals.posix_timers) },
+    63194:  .cputimer = {
+    63195:   .cputime_atomic = (struct task_cputime_atomic) { .utime = { (0) }, .stime = { (0) }, .sum_exec_runtime = { (0) }, },
+    63196:  },
+
+=== index=32 input=arch/riscv/kernel/vdso.i line=48088 message=expected '=' after static record array ===
+    48085:  return vmf_insert_pfn(vma, vmf->address, pfn);
+    48086: }
+    48087: 
+>   48088: static struct vm_special_mapping rv_vdso_maps[] __attribute__((__section__(".data..ro_after_init"))) = {
+    48089:  [RV_VDSO_MAP_VVAR] = {
+    48090:   .name = "[vvar]",
+    48091:   .fault = vvar_fault,
+
+=== index=37 input=arch/riscv/kernel/module.i line=45452 message=expected ')' after function declarator ===
+    45449:  return 0;
+    45450: }
+    45451: 
+>   45452: static int (*reloc_handlers_rela[]) (struct module *me, u32 *location,
+    45453:     Elf64_Addr v) = {
+    45454:  [1] = apply_r_riscv_32_rela,
+    45455:  [2] = apply_r_riscv_64_rela,
+
+=== index=39 input=arch/riscv/kernel/suspend.i line=48524 message=record initializer value type mismatch ===
+    48521:          unsigned long context))
+    48522: {
+    48523:  int rc = 0;
+>   48524:  struct suspend_context context = { 0 };
+    48525: 
+    48526: 
+    48527:  if (!finish)
+
+=== index=50 input=arch/riscv/kernel/acpi.i line=1 message=parsed AST violates compiler contracts ===
+>       1: # 0 "/home/runner/work/minic-toolchain/minic-toolchain/build/linux-main-first100-finalization-v7/linux-6.6.143/arch/riscv/kernel/acpi.c"
+        2: # 0 "<built-in>"
+        3: # 0 "<command-line>"
+        4: # 1 "/home/runner/work/minic-toolchain/minic-toolchain/build/linux-main-first100-finalization-v7/linux-6.6.143/include/linux/compiler-version.h" 1
+
+=== index=65 input=arch/riscv/purgatory/sha256.i line=20677 message=expected type name ===
+    20674: static inline __attribute__((__gnu_inline__)) __attribute__((__unused__)) __attribute__((__no_instrument_function__)) unsigned int crypto_tfm_ctx_alignment(void)
+    20675: {
+    20676:  struct crypto_tfm *tfm;
+>   20677:  return __alignof__(tfm->__crt_ctx);
+    20678: }
+    20679: 
+    20680: static inline __attribute__((__gnu_inline__)) __attribute__((__unused__)) __attribute__((__no_instrument_function__)) struct crypto_comp *__crypto_comp_cast(struct crypto_tfm *tfm)
+
+=== index=68 input=arch/riscv/kvm/../../../virt/kvm/kvm_main.i line=1 message=parsed AST violates compiler contracts ===
+>       1: # 0 "/home/runner/work/minic-toolchain/minic-toolchain/build/linux-main-first100-finalization-v7/linux-6.6.143/arch/riscv/kvm/../../../virt/kvm/kvm_main.c"
+        2: # 0 "<built-in>"
+        3: # 0 "<command-line>"
+        4: # 1 "/home/runner/work/minic-toolchain/minic-toolchain/build/linux-main-first100-finalization-v7/linux-6.6.143/include/linux/compiler-version.h" 1
+
+=== index=69 input=arch/riscv/kvm/../../../virt/kvm/eventfd.i line=64018 message=expected type name ===
+    64015:  irqfd->kvm = kvm;
+    64016:  irqfd->gsi = args->gsi;
+    64017:  INIT_LIST_HEAD(&irqfd->list);
+>   64018:  do { static __attribute__((__unused__)) struct lock_class_key __key; do { __init_work(((&irqfd->inject)), 0); ((&irqfd->inject))->data = (atomic_long_t) { ((unsigned long)(((1ul << WORK_OFFQ_POOL_BITS) - 1) << WORK_OFFQ_POOL_SHIFT)) }; INIT_LIST_HEAD(&((&irqfd->inject))->entry); ((&irqfd->inject))->func = ((irqfd_inject)); } while (0); } while (0);
+    64019:  do { static __attribute__((__unused__)) struct lock_class_key __key; do { __init_work(((&irqfd->shutdown)), 0); ((&irqfd->shutdown))->data = (atomic_long_t) { ((unsigned long)(((1ul << WORK_OFFQ_POOL_BITS) - 1) << WORK_OFFQ_POOL_SHIFT)) }; INIT_LIST_HEAD(&((&irqfd->shutdown))->entry); ((&irqfd->shutdown))->func = ((irqfd_shutdown)); } while (0); } while (0);
+    64020:  do { seqcount_spinlock_t *____s = (&irqfd->irq_entry_sc); __seqcount_init(&____s->seqcount, ((void *)0), ((void *)0)); ; } while (0);
+    64021: 
+
+=== index=72 input=arch/riscv/kvm/../../../virt/kvm/irqchip.i line=1 message=parsed AST violates compiler contracts ===
+>       1: # 0 "/home/runner/work/minic-toolchain/minic-toolchain/build/linux-main-first100-finalization-v7/linux-6.6.143/arch/riscv/kvm/../../../virt/kvm/irqchip.c"
+        2: # 0 "<built-in>"
+        3: # 0 "<command-line>"
+        4: # 1 "/home/runner/work/minic-toolchain/minic-toolchain/build/linux-main-first100-finalization-v7/linux-6.6.143/include/linux/compiler-version.h" 1

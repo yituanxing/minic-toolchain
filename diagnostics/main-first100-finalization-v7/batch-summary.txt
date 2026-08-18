@@ -1,0 +1,33 @@
+LINUX_BATCH_SUMMARY
+selected_c_tus=100
+pass=87
+fail=13
+preprocess_missing=0
+minic_jobs=4
+
+minic_failure_groups:
+  count=3 message=parsed AST violates compiler contracts
+  count=2 message=expected type name
+  count=1 message=unsupported GNU object attribute
+  count=1 message=expected '(' before function parameter list
+  count=1 message=unsupported external object definition
+  count=1 message=expected expression
+  count=1 message=backward static record designator currently requires a direct scalar field
+  count=1 message=expected '=' after static record array
+  count=1 message=expected ')' after function declarator
+  count=1 message=record initializer value type mismatch
+
+failures:
+  index=1 status=FAIL input=init/version.i line=20739 rc=1 message=unsupported GNU object attribute
+  index=2 status=FAIL input=init/do_mounts.i line=49166 rc=1 message=expected '(' before function parameter list
+  index=3 status=FAIL input=init/do_mounts_initrd.i line=62265 rc=1 message=unsupported external object definition
+  index=4 status=FAIL input=init/initramfs.i line=59102 rc=1 message=expected expression
+  index=6 status=FAIL input=init/init_task.i line=63193 rc=1 message=backward static record designator currently requires a direct scalar field
+  index=32 status=FAIL input=arch/riscv/kernel/vdso.i line=48088 rc=1 message=expected '=' after static record array
+  index=37 status=FAIL input=arch/riscv/kernel/module.i line=45452 rc=1 message=expected ')' after function declarator
+  index=39 status=FAIL input=arch/riscv/kernel/suspend.i line=48524 rc=1 message=record initializer value type mismatch
+  index=50 status=FAIL input=arch/riscv/kernel/acpi.i line=1 rc=1 message=parsed AST violates compiler contracts
+  index=65 status=FAIL input=arch/riscv/purgatory/sha256.i line=20677 rc=1 message=expected type name
+  index=68 status=FAIL input=arch/riscv/kvm/../../../virt/kvm/kvm_main.i line=1 rc=1 message=parsed AST violates compiler contracts
+  index=69 status=FAIL input=arch/riscv/kvm/../../../virt/kvm/eventfd.i line=64018 rc=1 message=expected type name
+  index=72 status=FAIL input=arch/riscv/kvm/../../../virt/kvm/irqchip.i line=1 rc=1 message=parsed AST violates compiler contracts
