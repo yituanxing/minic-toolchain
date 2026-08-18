@@ -1,0 +1,5 @@
+stage=check-fast
+status=0
+
+final_stage=check-fast
+final_status=0
