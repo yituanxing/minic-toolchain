@@ -1152,7 +1152,14 @@ static bool parse_external_tentative_object(MinicParser *parser,
             return false;
         }
     } else {
+        bool discard_declared_array;
+
         existing = minic_c0_program_global_object(parser->program, object_id);
+        discard_declared_array =
+            existing != NULL && minic_type_is_array(existing->type) &&
+            minic_type_is_array(object_type) &&
+            existing->type.array_type_id != object_type.array_type_id &&
+            object_type.array_type_id + 1U == parser->program->array_type_count;
         if (existing == NULL ||
             !minic_parser_external_object_types_compatible(
                 parser->program, existing->type, object_type) ||
@@ -1161,6 +1168,16 @@ static bool parse_external_tentative_object(MinicParser *parser,
                  parser->program, existing->type, object_type)) ||
             !minic_c0_global_object_merge_tentative(parser->program, object_id)) {
             minic_parser_error(parser, "conflicting external tentative definition");
+            return false;
+        }
+        /* The declaration descriptor is only a parser-side candidate once a canonical
+         * external entity already exists. Keep the canonical descriptor and retire a
+         * newly-created outer array descriptor after its composite information has been
+         * merged, otherwise an incomplete `name[]` redeclaration survives ownerless in
+         * the Program array arena and correctly trips the AST verifier. */
+        if (discard_declared_array &&
+            !minic_c0_program_discard_last_array_type(parser->program, object_type)) {
+            minic_parser_error(parser, "cannot retire transient external array declaration");
             return false;
         }
     }
@@ -1189,6 +1206,9 @@ static bool parse_external_object_definition(MinicParser *parser,
                                              bool has_visibility) {
     MinicGlobalObjectId object_id;
     const MinicGlobalObject *existing;
+    MinicType declared_object_type;
+
+    declared_object_type = object_type;
 
     if (parser == NULL || parser->current.kind != MINIC_TOKEN_EQUAL ||
         (!minic_type_is_integer(object_type) && !minic_type_is_pointer(object_type) &&
@@ -1210,7 +1230,14 @@ static bool parse_external_object_definition(MinicParser *parser,
             return false;
         }
     } else {
+        bool discard_declared_array;
+
         existing = minic_c0_program_global_object(parser->program, object_id);
+        discard_declared_array =
+            existing != NULL && minic_type_is_array(existing->type) &&
+            minic_type_is_array(object_type) &&
+            existing->type.array_type_id != object_type.array_type_id &&
+            object_type.array_type_id + 1U == parser->program->array_type_count;
         if (existing == NULL ||
             !minic_parser_external_object_types_compatible(
                 parser->program, existing->type, object_type) ||
@@ -1220,6 +1247,13 @@ static bool parse_external_object_definition(MinicParser *parser,
             !minic_c0_global_object_begin_definition(parser->program, object_id)) {
             minic_parser_error(parser, "conflicting external object definition");
             return false;
+        }
+        if (discard_declared_array) {
+            object_type = parser->program->global_objects[object_id].type;
+            if (!minic_c0_program_discard_last_array_type(parser->program, declared_object_type)) {
+                minic_parser_error(parser, "cannot retire transient external array definition");
+                return false;
+            }
         }
     }
     if (!apply_external_object_metadata(parser,
