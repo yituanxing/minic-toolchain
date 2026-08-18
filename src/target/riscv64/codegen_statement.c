@@ -220,9 +220,18 @@ static bool minic_riscv64_emit_return(FILE *file,
                              file, program, function->return_type, 1U, "a1", "t0"))) {
                         return false;
                     }
-                } else if (value->kind != MINIC_EXPRESSION_CALL ||
-                           !minic_riscv64_emit_expression(
-                               file, program, function, function_layout, statement->expression)) {
+                } else if (value->kind == MINIC_EXPRESSION_CALL) {
+                    if (!minic_riscv64_emit_expression(
+                            file, program, function, function_layout, statement->expression)) {
+                        return false;
+                    }
+                } else if (!minic_c0_record_value_is_copy_source(program, statement->expression) ||
+                           !minic_riscv64_emit_small_record_return_value(file,
+                                                                         program,
+                                                                         function,
+                                                                         function_layout,
+                                                                         statement->expression,
+                                                                         return_value.slot_count)) {
                     return false;
                 }
             } else {

@@ -100,6 +100,12 @@ bool minic_riscv64_emit_record_return_value(FILE *file,
                                             const MinicRiscv64FunctionLayout *function_layout,
                                             MinicExpressionId source_id,
                                             size_t result_pointer_offset);
+bool minic_riscv64_emit_small_record_return_value(FILE *file,
+                                                  const MinicC0Program *program,
+                                                  const MinicFunction *function,
+                                                  const MinicRiscv64FunctionLayout *function_layout,
+                                                  MinicExpressionId source_id,
+                                                  size_t slot_count);
 bool minic_riscv64_emit_record_copy_value(FILE *file,
                                           const MinicC0Program *program,
                                           const MinicFunction *function,
