@@ -1,0 +1,48 @@
+name: Productize Function Pointer Array Declarator V1
+on:
+  push:
+    branches: [product/function-pointer-array-declarator-v1]
+permissions:
+  contents: write
+jobs:
+  productize:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: product/function-pointer-array-declarator-v1
+          fetch-depth: 0
+      - name: Apply staging-proven declarator support
+        run: |
+          set -Eeuo pipefail
+          mat=tools/dev/.productize-function-pointer-array-declarator-v1.py
+          git show origin/staging/string-octal-v1:tools/dev/materialize-function-pointer-array-declarator-v1.py > "$mat"
+          python3 "$mat"
+          rm "$mat"
+          cat > tests/compiler/c0/function_pointer_array_declarator.c <<'EOF'
+          static int add_one(int value) { return value + 1; }
+          static int (*handlers[])(int) = { add_one };
+          int main(void) { return handlers[0](6) - 7; }
+          EOF
+          cat >> tests/compiler/c0/run.sh <<'EOF'
+
+          compile_source function_pointer_array_declarator function_pointer_array_declarator
+          expect_instructions function_pointer_array_declarator "handlers:" "li a0, 6"
+          EOF
+          clang-format-18 -i src/frontend/parser_internal.h src/frontend/parser_declarator.c tests/compiler/c0/function_pointer_array_declarator.c
+          git diff --check
+      - name: Validate Werror and fast gates
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/function-pointer-array-v1
+          make -j4 check-fast MODE=release BUILD_DIR=build/function-pointer-array-v1-fast
+      - name: Commit clean product diff
+        run: |
+          set -Eeuo pipefail
+          git rm .github/workflows/productize-function-pointer-array-declarator-v1.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/frontend/parser_internal.h src/frontend/parser_declarator.c tests/compiler/c0/function_pointer_array_declarator.c tests/compiler/c0/run.sh
+          git commit -m 'frontend: parse arrays of function pointers'
+          git push origin HEAD:product/function-pointer-array-declarator-v1
