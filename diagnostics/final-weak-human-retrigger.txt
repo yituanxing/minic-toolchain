@@ -1,0 +1,1 @@
+retrigger final weak product validation from connector-authored commit
