@@ -1,0 +1,67 @@
+name: Productize RV64 Small Record Copy Return V2
+on:
+  push:
+    branches: [product/rv64-small-record-copy-return-v2]
+permissions:
+  contents: write
+jobs:
+  productize:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: product/rv64-small-record-copy-return-v2
+          fetch-depth: 0
+      - name: Materialize proven small-record return sink
+        run: |
+          set -Eeuo pipefail
+          git fetch origin diagnostic/effective-convergence-snapshot-v1
+          git show origin/diagnostic/effective-convergence-snapshot-v1:tools/dev/materialize-rv64-small-record-copy-return-v1.py > /tmp/materialize.py
+          python3 /tmp/materialize.py
+          clang-format-18 -i src/target/riscv64/codegen_internal.h src/target/riscv64/codegen_expression.c src/target/riscv64/codegen_statement.c
+          cat > tests/compiler/c0/rv64_small_record_copy_return.c <<'EOF'
+          typedef struct { unsigned value; } one_t;
+          typedef struct { unsigned lo; unsigned hi; } pair_t;
+          static one_t make_one(unsigned value) { one_t result = { .value = value }; return result; }
+          one_t choose_one(int condition, const one_t *stored) { return condition ? *stored : make_one(7U); }
+          pair_t assign_and_return(pair_t *dst, pair_t *src) { return *dst = *src; }
+          EOF
+          cat > tests/compiler/c0/run-rv64-small-record-copy-return.sh <<'EOF'
+          #!/bin/sh
+          set -eu
+          root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+          minic=${MINIC:-"$root/build/debug/bin/minic"}
+          host_cc=${HOST_CC:-${CC:-cc}}
+          work=${BUILD_DIR:-"$root/build/debug"}/tests/rv64-small-record-copy-return
+          mkdir -p "$work"
+          "$host_cc" -E -P -std=gnu11 -x c "$root/tests/compiler/c0/rv64_small_record_copy_return.c" -o "$work/input.i"
+          "$minic" -S "$work/input.i" -o "$work/output.s"
+          test -s "$work/output.s"
+          if command -v riscv64-linux-gnu-gcc >/dev/null 2>&1; then
+            riscv64-linux-gnu-gcc -c "$work/output.s" -o "$work/output.o"
+            test -s "$work/output.o"
+          fi
+          EOF
+          chmod +x tests/compiler/c0/run-rv64-small-record-copy-return.sh
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('tests/compiler/c0/run.sh')
+          s=p.read_text()
+          line='\nMINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \\\n  sh "$root/tests/compiler/c0/run-rv64-small-record-copy-return.sh"\n'
+          if 'run-rv64-small-record-copy-return.sh' not in s:
+              p.write_text(s+line)
+          PY
+          git diff --check
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/product
+          MINIC="$GITHUB_WORKSPACE/build/product/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/focused" sh tests/compiler/c0/run-rv64-small-record-copy-return.sh
+          make -j4 check-fast MODE=release BUILD_DIR=build/check-fast
+      - name: Commit clean product source
+        run: |
+          set -Eeuo pipefail
+          rm .github/workflows/productize-rv64-small-record-copy-return-v2.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m 'target: return small record copy values through RV64 ABI registers'
+          git push origin HEAD:product/rv64-small-record-copy-return-v2
