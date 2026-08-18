@@ -1,0 +1,312 @@
+name: Productize External Tentative Declarator List V1
+on:
+  push:
+    branches: [product/external-tentative-declarator-list-v1]
+permissions:
+  contents: write
+jobs:
+  productize:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: product/external-tentative-declarator-list-v1
+          fetch-depth: 0
+      - name: Apply validate and persist
+        shell: bash
+        run: |
+          set -u
+          out=diagnostics/external-tentative-declarator-list-v1
+          mkdir -p "$out"
+          status=0
+          stage=patch
+          python3 - <<'PY' >"$out/patch.txt" 2>&1 || status=$?
+          from pathlib import Path
+          p=Path('src/frontend/parser_function.c')
+          s=p.read_text()
+          start=s.index('static bool parse_external_tentative_object(')
+          end=s.index('\nstatic bool parse_external_object_definition(', start)
+          block=r'''static bool record_external_tentative_object(MinicParser *parser,
+                                             MinicType object_type,
+                                             MinicSourceSpan name_span,
+                                             const char *section_name,
+                                             size_t section_name_length,
+                                             bool has_section,
+                                             size_t explicit_alignment,
+                                             MinicSymbolVisibility visibility,
+                                             bool has_visibility,
+                                             MinicGlobalObjectId *object_id_out) {
+    MinicGlobalObjectId object_id;
+    const MinicGlobalObject *existing;
+
+    if (parser == NULL || object_id_out == NULL ||
+        !minic_c0_type_is_complete_object(parser->program, object_type)) {
+        if (parser != NULL) {
+            minic_parser_error(parser,
+                               "external tentative definition requires a complete object type");
+        }
+        return false;
+    }
+    object_id = minic_parser_find_global_object_entity(parser, name_span);
+    if (object_id == MINIC_GLOBAL_OBJECT_INVALID) {
+        if (!minic_c0_program_add_tentative_global_object(parser->program,
+                                                          parser->source + name_span.begin.offset,
+                                                          minic_parser_span_length(name_span),
+                                                          object_type,
+                                                          false,
+                                                          minic_type_is_const(object_type),
+                                                          &object_id)) {
+            minic_parser_error(parser, "cannot create external tentative definition");
+            return false;
+        }
+    } else {
+        existing = minic_c0_program_global_object(parser->program, object_id);
+        if (existing == NULL ||
+            !minic_parser_external_object_types_compatible(
+                parser->program, existing->type, object_type) ||
+            (minic_type_is_array(existing->type) &&
+             !minic_parser_merge_external_array_composite_type(
+                 parser->program, existing->type, object_type)) ||
+            !minic_c0_global_object_merge_tentative(parser->program, object_id)) {
+            minic_parser_error(parser, "conflicting external tentative definition");
+            return false;
+        }
+    }
+    parser->program->global_objects[object_id].is_block_scope_extern_only = false;
+    if (!apply_external_object_metadata(parser,
+                                        object_id,
+                                        section_name,
+                                        section_name_length,
+                                        has_section,
+                                        explicit_alignment,
+                                        visibility,
+                                        has_visibility)) {
+        return false;
+    }
+    *object_id_out = object_id;
+    return true;
+}
+
+static bool parse_external_tentative_object(MinicParser *parser,
+                                            MinicType object_type,
+                                            MinicSourceSpan name_span,
+                                            const char *section_name,
+                                            size_t section_name_length,
+                                            bool has_section,
+                                            size_t explicit_alignment,
+                                            MinicSymbolVisibility visibility,
+                                            bool has_visibility) {
+    MinicGlobalObjectId object_id;
+
+    if (parser == NULL || parser->current.kind != MINIC_TOKEN_SEMICOLON ||
+        !record_external_tentative_object(parser,
+                                          object_type,
+                                          name_span,
+                                          section_name,
+                                          section_name_length,
+                                          has_section,
+                                          explicit_alignment,
+                                          visibility,
+                                          has_visibility,
+                                          &object_id)) {
+        return false;
+    }
+    (void)object_id;
+    return minic_parser_advance(parser);
+}
+
+static bool
+parse_external_tentative_declaration_list_after_head(MinicParser *parser,
+                                                     MinicType base_type,
+                                                     MinicType first_type,
+                                                     MinicSourceSpan first_name,
+                                                     const char *first_section_name,
+                                                     size_t first_section_name_length,
+                                                     bool first_has_section,
+                                                     size_t first_explicit_alignment,
+                                                     MinicSymbolVisibility first_visibility,
+                                                     bool first_has_visibility) {
+    MinicGlobalObjectId object_id;
+
+    if (parser == NULL || parser->current.kind != MINIC_TOKEN_COMMA ||
+        !record_external_tentative_object(parser,
+                                          first_type,
+                                          first_name,
+                                          first_section_name,
+                                          first_section_name_length,
+                                          first_has_section,
+                                          first_explicit_alignment,
+                                          first_visibility,
+                                          first_has_visibility,
+                                          &object_id)) {
+        return false;
+    }
+
+    while (parser->current.kind == MINIC_TOKEN_COMMA) {
+        MinicSourceSpan name_span;
+        MinicType object_type;
+        char section_name[128];
+        size_t section_name_length;
+        size_t explicit_alignment;
+        MinicSymbolVisibility visibility;
+        unsigned int const_qualifiers;
+        unsigned int volatile_qualifiers;
+        size_t pointer_depth;
+        bool has_section;
+        bool has_visibility;
+        bool is_array;
+
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
+        object_type = base_type;
+        pointer_depth = 0U;
+        const_qualifiers = 0U;
+        volatile_qualifiers = 0U;
+        while (parser->current.kind == MINIC_TOKEN_STAR) {
+            unsigned int bit;
+
+            pointer_depth += 1U;
+            if (pointer_depth > sizeof(unsigned int) * CHAR_BIT || !minic_parser_advance(parser) ||
+                !minic_parser_parse_pointer_qualifier_sequence(
+                    parser, pointer_depth, &const_qualifiers, &volatile_qualifiers) ||
+                !minic_type_pointer_to(object_type, &object_type)) {
+                minic_parser_error(parser, "cannot form external declaration-list pointer type");
+                return false;
+            }
+            bit = 1U << (pointer_depth - 1U);
+            if (((const_qualifiers & bit) != 0U &&
+                 !minic_type_add_const(object_type, &object_type)) ||
+                ((volatile_qualifiers & bit) != 0U &&
+                 !minic_type_add_volatile(object_type, &object_type))) {
+                return false;
+            }
+        }
+        if (!minic_parser_parse_direct_declarator_name(parser, &name_span) ||
+            !minic_parser_parse_array_declarator_suffix(
+                parser, object_type, true, &object_type, &is_array)) {
+            return false;
+        }
+        (void)is_array;
+        (void)memset(section_name, 0, sizeof(section_name));
+        section_name_length = 0U;
+        explicit_alignment = 0U;
+        visibility = MINIC_SYMBOL_VISIBILITY_DEFAULT;
+        has_section = false;
+        has_visibility = false;
+        if (!minic_parser_parse_gnu_object_attribute_lists_with_visibility(
+                parser,
+                section_name,
+                sizeof(section_name),
+                &section_name_length,
+                &has_section,
+                &explicit_alignment,
+                &visibility,
+                &has_visibility) ||
+            parser->current.kind == MINIC_TOKEN_EQUAL ||
+            !record_external_tentative_object(parser,
+                                              object_type,
+                                              name_span,
+                                              section_name,
+                                              section_name_length,
+                                              has_section,
+                                              explicit_alignment,
+                                              visibility,
+                                              has_visibility,
+                                              &object_id)) {
+            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                minic_parser_error(
+                    parser,
+                    "external declaration list supports declaration-only object declarators");
+            }
+            return false;
+        }
+    }
+    return minic_parser_expect(
+        parser, MINIC_TOKEN_SEMICOLON, "expected ';' after external object declaration list");
+}
+'''
+          s=s[:start]+block+s[end:]
+          old='''        if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
+            return parse_visible_external_array(parser,
+'''
+          new='''        if (parser->current.kind == MINIC_TOKEN_COMMA) {
+            return parse_external_tentative_declaration_list_after_head(parser,
+                                                                        base_type,
+                                                                        return_type,
+                                                                        name_span,
+                                                                        section_name,
+                                                                        section_name_length,
+                                                                        has_section,
+                                                                        object_explicit_alignment,
+                                                                        visibility,
+                                                                        has_visibility);
+        }
+        if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
+            return parse_visible_external_array(parser,
+'''
+          if s.count(old)!=1:
+              raise SystemExit(f'comma dispatch anchor count={s.count(old)}')
+          p.write_text(s.replace(old,new,1))
+          PY
+
+          if [ "$status" -eq 0 ]; then
+            stage=regression-source
+            cat > tests/compiler/c0/external_tentative_declarator_list.c <<'EOF'
+          unsigned long first_value, second_value;
+          int *first_pointer, *second_pointer;
+          int main(void) {
+              return (int)(first_value + second_value) +
+                     (first_pointer != 0) + (second_pointer != 0);
+          }
+          EOF
+            cat > tests/compiler/c0/run-external-tentative-declarator-list.sh <<'EOF'
+          #!/bin/sh
+          set -eu
+          root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+          minic=${MINIC:-"$root/build/debug/bin/minic"}
+          host_cc=${HOST_CC:-${CC:-cc}}
+          work=${BUILD_DIR:-"$root/build/debug"}/tests/external-tentative-declarator-list
+          mkdir -p "$work"
+          "$host_cc" -E -P -x c "$root/tests/compiler/c0/external_tentative_declarator_list.c" -o "$work/input.i"
+          "$minic" -S "$work/input.i" -o "$work/output.s"
+          test -s "$work/output.s"
+          EOF
+            chmod +x tests/compiler/c0/run-external-tentative-declarator-list.sh
+            cat >> tests/compiler/c0/run.sh <<'EOF'
+
+          MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+            sh "$root/tests/compiler/c0/run-external-tentative-declarator-list.sh"
+          EOF
+            clang-format-18 -i src/frontend/parser_function.c tests/compiler/c0/external_tentative_declarator_list.c >"$out/format.txt" 2>&1 || status=$?
+          fi
+          if [ "$status" -eq 0 ]; then
+            stage=build
+            make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/external-list-v1 >"$out/build.txt" 2>&1 || status=$?
+          fi
+          if [ "$status" -eq 0 ]; then
+            stage=focused
+            MINIC="$GITHUB_WORKSPACE/build/external-list-v1/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/external-list-v1" \
+              sh -x tests/compiler/c0/run-external-tentative-declarator-list.sh >"$out/focused.txt" 2>&1 || status=$?
+          fi
+          if [ "$status" -eq 0 ]; then
+            stage=check-fast
+            make -j4 check-fast MODE=release BUILD_DIR=build/external-list-v1-fast >"$out/check-fast.txt" 2>&1 || status=$?
+          fi
+          printf 'final_stage=%s\nfinal_status=%s\n' "$stage" "$status" > "$out/status.txt"
+          git diff -- src/frontend/parser_function.c tests/compiler/c0 > "$out/product.patch" || true
+
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          if [ "$status" -eq 0 ]; then
+            git rm .github/workflows/productize-external-tentative-declarator-list-v1.yml
+            rm -rf "$out"
+            git add src/frontend/parser_function.c tests/compiler/c0/external_tentative_declarator_list.c tests/compiler/c0/run-external-tentative-declarator-list.sh tests/compiler/c0/run.sh
+            git commit -m 'frontend: parse external tentative declarator lists'
+          else
+            git add "$out"
+            git commit -m 'diagnostic: record external declarator-list productization failure' || true
+          fi
+          git push origin HEAD:product/external-tentative-declarator-list-v1
+          exit 0
