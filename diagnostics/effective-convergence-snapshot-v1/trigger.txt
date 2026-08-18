@@ -1,0 +1,1 @@
+trigger effective convergence snapshot v1
