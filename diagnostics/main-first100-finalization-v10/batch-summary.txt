@@ -1,0 +1,30 @@
+LINUX_BATCH_SUMMARY
+selected_c_tus=100
+pass=89
+fail=11
+preprocess_missing=0
+minic_jobs=4
+
+minic_failure_groups:
+  count=3 message=parsed AST violates compiler contracts
+  count=1 message=integer initializer type mismatch
+  count=1 message=conditional expression branches have incompatible types
+  count=1 message=unsupported external object definition
+  count=1 message=expected expression
+  count=1 message=backward static record designator currently requires a direct scalar field
+  count=1 message=expected '=' after static record array
+  count=1 message=expected ')' after function declarator
+  count=1 message=expected type name
+
+failures:
+  index=1 status=FAIL input=init/version.i line=20739 rc=1 message=integer initializer type mismatch
+  index=2 status=FAIL input=init/do_mounts.i line=85095 rc=1 message=conditional expression branches have incompatible types
+  index=3 status=FAIL input=init/do_mounts_initrd.i line=62265 rc=1 message=unsupported external object definition
+  index=4 status=FAIL input=init/initramfs.i line=59102 rc=1 message=expected expression
+  index=6 status=FAIL input=init/init_task.i line=63193 rc=1 message=backward static record designator currently requires a direct scalar field
+  index=32 status=FAIL input=arch/riscv/kernel/vdso.i line=48088 rc=1 message=expected '=' after static record array
+  index=37 status=FAIL input=arch/riscv/kernel/module.i line=45452 rc=1 message=expected ')' after function declarator
+  index=50 status=FAIL input=arch/riscv/kernel/acpi.i line=1 rc=1 message=parsed AST violates compiler contracts
+  index=65 status=FAIL input=arch/riscv/purgatory/sha256.i line=20677 rc=1 message=expected type name
+  index=68 status=FAIL input=arch/riscv/kvm/../../../virt/kvm/kvm_main.i line=1 rc=1 message=parsed AST violates compiler contracts
+  index=72 status=FAIL input=arch/riscv/kvm/../../../virt/kvm/irqchip.i line=1 rc=1 message=parsed AST violates compiler contracts
