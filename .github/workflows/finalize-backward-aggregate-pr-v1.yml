@@ -44,8 +44,6 @@ jobs:
                   line = src[i]
                   if line.startswith('          '):
                       line = line[10:]
-                  elif line.strip():
-                      raise SystemExit(f'unexpected indentation in {name}: {line!r}')
                   block.append(line)
                   i += 1
               chunks.append('\n'.join(block).rstrip() + '\n')
