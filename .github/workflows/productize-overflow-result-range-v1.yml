@@ -1,0 +1,74 @@
+name: Productize Overflow Result Range V1
+on:
+  push:
+    branches: [product/overflow-result-range-v1]
+permissions:
+  contents: write
+jobs:
+  productize:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: product/overflow-result-range-v1
+          fetch-depth: 0
+      - name: Apply product slice
+        run: |
+          set -Eeuo pipefail
+          git show origin/staging/string-octal-v1:tools/dev/materialize-overflow-result-range-v1.py > /tmp/materialize.py
+          python3 /tmp/materialize.py
+          cat > tests/compiler/c0/overflow_result_range.c <<'EOF'
+          static long root_wait;
+          int scale_seconds(int sec) {
+              return __builtin_mul_overflow(sec, 1000L, &root_wait);
+          }
+          static unsigned long unsigned_wait;
+          int widen_unsigned(unsigned int value) {
+              return __builtin_add_overflow(value, 1UL, &unsigned_wait);
+          }
+          EOF
+          cat > tests/compiler/c0/invalid_overflow_result_range.c <<'EOF'
+          static int narrowed;
+          int unsupported(long value) {
+              return __builtin_add_overflow(value, 1L, &narrowed);
+          }
+          EOF
+          cat > tests/compiler/c0/run-overflow-result-range.sh <<'EOF'
+          #!/bin/sh
+          set -eu
+          root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+          minic=${MINIC:-"$root/build/debug/bin/minic"}
+          work=${BUILD_DIR:-"$root/build/debug"}/tests/overflow-result-range
+          mkdir -p "$work"
+          "$minic" -S "$root/tests/compiler/c0/overflow_result_range.c" -o "$work/positive.s"
+          test -s "$work/positive.s"
+          if "$minic" -S "$root/tests/compiler/c0/invalid_overflow_result_range.c" -o "$work/negative.s" >"$work/negative.out" 2>"$work/negative.err"; then
+            echo 'narrowing overflow result unexpectedly accepted' >&2
+            exit 1
+          fi
+          grep -F 'overflow builtin currently requires integer operand ranges representable' "$work/negative.err" >/dev/null
+          EOF
+          chmod +x tests/compiler/c0/run-overflow-result-range.sh
+          cat >> tests/compiler/c0/run.sh <<'EOF'
+
+          MINIC="$minic" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+            sh "$root/tests/compiler/c0/run-overflow-result-range.sh"
+          EOF
+          clang-format-18 -i src/frontend/expression_semantics.h src/frontend/expression_semantics.c src/frontend/parser_expression.c src/frontend/ast_verifier.c src/target/riscv64/codegen_expression.c tests/compiler/c0/overflow_result_range.c tests/compiler/c0/invalid_overflow_result_range.c
+          git diff --check
+      - name: Validate
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/overflow-range-v1
+          MINIC="$GITHUB_WORKSPACE/build/overflow-range-v1/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/overflow-range-v1-focused" sh tests/compiler/c0/run-overflow-result-range.sh
+          make -j4 check-fast MODE=release BUILD_DIR=build/overflow-range-v1-fast
+      - name: Commit clean product diff
+        run: |
+          set -Eeuo pipefail
+          git rm .github/workflows/productize-overflow-result-range-v1.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/frontend/expression_semantics.h src/frontend/expression_semantics.c src/frontend/parser_expression.c src/frontend/ast_verifier.c src/target/riscv64/codegen_expression.c tests/compiler/c0/overflow_result_range.c tests/compiler/c0/invalid_overflow_result_range.c tests/compiler/c0/run-overflow-result-range.sh tests/compiler/c0/run.sh
+          git commit -m 'frontend: accept overflow operands representable by result type'
+          git push origin HEAD:product/overflow-result-range-v1
