@@ -1,4 +1,5 @@
 name: Productize Fixed Call Character Pointer V2
+# second push registers the branch-local workflow
 on:
   push:
     branches: [product/fixed-call-character-pointer-v2]
