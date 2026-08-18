@@ -2,6 +2,8 @@ name: Productize Runtime Record Array V2
 on:
   push:
     branches: [product/runtime-record-array-v2]
+  pull_request:
+    branches: [main]
 permissions:
   contents: write
 jobs:
