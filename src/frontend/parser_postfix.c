@@ -45,7 +45,7 @@ bool minic_parser_materialize_array_object_type(MinicParser *parser,
         return false;
     }
     if (info.is_incomplete) {
-        return minic_c0_program_add_incomplete_array_type(
+        return minic_c0_program_add_query_incomplete_array_type(
             parser->program, info.element_type, array_type);
     }
     return info.element_count != 0U &&
