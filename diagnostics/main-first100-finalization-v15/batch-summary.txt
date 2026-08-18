@@ -1,0 +1,16 @@
+LINUX_BATCH_SUMMARY
+selected_c_tus=100
+pass=97
+fail=3
+preprocess_missing=0
+minic_jobs=4
+
+minic_failure_groups:
+  count=1 message=unsupported GNU object attribute
+  count=1 message=cannot write RISC-V assembly
+  count=1 message=backward static record designator currently requires a direct scalar field
+
+failures:
+  index=1 status=FAIL input=init/version.i line=20748 rc=1 message=unsupported GNU object attribute
+  index=2 status=FAIL input=init/do_mounts.i line=1 rc=1 message=cannot write RISC-V assembly
+  index=6 status=FAIL input=init/init_task.i line=63193 rc=1 message=backward static record designator currently requires a direct scalar field

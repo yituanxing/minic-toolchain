@@ -1,0 +1,23 @@
+=== index=1 input=init/version.i line=20748 message=unsupported GNU object attribute ===
+    20745: 
+    20746: 
+    20747: 
+>   20748: struct uts_namespace init_uts_ns __attribute__((__weak__));
+    20749: const char linux_banner[] __attribute__((__weak__));
+    20750: 
+    20751: # 1 "/home/runner/work/minic-toolchain/minic-toolchain/build/linux-main-first100-finalization-v15/linux-6.6.143/init/version-timestamp.c" 1
+
+=== index=2 input=init/do_mounts.i line=1 message=cannot write RISC-V assembly ===
+>       1: # 0 "/home/runner/work/minic-toolchain/minic-toolchain/build/linux-main-first100-finalization-v15/linux-6.6.143/init/do_mounts.c"
+        2: # 0 "<built-in>"
+        3: # 0 "<command-line>"
+        4: # 1 "/home/runner/work/minic-toolchain/minic-toolchain/build/linux-main-first100-finalization-v15/linux-6.6.143/include/linux/compiler-version.h" 1
+
+=== index=6 input=init/init_task.i line=63193 message=backward static record designator currently requires a direct scalar field ===
+    63190:  .cred_guard_mutex = { .owner = { (0) } , .wait_lock = (raw_spinlock_t) { .raw_lock = { (0) }, .magic = 0xdead4ead, .owner_cpu = -1, .owner = ((void *)-1L), } , .wait_list = { &(init_signals.cred_guard_mutex.wait_list), &(init_signals.cred_guard_mutex.wait_list) } , .magic = &init_signals.cred_guard_mutex },
+    63191:  .exec_update_lock = { .count = { (0L) }, .owner = { (0) }, .osq = { { ((0)) } }, .wait_lock = (raw_spinlock_t) { .raw_lock = { (0) }, .magic = 0xdead4ead, .owner_cpu = -1, .owner = ((void *)-1L), }, .wait_list = { &((init_signals.exec_update_lock).wait_list), &((init_signals.exec_update_lock).wait_list) }, .magic = &init_signals.exec_update_lock, },
+    63192: 
+>   63193:  .posix_timers = { &(init_signals.posix_timers), &(init_signals.posix_timers) },
+    63194:  .cputimer = {
+    63195:   .cputime_atomic = (struct task_cputime_atomic) { .utime = { (0) }, .stime = { (0) }, .sum_exec_runtime = { (0) }, },
+    63196:  },
