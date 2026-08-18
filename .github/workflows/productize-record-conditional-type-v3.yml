@@ -2,8 +2,6 @@ name: Productize Record Conditional Type V3
 on:
   push:
     branches: [product/record-conditional-type-v3]
-  pull_request:
-    branches: [main]
 permissions:
   contents: write
 jobs:
@@ -18,7 +16,7 @@ jobs:
       - name: Apply proven record conditional type semantics
         run: |
           set -Eeuo pipefail
-          git fetch origin staging/string-octal-v1 --no-tags
+          git fetch origin 'refs/heads/staging/string-octal-v1:refs/remotes/origin/staging/string-octal-v1' --no-tags
           git show origin/staging/string-octal-v1:tools/dev/materialize-record-conditional-type-v1.py > tools/dev/.productize-record-conditional-type-v1.py
           python3 tools/dev/.productize-record-conditional-type-v1.py
           rm tools/dev/.productize-record-conditional-type-v1.py
