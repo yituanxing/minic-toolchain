@@ -13,6 +13,7 @@ on:
   push:
     branches:
       - main
+      - product/backward-static-aggregate-overlay-v7
   merge_group:
     types:
       - checks_requested
@@ -60,7 +61,7 @@ jobs:
           retention-days: 7
 
   productize-backward-aggregate:
-    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'product/backward-static-aggregate-overlay-v7' && github.actor != 'github-actions[bot]' }}
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/product/backward-static-aggregate-overlay-v7' && github.actor != 'github-actions[bot]' }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
