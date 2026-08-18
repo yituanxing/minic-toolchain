@@ -1,0 +1,63 @@
+name: Productize Runtime Record Array V2
+on:
+  push:
+    branches: [product/runtime-record-array-v2]
+permissions:
+  contents: write
+jobs:
+  productize:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: product/runtime-record-array-v2
+          fetch-depth: 0
+      - name: Apply proven runtime record array semantics
+        run: |
+          set -Eeuo pipefail
+          git fetch origin 'refs/heads/staging/string-octal-v1:refs/remotes/origin/staging/string-octal-v1' --no-tags
+          git show origin/staging/string-octal-v1:tools/dev/materialize-runtime-record-array-v1.py > tools/dev/.productize-runtime-record-array-v2.py
+          python3 tools/dev/.productize-runtime-record-array-v2.py
+          rm tools/dev/.productize-runtime-record-array-v2.py
+      - name: Extend permanent focused contract
+        run: |
+          set -Eeuo pipefail
+          cat >> tests/compiler/c0/runtime_record_array_initializer.c <<'EOF'
+
+struct timespec64_probe {
+    long tv_sec;
+    long tv_nsec;
+};
+
+long runtime_record_array_local(long mtime) {
+    struct timespec64_probe t[2] = {{.tv_sec = mtime}, {.tv_sec = mtime}};
+    return t[0].tv_sec + t[1].tv_sec;
+}
+EOF
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('tests/compiler/c0/run-runtime-record-array-initializers.sh')
+          s = p.read_text()
+          anchor = "grep -F 'linux_guid_compound_literal:' \"$work/runtime_record_array_initializer.s\" >/dev/null\n"
+          if anchor not in s:
+              raise SystemExit('runtime-record-array runner anchor missing')
+          p.write_text(s.replace(anchor, anchor + "grep -F 'runtime_record_array_local:' \"$work/runtime_record_array_initializer.s\" >/dev/null\n", 1))
+          PY
+      - name: Validate product slice
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/product-runtime-record-array-v2
+          MINIC="$GITHUB_WORKSPACE/build/product-runtime-record-array-v2/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/product-runtime-record-array-v2-focused" \
+            sh tests/compiler/c0/run-runtime-record-array-initializers.sh
+          make -j4 check-fast MODE=release BUILD_DIR=build/product-runtime-record-array-v2-fast
+      - name: Commit clean product diff
+        run: |
+          set -Eeuo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git rm .github/workflows/productize-runtime-record-array-v2.yml
+          git add src/frontend/parser_statement.c tests/compiler/c0/runtime_record_array_initializer.c tests/compiler/c0/run-runtime-record-array-initializers.sh
+          git commit -m 'frontend: initialize runtime arrays of records'
+          git push origin HEAD:product/runtime-record-array-v2
