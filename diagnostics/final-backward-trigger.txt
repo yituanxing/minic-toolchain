@@ -1,1 +1,1 @@
-trigger final backward aggregate productizer v6
+trigger final backward aggregate productizer v7
