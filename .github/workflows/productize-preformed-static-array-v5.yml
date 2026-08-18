@@ -1,0 +1,52 @@
+name: Productize Preformed Static Array V5
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: write
+jobs:
+  productize:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: product/preformed-static-array-v5
+          fetch-depth: 0
+      - name: Apply proven preformed static-array semantics
+        run: |
+          set -Eeuo pipefail
+          git show origin/staging/string-octal-v1:tools/dev/materialize-preformed-static-array-v1.py > tools/dev/.productize-preformed-static-array-v5.py
+          python3 tools/dev/.productize-preformed-static-array-v5.py
+          rm tools/dev/.productize-preformed-static-array-v5.py
+      - name: Add permanent focused contract
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          Path('tests/compiler/c0/preformed_static_array.c').write_text('''struct mapping { int value; };\nstatic struct mapping maps[] __attribute__((section(".data.test"))) = {\n    { .value = 1 },\n    { .value = 2 },\n};\nint main(void) {\n    return maps[0].value + maps[1].value - 3;\n}\n''')
+          Path('tests/compiler/c0/run-preformed-static-array.sh').write_text('''#!/bin/sh\nset -eu\nroot=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)\nminic=${MINIC:-"$root/build/debug/bin/minic"}\nhost_cc=${HOST_CC:-${CC:-cc}}\nwork=${BUILD_DIR:-"$root/build/debug"}/tests/preformed-static-array\nmkdir -p "$work"\n"$host_cc" -E -P -x c "$root/tests/compiler/c0/preformed_static_array.c" -o "$work/input.i"\n"$minic" -S "$work/input.i" -o "$work/output.s"\ntest -s "$work/output.s"\ngrep -F '.section .data.test' "$work/output.s" >/dev/null\n''')
+          run = Path('tests/compiler/c0/run.sh')
+          run.write_text(run.read_text() + '''\nMINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \\\n  sh "$root/tests/compiler/c0/run-preformed-static-array.sh"\n''')
+          PY
+          chmod +x tests/compiler/c0/run-preformed-static-array.sh
+          clang-format-18 -i src/frontend/parser_global.c tests/compiler/c0/preformed_static_array.c
+          git diff --check
+      - name: Validate product slice
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/preformed-static-array-v5
+          MINIC="$GITHUB_WORKSPACE/build/preformed-static-array-v5/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/preformed-static-array-v5-focused" \
+            sh tests/compiler/c0/run-preformed-static-array.sh
+          make -j4 check-fast MODE=release BUILD_DIR=build/preformed-static-array-v5-fast
+      - name: Commit clean product diff
+        run: |
+          set -Eeuo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git rm .github/workflows/productize-preformed-static-array-v5.yml
+          git add src/frontend/parser_global.c tests/compiler/c0/preformed_static_array.c \
+                  tests/compiler/c0/run-preformed-static-array.sh tests/compiler/c0/run.sh
+          git commit -m 'frontend: initialize preformed static arrays'
+          git push origin HEAD:product/preformed-static-array-v5
