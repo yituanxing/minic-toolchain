@@ -1,0 +1,92 @@
+name: Productize Alignof Expression V6
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: write
+jobs:
+  productize:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: product/alignof-expression-v6
+          fetch-depth: 0
+      - name: Import validated alignof expression semantics
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          import subprocess
+          from pathlib import Path
+          p=Path('src/frontend/parser_expression.c')
+          main=p.read_text()
+          staging=subprocess.check_output(['git','show','origin/staging/string-octal-v1:src/frontend/parser_expression.c'],text=True)
+          s0=staging.index('static bool alignof_expression_alignment(')
+          s1=staging.index('\nstatic bool parse_sizeof(',s0)
+          m0=main.index('static bool parse_alignof(')
+          m1=main.index('\nstatic bool parse_sizeof(',m0)
+          p.write_text(main[:m0]+staging[s0:s1]+main[m1:])
+          PY
+      - name: Add permanent GNU alignof expression contract
+        run: |
+          set -Eeuo pipefail
+          cat > tests/compiler/c0/alignof_expression.c <<'EOF'
+          struct align_tail {
+              long head;
+              unsigned char tail[];
+          };
+
+          unsigned long alignof_scalar_member(struct align_tail *ptr) {
+              return __alignof__(ptr->head);
+          }
+
+          unsigned long alignof_flexible_array_member(struct align_tail *ptr) {
+              return __alignof__(ptr->tail);
+          }
+
+          int main(void) {
+              struct align_tail *ptr = 0;
+              return (int)(alignof_scalar_member(ptr) == 0 ||
+                           alignof_flexible_array_member(ptr) == 0);
+          }
+          EOF
+          cat > tests/compiler/c0/run-alignof-expression.sh <<'EOF'
+          #!/bin/sh
+          set -eu
+          root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+          minic=${MINIC:-"$root/build/debug/bin/minic"}
+          host_cc=${HOST_CC:-${CC:-cc}}
+          work=${BUILD_DIR:-"$root/build/debug"}/tests/alignof-expression
+          mkdir -p "$work"
+          "$host_cc" -E -P -x c "$root/tests/compiler/c0/alignof_expression.c" -o "$work/input.i"
+          "$minic" -S "$work/input.i" -o "$work/output.s"
+          test -s "$work/output.s"
+          grep -F 'alignof_flexible_array_member:' "$work/output.s" >/dev/null
+          EOF
+          chmod +x tests/compiler/c0/run-alignof-expression.sh
+          cat >> tests/compiler/c0/run.sh <<'EOF'
+
+          MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+            sh "$root/tests/compiler/c0/run-alignof-expression.sh"
+          EOF
+          clang-format-18 -i src/frontend/parser_expression.c tests/compiler/c0/alignof_expression.c
+          git diff --check
+      - name: Validate product slice
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/alignof-expression-v6
+          MINIC="$GITHUB_WORKSPACE/build/alignof-expression-v6/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/alignof-expression-v6-focused" \
+            sh tests/compiler/c0/run-alignof-expression.sh
+          make -j4 check-fast MODE=release BUILD_DIR=build/alignof-expression-v6-fast
+      - name: Commit clean product diff
+        run: |
+          set -Eeuo pipefail
+          git rm .github/workflows/productize-alignof-expression-v6.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/frontend/parser_expression.c tests/compiler/c0/alignof_expression.c \
+                  tests/compiler/c0/run-alignof-expression.sh tests/compiler/c0/run.sh
+          git commit -m 'frontend: evaluate GNU alignof expressions'
+          git push origin HEAD:product/alignof-expression-v6
