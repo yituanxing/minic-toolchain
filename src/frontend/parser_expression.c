@@ -438,9 +438,16 @@ static bool pointer_sign_call_conversion_compatible(MinicType target, MinicType 
         !minic_type_pointee(target, &target_pointee) ||
         !minic_type_pointee(source, &source_pointee) || !minic_type_is_integer(target_pointee) ||
         !minic_type_is_integer(source_pointee) ||
-        target_pointee.integer_rank != source_pointee.integer_rank ||
-        target_pointee.integer_sign == source_pointee.integer_sign ||
-        target_pointee.is_plain_char != source_pointee.is_plain_char) {
+        target_pointee.integer_rank != source_pointee.integer_rank) {
+        return false;
+    }
+    /* Fixed C calls in GNU/Linux routinely pass plain char buffers through APIs
+       whose byte-oriented parameter is signed or unsigned char. Keep that
+       compatibility local to the explicit call conversion: ordinary pointer
+       assignment still distinguishes the three character types. */
+    if (target_pointee.integer_rank != MINIC_INTEGER_RANK_CHAR &&
+        (target_pointee.integer_sign == source_pointee.integer_sign ||
+         target_pointee.is_plain_char != source_pointee.is_plain_char)) {
         return false;
     }
     if (minic_type_is_const(source_pointee) && !minic_type_is_const(target_pointee)) {
