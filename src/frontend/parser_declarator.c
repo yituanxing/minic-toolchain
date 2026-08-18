@@ -93,6 +93,48 @@ bool minic_parser_parse_function_parameter_suffix(MinicParser *parser,
                parser, MINIC_TOKEN_RPAREN, "expected ')' after function parameter list");
 }
 
+static bool parse_array_bound_allow_zero(MinicParser *parser, size_t *element_count);
+
+static bool parse_parenthesized_function_array_suffix(MinicParser *parser,
+                                                      MinicParsedFunctionDeclarator *declarator) {
+    size_t dimension;
+
+    if (parser == NULL || declarator == NULL) {
+        return false;
+    }
+    while (parser->current.kind == MINIC_TOKEN_LBRACKET) {
+        if (declarator->array_dimension_count >=
+            sizeof(declarator->array_bounds) / sizeof(declarator->array_bounds[0])) {
+            minic_parser_error(parser, "array declarator supports at most eight dimensions");
+            return false;
+        }
+        dimension = declarator->array_dimension_count;
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
+        if (parser->current.kind == MINIC_TOKEN_RBRACKET) {
+            if (dimension != 0U || declarator->array_outermost_incomplete) {
+                minic_parser_error(parser, "only the outermost array dimension may be incomplete");
+                return false;
+            }
+            declarator->array_outermost_incomplete = true;
+            declarator->array_bounds[dimension] = 0U;
+            if (!minic_parser_advance(parser)) {
+                return false;
+            }
+        } else {
+            if (!parse_array_bound_allow_zero(parser, &declarator->array_bounds[dimension])) {
+                return false;
+            }
+            if (declarator->array_bounds[dimension] == 0U) {
+                declarator->array_zero_length_mask |= 1U << dimension;
+            }
+        }
+        declarator->array_dimension_count += 1U;
+    }
+    return true;
+}
+
 bool minic_parser_parse_parenthesized_function_declarator(
     MinicParser *parser,
     bool require_name,
@@ -136,7 +178,8 @@ bool minic_parser_parse_parenthesized_function_declarator(
         return false;
     }
 
-    return minic_parser_expect(
+    return parse_parenthesized_function_array_suffix(parser, declarator) &&
+           minic_parser_expect(
                parser, MINIC_TOKEN_RPAREN, "expected ')' after function declarator") &&
            minic_parser_parse_function_parameter_suffix(parser, declarator);
 }
@@ -274,6 +317,32 @@ bool minic_parser_build_function_declarator_type(MinicParser *parser,
             return false;
         }
         pointer_depth += 1U;
+    }
+    {
+        size_t dimension = declarator->array_dimension_count;
+
+        while (dimension > 0U) {
+            unsigned int bit;
+
+            dimension -= 1U;
+            bit = 1U << dimension;
+            if (dimension == 0U && declarator->array_outermost_incomplete) {
+                if (!minic_c0_program_add_incomplete_array_type(
+                        parser->program, function_type, &function_type)) {
+                    return false;
+                }
+            } else if ((declarator->array_zero_length_mask & bit) != 0U) {
+                if (!minic_c0_program_add_zero_length_array_type(
+                        parser->program, function_type, &function_type)) {
+                    return false;
+                }
+            } else if (!minic_c0_program_add_array_type(parser->program,
+                                                        function_type,
+                                                        declarator->array_bounds[dimension],
+                                                        &function_type)) {
+                return false;
+            }
+        }
     }
     *declarator_type = function_type;
     return true;
