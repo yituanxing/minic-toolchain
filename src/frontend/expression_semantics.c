@@ -74,5 +74,11 @@ bool minic_c0_conditional_result_type(const MinicC0Program *program,
         *result = when_false->type;
         return true;
     }
+    if (minic_type_is_record(when_true->type) && minic_type_is_record(when_false->type) &&
+        minic_c0_types_compatible(program, when_true->type, when_false->type)) {
+        /* The conditional expression is an rvalue. Keep the common record identity while
+         * dropping lvalue-only top-level qualification from either source arm. */
+        return minic_type_unqualified(when_true->type, result) && minic_type_is_record(*result);
+    }
     return conditional_type_only(target, when_true->type, when_false->type, result);
 }
