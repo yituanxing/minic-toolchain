@@ -57,3 +57,13 @@ unsigned long typeof_generic_pointer_size(const void *addr) {
                  signed long long: (signed long long)0,
                  default: (*(unsigned long *)addr))) *);
 }
+
+
+struct QueryTail {
+    int head;
+    unsigned char tail[];
+};
+
+unsigned long typeof_flexible_array_pointer_size(struct QueryTail *value) {
+    return sizeof(typeof(value->tail) *);
+}

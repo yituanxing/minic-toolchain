@@ -363,6 +363,7 @@ typedef struct MinicArrayType {
     MinicType element_type;
     size_t element_count;
     bool is_zero_length;
+    bool is_query_materialized;
 } MinicArrayType;
 
 typedef struct MinicFunctionType {
@@ -654,6 +655,9 @@ bool minic_c0_program_add_array_type(MinicC0Program *program,
 bool minic_c0_program_add_incomplete_array_type(MinicC0Program *program,
                                                 MinicType element_type,
                                                 MinicType *array_type);
+bool minic_c0_program_add_query_incomplete_array_type(MinicC0Program *program,
+                                                      MinicType element_type,
+                                                      MinicType *array_type);
 bool minic_c0_program_add_zero_length_array_type(MinicC0Program *program,
                                                  MinicType element_type,
                                                  MinicType *array_type);

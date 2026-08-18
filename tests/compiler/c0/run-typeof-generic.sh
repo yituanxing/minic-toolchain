@@ -17,7 +17,8 @@ mkdir -p "$work"
 test -s "$assembly"
 for symbol in generic_selected_value generic_default_value generic_controlling_is_unevaluated \
               typeof_expression_size typeof_type_name_size typeof_generic_pointer_size \
-              typeof_incomplete_object_address typeof_function_redeclaration; do
+              typeof_incomplete_object_address typeof_function_redeclaration \
+              typeof_flexible_array_pointer_size; do
     grep -F "$symbol:" "$assembly" >/dev/null
 done
 # Selected/default generic values must survive frontend selection lowering.
@@ -31,7 +32,7 @@ if grep -F 'call generic_side_effect' "$assembly" >/dev/null; then
 fi
 # RV64 unsigned long and pointers are both eight bytes.
 size8=$(grep -c '  li a0, 8' "$assembly" || true)
-test "$size8" -ge 3
+test "$size8" -ge 4
 grep -F 'typeof_pending_object' "$assembly" >/dev/null
 # GNU typeof of a function designator preserves the function type rather than
 # the execution-time function-pointer representation used by ordinary expressions.
