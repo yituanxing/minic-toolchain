@@ -1,7 +1,7 @@
 name: Productize RV64 Small Record Copy Return V4
 on:
   pull_request:
-    types: [opened]
+    types: [opened, synchronize]
 permissions:
   contents: write
 jobs:
@@ -17,8 +17,9 @@ jobs:
         run: |
           set -Eeuo pipefail
           git fetch origin d66826cd6cf82e63f171fb2cd3f231ca7679ae7a
-          git show d66826cd6cf82e63f171fb2cd3f231ca7679ae7a:tools/dev/materialize-rv64-small-record-copy-return-v1.py > /tmp/materialize.py
-          python3 /tmp/materialize.py
+          git show d66826cd6cf82e63f171fb2cd3f231ca7679ae7a:tools/dev/materialize-rv64-small-record-copy-return-v1.py > tools/dev/materialize-rv64-small-record-copy-return-v1.py
+          python3 tools/dev/materialize-rv64-small-record-copy-return-v1.py
+          rm tools/dev/materialize-rv64-small-record-copy-return-v1.py
           cat > tests/compiler/c0/small_record_copy_return.c <<'EOF'
           typedef struct { unsigned value; } one_t;
           typedef struct { unsigned lo; unsigned hi; } two_t;
