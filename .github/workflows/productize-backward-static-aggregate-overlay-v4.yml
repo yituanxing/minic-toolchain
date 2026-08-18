@@ -17,7 +17,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           git fetch origin d66826cd6cf82e63f171fb2cd3f231ca7679ae7a
-          git show 3fc29a1b0408c54aef87af8af5336f056af6dd12:.github/workflows/compiler-c0.yml > /tmp/carrier.yml
+          git show 182d7acc930b555aa163a5cfdab2e557bdfff1bb:.github/workflows/compiler-c0.yml > /tmp/carrier.yml
           python3 - <<'PY'
           from pathlib import Path
           text = Path('/tmp/carrier.yml').read_text()
@@ -27,12 +27,7 @@ jobs:
           block = text[start:end]
           lines = []
           for line in block.splitlines():
-              if line == '':
-                  lines.append('')
-                  continue
-              if not line.startswith('          '):
-                  raise SystemExit(f'unexpected carrier indentation: {line!r}')
-              lines.append(line[10:])
+              lines.append(line[10:] if line.startswith('          ') else line)
           Path('/tmp/materialize-record.py').write_text('\n'.join(lines) + '\n')
           PY
           python3 /tmp/materialize-record.py
@@ -85,9 +80,8 @@ jobs:
       - name: Validate aggregate overlay
         run: |
           set -Eeuo pipefail
-          if command -v clang-format-18 >/dev/null 2>&1; then
-            clang-format-18 -i src/frontend/ast.h src/frontend/ast_global.c src/frontend/parser_global.c tests/compiler/c0/backward_static_aggregate_overlay.c
-          fi
+          clang-format-18 -i src/frontend/ast.h src/frontend/ast_global.c src/frontend/parser_global.c tests/compiler/c0/backward_static_aggregate_overlay.c
+          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
           git diff --check
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/product-backward-aggregate
           MINIC="$GITHUB_WORKSPACE/build/product-backward-aggregate/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/product-backward-aggregate" sh tests/compiler/c0/run-backward-static-aggregate-overlay.sh
