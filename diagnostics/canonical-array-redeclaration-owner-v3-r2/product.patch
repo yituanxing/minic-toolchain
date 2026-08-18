@@ -1,0 +1,86 @@
+diff --git a/src/frontend/parser_function.c b/src/frontend/parser_function.c
+index b4962007..f7949056 100644
+--- a/src/frontend/parser_function.c
++++ b/src/frontend/parser_function.c
+@@ -1152,7 +1152,14 @@ static bool parse_external_tentative_object(MinicParser *parser,
+             return false;
+         }
+     } else {
++        bool discard_declared_array;
++
+         existing = minic_c0_program_global_object(parser->program, object_id);
++        discard_declared_array =
++            existing != NULL && minic_type_is_array(existing->type) &&
++            minic_type_is_array(object_type) &&
++            existing->type.array_type_id != object_type.array_type_id &&
++            object_type.array_type_id + 1U == parser->program->array_type_count;
+         if (existing == NULL ||
+             !minic_parser_external_object_types_compatible(
+                 parser->program, existing->type, object_type) ||
+@@ -1163,6 +1170,16 @@ static bool parse_external_tentative_object(MinicParser *parser,
+             minic_parser_error(parser, "conflicting external tentative definition");
+             return false;
+         }
++        /* The declaration descriptor is only a parser-side candidate once a canonical
++         * external entity already exists. Keep the canonical descriptor and retire a
++         * newly-created outer array descriptor after its composite information has been
++         * merged, otherwise an incomplete `name[]` redeclaration survives ownerless in
++         * the Program array arena and correctly trips the AST verifier. */
++        if (discard_declared_array &&
++            !minic_c0_program_discard_last_array_type(parser->program, object_type)) {
++            minic_parser_error(parser, "cannot retire transient external array declaration");
++            return false;
++        }
+     }
+     parser->program->global_objects[object_id].is_block_scope_extern_only = false;
+     if (!apply_external_object_metadata(parser,
+@@ -1189,6 +1206,9 @@ static bool parse_external_object_definition(MinicParser *parser,
+                                              bool has_visibility) {
+     MinicGlobalObjectId object_id;
+     const MinicGlobalObject *existing;
++    MinicType declared_object_type;
++
++    declared_object_type = object_type;
+ 
+     if (parser == NULL || parser->current.kind != MINIC_TOKEN_EQUAL ||
+         (!minic_type_is_integer(object_type) && !minic_type_is_pointer(object_type) &&
+@@ -1210,7 +1230,14 @@ static bool parse_external_object_definition(MinicParser *parser,
+             return false;
+         }
+     } else {
++        bool discard_declared_array;
++
+         existing = minic_c0_program_global_object(parser->program, object_id);
++        discard_declared_array =
++            existing != NULL && minic_type_is_array(existing->type) &&
++            minic_type_is_array(object_type) &&
++            existing->type.array_type_id != object_type.array_type_id &&
++            object_type.array_type_id + 1U == parser->program->array_type_count;
+         if (existing == NULL ||
+             !minic_parser_external_object_types_compatible(
+                 parser->program, existing->type, object_type) ||
+@@ -1221,6 +1248,13 @@ static bool parse_external_object_definition(MinicParser *parser,
+             minic_parser_error(parser, "conflicting external object definition");
+             return false;
+         }
++        if (discard_declared_array) {
++            object_type = parser->program->global_objects[object_id].type;
++            if (!minic_c0_program_discard_last_array_type(parser->program, declared_object_type)) {
++                minic_parser_error(parser, "cannot retire transient external array definition");
++                return false;
++            }
++        }
+     }
+     if (!apply_external_object_metadata(parser,
+                                         object_id,
+diff --git a/tests/compiler/c0/run.sh b/tests/compiler/c0/run.sh
+index 7ddb14d2..bb925099 100755
+--- a/tests/compiler/c0/run.sh
++++ b/tests/compiler/c0/run.sh
+@@ -438,3 +438,6 @@ sh "$root/tests/compiler/c0/run-braced-static-scalar.sh"
+ MINIC="$minic" HOST_CC="$host_cc" \
+ BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+ sh "$root/tests/compiler/c0/run-static-pointer-constant-conditional.sh"
++
++MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
++  sh "$root/tests/compiler/c0/run-external-array-redeclaration-owner.sh"

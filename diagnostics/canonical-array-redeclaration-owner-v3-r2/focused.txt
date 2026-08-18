@@ -1,0 +1,12 @@
++ set -eu
++ dirname -- tests/compiler/c0/run-external-array-redeclaration-owner.sh
++ CDPATH= cd -- tests/compiler/c0/../../..
++ pwd
++ root=/home/runner/work/minic-toolchain/minic-toolchain
++ minic=/home/runner/work/minic-toolchain/minic-toolchain/build/array-owner-v3-r2/bin/minic
++ host_cc=cc
++ work=/home/runner/work/minic-toolchain/minic-toolchain/build/array-owner-v3-r2/tests/external-array-redeclaration-owner
++ mkdir -p /home/runner/work/minic-toolchain/minic-toolchain/build/array-owner-v3-r2/tests/external-array-redeclaration-owner
++ cc -E -P -x c /home/runner/work/minic-toolchain/minic-toolchain/tests/compiler/c0/external_array_redeclaration_owner.c -o /home/runner/work/minic-toolchain/minic-toolchain/build/array-owner-v3-r2/tests/external-array-redeclaration-owner/input.i
++ /home/runner/work/minic-toolchain/minic-toolchain/build/array-owner-v3-r2/bin/minic -S /home/runner/work/minic-toolchain/minic-toolchain/build/array-owner-v3-r2/tests/external-array-redeclaration-owner/input.i -o /home/runner/work/minic-toolchain/minic-toolchain/build/array-owner-v3-r2/tests/external-array-redeclaration-owner/output.s
+/home/runner/work/minic-toolchain/minic-toolchain/build/array-owner-v3-r2/tests/external-array-redeclaration-owner/input.i:2:21: error: incomplete external tentative array is not implemented yet
