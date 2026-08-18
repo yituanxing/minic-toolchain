@@ -16,6 +16,7 @@ jobs:
       - name: Import validated alignof expression semantics
         run: |
           set -Eeuo pipefail
+          git fetch origin staging/string-octal-v1 --no-tags
           python3 - <<'PY'
           import subprocess
           from pathlib import Path
