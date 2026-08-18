@@ -49,6 +49,70 @@ jobs:
           PY
           bash /tmp/run-weak-apply.sh
 
+          # C requires a file-scope tentative definition of incomplete array type
+          # to become a one-element array if no later declaration completes it.
+          # Keep this TU-finalization rule generic; weak merely exposed the gap.
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('src/frontend/parser_function.c')
+          s = p.read_text()
+          marker = '''bool minic_parse_c0_program(const char *path,
+                                      const char *source,
+                                      size_t length,
+                                      MinicC0Program *program,
+                                      MinicDiagnostic *diagnostic) {
+          '''
+          if s.count(marker) != 1:
+              raise SystemExit(f'parse program marker count={s.count(marker)}')
+          helper = '''static bool finalize_tentative_incomplete_arrays(MinicC0Program *program) {
+              size_t index;
+
+              if (program == NULL) {
+                  return false;
+              }
+              for (index = 0U; index < program->global_object_count; ++index) {
+                  const MinicGlobalObject *object;
+                  const MinicArrayType *array_type;
+
+                  object = minic_c0_program_global_object(program, index);
+                  if (object == NULL || !object->is_tentative || !minic_type_is_array(object->type)) {
+                      continue;
+                  }
+                  array_type = minic_c0_program_array_type(program, object->type.array_type_id);
+                  if (array_type == NULL) {
+                      return false;
+                  }
+                  if (array_type->element_count != 0U || array_type->is_zero_length) {
+                      continue;
+                  }
+                  if (array_type->is_query_materialized ||
+                      !minic_c0_program_complete_array_type(program, object->type, 1U)) {
+                      return false;
+                  }
+              }
+              return true;
+          }
+
+          '''
+          s = s.replace(marker, helper + marker, 1)
+          old = '''    if (!success && diagnostic != NULL && diagnostic->message[0] == '\\0') {
+                  minic_parser_error(&parser, "parser failed without diagnostic");
+              }
+          '''
+          new = '''    if (success && !finalize_tentative_incomplete_arrays(program)) {
+                  minic_parser_error(&parser, "cannot complete tentative incomplete array definition");
+                  success = false;
+              }
+              if (!success && diagnostic != NULL && diagnostic->message[0] == '\\0') {
+                  minic_parser_error(&parser, "parser failed without diagnostic");
+              }
+          '''
+          if s.count(old) != 1:
+              raise SystemExit(f'parse finalization anchor count={s.count(old)}')
+          p.write_text(s.replace(old, new, 1))
+          PY
+
       - name: Validate weak object product tree
         run: |
           set -Eeuo pipefail
