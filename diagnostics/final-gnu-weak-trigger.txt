@@ -1,1 +1,1 @@
-trigger final GNU weak external-object productizer
+trigger final GNU weak external-object productizer v2
