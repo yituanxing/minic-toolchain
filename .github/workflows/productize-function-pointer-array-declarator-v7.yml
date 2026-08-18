@@ -22,24 +22,16 @@ jobs:
       - name: Extend permanent focused contract
         run: |
           set -Eeuo pipefail
-          cat >> tests/compiler/c0/function_pointer_qualifiers.c <<'EOF'
-
-extern int (*external_handlers[])(int value);
-static int (*static_handlers[1])(int value) = {0};
-
-int function_pointer_array_shape(void)
-{
-    return static_handlers[0] == 0;
-}
-EOF
           python3 - <<'PY'
           from pathlib import Path
-          p = Path('tests/compiler/c0/run-function-pointer-qualifiers.sh')
-          s = p.read_text()
+          src = Path('tests/compiler/c0/function_pointer_qualifiers.c')
+          src.write_text(src.read_text() + '''\nextern int (*external_handlers[])(int value);\nstatic int (*static_handlers[1])(int value) = {0};\n\nint function_pointer_array_shape(void)\n{\n    return static_handlers[0] == 0;\n}\n''')
+          runner = Path('tests/compiler/c0/run-function-pointer-qualifiers.sh')
+          text = runner.read_text()
           anchor = "grep -F 'call_typedef:' \"$work/output.s\" >/dev/null\n"
-          if anchor not in s:
+          if anchor not in text:
               raise SystemExit('function-pointer runner anchor missing')
-          p.write_text(s.replace(anchor, anchor + "grep -F 'function_pointer_array_shape:' \"$work/output.s\" >/dev/null\n", 1))
+          runner.write_text(text.replace(anchor, anchor + "grep -F 'function_pointer_array_shape:' \"$work/output.s\" >/dev/null\n", 1))
           PY
       - name: Validate product slice
         run: |
