@@ -1,0 +1,1 @@
+trigger branch-local productizer after workflow registration
