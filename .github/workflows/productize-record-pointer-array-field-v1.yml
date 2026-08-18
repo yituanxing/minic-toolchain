@@ -1,0 +1,57 @@
+name: Productize Record Pointer Array Field V1
+on:
+  push:
+    branches: [product/record-pointer-array-field-v1]
+permissions:
+  contents: write
+jobs:
+  productize:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: product/record-pointer-array-field-v1
+          fetch-depth: 0
+      - name: Apply staging-proven declarator support
+        run: |
+          set -Eeuo pipefail
+          mat=tools/dev/.productize-record-pointer-array-field-v1.py
+          git show origin/staging/string-octal-v1:tools/dev/materialize-record-pointer-array-v1.py > "$mat"
+          python3 "$mat"
+          rm "$mat"
+          cat > tests/compiler/c0/record_pointer_array_field.c <<'EOF'
+          struct holder {
+              char (*zero)[0];
+              char (*one)[1];
+              const unsigned char (*two)[2];
+          };
+          int main(void) {
+              struct holder h;
+              h.zero = (char (*)[0])0;
+              h.one = (char (*)[1])0;
+              h.two = (const unsigned char (*)[2])0;
+              return h.zero != 0 || h.one != 0 || h.two != 0;
+          }
+          EOF
+          cat >> tests/compiler/c0/run.sh <<'EOF'
+
+          compile_source record_pointer_array_field record_pointer_array_field
+          expect_instructions record_pointer_array_field "mv s0, sp" "li a0, 0"
+          EOF
+          clang-format-18 -i src/frontend/parser_record.c tests/compiler/c0/record_pointer_array_field.c
+          git diff --check
+      - name: Validate Werror and fast gates
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/record-pointer-array-field-v1
+          make -j4 check-fast MODE=release BUILD_DIR=build/record-pointer-array-field-v1-fast
+      - name: Commit clean product diff
+        run: |
+          set -Eeuo pipefail
+          git rm .github/workflows/productize-record-pointer-array-field-v1.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/frontend/parser_record.c tests/compiler/c0/record_pointer_array_field.c tests/compiler/c0/run.sh
+          git commit -m 'frontend: parse pointer-to-array record fields'
+          git push origin HEAD:product/record-pointer-array-field-v1
