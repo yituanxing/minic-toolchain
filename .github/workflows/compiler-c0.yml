@@ -39,8 +39,9 @@ jobs:
         run: |
           set -Eeuo pipefail
           git fetch origin main staging/string-octal-v1
-          git show origin/staging/string-octal-v1:tools/dev/materialize-function-pointer-array-declarator-v1.py > /tmp/materialize.py
-          python3 /tmp/materialize.py
+          git show origin/staging/string-octal-v1:tools/dev/materialize-function-pointer-array-declarator-v1.py > tools/dev/.productize-function-pointer-array-v9.py
+          python3 tools/dev/.productize-function-pointer-array-v9.py
+          rm tools/dev/.productize-function-pointer-array-v9.py
           python3 - <<'PY'
           from pathlib import Path
           src = Path('tests/compiler/c0/function_pointer_qualifiers.c')
