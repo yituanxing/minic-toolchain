@@ -17,7 +17,7 @@ jobs:
         shell: bash
         run: |
           set -u
-          out=diagnostics/canonical-array-redeclaration-owner-v3-r2
+          out=diagnostics/canonical-array-redeclaration-owner-v3-r3
           mkdir -p "$out"
           stage=materialize
           status=0
@@ -29,9 +29,9 @@ jobs:
           if [ "$status" -eq 0 ]; then
             stage=regression-source
             cat > tests/compiler/c0/external_array_redeclaration_owner.c <<'EOF'
+          extern int tentative_values[];
           int tentative_values[4];
-          int tentative_values[];
-          int defined_values[4];
+          extern int defined_values[];
           int defined_values[4] = {1, 2, 3, 4};
           int main(void) { return tentative_values[0] + defined_values[3] - 4; }
           EOF
@@ -57,16 +57,16 @@ jobs:
           fi
           if [ "$status" -eq 0 ]; then
             stage=build
-            make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/array-owner-v3-r2 >"$out/build.txt" 2>&1 || status=$?
+            make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/array-owner-v3-r3 >"$out/build.txt" 2>&1 || status=$?
           fi
           if [ "$status" -eq 0 ]; then
             stage=focused
-            MINIC="$GITHUB_WORKSPACE/build/array-owner-v3-r2/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/array-owner-v3-r2" \
+            MINIC="$GITHUB_WORKSPACE/build/array-owner-v3-r3/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/array-owner-v3-r3" \
               sh -x tests/compiler/c0/run-external-array-redeclaration-owner.sh >"$out/focused.txt" 2>&1 || status=$?
           fi
           if [ "$status" -eq 0 ]; then
             stage=check-fast
-            make -j4 check-fast MODE=release BUILD_DIR=build/array-owner-v3-r2-fast >"$out/check-fast.txt" 2>&1 || status=$?
+            make -j4 check-fast MODE=release BUILD_DIR=build/array-owner-v3-r3-fast >"$out/check-fast.txt" 2>&1 || status=$?
           fi
           printf 'final_stage=%s\nfinal_status=%s\n' "$stage" "$status" > "$out/status.txt"
           git diff -- src/frontend/parser_function.c tests/compiler/c0 > "$out/product.patch" || true
@@ -75,12 +75,12 @@ jobs:
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           if [ "$status" -eq 0 ]; then
             git rm .github/workflows/productize-canonical-array-redeclaration-owner-v3.yml
-            rm -rf diagnostics/canonical-array-redeclaration-owner-v3 diagnostics/canonical-array-redeclaration-owner-v3-r2
+            rm -rf diagnostics/canonical-array-redeclaration-owner-v3 diagnostics/canonical-array-redeclaration-owner-v3-r2 diagnostics/canonical-array-redeclaration-owner-v3-r3
             git add src/frontend/parser_function.c tests/compiler/c0/external_array_redeclaration_owner.c tests/compiler/c0/run-external-array-redeclaration-owner.sh tests/compiler/c0/run.sh
             git commit -m 'frontend: retire transient external array redeclarations'
           else
             git add "$out"
-            git commit -m 'diagnostic: record array owner v3 rerun failure' || true
+            git commit -m 'diagnostic: record array owner v3 extern-completion failure' || true
           fi
           git push origin HEAD:product/canonical-array-redeclaration-owner-v3
           exit 0
