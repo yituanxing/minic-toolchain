@@ -48,6 +48,13 @@ jobs:
                   block.append(line)
                   i += 1
               chunks.append('\n'.join(block).rstrip() + '\n')
-          Path('/tmp/finalize-backward.sh').write_text('\n'.join(chunks))
+          script = '\n'.join(chunks)
+          script = script.replace(
+              '/tmp/materialize-record-literal.py',
+              'tools/dev/materialize-backward-record-compound-literal-v1.py')
+          script = script.replace(
+              '/tmp/materialize-array-overlay.py',
+              'tools/dev/materialize-backward-static-array-overlay-v1.py')
+          Path('/tmp/finalize-backward.sh').write_text(script)
           PY
           bash -eux /tmp/finalize-backward.sh
