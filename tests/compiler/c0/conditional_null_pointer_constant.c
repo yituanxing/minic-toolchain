@@ -38,3 +38,10 @@ int linux_statement_expression_shape(int condition, struct node *node) {
            })
         ->value;
 }
+
+int choose_record_value(int condition) {
+    struct node left = {"left", 11};
+    const struct node right = {"right", 22};
+    struct node value = condition ? left : right;
+    return value.value;
+}
