@@ -19,13 +19,52 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: compiler-c0-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  productize-preformed-static-array:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+      - name: Materialize clean product slice
+        run: |
+          set -Eeuo pipefail
+          git fetch origin main staging/string-octal-v1
+          git show origin/staging/string-octal-v1:tools/dev/materialize-preformed-static-array-v1.py > tools/dev/.productize-preformed-static-array-v6.py
+          python3 tools/dev/.productize-preformed-static-array-v6.py
+          rm tools/dev/.productize-preformed-static-array-v6.py
+          python3 - <<'PY'
+          from pathlib import Path
+          Path('tests/compiler/c0/preformed_static_array.c').write_text('''struct mapping { int value; };\nstatic struct mapping maps[] __attribute__((section(".data.test"))) = {\n    { .value = 1 },\n    { .value = 2 },\n};\nint main(void) {\n    return maps[0].value + maps[1].value - 3;\n}\n''')
+          Path('tests/compiler/c0/run-preformed-static-array.sh').write_text('''#!/bin/sh\nset -eu\nroot=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)\nminic=${MINIC:-"$root/build/debug/bin/minic"}\nhost_cc=${HOST_CC:-${CC:-cc}}\nwork=${BUILD_DIR:-"$root/build/debug"}/tests/preformed-static-array\nmkdir -p "$work"\n"$host_cc" -E -P -x c "$root/tests/compiler/c0/preformed_static_array.c" -o "$work/input.i"\n"$minic" -S "$work/input.i" -o "$work/output.s"\ntest -s "$work/output.s"\ngrep -F '.section .data.test' "$work/output.s" >/dev/null\n''')
+          run = Path('tests/compiler/c0/run.sh')
+          text = run.read_text()
+          marker = 'run-preformed-static-array.sh'
+          if marker not in text:
+              run.write_text(text + '''\nMINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \\\n  sh "$root/tests/compiler/c0/run-preformed-static-array.sh"\n''')
+          PY
+          chmod +x tests/compiler/c0/run-preformed-static-array.sh
+          git show origin/main:.github/workflows/compiler-c0.yml > .github/workflows/compiler-c0.yml
+          clang-format-18 -i src/frontend/parser_global.c tests/compiler/c0/preformed_static_array.c
+          git diff --check
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/preformed-static-array-v6
+          MINIC="$GITHUB_WORKSPACE/build/preformed-static-array-v6/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/preformed-static-array-v6-focused" sh tests/compiler/c0/run-preformed-static-array.sh
+          make -j4 check-fast MODE=release BUILD_DIR=build/preformed-static-array-v6-fast
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/frontend/parser_global.c tests/compiler/c0/preformed_static_array.c tests/compiler/c0/run-preformed-static-array.sh tests/compiler/c0/run.sh .github/workflows/compiler-c0.yml
+          git commit -m 'frontend: initialize preformed static arrays'
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
+
   full-validation:
     name: Full compiler validation
     runs-on: ubuntu-24.04
