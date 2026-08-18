@@ -1,0 +1,95 @@
+name: Productize Static Record Array Suffix Attrs V1
+on:
+  push:
+    branches: [product/static-record-array-suffix-attrs-v1]
+permissions:
+  contents: write
+jobs:
+  productize:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: product/static-record-array-suffix-attrs-v1
+          fetch-depth: 0
+      - name: Apply product slice
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('src/frontend/parser_global.c')
+          s=p.read_text()
+          old='''static bool\nparse_static_record_array(MinicParser *parser, MinicType element_type, MinicSourceSpan name_span) {\n    const MinicRecord *record;\n'''
+          new='''static bool parse_static_record_array(MinicParser *parser,\n                                      MinicType element_type,\n                                      MinicSourceSpan name_span,\n                                      char *section_name,\n                                      size_t section_capacity,\n                                      size_t *section_name_length,\n                                      bool *has_section,\n                                      size_t *explicit_alignment) {\n    const MinicRecord *record;\n'''
+          if s.count(old)!=1: raise SystemExit(f'record-array signature anchor={s.count(old)}')
+          s=s.replace(old,new,1)
+          old='''    record = minic_c0_program_record(parser->program, element_type.record_id);\n'''
+          new='''    if (parser == NULL || section_name == NULL || section_capacity == 0U ||\n        section_name_length == NULL || has_section == NULL || explicit_alignment == NULL) {\n        return false;\n    }\n    record = minic_c0_program_record(parser->program, element_type.record_id);\n'''
+          if s.count(old)<1: raise SystemExit('record lookup anchor missing')
+          pos=s.index('static bool parse_static_record_array(')
+          tail=s[pos:]
+          if old not in tail: raise SystemExit('record-array lookup missing')
+          tail=tail.replace(old,new,1)
+          s=s[:pos]+tail
+          old='''    if (parser->current.kind == MINIC_TOKEN_LBRACKET) {\n        minic_parser_error(parser, "multi-dimensional static record arrays are not supported yet");\n        return false;\n    }\n    if (!minic_parser_expect(parser, MINIC_TOKEN_EQUAL, "expected '=' after static record array") ||\n'''
+          new='''    if (parser->current.kind == MINIC_TOKEN_LBRACKET) {\n        minic_parser_error(parser, "multi-dimensional static record arrays are not supported yet");\n        return false;\n    }\n    if (!minic_parser_parse_gnu_object_attribute_lists(parser,\n                                                       section_name,\n                                                       section_capacity,\n                                                       section_name_length,\n                                                       has_section,\n                                                       explicit_alignment)) {\n        return false;\n    }\n    if (!minic_parser_expect(parser, MINIC_TOKEN_EQUAL, "expected '=' after static record array") ||\n'''
+          if s.count(old)!=1: raise SystemExit(f'record-array attr insertion anchor={s.count(old)}')
+          s=s.replace(old,new,1)
+          old='''static bool parse_static_record(MinicParser *parser, MinicType type, MinicSourceSpan name_span) {\n    const MinicRecord *record;\n'''
+          new='''static bool parse_static_record(MinicParser *parser,\n                                MinicType type,\n                                MinicSourceSpan name_span,\n                                char *section_name,\n                                size_t section_capacity,\n                                size_t *section_name_length,\n                                bool *has_section,\n                                size_t *explicit_alignment) {\n    const MinicRecord *record;\n'''
+          if s.count(old)!=1: raise SystemExit(f'record signature anchor={s.count(old)}')
+          s=s.replace(old,new,1)
+          old='''    if (parser->current.kind == MINIC_TOKEN_LBRACKET) {\n        return parse_static_record_array(parser, type, name_span);\n    }\n'''
+          new='''    if (parser->current.kind == MINIC_TOKEN_LBRACKET) {\n        return parse_static_record_array(parser,\n                                         type,\n                                         name_span,\n                                         section_name,\n                                         section_capacity,\n                                         section_name_length,\n                                         has_section,\n                                         explicit_alignment);\n    }\n'''
+          if s.count(old)!=1: raise SystemExit(f'record call anchor={s.count(old)}')
+          s=s.replace(old,new,1)
+          old='''        return parse_static_record(parser, element_type, name_span);\n'''
+          new='''        return parse_static_record(parser,\n                                   element_type,\n                                   name_span,\n                                   section_name,\n                                   section_capacity,\n                                   section_name_length,\n                                   has_section,\n                                   explicit_alignment);\n'''
+          if s.count(old)!=2: raise SystemExit(f'static record caller count={s.count(old)}')
+          s=s.replace(old,new)
+          p.write_text(s)
+          PY
+          cat > tests/compiler/c0/static_record_array_suffix_attributes.c <<'EOF'
+          struct mapping { int value; };
+          static struct mapping maps[] __attribute__((section(".data.test"), aligned(16))) = {
+              { .value = 1 }, { .value = 2 },
+          };
+          int main(void) { return maps[1].value - 2; }
+          EOF
+          cat > tests/compiler/c0/run-static-record-array-suffix-attributes.sh <<'EOF'
+          #!/bin/sh
+          set -eu
+          root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+          minic=${MINIC:-"$root/build/debug/bin/minic"}
+          host_cc=${HOST_CC:-${CC:-cc}}
+          work=${BUILD_DIR:-"$root/build/debug"}/tests/static-record-array-suffix-attributes
+          mkdir -p "$work"
+          "$host_cc" -E -P -x c "$root/tests/compiler/c0/static_record_array_suffix_attributes.c" -o "$work/input.i"
+          "$minic" -S "$work/input.i" -o "$work/output.s"
+          grep -F '.section .data.test' "$work/output.s" >/dev/null
+          test -s "$work/output.s"
+          EOF
+          chmod +x tests/compiler/c0/run-static-record-array-suffix-attributes.sh
+          cat >> tests/compiler/c0/run.sh <<'EOF'
+
+          MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+            sh "$root/tests/compiler/c0/run-static-record-array-suffix-attributes.sh"
+          EOF
+          clang-format-18 -i src/frontend/parser_global.c tests/compiler/c0/static_record_array_suffix_attributes.c
+          git diff --check
+      - name: Validate
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/static-record-array-attrs-v1
+          MINIC="$GITHUB_WORKSPACE/build/static-record-array-attrs-v1/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/static-record-array-attrs-v1-focused" sh tests/compiler/c0/run-static-record-array-suffix-attributes.sh
+          make -j4 check-fast MODE=release BUILD_DIR=build/static-record-array-attrs-v1-fast
+      - name: Commit clean product diff
+        run: |
+          set -Eeuo pipefail
+          git rm .github/workflows/productize-static-record-array-suffix-attrs-v1.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/frontend/parser_global.c tests/compiler/c0/static_record_array_suffix_attributes.c tests/compiler/c0/run-static-record-array-suffix-attributes.sh tests/compiler/c0/run.sh
+          git commit -m 'frontend: preserve static record array suffix attributes'
+          git push origin HEAD:product/static-record-array-suffix-attrs-v1
