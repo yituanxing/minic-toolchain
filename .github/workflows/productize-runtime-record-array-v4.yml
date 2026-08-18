@@ -22,26 +22,16 @@ jobs:
       - name: Extend permanent focused contract
         run: |
           set -Eeuo pipefail
-          cat >> tests/compiler/c0/runtime_record_array_initializer.c <<'EOF'
-
-struct timespec64_probe {
-    long tv_sec;
-    long tv_nsec;
-};
-
-long runtime_record_array_local(long mtime) {
-    struct timespec64_probe t[2] = {{.tv_sec = mtime}, {.tv_sec = mtime}};
-    return t[0].tv_sec + t[1].tv_sec;
-}
-EOF
           python3 - <<'PY'
           from pathlib import Path
-          p = Path('tests/compiler/c0/run-runtime-record-array-initializers.sh')
-          s = p.read_text()
+          src = Path('tests/compiler/c0/runtime_record_array_initializer.c')
+          src.write_text(src.read_text() + '''\nstruct timespec64_probe {\n    long tv_sec;\n    long tv_nsec;\n};\n\nlong runtime_record_array_local(long mtime) {\n    struct timespec64_probe t[2] = {{.tv_sec = mtime}, {.tv_sec = mtime}};\n    return t[0].tv_sec + t[1].tv_sec;\n}\n''')
+          runner = Path('tests/compiler/c0/run-runtime-record-array-initializers.sh')
+          text = runner.read_text()
           anchor = "grep -F 'linux_guid_compound_literal:' \"$work/runtime_record_array_initializer.s\" >/dev/null\n"
-          if anchor not in s:
+          if anchor not in text:
               raise SystemExit('runtime-record-array runner anchor missing')
-          p.write_text(s.replace(anchor, anchor + "grep -F 'runtime_record_array_local:' \"$work/runtime_record_array_initializer.s\" >/dev/null\n", 1))
+          runner.write_text(text.replace(anchor, anchor + "grep -F 'runtime_record_array_local:' \"$work/runtime_record_array_initializer.s\" >/dev/null\n", 1))
           PY
       - name: Validate product slice
         run: |
