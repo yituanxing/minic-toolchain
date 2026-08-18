@@ -1,0 +1,53 @@
+name: Finalize Backward Aggregate PR V1
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+jobs:
+  productize:
+    if: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'product/final-backward-aggregate-v1' && github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: product/final-backward-aggregate-v1
+          fetch-depth: 0
+      - name: Execute registered finalizer steps
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          src = Path('.github/workflows/finalize-backward-aggregate-v1.yml').read_text().splitlines()
+          wanted = [
+              'Apply proven backward aggregate semantics',
+              'Validate product slice',
+              'Commit clean product diff',
+          ]
+          chunks = []
+          for name in wanted:
+              marker = f'      - name: {name}'
+              try:
+                  i = src.index(marker)
+              except ValueError:
+                  raise SystemExit(f'missing finalizer step: {name}')
+              if i + 1 >= len(src) or src[i + 1].strip() != 'run: |':
+                  raise SystemExit(f'malformed finalizer step: {name}')
+              i += 2
+              block = []
+              while i < len(src) and not src[i].startswith('      - name: '):
+                  line = src[i]
+                  if line.startswith('          '):
+                      line = line[10:]
+                  elif line.strip():
+                      raise SystemExit(f'unexpected indentation in {name}: {line!r}')
+                  block.append(line)
+                  i += 1
+              chunks.append('\n'.join(block).rstrip() + '\n')
+          Path('/tmp/finalize-backward.sh').write_text('\n'.join(chunks))
+          PY
+          bash -eux /tmp/finalize-backward.sh
