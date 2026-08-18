@@ -1,0 +1,63 @@
+name: Productize Query Incomplete Array Lifetime V1
+on:
+  push:
+    branches: [product/query-incomplete-array-lifetime-v1]
+permissions:
+  contents: write
+jobs:
+  productize:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply proven query-only array lifetime semantics
+        run: |
+          set -Eeuo pipefail
+          git fetch origin staging/string-octal-v1 --no-tags
+          git show origin/staging/string-octal-v1:tools/dev/materialize-query-incomplete-array-v1.py > /tmp/materialize-query-incomplete-array-v1.py
+          python3 /tmp/materialize-query-incomplete-array-v1.py
+      - name: Add permanent focused contract
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('tests/compiler/c0/typeof_generic.c')
+          s = p.read_text()
+          marker = 'unsigned long typeof_flexible_array_pointer_size(struct QueryTail *value)'
+          if marker not in s:
+              s += '''\n\nstruct QueryTail {\n    int head;\n    unsigned char tail[];\n};\n\nunsigned long typeof_flexible_array_pointer_size(struct QueryTail *value) {\n    return sizeof(typeof(value->tail) *);\n}\n'''
+          p.write_text(s)
+
+          p = Path('tests/compiler/c0/run-typeof-generic.sh')
+          s = p.read_text()
+          old = '              typeof_incomplete_object_address typeof_function_redeclaration; do\n'
+          new = '              typeof_incomplete_object_address typeof_function_redeclaration \\\n              typeof_flexible_array_pointer_size; do\n'
+          if old not in s:
+              raise SystemExit('typeof symbol-list anchor missing')
+          s = s.replace(old, new, 1)
+          old = 'test "$size8" -ge 3\n'
+          new = 'test "$size8" -ge 4\n'
+          if old not in s:
+              raise SystemExit('typeof size8 anchor missing')
+          p.write_text(s.replace(old, new, 1))
+          PY
+      - name: Validate product slice
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/product-query
+          MINIC="$GITHUB_WORKSPACE/build/product-query/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/product-query-focused" \
+            sh tests/compiler/c0/run-typeof-generic.sh
+          make -j4 check-fast MODE=release BUILD_DIR=build/product-query-fast
+      - name: Commit clean product diff
+        run: |
+          set -Eeuo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git rm .github/workflows/productize-query-incomplete-array-lifetime-v1.yml
+          git add src/frontend/ast.h src/frontend/ast.c src/frontend/parser_postfix.c src/frontend/ast_verifier.c \
+                  tests/compiler/c0/typeof_generic.c tests/compiler/c0/run-typeof-generic.sh
+          git commit -m 'frontend: distinguish query-only incomplete array types'
+          git push origin HEAD:product/query-incomplete-array-lifetime-v1
