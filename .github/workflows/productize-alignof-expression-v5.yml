@@ -2,6 +2,8 @@ name: Productize Alignof Expression V5
 on:
   push:
     branches: [product/alignof-expression-v4]
+  pull_request:
+    branches: [main]
 permissions:
   contents: write
 jobs:
