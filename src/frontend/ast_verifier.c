@@ -736,8 +736,10 @@ static bool verify_expression(const MinicC0Program *program,
                expression->value.overflow.operator_kind <= MINIC_OVERFLOW_MULTIPLY &&
                minic_type_pointee(result_pointer->type, &result_type) &&
                minic_type_is_integer(result_type) && !minic_type_is_bool_integer(result_type) &&
-               minic_type_equal(overflow_left->type, result_type) &&
-               minic_type_equal(overflow_right->type, result_type);
+               minic_c0_integer_range_representable_in_type(
+                   program, target, overflow_left->type, result_type) &&
+               minic_c0_integer_range_representable_in_type(
+                   program, target, overflow_right->type, result_type);
     }
     case MINIC_EXPRESSION_COMPOUND_LITERAL: {
         const MinicLocal *local;

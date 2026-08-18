@@ -21,6 +21,10 @@ bool minic_const_value_convert_integer(const MinicC0Program *program,
                                        const MinicConstValue *source,
                                        MinicType type,
                                        MinicConstValue *result);
+bool minic_const_value_integer_representable_in_type(const MinicC0Program *program,
+                                                     const MinicTargetInfo *target,
+                                                     const MinicConstValue *value,
+                                                     MinicType destination_type);
 bool minic_const_value_is_zero(const MinicC0Program *program,
                                const MinicTargetInfo *target,
                                const MinicConstValue *value,

@@ -48,6 +48,36 @@ static bool conditional_type_only(const MinicTargetInfo *target,
     return false;
 }
 
+bool minic_c0_integer_range_representable_in_type(const MinicC0Program *program,
+                                                  const MinicTargetInfo *target,
+                                                  MinicType source_type,
+                                                  MinicType destination_type) {
+    unsigned int source_bits;
+    unsigned int destination_bits;
+    bool source_signed;
+    bool destination_signed;
+
+    if (program == NULL || target == NULL || !minic_type_is_integer(source_type) ||
+        !minic_type_is_integer(destination_type) ||
+        !minic_target_info_integer_width(target, program, source_type, &source_bits) ||
+        !minic_target_info_integer_width(target, program, destination_type, &destination_bits) ||
+        source_bits == 0U || destination_bits == 0U) {
+        return false;
+    }
+    if (minic_type_is_bool_integer(source_type)) {
+        return destination_bits >= 1U;
+    }
+    source_signed = minic_type_is_signed_integer(source_type);
+    destination_signed = minic_type_is_signed_integer(destination_type);
+    if (source_signed) {
+        return destination_signed && destination_bits >= source_bits;
+    }
+    if (!destination_signed) {
+        return destination_bits >= source_bits;
+    }
+    return destination_bits > source_bits;
+}
+
 bool minic_c0_conditional_result_type(const MinicC0Program *program,
                                       const MinicTargetInfo *target,
                                       MinicExpressionId when_true_expression_id,

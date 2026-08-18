@@ -53,6 +53,12 @@ static bool value_signed(const MinicC0Program *program,
     return true;
 }
 
+static bool signed_range(const MinicC0Program *program,
+                         const MinicTargetInfo *target,
+                         MinicType type,
+                         int64_t *minimum,
+                         int64_t *maximum);
+
 static bool convert_value(const MinicC0Program *program,
                           const MinicTargetInfo *target,
                           const MinicConstValue *source,
@@ -89,6 +95,59 @@ bool minic_const_value_convert_integer(const MinicC0Program *program,
                                        MinicType type,
                                        MinicConstValue *result) {
     return convert_value(program, target, source, type, result);
+}
+
+bool minic_const_value_integer_representable_in_type(const MinicC0Program *program,
+                                                     const MinicTargetInfo *target,
+                                                     const MinicConstValue *value,
+                                                     MinicType destination_type) {
+    unsigned int destination_width;
+    uint64_t unsigned_value;
+
+    if (program == NULL || target == NULL || value == NULL || !minic_type_is_integer(value->type) ||
+        !minic_type_is_integer(destination_type) ||
+        !integer_width(program, target, destination_type, &destination_width) ||
+        destination_width == 0U) {
+        return false;
+    }
+
+    if (minic_type_is_signed_integer(value->type)) {
+        int64_t signed_value;
+
+        if (!value_signed(program, target, value, &signed_value)) {
+            return false;
+        }
+        if (minic_type_is_bool_integer(destination_type)) {
+            return signed_value == 0 || signed_value == 1;
+        }
+        if (minic_type_is_signed_integer(destination_type)) {
+            int64_t minimum;
+            int64_t maximum;
+
+            return signed_range(program, target, destination_type, &minimum, &maximum) &&
+                   signed_value >= minimum && signed_value <= maximum;
+        }
+        if (signed_value < 0) {
+            return false;
+        }
+        unsigned_value = (uint64_t)signed_value;
+    } else if (!normalize_bits(program, target, value->type, value->bits, &unsigned_value)) {
+        return false;
+    }
+
+    if (minic_type_is_bool_integer(destination_type)) {
+        return unsigned_value <= UINT64_C(1);
+    }
+    if (minic_type_is_signed_integer(destination_type)) {
+        uint64_t maximum = destination_width == 64U
+                               ? (uint64_t)INT64_MAX
+                               : (UINT64_C(1) << (destination_width - 1U)) - UINT64_C(1);
+        return unsigned_value <= maximum;
+    }
+    if (destination_width == 64U) {
+        return true;
+    }
+    return unsigned_value <= (UINT64_C(1) << destination_width) - UINT64_C(1);
 }
 
 static bool value_truthy(const MinicC0Program *program,
