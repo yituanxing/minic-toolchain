@@ -16,17 +16,18 @@ jobs:
         with:
           ref: product/final-backward-aggregate-v1
           fetch-depth: 0
-      - name: Execute registered finalizer steps
+      - name: Execute proven backward productizer body
         run: |
           set -Eeuo pipefail
+          git show origin/product/backward-static-aggregate-overlay-v7:.github/workflows/compiler-c0.yml > /tmp/proven-backward.yml
           python3 - <<'PY'
           from pathlib import Path
 
-          src = Path('.github/workflows/finalize-backward-aggregate-v1.yml').read_text().splitlines()
+          src = Path('/tmp/proven-backward.yml').read_text().splitlines()
           wanted = [
-              'Apply proven backward aggregate semantics',
-              'Validate product slice',
-              'Commit clean product diff',
+              'Apply generic backward aggregate owner',
+              'Canonicalize and validate product slice',
+              'Restore normal CI and commit product tree',
           ]
           chunks = []
           for name in wanted:
@@ -34,9 +35,9 @@ jobs:
               try:
                   i = src.index(marker)
               except ValueError:
-                  raise SystemExit(f'missing finalizer step: {name}')
+                  raise SystemExit(f'missing proven productizer step: {name}')
               if i + 1 >= len(src) or src[i + 1].strip() != 'run: |':
-                  raise SystemExit(f'malformed finalizer step: {name}')
+                  raise SystemExit(f'malformed proven productizer step: {name}')
               i += 2
               block = []
               while i < len(src) and not src[i].startswith('      - name: '):
@@ -50,11 +51,11 @@ jobs:
               chunks.append('\n'.join(block).rstrip() + '\n')
           script = '\n'.join(chunks)
           script = script.replace(
-              '/tmp/materialize-record-literal.py',
-              'tools/dev/materialize-backward-record-compound-literal-v1.py')
+              "rm -f diagnostics/productizer-backward-v7-trigger.txt",
+              "rm -f diagnostics/productizer-backward-v7-trigger.txt diagnostics/final-backward-trigger.txt")
           script = script.replace(
-              '/tmp/materialize-array-overlay.py',
-              'tools/dev/materialize-backward-static-array-overlay-v1.py')
+              "git push origin HEAD:product/backward-static-aggregate-overlay-v7",
+              "git push origin HEAD:product/final-backward-aggregate-v1")
           Path('/tmp/finalize-backward.sh').write_text(script)
           PY
           bash -eux /tmp/finalize-backward.sh
