@@ -1,0 +1,1 @@
+register final GNU weak object productizer and exact main first100 verifier
