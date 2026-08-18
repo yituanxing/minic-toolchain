@@ -1,0 +1,12 @@
++ set -eu
++ dirname -- tests/compiler/c0/run-static-local-prefix-attributes.sh
++ CDPATH= cd -- tests/compiler/c0/../../..
++ pwd
++ root=/home/runner/work/minic-toolchain/minic-toolchain
++ minic=/home/runner/work/minic-toolchain/minic-toolchain/build/static-local-prefix-v1/bin/minic
++ host_cc=cc
++ work=/home/runner/work/minic-toolchain/minic-toolchain/build/static-local-prefix-v1/tests/static-local-prefix-attributes
++ mkdir -p /home/runner/work/minic-toolchain/minic-toolchain/build/static-local-prefix-v1/tests/static-local-prefix-attributes
++ cc -E -P -x c /home/runner/work/minic-toolchain/minic-toolchain/tests/compiler/c0/static_local_prefix_attributes.c -o /home/runner/work/minic-toolchain/minic-toolchain/build/static-local-prefix-v1/tests/static-local-prefix-attributes/input.i
++ /home/runner/work/minic-toolchain/minic-toolchain/build/static-local-prefix-v1/bin/minic -S /home/runner/work/minic-toolchain/minic-toolchain/build/static-local-prefix-v1/tests/static-local-prefix-attributes/input.i -o /home/runner/work/minic-toolchain/minic-toolchain/build/static-local-prefix-v1/tests/static-local-prefix-attributes/output.s
+/home/runner/work/minic-toolchain/minic-toolchain/build/static-local-prefix-v1/tests/static-local-prefix-attributes/input.i:6:33: error: unsupported GNU attribute on static local object

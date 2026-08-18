@@ -1,0 +1,24 @@
+diff --git a/src/frontend/parser_statement.c b/src/frontend/parser_statement.c
+index 7f8004c5..68ad64b0 100644
+--- a/src/frontend/parser_statement.c
++++ b/src/frontend/parser_statement.c
+@@ -2205,6 +2205,8 @@ static bool parse_static_local_declaration(MinicParser *parser) {
+     (void)memset(&declaration_attributes, 0, sizeof(declaration_attributes));
+     if (parser->current_function == MINIC_FUNCTION_INVALID ||
+         !minic_parser_expect(parser, MINIC_TOKEN_KW_STATIC, "expected keyword 'static'") ||
++        !minic_parser_parse_gnu_attribute_lists(
++            parser, consume_static_local_interleaved_attribute, &declaration_attributes) ||
+         !minic_parser_parse_type_specifiers(parser, &base_type) ||
+         !minic_parser_parse_gnu_attribute_lists(
+             parser, consume_static_local_interleaved_attribute, &declaration_attributes)) {
+diff --git a/tests/compiler/c0/run.sh b/tests/compiler/c0/run.sh
+index 7ddb14d2..5497ab9b 100755
+--- a/tests/compiler/c0/run.sh
++++ b/tests/compiler/c0/run.sh
+@@ -438,3 +438,6 @@ sh "$root/tests/compiler/c0/run-braced-static-scalar.sh"
+ MINIC="$minic" HOST_CC="$host_cc" \
+ BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+ sh "$root/tests/compiler/c0/run-static-pointer-constant-conditional.sh"
++
++MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
++  sh "$root/tests/compiler/c0/run-static-local-prefix-attributes.sh"
