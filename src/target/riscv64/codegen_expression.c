@@ -971,6 +971,39 @@ bool minic_riscv64_emit_record_return_value(FILE *file,
                file, storage_size, temporary_size, "t4", false);
 }
 
+bool minic_riscv64_emit_small_record_return_value(
+    FILE *file,
+    const MinicC0Program *program,
+    const MinicFunction *function,
+    const MinicRiscv64FunctionLayout *function_layout,
+    MinicExpressionId source_id,
+    size_t slot_count) {
+    const MinicExpression *source;
+    size_t storage_size;
+    size_t temporary_size;
+
+    source = minic_c0_program_expression(program, source_id);
+    if (source == NULL || !minic_type_is_record(source->type) ||
+        !minic_c0_record_value_is_copy_source(program, source_id) || slot_count == 0U ||
+        slot_count > 2U ||
+        !minic_riscv64_type_layout(program, source->type, &storage_size, &temporary_size) ||
+        storage_size == 0U || storage_size > 16U || storage_size > SIZE_MAX - 15U) {
+        return false;
+    }
+    temporary_size = (storage_size + 15U) & ~(size_t)15U;
+    if (!minic_riscv64_emit_record_value_temporary(
+            file, program, function, function_layout, source_id, storage_size, temporary_size) ||
+        fprintf(file, "  mv t0, sp\n") < 0 ||
+        !minic_riscv64_emit_integer_aggregate_load_chunk(
+            file, program, source->type, 0U, "a0", "t0") ||
+        (slot_count == 2U &&
+         !minic_riscv64_emit_integer_aggregate_load_chunk(
+             file, program, source->type, 1U, "a1", "t0"))) {
+        return false;
+    }
+    return minic_riscv64_emit_stack_release(file, temporary_size);
+}
+
 bool minic_riscv64_emit_record_copy_value(FILE *file,
                                           const MinicC0Program *program,
                                           const MinicFunction *function,
