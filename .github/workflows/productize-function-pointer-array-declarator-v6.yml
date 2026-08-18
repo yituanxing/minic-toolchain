@@ -1,3 +1,4 @@
+# registration sync
 name: Productize Function Pointer Array Declarator V6
 on:
   pull_request:
