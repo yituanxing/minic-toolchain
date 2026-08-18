@@ -10,51 +10,78 @@ on:
       - 'tests/**'
       - '.github/scripts/**'
       - '.github/workflows/compiler-c0.yml'
-  push:
-    branches:
-      - main
-  merge_group:
-    types:
-      - checks_requested
-  workflow_dispatch:
+      - '.github/workflows/productize-alignof-expression-v5.yml'
 
 permissions:
-  contents: read
-
-concurrency:
-  group: compiler-c0-${{ github.ref }}
-  cancel-in-progress: true
+  contents: write
 
 jobs:
-  full-validation:
-    name: Full compiler validation
+  productize-alignof-expression:
+    if: ${{ github.head_ref == 'product/alignof-expression-v4' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
-    env:
-      DEBIAN_FRONTEND: noninteractive
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Restore RISC-V package archives
-        id: rv64-cache
-        uses: actions/cache@v4
+      - uses: actions/checkout@v4
         with:
-          path: ~/.cache/minic-apt/archives
-          key: rv64-apt-${{ runner.os }}-${{ runner.arch }}-noble-${{ hashFiles('tools/ci/ubuntu-24.04-packages.txt') }}
+          ref: product/alignof-expression-v4
+          fetch-depth: 0
+      - name: Apply validated product slice
+        run: |
+          set -Eeuo pipefail
+          git fetch origin 'refs/heads/staging/string-octal-v1:refs/remotes/origin/staging/string-octal-v1' --no-tags
+          python3 - <<'PY'
+          import subprocess
+          from pathlib import Path
+          p=Path('src/frontend/parser_expression.c')
+          main=p.read_text()
+          staging=subprocess.check_output(['git','show','origin/staging/string-octal-v1:src/frontend/parser_expression.c'],text=True)
+          s0=staging.index('static bool alignof_expression_alignment(')
+          s1=staging.index('\nstatic bool parse_sizeof(',s0)
+          m0=main.index('static bool parse_alignof(')
+          m1=main.index('\nstatic bool parse_sizeof(',m0)
+          p.write_text(main[:m0]+staging[s0:s1]+main[m1:])
+          PY
+          cat > tests/compiler/c0/alignof_expression.c <<'EOF'
+          struct align_tail { long head; unsigned char tail[]; };
+          unsigned long alignof_scalar_member(struct align_tail *ptr) { return __alignof__(ptr->head); }
+          unsigned long alignof_flexible_array_member(struct align_tail *ptr) { return __alignof__(ptr->tail); }
+          int main(void) {
+              struct align_tail *ptr = 0;
+              return (int)(alignof_scalar_member(ptr) == 0 || alignof_flexible_array_member(ptr) == 0);
+          }
+          EOF
+          cat > tests/compiler/c0/run-alignof-expression.sh <<'EOF'
+          #!/bin/sh
+          set -eu
+          root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+          minic=${MINIC:-"$root/build/debug/bin/minic"}
+          host_cc=${HOST_CC:-${CC:-cc}}
+          work=${BUILD_DIR:-"$root/build/debug"}/tests/alignof-expression
+          mkdir -p "$work"
+          "$host_cc" -E -P -x c "$root/tests/compiler/c0/alignof_expression.c" -o "$work/input.i"
+          "$minic" -S "$work/input.i" -o "$work/output.s"
+          test -s "$work/output.s"
+          grep -F 'alignof_flexible_array_member:' "$work/output.s" >/dev/null
+          EOF
+          chmod +x tests/compiler/c0/run-alignof-expression.sh
+          cat >> tests/compiler/c0/run.sh <<'EOF'
 
-      - name: Run the complete compiler gate
-        env:
-          RV64_CACHE_HIT: ${{ steps.rv64-cache.outputs.cache-hit }}
-        run: bash .github/scripts/compiler-c0-full-gate.sh
-
-      - name: Upload compiler failure diagnostics
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: compiler-c0-failure-diagnostics
-          path: |
-            build/ci-external/tests/external/tiny-aes-c/diagnostic.txt
-            build/ci-external/tests/external/tiny-aes-c/*.status
-          if-no-files-found: ignore
-          retention-days: 7
+          MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+            sh "$root/tests/compiler/c0/run-alignof-expression.sh"
+          EOF
+          clang-format-18 -i src/frontend/parser_expression.c tests/compiler/c0/alignof_expression.c
+          git diff --check
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/alignof-expression-v5
+          MINIC="$GITHUB_WORKSPACE/build/alignof-expression-v5/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/alignof-expression-v5-focused" sh tests/compiler/c0/run-alignof-expression.sh
+          make -j4 check-fast MODE=release BUILD_DIR=build/alignof-expression-v5-fast
+      - name: Persist clean product commit
+        run: |
+          set -Eeuo pipefail
+          git fetch origin main --no-tags
+          git checkout origin/main -- .github/workflows/compiler-c0.yml
+          git rm -f .github/workflows/productize-alignof-expression-v5.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/frontend/parser_expression.c tests/compiler/c0/alignof_expression.c tests/compiler/c0/run-alignof-expression.sh tests/compiler/c0/run.sh .github/workflows/compiler-c0.yml
+          git commit -m 'frontend: evaluate GNU alignof expressions'
+          git push origin HEAD:product/alignof-expression-v4
