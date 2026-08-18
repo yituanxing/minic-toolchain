@@ -1,0 +1,75 @@
+name: Finalize GNU Weak External Objects V2
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+jobs:
+  productize:
+    if: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'product/final-gnu-weak-object-v1' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: product/final-gnu-weak-object-v1
+          fetch-depth: 0
+
+      - name: Run corrected weak productizer
+        run: |
+          set -Eeuo pipefail
+          git fetch origin main
+          git show origin/main:.github/workflows/finalize-gnu-weak-external-objects-v1.yml > /tmp/weak-v1.yml
+          python3 - <<'PY'
+          from pathlib import Path
+          import textwrap
+
+          text = Path('/tmp/weak-v1.yml').read_text()
+          start = text.index('      - name: Apply current-main GNU weak object semantics\n')
+          run_start = text.index('        run: |\n', start) + len('        run: |\n')
+          end = text.index('\n      - name: Validate weak object product tree\n', run_start)
+          script = textwrap.dedent(text[run_start:end])
+
+          block_start = script.index("old = '''    if (parser == NULL || object_id_out == NULL ||")
+          block_end_marker = 's = s.replace(old, new, 1)'
+          block_end = script.index(block_end_marker, block_start) + len(block_end_marker)
+          replacement = '''needle = '!minic_c0_type_is_complete_object(parser->program, object_type)) {'
+          if s.count(needle) != 1:
+              raise SystemExit(f'tentative incomplete-array guard count={s.count(needle)}')
+          s = s.replace(
+              needle,
+              '(!minic_c0_type_is_complete_object(parser->program, object_type) &&\\n'
+              '         !minic_type_is_array(object_type))) {',
+              1)
+          '''
+          script = script[:block_start] + replacement + script[block_end:]
+          Path('/tmp/run-weak-apply.sh').write_text(script)
+          PY
+          bash /tmp/run-weak-apply.sh
+
+      - name: Validate weak object product tree
+        run: |
+          set -Eeuo pipefail
+          if command -v clang-format-18 >/dev/null 2>&1; then
+            clang-format-18 -i src/frontend/ast.h src/frontend/ast_global.c src/frontend/ast_verifier.c src/frontend/attribute.c src/frontend/parser_attribute.c src/frontend/parser_function.c src/frontend/parser_internal.h src/target/riscv64/codegen_function.c tests/compiler/c0/gnu_weak_external_objects.c tests/compiler/c0/invalid_gnu_weak_internal_object.c
+          fi
+          git diff --check
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/product-weak-final
+          MINIC="$GITHUB_WORKSPACE/build/product-weak-final/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/product-weak-final" sh tests/compiler/c0/run-gnu-weak-external-objects.sh
+          make -j4 check-fast MODE=release BUILD_DIR=build/product-weak-final-fast
+
+      - name: Commit clean weak product tree
+        run: |
+          set -Eeuo pipefail
+          rm -f diagnostics/final-gnu-weak-trigger.txt
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          if git diff --cached --quiet; then
+            echo 'no product diff to commit'
+            exit 0
+          fi
+          git commit -m 'frontend: model GNU weak external objects'
+          git push origin HEAD:product/final-gnu-weak-object-v1
