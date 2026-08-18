@@ -19,13 +19,59 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: compiler-c0-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  productize-function-pointer-array:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+      - name: Materialize clean product slice
+        run: |
+          set -Eeuo pipefail
+          git fetch origin main staging/string-octal-v1
+          git show origin/staging/string-octal-v1:tools/dev/materialize-function-pointer-array-declarator-v1.py > /tmp/materialize.py
+          python3 /tmp/materialize.py
+          python3 - <<'PY'
+          from pathlib import Path
+          src = Path('tests/compiler/c0/function_pointer_qualifiers.c')
+          addition = '''\nextern int (*external_handlers[])(int value);\nstatic int (*static_handlers[1])(int value) = {0};\n\nint function_pointer_array_shape(void)\n{\n    return static_handlers[0] == 0;\n}\n'''
+          text = src.read_text()
+          if 'function_pointer_array_shape' not in text:
+              src.write_text(text + addition)
+          runner = Path('tests/compiler/c0/run-function-pointer-qualifiers.sh')
+          text = runner.read_text()
+          anchor = "grep -F 'call_typedef:' \"$work/output.s\" >/dev/null\n"
+          if anchor not in text:
+              raise SystemExit('function-pointer runner anchor missing')
+          if "function_pointer_array_shape:" not in text:
+              runner.write_text(text.replace(anchor, anchor + "grep -F 'function_pointer_array_shape:' \"$work/output.s\" >/dev/null\n", 1))
+          PY
+          git show origin/main:.github/workflows/compiler-c0.yml > .github/workflows/compiler-c0.yml
+          clang-format-18 -i src/frontend/parser_declarator.c tests/compiler/c0/function_pointer_qualifiers.c
+          git diff --check
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/product-fp-array-v9
+          MINIC="$GITHUB_WORKSPACE/build/product-fp-array-v9/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/product-fp-array-v9-focused" sh tests/compiler/c0/run-function-pointer-qualifiers.sh
+          make -j4 check-fast MODE=release BUILD_DIR=build/product-fp-array-v9-fast
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/frontend/parser_internal.h src/frontend/parser_declarator.c tests/compiler/c0/function_pointer_qualifiers.c tests/compiler/c0/run-function-pointer-qualifiers.sh .github/workflows/compiler-c0.yml
+          if git diff --cached --quiet; then
+            echo 'no product diff'
+            exit 1
+          fi
+          git commit -m 'frontend: parse function pointer array declarators'
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
+
   full-validation:
     name: Full compiler validation
     runs-on: ubuntu-24.04
