@@ -1,0 +1,32 @@
+name: Diagnostic Main Staging Targeted Diffs V1
+on:
+  push:
+    branches: [diagnostic/main-staging-targeted-diffs-v1]
+permissions:
+  contents: write
+jobs:
+  diff:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: diagnostic/main-staging-targeted-diffs-v1
+          fetch-depth: 0
+      - name: Persist targeted source diffs
+        run: |
+          set -Eeuo pipefail
+          mkdir -p diagnostics/main-staging-targeted-diffs-v1
+          git diff origin/main origin/staging/string-octal-v1 -- \
+            src/frontend/parser_expression.c \
+            src/frontend/parser_function.c \
+            src/frontend/parser_global.c \
+            src/frontend/parser_statement.c \
+            src/frontend/ast_global.c \
+            src/frontend/ast.h \
+            > diagnostics/main-staging-targeted-diffs-v1/targeted.patch
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add diagnostics/main-staging-targeted-diffs-v1/targeted.patch
+          git commit -m 'diagnostic: record targeted main staging source diff'
+          git push origin HEAD:diagnostic/main-staging-targeted-diffs-v1
