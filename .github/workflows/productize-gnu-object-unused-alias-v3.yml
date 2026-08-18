@@ -1,0 +1,65 @@
+name: Productize GNU Object Unused Alias V3
+on:
+  push:
+    branches: [product/gnu-object-unused-alias-v3]
+permissions:
+  contents: write
+jobs:
+  productize:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: product/gnu-object-unused-alias-v3
+          fetch-depth: 0
+      - name: Apply validated GNU unused alias
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('src/frontend/attribute.c')
+          s=p.read_text()
+          old='''    MINIC_ATTRIBUTE_ENTRY("__unused__",\n                          MINIC_ATTRIBUTE_UNUSED,\n                          MINIC_ATTRIBUTE_CLASS_INFORMATIONAL,\n                          MINIC_ATTRIBUTE_TARGET_FUNCTION | MINIC_ATTRIBUTE_TARGET_OBJECT |\n                              MINIC_ATTRIBUTE_TARGET_TYPE | MINIC_ATTRIBUTE_TARGET_FIELD |\n                              MINIC_ATTRIBUTE_TARGET_STATEMENT),\n'''
+          new='''    MINIC_ATTRIBUTE_ENTRY("unused",\n                          MINIC_ATTRIBUTE_UNUSED,\n                          MINIC_ATTRIBUTE_CLASS_INFORMATIONAL,\n                          MINIC_ATTRIBUTE_TARGET_FUNCTION | MINIC_ATTRIBUTE_TARGET_OBJECT |\n                              MINIC_ATTRIBUTE_TARGET_TYPE | MINIC_ATTRIBUTE_TARGET_FIELD |\n                              MINIC_ATTRIBUTE_TARGET_STATEMENT),\n'''+old
+          if s.count(old)!=1:
+              raise SystemExit(f'unused descriptor anchor count={s.count(old)}')
+          p.write_text(s.replace(old,new,1))
+          PY
+          cat > tests/compiler/c0/gnu_object_unused_alias.c <<'EOF'
+          static const int value __attribute__((unused)) = 7;
+          int main(void) { return value - 7; }
+          EOF
+          cat > tests/compiler/c0/run-gnu-object-unused-alias.sh <<'EOF'
+          #!/bin/sh
+          set -eu
+          root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+          minic=${MINIC:-"$root/build/debug/bin/minic"}
+          host_cc=${HOST_CC:-${CC:-cc}}
+          work=${BUILD_DIR:-"$root/build/debug"}/tests/gnu-object-unused-alias
+          mkdir -p "$work"
+          "$host_cc" -E -P -x c "$root/tests/compiler/c0/gnu_object_unused_alias.c" -o "$work/input.i"
+          "$minic" -S "$work/input.i" -o "$work/output.s"
+          test -s "$work/output.s"
+          EOF
+          chmod +x tests/compiler/c0/run-gnu-object-unused-alias.sh
+          cat >> tests/compiler/c0/run.sh <<'EOF'
+
+          MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+            sh "$root/tests/compiler/c0/run-gnu-object-unused-alias.sh"
+          EOF
+          clang-format-18 -i src/frontend/attribute.c tests/compiler/c0/gnu_object_unused_alias.c
+          git diff --check
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/unused-alias-v3
+          MINIC="$GITHUB_WORKSPACE/build/unused-alias-v3/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/unused-alias-v3" \
+            sh tests/compiler/c0/run-gnu-object-unused-alias.sh
+          make -j4 check-fast MODE=release BUILD_DIR=build/unused-alias-v3-fast
+      - name: Commit clean product diff
+        run: |
+          set -Eeuo pipefail
+          git rm .github/workflows/productize-gnu-object-unused-alias-v3.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/frontend/attribute.c tests/compiler/c0/gnu_object_unused_alias.c tests/compiler/c0/run-gnu-object-unused-alias.sh tests/compiler/c0/run.sh
+          git commit -m 'frontend: accept GNU unused attribute spelling'
+          git push origin HEAD:product/gnu-object-unused-alias-v3
