@@ -17,17 +17,18 @@ jobs:
         shell: bash
         run: |
           set -u
-          out=diagnostics/canonical-array-redeclaration-owner-v2
-          mkdir -p "$out"
+          out=diagnostics/canonical-array-redeclaration-owner-v2-r2
+          mkdir -p "$out" tools/dev
           stage=materialize
           status=0
+          mat=tools/dev/.diagnose-canonical-array-owner-v2.py
 
-          git show origin/staging/string-octal-v1:tools/dev/materialize-canonical-array-redeclaration-owner-v1.py > /tmp/materialize.py 2>"$out/git-show.err" || status=$?
+          git show origin/staging/string-octal-v1:tools/dev/materialize-canonical-array-redeclaration-owner-v1.py > "$mat" 2>"$out/git-show.err" || status=$?
           if [ "$status" -eq 0 ]; then
-            python3 /tmp/materialize.py >"$out/materialize.log" 2>&1 || status=$?
+            python3 "$mat" >"$out/materialize.log" 2>&1 || status=$?
           fi
+          rm -f "$mat"
           printf 'stage=%s\nstatus=%s\n' "$stage" "$status" > "$out/status.txt"
-
           if [ "$status" -eq 0 ]; then
             stage=format
             clang-format-18 -i src/frontend/parser_function.c >"$out/format.log" 2>&1 || status=$?
@@ -35,21 +36,19 @@ jobs:
           fi
           if [ "$status" -eq 0 ]; then
             stage=build
-            make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/array-owner-v2 >"$out/build.log" 2>&1 || status=$?
+            make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/array-owner-v2-r2 >"$out/build.log" 2>&1 || status=$?
             printf 'stage=%s\nstatus=%s\n' "$stage" "$status" > "$out/status.txt"
           fi
           if [ "$status" -eq 0 ]; then
             stage=check-fast
-            make -j4 check-fast MODE=release BUILD_DIR=build/array-owner-v2-fast >"$out/check-fast.log" 2>&1 || status=$?
+            make -j4 check-fast MODE=release BUILD_DIR=build/array-owner-v2-r2-fast >"$out/check-fast.log" 2>&1 || status=$?
             printf 'stage=%s\nstatus=%s\n' "$stage" "$status" > "$out/status.txt"
           fi
-
           git diff -- src/frontend/parser_function.c > "$out/product.patch" || true
           printf '\nfinal_stage=%s\nfinal_status=%s\n' "$stage" "$status" >> "$out/status.txt"
-
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add "$out"
-          git commit -m 'diagnostic: record array owner v2 productization result' || true
+          git commit -m 'diagnostic: record array owner v2 rerun' || true
           git push origin HEAD:product/canonical-array-redeclaration-owner-v2
           exit 0
