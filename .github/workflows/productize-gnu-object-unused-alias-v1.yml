@@ -1,0 +1,49 @@
+name: Productize GNU Object Unused Alias V1
+on:
+  push:
+    branches: [product/gnu-object-unused-alias-v1]
+permissions:
+  contents: write
+jobs:
+  productize:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: product/gnu-object-unused-alias-v1
+          fetch-depth: 0
+      - name: Add alias and focused regression
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('src/frontend/attribute.c')
+          s=p.read_text()
+          old='''    MINIC_ATTRIBUTE_ENTRY("__unused__",\n                          MINIC_ATTRIBUTE_UNUSED,\n                          MINIC_ATTRIBUTE_CLASS_INFORMATIONAL,\n                          MINIC_ATTRIBUTE_TARGET_FUNCTION | MINIC_ATTRIBUTE_TARGET_OBJECT |\n                              MINIC_ATTRIBUTE_TARGET_TYPE | MINIC_ATTRIBUTE_TARGET_FIELD |\n                              MINIC_ATTRIBUTE_TARGET_STATEMENT),\n'''
+          new='''    MINIC_ATTRIBUTE_ENTRY("unused",\n                          MINIC_ATTRIBUTE_UNUSED,\n                          MINIC_ATTRIBUTE_CLASS_INFORMATIONAL,\n                          MINIC_ATTRIBUTE_TARGET_FUNCTION | MINIC_ATTRIBUTE_TARGET_OBJECT |\n                              MINIC_ATTRIBUTE_TARGET_TYPE | MINIC_ATTRIBUTE_TARGET_FIELD |\n                              MINIC_ATTRIBUTE_TARGET_STATEMENT),\n    MINIC_ATTRIBUTE_ENTRY("__unused__",\n                          MINIC_ATTRIBUTE_UNUSED,\n                          MINIC_ATTRIBUTE_CLASS_INFORMATIONAL,\n                          MINIC_ATTRIBUTE_TARGET_FUNCTION | MINIC_ATTRIBUTE_TARGET_OBJECT |\n                              MINIC_ATTRIBUTE_TARGET_TYPE | MINIC_ATTRIBUTE_TARGET_FIELD |\n                              MINIC_ATTRIBUTE_TARGET_STATEMENT),\n'''
+          if s.count(old)!=1:
+              raise SystemExit(f'unused descriptor anchor count={s.count(old)}')
+          p.write_text(s.replace(old,new,1))
+          Path('tests/compiler/c0/gnu_object_unused_alias.c').write_text('''static const int value __attribute__((unused)) = 7;\nint main(void) { return value - 7; }\n''')
+          run=Path('tests/compiler/c0/run.sh')
+          rs=run.read_text()
+          rs += '''\ncompile_source gnu_object_unused_alias gnu_object_unused_alias\nexpect_instructions gnu_object_unused_alias "value:" "li a0, 0"\n'''
+          run.write_text(rs)
+          PY
+          clang-format-18 -i src/frontend/attribute.c tests/compiler/c0/gnu_object_unused_alias.c
+          git diff --check
+      - name: Validate Werror and fast gate
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/unused-alias-v1
+          make -j4 check-fast MODE=release BUILD_DIR=build/unused-alias-v1-fast
+      - name: Commit clean product diff
+        run: |
+          set -Eeuo pipefail
+          git rm .github/workflows/productize-gnu-object-unused-alias-v1.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/frontend/attribute.c tests/compiler/c0/gnu_object_unused_alias.c tests/compiler/c0/run.sh
+          git commit -m 'frontend: accept GNU unused object attribute spelling'
+          git push origin HEAD:product/gnu-object-unused-alias-v1
