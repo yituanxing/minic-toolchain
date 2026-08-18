@@ -60,13 +60,11 @@ if "$minic" -S "$root/tests/compiler/c0/invalid_static_duplicate_definition.c" \
 fi
 grep -F 'conflicting static object definition' "$work/invalid-static-definition.stderr" >/dev/null
 
-if "$minic" -S "$root/tests/compiler/c0/invalid_external_tentative_incomplete_array.c" \
-    -o "$work/invalid-incomplete.s" 2>"$work/invalid-incomplete.stderr"; then
-    printf '%s\n' 'incomplete tentative array unexpectedly accepted' >&2
-    exit 1
-fi
-grep -F 'incomplete external tentative array is not implemented yet' \
-    "$work/invalid-incomplete.stderr" >/dev/null
+"$minic" -S "$root/tests/compiler/c0/external_tentative_incomplete_array.c" \
+    -o "$work/incomplete-tentative.s"
+grep -F 'incomplete_tentative_array:' "$work/incomplete-tentative.s" >/dev/null
+grep -F '.size incomplete_tentative_array, 4' "$work/incomplete-tentative.s" >/dev/null
+grep -F '.zero 4' "$work/incomplete-tentative.s" >/dev/null
 
 if "$minic" -S "$root/tests/compiler/c0/invalid_external_tentative_redeclaration.c" \
     -o "$work/invalid-redecl.s" 2>"$work/invalid-redecl.stderr"; then
@@ -83,4 +81,4 @@ fi
 grep -F 'conflicting external tentative definition' \
     "$work/invalid-array-bound.stderr" >/dev/null
 
-printf '%s\n' 'PASS compiler/c0/external_tentative_definitions state=extern|tentative|defined linkage=external|static static-types=int|pointer|record array-composite=incomplete-to-complete zero=end-of-tu conflicts=fail-closed'
+printf '%s\n' 'PASS compiler/c0/external_tentative_definitions state=extern|tentative|defined linkage=external|static static-types=int|pointer|record array-composite=incomplete-to-complete incomplete-tentative=one-element zero=end-of-tu conflicts=fail-closed'
