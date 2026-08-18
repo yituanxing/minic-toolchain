@@ -1,0 +1,96 @@
+name: Productize Backward Static Aggregate Overlay V3
+on:
+  push:
+    branches: [product/backward-static-aggregate-overlay-v3]
+permissions:
+  contents: write
+jobs:
+  productize:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply proven aggregate overlay layers
+        run: |
+          set -Eeuo pipefail
+          git fetch origin d66826cd6cf82e63f171fb2cd3f231ca7679ae7a
+          git show 3fc29a1b0408c54aef87af8af5336f056af6dd12:.github/workflows/compiler-c0.yml > /tmp/carrier.yml
+          python3 - <<'PY'
+          from pathlib import Path
+          text = Path('/tmp/carrier.yml').read_text()
+          marker = '          from pathlib import Path\n'
+          start = text.index(marker)
+          end = text.index('          PY\n', start)
+          block = text[start:end]
+          lines = []
+          for line in block.splitlines():
+              if not line.startswith('          '):
+                  raise SystemExit(f'unexpected carrier indentation: {line!r}')
+              lines.append(line[10:])
+          Path('/tmp/materialize-record.py').write_text('\n'.join(lines) + '\n')
+          PY
+          python3 /tmp/materialize-record.py
+          git show d66826cd6cf82e63f171fb2cd3f231ca7679ae7a:tools/dev/materialize-backward-record-compound-literal-v1.py > /tmp/materialize-compound.py
+          python3 /tmp/materialize-compound.py
+          git show d66826cd6cf82e63f171fb2cd3f231ca7679ae7a:tools/dev/materialize-backward-static-array-overlay-v1.py > /tmp/materialize-array.py
+          python3 /tmp/materialize-array.py
+          cat > tests/compiler/c0/backward_static_aggregate_overlay.c <<'EOF'
+          struct node { long value; };
+          struct pair { long left; long right; };
+          struct holder {
+              struct node *slots[2];
+              struct pair pair;
+              long tail;
+          };
+          static struct node node0 = { 7 };
+          static struct holder object = {
+              .tail = 9,
+              .slots = { &node0, &node0 },
+              .pair = (struct pair){ 3, 5 },
+          };
+          int main(void) {
+              return (int)(object.slots[0]->value + object.slots[1]->value +
+                           object.pair.left + object.pair.right + object.tail - 31);
+          }
+          EOF
+          cat > tests/compiler/c0/run-backward-static-aggregate-overlay.sh <<'EOF'
+          #!/bin/sh
+          set -eu
+          root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+          minic=${MINIC:-"$root/build/debug/bin/minic"}
+          host_cc=${HOST_CC:-${CC:-cc}}
+          work=${BUILD_DIR:-"$root/build/debug"}/tests/backward-static-aggregate-overlay
+          mkdir -p "$work"
+          "$host_cc" -E -P -std=gnu11 -x c "$root/tests/compiler/c0/backward_static_aggregate_overlay.c" -o "$work/input.i"
+          "$minic" -S "$work/input.i" -o "$work/output.s"
+          test -s "$work/output.s"
+          EOF
+          chmod +x tests/compiler/c0/run-backward-static-aggregate-overlay.sh
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('tests/compiler/c0/run.sh')
+          s = p.read_text()
+          if 'run-backward-static-aggregate-overlay.sh' not in s:
+              p.write_text(s + '\nMINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \\\n  sh "$root/tests/compiler/c0/run-backward-static-aggregate-overlay.sh"\n')
+          PY
+          rm .github/workflows/productize-backward-static-aggregate-overlay-v3.yml
+      - name: Validate aggregate overlay
+        run: |
+          set -Eeuo pipefail
+          if command -v clang-format-18 >/dev/null 2>&1; then
+            clang-format-18 -i src/frontend/ast.h src/frontend/ast_global.c src/frontend/parser_global.c tests/compiler/c0/backward_static_aggregate_overlay.c
+          fi
+          git diff --check
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/product-backward-aggregate
+          MINIC="$GITHUB_WORKSPACE/build/product-backward-aggregate/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/product-backward-aggregate" sh tests/compiler/c0/run-backward-static-aggregate-overlay.sh
+          make -j4 check-fast MODE=release BUILD_DIR=build/product-backward-aggregate-fast
+      - name: Commit clean product diff
+        run: |
+          set -Eeuo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/frontend/ast.h src/frontend/ast_global.c src/frontend/parser_global.c tests/compiler/c0/backward_static_aggregate_overlay.c tests/compiler/c0/run-backward-static-aggregate-overlay.sh tests/compiler/c0/run.sh .github/workflows/compiler-c0.yml .github/workflows/productize-backward-static-aggregate-overlay-v3.yml
+          git commit -m 'frontend: overlay backward static aggregate subobjects'
+          git push origin HEAD:product/backward-static-aggregate-overlay-v3
