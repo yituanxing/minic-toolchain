@@ -1,11 +1,11 @@
-name: Productize Backward Record Compound Literal V3
+name: Diagnose Backward Record Compound Literal V3
 on:
   push:
     branches: [product/backward-record-compound-literal-v3]
 permissions:
   contents: write
 jobs:
-  productize:
+  diagnose:
     if: ${{ github.actor != 'github-actions[bot]' }}
     runs-on: ubuntu-24.04
     steps:
@@ -13,55 +13,43 @@ jobs:
         with:
           ref: product/backward-record-compound-literal-v3
           fetch-depth: 0
-      - name: Materialize clean source and contract
+      - name: Apply, validate, and persist result
+        shell: bash
         run: |
-          set -Eeuo pipefail
-          git show origin/staging/string-octal-v1:tools/dev/materialize-backward-record-compound-literal-v1.py > tools/dev/.productize-backward-record-compound-literal-v3.py
-          python3 tools/dev/.productize-backward-record-compound-literal-v3.py
-          rm tools/dev/.productize-backward-record-compound-literal-v3.py
-          cat > tests/compiler/c0/run-backward-record-compound-literal.sh <<'EOF'
-          #!/bin/sh
-          set -eu
-          root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
-          minic=${MINIC:-"$root/build/debug/bin/minic"}
-          work=${BUILD_DIR:-"$root/build/debug"}/tests/backward-record-compound-literal
-          mkdir -p "$work"
-          cat > "$work/input.c" <<'SRC'
-          struct Inner { int value; };
-          struct Outer { struct Inner inner; int tail; };
-          static struct Outer object = {
-              .tail = 9,
-              .inner = (struct Inner){ .value = 7 },
-          };
-          int main(void) { return object.inner.value + object.tail - 16; }
-          SRC
-          "$minic" -S "$work/input.c" -o "$work/output.s"
-          grep -Fq 'object:' "$work/output.s"
-          grep -Fq '  .word 7' "$work/output.s"
-          grep -Fq '  .word 9' "$work/output.s"
-          printf '%s\n' 'PASS compiler/c0/backward-record-compound-literal'
-          EOF
-          chmod +x tests/compiler/c0/run-backward-record-compound-literal.sh
-          cat >> tests/compiler/c0/run.sh <<'EOF'
+          set -u
+          out=diagnostics/backward-record-compound-literal-v3
+          mkdir -p "$out"
+          stage=materialize
+          status=0
 
-          MINIC="$minic" \
-          BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-          sh "$root/tests/compiler/c0/run-backward-record-compound-literal.sh"
-          EOF
-          clang-format-18 -i src/frontend/parser_global.c
-          git diff --check
-      - name: Validate Werror focused and fast gates
-        run: |
-          set -Eeuo pipefail
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/product-backward-record-v3
-          MINIC="$GITHUB_WORKSPACE/build/product-backward-record-v3/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/product-backward-record-v3" sh tests/compiler/c0/run-backward-record-compound-literal.sh
-          make -j4 check-fast MODE=release BUILD_DIR=build/product-backward-record-v3-fast
-      - name: Commit clean product diff
-        run: |
-          set -Eeuo pipefail
-          git rm .github/workflows/productize-backward-record-compound-literal-v3.yml
+          git show origin/staging/string-octal-v1:tools/dev/materialize-backward-record-compound-literal-v1.py > /tmp/materialize.py 2>"$out/git-show.err" || status=$?
+          if [ "$status" -eq 0 ]; then
+            python3 /tmp/materialize.py >"$out/materialize.log" 2>&1 || status=$?
+          fi
+          printf 'stage=%s\nstatus=%s\n' "$stage" "$status" > "$out/status.txt"
+
+          if [ "$status" -eq 0 ]; then
+            stage=format
+            clang-format-18 -i src/frontend/parser_global.c >"$out/format.log" 2>&1 || status=$?
+            printf 'stage=%s\nstatus=%s\n' "$stage" "$status" > "$out/status.txt"
+          fi
+          if [ "$status" -eq 0 ]; then
+            stage=build
+            make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/backward-record-v3 >"$out/build.log" 2>&1 || status=$?
+            printf 'stage=%s\nstatus=%s\n' "$stage" "$status" > "$out/status.txt"
+          fi
+          if [ "$status" -eq 0 ]; then
+            stage=check-fast
+            make -j4 check-fast MODE=release BUILD_DIR=build/backward-record-v3-fast >"$out/check-fast.log" 2>&1 || status=$?
+            printf 'stage=%s\nstatus=%s\n' "$stage" "$status" > "$out/status.txt"
+          fi
+
+          git diff -- src/frontend/parser_global.c > "$out/product.patch" || true
+          printf '\nfinal_stage=%s\nfinal_status=%s\n' "$stage" "$status" >> "$out/status.txt"
+
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -A
-          git commit -m 'frontend: support backward static record compound literals'
+          git add "$out"
+          git commit -m 'diagnostic: record backward record v3 productization result' || true
           git push origin HEAD:product/backward-record-compound-literal-v3
+          exit 0
