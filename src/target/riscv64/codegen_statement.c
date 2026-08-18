@@ -225,15 +225,13 @@ static bool minic_riscv64_emit_return(FILE *file,
                             file, program, function, function_layout, statement->expression)) {
                         return false;
                     }
-                } else if (!minic_c0_record_value_is_copy_source(
-                               program, statement->expression) ||
-                           !minic_riscv64_emit_small_record_return_value(
-                               file,
-                               program,
-                               function,
-                               function_layout,
-                               statement->expression,
-                               return_value.slot_count)) {
+                } else if (!minic_c0_record_value_is_copy_source(program, statement->expression) ||
+                           !minic_riscv64_emit_small_record_return_value(file,
+                                                                         program,
+                                                                         function,
+                                                                         function_layout,
+                                                                         statement->expression,
+                                                                         return_value.slot_count)) {
                     return false;
                 }
             } else {

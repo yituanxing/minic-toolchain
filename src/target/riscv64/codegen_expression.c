@@ -971,13 +971,12 @@ bool minic_riscv64_emit_record_return_value(FILE *file,
                file, storage_size, temporary_size, "t4", false);
 }
 
-bool minic_riscv64_emit_small_record_return_value(
-    FILE *file,
-    const MinicC0Program *program,
-    const MinicFunction *function,
-    const MinicRiscv64FunctionLayout *function_layout,
-    MinicExpressionId source_id,
-    size_t slot_count) {
+bool minic_riscv64_emit_small_record_return_value(FILE *file,
+                                                  const MinicC0Program *program,
+                                                  const MinicFunction *function,
+                                                  const MinicRiscv64FunctionLayout *function_layout,
+                                                  MinicExpressionId source_id,
+                                                  size_t slot_count) {
     const MinicExpression *source;
     size_t storage_size;
     size_t temporary_size;
@@ -996,9 +995,8 @@ bool minic_riscv64_emit_small_record_return_value(
         fprintf(file, "  mv t0, sp\n") < 0 ||
         !minic_riscv64_emit_integer_aggregate_load_chunk(
             file, program, source->type, 0U, "a0", "t0") ||
-        (slot_count == 2U &&
-         !minic_riscv64_emit_integer_aggregate_load_chunk(
-             file, program, source->type, 1U, "a1", "t0"))) {
+        (slot_count == 2U && !minic_riscv64_emit_integer_aggregate_load_chunk(
+                                 file, program, source->type, 1U, "a1", "t0"))) {
         return false;
     }
     return minic_riscv64_emit_stack_release(file, temporary_size);
