@@ -1119,19 +1119,20 @@ static bool apply_external_object_metadata(MinicParser *parser,
     return true;
 }
 
-static bool parse_external_tentative_object(MinicParser *parser,
-                                            MinicType object_type,
-                                            MinicSourceSpan name_span,
-                                            const char *section_name,
-                                            size_t section_name_length,
-                                            bool has_section,
-                                            size_t explicit_alignment,
-                                            MinicSymbolVisibility visibility,
-                                            bool has_visibility) {
+static bool record_external_tentative_object(MinicParser *parser,
+                                             MinicType object_type,
+                                             MinicSourceSpan name_span,
+                                             const char *section_name,
+                                             size_t section_name_length,
+                                             bool has_section,
+                                             size_t explicit_alignment,
+                                             MinicSymbolVisibility visibility,
+                                             bool has_visibility,
+                                             MinicGlobalObjectId *object_id_out) {
     MinicGlobalObjectId object_id;
     const MinicGlobalObject *existing;
 
-    if (parser == NULL || parser->current.kind != MINIC_TOKEN_SEMICOLON ||
+    if (parser == NULL || object_id_out == NULL ||
         !minic_c0_type_is_complete_object(parser->program, object_type)) {
         if (parser != NULL) {
             minic_parser_error(parser,
@@ -1192,7 +1193,122 @@ static bool parse_external_tentative_object(MinicParser *parser,
                                         has_visibility)) {
         return false;
     }
+    *object_id_out = object_id;
+    return true;
+}
+
+static bool parse_external_tentative_object(MinicParser *parser,
+                                            MinicType object_type,
+                                            MinicSourceSpan name_span,
+                                            const char *section_name,
+                                            size_t section_name_length,
+                                            bool has_section,
+                                            size_t explicit_alignment,
+                                            MinicSymbolVisibility visibility,
+                                            bool has_visibility) {
+    MinicGlobalObjectId object_id;
+
+    if (parser == NULL || parser->current.kind != MINIC_TOKEN_SEMICOLON ||
+        !record_external_tentative_object(parser,
+                                          object_type,
+                                          name_span,
+                                          section_name,
+                                          section_name_length,
+                                          has_section,
+                                          explicit_alignment,
+                                          visibility,
+                                          has_visibility,
+                                          &object_id)) {
+        return false;
+    }
+    (void)object_id;
     return minic_parser_advance(parser);
+}
+
+static bool
+parse_external_tentative_declaration_list_after_head(MinicParser *parser,
+                                                     MinicType base_type,
+                                                     MinicType first_type,
+                                                     MinicSourceSpan first_name,
+                                                     const char *first_section_name,
+                                                     size_t first_section_name_length,
+                                                     bool first_has_section,
+                                                     size_t first_explicit_alignment,
+                                                     MinicSymbolVisibility first_visibility,
+                                                     bool first_has_visibility) {
+    MinicGlobalObjectId object_id;
+
+    if (parser == NULL || parser->current.kind != MINIC_TOKEN_COMMA ||
+        !record_external_tentative_object(parser,
+                                          first_type,
+                                          first_name,
+                                          first_section_name,
+                                          first_section_name_length,
+                                          first_has_section,
+                                          first_explicit_alignment,
+                                          first_visibility,
+                                          first_has_visibility,
+                                          &object_id)) {
+        return false;
+    }
+    while (parser->current.kind == MINIC_TOKEN_COMMA) {
+        MinicSourceSpan name_span;
+        MinicType object_type;
+        char section_name[256];
+        size_t section_name_length;
+        size_t explicit_alignment;
+        MinicSymbolVisibility visibility;
+        bool has_section;
+        bool has_visibility;
+        bool is_array;
+
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
+        object_type = base_type;
+        if (!minic_parser_parse_pointer_declarator(parser, object_type, &object_type) ||
+            !minic_parser_parse_direct_declarator_name(parser, &name_span) ||
+            !minic_parser_parse_array_declarator_suffix(
+                parser, object_type, true, &object_type, &is_array)) {
+            return false;
+        }
+        (void)is_array;
+        (void)memset(section_name, 0, sizeof(section_name));
+        section_name_length = 0U;
+        explicit_alignment = 0U;
+        visibility = first_visibility;
+        has_section = false;
+        has_visibility = first_has_visibility;
+        if (!minic_parser_parse_gnu_object_attribute_lists_with_visibility(parser,
+                                                                           section_name,
+                                                                           sizeof(section_name),
+                                                                           &section_name_length,
+                                                                           &has_section,
+                                                                           &explicit_alignment,
+                                                                           &visibility,
+                                                                           &has_visibility)) {
+            return false;
+        }
+        if (parser->current.kind == MINIC_TOKEN_EQUAL) {
+            minic_parser_error(parser,
+                               "mixed initialized external declarator lists are not supported yet");
+            return false;
+        }
+        if (!record_external_tentative_object(parser,
+                                              object_type,
+                                              name_span,
+                                              section_name,
+                                              section_name_length,
+                                              has_section,
+                                              explicit_alignment,
+                                              visibility,
+                                              has_visibility,
+                                              &object_id)) {
+            return false;
+        }
+    }
+    return minic_parser_expect(
+        parser, MINIC_TOKEN_SEMICOLON, "expected ';' after external object declaration list");
 }
 
 static bool parse_external_object_definition(MinicParser *parser,
@@ -2041,6 +2157,18 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                                                            &has_section,
                                                            &object_explicit_alignment)) {
             return false;
+        }
+        if (parser->current.kind == MINIC_TOKEN_COMMA) {
+            return parse_external_tentative_declaration_list_after_head(parser,
+                                                                        base_type,
+                                                                        return_type,
+                                                                        name_span,
+                                                                        section_name,
+                                                                        section_name_length,
+                                                                        has_section,
+                                                                        object_explicit_alignment,
+                                                                        visibility,
+                                                                        has_visibility);
         }
         if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
             return parse_visible_external_array(parser,
