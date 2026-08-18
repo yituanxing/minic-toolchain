@@ -22,15 +22,11 @@ jobs:
       - name: Extend permanent conditional contract
         run: |
           set -Eeuo pipefail
-          cat >> tests/compiler/c0/conditional_null_pointer_constant.c <<'EOF'
-
-int choose_record_value(int condition) {
-    struct node left = {"left", 11};
-    const struct node right = {"right", 22};
-    struct node value = condition ? left : right;
-    return value.value;
-}
-EOF
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('tests/compiler/c0/conditional_null_pointer_constant.c')
+          path.write_text(path.read_text() + '''\nint choose_record_value(int condition) {\n    struct node left = {"left", 11};\n    const struct node right = {"right", 22};\n    struct node value = condition ? left : right;\n    return value.value;\n}\n''')
+          PY
       - name: Validate product slice
         run: |
           set -Eeuo pipefail
