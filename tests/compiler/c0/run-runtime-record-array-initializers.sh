@@ -14,6 +14,7 @@ mkdir -p "$work"
 "$minic" -S "$work/runtime_record_array_initializer.i" \
     -o "$work/runtime_record_array_initializer.s"
 grep -F 'linux_guid_compound_literal:' "$work/runtime_record_array_initializer.s" >/dev/null
+grep -F 'runtime_record_array_local:' "$work/runtime_record_array_initializer.s" >/dev/null
 grep -F '  sb ' "$work/runtime_record_array_initializer.s" >/dev/null
 printf '%s\n' 'PASS compiler/c0/runtime_record_array_initializer compound-literal=1 fixed-array-field=16 scalar-elements=1'
 
