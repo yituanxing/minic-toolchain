@@ -14,6 +14,7 @@ test -s "$work/output.s"
 grep -F 'call_filter:' "$work/output.s" >/dev/null
 grep -F 'call_hook:' "$work/output.s" >/dev/null
 grep -F 'call_typedef:' "$work/output.s" >/dev/null
+grep -F 'function_pointer_array_shape:' "$work/output.s" >/dev/null
 grep -F 'jalr' "$work/output.s" >/dev/null
 
 cat >"$work/const-field-assign.c" <<'EOF'

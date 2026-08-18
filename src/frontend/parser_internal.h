@@ -143,6 +143,10 @@ typedef struct MinicParsedFunctionDeclarator {
     size_t pointer_depth;
     unsigned int pointer_const_qualifiers;
     unsigned int pointer_volatile_qualifiers;
+    size_t array_bounds[8];
+    size_t array_dimension_count;
+    unsigned int array_zero_length_mask;
+    bool array_outermost_incomplete;
     bool has_name;
     bool is_variadic;
 } MinicParsedFunctionDeclarator;
