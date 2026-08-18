@@ -1,1 +1,1 @@
-trigger final GNU weak external-object productizer v2
+retrigger final GNU weak external-object productizer after tentative incomplete-array TU finalization registration
