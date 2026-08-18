@@ -2,8 +2,6 @@ name: Productize Runtime Record Array V2
 on:
   push:
     branches: [product/runtime-record-array-v1]
-  pull_request:
-    branches: [main]
 permissions:
   contents: write
 jobs:
@@ -18,7 +16,7 @@ jobs:
       - name: Apply proven runtime record array semantics
         run: |
           set -Eeuo pipefail
-          git fetch origin staging/string-octal-v1 --no-tags
+          git fetch origin 'refs/heads/staging/string-octal-v1:refs/remotes/origin/staging/string-octal-v1' --no-tags
           git show origin/staging/string-octal-v1:tools/dev/materialize-runtime-record-array-v1.py > tools/dev/.productize-runtime-record-array-v1.py
           python3 tools/dev/.productize-runtime-record-array-v1.py
           rm tools/dev/.productize-runtime-record-array-v1.py
