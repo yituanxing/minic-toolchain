@@ -25,3 +25,13 @@ int linux_guid_compound_literal(void) {
                                    0x2b,
                                    0x8c}});
 }
+
+struct timespec64_probe {
+    long tv_sec;
+    long tv_nsec;
+};
+
+long runtime_record_array_local(long mtime) {
+    struct timespec64_probe t[2] = {{.tv_sec = mtime}, {.tv_sec = mtime}};
+    return t[0].tv_sec + t[1].tv_sec;
+}
