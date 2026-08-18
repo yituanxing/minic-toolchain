@@ -1,0 +1,54 @@
+name: Productize Runtime Record Array Initializer V1
+on:
+  push:
+    branches: [product/runtime-record-array-initializer-v1]
+permissions:
+  contents: write
+jobs:
+  productize:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: product/runtime-record-array-initializer-v1
+          fetch-depth: 0
+      - name: Apply staging-proven runtime aggregate support
+        run: |
+          set -Eeuo pipefail
+          mat=tools/dev/.productize-runtime-record-array-initializer-v1.py
+          git show origin/staging/string-octal-v1:tools/dev/materialize-runtime-record-array-v1.py > "$mat"
+          python3 "$mat"
+          rm "$mat"
+          cat > tests/compiler/c0/runtime_record_array_initializer.c <<'EOF'
+          struct pair { long left; long right; };
+          static long sum(long value) {
+              struct pair values[2] = {
+                  { .left = value, .right = 2 },
+                  { .left = 3, .right = value },
+              };
+              return values[0].left + values[0].right + values[1].left + values[1].right;
+          }
+          int main(void) { return (int)(sum(1) - 7); }
+          EOF
+          cat >> tests/compiler/c0/run.sh <<'EOF'
+
+          compile_source runtime_record_array_initializer runtime_record_array_initializer
+          expect_instructions runtime_record_array_initializer "sum:" "li a0, 0"
+          EOF
+          clang-format-18 -i src/frontend/parser_statement.c tests/compiler/c0/runtime_record_array_initializer.c
+          git diff --check
+      - name: Validate Werror and fast gates
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/runtime-record-array-v1
+          make -j4 check-fast MODE=release BUILD_DIR=build/runtime-record-array-v1-fast
+      - name: Commit clean product diff
+        run: |
+          set -Eeuo pipefail
+          git rm .github/workflows/productize-runtime-record-array-initializer-v1.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/frontend/parser_statement.c tests/compiler/c0/runtime_record_array_initializer.c tests/compiler/c0/run.sh
+          git commit -m 'frontend: initialize runtime arrays of records'
+          git push origin HEAD:product/runtime-record-array-initializer-v1
