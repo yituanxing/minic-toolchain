@@ -1,7 +1,7 @@
 name: Productize Backward Static Aggregate Overlay V4
 on:
   pull_request:
-    types: [opened]
+    types: [opened, synchronize]
 permissions:
   contents: write
 jobs:
@@ -27,16 +27,21 @@ jobs:
           block = text[start:end]
           lines = []
           for line in block.splitlines():
+              if line == '':
+                  lines.append('')
+                  continue
               if not line.startswith('          '):
                   raise SystemExit(f'unexpected carrier indentation: {line!r}')
               lines.append(line[10:])
           Path('/tmp/materialize-record.py').write_text('\n'.join(lines) + '\n')
           PY
           python3 /tmp/materialize-record.py
-          git show d66826cd6cf82e63f171fb2cd3f231ca7679ae7a:tools/dev/materialize-backward-record-compound-literal-v1.py > /tmp/materialize-compound.py
-          python3 /tmp/materialize-compound.py
-          git show d66826cd6cf82e63f171fb2cd3f231ca7679ae7a:tools/dev/materialize-backward-static-array-overlay-v1.py > /tmp/materialize-array.py
-          python3 /tmp/materialize-array.py
+          git show d66826cd6cf82e63f171fb2cd3f231ca7679ae7a:tools/dev/materialize-backward-record-compound-literal-v1.py > tools/dev/materialize-backward-record-compound-literal-v1.py
+          python3 tools/dev/materialize-backward-record-compound-literal-v1.py
+          rm tools/dev/materialize-backward-record-compound-literal-v1.py
+          git show d66826cd6cf82e63f171fb2cd3f231ca7679ae7a:tools/dev/materialize-backward-static-array-overlay-v1.py > tools/dev/materialize-backward-static-array-overlay-v1.py
+          python3 tools/dev/materialize-backward-static-array-overlay-v1.py
+          rm tools/dev/materialize-backward-static-array-overlay-v1.py
           cat > tests/compiler/c0/backward_static_aggregate_overlay.c <<'EOF'
           struct node { long value; };
           struct pair { long left; long right; };
