@@ -217,7 +217,6 @@ typedef struct MinicCleanupContext {
 typedef enum MinicStatementKind {
     MINIC_STATEMENT_ASSIGN = 0,
     MINIC_STATEMENT_RECORD_COPY,
-    MINIC_STATEMENT_RECORD_INITIALIZE,
     MINIC_STATEMENT_XOR_ASSIGN,
     MINIC_STATEMENT_EXPRESSION,
     MINIC_STATEMENT_INLINE_ASM,
@@ -324,7 +323,6 @@ typedef struct MinicFunction {
     size_t local_begin;
     size_t local_count;
     MinicBlockId body_block;
-    MinicFunctionId alias_target;
     bool is_defined;
     bool is_internal;
     bool is_variadic;
@@ -363,7 +361,6 @@ typedef struct MinicArrayType {
     MinicType element_type;
     size_t element_count;
     bool is_zero_length;
-    bool is_query_materialized;
 } MinicArrayType;
 
 typedef struct MinicFunctionType {
@@ -443,6 +440,7 @@ typedef struct MinicGlobalObject {
     size_t explicit_alignment;
     MinicSymbolVisibility visibility;
     bool is_internal;
+    bool is_weak;
     bool is_read_only;
     bool is_zero_initialized;
     bool is_extern;
@@ -601,9 +599,6 @@ bool minic_c0_program_set_function_internal(MinicC0Program *program,
 bool minic_c0_program_set_function_weak(MinicC0Program *program,
                                         MinicFunctionId function_id,
                                         bool is_weak);
-bool minic_c0_program_set_function_alias(MinicC0Program *program,
-                                         MinicFunctionId function_id,
-                                         MinicFunctionId target_function_id);
 bool minic_c0_program_set_function_assembler_name(MinicC0Program *program,
                                                   MinicFunctionId function_id,
                                                   const char *name,
@@ -655,9 +650,6 @@ bool minic_c0_program_add_array_type(MinicC0Program *program,
 bool minic_c0_program_add_incomplete_array_type(MinicC0Program *program,
                                                 MinicType element_type,
                                                 MinicType *array_type);
-bool minic_c0_program_add_query_incomplete_array_type(MinicC0Program *program,
-                                                      MinicType element_type,
-                                                      MinicType *array_type);
 bool minic_c0_program_add_zero_length_array_type(MinicC0Program *program,
                                                  MinicType element_type,
                                                  MinicType *array_type);
@@ -815,6 +807,9 @@ bool minic_c0_global_object_set_zero_initialized(MinicC0Program *program,
                                                  MinicGlobalObjectId global_object_id);
 bool minic_c0_global_object_set_extern(MinicC0Program *program,
                                        MinicGlobalObjectId global_object_id);
+bool minic_c0_global_object_set_weak(MinicC0Program *program,
+                                     MinicGlobalObjectId global_object_id,
+                                     bool is_weak);
 bool minic_c0_global_object_set_visibility(MinicC0Program *program,
                                            MinicGlobalObjectId global_object_id,
                                            MinicSymbolVisibility visibility);

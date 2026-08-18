@@ -482,15 +482,11 @@ static bool aggregate_scalar_slot_type(const MinicC0Program *program,
         }
         for (element_index = 0U; element_index < array_type->element_count; ++element_index) {
             size_t before = *slot_index;
-            size_t element_slots;
-
             if (aggregate_scalar_slot_type(
                     program, array_type->element_type, slot_index, slot_type)) {
                 return true;
             }
-            if (*slot_index == before &&
-                (!aggregate_scalar_slot_count(program, array_type->element_type, &element_slots) ||
-                 element_slots != 0U)) {
+            if (*slot_index == before) {
                 return false;
             }
         }
@@ -516,14 +512,10 @@ static bool aggregate_scalar_slot_type(const MinicC0Program *program,
             }
             for (element_index = 0U; element_index < field->element_count; ++element_index) {
                 size_t before = *slot_index;
-                size_t field_slots;
-
                 if (aggregate_scalar_slot_type(program, field->type, slot_index, slot_type)) {
                     return true;
                 }
-                if (*slot_index == before &&
-                    (!aggregate_scalar_slot_count(program, field->type, &field_slots) ||
-                     field_slots != 0U)) {
+                if (*slot_index == before) {
                     return false;
                 }
             }
@@ -978,6 +970,22 @@ minic_c0_program_fixed_register_binding(const MinicC0Program *program,
         return NULL;
     }
     return &program->fixed_register_bindings[binding_id];
+}
+
+bool minic_c0_global_object_set_weak(MinicC0Program *program,
+                                     MinicGlobalObjectId global_object_id,
+                                     bool is_weak) {
+    MinicGlobalObject *object;
+
+    if (program == NULL || global_object_id >= program->global_object_count) {
+        return false;
+    }
+    object = &program->global_objects[global_object_id];
+    if (is_weak && object->is_internal) {
+        return false;
+    }
+    object->is_weak = is_weak;
+    return true;
 }
 
 bool minic_c0_global_object_set_visibility(MinicC0Program *program,
