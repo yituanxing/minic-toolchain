@@ -1,21 +1,20 @@
-name: Diagnostic Linux First100 Current V1
+name: Materialize Effective Convergence Snapshot V1
 on:
   push:
-    branches: [staging/string-octal-v1]
+    branches: [diagnostic/effective-convergence-snapshot-v1]
 permissions:
-  contents: read
+  contents: write
 jobs:
-  first100:
+  snapshot:
     if: ${{ github.actor != 'github-actions[bot]' }}
     runs-on: ubuntu-24.04
-    env:
-      DEBIAN_FRONTEND: noninteractive
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: staging/string-octal-v1
+          ref: diagnostic/effective-convergence-snapshot-v1
           fetch-depth: 0
-      - name: Materialize current convergence compiler
+      - name: Materialize exact frozen convergence compiler
         run: |
           set -Eeuo pipefail
           python3 tools/dev/materialize-runtime-record-array-v1.py
@@ -59,37 +58,13 @@ jobs:
             src/target/data_layout.c src/target/riscv64/codegen_function.c \
             src/target/riscv64/codegen_expression.c src/target/riscv64/codegen_statement.c
           git diff --check
-          make -j4 MODE=release BUILD_DIR=build/convergence
-      - name: Install Linux probe tools
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/effective-snapshot
+          make -j4 check-fast MODE=release BUILD_DIR=build/effective-snapshot-fast
+      - name: Persist effective source tree
         run: |
           set -Eeuo pipefail
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu flex bison bc libelf-dev libssl-dev
-          mkdir -p tests/external/linux
-          git show origin/diagnostic/linux-first100-variadic-stack-v0:tests/external/linux/batch_probe.sh > tests/external/linux/batch_probe.sh
-          chmod +x tests/external/linux/batch_probe.sh
-      - name: Probe unchanged Linux first100
-        run: |
-          set -Eeuo pipefail
-          build="$GITHUB_WORKSPACE/build/linux-first100-current"
-          set +e
-          MINIC="$GITHUB_WORKSPACE/build/convergence/bin/minic" \
-          BUILD_DIR="$build" \
-          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-6.6.143.tar.xz" \
-          CROSS_COMPILE=riscv64-linux-gnu- \
-          LINUX_BATCH_OFFSET=0 LINUX_BATCH_LIMIT=100 LINUX_BATCH_JOBS=4 \
-            sh tests/external/linux/batch_probe.sh
-          status=$?
-          set -e
-          mkdir -p build/first100-artifact
-          cp "$build/batch-summary.txt" build/first100-artifact/ 2>/dev/null || true
-          cp -R "$build/minic-stderr" build/first100-artifact/ 2>/dev/null || true
-          echo "$status" > build/first100-artifact/status.txt
-          exit "$status"
-      - name: Upload first100 diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-first100-current
-          path: build/first100-artifact
-          if-no-files-found: warn
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src
+          git commit -m 'diagnostic: snapshot effective convergence sources'
+          git push origin HEAD:diagnostic/effective-convergence-snapshot-v1
