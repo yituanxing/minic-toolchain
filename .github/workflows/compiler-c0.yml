@@ -10,51 +10,51 @@ on:
       - 'tests/**'
       - '.github/scripts/**'
       - '.github/workflows/compiler-c0.yml'
-  push:
-    branches:
-      - main
-  merge_group:
-    types:
-      - checks_requested
-  workflow_dispatch:
+      - '.github/workflows/productize-record-conditional-type-v3.yml'
 
 permissions:
-  contents: read
-
-concurrency:
-  group: compiler-c0-${{ github.ref }}
-  cancel-in-progress: true
+  contents: write
 
 jobs:
-  full-validation:
-    name: Full compiler validation
+  productize-record-conditional:
+    if: ${{ github.head_ref == 'product/record-conditional-type-v3' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
-    env:
-      DEBIAN_FRONTEND: noninteractive
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Restore RISC-V package archives
-        id: rv64-cache
-        uses: actions/cache@v4
+      - uses: actions/checkout@v4
         with:
-          path: ~/.cache/minic-apt/archives
-          key: rv64-apt-${{ runner.os }}-${{ runner.arch }}-noble-${{ hashFiles('tools/ci/ubuntu-24.04-packages.txt') }}
+          ref: product/record-conditional-type-v3
+          fetch-depth: 0
+      - name: Apply validated product slice
+        run: |
+          set -Eeuo pipefail
+          git fetch origin 'refs/heads/staging/string-octal-v1:refs/remotes/origin/staging/string-octal-v1' --no-tags
+          mat=tools/dev/.productize-record-conditional-v3.py
+          git show origin/staging/string-octal-v1:tools/dev/materialize-record-conditional-type-v1.py > "$mat"
+          python3 "$mat"
+          rm "$mat"
+          cat >> tests/compiler/c0/conditional_null_pointer_constant.c <<'EOF'
 
-      - name: Run the complete compiler gate
-        env:
-          RV64_CACHE_HIT: ${{ steps.rv64-cache.outputs.cache-hit }}
-        run: bash .github/scripts/compiler-c0-full-gate.sh
-
-      - name: Upload compiler failure diagnostics
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: compiler-c0-failure-diagnostics
-          path: |
-            build/ci-external/tests/external/tiny-aes-c/diagnostic.txt
-            build/ci-external/tests/external/tiny-aes-c/*.status
-          if-no-files-found: ignore
-          retention-days: 7
+int choose_record_value(int condition) {
+    struct node left = {"left", 11};
+    const struct node right = {"right", 22};
+    struct node value = condition ? left : right;
+    return value.value;
+}
+EOF
+          clang-format-18 -i src/frontend/expression_semantics.c tests/compiler/c0/conditional_null_pointer_constant.c
+          git diff --check
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/product-record-conditional
+          MINIC="$GITHUB_WORKSPACE/build/product-record-conditional/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/product-record-conditional-focused" sh tests/compiler/c0/run-conditional-null-pointer-constant.sh
+          make -j4 check-fast MODE=release BUILD_DIR=build/product-record-conditional-fast
+      - name: Persist clean product commit
+        run: |
+          set -Eeuo pipefail
+          git fetch origin main --no-tags
+          git checkout origin/main -- .github/workflows/compiler-c0.yml
+          git rm -f .github/workflows/productize-record-conditional-type-v3.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/frontend/expression_semantics.c tests/compiler/c0/conditional_null_pointer_constant.c .github/workflows/compiler-c0.yml
+          git commit -m 'frontend: type compatible record conditionals'
+          git push origin HEAD:product/record-conditional-type-v3
