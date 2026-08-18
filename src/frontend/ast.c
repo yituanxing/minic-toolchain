@@ -1104,6 +1104,20 @@ bool minic_c0_program_add_incomplete_array_type(MinicC0Program *program,
     return minic_c0_program_add_array_descriptor(program, element_type, 0U, array_type);
 }
 
+bool minic_c0_program_add_query_incomplete_array_type(MinicC0Program *program,
+                                                      MinicType element_type,
+                                                      MinicType *array_type) {
+    MinicType created;
+
+    if (program == NULL || array_type == NULL ||
+        !minic_c0_program_add_array_descriptor(program, element_type, 0U, &created)) {
+        return false;
+    }
+    program->array_types[created.array_type_id].is_query_materialized = true;
+    *array_type = created;
+    return true;
+}
+
 bool minic_c0_program_add_zero_length_array_type(MinicC0Program *program,
                                                  MinicType element_type,
                                                  MinicType *array_type) {
@@ -1154,6 +1168,7 @@ bool minic_c0_program_complete_array_type(MinicC0Program *program,
         return descriptor->element_count == element_count;
     }
     descriptor->element_count = element_count;
+    descriptor->is_query_materialized = false;
     return true;
 }
 

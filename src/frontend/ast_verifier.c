@@ -1147,9 +1147,16 @@ bool minic_c0_program_verify_target(const MinicC0Program *program,
         const MinicArrayType *array_type;
 
         array_type = &program->array_types[index];
-        if ((array_type->element_count == 0U &&
+        if ((array_type->element_count == 0U && !array_type->is_query_materialized &&
+
              !incomplete_array_has_semantic_owner(program, index)) ||
+
+            (array_type->is_query_materialized &&
+
+             (array_type->element_count != 0U || array_type->is_zero_length)) ||
+
             !type_is_valid(program, target, array_type->element_type) ||
+
             minic_type_is_function(array_type->element_type)) {
             return false;
         }
