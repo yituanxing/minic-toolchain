@@ -1,0 +1,62 @@
+name: Diagnostic Main First100 Finalization V14
+on:
+  push:
+    branches: [diagnostic/main-first100-finalization-v14]
+permissions:
+  contents: write
+jobs:
+  first100:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-24.04
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: diagnostic/main-first100-finalization-v14
+          fetch-depth: 0
+      - name: Build exact product compiler
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/product-main
+          make -j4 check-fast MODE=release BUILD_DIR=build/product-main-fast
+      - name: Install Linux probe tools
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu flex bison bc libelf-dev libssl-dev
+          mkdir -p tests/external/linux
+          git show origin/diagnostic/linux-first100-variadic-stack-v0:tests/external/linux/batch_probe.sh > tests/external/linux/batch_probe.sh
+          chmod +x tests/external/linux/batch_probe.sh
+      - name: Probe materializer-free Linux first100
+        run: |
+          set -Eeuo pipefail
+          build="$GITHUB_WORKSPACE/build/linux-main-first100-finalization-v14"
+          set +e
+          MINIC="$GITHUB_WORKSPACE/build/product-main/bin/minic" \
+          BUILD_DIR="$build" \
+          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-6.6.143.tar.xz" \
+          CROSS_COMPILE=riscv64-linux-gnu- \
+          LINUX_BATCH_OFFSET=0 LINUX_BATCH_LIMIT=100 LINUX_BATCH_JOBS=4 \
+            sh tests/external/linux/batch_probe.sh
+          status=$?
+          set -e
+          out=diagnostics/main-first100-finalization-v14
+          mkdir -p "$out"
+          for file in batch-summary.txt batch-results.tsv batch-results.json failure-contexts.txt selected-tus.txt; do
+            cp "$build/$file" "$out/" 2>/dev/null || true
+          done
+          printf '%s\n' "$status" > "$out/status.txt"
+      - name: Commit diagnostic result
+        if: always()
+        run: |
+          set -Eeuo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add diagnostics/main-first100-finalization-v14 || true
+          if git diff --cached --quiet; then
+            echo 'no diagnostic result to commit'
+            exit 0
+          fi
+          git commit -m 'diagnostic: record main first100 finalization v14 result'
+          git push origin HEAD:diagnostic/main-first100-finalization-v14
