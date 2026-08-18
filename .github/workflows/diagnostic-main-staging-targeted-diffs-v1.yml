@@ -13,10 +13,11 @@ jobs:
         with:
           ref: diagnostic/main-staging-targeted-diffs-v1
           fetch-depth: 0
-      - name: Persist targeted source diffs
+      - name: Persist targeted source diffs and helpers
         run: |
           set -Eeuo pipefail
-          mkdir -p diagnostics/main-staging-targeted-diffs-v1
+          out=diagnostics/main-staging-targeted-diffs-v1
+          mkdir -p "$out"
           git diff origin/main origin/staging/string-octal-v1 -- \
             src/frontend/parser_expression.c \
             src/frontend/parser_function.c \
@@ -24,9 +25,24 @@ jobs:
             src/frontend/parser_statement.c \
             src/frontend/ast_global.c \
             src/frontend/ast.h \
-            > diagnostics/main-staging-targeted-diffs-v1/targeted.patch
+            > "$out/targeted.patch"
+          git show origin/staging/string-octal-v1:src/frontend/parser_function.c > /tmp/staging-parser-function.c
+          python3 - <<'PY'
+          from pathlib import Path
+          s=Path('/tmp/staging-parser-function.c').read_text()
+          start=s.index('static bool\nparse_external_tentative_declaration_list_after_head(')
+          end=s.index('\nstatic bool parse_external_object_definition(', start)
+          Path('diagnostics/main-staging-targeted-diffs-v1/external-tentative-list-helper.c.txt').write_text(s[start:end]+'\n')
+          # Capture the exact caller window around the comma dispatch too.
+          needle='return parse_external_tentative_declaration_list_after_head(parser,'
+          pos=s.index(needle)
+          lo=s.rfind('\n',0,max(0,pos-1800))
+          hi=s.find('\n    if (!apply_function_attribute_list(',pos)
+          if hi < 0: hi=min(len(s),pos+2600)
+          Path('diagnostics/main-staging-targeted-diffs-v1/external-tentative-list-caller.txt').write_text(s[lo+1:hi])
+          PY
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add diagnostics/main-staging-targeted-diffs-v1/targeted.patch
-          git commit -m 'diagnostic: record targeted main staging source diff'
+          git add "$out"
+          git commit -m 'diagnostic: extract targeted staging helper sources' || true
           git push origin HEAD:diagnostic/main-staging-targeted-diffs-v1
