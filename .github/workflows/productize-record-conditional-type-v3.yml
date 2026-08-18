@@ -2,6 +2,8 @@ name: Productize Record Conditional Type V3
 on:
   push:
     branches: [product/record-conditional-type-v3]
+  pull_request:
+    branches: [main]
 permissions:
   contents: write
 jobs:
