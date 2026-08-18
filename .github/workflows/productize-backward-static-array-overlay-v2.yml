@@ -1,0 +1,82 @@
+name: Productize Backward Static Aggregate Overlay V2
+on:
+  push:
+    branches: [product/backward-static-array-overlay-v2]
+permissions:
+  contents: write
+jobs:
+  productize:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: product/backward-static-array-overlay-v2
+          fetch-depth: 0
+      - name: Materialize proven backward aggregate ownership
+        run: |
+          set -Eeuo pipefail
+          git fetch origin diagnostic/effective-convergence-snapshot-v1
+          python3 - <<'PY'
+          from pathlib import Path
+          y=Path('.github/workflows/compiler-c0.yml').read_text()
+          marker="          python3 - <<'PY'\n"
+          a=y.index(marker)+len(marker)
+          b=y.index("\n          PY",a)
+          lines=y[a:b].splitlines()
+          script='\n'.join(line[10:] if line.startswith('          ') else line for line in lines)+'\n'
+          Path('/tmp/record-overlay.py').write_text(script)
+          PY
+          python3 /tmp/record-overlay.py
+          for m in materialize-backward-record-compound-literal-v1.py materialize-backward-static-array-overlay-v1.py; do
+            git show origin/diagnostic/effective-convergence-snapshot-v1:tools/dev/$m > /tmp/$m
+            python3 /tmp/$m
+          done
+          git show d6ab1bbdaa525b4b0e64db7d7d41177a1bb76797:.github/workflows/compiler-c0.yml > .github/workflows/compiler-c0.yml
+          cat > tests/compiler/c0/backward_static_aggregate_overlay.c <<'EOF'
+          struct link { struct link *next; struct link *prev; };
+          struct item { long value; struct link link; };
+          struct holder { struct link head; struct item items[2]; long tail; };
+          static struct holder object = {
+              .tail = 9,
+              .head = { &object.head, &object.head },
+              .items = {
+                  [0] = (struct item){ .value = 3, .link = { &object.items[0].link, &object.items[0].link } },
+                  [1] = { .value = 4, .link = { &object.items[1].link, &object.items[1].link } },
+              },
+          };
+          int main(void) { return (int)(object.items[0].value + object.items[1].value + object.tail - 16); }
+          EOF
+          cat > tests/compiler/c0/run-backward-static-aggregate-overlay.sh <<'EOF'
+          #!/bin/sh
+          set -eu
+          root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+          minic=${MINIC:-"$root/build/debug/bin/minic"}
+          host_cc=${HOST_CC:-${CC:-cc}}
+          work=${BUILD_DIR:-"$root/build/debug"}/tests/backward-static-aggregate-overlay
+          mkdir -p "$work"
+          "$host_cc" -E -P -std=gnu11 -x c "$root/tests/compiler/c0/backward_static_aggregate_overlay.c" -o "$work/input.i"
+          "$minic" -S "$work/input.i" -o "$work/output.s"
+          test -s "$work/output.s"
+          EOF
+          chmod +x tests/compiler/c0/run-backward-static-aggregate-overlay.sh
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('tests/compiler/c0/run.sh'); s=p.read_text()
+          line='\nMINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \\\n  sh "$root/tests/compiler/c0/run-backward-static-aggregate-overlay.sh"\n'
+          if 'run-backward-static-aggregate-overlay.sh' not in s: p.write_text(s+line)
+          PY
+          clang-format-18 -i src/frontend/ast.h src/frontend/ast_global.c src/frontend/parser_global.c tests/compiler/c0/backward_static_aggregate_overlay.c
+          git diff --check
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/product
+          MINIC="$GITHUB_WORKSPACE/build/product/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/focused" sh tests/compiler/c0/run-backward-static-aggregate-overlay.sh
+          make -j4 check-fast MODE=release BUILD_DIR=build/check-fast
+      - name: Commit clean product source
+        run: |
+          set -Eeuo pipefail
+          rm .github/workflows/productize-backward-static-array-overlay-v2.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m 'frontend: overwrite zero-materialized static aggregate subobjects'
+          git push origin HEAD:product/backward-static-array-overlay-v2
