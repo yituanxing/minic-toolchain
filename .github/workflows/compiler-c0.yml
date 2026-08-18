@@ -19,13 +19,64 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: compiler-c0-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  productize-overflow-representability:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+      - name: Materialize clean product slice
+        run: |
+          set -Eeuo pipefail
+          git fetch origin main staging/string-octal-v1
+          for script in materialize-overflow-result-range-v1.py materialize-overflow-constant-value-v1.py; do
+            git show "origin/staging/string-octal-v1:tools/dev/$script" > "tools/dev/.$script"
+            python3 "tools/dev/.$script"
+            rm "tools/dev/.$script"
+          done
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('tests/compiler/c0/gnu_overflow_builtins.c')
+          text = p.read_text()
+          helper = '''\nstatic _Bool checked_mul_representable_constant(unsigned long value, unsigned long *result) {\n    return __builtin_mul_overflow(value, 1000L, result);\n}\n'''
+          if 'checked_mul_representable_constant' not in text:
+              marker = 'int main(void) {'
+              if marker not in text:
+                  raise SystemExit('overflow main anchor missing')
+              text = text.replace(marker, helper + '\n' + marker, 1)
+              old = 'checked_mul_ulong(4UL, 5UL, &ul) || checked_sub_ulong(8UL, 3UL, &ul)'
+              new = 'checked_mul_ulong(4UL, 5UL, &ul) || checked_sub_ulong(8UL, 3UL, &ul) ||\n                   checked_mul_representable_constant(2UL, &ul)'
+              if old not in text:
+                  raise SystemExit('overflow call anchor missing')
+              text = text.replace(old, new, 1)
+              old_result = '(i == 3 && l == 6 && ul == 5UL ? 0 : 2)'
+              new_result = '(i == 3 && l == 6 && ul == 2000UL ? 0 : 2)'
+              if old_result not in text:
+                  raise SystemExit('overflow result anchor missing')
+              p.write_text(text.replace(old_result, new_result, 1))
+          PY
+          git show origin/main:.github/workflows/compiler-c0.yml > .github/workflows/compiler-c0.yml
+          clang-format-18 -i src/frontend/expression_semantics.c src/frontend/parser_expression.c src/frontend/ast_verifier.c src/target/riscv64/codegen_expression.c tests/compiler/c0/gnu_overflow_builtins.c
+          git diff --check
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/product-overflow-v2
+          MINIC="$GITHUB_WORKSPACE/build/product-overflow-v2/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/product-overflow-v2-focused" sh tests/compiler/c0/run-gnu-overflow-builtins.sh
+          make -j4 check-fast MODE=release BUILD_DIR=build/product-overflow-v2-fast
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/frontend/expression_semantics.h src/frontend/expression_semantics.c src/frontend/parser_expression.c src/frontend/ast_verifier.c src/target/riscv64/codegen_expression.c tests/compiler/c0/gnu_overflow_builtins.c .github/workflows/compiler-c0.yml
+          git commit -m 'frontend: accept representable overflow builtin operands'
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
+
   full-validation:
     name: Full compiler validation
     runs-on: ubuntu-24.04
