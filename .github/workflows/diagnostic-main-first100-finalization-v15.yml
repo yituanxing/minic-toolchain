@@ -2,6 +2,8 @@ name: Diagnostic Main First100 Finalization V15
 on:
   push:
     branches: [diagnostic/main-first100-finalization-v15]
+  pull_request:
+    branches: [main]
 permissions:
   contents: write
 jobs:
