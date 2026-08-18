@@ -16,8 +16,9 @@ jobs:
         run: |
           set -Eeuo pipefail
           git fetch origin staging/string-octal-v1 --no-tags
-          git show origin/staging/string-octal-v1:tools/dev/materialize-query-incomplete-array-v1.py > /tmp/materialize-query-incomplete-array-v1.py
-          python3 /tmp/materialize-query-incomplete-array-v1.py
+          git show origin/staging/string-octal-v1:tools/dev/materialize-query-incomplete-array-v1.py > tools/dev/.productize-query-incomplete-array-v1.py
+          python3 tools/dev/.productize-query-incomplete-array-v1.py
+          rm tools/dev/.productize-query-incomplete-array-v1.py
       - name: Add permanent focused contract
         run: |
           set -Eeuo pipefail
