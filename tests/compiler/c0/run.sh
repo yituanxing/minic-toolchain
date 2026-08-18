@@ -444,3 +444,6 @@ MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" 
 
 MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
   sh "$root/tests/compiler/c0/run-external-array-redeclaration-owner.sh"
+
+MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+  sh "$root/tests/compiler/c0/run-static-local-prefix-attributes.sh"
