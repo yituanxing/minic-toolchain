@@ -19,88 +19,13 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: compiler-c0-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  productize-overflow-representability:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Checkout PR head
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.ref }}
-          fetch-depth: 0
-      - name: Materialize clean product slice
-        run: |
-          set -Eeuo pipefail
-          git fetch origin main staging/string-octal-v1
-          git show origin/staging/string-octal-v1:tools/dev/materialize-overflow-result-range-v1.py > tools/dev/.productize-overflow-range-v3.py
-          python3 tools/dev/.productize-overflow-range-v3.py
-          rm tools/dev/.productize-overflow-range-v3.py
-          python3 - <<'PY'
-          from pathlib import Path
-
-          def replace_once(path, old, new):
-              p = Path(path)
-              text = p.read_text()
-              count = text.count(old)
-              if count != 1:
-                  raise SystemExit(f'{path}: anchor count={count}')
-              p.write_text(text.replace(old, new, 1))
-
-          replace_once(
-              'src/frontend/const_eval.h',
-              '''bool minic_const_value_is_zero(const MinicC0Program *program,\n                               const MinicTargetInfo *target,\n                               const MinicConstValue *value,\n                               bool *is_zero);\n''',
-              '''bool minic_const_value_integer_representable_in_type(\n    const MinicC0Program *program,\n    const MinicTargetInfo *target,\n    const MinicConstValue *value,\n    MinicType destination_type);\nbool minic_const_value_is_zero(const MinicC0Program *program,\n                               const MinicTargetInfo *target,\n                               const MinicConstValue *value,\n                               bool *is_zero);\n''')
-
-          replace_once(
-              'src/frontend/const_eval.c',
-              '''bool minic_const_value_convert_integer(const MinicC0Program *program,\n                                       const MinicTargetInfo *target,\n                                       const MinicConstValue *source,\n                                       MinicType type,\n                                       MinicConstValue *result) {\n    return convert_value(program, target, source, type, result);\n}\n''',
-              '''bool minic_const_value_convert_integer(const MinicC0Program *program,\n                                       const MinicTargetInfo *target,\n                                       const MinicConstValue *source,\n                                       MinicType type,\n                                       MinicConstValue *result) {\n    return convert_value(program, target, source, type, result);\n}\n\nbool minic_const_value_integer_representable_in_type(\n    const MinicC0Program *program,\n    const MinicTargetInfo *target,\n    const MinicConstValue *value,\n    MinicType destination_type) {\n    unsigned int destination_width;\n    uint64_t unsigned_value;\n\n    if (program == NULL || target == NULL || value == NULL ||\n        !minic_type_is_integer(value->type) || !minic_type_is_integer(destination_type) ||\n        !integer_width(program, target, destination_type, &destination_width) ||\n        destination_width == 0U) {\n        return false;\n    }\n\n    if (minic_type_is_signed_integer(value->type)) {\n        int64_t signed_value;\n\n        if (!value_signed(program, target, value, &signed_value)) {\n            return false;\n        }\n        if (minic_type_is_bool_integer(destination_type)) {\n            return signed_value == 0 || signed_value == 1;\n        }\n        if (minic_type_is_signed_integer(destination_type)) {\n            int64_t minimum;\n            int64_t maximum;\n\n            return signed_range(\n                       program, target, destination_type, &minimum, &maximum) &&\n                   signed_value >= minimum && signed_value <= maximum;\n        }\n        if (signed_value < 0) {\n            return false;\n        }\n        unsigned_value = (uint64_t)signed_value;\n    } else if (!normalize_bits(program, target, value->type, value->bits, &unsigned_value)) {\n        return false;\n    }\n\n    if (minic_type_is_bool_integer(destination_type)) {\n        return unsigned_value <= UINT64_C(1);\n    }\n    if (minic_type_is_signed_integer(destination_type)) {\n        uint64_t maximum = destination_width == 64U\n                               ? (uint64_t)INT64_MAX\n                               : (UINT64_C(1) << (destination_width - 1U)) - UINT64_C(1);\n        return unsigned_value <= maximum;\n    }\n    if (destination_width == 64U) {\n        return true;\n    }\n    return unsigned_value <= (UINT64_C(1) << destination_width) - UINT64_C(1);\n}\n''')
-
-          parser = Path('src/frontend/parser_expression.c')
-          text = parser.read_text()
-          marker = '''static bool parse_builtin_overflow(MinicParser *parser,\n                                   MinicOverflowOperator operator_kind,\n                                   MinicExpressionId *expression_id) {\n'''
-          helper = '''static bool normalize_overflow_integer_operand(MinicParser *parser,\n                                               MinicExpressionId *operand_id,\n                                               MinicType result_type) {\n    const MinicExpression *operand;\n    MinicConstValue constant;\n    MinicExpression conversion;\n    MinicExpressionId source_id;\n    MinicSourceSpan span;\n\n    if (parser == NULL || operand_id == NULL) {\n        return false;\n    }\n    source_id = *operand_id;\n    operand = minic_c0_program_expression(parser->program, source_id);\n    if (operand == NULL || !minic_type_is_integer(operand->type)) {\n        return false;\n    }\n    if (minic_c0_integer_range_representable_in_type(\n            parser->program, parser->target_info, operand->type, result_type)) {\n        return true;\n    }\n    if (!minic_const_eval_integer(parser->program, parser->target_info, source_id, &constant) ||\n        !minic_const_value_integer_representable_in_type(\n            parser->program, parser->target_info, &constant, result_type)) {\n        return false;\n    }\n\n    span = operand->span;\n    (void)memset(&conversion, 0, sizeof(conversion));\n    conversion.kind = MINIC_EXPRESSION_CAST;\n    conversion.span = span;\n    conversion.type = result_type;\n    conversion.value_category = MINIC_VALUE_RVALUE;\n    conversion.value.unary.operand = source_id;\n    return minic_parser_add_expression(parser, &conversion, operand_id);\n}\n\n''' + marker
-          if text.count(marker) != 1:
-              raise SystemExit('overflow parser marker mismatch')
-          text = text.replace(marker, helper, 1)
-          old_guard = '''    left = minic_c0_program_expression(parser->program, left_id);\n    right = minic_c0_program_expression(parser->program, right_id);\n    result_pointer = minic_c0_program_expression(parser->program, result_pointer_id);\n    if (left == NULL || right == NULL || result_pointer == NULL ||\n        !minic_type_pointee(result_pointer->type, &result_type) ||\n        !minic_type_is_integer(result_type) || minic_type_is_bool_integer(result_type) ||\n        !minic_c0_integer_range_representable_in_type(\n            parser->program, parser->target_info, left->type, result_type) ||\n        !minic_c0_integer_range_representable_in_type(\n            parser->program, parser->target_info, right->type, result_type)) {\n        minic_parser_error(\n            parser,\n            \"overflow builtin currently requires integer operand ranges representable by the \"\n            \"non-bool result pointee type\");\n        return false;\n    }\n\n    (void)memset(&expression, 0, sizeof(expression));\n    expression.kind = MINIC_EXPRESSION_BUILTIN_OVERFLOW;\n    expression.span.begin = begin;\n    expression.span.end = result_pointer->span.end;\n'''
-          new_guard = '''    left = minic_c0_program_expression(parser->program, left_id);\n    right = minic_c0_program_expression(parser->program, right_id);\n    result_pointer = minic_c0_program_expression(parser->program, result_pointer_id);\n    if (left == NULL || right == NULL || result_pointer == NULL ||\n        !minic_type_pointee(result_pointer->type, &result_type) ||\n        !minic_type_is_integer(result_type) || minic_type_is_bool_integer(result_type)) {\n        minic_parser_error(parser,\n                           \"overflow builtin requires integer operands and a non-bool integer \"\n                           \"result pointee\");\n        return false;\n    }\n    {\n        MinicSourcePosition result_end = result_pointer->span.end;\n\n        if (!normalize_overflow_integer_operand(parser, &left_id, result_type) ||\n            !normalize_overflow_integer_operand(parser, &right_id, result_type)) {\n            minic_parser_error(\n                parser,\n                \"overflow builtin operand is not representable by the result pointee type\");\n            return false;\n        }\n        (void)memset(&expression, 0, sizeof(expression));\n        expression.kind = MINIC_EXPRESSION_BUILTIN_OVERFLOW;\n        expression.span.begin = begin;\n        expression.span.end = result_end;\n    }\n'''
-          if text.count(old_guard) != 1:
-              raise SystemExit(f'overflow guard anchor count={text.count(old_guard)}')
-          parser.write_text(text.replace(old_guard, new_guard, 1))
-
-          test = Path('tests/compiler/c0/gnu_overflow_builtins.c')
-          text = test.read_text()
-          helper_test = '''\nstatic _Bool checked_mul_representable_constant(unsigned long value, unsigned long *result) {\n    return __builtin_mul_overflow(value, 1000L, result);\n}\n'''
-          if 'checked_mul_representable_constant' not in text:
-              text = text.replace('int main(void) {', helper_test + '\nint main(void) {', 1)
-              text = text.replace(
-                  'checked_mul_ulong(4UL, 5UL, &ul) || checked_sub_ulong(8UL, 3UL, &ul)',
-                  'checked_mul_ulong(4UL, 5UL, &ul) || checked_sub_ulong(8UL, 3UL, &ul) ||\n        checked_mul_representable_constant(2UL, &ul)',
-                  1)
-              text = text.replace('(i == 3 && l == 6 && ul == 5UL ? 0 : 2)',
-                                  '(i == 3 && l == 6 && ul == 2000UL ? 0 : 2)', 1)
-              test.write_text(text)
-          PY
-          git show origin/main:.github/workflows/compiler-c0.yml > .github/workflows/compiler-c0.yml
-          clang-format-18 -i src/frontend/expression_semantics.h src/frontend/expression_semantics.c src/frontend/const_eval.h src/frontend/const_eval.c src/frontend/parser_expression.c src/frontend/ast_verifier.c src/target/riscv64/codegen_expression.c tests/compiler/c0/gnu_overflow_builtins.c
-          git diff --check
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/product-overflow-v3
-          MINIC="$GITHUB_WORKSPACE/build/product-overflow-v3/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/product-overflow-v3-focused" sh tests/compiler/c0/run-gnu-overflow-builtins.sh
-          make -j4 check-fast MODE=release BUILD_DIR=build/product-overflow-v3-fast
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add src/frontend/expression_semantics.h src/frontend/expression_semantics.c src/frontend/const_eval.h src/frontend/const_eval.c src/frontend/parser_expression.c src/frontend/ast_verifier.c src/target/riscv64/codegen_expression.c tests/compiler/c0/gnu_overflow_builtins.c .github/workflows/compiler-c0.yml
-          git commit -m 'frontend: accept representable overflow builtin operands'
-          git push origin HEAD:${{ github.event.pull_request.head.ref }}
-
   full-validation:
     name: Full compiler validation
     runs-on: ubuntu-24.04

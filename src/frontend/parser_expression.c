@@ -1674,6 +1674,43 @@ static bool parse_builtin_unary(MinicParser *parser,
            minic_parser_add_expression(parser, &expression, expression_id);
 }
 
+static bool normalize_overflow_integer_operand(MinicParser *parser,
+                                               MinicExpressionId *operand_id,
+                                               MinicType result_type) {
+    const MinicExpression *operand;
+    MinicConstValue constant;
+    MinicExpression conversion;
+    MinicExpressionId source_id;
+    MinicSourceSpan span;
+
+    if (parser == NULL || operand_id == NULL) {
+        return false;
+    }
+    source_id = *operand_id;
+    operand = minic_c0_program_expression(parser->program, source_id);
+    if (operand == NULL || !minic_type_is_integer(operand->type)) {
+        return false;
+    }
+    if (minic_c0_integer_range_representable_in_type(
+            parser->program, parser->target_info, operand->type, result_type)) {
+        return true;
+    }
+    if (!minic_const_eval_integer(parser->program, parser->target_info, source_id, &constant) ||
+        !minic_const_value_integer_representable_in_type(
+            parser->program, parser->target_info, &constant, result_type)) {
+        return false;
+    }
+
+    span = operand->span;
+    (void)memset(&conversion, 0, sizeof(conversion));
+    conversion.kind = MINIC_EXPRESSION_CAST;
+    conversion.span = span;
+    conversion.type = result_type;
+    conversion.value_category = MINIC_VALUE_RVALUE;
+    conversion.value.unary.operand = source_id;
+    return minic_parser_add_expression(parser, &conversion, operand_id);
+}
+
 static bool parse_builtin_overflow(MinicParser *parser,
                                    MinicOverflowOperator operator_kind,
                                    MinicExpressionId *expression_id) {
@@ -1708,18 +1745,26 @@ static bool parse_builtin_overflow(MinicParser *parser,
     result_pointer = minic_c0_program_expression(parser->program, result_pointer_id);
     if (left == NULL || right == NULL || result_pointer == NULL ||
         !minic_type_pointee(result_pointer->type, &result_type) ||
-        !minic_type_is_integer(result_type) || minic_type_is_bool_integer(result_type) ||
-        !minic_type_equal(left->type, result_type) || !minic_type_equal(right->type, result_type)) {
+        !minic_type_is_integer(result_type) || minic_type_is_bool_integer(result_type)) {
         minic_parser_error(parser,
-                           "overflow builtin currently requires matching non-bool integer operands "
-                           "and result pointee");
+                           "overflow builtin requires integer operands and a non-bool integer "
+                           "result pointee");
         return false;
     }
+    {
+        MinicSourcePosition result_end = result_pointer->span.end;
 
-    (void)memset(&expression, 0, sizeof(expression));
-    expression.kind = MINIC_EXPRESSION_BUILTIN_OVERFLOW;
-    expression.span.begin = begin;
-    expression.span.end = result_pointer->span.end;
+        if (!normalize_overflow_integer_operand(parser, &left_id, result_type) ||
+            !normalize_overflow_integer_operand(parser, &right_id, result_type)) {
+            minic_parser_error(
+                parser, "overflow builtin operand is not representable by the result pointee type");
+            return false;
+        }
+        (void)memset(&expression, 0, sizeof(expression));
+        expression.kind = MINIC_EXPRESSION_BUILTIN_OVERFLOW;
+        expression.span.begin = begin;
+        expression.span.end = result_end;
+    }
     expression.type = minic_type_bool();
     expression.value_category = MINIC_VALUE_RVALUE;
     expression.value.overflow.operator_kind = operator_kind;

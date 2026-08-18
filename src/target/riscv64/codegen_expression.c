@@ -1,4 +1,5 @@
 #include "target/riscv64/codegen_internal.h"
+#include "frontend/expression_semantics.h"
 #include "target/data_layout.h"
 #include "target/riscv64/abi.h"
 #include "target/riscv64/layout.h"
@@ -1191,7 +1192,10 @@ static bool minic_riscv64_emit_overflow_builtin(FILE *file,
     if (left == NULL || right == NULL || result_pointer == NULL ||
         !minic_type_pointee(result_pointer->type, &result_type) ||
         !minic_type_is_integer(result_type) || minic_type_is_bool_integer(result_type) ||
-        !minic_type_equal(left->type, result_type) || !minic_type_equal(right->type, result_type) ||
+        !minic_c0_integer_range_representable_in_type(
+            program, minic_default_target_info(), left->type, result_type) ||
+        !minic_c0_integer_range_representable_in_type(
+            program, minic_default_target_info(), right->type, result_type) ||
         !minic_riscv64_type_layout(program, result_type, &result_size, &result_alignment) ||
         result_size == 0U || result_size > 8U) {
         return false;
