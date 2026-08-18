@@ -2,6 +2,8 @@ name: Productize Function Pointer Array Declarator V5
 on:
   push:
     branches: [product/function-pointer-array-declarator-v5]
+  pull_request:
+    branches: [main]
 permissions:
   contents: write
 jobs:
