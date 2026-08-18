@@ -1,4 +1,4 @@
-name: Productize Canonical Array Redeclaration Owner V3
+name: Productize Canonical Array Redeclaration Owner V3 Durable
 on:
   push:
     branches: [product/canonical-array-redeclaration-owner-v3]
@@ -13,25 +13,29 @@ jobs:
         with:
           ref: product/canonical-array-redeclaration-owner-v3
           fetch-depth: 0
-      - name: Apply validated owner fix and regression
+      - name: Apply validate and persist
+        shell: bash
         run: |
-          set -Eeuo pipefail
+          set -u
+          out=diagnostics/canonical-array-redeclaration-owner-v3
+          mkdir -p "$out"
+          stage=materialize
+          status=0
           mat=tools/dev/.productize-array-owner-v3.py
-          git show origin/staging/string-octal-v1:tools/dev/materialize-canonical-array-redeclaration-owner-v1.py > "$mat"
-          python3 "$mat"
-          rm "$mat"
-          cat > tests/compiler/c0/external_array_redeclaration_owner.c <<'EOF'
+          git show origin/staging/string-octal-v1:tools/dev/materialize-canonical-array-redeclaration-owner-v1.py > "$mat" 2>"$out/materialize-fetch.err" || status=$?
+          if [ "$status" -eq 0 ]; then python3 "$mat" >"$out/materialize.log" 2>&1 || status=$?; fi
+          rm -f "$mat"
+
+          if [ "$status" -eq 0 ]; then
+            stage=regression-source
+            cat > tests/compiler/c0/external_array_redeclaration_owner.c <<'EOF'
           int tentative_values[4];
           int tentative_values[];
-
           int defined_values[4];
           int defined_values[4] = {1, 2, 3, 4};
-
-          int main(void) {
-              return tentative_values[0] + defined_values[3] - 4;
-          }
+          int main(void) { return tentative_values[0] + defined_values[3] - 4; }
           EOF
-          cat > tests/compiler/c0/run-external-array-redeclaration-owner.sh <<'EOF'
+            cat > tests/compiler/c0/run-external-array-redeclaration-owner.sh <<'EOF'
           #!/bin/sh
           set -eu
           root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
@@ -46,35 +50,41 @@ jobs:
           grep -F '.globl defined_values' "$work/output.s" >/dev/null
           grep -F '.size defined_values, 16' "$work/output.s" >/dev/null
           grep -F '  .word 4' "$work/output.s" >/dev/null
-          printf '%s\n' 'PASS compiler/c0/external-array-redeclaration-owner'
           EOF
-          chmod +x tests/compiler/c0/run-external-array-redeclaration-owner.sh
-          cat >> tests/compiler/c0/run.sh <<'EOF'
+            chmod +x tests/compiler/c0/run-external-array-redeclaration-owner.sh
+            cat >> tests/compiler/c0/run.sh <<'EOF'
 
-          MINIC="$minic" \
-          HOST_CC="$host_cc" \
-          BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
-          sh "$root/tests/compiler/c0/run-external-array-redeclaration-owner.sh"
+          MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+            sh "$root/tests/compiler/c0/run-external-array-redeclaration-owner.sh"
           EOF
-          clang-format-18 -i src/frontend/parser_function.c tests/compiler/c0/external_array_redeclaration_owner.c
-          git diff --check
-      - name: Validate focused Werror and fast gates
-        run: |
-          set -Eeuo pipefail
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/array-owner-v3
-          MINIC="$GITHUB_WORKSPACE/build/array-owner-v3/bin/minic" \
-          BUILD_DIR="$GITHUB_WORKSPACE/build/array-owner-v3" \
-            sh tests/compiler/c0/run-external-array-redeclaration-owner.sh
-          make -j4 check-fast MODE=release BUILD_DIR=build/array-owner-v3-fast
-      - name: Commit clean product diff
-        run: |
-          set -Eeuo pipefail
-          git rm .github/workflows/productize-canonical-array-redeclaration-owner-v3.yml
+            clang-format-18 -i src/frontend/parser_function.c tests/compiler/c0/external_array_redeclaration_owner.c >"$out/format.log" 2>&1 || status=$?
+          fi
+          if [ "$status" -eq 0 ]; then
+            stage=build
+            make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/array-owner-v3 >"$out/build.log" 2>&1 || status=$?
+          fi
+          if [ "$status" -eq 0 ]; then
+            stage=focused
+            MINIC="$GITHUB_WORKSPACE/build/array-owner-v3/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/array-owner-v3" \
+              sh tests/compiler/c0/run-external-array-redeclaration-owner.sh >"$out/focused.log" 2>&1 || status=$?
+          fi
+          if [ "$status" -eq 0 ]; then
+            stage=check-fast
+            make -j4 check-fast MODE=release BUILD_DIR=build/array-owner-v3-fast >"$out/check-fast.log" 2>&1 || status=$?
+          fi
+          printf 'final_stage=%s\nfinal_status=%s\n' "$stage" "$status" > "$out/status.txt"
+          git diff -- src/frontend/parser_function.c tests/compiler/c0 > "$out/product.patch" || true
+
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add src/frontend/parser_function.c \
-                  tests/compiler/c0/external_array_redeclaration_owner.c \
-                  tests/compiler/c0/run-external-array-redeclaration-owner.sh \
-                  tests/compiler/c0/run.sh
-          git commit -m 'frontend: retire transient external array redeclarations'
+          if [ "$status" -eq 0 ]; then
+            git rm .github/workflows/productize-canonical-array-redeclaration-owner-v3.yml
+            rm -rf "$out"
+            git add src/frontend/parser_function.c tests/compiler/c0/external_array_redeclaration_owner.c tests/compiler/c0/run-external-array-redeclaration-owner.sh tests/compiler/c0/run.sh
+            git commit -m 'frontend: retire transient external array redeclarations'
+          else
+            git add "$out"
+            git commit -m 'diagnostic: record array owner v3 productization failure' || true
+          fi
           git push origin HEAD:product/canonical-array-redeclaration-owner-v3
+          exit 0
