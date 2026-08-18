@@ -61,7 +61,7 @@ jobs:
           retention-days: 7
 
   productize-backward-aggregate:
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/product/backward-static-aggregate-overlay-v7' && github.actor != 'github-actions[bot]' }}
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/product/backward-static-aggregate-overlay-v7' }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -281,8 +281,9 @@ static bool overwrite_static_zero_record_constant(MinicParser *parser,
         run: |
           set -Eeuo pipefail
           git show origin/main:.github/workflows/compiler-c0.yml > .github/workflows/compiler-c0.yml
+          rm -f diagnostics/productizer-backward-v7-trigger.txt
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add src/frontend/ast.h src/frontend/ast_global.c src/frontend/parser_global.c tests/compiler/c0/backward_static_aggregate_overlay.c tests/compiler/c0/run-backward-static-aggregate-overlay.sh tests/compiler/c0/run.sh .github/workflows/compiler-c0.yml
+          git add -A
           git commit -m 'frontend: overlay backward static aggregate subobjects'
           git push origin HEAD:product/backward-static-aggregate-overlay-v7
