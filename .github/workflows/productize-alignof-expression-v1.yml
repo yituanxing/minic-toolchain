@@ -1,0 +1,61 @@
+name: Productize Alignof Expression V1
+on:
+  push:
+    branches: [product/alignof-expression-v1]
+permissions:
+  contents: write
+jobs:
+  productize:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: product/alignof-expression-v1
+          fetch-depth: 0
+      - name: Import proven alignof expression implementation
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          import subprocess
+          from pathlib import Path
+          main = Path('src/frontend/parser_expression.c').read_text()
+          staging = subprocess.check_output(['git','show','origin/staging/string-octal-v1:src/frontend/parser_expression.c'], text=True)
+          s0 = staging.index('static bool alignof_expression_alignment(')
+          s1 = staging.index('\nstatic bool parse_sizeof(', s0)
+          block = staging[s0:s1]
+          m0 = main.index('static bool parse_alignof(')
+          m1 = main.index('\nstatic bool parse_sizeof(', m0)
+          Path('src/frontend/parser_expression.c').write_text(main[:m0] + block + main[m1:])
+          PY
+          cat > tests/compiler/c0/alignof_expression.c <<'EOF'
+          struct inner { char c; long value; };
+          struct outer { char pad; struct inner inner; };
+          static struct outer object;
+          int main(void) {
+              unsigned long a = __alignof__(object.inner.value);
+              unsigned long b = __alignof__(object.inner);
+              return (a == __alignof__(long) && b == __alignof__(struct inner)) ? 0 : 1;
+          }
+          EOF
+          cat >> tests/compiler/c0/run.sh <<'EOF'
+
+          compile_source alignof_expression alignof_expression
+          expect_instructions alignof_expression "li a0, 0"
+          EOF
+          clang-format-18 -i src/frontend/parser_expression.c tests/compiler/c0/alignof_expression.c
+          git diff --check
+      - name: Validate Werror and fast gates
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/alignof-expression-v1
+          make -j4 check-fast MODE=release BUILD_DIR=build/alignof-expression-v1-fast
+      - name: Commit clean product diff
+        run: |
+          set -Eeuo pipefail
+          git rm .github/workflows/productize-alignof-expression-v1.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/frontend/parser_expression.c tests/compiler/c0/alignof_expression.c tests/compiler/c0/run.sh
+          git commit -m 'frontend: evaluate GNU alignof expressions'
+          git push origin HEAD:product/alignof-expression-v1
