@@ -1,0 +1,61 @@
+name: Productize Fixed Call Character Pointer V1
+on:
+  push:
+    branches: [product/fixed-call-character-pointer-v1]
+permissions:
+  contents: write
+jobs:
+  productize:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: product/fixed-call-character-pointer-v1
+          fetch-depth: 0
+      - name: Apply product slice
+        run: |
+          set -Eeuo pipefail
+          git show origin/staging/string-octal-v1:tools/dev/materialize-fixed-call-character-pointer-v1.py > /tmp/materialize.py
+          python3 /tmp/materialize.py
+          cat > tests/compiler/c0/fixed_call_character_pointer.c <<'EOF'
+          static long take_unsigned(const unsigned char *p) { return p[0]; }
+          static long take_signed(const signed char *p) { return p[0]; }
+          int main(void) {
+              char bytes[1] = {0};
+              return (int)(take_unsigned(bytes) + take_signed(bytes));
+          }
+          EOF
+          cat > tests/compiler/c0/run-fixed-call-character-pointer.sh <<'EOF'
+          #!/bin/sh
+          set -eu
+          root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+          minic=${MINIC:-"$root/build/debug/bin/minic"}
+          work=${BUILD_DIR:-"$root/build/debug"}/tests/fixed-call-character-pointer
+          mkdir -p "$work"
+          "$minic" -S "$root/tests/compiler/c0/fixed_call_character_pointer.c" -o "$work/output.s"
+          test -s "$work/output.s"
+          EOF
+          chmod +x tests/compiler/c0/run-fixed-call-character-pointer.sh
+          cat >> tests/compiler/c0/run.sh <<'EOF'
+
+          MINIC="$minic" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+            sh "$root/tests/compiler/c0/run-fixed-call-character-pointer.sh"
+          EOF
+          clang-format-18 -i src/frontend/parser_expression.c tests/compiler/c0/fixed_call_character_pointer.c
+          git diff --check
+      - name: Validate
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/char-call-v1
+          MINIC="$GITHUB_WORKSPACE/build/char-call-v1/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/char-call-v1-focused" sh tests/compiler/c0/run-fixed-call-character-pointer.sh
+          make -j4 check-fast MODE=release BUILD_DIR=build/char-call-v1-fast
+      - name: Commit clean product diff
+        run: |
+          set -Eeuo pipefail
+          git rm .github/workflows/productize-fixed-call-character-pointer-v1.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/frontend/parser_expression.c tests/compiler/c0/fixed_call_character_pointer.c tests/compiler/c0/run-fixed-call-character-pointer.sh tests/compiler/c0/run.sh
+          git commit -m 'frontend: allow character-pointer conversions at fixed calls'
+          git push origin HEAD:product/fixed-call-character-pointer-v1
