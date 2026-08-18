@@ -19,6 +19,7 @@ int call_typedef(const_callback_t callback, int value) {
     return callback(value);
 }
 
+/* Array suffixes belong to the function-pointer declarator, not the function type. */
 extern int (*external_handlers[])(int value);
 static int (*static_handlers[1])(int value) = {0};
 
