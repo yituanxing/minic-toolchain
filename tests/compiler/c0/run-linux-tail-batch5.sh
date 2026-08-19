@@ -14,7 +14,11 @@ static const struct token tokens[] = {
     { 2, "two" },
 };
 SRC
-"$minic" -S "$work/global-inferred.c" -o "$work/global-inferred.s"
+if ! "$minic" -S "$work/global-inferred.c" -o "$work/global-inferred.s"; then
+    printf '%s\n' '--- partial global-inferred.s ---' >&2
+    test -f "$work/global-inferred.s" && cat "$work/global-inferred.s" >&2 || true
+    exit 1
+fi
 grep -F '.size tokens, 32' "$work/global-inferred.s" >/dev/null
 grep -F '__minic_str_' "$work/global-inferred.s" >/dev/null
 
@@ -30,7 +34,11 @@ int probe(void)
     return 0;
 }
 SRC
-"$minic" -S "$work/local-inferred.c" -o "$work/local-inferred.s"
+if ! "$minic" -S "$work/local-inferred.c" -o "$work/local-inferred.s"; then
+    printf '%s\n' '--- partial local-inferred.s ---' >&2
+    test -f "$work/local-inferred.s" && cat "$work/local-inferred.s" >&2 || true
+    exit 1
+fi
 grep -F '.size __minic_static_local_' "$work/local-inferred.s" >/dev/null
 
 printf '%s\n' 'PASS compiler/c0/linux-tail-batch5 inferred-aggregate=global+static-local relocation-slot=logical+layout runtime-access=decoupled'
