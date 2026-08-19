@@ -1,4 +1,5 @@
 name: Linux 6.6.143 Batch Pressure
+# Replay trigger: promoted static record designator candidate.
 
 on:
   push:
