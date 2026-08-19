@@ -507,8 +507,7 @@ static bool static_pointer_initializer_type_compatible(const MinicParser *parser
         return true;
     }
     source = minic_c0_program_expression(parser->program, expression_id);
-    return source != NULL &&
-           minic_type_gnu_pointer_sign_compatible(target_type, source->type);
+    return source != NULL && minic_type_gnu_pointer_sign_compatible(target_type, source->type);
 }
 
 static bool parse_static_pointer_initializer(MinicParser *parser,
