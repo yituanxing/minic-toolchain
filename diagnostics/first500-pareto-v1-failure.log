@@ -1,0 +1,1 @@
+src/frontend/parser_expression.c: expected one occurrence, found 0: '    if (!minic_type_is_void(target_type) &&\n        !minic_type_cast_compatible(target_type, operand->type) &&\n        !'
