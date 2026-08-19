@@ -37,6 +37,23 @@ static struct FunctionAddressHolder aggregate_array_nine = {
     (void *)&global_address_array[9],
 };
 
+struct NestedSubobjectAddressTarget {
+    char tag;
+    char bytes[5];
+};
+
+struct SubobjectAddressTarget {
+    int prefix;
+    int values[4];
+    struct NestedSubobjectAddressTarget nested;
+};
+
+static struct SubobjectAddressTarget subobject_address_target;
+static int *member_array_decay_address = subobject_address_target.values;
+static int *member_array_element_address = &subobject_address_target.values[2];
+static char *nested_member_array_decay_address = subobject_address_target.nested.bytes;
+static char *nested_member_array_element_address = &subobject_address_target.nested.bytes[3];
+
 int read_static_object_addresses(void) {
     return external_address != (void *)0 && explicit_object_cast_address != (void *)0 &&
            function_address != (void *)0 && aggregate_function_address.address != (void *)0 &&
