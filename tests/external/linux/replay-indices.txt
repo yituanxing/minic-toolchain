@@ -1,7 +1,14 @@
-# Linux first500 TUs whose current frontier is promoted static record designators.
+# All Linux first500 TUs at the promoted static-record-designator frontier.
+118
+122
+134
 197
 200
 202
 214
 216
 228
+251
+290
+340
+389
