@@ -484,7 +484,13 @@ static bool aggregate_scalar_slot_layout(const MinicDataLayout *layout,
                 return true;
             }
             if (*slot_index == before) {
-                return false;
+                size_t child_slots;
+
+                if (!minic_c0_type_initializer_slot_count(
+                        program, array_type->element_type, &child_slots) ||
+                    child_slots != 0U) {
+                    return false;
+                }
             }
         }
         return false;
@@ -528,7 +534,12 @@ static bool aggregate_scalar_slot_layout(const MinicDataLayout *layout,
                     return true;
                 }
                 if (*slot_index == before) {
-                    return false;
+                    size_t child_slots;
+
+                    if (!minic_c0_type_initializer_slot_count(program, field->type, &child_slots) ||
+                        child_slots != 0U) {
+                        return false;
+                    }
                 }
             }
         }
@@ -543,6 +554,7 @@ bool minic_data_layout_global_relocation_offset(const MinicDataLayout *layout,
                                                 size_t *offset) {
     size_t object_alignment;
     size_t object_size;
+    size_t relocation_width;
     size_t resolved_offset;
 
     if (layout == NULL || program == NULL || object == NULL || relocation == NULL ||
@@ -551,6 +563,7 @@ bool minic_data_layout_global_relocation_offset(const MinicDataLayout *layout,
         return false;
     }
     (void)object_alignment;
+    relocation_width = layout->pointer_size;
     if (relocation->location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_SCALAR) {
         if (relocation->location_index != 0U || !minic_type_is_pointer(object->type)) {
             return false;
@@ -592,17 +605,21 @@ bool minic_data_layout_global_relocation_offset(const MinicDataLayout *layout,
     } else if (relocation->location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR) {
         MinicType slot_type;
         size_t remaining;
+        size_t slot_alignment;
 
         remaining = relocation->location_index;
         if (!aggregate_scalar_slot_layout(
                 layout, program, object->type, 0U, &remaining, &slot_type, &resolved_offset) ||
-            !minic_type_is_pointer(slot_type)) {
+            (!minic_type_is_pointer(slot_type) && !minic_type_is_integer(slot_type)) ||
+            !minic_data_layout_type(
+                layout, program, slot_type, &relocation_width, &slot_alignment)) {
             return false;
         }
+        (void)slot_alignment;
     } else {
         return false;
     }
-    if (resolved_offset > object_size || layout->pointer_size > object_size - resolved_offset) {
+    if (resolved_offset > object_size || relocation_width > object_size - resolved_offset) {
         return false;
     }
     *offset = resolved_offset;

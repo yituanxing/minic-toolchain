@@ -349,6 +349,71 @@ bool minic_c0_types_compatible(const MinicC0Program *program, MinicType left, Mi
            minic_c0_array_shapes_compatible(program, left_unqualified, right_unqualified);
 }
 
+static bool minic_c0_type_initializer_slot_count_impl(const MinicC0Program *program,
+                                                      MinicType type,
+                                                      size_t *slot_count) {
+    if (program == NULL || slot_count == NULL) {
+        return false;
+    }
+    if (minic_type_is_integer(type) || minic_type_is_pointer(type)) {
+        *slot_count = 1U;
+        return true;
+    }
+    if (minic_type_is_array(type)) {
+        const MinicArrayType *array_type;
+        size_t element_slots;
+
+        array_type = minic_c0_program_array_type(program, type.array_type_id);
+        if (array_type == NULL || array_type->element_count == 0U ||
+            !minic_c0_type_initializer_slot_count_impl(
+                program, array_type->element_type, &element_slots) ||
+            (element_slots != 0U && array_type->element_count > SIZE_MAX / element_slots)) {
+            return false;
+        }
+        *slot_count = array_type->element_count * element_slots;
+        return true;
+    }
+    if (minic_type_is_record(type)) {
+        const MinicRecord *record;
+        size_t field_index;
+        size_t field_limit;
+        size_t total;
+
+        record = minic_c0_program_record(program, type.record_id);
+        if (record == NULL || !record->is_complete) {
+            return false;
+        }
+        field_limit = record->is_union ? 1U : record->field_count;
+        total = 0U;
+        for (field_index = 0U; field_index < field_limit; ++field_index) {
+            const MinicRecordField *field;
+            size_t element_slots;
+            size_t field_slots;
+
+            field = &record->fields[field_index];
+            if (field->element_count == 0U || field->is_flexible_array ||
+                !minic_c0_type_initializer_slot_count_impl(program, field->type, &element_slots) ||
+                (element_slots != 0U && field->element_count > SIZE_MAX / element_slots)) {
+                return false;
+            }
+            field_slots = field->element_count * element_slots;
+            if (total > SIZE_MAX - field_slots) {
+                return false;
+            }
+            total += field_slots;
+        }
+        *slot_count = total;
+        return true;
+    }
+    return false;
+}
+
+bool minic_c0_type_initializer_slot_count(const MinicC0Program *program,
+                                          MinicType type,
+                                          size_t *slot_count) {
+    return minic_c0_type_initializer_slot_count_impl(program, type, slot_count);
+}
+
 bool minic_c0_program_add_expression(MinicC0Program *program,
                                      const MinicExpression *expression,
                                      MinicExpressionId *expression_id) {

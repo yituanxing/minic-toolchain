@@ -423,7 +423,8 @@ static bool minic_riscv64_emit_direct_record_values(FILE *file,
         if (relocation != NULL &&
             relocation->location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_RECORD_FIELD &&
             relocation->location_index == field_index) {
-            if (!minic_type_is_pointer(field->type) || value != 0U ||
+            if ((!minic_type_is_pointer(field->type) && !minic_type_is_integer(field->type)) ||
+                value != 0U ||
                 !minic_riscv64_emit_symbol_value(file, program, relocation, field_size)) {
                 return false;
             }
@@ -477,7 +478,7 @@ static bool minic_riscv64_emit_constant_value(FILE *file,
         if (relocation != NULL &&
             relocation->location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR &&
             relocation->location_index == slot_index) {
-            if (!minic_type_is_pointer(type) || bits != 0U ||
+            if ((!minic_type_is_pointer(type) && !minic_type_is_integer(type)) || bits != 0U ||
                 !minic_riscv64_emit_symbol_value(file, program, relocation, type_size)) {
                 return false;
             }

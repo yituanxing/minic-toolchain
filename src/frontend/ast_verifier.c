@@ -1326,18 +1326,32 @@ bool minic_c0_program_verify_target(const MinicC0Program *program,
             for (relocation_index = 0U; relocation_index < object->relocation_count;
                  ++relocation_index) {
                 const MinicGlobalRelocation *relocation;
+                const MinicDataLayout *layout;
                 MinicType slot_pointee;
                 MinicType slot_type;
+                size_t slot_alignment;
+                size_t slot_size;
+                bool slot_is_integer;
+                bool slot_is_pointer;
 
                 relocation = &object->relocations[relocation_index];
-                if (!minic_c0_global_relocation_slot_type(program,
+                layout = minic_target_info_data_layout(target);
+                if (layout == NULL ||
+                    !minic_c0_global_relocation_slot_type(program,
                                                           object,
                                                           relocation->location_kind,
                                                           relocation->location_index,
                                                           &slot_type)) {
                     return false;
                 }
-                if (!minic_type_pointee(slot_type, &slot_pointee) ||
+                slot_is_pointer = minic_type_is_pointer(slot_type);
+                slot_is_integer = minic_type_is_integer(slot_type);
+                if ((!slot_is_pointer && !slot_is_integer) ||
+                    (slot_is_integer &&
+                     (!minic_data_layout_type(
+                          layout, program, slot_type, &slot_size, &slot_alignment) ||
+                      slot_size != layout->pointer_size)) ||
+                    (slot_is_pointer && !minic_type_pointee(slot_type, &slot_pointee)) ||
                     (relocation_index != 0U &&
                      (object->relocations[relocation_index - 1U].location_kind !=
                           relocation->location_kind ||
@@ -1345,19 +1359,20 @@ bool minic_c0_program_verify_target(const MinicC0Program *program,
                           relocation->location_index)) ||
                     (relocation->target_kind == MINIC_GLOBAL_RELOCATION_OBJECT &&
                      (relocation->target_id >= program->global_object_count ||
-                      (minic_type_is_function(slot_pointee) &&
+                      (slot_is_pointer && minic_type_is_function(slot_pointee) &&
                        !relocation->has_explicit_pointer_cast))) ||
                     (relocation->target_kind == MINIC_GLOBAL_RELOCATION_FUNCTION &&
-                     !minic_c0_global_relocation_function_target_compatible(
-                         program,
-                         slot_type,
-                         (MinicFunctionId)relocation->target_id,
-                         relocation->has_explicit_pointer_cast)) ||
+                     ((slot_is_pointer && !minic_c0_global_relocation_function_target_compatible(
+                                              program,
+                                              slot_type,
+                                              (MinicFunctionId)relocation->target_id,
+                                              relocation->has_explicit_pointer_cast)) ||
+                      (slot_is_integer && relocation->target_id >= program->function_count))) ||
                     (relocation->target_kind != MINIC_GLOBAL_RELOCATION_OBJECT &&
                      relocation->target_kind != MINIC_GLOBAL_RELOCATION_FUNCTION)) {
                     return false;
                 }
-                if (relocation->target_kind == MINIC_GLOBAL_RELOCATION_OBJECT &&
+                if (slot_is_pointer && relocation->target_kind == MINIC_GLOBAL_RELOCATION_OBJECT &&
                     !minic_c0_global_relocation_object_target_compatible(
                         program, relocation, slot_type)) {
                     return false;
