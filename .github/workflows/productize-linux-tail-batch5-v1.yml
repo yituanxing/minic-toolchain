@@ -25,7 +25,10 @@ jobs:
         run: |
           set -Eeuo pipefail
           python3 tools/dev/materialize-linux-tail-batch5-v1.py
-          clang-format -i src/frontend/ast_global.c src/frontend/parser_statement.c
+          clang-format -i \
+            src/frontend/ast_global.c \
+            src/frontend/parser_statement.c \
+            src/target/data_layout.c
           git diff --check
 
       - name: Build and focused batch gate
@@ -44,6 +47,7 @@ jobs:
           git add \
             src/frontend/ast_global.c \
             src/frontend/parser_statement.c \
+            src/target/data_layout.c \
             tests/compiler/c0/run.sh \
             tests/compiler/c0/run-linux-tail-batch5.sh
           git diff --cached --check
