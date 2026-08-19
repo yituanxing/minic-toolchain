@@ -79,8 +79,8 @@ text, count = re.subn(
 if count != 1:
     raise SystemExit("codegen_expression.c: double-comparison signature not found")
 
-# These call patterns cannot match definitions because definitions spell `FILE *file` on the same
-# line as `(`. Preserve the existing indentation while inserting the one semantic context argument.
+# Multi-line calls are common in the emitter. Definitions cannot match because they spell
+# `FILE *file` on the same line as `(`.
 def add_program_to_calls(source, function_name, minimum=1):
     pattern = rf"({re.escape(function_name)}\(\n\s*)file,"
     result, found = re.subn(pattern, r"\1file, program,", source)
@@ -96,6 +96,18 @@ for function_name, minimum in [
     ("minic_riscv64_emit_conditional_result_conversion", 3),
 ]:
     text, _ = add_program_to_calls(text, function_name, minimum)
+
+# Compound assignment keeps one compact same-line floating call. Close that call in the same
+# grouped replacement rather than waiting for another compiler iteration.
+compact_old = "minic_riscv64_emit_double_binary(file, operator_kind, target->type, value->type)"
+compact_new = (
+    "minic_riscv64_emit_double_binary(file, program, operator_kind, target->type, value->type)"
+)
+if text.count(compact_old) != 1:
+    raise SystemExit(
+        "codegen_expression.c: expected exactly one compact double-binary call without program"
+    )
+text = text.replace(compact_old, compact_new, 1)
 
 path.write_text(text)
 PY
