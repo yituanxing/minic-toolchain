@@ -435,6 +435,9 @@ bool minic_parser_parse_string_literal_size(MinicParser *parser, uint64_t *size)
 bool minic_parser_add_string_literal_initializer(MinicParser *parser,
                                                  MinicGlobalObjectId object_id,
                                                  size_t *element_count);
+bool minic_parser_parse_bounded_string_literal_values(MinicParser *parser,
+                                                      size_t element_capacity,
+                                                      int *values);
 bool minic_parser_add_bounded_string_literal_initializer(MinicParser *parser,
                                                          MinicGlobalObjectId object_id,
                                                          size_t element_capacity);

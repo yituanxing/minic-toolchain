@@ -1443,6 +1443,13 @@ static bool parse_static_scalar_array_transaction(MinicParser *parser,
     final_capacity = 0U;
     extent = 0U;
     success = false;
+    if (parser != NULL && !infer_bound && element_count != 0U &&
+        minic_type_is_char_integer(element_type) &&
+        parser->current.kind == MINIC_TOKEN_STRING_LITERAL) {
+        return minic_parser_add_bounded_string_literal_initializer(
+            parser, object_id, element_count);
+    }
+
     minic_array_initializer_plan_initialize(&plan, element_count, infer_bound);
     if (parser == NULL ||
         (!minic_type_is_integer(element_type) && !minic_type_is_pointer(element_type)) ||
