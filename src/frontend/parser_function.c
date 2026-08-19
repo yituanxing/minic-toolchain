@@ -2163,14 +2163,8 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                                               sizeof(assembler_name),
                                               &assembler_name_length,
                                               &has_assembler_name) ||
-                !parse_persistent_function_attributes(parser,
-                                                     is_internal,
-                                                     NULL,
-                                                     0U,
-                                                     NULL,
-                                                     NULL,
-                                                     &entity_is_weak,
-                                                     NULL)) {
+                !parse_persistent_function_attributes(
+                    parser, is_internal, NULL, 0U, NULL, NULL, &entity_is_weak, NULL)) {
                 return false;
             }
             if (parser->current.kind != MINIC_TOKEN_COMMA &&
@@ -2423,13 +2417,13 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                                       &assembler_name_length,
                                       &has_assembler_name) ||
         !parse_persistent_function_attributes(parser,
-                                             is_internal,
-                                             section_name,
-                                             sizeof(section_name),
-                                             &section_name_length,
-                                             &has_section,
-                                             &is_weak,
-                                             &alias_target)) {
+                                              is_internal,
+                                              section_name,
+                                              sizeof(section_name),
+                                              &section_name_length,
+                                              &has_section,
+                                              &is_weak,
+                                              &alias_target)) {
         return false;
     }
     if (is_main && (parameter_count != 0U || is_variadic)) {

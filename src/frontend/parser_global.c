@@ -1673,8 +1673,8 @@ static bool parse_static_record_designator_path(MinicParser *parser,
 
             if (field == NULL || !field->is_array || field->element_count == 0U ||
                 field->is_bit_field || field->is_flexible_array) {
-                minic_parser_error(parser,
-                                   "array designator after record member requires a fixed array field");
+                minic_parser_error(
+                    parser, "array designator after record member requires a fixed array field");
                 return false;
             }
             if (!minic_parser_parse_array_designator(
@@ -1683,8 +1683,7 @@ static bool parse_static_record_designator_path(MinicParser *parser,
             }
             if (first != last) {
                 minic_parser_error(
-                    parser,
-                    "GNU range designators after record members are not supported yet");
+                    parser, "GNU range designators after record members are not supported yet");
                 return false;
             }
             designator->has_array_index = true;
@@ -1958,11 +1957,10 @@ static bool append_static_record_designator_value(MinicParser *parser,
     return true;
 }
 
-static bool append_static_record_array_element_designator_value(
-    MinicParser *parser,
-    MinicGlobalObjectId object_id,
-    const MinicRecordField *field,
-    size_t element_index) {
+static bool append_static_record_array_element_designator_value(MinicParser *parser,
+                                                                MinicGlobalObjectId object_id,
+                                                                const MinicRecordField *field,
+                                                                size_t element_index) {
     size_t index;
 
     if (parser == NULL || field == NULL || !field->is_array || field->is_bit_field ||
@@ -1972,8 +1970,7 @@ static bool append_static_record_array_element_designator_value(
     }
     for (index = 0U; index < element_index; ++index) {
         if (!append_static_constant_zero(parser, object_id, field->type)) {
-            minic_parser_error(parser,
-                               "cannot zero-fill static record array designator prefix");
+            minic_parser_error(parser, "cannot zero-fill static record array designator prefix");
             return false;
         }
     }
@@ -1982,8 +1979,7 @@ static bool append_static_record_array_element_designator_value(
     }
     for (index = element_index + 1U; index < field->element_count; ++index) {
         if (!append_static_constant_zero(parser, object_id, field->type)) {
-            minic_parser_error(parser,
-                               "cannot zero-fill static record array designator suffix");
+            minic_parser_error(parser, "cannot zero-fill static record array designator suffix");
             return false;
         }
     }
@@ -2312,9 +2308,9 @@ static bool parse_static_record_constant(MinicParser *parser,
 
             if (designator.depth != 1U || !field->is_array || field->is_bit_field ||
                 field->is_flexible_array || designator.array_index >= field->element_count) {
-                minic_parser_error(
-                    parser,
-                    "static record array member designator currently requires a direct fixed array field");
+                minic_parser_error(parser,
+                                   "static record array member designator currently requires a "
+                                   "direct fixed array field");
                 return false;
             }
             if (overwrite_materialized_field) {
