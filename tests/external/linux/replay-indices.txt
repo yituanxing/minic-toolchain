@@ -1,2 +1,0 @@
-# Milestone full500 refresh after chained designator, GNU pointer-sign static init,
-# and promoted static record designator convergence. Empty selection means offset=0, limit=500.
