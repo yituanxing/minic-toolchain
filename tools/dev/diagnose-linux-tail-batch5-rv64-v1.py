@@ -14,6 +14,11 @@ p.write_text(text.replace(old, new, 1))
 
 p = Path('src/frontend/parser_global.c')
 text = p.read_text()
+if '#include <stdio.h>' not in text:
+    marker = '#include <string.h>\n'
+    if text.count(marker) != 1:
+        raise SystemExit('cannot locate parser_global include block')
+    text = text.replace(marker, '#include <stdio.h>\n' + marker, 1)
 old = '''        slot_index = overwrite ? overwrite_slot\n                               : parser->program->global_objects[object_id].initializer_count;\n        if (!parse_static_pointer_initializer(parser, type, &initializer)) {\n            return false;\n        }\n        if (initializer.has_relocation) {\n            bool recorded;\n\n            if (!overwrite &&\n                !minic_c0_global_object_add_initializer_bits(parser->program, object_id, 0U)) {'''
 new = '''        size_t debug_before_parse;\n\n        slot_index = overwrite ? overwrite_slot\n                               : parser->program->global_objects[object_id].initializer_count;\n        debug_before_parse = parser->program->global_objects[object_id].initializer_count;\n        if (!parse_static_pointer_initializer(parser, type, &initializer)) {\n            return false;\n        }\n        if (initializer.has_relocation) {\n            bool recorded;\n\n            (void)fprintf(stderr,\n                          "MINIC_STATIC_POINTER_TRACE name=%s before=%zu after_parse=%zu slot=%zu overwrite=%d\\n",\n                          parser->program->global_objects[object_id].name,\n                          debug_before_parse,\n                          parser->program->global_objects[object_id].initializer_count,\n                          slot_index,\n                          overwrite ? 1 : 0);\n            if (!overwrite &&\n                !minic_c0_global_object_add_initializer_bits(parser->program, object_id, 0U)) {'''
 if text.count(old) != 1:
