@@ -1,0 +1,2 @@
+ENUM_TYPE_OWNERSHIP_MATERIALIZED
+enum ownership materialization incomplete; missing changed paths: tests/compiler/c0/enum_forward_completion.c, tests/compiler/c0/run-enum-forward-completion.sh
