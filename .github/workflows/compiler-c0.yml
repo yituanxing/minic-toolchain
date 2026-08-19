@@ -58,7 +58,14 @@ jobs:
             src/frontend/ast_verifier.c \
             src/target/riscv64/codegen_expression.c
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/va-copy-product
-          bash .github/scripts/ensure-ubuntu-24.04-riscv-tools.sh
+          if [[ "$RV64_CACHE_HIT" == true ]]; then
+            mapfile -d '' cached_packages < <(find "$HOME/.cache/minic-apt/archives" -maxdepth 1 -type f -name '*.deb' -print0 | sort -z)
+            sudo apt-get install -y --no-install-recommends "${cached_packages[@]}"
+          else
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends gcc-riscv64-linux-gnu libc6-dev-riscv64-cross qemu-user
+          fi
+          sh tools/ci/verify-validation-tools.sh
           MINIC="$GITHUB_WORKSPACE/build/va-copy-product/bin/minic" \
           RISCV_CC=riscv64-linux-gnu-gcc \
           QEMU_RISCV64=qemu-riscv64 \
