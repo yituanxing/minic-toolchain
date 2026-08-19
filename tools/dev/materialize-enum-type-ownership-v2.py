@@ -18,6 +18,27 @@ prelude_marker = "# 1. Enum MinicType is identity only. Compatible integer facts
 if stage2_marker not in source or prelude_marker not in source:
     raise SystemExit("v1 materializer markers are unavailable")
 
+# v1 was authored against the equivalent multi-line enum accessor. Current canonical ast.c
+# compacted it to a conditional expression. Normalize that spelling before reusing stage 2 so the
+# semantic transformation is insensitive to this formatting-only difference.
+ast_path = ROOT / "src/frontend/ast.c"
+ast_text = ast_path.read_text()
+compact_accessor = """const MinicEnum *minic_c0_program_enum(const MinicC0Program *program, MinicEnumId enum_id) {
+    return program != NULL && enum_id < program->enum_count ? &program->enums[enum_id] : NULL;
+}
+"""
+expanded_accessor = """const MinicEnum *minic_c0_program_enum(const MinicC0Program *program, MinicEnumId enum_id) {
+    if (program == NULL || enum_id >= program->enum_count) {
+        return NULL;
+    }
+    return &program->enums[enum_id];
+}
+"""
+if compact_accessor in ast_text:
+    ast_path.write_text(ast_text.replace(compact_accessor, expanded_accessor, 1))
+elif expanded_accessor not in ast_text:
+    raise SystemExit("ast.c: unsupported enum accessor spelling")
+
 # Reuse helper functions/imports, skip stage 1 because current canonical head already has it.
 prelude = source.split(prelude_marker, 1)[0]
 stage2_and_later = stage2_marker + source.split(stage2_marker, 1)[1]
