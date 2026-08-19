@@ -57,13 +57,43 @@ jobs:
           path: ~/.cache/minic-apt/archives
           key: rv64-apt-${{ runner.os }}-${{ runner.arch }}-noble-${{ hashFiles('tools/ci/ubuntu-24.04-packages.txt') }}
 
+      - name: Restore native Kbuild package archives
+        id: kbuild-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/minic-kbuild-apt/archives
+          key: kbuild-apt-${{ runner.os }}-${{ runner.arch }}-noble-flex-bison-bc-libelf-dev-libssl-dev-v1
+
       - name: Install RISC-V Linux Kbuild dependencies
         env:
           RV64_CACHE_HIT: ${{ steps.rv64-cache.outputs.cache-hit }}
+          KBUILD_CACHE_HIT: ${{ steps.kbuild-cache.outputs.cache-hit }}
         run: |
           set -Eeuo pipefail
           apt_cache="$HOME/.cache/minic-apt/archives"
-          mkdir -p "$apt_cache/partial"
+          native_cache="$HOME/.cache/minic-kbuild-apt/archives"
+          mkdir -p "$apt_cache/partial" "$native_cache/partial"
+
+          install_cached_debs() {
+            cache_dir=$1
+            label=$2
+            mapfile -d '' cached_packages < <(
+              find "$cache_dir" -maxdepth 1 -type f -name '*.deb' -print0 | sort -z
+            )
+            if (( ${#cached_packages[@]} == 0 )); then
+              printf '%s package cache reported a hit but contains no .deb archives\n' "$label" >&2
+              return 1
+            fi
+            printf 'Restoring %d cached %s packages\n' "${#cached_packages[@]}" "$label"
+            sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 \
+              install -y --no-install-recommends "${cached_packages[@]}"
+          }
+
+          # Restore native build tools before asking the network. This turns the
+          # repeated first500 loop into a local package install after the first fill.
+          if [[ "$KBUILD_CACHE_HIT" == true ]]; then
+            install_cached_debs "$native_cache" 'native Kbuild'
+          fi
 
           native_missing=()
           command -v flex >/dev/null 2>&1 || native_missing+=(flex)
@@ -72,34 +102,35 @@ jobs:
           dpkg-query -W -f='${Status}' libelf-dev 2>/dev/null | grep -q 'ok installed' || native_missing+=(libelf-dev)
           dpkg-query -W -f='${Status}' libssl-dev 2>/dev/null | grep -q 'ok installed' || native_missing+=(libssl-dev)
 
-          # On a warm pressure runner the cross-toolchain .debs and native Kbuild
-          # utilities are already available, so avoid a network metadata refresh
-          # entirely. Only touch the Ubuntu mirror when something is genuinely
-          # missing or the shared cross-package cache is cold.
-          if (( ${#native_missing[@]} != 0 )) || [[ "$RV64_CACHE_HIT" != true ]]; then
-            sudo apt-get update
+          # A hosted image already carries apt package indexes. On a warm RISC-V
+          # cache hit, install the few missing native packages directly and avoid
+          # a metadata refresh that has repeatedly dominated the whole 500-TU run.
+          # Refresh only when the cross-package cache itself is cold.
+          if [[ "$RV64_CACHE_HIT" != true ]]; then
+            sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 update
           fi
 
           if (( ${#native_missing[@]} != 0 )); then
             printf 'Installing %d missing native Kbuild packages: %s\n' \
               "${#native_missing[@]}" "${native_missing[*]}"
-            sudo apt-get install -y --no-install-recommends "${native_missing[@]}"
+            sudo apt-get \
+              -o Acquire::Retries=2 \
+              -o Acquire::http::Timeout=20 \
+              -o Dir::Cache::archives="$native_cache" \
+              -o APT::Keep-Downloaded-Packages=true \
+              install -y --no-install-recommends "${native_missing[@]}"
           else
-            printf '%s\n' 'Native Kbuild dependencies already present; skipping apt network work.'
+            printf '%s\n' 'Native Kbuild dependencies already present or restored from cache.'
           fi
 
           if [[ "$RV64_CACHE_HIT" == true ]]; then
-            mapfile -d '' cached_packages < <(find "$apt_cache" -maxdepth 1 -type f -name '*.deb' -print0 | sort -z)
-            if (( ${#cached_packages[@]} == 0 )); then
-              printf '%s\n' 'RISC-V package cache reported a hit but contains no .deb archives' >&2
-              exit 1
-            fi
-            printf 'Restoring %d cached RISC-V packages\n' "${#cached_packages[@]}"
-            sudo apt-get install -y --no-install-recommends "${cached_packages[@]}"
+            install_cached_debs "$apt_cache" 'RISC-V'
           else
             mapfile -t requested_packages < <(grep -Ev '^[[:space:]]*(#|$)' tools/ci/ubuntu-24.04-packages.txt)
             printf 'Building RISC-V package cache from %d requested packages\n' "${#requested_packages[@]}"
             sudo apt-get \
+              -o Acquire::Retries=2 \
+              -o Acquire::http::Timeout=20 \
               -o Dir::Cache::archives="$apt_cache" \
               -o APT::Keep-Downloaded-Packages=true \
               install -y --no-install-recommends "${requested_packages[@]}"
