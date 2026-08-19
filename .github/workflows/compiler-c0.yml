@@ -80,7 +80,7 @@ jobs:
           export BUILD_DIR="$PWD/build/linux-tail-batch2"
           export HOST_CC=cc
           sh tests/compiler/c0/run-function-pointer-field-array.sh
-          sh tests/compiler/c0/run-gnu-function-copy-alias.sh
+          sh -x tests/compiler/c0/run-gnu-function-copy-alias.sh
           printf '%s\n' 'PASS compiler/c0/linux-tail-batch2 function-pointer-field-array forward-alias'
 
       - name: Run fast regression gate
