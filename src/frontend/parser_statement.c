@@ -644,6 +644,68 @@ static bool parse_fixed_runtime_array_initializer(MinicParser *parser,
         parser, base_id, array_info.element_type, element_count);
 }
 
+static bool parse_local_character_array_string_initializer(MinicParser *parser,
+                                                           MinicLocalId local_id,
+                                                           bool infer_count,
+                                                           size_t declared_count) {
+    const MinicLocal *local;
+    MinicParser probe;
+    MinicSourceSpan initializer_span;
+    uint64_t string_size;
+    int *values;
+    size_t element_size;
+    size_t element_count;
+    size_t index;
+    bool success;
+
+    local = minic_c0_program_local(parser->program, local_id);
+    if (local == NULL || !local->is_array || !minic_type_is_char_integer(local->type) ||
+        parser->current.kind != MINIC_TOKEN_STRING_LITERAL) {
+        return false;
+    }
+    initializer_span = parser->current.span;
+    element_count = declared_count;
+    if (infer_count) {
+        probe = *parser;
+        if (!minic_parser_parse_string_literal_size(&probe, &string_size) ||
+            !minic_target_info_sizeof_type(
+                parser->target_info, parser->program, local->type, &element_size) ||
+            element_size == 0U || string_size == 0U || string_size % (uint64_t)element_size != 0U ||
+            string_size / (uint64_t)element_size > SIZE_MAX) {
+            minic_parser_error(parser, "cannot infer local character array extent from string");
+            return false;
+        }
+        element_count = (size_t)(string_size / (uint64_t)element_size);
+        parser->program->locals[local_id].element_count = element_count;
+    }
+    if (element_count == 0U) {
+        minic_parser_error(parser, "character array string initializer requires nonzero extent");
+        return false;
+    }
+
+    values = (int *)calloc(element_count, sizeof(*values));
+    if (values == NULL) {
+        minic_parser_error(parser, "out of memory while decoding local string initializer");
+        return false;
+    }
+    success = minic_parser_parse_bounded_string_literal_values(parser, element_count, values);
+    for (index = 0U; success && index < element_count; ++index) {
+        MinicExpression value;
+        MinicExpressionId value_id;
+
+        (void)memset(&value, 0, sizeof(value));
+        value.kind = MINIC_EXPRESSION_INTEGER;
+        value.span = initializer_span;
+        value.type = minic_type_int();
+        value.value_category = MINIC_VALUE_RVALUE;
+        value.value.integer_value = (int64_t)values[index];
+        success = minic_parser_add_expression(parser, &value, &value_id) &&
+                  add_local_array_element_assignment(parser, local_id, index, value_id);
+    }
+    free(values);
+    return success;
+}
+
 static bool
 parse_local_array_initializer(MinicParser *parser, MinicLocalId local_id, bool infer_count) {
     const MinicLocal *local;
@@ -658,7 +720,15 @@ parse_local_array_initializer(MinicParser *parser, MinicLocalId local_id, bool i
     }
     declared_count = local->element_count;
     initializer_span.begin = local->name_span.begin;
-    if (!minic_parser_advance(parser) || parser->current.kind != MINIC_TOKEN_LBRACE) {
+    if (!minic_parser_advance(parser)) {
+        return false;
+    }
+    if (minic_type_is_char_integer(local->type) &&
+        parser->current.kind == MINIC_TOKEN_STRING_LITERAL) {
+        return parse_local_character_array_string_initializer(
+            parser, local_id, infer_count, declared_count);
+    }
+    if (parser->current.kind != MINIC_TOKEN_LBRACE) {
         minic_parser_error(parser, "array initializers are not supported yet");
         return false;
     }

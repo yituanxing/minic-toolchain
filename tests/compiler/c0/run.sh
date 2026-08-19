@@ -309,6 +309,11 @@ sh "$root/tests/compiler/c0/run-runtime-local-array-initializer.sh"
 MINIC="$minic" \
 HOST_CC="$host_cc" \
 BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+sh "$root/tests/compiler/c0/run-character-array-string-initializer.sh"
+
+MINIC="$minic" \
+HOST_CC="$host_cc" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
 sh "$root/tests/compiler/c0/run-array-parameter-adjustment.sh"
 
 MINIC="$minic" \
