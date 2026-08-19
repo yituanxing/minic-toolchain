@@ -31,7 +31,7 @@ typedef size_t MinicCleanupContextId;
 #define MINIC_FIXED_REGISTER_BINDING_INVALID ((MinicFixedRegisterBindingId) - 1)
 #define MINIC_INLINE_ASM_INVALID ((MinicInlineAsmId) - 1)
 #define MINIC_CLEANUP_CONTEXT_ROOT ((MinicCleanupContextId)0)
-#define MINIC_MAX_FUNCTION_PARAMETERS 16U
+#define MINIC_MAX_FUNCTION_PARAMETERS 32U
 
 typedef enum MinicValueCategory { MINIC_VALUE_RVALUE = 0, MINIC_VALUE_LVALUE } MinicValueCategory;
 
