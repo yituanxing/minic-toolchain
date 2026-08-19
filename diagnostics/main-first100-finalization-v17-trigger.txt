@@ -1,1 +1,1 @@
-trigger exact canonical main first100 finalization v17
+retrigger exact canonical main first100 after static record initializer ownership merge 6cc5618f
