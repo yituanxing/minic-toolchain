@@ -25,6 +25,10 @@ on:
         description: Concurrent MiniC processes
         required: false
         default: '4'
+      indices:
+        description: Comma-separated configured TU indices; overrides offset/limit
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -59,7 +63,7 @@ jobs:
 
       - name: Restore native Kbuild package archives
         id: kbuild-cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: ~/.cache/minic-kbuild-apt/archives
           key: kbuild-apt-${{ runner.os }}-${{ runner.arch }}-noble-flex-bison-bc-libelf-dev-libssl-dev-v1
@@ -84,9 +88,10 @@ jobs:
               printf '%s package cache reported a hit but contains no .deb archives\n' "$label" >&2
               return 1
             fi
-            printf 'Restoring %d cached %s packages\n' "${#cached_packages[@]}" "$label"
-            sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 \
-              install -y --no-install-recommends "${cached_packages[@]}"
+            printf 'Restoring %d cached %s packages without network access\n' \
+              "${#cached_packages[@]}" "$label"
+            sudo dpkg --unpack "${cached_packages[@]}"
+            sudo dpkg --configure -a
           }
 
           # Restore native build tools before asking the network. This turns the
@@ -104,8 +109,7 @@ jobs:
 
           # A hosted image already carries apt package indexes. On a warm RISC-V
           # cache hit, install the few missing native packages directly and avoid
-          # a metadata refresh that has repeatedly dominated the whole 500-TU run.
-          # Refresh only when the cross-package cache itself is cold.
+          # a metadata refresh. Refresh only when the cross-package cache is cold.
           if [[ "$RV64_CACHE_HIT" != true ]]; then
             sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 update
           fi
@@ -146,8 +150,10 @@ jobs:
           BATCH_OFFSET: ${{ github.event_name == 'workflow_dispatch' && inputs.offset || '0' }}
           BATCH_LIMIT: ${{ github.event_name == 'workflow_dispatch' && inputs.limit || '500' }}
           BATCH_JOBS: ${{ github.event_name == 'workflow_dispatch' && inputs.minic_jobs || '4' }}
+          BATCH_INDICES: ${{ github.event_name == 'workflow_dispatch' && inputs.indices || '' }}
         run: |
           set -Eeuo pipefail
+          set +e
           MINIC="$GITHUB_WORKSPACE/build/linux-batch-compiler/bin/minic" \
           BUILD_DIR="$GITHUB_WORKSPACE/build/linux-batch" \
           LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-cache/linux-6.6.143.tar.xz" \
@@ -155,7 +161,16 @@ jobs:
           LINUX_BATCH_OFFSET="$BATCH_OFFSET" \
           LINUX_BATCH_LIMIT="$BATCH_LIMIT" \
           LINUX_BATCH_JOBS="$BATCH_JOBS" \
+          LINUX_BATCH_SELECTION="$BATCH_INDICES" \
             sh tests/external/linux/batch_probe.sh
+          batch_status=$?
+          set -e
+          if ! test -s build/linux-batch/batch-summary.txt; then
+            printf 'Linux pressure failed before producing a summary (status=%d)\n' "$batch_status" >&2
+            exit "$batch_status"
+          fi
+          printf 'LINUX_BATCH_MEASUREMENT status=%d (compiler frontier is data, not CI infrastructure failure)\n' \
+            "$batch_status"
 
       - name: Show compact batch summary
         if: always()
@@ -185,6 +200,13 @@ jobs:
             build/linux-batch/minic-stderr/**/*.stderr
           if-no-files-found: ignore
           retention-days: 7
+
+      - name: Save native Kbuild package archives
+        if: always() && steps.kbuild-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/minic-kbuild-apt/archives
+          key: kbuild-apt-${{ runner.os }}-${{ runner.arch }}-noble-flex-bison-bc-libelf-dev-libssl-dev-v1
 
       - name: Save pinned Linux source archive
         if: always() && steps.linux-source-cache.outputs.cache-hit != 'true' && hashFiles('build/linux-cache/linux-6.6.143.tar.xz') != ''
