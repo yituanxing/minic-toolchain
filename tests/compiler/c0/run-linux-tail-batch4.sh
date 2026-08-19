@@ -1,5 +1,6 @@
 #!/bin/sh
 set -eu
+# Batch4 intentionally validates all four owners in one focused cycle.
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 minic=${MINIC:-"$root/build/debug/bin/minic"}
 work=${BUILD_DIR:-"$root/build/debug"}/tests/linux-tail-batch4
