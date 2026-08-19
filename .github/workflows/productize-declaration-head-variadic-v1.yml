@@ -6,6 +6,7 @@ on:
       - frontend/enum-mode-byte-v1
     paths:
       - 'tools/dev/materialize-declaration-head-variadic-function-type-v1.py'
+      - 'tools/dev/fix-declaration-head-attribute-init-v1.py'
       - 'tests/compiler/c0/declaration_head_variadic*.c'
       - 'tests/compiler/c0/run-declaration-head-variadic.sh'
       - '.github/workflows/productize-declaration-head-variadic-v1.yml'
@@ -26,6 +27,7 @@ jobs:
       - name: Materialize semantic product
         run: |
           python3 tools/dev/materialize-declaration-head-variadic-function-type-v1.py
+          python3 tools/dev/fix-declaration-head-attribute-init-v1.py
           clang-format -i \
             src/frontend/ast.c \
             src/frontend/ast.h \
