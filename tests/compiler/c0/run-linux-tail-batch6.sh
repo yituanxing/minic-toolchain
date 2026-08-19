@@ -1,5 +1,6 @@
 #!/bin/sh
 set -eu
+# Batch6 validates one canonical lifecycle owner for inferred and fixed static record arrays.
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 minic=${MINIC:-"$root/build/debug/bin/minic"}
 work=${BUILD_DIR:-"$root/build/debug"}/tests/linux-tail-batch6
