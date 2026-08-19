@@ -19,13 +19,73 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: compiler-c0-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  productize-builtin-va-copy:
+    name: Productize GNU va_copy
+    if: github.event_name == 'pull_request' && github.head_ref == 'frontend/builtin-va-copy-v1'
+    runs-on: ubuntu-24.04
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Checkout exact head branch
+        uses: actions/checkout@v4
+        with:
+          ref: frontend/builtin-va-copy-v1
+
+      - name: Restore RISC-V package archives
+        id: rv64-cache-product
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/minic-apt/archives
+          key: rv64-apt-${{ runner.os }}-${{ runner.arch }}-noble-${{ hashFiles('tools/ci/ubuntu-24.04-packages.txt') }}
+
+      - name: Materialize and validate GNU va_copy
+        env:
+          RV64_CACHE_HIT: ${{ steps.rv64-cache-product.outputs.cache-hit }}
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/materialize-builtin-va-copy-v1.py
+          clang-format -i \
+            src/frontend/ast.h \
+            src/frontend/ast_traversal.c \
+            src/frontend/parser_expression.c \
+            src/frontend/ast_verifier.c \
+            src/target/riscv64/codegen_expression.c
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/va-copy-product
+          bash .github/scripts/ensure-ubuntu-24.04-riscv-tools.sh
+          MINIC="$GITHUB_WORKSPACE/build/va-copy-product/bin/minic" \
+          RISCV_CC=riscv64-linux-gnu-gcc \
+          QEMU_RISCV64=qemu-riscv64 \
+          REQUIRE_RISCV_RUNTIME=1 \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/va-copy-focused" \
+            sh tests/compiler/c0/run-builtin-va-copy.sh
+          git diff --check
+
+      - name: Commit product
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            src/frontend/ast.h \
+            src/frontend/ast_traversal.c \
+            src/frontend/parser_expression.c \
+            src/frontend/ast_verifier.c \
+            src/target/riscv64/codegen_expression.c \
+            tests/compiler/c0/run.sh
+          if git diff --cached --quiet; then
+            echo 'GNU va_copy product already materialized'
+            exit 0
+          fi
+          git commit -m 'frontend: support target-aware GNU va_copy'
+          git push origin HEAD:frontend/builtin-va-copy-v1
+
   full-validation:
     name: Full compiler validation
     runs-on: ubuntu-24.04
