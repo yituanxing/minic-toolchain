@@ -1,6 +1,6 @@
 #!/bin/sh
 set -eu
-# Batch5 isolates static aggregate materialization and covers union-first positional initialization.
+# Batch5 validates aggregate materialization plus positional-to-designated runtime record initialization.
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 minic=${MINIC:-"$root/build/debug/bin/minic"}
 work=${BUILD_DIR:-"$root/build/debug"}/tests/linux-tail-batch5
@@ -54,4 +54,4 @@ SRC
 "$minic" -S "$work/union-positional.c" -o "$work/union-positional.s"
 test -s "$work/union-positional.s"
 
-printf '%s\n' 'PASS compiler/c0/linux-tail-batch5 inferred-aggregate=global+static-local relocation-slot=logical+layout union-positional=first-member'
+printf '%s\n' 'PASS compiler/c0/linux-tail-batch5 inferred-aggregate=global+static-local relocation-slot=logical+layout union-positional=first-member mixed-designator=tail'
