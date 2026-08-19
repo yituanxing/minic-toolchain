@@ -58,35 +58,3 @@ jobs:
             build/ci-external/tests/external/tiny-aes-c/*.status
           if-no-files-found: ignore
           retention-days: 7
-
-  finalize-linux-tail-batch-format:
-    name: Finalize Linux tail batch formatting
-    if: github.event_name == 'pull_request' && github.head_ref == 'frontend/linux-tail-batch-v1'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    permissions:
-      contents: write
-    steps:
-      - name: Checkout exact PR head
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-
-      - name: Format owned product file
-        run: sh tools/dev/format-linux-tail-batch-v1.sh
-
-      - name: Validate release build
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/final-linux-tail-batch-format
-
-      - name: Publish formatted product
-        run: |
-          set -Eeuo pipefail
-          if git diff --quiet -- src/frontend/parser_function.c; then
-            echo 'Linux tail batch product is already formatted.'
-            exit 0
-          fi
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add src/frontend/parser_function.c
-          git commit -m 'style: format Linux tail batch product'
-          git push origin HEAD:${{ github.head_ref }}
