@@ -22,6 +22,7 @@ jobs:
 
       - name: Materialize and format
         run: |
+          echo 'staging trigger v2'
           python3 tools/dev/materialize-gnu-pointer-signedness-v1.py
           clang-format -i src/frontend/type.c src/frontend/parser_global.c
 
