@@ -1,14 +1,3 @@
-# All Linux first500 TUs at the promoted static-record-designator frontier.
-118
-122
-134
-197
-200
-202
-214
-216
-228
-251
-290
-340
-389
+# Exact second tail batch evidence: function-pointer field array + forward GNU alias.
+219
+348
