@@ -32,15 +32,20 @@ replace_once(
 )
 
 # Extend the existing alias gate with the Linux ordering: declaration, alias,
-# definition. The existing undefined-target negative proves fail-closed behavior
-# remains at translation-unit verification.
+# definition. A target that never becomes defined remains fail-closed at the
+# translation-unit AST contract owner rather than at declaration time.
 alias_gate = Path("tests/compiler/c0/run-gnu-function-copy-alias.sh")
 text = alias_gate.read_text()
 needle = """grep -Fq '.set alias_fn, target' \"$work/positive.s\"\n"""
 insert = """grep -Fq '.set alias_fn, target' \"$work/positive.s\"\ncat > \"$work/forward.c\" <<'SRC'\nint target(int value);\nint __attribute__((weak, alias(\"target\"))) alias_fn(int value);\nint target(int value) { return value + 1; }\nSRC\n\"$minic\" -S \"$work/forward.c\" -o \"$work/forward.s\"\ngrep -Fq '.weak alias_fn' \"$work/forward.s\"\ngrep -Fq '.set alias_fn, target' \"$work/forward.s\"\n"""
 if text.count(needle) != 1:
     raise SystemExit("forward alias gate insertion point mismatch")
-alias_gate.write_text(text.replace(needle, insert, 1))
+text = text.replace(needle, insert, 1)
+old_undefined = """grep -Fq 'GNU function alias requires a defined same-TU target with matching signature' \"$work/undefined.err\"\n"""
+new_undefined = """grep -Fq 'parsed AST violates compiler contracts' \"$work/undefined.err\"\n"""
+if text.count(old_undefined) != 1:
+    raise SystemExit("undefined alias diagnostic owner insertion point mismatch")
+alias_gate.write_text(text.replace(old_undefined, new_undefined, 1))
 
 # Focused record/layout gate: typedef'd function pointer arrays are record fields,
 # with ordinary pointer-size layout and a following scalar field.
