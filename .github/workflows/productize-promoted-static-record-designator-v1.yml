@@ -7,6 +7,7 @@ on:
     paths:
       - 'tools/dev/materialize-static-storage-scalar-array-owner-v1.py'
       - 'tools/dev/register-static-storage-scalar-array-owner-v1.py'
+      - 'tools/dev/fix-static-storage-scalar-array-owner-materialization-v1.py'
       - 'tests/compiler/c0/static_storage_scalar_array_owner.c'
       - 'tests/compiler/c0/run-static-storage-scalar-array-owner.sh'
       - '.github/workflows/productize-promoted-static-record-designator-v1.yml'
@@ -30,8 +31,10 @@ jobs:
           set -Eeuo pipefail
           python3 tools/dev/materialize-static-storage-scalar-array-owner-v1.py
           python3 tools/dev/register-static-storage-scalar-array-owner-v1.py
+          python3 tools/dev/fix-static-storage-scalar-array-owner-materialization-v1.py
           rm tools/dev/materialize-static-storage-scalar-array-owner-v1.py
           rm tools/dev/register-static-storage-scalar-array-owner-v1.py
+          rm tools/dev/fix-static-storage-scalar-array-owner-materialization-v1.py
           clang-format-18 -i \
             src/frontend/parser_function.c \
             src/frontend/parser_statement.c \
