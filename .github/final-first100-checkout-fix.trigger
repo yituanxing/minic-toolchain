@@ -1,1 +1,0 @@
-final verifier checkout fix
