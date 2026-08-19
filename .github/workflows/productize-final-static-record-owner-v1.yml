@@ -21,20 +21,24 @@ jobs:
           from pathlib import Path
           import subprocess
 
-          path = Path('src/frontend/parser_global.c')
-          source = path.read_text()
-          staging = subprocess.check_output(
+          staging_global = subprocess.check_output(
               ['git', 'show', 'origin/diagnostic/effective-convergence-snapshot-v1:src/frontend/parser_global.c'],
               text=True,
           )
+          staging_string = subprocess.check_output(
+              ['git', 'show', 'origin/diagnostic/effective-convergence-snapshot-v1:src/frontend/parser_string.c'],
+              text=True,
+          )
 
+          global_path = Path('src/frontend/parser_global.c')
+          source = global_path.read_text()
           helper_start_marker = 'typedef struct MinicStaticRecordDesignator {'
           helper_end_marker = 'static bool overwrite_static_zero_record_constant('
           if helper_start_marker in source:
               raise SystemExit('static record designator helper already present')
-          helper_start = staging.index(helper_start_marker)
-          helper_end = staging.index(helper_end_marker, helper_start)
-          helpers = staging[helper_start:helper_end]
+          helper_start = staging_global.index(helper_start_marker)
+          helper_end = staging_global.index(helper_end_marker, helper_start)
+          helpers = staging_global[helper_start:helper_end]
           insert_at = source.index(helper_end_marker)
           source = source[:insert_at] + helpers + source[insert_at:]
 
@@ -58,13 +62,42 @@ jobs:
 
           function_start = 'static bool parse_static_record_constant('
           function_end = '\nbool minic_parser_parse_static_storage_initializer_value('
-          staging_start = staging.index(function_start, helper_start)
-          staging_end = staging.index(function_end, staging_start)
-          staged_function = staging[staging_start:staging_end]
+          staging_start = staging_global.index(function_start, helper_start)
+          staging_end = staging_global.index(function_end, staging_start)
+          staged_function = staging_global[staging_start:staging_end]
           current_start = source.index(function_start, insert_at + len(helpers))
           current_end = source.index(function_end, current_start)
           source = source[:current_start] + staged_function + source[current_end:]
-          path.write_text(source)
+          global_path.write_text(source)
+
+          string_path = Path('src/frontend/parser_string.c')
+          string_source = string_path.read_text()
+          replace_start_marker = 'static bool replace_zero_string_payload('
+          replace_end_marker = '\nbool minic_parser_get_predefined_function_name_object('
+          if 'bool minic_parser_replace_zero_bounded_string_literal_initializer(' in string_source:
+              raise SystemExit('bounded string overwrite implementation already present')
+          replace_start = staging_string.index(replace_start_marker)
+          replace_end = staging_string.index(replace_end_marker, replace_start)
+          replace_block = staging_string[replace_start:replace_end]
+          string_insert = string_source.index(replace_end_marker)
+          string_source = string_source[:string_insert] + '\n' + replace_block + string_source[string_insert:]
+          string_path.write_text(string_source)
+
+          internal_path = Path('src/frontend/parser_internal.h')
+          internal_source = internal_path.read_text()
+          prototype_name = 'bool minic_parser_replace_zero_bounded_string_literal_initializer('
+          if prototype_name in internal_source:
+              raise SystemExit('bounded string overwrite prototype already present')
+          bounded_name = 'bool minic_parser_add_bounded_string_literal_initializer('
+          bounded_start = internal_source.index(bounded_name)
+          bounded_end = internal_source.index(';\n', bounded_start) + 2
+          prototype = '''bool minic_parser_replace_zero_bounded_string_literal_initializer(MinicParser *parser,
+                                                                    MinicGlobalObjectId object_id,
+                                                                    size_t first_slot,
+                                                                    size_t element_capacity);
+          '''
+          internal_source = internal_source[:bounded_end] + prototype + internal_source[bounded_end:]
+          internal_path.write_text(internal_source)
           PY
 
           cat > tests/compiler/c0/static_record_nested_designator_string_overlay.c <<'EOF'
@@ -125,7 +158,7 @@ jobs:
       - name: Validate clean product slice
         run: |
           set -Eeuo pipefail
-          clang-format-18 -i src/frontend/parser_global.c tests/compiler/c0/static_record_nested_designator_string_overlay.c
+          clang-format-18 -i src/frontend/parser_global.c src/frontend/parser_string.c src/frontend/parser_internal.h tests/compiler/c0/static_record_nested_designator_string_overlay.c
           CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
           git diff --check
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/product-static-record-owner
@@ -140,6 +173,8 @@ jobs:
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add src/frontend/parser_global.c \
+                  src/frontend/parser_string.c \
+                  src/frontend/parser_internal.h \
                   tests/compiler/c0/static_record_nested_designator_string_overlay.c \
                   tests/compiler/c0/run-static-record-nested-designator-string-overlay.sh \
                   tests/compiler/c0/run.sh \
