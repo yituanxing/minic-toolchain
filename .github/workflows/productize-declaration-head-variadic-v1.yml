@@ -1,0 +1,64 @@
+name: Productize declaration-head variadic function types v1
+
+on:
+  pull_request:
+    branches:
+      - frontend/enum-mode-byte-v1
+    paths:
+      - 'tools/dev/materialize-declaration-head-variadic-function-type-v1.py'
+      - 'tests/compiler/c0/declaration_head_variadic*.c'
+      - 'tests/compiler/c0/run-declaration-head-variadic.sh'
+      - '.github/workflows/productize-declaration-head-variadic-v1.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  productize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@v4
+        with:
+          ref: frontend/declaration-head-variadic-function-type-v1
+
+      - name: Materialize semantic product
+        run: |
+          python3 tools/dev/materialize-declaration-head-variadic-function-type-v1.py
+          clang-format -i \
+            src/frontend/ast.c \
+            src/frontend/ast.h \
+            src/frontend/parser_declarator.c \
+            src/frontend/parser_expression.c \
+            src/frontend/parser_function.c \
+            src/frontend/parser_postfix.c \
+            src/frontend/parser_typedef.c
+
+      - name: Build and focused gate
+        run: |
+          make -j4 CFLAGS=-Werror
+          MINIC="$GITHUB_WORKSPACE/build/debug/bin/minic" HOST_CC=cc BUILD_DIR="$GITHUB_WORKSPACE/build/debug" \
+            sh tests/compiler/c0/run-declaration-head-variadic.sh
+          git diff --check
+
+      - name: Commit product
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            src/frontend/ast.c \
+            src/frontend/ast.h \
+            src/frontend/parser_declarator.c \
+            src/frontend/parser_expression.c \
+            src/frontend/parser_function.c \
+            src/frontend/parser_postfix.c \
+            src/frontend/parser_typedef.c \
+            tests/compiler/c0/run.sh
+          if git diff --cached --quiet; then
+            echo 'declaration-head variadic product already materialized'
+            exit 0
+          fi
+          git commit -m 'frontend: model declaration-head variadic function types'
+          git push origin HEAD:frontend/declaration-head-variadic-function-type-v1
