@@ -105,6 +105,7 @@ run_case array_declaration 0 array_declaration
 run_case gnu_array_range_runtime 0 gnu_array_range_runtime
 run_case identity_record_typedef_cast 0 identity_record_typedef_cast
 run_case record_field_nonstring_attribute 0 record_field_nonstring_attribute
+run_case gnu_builtin_va_start 0 gnu_builtin_va_start
 run_case gnu_cleanup_runtime 0 gnu_cleanup_runtime
 run_case gnu_void_pointer_relational 0 gnu_void_pointer_relational
 run_double_return_abi
