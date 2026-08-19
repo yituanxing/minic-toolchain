@@ -58,3 +58,63 @@ jobs:
             build/ci-external/tests/external/tiny-aes-c/*.status
           if-no-files-found: ignore
           retention-days: 7
+
+  finalize-rv64-inline-asm-jr-format:
+    name: Finalize RV64 +m/Jr formatting
+    if: github.event_name == 'pull_request' && github.head_ref == 'target/rv64-inline-asm-readwrite-memory-jr-v1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Format owned product files
+        run: sh tools/dev/format-rv64-inline-asm-jr-v1.sh
+
+      - name: Restore RISC-V package archives
+        id: rv64-cache-format
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/minic-apt/archives
+          key: rv64-apt-${{ runner.os }}-${{ runner.arch }}-noble-${{ hashFiles('tools/ci/ubuntu-24.04-packages.txt') }}
+
+      - name: Install cached RISC-V packages
+        env:
+          RV64_CACHE_HIT: ${{ steps.rv64-cache-format.outputs.cache-hit }}
+        run: |
+          set -Eeuo pipefail
+          cache="$HOME/.cache/minic-apt/archives"
+          if [[ "$RV64_CACHE_HIT" == true ]]; then
+            mapfile -d '' packages < <(find "$cache" -maxdepth 1 -type f -name '*.deb' -print0 | sort -z)
+            sudo dpkg --unpack "${packages[@]}"
+            sudo dpkg --configure -a
+          else
+            sudo apt-get update
+            mapfile -t requested < <(grep -Ev '^[[:space:]]*(#|$)' tools/ci/ubuntu-24.04-packages.txt)
+            sudo apt-get install -y --no-install-recommends "${requested[@]}"
+          fi
+
+      - name: Validate formatted product
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/final-rv64-inline-asm-jr-format
+          MINIC="$PWD/build/final-rv64-inline-asm-jr-format/bin/minic" \
+            BUILD_DIR="$PWD/build/final-rv64-inline-asm-jr-format" \
+            sh tests/compiler/c0/run-gnu-inline-asm-operands-rv64.sh
+
+      - name: Publish formatted product
+        run: |
+          set -Eeuo pipefail
+          if git diff --quiet -- src/target/riscv64/codegen_inline_asm.c tests/compiler/c0/gnu_inline_asm_operands.c; then
+            echo 'RV64 +m/Jr product is already formatted.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/target/riscv64/codegen_inline_asm.c tests/compiler/c0/gnu_inline_asm_operands.c
+          git commit -m 'style: format RV64 +m/Jr product'
+          git push origin HEAD:${{ github.head_ref }}
