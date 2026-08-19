@@ -4,7 +4,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-#define MINIC_INITIALIZER_ACTION_INVALID ((size_t)-1)
+#define MINIC_INITIALIZER_ACTION_INVALID ((size_t) - 1)
 
 typedef struct MinicArrayInitializerAction {
     size_t first_index;

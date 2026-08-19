@@ -1,4 +1,5 @@
 #include "frontend/parser_internal.h"
+#include "frontend/initializer.h"
 
 #include <limits.h>
 #include <stdint.h>
@@ -1113,18 +1114,23 @@ static bool parse_static_scalar_array_transaction(MinicParser *parser,
                                                   MinicType element_type,
                                                   size_t element_count,
                                                   bool infer_bound) {
-    MinicStaticArraySlot *slots;
+    MinicArrayInitializerPlan plan;
+    MinicStaticArraySlot *action_values;
+    MinicStaticArraySlot *final_slots;
     const MinicGlobalObject *object;
-    size_t capacity;
+    size_t action_capacity;
+    size_t final_capacity;
     size_t extent;
-    size_t next_index;
+    size_t index;
     bool success;
 
-    slots = NULL;
-    capacity = 0U;
-    extent = infer_bound ? 0U : element_count;
-    next_index = 0U;
+    action_values = NULL;
+    final_slots = NULL;
+    action_capacity = 0U;
+    final_capacity = 0U;
+    extent = 0U;
     success = false;
+    minic_array_initializer_plan_initialize(&plan, element_count, infer_bound);
     if (parser == NULL ||
         (!minic_type_is_integer(element_type) && !minic_type_is_pointer(element_type)) ||
         (!infer_bound && element_count == 0U) || parser->current.kind != MINIC_TOKEN_LBRACE) {
@@ -1133,55 +1139,32 @@ static bool parse_static_scalar_array_transaction(MinicParser *parser,
         }
         goto done;
     }
-    if (!infer_bound && !grow_static_array_slots(parser, &slots, &capacity, element_count)) {
-        goto done;
-    }
     if (!minic_parser_advance(parser)) {
         goto done;
     }
     while (parser->current.kind != MINIC_TOKEN_RBRACE) {
-        MinicStaticArraySlot value;
-        size_t first;
-        size_t last;
-        size_t required;
-        size_t index;
+        size_t action_id;
 
         if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
+            size_t first;
+            size_t last;
+
             if (!minic_parser_parse_array_designator(
-                    parser, element_count, infer_bound, &first, &last)) {
+                    parser, element_count, infer_bound, &first, &last) ||
+                !minic_array_initializer_plan_add_designated(&plan, first, last, &action_id)) {
+                if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                    minic_parser_error(parser, "static array designator extent overflows");
+                }
                 goto done;
             }
-        } else {
-            first = next_index;
-            last = first;
-            if (!infer_bound && first >= element_count) {
-                minic_parser_error(parser, "too many nested static array initializers");
-                goto done;
-            }
-        }
-        if (last == SIZE_MAX) {
-            minic_parser_error(parser, "static array designator extent overflows");
+        } else if (!minic_array_initializer_plan_add_positional(&plan, &action_id)) {
+            minic_parser_error(parser, "too many nested static array initializers");
             goto done;
         }
-        required = last + 1U;
-        if (infer_bound) {
-            if (!grow_static_array_slots(parser, &slots, &capacity, required)) {
-                goto done;
-            }
-            if (required > extent) {
-                extent = required;
-            }
-        }
-        if (!parse_static_array_scalar_slot(parser, element_type, &value)) {
+        if (!grow_static_array_slots(parser, &action_values, &action_capacity, action_id + 1U) ||
+            !parse_static_array_scalar_slot(parser, element_type, &action_values[action_id])) {
             goto done;
         }
-        for (index = first;; ++index) {
-            slots[index] = value;
-            if (index == last) {
-                break;
-            }
-        }
-        next_index = required;
         if (parser->current.kind == MINIC_TOKEN_COMMA) {
             if (!minic_parser_advance(parser)) {
                 goto done;
@@ -1198,6 +1181,7 @@ static bool parse_static_scalar_array_transaction(MinicParser *parser,
             parser, MINIC_TOKEN_RBRACE, "expected '}' after static array initializer")) {
         goto done;
     }
+    extent = minic_array_initializer_plan_element_count(&plan);
     if (infer_bound) {
         if (extent == 0U) {
             minic_parser_error(parser, "cannot infer static array bound from an empty initializer");
@@ -1210,13 +1194,29 @@ static bool parse_static_scalar_array_transaction(MinicParser *parser,
             goto done;
         }
     }
-    if (!materialize_static_array_slots(parser, object_id, element_type, slots, extent)) {
+    if (!grow_static_array_slots(parser, &final_slots, &final_capacity, extent)) {
+        goto done;
+    }
+    for (index = 0U; index < extent; ++index) {
+        size_t owner;
+
+        if (!minic_array_initializer_plan_final_owner(&plan, index, &owner)) {
+            minic_parser_error(parser, "cannot resolve static array initializer owner");
+            goto done;
+        }
+        if (owner != MINIC_INITIALIZER_ACTION_INVALID) {
+            final_slots[index] = action_values[owner];
+        }
+    }
+    if (!materialize_static_array_slots(parser, object_id, element_type, final_slots, extent)) {
         goto done;
     }
     success = true;
 
 done:
-    free(slots);
+    free(action_values);
+    free(final_slots);
+    minic_array_initializer_plan_destroy(&plan);
     return success;
 }
 

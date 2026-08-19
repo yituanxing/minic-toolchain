@@ -11,12 +11,11 @@ static bool grow_actions(MinicArrayInitializerPlan *plan) {
         return true;
     }
     new_capacity = plan->action_capacity == 0U ? 8U : plan->action_capacity * 2U;
-    if (new_capacity < plan->action_capacity ||
-        new_capacity > SIZE_MAX / sizeof(*plan->actions)) {
+    if (new_capacity < plan->action_capacity || new_capacity > SIZE_MAX / sizeof(*plan->actions)) {
         return false;
     }
-    new_actions =
-        (MinicArrayInitializerAction *)realloc(plan->actions, new_capacity * sizeof(*plan->actions));
+    new_actions = (MinicArrayInitializerAction *)realloc(plan->actions,
+                                                         new_capacity * sizeof(*plan->actions));
     if (new_actions == NULL) {
         return false;
     }
@@ -141,7 +140,8 @@ size_t minic_array_initializer_plan_action_final_count(const MinicArrayInitializ
     action = &plan->actions[action_id];
     element_count = minic_array_initializer_plan_element_count(plan);
     count = 0U;
-    for (index = action->first_index; index <= action->last_index && index < element_count; ++index) {
+    for (index = action->first_index; index <= action->last_index && index < element_count;
+         ++index) {
         if (minic_array_initializer_plan_action_owns(plan, action_id, index)) {
             count += 1U;
         }
