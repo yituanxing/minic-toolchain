@@ -22,7 +22,9 @@ jobs:
           ref: frontend/gnu-pointer-signedness-v1
 
       - name: Materialize bounded GNU compatibility
-        run: python3 tools/dev/materialize-gnu-pointer-signedness-v1.py
+        run: |
+          python3 tools/dev/materialize-gnu-pointer-signedness-v1.py
+          clang-format -i src/frontend/type.c src/frontend/parser_global.c
 
       - name: Build exact MiniC
         run: make -j4 CFLAGS=-Werror
@@ -42,10 +44,10 @@ jobs:
           set -Eeuo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add src/frontend/type.c tests/compiler/c0/run.sh
+          git add src/frontend/type.c src/frontend/parser_global.c tests/compiler/c0/run.sh
           if git diff --cached --quiet; then
             echo 'product already materialized'
             exit 0
           fi
-          git commit -m 'frontend: accept GNU same-rank integer pointer signedness'
+          git commit -m 'frontend: keep GNU pointer signedness at parser boundary'
           git push origin HEAD:frontend/gnu-pointer-signedness-v1
