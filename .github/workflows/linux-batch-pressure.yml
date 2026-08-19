@@ -50,13 +50,42 @@ jobs:
           path: build/linux-cache/linux-6.6.143.tar.xz
           key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
 
+      - name: Restore RISC-V package archives
+        id: rv64-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/minic-apt/archives
+          key: rv64-apt-${{ runner.os }}-${{ runner.arch }}-noble-${{ hashFiles('tools/ci/ubuntu-24.04-packages.txt') }}
+
       - name: Install RISC-V Linux Kbuild dependencies
+        env:
+          RV64_CACHE_HIT: ${{ steps.rv64-cache.outputs.cache-hit }}
         run: |
           set -Eeuo pipefail
+          apt_cache="$HOME/.cache/minic-apt/archives"
+          mkdir -p "$apt_cache/partial"
+
+          # Native Kbuild utilities are small and mostly preinstalled on the hosted
+          # image. Keep them separate from the cross-toolchain cache key.
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
-            flex bison bc libelf-dev libssl-dev
+          sudo apt-get install -y --no-install-recommends flex bison bc libelf-dev libssl-dev
+
+          if [[ "$RV64_CACHE_HIT" == true ]]; then
+            mapfile -d '' cached_packages < <(find "$apt_cache" -maxdepth 1 -type f -name '*.deb' -print0 | sort -z)
+            if (( ${#cached_packages[@]} == 0 )); then
+              printf '%s\n' 'RISC-V package cache reported a hit but contains no .deb archives' >&2
+              exit 1
+            fi
+            printf 'Restoring %d cached RISC-V packages\n' "${#cached_packages[@]}"
+            sudo apt-get install -y --no-install-recommends "${cached_packages[@]}"
+          else
+            mapfile -t requested_packages < <(grep -Ev '^[[:space:]]*(#|$)' tools/ci/ubuntu-24.04-packages.txt)
+            printf 'Building RISC-V package cache from %d requested packages\n' "${#requested_packages[@]}"
+            sudo apt-get \
+              -o Dir::Cache::archives="$apt_cache" \
+              -o APT::Keep-Downloaded-Packages=true \
+              install -y --no-install-recommends "${requested_packages[@]}"
+          fi
 
       - name: Build exact MiniC candidate
         run: |
