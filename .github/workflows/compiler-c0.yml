@@ -28,7 +28,6 @@ concurrency:
 jobs:
   full-validation:
     name: Full compiler validation
-    if: github.event_name != 'pull_request' || github.head_ref != 'frontend/linux-tail-batch2-work-v1'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
@@ -49,57 +48,13 @@ jobs:
           RV64_CACHE_HIT: ${{ steps.rv64-cache.outputs.cache-hit }}
         run: bash .github/scripts/compiler-c0-full-gate.sh
 
-  productize-linux-tail-batch2:
-    name: Productize second Linux tail batch
-    if: github.event_name == 'pull_request' && github.head_ref == 'frontend/linux-tail-batch2-work-v1'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    permissions:
-      contents: write
-    steps:
-      - name: Checkout exact PR head
-        uses: actions/checkout@v4
+      - name: Upload compiler failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 1
-
-      - name: Materialize batched product
-        run: |
-          set -Eeuo pipefail
-          python3 tools/dev/materialize-linux-tail-batch2-v1.py
-          clang-format -i src/frontend/parser_record.c src/frontend/parser_function.c
-          chmod +x tests/compiler/c0/run-function-pointer-field-array.sh
-
-      - name: Build exact candidate
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/linux-tail-batch2
-
-      - name: Run focused semantic gates
-        run: |
-          set -Eeuo pipefail
-          export MINIC="$PWD/build/linux-tail-batch2/bin/minic"
-          export BUILD_DIR="$PWD/build/linux-tail-batch2"
-          export HOST_CC=cc
-          sh tests/compiler/c0/run-function-pointer-field-array.sh
-          sh -x tests/compiler/c0/run-gnu-function-copy-alias.sh
-          printf '%s\n' 'PASS compiler/c0/linux-tail-batch2 function-pointer-field-array forward-alias'
-
-      - name: Run fast regression gate
-        run: make check-fast
-
-      - name: Publish clean batched product
-        run: |
-          set -Eeuo pipefail
-          git fetch origin main --depth=1
-          git show FETCH_HEAD:.github/workflows/compiler-c0.yml > .github/workflows/compiler-c0.yml
-          git rm tools/dev/materialize-linux-tail-batch2-v1.py
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add \
-            .github/workflows/compiler-c0.yml \
-            src/frontend/parser_record.c \
-            src/frontend/parser_function.c \
-            tests/compiler/c0/run-function-pointer-field-array.sh \
-            tests/compiler/c0/run-gnu-function-copy-alias.sh \
-            tests/compiler/c0/run.sh
-          git commit -m 'frontend: remove stale Linux tail restrictions'
-          git push origin HEAD:${{ github.head_ref }}
+          name: compiler-c0-failure-diagnostics
+          path: |
+            build/ci-external/tests/external/tiny-aes-c/diagnostic.txt
+            build/ci-external/tests/external/tiny-aes-c/*.status
+          if-no-files-found: ignore
+          retention-days: 7
