@@ -23,6 +23,37 @@ helper = r'''static bool static_object_relocation_target_same(
     return true;
 }
 
+static bool static_pointer_null_initializer_value(const MinicC0Program *program,
+                                                  MinicExpressionId expression_id) {
+    const MinicExpression *expression;
+    size_t remaining;
+
+    if (program == NULL || program->expression_count == SIZE_MAX) {
+        return false;
+    }
+    remaining = program->expression_count + 1U;
+    while (remaining-- != 0U) {
+        const MinicExpression *operand;
+
+        if (minic_c0_expression_is_null_pointer_constant_v0(program, expression_id)) {
+            return true;
+        }
+        expression = minic_c0_program_expression(program, expression_id);
+        if (expression == NULL || !minic_type_is_pointer(expression->type) ||
+            (expression->kind != MINIC_EXPRESSION_CAST &&
+             expression->kind != MINIC_EXPRESSION_BITCAST &&
+             expression->kind != MINIC_EXPRESSION_CONVERSION)) {
+            return false;
+        }
+        operand = minic_c0_program_expression(program, expression->value.unary.operand);
+        if (operand == NULL || !minic_type_is_pointer(operand->type)) {
+            return false;
+        }
+        expression_id = expression->value.unary.operand;
+    }
+    return false;
+}
+
 static bool static_pointer_initializer_equality_known(
     const MinicParser *parser,
     const MinicStaticPointerInitializer *left,
@@ -73,6 +104,21 @@ static bool static_pointer_initializer_equality_known(
 
 '''
 text = text.replace(anchor, helper + anchor, 1)
+
+old_null = '''    if (minic_c0_expression_is_null_pointer_constant_v0(parser->program, expression_id)) {
+        return true;
+    }
+'''
+new_null = '''    if (static_pointer_null_initializer_value(parser->program, expression_id)) {
+        return true;
+    }
+'''
+initializer_start = text.index(anchor)
+initializer_tail = text[initializer_start:]
+if initializer_tail.count(old_null) != 1:
+    raise SystemExit("unexpected static pointer null initializer check")
+initializer_tail = initializer_tail.replace(old_null, new_null, 1)
+text = text[:initializer_start] + initializer_tail
 
 old = '''    if (expression->kind == MINIC_EXPRESSION_CONDITIONAL &&
         !expression->value.conditional.uses_condition_value) {
