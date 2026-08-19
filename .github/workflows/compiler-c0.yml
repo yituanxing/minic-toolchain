@@ -9,6 +9,7 @@ on:
       - 'tools/**'
       - 'tests/**'
       - 'diagnostics/final-static-integer-relocation-trigger.txt'
+      - 'diagnostics/final-static-union-zero-trigger.txt'
       - '.github/scripts/**'
       - '.github/workflows/compiler-c0.yml'
   push:
@@ -76,3 +77,20 @@ jobs:
 
       - name: Materialize, validate, and publish product slice
         run: bash .github/scripts/productize-final-static-integer-relocation-v1.sh
+
+  productize-final-static-union-zero:
+    name: Productize final static union zero overlay
+    if: ${{ github.event_name == 'pull_request' && github.head_ref == 'product/final-static-union-zero-v1' && github.actor != 'github-actions[bot]' }}
+    permissions:
+      contents: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout product branch
+        uses: actions/checkout@v4
+        with:
+          ref: product/final-static-union-zero-v1
+          fetch-depth: 0
+
+      - name: Materialize, validate, and publish product slice
+        run: bash .github/scripts/productize-final-static-union-zero-v1.sh
