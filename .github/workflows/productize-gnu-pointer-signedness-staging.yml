@@ -1,0 +1,42 @@
+name: Productize GNU pointer signedness staging
+
+on:
+  push:
+    branches:
+      - staging/gnu-pointer-signedness-v2
+    paths:
+      - '.github/workflows/productize-gnu-pointer-signedness-staging.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  productize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout staging
+        uses: actions/checkout@v4
+        with:
+          ref: staging/gnu-pointer-signedness-v2
+
+      - name: Materialize and format
+        run: |
+          python3 tools/dev/materialize-gnu-pointer-signedness-v1.py
+          clang-format -i src/frontend/type.c src/frontend/parser_global.c
+
+      - name: Focused validation
+        run: |
+          make -j4 CFLAGS=-Werror
+          MINIC="$GITHUB_WORKSPACE/build/debug/bin/minic" HOST_CC=cc BUILD_DIR="$GITHUB_WORKSPACE/build/debug" \
+            sh tests/compiler/c0/run-gnu-pointer-signedness.sh
+          git diff --check
+
+      - name: Commit corrected product
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/frontend/type.c src/frontend/parser_global.c tests/compiler/c0/run.sh
+          git commit -m 'frontend: keep GNU pointer signedness at parser boundary'
+          git push origin HEAD:staging/gnu-pointer-signedness-v2
