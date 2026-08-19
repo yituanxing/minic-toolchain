@@ -1,6 +1,6 @@
 #!/bin/sh
 set -eu
-# Batch5 isolates static aggregate materialization from unrelated runtime access lowering.
+# Batch5 isolates static aggregate materialization and exposes terminal counters on failure.
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 minic=${MINIC:-"$root/build/debug/bin/minic"}
 work=${BUILD_DIR:-"$root/build/debug"}/tests/linux-tail-batch5
