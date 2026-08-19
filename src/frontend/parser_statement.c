@@ -1072,6 +1072,28 @@ static bool parse_positional_runtime_record_initializer(MinicParser *parser,
     return minic_parser_advance(parser);
 }
 
+static bool parse_runtime_record_designator_target(MinicParser *parser,
+                                                   MinicExpressionId base_id,
+                                                   MinicExpressionId *target_id) {
+    MinicExpressionId current_id;
+
+    if (parser == NULL || target_id == NULL || parser->current.kind != MINIC_TOKEN_DOT) {
+        minic_parser_error(parser, "expected designated record initializer");
+        return false;
+    }
+    current_id = base_id;
+    do {
+        MinicExpressionId member_id;
+
+        if (!minic_parser_parse_direct_member(parser, current_id, &member_id)) {
+            return false;
+        }
+        current_id = member_id;
+    } while (parser->current.kind == MINIC_TOKEN_DOT);
+    *target_id = current_id;
+    return true;
+}
+
 bool minic_parser_parse_runtime_record_initializer(MinicParser *parser,
                                                    MinicExpressionId target_id) {
     MinicSourceSpan initializer_span;
@@ -1143,8 +1165,7 @@ bool minic_parser_parse_runtime_record_initializer(MinicParser *parser,
         MinicType member_type;
         bool member_is_array;
 
-        if (parser->current.kind != MINIC_TOKEN_DOT ||
-            !minic_parser_parse_direct_member(parser, target_id, &member_id) ||
+        if (!parse_runtime_record_designator_target(parser, target_id, &member_id) ||
             !minic_parser_expect(
                 parser, MINIC_TOKEN_EQUAL, "expected '=' after record designator")) {
             if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
