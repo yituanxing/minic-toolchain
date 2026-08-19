@@ -55,9 +55,13 @@ union reader_special {
     int s;
 };
 struct task_state {
+    long before;
     union reader_special special;
+    long after;
 };
 static struct task_state init_task = {
+    .before = 3,
+    .after = 5,
     .special.s = 1,
 };
 int main(void) { return init_task.special.s; }
@@ -79,7 +83,8 @@ if "$minic" -S "$work/invalid.i" -o "$work/invalid.s" >"$work/invalid.out" 2>"$w
   echo "expected nonzero noncanonical union overlay rejection" >&2
   exit 1
 fi
-grep -Eq 'zero initializer|zero canonical storage|noncanonical static union' "$work/invalid.err"
+cat "$work/invalid.err"
+grep -Fq 'backward noncanonical static union member requires a zero initializer' "$work/invalid.err"
 echo 'PASS compiler/c0/static-union-zero-overlay zero-noncanonical=accepted nonzero=fail-closed'
 EOF
 chmod +x tests/compiler/c0/run-static-union-zero-overlay.sh
