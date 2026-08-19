@@ -243,12 +243,12 @@ static bool minic_data_layout_type_depth(const MinicDataLayout *layout,
         return true;
     }
     if (minic_type_is_enum(type)) {
-        const MinicEnum *entity;
+        MinicType effective_type;
 
-        entity = minic_c0_program_enum(program, type.enum_id);
-        if (entity == NULL || !entity->is_complete) {
+        if (!minic_c0_type_effective_integer_type(program, type, &effective_type)) {
             return false;
         }
+        type = effective_type;
     }
     if (minic_type_is_integer(type)) {
         size_t rank = (size_t)type.integer_rank;

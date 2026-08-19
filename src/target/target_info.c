@@ -216,10 +216,13 @@ bool minic_target_info_integer_width(const MinicTargetInfo *target,
                                      const MinicC0Program *program,
                                      MinicType type,
                                      unsigned int *bits) {
-    if (target == NULL || program == NULL) {
+    MinicType effective_type;
+
+    if (target == NULL || program == NULL ||
+        !minic_c0_type_effective_integer_type(program, type, &effective_type)) {
         return false;
     }
-    return integer_model_semantic_width(target->integer_model, type, bits);
+    return integer_model_semantic_width(target->integer_model, effective_type, bits);
 }
 
 bool minic_target_info_integer_promotion(const MinicTargetInfo *target,
@@ -293,6 +296,31 @@ bool minic_target_info_integer_common(const MinicTargetInfo *target,
         return true;
     }
     return integer_type_with_rank(MINIC_INTEGER_SIGN_UNSIGNED, signed_type.integer_rank, result);
+}
+
+bool minic_target_info_integer_promotion_for_program(const MinicTargetInfo *target,
+                                                     const MinicC0Program *program,
+                                                     MinicType type,
+                                                     MinicType *result) {
+    MinicType effective_type;
+
+    return target != NULL && program != NULL && result != NULL &&
+           minic_c0_type_effective_integer_type(program, type, &effective_type) &&
+           minic_target_info_integer_promotion(target, effective_type, result);
+}
+
+bool minic_target_info_integer_common_for_program(const MinicTargetInfo *target,
+                                                  const MinicC0Program *program,
+                                                  MinicType left,
+                                                  MinicType right,
+                                                  MinicType *result) {
+    MinicType effective_left;
+    MinicType effective_right;
+
+    return target != NULL && program != NULL && result != NULL &&
+           minic_c0_type_effective_integer_type(program, left, &effective_left) &&
+           minic_c0_type_effective_integer_type(program, right, &effective_right) &&
+           minic_target_info_integer_common(target, effective_left, effective_right, result);
 }
 
 bool minic_target_info_integer_literal_type(const MinicTargetInfo *target,

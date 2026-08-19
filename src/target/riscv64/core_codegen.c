@@ -257,6 +257,7 @@ bool minic_riscv64_core_function_can_emit_basic_v0_for_program(const MinicC0Prog
 }
 
 static bool emit_parameter(FILE *file,
+                           const MinicC0Program *program,
                            const MinicCoreFunction *function,
                            const MinicRiscv64CoreFrame *frame,
                            const MinicCoreInstruction *instruction) {
@@ -285,13 +286,15 @@ static bool emit_parameter(FILE *file,
         }
     }
     if (minic_type_is_integer(instruction->type) &&
-        !minic_riscv64_emit_integer_conversion(file, instruction->type, "t0")) {
+        !minic_riscv64_emit_integer_conversion_for_program(
+            file, program, instruction->type, "t0")) {
         return false;
     }
     return store_core_value(file, frame, instruction->result, "t0");
 }
 
 static bool emit_call(FILE *file,
+                      const MinicC0Program *program,
                       const MinicCoreFunction *function,
                       const MinicRiscv64CoreFrame *frame,
                       const MinicCoreInstruction *instruction) {
@@ -323,7 +326,8 @@ static bool emit_call(FILE *file,
         return true;
     }
     if (minic_type_is_integer(instruction->type) &&
-        !minic_riscv64_emit_integer_conversion(file, instruction->type, "a0")) {
+        !minic_riscv64_emit_integer_conversion_for_program(
+            file, program, instruction->type, "a0")) {
         return false;
     }
     return store_core_value(file, frame, instruction->result, "a0");
@@ -368,7 +372,8 @@ static bool emit_instruction(FILE *file,
     switch (instruction->kind) {
     case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT:
         if (fprintf(file, "  li t0, %" PRId64 "\n", instruction->value.integer_value) < 0 ||
-            !minic_riscv64_emit_integer_conversion(file, instruction->type, "t0")) {
+            !minic_riscv64_emit_integer_conversion_for_program(
+                file, program, instruction->type, "t0")) {
             return false;
         }
         return store_core_value(file, frame, instruction->result, "t0");
@@ -376,20 +381,23 @@ static bool emit_instruction(FILE *file,
         if (!load_core_value(file, frame, instruction->value.binary.left, "t0") ||
             !load_core_value(file, frame, instruction->value.binary.right, "t1") ||
             fprintf(file, "  add t0, t0, t1\n") < 0 ||
-            !minic_riscv64_emit_integer_conversion(file, instruction->type, "t0")) {
+            !minic_riscv64_emit_integer_conversion_for_program(
+                file, program, instruction->type, "t0")) {
             return false;
         }
         return store_core_value(file, frame, instruction->result, "t0");
     case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION:
         if (!load_core_value(file, frame, instruction->value.operand, "t0") ||
-            !minic_riscv64_emit_integer_conversion(file, instruction->type, "t0")) {
+            !minic_riscv64_emit_integer_conversion_for_program(
+                file, program, instruction->type, "t0")) {
             return false;
         }
         return store_core_value(file, frame, instruction->result, "t0");
     case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE:
         if (!load_core_value(file, frame, instruction->value.operand, "t0") ||
             fprintf(file, "  neg t0, t0\n") < 0 ||
-            !minic_riscv64_emit_integer_conversion(file, instruction->type, "t0")) {
+            !minic_riscv64_emit_integer_conversion_for_program(
+                file, program, instruction->type, "t0")) {
             return false;
         }
         return store_core_value(file, frame, instruction->result, "t0");
@@ -400,7 +408,7 @@ static bool emit_instruction(FILE *file,
         }
         return store_core_value(file, frame, instruction->result, "t0");
     case MINIC_CORE_INSTRUCTION_PARAMETER:
-        return emit_parameter(file, function, frame, instruction);
+        return emit_parameter(file, program, function, frame, instruction);
     case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS:
         if (!core_object_offset(frame, instruction->value.object_id, &object_offset) ||
             !emit_sp_address(file, "t0", object_offset)) {
@@ -409,7 +417,8 @@ static bool emit_instruction(FILE *file,
         return store_core_value(file, frame, instruction->result, "t0");
     case MINIC_CORE_INSTRUCTION_LOAD:
         if (!load_core_value(file, frame, instruction->value.load.address, "t0") ||
-            !minic_riscv64_emit_scalar_load(file, instruction->type, "t1", "t0")) {
+            !minic_riscv64_emit_scalar_load_for_program(
+                file, program, instruction->type, "t1", "t0")) {
             return false;
         }
         return store_core_value(file, frame, instruction->result, "t1");
@@ -424,10 +433,10 @@ static bool emit_instruction(FILE *file,
         stored_type = function->values[stored_value].type;
         return load_core_value(file, frame, instruction->value.store.address, "t0") &&
                load_core_value(file, frame, stored_value, "t1") &&
-               minic_riscv64_emit_scalar_store(file, stored_type, "t1", "t0");
+               minic_riscv64_emit_scalar_store_for_program(file, program, stored_type, "t1", "t0");
     }
     case MINIC_CORE_INSTRUCTION_CALL:
-        return emit_call(file, function, frame, instruction);
+        return emit_call(file, program, function, frame, instruction);
     case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:
         return emit_field_address(file, program, frame, instruction);
     }
