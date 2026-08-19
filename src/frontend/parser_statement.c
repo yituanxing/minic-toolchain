@@ -2381,11 +2381,11 @@ static bool parse_static_local_array_declarator(MinicParser *parser,
         }
 
         if (minic_type_is_pointer(declared_type)) {
-            if (!minic_parser_parse_zero_pointer_constant(parser) ||
-                !minic_c0_global_object_set_zero_initialized(parser->program, scalar_object_id) ||
+            if (!minic_parser_parse_static_pointer_object_initializer(
+                    parser, scalar_object_id, declared_type) ||
                 !minic_parser_bind_scoped_global_object(parser, name_span, scalar_object_id)) {
                 if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
-                    minic_parser_error(parser, "cannot finalize static local null pointer storage");
+                    minic_parser_error(parser, "cannot finalize static local pointer storage");
                 }
                 return false;
             }
