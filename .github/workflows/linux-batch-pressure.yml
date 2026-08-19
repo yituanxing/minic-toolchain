@@ -65,10 +65,28 @@ jobs:
           apt_cache="$HOME/.cache/minic-apt/archives"
           mkdir -p "$apt_cache/partial"
 
-          # Native Kbuild utilities are small and mostly preinstalled on the hosted
-          # image. Keep them separate from the cross-toolchain cache key.
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends flex bison bc libelf-dev libssl-dev
+          native_missing=()
+          command -v flex >/dev/null 2>&1 || native_missing+=(flex)
+          command -v bison >/dev/null 2>&1 || native_missing+=(bison)
+          command -v bc >/dev/null 2>&1 || native_missing+=(bc)
+          dpkg-query -W -f='${Status}' libelf-dev 2>/dev/null | grep -q 'ok installed' || native_missing+=(libelf-dev)
+          dpkg-query -W -f='${Status}' libssl-dev 2>/dev/null | grep -q 'ok installed' || native_missing+=(libssl-dev)
+
+          # On a warm pressure runner the cross-toolchain .debs and native Kbuild
+          # utilities are already available, so avoid a network metadata refresh
+          # entirely. Only touch the Ubuntu mirror when something is genuinely
+          # missing or the shared cross-package cache is cold.
+          if (( ${#native_missing[@]} != 0 )) || [[ "$RV64_CACHE_HIT" != true ]]; then
+            sudo apt-get update
+          fi
+
+          if (( ${#native_missing[@]} != 0 )); then
+            printf 'Installing %d missing native Kbuild packages: %s\n' \
+              "${#native_missing[@]}" "${native_missing[*]}"
+            sudo apt-get install -y --no-install-recommends "${native_missing[@]}"
+          else
+            printf '%s\n' 'Native Kbuild dependencies already present; skipping apt network work.'
+          fi
 
           if [[ "$RV64_CACHE_HIT" == true ]]; then
             mapfile -d '' cached_packages < <(find "$apt_cache" -maxdepth 1 -type f -name '*.deb' -print0 | sort -z)
