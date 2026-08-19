@@ -1783,6 +1783,121 @@ static bool parse_builtin_overflow(MinicParser *parser,
     return minic_parser_add_expression(parser, &expression, expression_id);
 }
 
+static bool parse_builtin_va_list_target(MinicParser *parser,
+                                         MinicExpressionId *target_id,
+                                         MinicSourceSpan *span) {
+    const MinicExpression *target;
+
+    if (parser == NULL || target_id == NULL || span == NULL) {
+        return false;
+    }
+    *span = parser->current.span;
+    if (!parse_expression_internal(parser, target_id, 0U, false)) {
+        return false;
+    }
+    target = minic_c0_program_expression(parser->program, *target_id);
+    if (target == NULL || target->value_category != MINIC_VALUE_LVALUE ||
+        !minic_type_is_pointer(target->type) || minic_type_is_const(target->type)) {
+        minic_parser_error(parser, "GNU va builtin requires a modifiable va_list lvalue");
+        return false;
+    }
+    return true;
+}
+
+static bool parse_builtin_va_start(MinicParser *parser, MinicExpressionId *expression_id) {
+    const MinicFunction *function;
+    MinicExpression expression;
+    MinicExpressionId target_id;
+    MinicLocalId last_parameter_id;
+    MinicSourcePosition begin;
+    MinicSourcePosition end;
+    MinicSourceSpan target_span;
+
+    function = parser != NULL ? minic_c0_program_function(parser->program, parser->current_function)
+                              : NULL;
+    if (parser == NULL || expression_id == NULL || function == NULL || !function->is_variadic ||
+        function->parameter_count == 0U) {
+        if (parser != NULL) {
+            minic_parser_error(parser, "__builtin_va_start requires a variadic function");
+        }
+        return false;
+    }
+
+    begin = parser->current.span.begin;
+    if (!minic_parser_advance(parser) ||
+        !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '(' after __builtin_va_start") ||
+        !parse_builtin_va_list_target(parser, &target_id, &target_span) ||
+        !minic_parser_expect(parser, MINIC_TOKEN_COMMA, "expected ',' in __builtin_va_start")) {
+        return false;
+    }
+    (void)target_span;
+
+    if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
+        minic_parser_error(parser, "__builtin_va_start requires the last named parameter");
+        return false;
+    }
+    last_parameter_id = minic_parser_find_local(parser, parser->current.span);
+    if (last_parameter_id == MINIC_LOCAL_INVALID ||
+        last_parameter_id != parser->local_begin + function->parameter_count - 1U) {
+        minic_parser_error(parser,
+                           "__builtin_va_start second argument must be the last named parameter");
+        return false;
+    }
+    if (!minic_parser_advance(parser) || parser->current.kind != MINIC_TOKEN_RPAREN) {
+        minic_parser_error(parser, "expected ')' after __builtin_va_start");
+        return false;
+    }
+    end = parser->current.span.end;
+    if (!minic_parser_advance(parser)) {
+        return false;
+    }
+
+    (void)memset(&expression, 0, sizeof(expression));
+    expression.kind = MINIC_EXPRESSION_BUILTIN_VA_START;
+    expression.span.begin = begin;
+    expression.span.end = end;
+    expression.type = minic_type_void();
+    expression.value_category = MINIC_VALUE_RVALUE;
+    expression.value.unary.operand = target_id;
+    return minic_parser_add_expression(parser, &expression, expression_id);
+}
+
+static bool parse_builtin_va_end(MinicParser *parser, MinicExpressionId *expression_id) {
+    MinicExpression expression;
+    MinicExpressionId target_id;
+    MinicSourcePosition begin;
+    MinicSourcePosition end;
+    MinicSourceSpan target_span;
+
+    if (parser == NULL || expression_id == NULL) {
+        return false;
+    }
+    begin = parser->current.span.begin;
+    if (!minic_parser_advance(parser) ||
+        !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '(' after __builtin_va_end") ||
+        !parse_builtin_va_list_target(parser, &target_id, &target_span)) {
+        return false;
+    }
+    (void)target_span;
+    if (parser->current.kind != MINIC_TOKEN_RPAREN) {
+        minic_parser_error(parser, "expected ')' after __builtin_va_end");
+        return false;
+    }
+    end = parser->current.span.end;
+    if (!minic_parser_advance(parser)) {
+        return false;
+    }
+
+    (void)memset(&expression, 0, sizeof(expression));
+    expression.kind = MINIC_EXPRESSION_BUILTIN_VA_END;
+    expression.span.begin = begin;
+    expression.span.end = end;
+    expression.type = minic_type_void();
+    expression.value_category = MINIC_VALUE_RVALUE;
+    expression.value.unary.operand = target_id;
+    return minic_parser_add_expression(parser, &expression, expression_id);
+}
+
 static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id, bool decay_array) {
     MinicExpression expression;
     MinicExpressionId primary_id;
@@ -1793,6 +1908,18 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
     MinicFixedRegisterBindingId fixed_register_binding_id;
     MinicEnumeratorId enumerator_id;
 
+    if (generic_token_text_equals(parser, "__builtin_va_start")) {
+        if (!parse_builtin_va_start(parser, &primary_id)) {
+            return false;
+        }
+        return finish_value_expression(parser, primary_id, decay_array, expression_id);
+    }
+    if (generic_token_text_equals(parser, "__builtin_va_end")) {
+        if (!parse_builtin_va_end(parser, &primary_id)) {
+            return false;
+        }
+        return finish_value_expression(parser, primary_id, decay_array, expression_id);
+    }
     if (generic_token_text_equals(parser, "__builtin_unreachable")) {
         if (!parse_builtin_unreachable(parser, &primary_id) ||
             !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
