@@ -9,6 +9,24 @@ patch=/tmp/minic-initializer-array-plan.patch
 run_materialization() {
   python3 tools/dev/materialize-initializer-array-plan-v1.py
 
+  # Python regex replacement strings interpret backslash escapes. The static-array replacement
+  # currently contains one C '\0' literal, so normalize any accidental NUL byte immediately after
+  # the grouped materialization and fail closed if any control-byte corruption survives.
+  python3 - <<'PY'
+from pathlib import Path
+
+for name in ["src/frontend/parser_global.c", "src/frontend/parser_statement.c"]:
+    path = Path(name)
+    data = path.read_bytes()
+    if b"\x00" in data:
+        data = data.replace(b"\x00", b"\\0")
+        path.write_bytes(data)
+
+for path in Path("src").rglob("*.[ch]"):
+    if b"\x00" in path.read_bytes():
+        raise SystemExit(f"NUL byte survived initializer materialization: {path}")
+PY
+
   # `initializer.c/.h` are already tracked on this stacked branch before the materializer runs,
   # so they do not necessarily appear in `git diff`. Format the semantic owner explicitly along
   # with every tracked/untracked C/H path produced by the grouped replacement.
@@ -33,8 +51,7 @@ run_materialization() {
   grep -F 'minic_array_initializer_plan_add_designated' src/frontend/parser_global.c >/dev/null
   grep -F 'minic_array_initializer_plan_add_designated' src/frontend/parser_statement.c >/dev/null
   grep -F 'add_runtime_initializer_once_read' src/frontend/parser_statement.c >/dev/null
-  ! grep -F 'multi-element runtime array range initializer requires an integer constant value' \
-      src/frontend/parser_statement.c
+  grep -F 'return parse_fixed_runtime_scalar_array_initializer(' src/frontend/parser_statement.c >/dev/null
 
   make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/product-init-array
   MINIC="$root/build/product-init-array/bin/minic" \
