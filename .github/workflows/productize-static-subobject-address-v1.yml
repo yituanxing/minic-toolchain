@@ -4,8 +4,11 @@ on:
   pull_request:
     paths:
       - 'tools/dev/materialize-static-subobject-address-v1.py'
+      - 'tools/dev/materialize-static-subobject-path-validation-v1.py'
       - '.github/workflows/productize-static-subobject-address-v1.yml'
       - 'src/frontend/parser_global.c'
+      - 'src/frontend/ast_global.c'
+      - 'src/target/data_layout.c'
       - 'tests/compiler/c0/static_object_address_relocation.c'
       - 'tests/compiler/c0/run-static-object-address-relocation.sh'
 
@@ -31,7 +34,9 @@ jobs:
         run: |
           set -Eeuo pipefail
           python3 tools/dev/materialize-static-subobject-address-v1.py
+          python3 tools/dev/materialize-static-subobject-path-validation-v1.py
           rm tools/dev/materialize-static-subobject-address-v1.py
+          rm tools/dev/materialize-static-subobject-path-validation-v1.py
           rm .github/workflows/productize-static-subobject-address-v1.yml
 
       - name: Format and validate focused ownership
