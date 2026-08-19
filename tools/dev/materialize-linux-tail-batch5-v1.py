@@ -11,6 +11,17 @@ def replace_once(path: str, old: str, new: str) -> None:
     p.write_text(text.replace(old, new, 1))
 
 
+# The aggregate-array parser uses one [first,last] interval for both designated
+# and positional elements. A positional element is the degenerate range
+# [next_index,next_index]; initialize both endpoints before any range cloning or
+# extent bookkeeping. Leaving `last` indeterminate corrupts the initializer
+# representation even though the emitted bytes can look correct.
+replace_once(
+    "src/frontend/parser_global.c",
+    '''        } else {\n            first = next_index;\n            if (!infer_bound && first >= element_count) {''',
+    '''        } else {\n            first = next_index;\n            last = first;\n            if (!infer_bound && first >= element_count) {''',
+)
+
 # Inferred-bound aggregate arrays are intentionally incomplete while their
 # initializer is being materialized. Their scalar-slot type repeats with the
 # element layout even before the final bound is known, just as ARRAY_ELEMENT
