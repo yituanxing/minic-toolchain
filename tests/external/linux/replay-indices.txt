@@ -1,14 +1,9 @@
-# All Linux first500 TUs at the promoted static-record-designator frontier.
-118
-122
-134
+# Linux first500 TUs in the remaining static pointer constant group after #436.
+114
+121
+141
 197
-200
-202
-214
-216
-228
-251
-290
-340
-389
+232
+310
+352
+375
