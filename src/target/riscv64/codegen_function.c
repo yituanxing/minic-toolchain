@@ -1204,6 +1204,17 @@ bool minic_riscv64_write_c0_program_with_core_candidates(const char *path,
                            object->name_length != 0U ? object->name : "<anonymous>");
             minic_riscv64_set_diagnostic(diagnostic, path, message);
         }
+        if (!success && diagnostic != NULL && diagnostic->message[0] == '\0') {
+            char message[256];
+            const MinicGlobalObject *object;
+
+            object = &program->global_objects[global_index];
+            (void)snprintf(message,
+                           sizeof(message),
+                           "cannot emit RISC-V global object '%s'",
+                           object->name_length != 0U ? object->name : "<anonymous>");
+            minic_riscv64_set_diagnostic(diagnostic, path, message);
+        }
     }
     if (success && program->file_asm_count != 0U) {
         size_t file_asm_index;
@@ -1276,6 +1287,18 @@ bool minic_riscv64_write_c0_program_with_core_candidates(const char *path,
                           file, program, core_function, &symbol);
         } else {
             success = minic_riscv64_emit_function(file, program, function, &label_counter);
+        }
+        if (!success && diagnostic != NULL && diagnostic->message[0] == '\0') {
+            char message[256];
+            const char *symbol_name;
+
+            symbol_name = minic_c0_function_symbol_name(function);
+            (void)snprintf(message,
+                           sizeof(message),
+                           "cannot emit RISC-V function '%s'",
+                           symbol_name != NULL && symbol_name[0] != '\0' ? symbol_name
+                                                                         : "<anonymous>");
+            minic_riscv64_set_diagnostic(diagnostic, path, message);
         }
         if (!success && diagnostic != NULL && diagnostic->message[0] == '\0') {
             char message[256];
