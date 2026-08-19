@@ -2,29 +2,67 @@
 set -Eeuo pipefail
 
 git fetch origin diagnostic/effective-convergence-snapshot-v1
-git show origin/diagnostic/effective-convergence-snapshot-v1:tools/dev/materialize-backward-static-union-zero-overlay-v1.py > tools/dev/materialize-backward-static-union-zero-overlay-v1.py
-python3 tools/dev/materialize-backward-static-union-zero-overlay-v1.py
-rm tools/dev/materialize-backward-static-union-zero-overlay-v1.py
-
-# Designator parsing owns only the member path. Whether a selected union member
-# has a representable flattened scalar slot is a later storage-ownership
-# question. Keep the normal scalar-slot resolver strict, but allow a
-# noncanonical union member to reach the dedicated zero-overlay owner.
+git show origin/diagnostic/effective-convergence-snapshot-v1:src/frontend/parser_global.c > /tmp/convergence-parser-global.c
 python3 - <<'PY'
 from pathlib import Path
+
 path = Path('src/frontend/parser_global.c')
 text = path.read_text()
-early_guard = '''        if (current_record->is_union && field_index != 0U) {
-            minic_parser_error(
-                parser, "nested static union designator requires the representable first member");
-            return false;
-        }
+staging = Path('/tmp/convergence-parser-global.c').read_text()
+
+helper_name = 'try_overwrite_static_zero_noncanonical_union_designator'
+if f'static bool {helper_name}(' not in text:
+    helper_start = staging.index(f'static bool {helper_name}(')
+    helper_end = staging.index('\nstatic bool append_static_record_designator_value(', helper_start)
+    helper = staging[helper_start:helper_end] + '\n\n'
+    insert_at = text.index('static bool append_static_record_designator_value(')
+    text = text[:insert_at] + helper + text[insert_at:]
+
+parse_start = text.index('static bool parse_static_record_constant(')
+parse_end = text.index('\nstatic bool ', parse_start + 1)
+parse_body = text[parse_start:parse_end]
+if f'{helper_name}(' not in parse_body:
+    branch_start = text.index('        if (has_designator && designator.depth > 1U) {', parse_start)
+    overwrite_start = text.index('            if (overwrite_materialized_field) {', branch_start)
+    forward_else = text.index(
+        '\n            } else {\n                const MinicRecord *nested_record;', overwrite_start
+    )
+    replacement = '''            if (overwrite_materialized_field) {
+                size_t relative_slot;
+                size_t slot_index;
+                MinicType slot_type;
+                bool handled_union_zero;
+
+                if (!try_overwrite_static_zero_noncanonical_union_designator(
+                        parser,
+                        object_id,
+                        record,
+                        &designator,
+                        record_base_slot,
+                        &handled_union_zero)) {
+                    return false;
+                }
+                if (!handled_union_zero) {
+                    if (!static_record_designator_scalar_slot(
+                            parser->program, record, &designator, &relative_slot, &slot_type) ||
+                        record_base_slot > SIZE_MAX - relative_slot) {
+                        minic_parser_error(parser,
+                                           "backward nested static record designator currently "
+                                           "requires a scalar leaf");
+                        return false;
+                    }
+                    slot_index = record_base_slot + relative_slot;
+                    if (!parse_static_scalar_constant_at(
+                            parser, object_id, slot_type, true, slot_index)) {
+                        return false;
+                    }
+                }
 '''
-if text.count(early_guard) != 1:
-    raise SystemExit(f'early noncanonical union path guard count={text.count(early_guard)}')
-text = text.replace(early_guard, '', 1)
+    text = text[:overwrite_start] + replacement + text[forward_else:]
+
 path.write_text(text)
 PY
+rm -f /tmp/convergence-parser-global.c
 
 cat > tests/compiler/c0/static_union_zero_overlay.c <<'EOF'
 union reader_special {
