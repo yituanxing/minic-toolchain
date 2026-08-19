@@ -1,0 +1,17 @@
+=== index=1 input=init/version.i line=20764 message=expected '=' after static record designator ===
+    20761: 
+    20762: 
+    20763: struct uts_namespace init_uts_ns = {
+>   20764:  .ns.count = { .refs = { (2) }, },
+    20765:  .name = {
+    20766:   .sysname = "Linux",
+    20767:   .nodename = "(none)",
+
+=== index=6 input=init/init_task.i line=63265 message=cannot record external record initializer ===
+    63262:  .group_leader = &init_task,
+    63263:  .real_cred = (typeof(*(&init_cred)) *)(&init_cred),
+    63264:  .cred = (typeof(*(&init_cred)) *)(&init_cred),
+>   63265:  .comm = "swapper",
+    63266:  .thread = { .sp = sizeof(init_stack) + (long)&init_stack, },
+    63267:  .fs = &init_fs,
+    63268:  .files = &init_files,
