@@ -19,6 +19,23 @@ const MinicDataLayout *minic_default_data_layout(void) {
     return &minic_rv64_data_layout;
 }
 
+bool minic_data_layout_pointer_arithmetic_stride(const MinicDataLayout *layout,
+                                                 const MinicC0Program *program,
+                                                 MinicType pointee_type,
+                                                 size_t *stride) {
+    size_t alignment;
+
+    if (layout == NULL || program == NULL || stride == NULL) {
+        return false;
+    }
+    if (minic_type_is_void(pointee_type) || minic_type_is_function(pointee_type)) {
+        *stride = 1U;
+        return true;
+    }
+    return minic_data_layout_type(layout, program, pointee_type, stride, &alignment) &&
+           *stride != 0U;
+}
+
 static bool minic_data_layout_align_up(size_t value, size_t alignment, size_t *result) {
     size_t remainder;
     size_t padding;

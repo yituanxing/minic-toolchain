@@ -57,6 +57,10 @@ static char *nested_member_array_element_address = &subobject_address_target.nes
 static void *signed_minus_one_pointer = (void *)-1;
 static void *unsigned_32_pointer = (void *)0xffffffffU;
 static void *high_unsigned_pointer = (void *)(0xdead000000000000UL + 0x300UL);
+static void *gnu_void_pointer_poison = (void *)0x300UL + 0xdead000000000000UL;
+static int *scaled_integer_pointer_add = (int *)0x1000UL + 3;
+static int *scaled_integer_pointer_subtract = (int *)0x1000UL - 2;
+static int *scaled_integer_pointer_reversed = 3 + (int *)0x1000UL;
 
 int read_static_object_addresses(void) {
     return external_address != (void *)0 && explicit_object_cast_address != (void *)0 &&

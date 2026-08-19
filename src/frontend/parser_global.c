@@ -182,7 +182,6 @@ static bool static_pointer_offset_bytes(const MinicParser *parser,
     MinicConstValue constant;
     int64_t count;
     size_t size;
-    size_t alignment;
     uint64_t magnitude;
     uint64_t limit;
     uint64_t product;
@@ -191,15 +190,13 @@ static bool static_pointer_offset_bytes(const MinicParser *parser,
         !minic_const_eval_integer(
             parser->program, parser->target_info, offset_expression_id, &constant) ||
         !minic_const_value_as_int64(parser->program, parser->target_info, &constant, &count) ||
-        !minic_data_layout_type(minic_target_info_data_layout(parser->target_info),
-                                parser->program,
-                                pointee_type,
-                                &size,
-                                &alignment) ||
-        size == 0U) {
+        !minic_data_layout_pointer_arithmetic_stride(
+            minic_target_info_data_layout(parser->target_info),
+            parser->program,
+            pointee_type,
+            &size)) {
         return false;
     }
-    (void)alignment;
     if (count >= 0) {
         magnitude = (uint64_t)count;
         limit = (uint64_t)INT64_MAX;
@@ -478,39 +475,44 @@ static bool static_object_address_relocation_path(const MinicParser *parser,
     return false;
 }
 
-static bool static_pointer_integer_constant_bits(const MinicParser *parser,
-                                                 MinicExpressionId expression_id,
-                                                 uint64_t *bits) {
-    const MinicExpression *expression;
-    const MinicExpression *operand;
+static bool static_pointer_width(const MinicParser *parser,
+                                 unsigned int *pointer_bits,
+                                 uint64_t *pointer_mask) {
+    const MinicDataLayout *layout;
+
+    if (parser == NULL || pointer_bits == NULL || pointer_mask == NULL) {
+        return false;
+    }
+    layout = minic_target_info_data_layout(parser->target_info);
+    if (layout == NULL || layout->pointer_size == 0U || layout->pointer_size > 8U) {
+        return false;
+    }
+    *pointer_bits = (unsigned int)(layout->pointer_size * 8U);
+    *pointer_mask =
+        *pointer_bits == 64U ? UINT64_MAX : (UINT64_C(1) << *pointer_bits) - UINT64_C(1);
+    return true;
+}
+
+static bool static_integer_constant_pointer_width_bits(const MinicParser *parser,
+                                                       MinicExpressionId expression_id,
+                                                       uint64_t *bits) {
     MinicConstValue constant;
     MinicType effective_type;
-    const MinicDataLayout *layout;
     unsigned int source_bits;
     unsigned int pointer_bits;
+    uint64_t pointer_mask;
     uint64_t value_bits;
 
-    if (parser == NULL || bits == NULL) {
-        return false;
-    }
-    expression = minic_c0_program_expression(parser->program, expression_id);
-    while (expression != NULL && expression->kind == MINIC_EXPRESSION_CONVERSION) {
-        expression = minic_c0_program_expression(parser->program, expression->value.unary.operand);
-    }
-    if (expression == NULL || expression->kind != MINIC_EXPRESSION_CAST ||
-        !minic_type_is_pointer(expression->type)) {
-        return false;
-    }
-    operand = minic_c0_program_expression(parser->program, expression->value.unary.operand);
-    if (operand == NULL || !minic_type_is_integer(operand->type) ||
-        !minic_const_eval_integer(
-            parser->program, parser->target_info, expression->value.unary.operand, &constant) ||
+    if (parser == NULL || bits == NULL ||
+        !minic_const_eval_integer(parser->program, parser->target_info, expression_id, &constant) ||
         !minic_c0_type_effective_integer_type(parser->program, constant.type, &effective_type) ||
         !minic_target_info_integer_width(
             parser->target_info, parser->program, effective_type, &source_bits) ||
-        source_bits == 0U || source_bits > 64U) {
+        source_bits == 0U || source_bits > 64U ||
+        !static_pointer_width(parser, &pointer_bits, &pointer_mask)) {
         return false;
     }
+    (void)pointer_bits;
 
     value_bits = constant.bits;
     if (source_bits < 64U) {
@@ -522,17 +524,99 @@ static bool static_pointer_integer_constant_bits(const MinicParser *parser,
             value_bits |= ~source_mask;
         }
     }
+    *bits = value_bits & pointer_mask;
+    return true;
+}
 
-    layout = minic_target_info_data_layout(parser->target_info);
-    if (layout == NULL || layout->pointer_size == 0U || layout->pointer_size > 8U) {
+static bool static_pointer_integer_constant_bits(const MinicParser *parser,
+                                                 MinicExpressionId expression_id,
+                                                 uint64_t *bits) {
+    const MinicExpression *expression;
+    const MinicExpression *left;
+    const MinicExpression *right;
+    unsigned int pointer_bits;
+    uint64_t pointer_mask;
+
+    if (parser == NULL || bits == NULL ||
+        !static_pointer_width(parser, &pointer_bits, &pointer_mask)) {
         return false;
     }
-    pointer_bits = (unsigned int)(layout->pointer_size * 8U);
-    *bits = value_bits;
-    if (pointer_bits < 64U) {
-        *bits &= (UINT64_C(1) << pointer_bits) - UINT64_C(1);
+    (void)pointer_bits;
+    expression = minic_c0_program_expression(parser->program, expression_id);
+    while (expression != NULL && expression->kind == MINIC_EXPRESSION_CONVERSION) {
+        expression_id = expression->value.unary.operand;
+        expression = minic_c0_program_expression(parser->program, expression_id);
     }
-    return true;
+    if (expression == NULL) {
+        return false;
+    }
+    if (expression->kind == MINIC_EXPRESSION_CAST && minic_type_is_pointer(expression->type)) {
+        const MinicExpression *operand;
+
+        operand = minic_c0_program_expression(parser->program, expression->value.unary.operand);
+        return operand != NULL && minic_type_is_integer(operand->type) &&
+               static_integer_constant_pointer_width_bits(
+                   parser, expression->value.unary.operand, bits);
+    }
+    if (expression->kind != MINIC_EXPRESSION_BINARY ||
+        (expression->value.binary.operator_kind != MINIC_BINARY_ADD &&
+         expression->value.binary.operator_kind != MINIC_BINARY_SUBTRACT)) {
+        return false;
+    }
+
+    left = minic_c0_program_expression(parser->program, expression->value.binary.left);
+    right = minic_c0_program_expression(parser->program, expression->value.binary.right);
+    if (left == NULL || right == NULL) {
+        return false;
+    }
+    if (minic_type_is_pointer(left->type) && minic_type_is_integer(right->type)) {
+        MinicType pointee;
+        size_t stride;
+        uint64_t base_bits;
+        uint64_t offset_bits;
+        uint64_t scaled_bits;
+
+        if (!minic_type_pointee(left->type, &pointee) ||
+            !minic_data_layout_pointer_arithmetic_stride(
+                minic_target_info_data_layout(parser->target_info),
+                parser->program,
+                pointee,
+                &stride) ||
+            !static_pointer_integer_constant_bits(
+                parser, expression->value.binary.left, &base_bits) ||
+            !static_integer_constant_pointer_width_bits(
+                parser, expression->value.binary.right, &offset_bits)) {
+            return false;
+        }
+        scaled_bits = offset_bits * (uint64_t)stride;
+        *bits = expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT
+                    ? (base_bits - scaled_bits) & pointer_mask
+                    : (base_bits + scaled_bits) & pointer_mask;
+        return true;
+    }
+    if (expression->value.binary.operator_kind == MINIC_BINARY_ADD &&
+        minic_type_is_integer(left->type) && minic_type_is_pointer(right->type)) {
+        MinicType pointee;
+        size_t stride;
+        uint64_t base_bits;
+        uint64_t offset_bits;
+
+        if (!minic_type_pointee(right->type, &pointee) ||
+            !minic_data_layout_pointer_arithmetic_stride(
+                minic_target_info_data_layout(parser->target_info),
+                parser->program,
+                pointee,
+                &stride) ||
+            !static_pointer_integer_constant_bits(
+                parser, expression->value.binary.right, &base_bits) ||
+            !static_integer_constant_pointer_width_bits(
+                parser, expression->value.binary.left, &offset_bits)) {
+            return false;
+        }
+        *bits = (base_bits + offset_bits * (uint64_t)stride) & pointer_mask;
+        return true;
+    }
+    return false;
 }
 
 static bool static_pointer_initializer_from_expression(MinicParser *parser,
