@@ -1,4 +1,4 @@
-# Linux first500 static-pointer frontier, replayed unchanged on #438.
+# Linux first500 static-pointer frontier, replayed unchanged on #440.
 114
 121
 137
