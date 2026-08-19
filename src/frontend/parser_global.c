@@ -726,6 +726,84 @@ bool minic_parser_parse_static_storage_initializer_value(MinicParser *parser,
                                                          MinicGlobalObjectId object_id,
                                                          MinicType type);
 
+static bool static_integer_address_constant_delta(const MinicParser *parser,
+                                                  MinicExpressionId expression_id,
+                                                  int64_t *delta) {
+    MinicConstValue value;
+
+    return parser != NULL && delta != NULL &&
+           minic_const_eval_integer(parser->program, parser->target_info, expression_id, &value) &&
+           minic_const_value_as_int64(parser->program, parser->target_info, &value, delta);
+}
+
+static bool static_integer_address_relocation_target(const MinicParser *parser,
+                                                     MinicExpressionId expression_id,
+                                                     MinicStaticObjectRelocationTarget *target) {
+    const MinicExpression *expression;
+
+    if (parser == NULL || target == NULL) {
+        return false;
+    }
+    expression = minic_c0_program_expression(parser->program, expression_id);
+    if (expression == NULL || !minic_type_is_integer(expression->type)) {
+        return false;
+    }
+    if (expression->kind == MINIC_EXPRESSION_CAST || expression->kind == MINIC_EXPRESSION_BITCAST ||
+        expression->kind == MINIC_EXPRESSION_CONVERSION) {
+        const MinicExpression *operand;
+
+        operand = minic_c0_program_expression(parser->program, expression->value.unary.operand);
+        if (operand != NULL && minic_type_is_pointer(operand->type)) {
+            return static_object_address_relocation_path(
+                parser, expression->value.unary.operand, target);
+        }
+        return static_integer_address_relocation_target(
+            parser, expression->value.unary.operand, target);
+    }
+    if (expression->kind == MINIC_EXPRESSION_BINARY &&
+        (expression->value.binary.operator_kind == MINIC_BINARY_ADD ||
+         expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT)) {
+        MinicStaticObjectRelocationTarget base;
+        int64_t delta;
+
+        if (static_integer_address_relocation_target(
+                parser, expression->value.binary.left, &base) &&
+            static_integer_address_constant_delta(parser, expression->value.binary.right, &delta)) {
+            if (expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT) {
+                if (delta == INT64_MIN) {
+                    return false;
+                }
+                delta = -delta;
+            }
+            if (!static_add_pointer_offset(base.byte_addend, delta, &base.byte_addend)) {
+                return false;
+            }
+            *target = base;
+            return true;
+        }
+        if (expression->value.binary.operator_kind == MINIC_BINARY_ADD &&
+            static_integer_address_constant_delta(parser, expression->value.binary.left, &delta) &&
+            static_integer_address_relocation_target(
+                parser, expression->value.binary.right, &base) &&
+            static_add_pointer_offset(base.byte_addend, delta, &base.byte_addend)) {
+            *target = base;
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool static_integer_address_slot_supported(const MinicParser *parser, MinicType type) {
+    const MinicDataLayout *layout;
+    size_t alignment;
+    size_t size;
+
+    layout = parser == NULL ? NULL : minic_target_info_data_layout(parser->target_info);
+    return layout != NULL && minic_type_is_integer(type) &&
+           minic_data_layout_type(layout, parser->program, type, &size, &alignment) &&
+           size == layout->pointer_size;
+}
+
 static bool parse_static_scalar_constant_at(MinicParser *parser,
                                             MinicGlobalObjectId object_id,
                                             MinicType type,
@@ -741,9 +819,30 @@ static bool parse_static_scalar_constant_at(MinicParser *parser,
         return false;
     }
     if (minic_type_is_integer(type)) {
+        MinicConstValue constant;
+        MinicConstValue converted;
+        MinicExpressionId expression_id;
+        MinicStaticObjectRelocationTarget relocation_target;
         uint64_t parsed_bits;
+        bool has_symbolic_address;
 
-        if (!minic_parser_parse_integer_initializer_bits(parser, type, &parsed_bits)) {
+        if (!minic_parser_parse_expression(parser, &expression_id, 0U)) {
+            return false;
+        }
+        if (minic_const_eval_integer(
+                parser->program, parser->target_info, expression_id, &constant) &&
+            minic_const_value_convert_integer(
+                parser->program, parser->target_info, &constant, type, &converted)) {
+            parsed_bits = converted.bits;
+            has_symbolic_address = false;
+        } else if (static_integer_address_slot_supported(parser, type) &&
+                   static_integer_address_relocation_target(
+                       parser, expression_id, &relocation_target)) {
+            parsed_bits = 0U;
+            has_symbolic_address = true;
+        } else {
+            minic_parser_error(parser,
+                               "integer initializer requires an integer constant expression");
             return false;
         }
         if (overwrite) {
@@ -757,6 +856,20 @@ static bool parse_static_scalar_constant_at(MinicParser *parser,
         } else if (!minic_c0_global_object_add_initializer_bits(
                        parser->program, object_id, parsed_bits)) {
             minic_parser_error(parser, "cannot record static aggregate integer initializer");
+            return false;
+        }
+        if (has_symbolic_address &&
+            !minic_c0_global_object_add_integer_object_relocation_path_addend(
+                parser->program,
+                object_id,
+                MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR,
+                overwrite ? overwrite_slot
+                          : parser->program->global_objects[object_id].initializer_count - 1U,
+                relocation_target.object_id,
+                relocation_target.member_indices,
+                relocation_target.member_depth,
+                relocation_target.byte_addend)) {
+            minic_parser_error(parser, "cannot record static symbolic integer relocation");
             return false;
         }
     } else if (minic_type_is_pointer(type)) {

@@ -367,67 +367,10 @@ bool minic_c0_global_object_add_initializer(MinicC0Program *program,
         program, global_object_id, (uint64_t)(int64_t)value);
 }
 
-static bool
-aggregate_scalar_slot_count(const MinicC0Program *program, MinicType type, size_t *slot_count) {
-    if (program == NULL || slot_count == NULL) {
-        return false;
-    }
-    if (minic_type_is_integer(type) || minic_type_is_pointer(type)) {
-        *slot_count = 1U;
-        return true;
-    }
-    if (minic_type_is_array(type)) {
-        const MinicArrayType *array_type;
-        size_t element_slots;
-
-        array_type = minic_c0_program_array_type(program, type.array_type_id);
-        if (array_type == NULL || array_type->element_count == 0U ||
-            !aggregate_scalar_slot_count(program, array_type->element_type, &element_slots) ||
-            (element_slots != 0U && array_type->element_count > SIZE_MAX / element_slots)) {
-            return false;
-        }
-        *slot_count = array_type->element_count * element_slots;
-        return true;
-    }
-    if (minic_type_is_record(type)) {
-        const MinicRecord *record;
-        size_t field_index;
-        size_t field_limit;
-        size_t total;
-
-        record = minic_c0_program_record(program, type.record_id);
-        if (record == NULL || !record->is_complete) {
-            return false;
-        }
-        field_limit = record->is_union ? 1U : record->field_count;
-        total = 0U;
-        for (field_index = 0U; field_index < field_limit; ++field_index) {
-            const MinicRecordField *field;
-            size_t element_slots;
-            size_t field_slots;
-
-            field = &record->fields[field_index];
-            if (field->element_count == 0U || field->is_flexible_array ||
-                !aggregate_scalar_slot_count(program, field->type, &element_slots) ||
-                (element_slots != 0U && field->element_count > SIZE_MAX / element_slots)) {
-                return false;
-            }
-            field_slots = field->element_count * element_slots;
-            if (total > SIZE_MAX - field_slots) {
-                return false;
-            }
-            total += field_slots;
-        }
-        *slot_count = total;
-        return true;
-    }
-    return false;
-}
-
 bool minic_c0_global_initializer_slot_count(const MinicC0Program *program,
                                             MinicType type,
                                             size_t *slot_count) {
-    return aggregate_scalar_slot_count(program, type, slot_count);
+    return minic_c0_type_initializer_slot_count(program, type, slot_count);
 }
 
 bool minic_c0_global_record_field_initializer_slot(const MinicC0Program *program,
@@ -449,7 +392,7 @@ bool minic_c0_global_record_field_initializer_slot(const MinicC0Program *program
 
         field = &record->fields[index];
         if (field->element_count == 0U || field->is_flexible_array ||
-            !aggregate_scalar_slot_count(program, field->type, &element_slots) ||
+            !minic_c0_type_initializer_slot_count(program, field->type, &element_slots) ||
             (element_slots != 0U && field->element_count > SIZE_MAX / element_slots)) {
             return false;
         }
@@ -494,9 +437,9 @@ static bool aggregate_scalar_slot_type(const MinicC0Program *program,
                     program, array_type->element_type, slot_index, slot_type)) {
                 return true;
             }
-            if (*slot_index == before &&
-                (!aggregate_scalar_slot_count(program, array_type->element_type, &element_slots) ||
-                 element_slots != 0U)) {
+            if (*slot_index == before && (!minic_c0_type_initializer_slot_count(
+                                              program, array_type->element_type, &element_slots) ||
+                                          element_slots != 0U)) {
                 return false;
             }
         }
@@ -528,7 +471,7 @@ static bool aggregate_scalar_slot_type(const MinicC0Program *program,
                     return true;
                 }
                 if (*slot_index == before &&
-                    (!aggregate_scalar_slot_count(program, field->type, &field_slots) ||
+                    (!minic_c0_type_initializer_slot_count(program, field->type, &field_slots) ||
                      field_slots != 0U)) {
                     return false;
                 }
@@ -711,7 +654,7 @@ bool minic_c0_global_relocation_slot_type(const MinicC0Program *program,
 
         remaining = location_index;
         return aggregate_scalar_slot_type(program, object->type, &remaining, slot_type) &&
-               minic_type_is_pointer(*slot_type);
+               (minic_type_is_pointer(*slot_type) || minic_type_is_integer(*slot_type));
     }
     return false;
 }
@@ -731,6 +674,8 @@ static bool add_global_symbol_relocation(MinicC0Program *program,
     MinicType slot_pointee;
     MinicType slot_type;
     MinicType target_type;
+    bool slot_is_integer;
+    bool slot_is_pointer;
     size_t insertion_index;
     size_t path_index;
 
@@ -748,21 +693,26 @@ static bool add_global_symbol_relocation(MinicC0Program *program,
     }
     object = &program->global_objects[global_object_id];
     if (!minic_c0_global_relocation_slot_type(
-            program, object, location_kind, location_index, &slot_type) ||
-        !minic_type_pointee(slot_type, &slot_pointee) ||
-        (target_kind == MINIC_GLOBAL_RELOCATION_FUNCTION &&
+            program, object, location_kind, location_index, &slot_type)) {
+        return false;
+    }
+    slot_is_pointer = minic_type_is_pointer(slot_type);
+    slot_is_integer = minic_type_is_integer(slot_type);
+    if ((!slot_is_pointer && !slot_is_integer) ||
+        (slot_is_pointer && !minic_type_pointee(slot_type, &slot_pointee)) ||
+        (target_kind == MINIC_GLOBAL_RELOCATION_FUNCTION && slot_is_pointer &&
          !minic_c0_global_relocation_function_target_compatible(
              program, slot_type, (MinicFunctionId)target_id, has_explicit_pointer_cast)) ||
-        (target_kind == MINIC_GLOBAL_RELOCATION_OBJECT && minic_type_is_function(slot_pointee) &&
-         !has_explicit_pointer_cast) ||
+        (target_kind == MINIC_GLOBAL_RELOCATION_OBJECT && slot_is_pointer &&
+         minic_type_is_function(slot_pointee) && !has_explicit_pointer_cast) ||
         (target_kind == MINIC_GLOBAL_RELOCATION_OBJECT &&
          (!global_object_member_path_type(program,
                                           &program->global_objects[target_id],
                                           target_member_indices,
                                           target_member_depth,
                                           &target_type) ||
-          !global_relocation_object_target_type_compatible(
-              program, slot_type, target_type, has_explicit_pointer_cast))) ||
+          (slot_is_pointer && !global_relocation_object_target_type_compatible(
+                                  program, slot_type, target_type, has_explicit_pointer_cast)))) ||
         object->is_tentative ||
         (object->initializer_count != 0U &&
          ((location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_RECORD_FIELD &&
@@ -907,6 +857,38 @@ bool minic_c0_global_object_add_object_relocation_path_addend_cast(
                                         target_member_depth,
                                         target_byte_addend,
                                         true);
+}
+
+bool minic_c0_global_object_add_integer_object_relocation_path_addend(
+    MinicC0Program *program,
+    MinicGlobalObjectId global_object_id,
+    MinicGlobalRelocationLocationKind location_kind,
+    size_t location_index,
+    MinicGlobalObjectId target_object_id,
+    const size_t *target_member_indices,
+    size_t target_member_depth,
+    int64_t target_byte_addend) {
+    MinicType slot_type;
+
+    if (program == NULL || global_object_id >= program->global_object_count ||
+        !minic_c0_global_relocation_slot_type(program,
+                                              &program->global_objects[global_object_id],
+                                              location_kind,
+                                              location_index,
+                                              &slot_type) ||
+        !minic_type_is_integer(slot_type)) {
+        return false;
+    }
+    return add_global_symbol_relocation(program,
+                                        global_object_id,
+                                        location_kind,
+                                        location_index,
+                                        MINIC_GLOBAL_RELOCATION_OBJECT,
+                                        target_object_id,
+                                        target_member_indices,
+                                        target_member_depth,
+                                        target_byte_addend,
+                                        false);
 }
 
 bool minic_c0_global_object_add_object_relocation_path(

@@ -743,6 +743,9 @@ bool minic_c0_global_object_replace_zero_initializer_bits(MinicC0Program *progra
                                                           MinicGlobalObjectId global_object_id,
                                                           size_t initializer_index,
                                                           uint64_t bits);
+bool minic_c0_type_initializer_slot_count(const MinicC0Program *program,
+                                          MinicType type,
+                                          size_t *slot_count);
 bool minic_c0_global_initializer_slot_count(const MinicC0Program *program,
                                             MinicType type,
                                             size_t *slot_count);
@@ -792,6 +795,15 @@ bool minic_c0_global_object_add_object_relocation_path_addend(
     size_t target_member_depth,
     int64_t target_byte_addend);
 bool minic_c0_global_object_add_object_relocation_path_addend_cast(
+    MinicC0Program *program,
+    MinicGlobalObjectId global_object_id,
+    MinicGlobalRelocationLocationKind location_kind,
+    size_t location_index,
+    MinicGlobalObjectId target_object_id,
+    const size_t *target_member_indices,
+    size_t target_member_depth,
+    int64_t target_byte_addend);
+bool minic_c0_global_object_add_integer_object_relocation_path_addend(
     MinicC0Program *program,
     MinicGlobalObjectId global_object_id,
     MinicGlobalRelocationLocationKind location_kind,
