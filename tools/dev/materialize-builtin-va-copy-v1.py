@@ -113,8 +113,8 @@ copy_verifier = r'''    case MINIC_EXPRESSION_BUILTIN_VA_COPY:
 '''
 replace_once(
     verifier,
-    "    case MINIC_EXPRESSION_BUILTIN_UNARY:\n",
-    copy_verifier + "    case MINIC_EXPRESSION_BUILTIN_UNARY:\n",
+    "    case MINIC_EXPRESSION_BUILTIN_UNARY: {\n",
+    copy_verifier + "    case MINIC_EXPRESSION_BUILTIN_UNARY: {\n",
 )
 
 codegen = Path("src/target/riscv64/codegen_expression.c")
