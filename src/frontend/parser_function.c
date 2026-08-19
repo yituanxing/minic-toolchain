@@ -403,6 +403,10 @@ bool minic_parser_parse_gnu_prefix_function_attributes(MinicParser *parser,
 
 static bool parse_persistent_function_attributes(MinicParser *parser,
                                                  bool is_internal,
+                                                 char *section_name,
+                                                 size_t section_capacity,
+                                                 size_t *section_name_length,
+                                                 bool *has_section,
                                                  bool *is_weak,
                                                  MinicFunctionId *alias_target) {
     MinicFunctionAttributeContext context;
@@ -411,10 +415,10 @@ static bool parse_persistent_function_attributes(MinicParser *parser,
     context.is_internal = is_internal;
     context.is_inline = false;
     context.is_extern = false;
-    context.section_name = NULL;
-    context.section_capacity = 0U;
-    context.section_name_length = NULL;
-    context.has_section = NULL;
+    context.section_name = section_name;
+    context.section_capacity = section_capacity;
+    context.section_name_length = section_name_length;
+    context.has_section = has_section;
     context.is_weak = is_weak;
     context.alias_target = alias_target;
     context.unsupported_message =
@@ -2159,7 +2163,14 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                                               sizeof(assembler_name),
                                               &assembler_name_length,
                                               &has_assembler_name) ||
-                !parse_persistent_function_attributes(parser, is_internal, &entity_is_weak, NULL)) {
+                !parse_persistent_function_attributes(parser,
+                                                     is_internal,
+                                                     NULL,
+                                                     0U,
+                                                     NULL,
+                                                     NULL,
+                                                     &entity_is_weak,
+                                                     NULL)) {
                 return false;
             }
             if (parser->current.kind != MINIC_TOKEN_COMMA &&
@@ -2411,7 +2422,14 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                                       sizeof(assembler_name),
                                       &assembler_name_length,
                                       &has_assembler_name) ||
-        !parse_persistent_function_attributes(parser, is_internal, &is_weak, &alias_target)) {
+        !parse_persistent_function_attributes(parser,
+                                             is_internal,
+                                             section_name,
+                                             sizeof(section_name),
+                                             &section_name_length,
+                                             &has_section,
+                                             &is_weak,
+                                             &alias_target)) {
         return false;
     }
     if (is_main && (parameter_count != 0U || is_variadic)) {
