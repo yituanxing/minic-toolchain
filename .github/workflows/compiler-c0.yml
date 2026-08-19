@@ -58,20 +58,3 @@ jobs:
             build/ci-external/tests/external/tiny-aes-c/*.status
           if-no-files-found: ignore
           retention-days: 7
-
-  productize-enum-type-ownership:
-    name: Productize enum type ownership
-    if: ${{ github.event_name == 'pull_request' && github.head_ref == 'refactor/frontend-semantic-ownership' && github.actor != 'github-actions[bot]' }}
-    permissions:
-      contents: write
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - name: Checkout convergence branch
-        uses: actions/checkout@v4
-        with:
-          ref: refactor/frontend-semantic-ownership
-          fetch-depth: 0
-
-      - name: Materialize, validate, and publish canonical enum ownership
-        run: bash .github/scripts/productize-enum-type-ownership-v1.sh
