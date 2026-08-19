@@ -8,6 +8,7 @@ on:
       - 'src/**'
       - 'tools/**'
       - 'tests/**'
+      - 'diagnostics/final-static-integer-relocation-trigger.txt'
       - '.github/scripts/**'
       - '.github/workflows/compiler-c0.yml'
   push:
@@ -58,3 +59,20 @@ jobs:
             build/ci-external/tests/external/tiny-aes-c/*.status
           if-no-files-found: ignore
           retention-days: 7
+
+  productize-final-static-integer-relocation:
+    name: Productize final static integer relocation
+    if: ${{ github.event_name == 'pull_request' && github.head_ref == 'product/final-static-integer-relocation-v1' && github.actor != 'github-actions[bot]' }}
+    permissions:
+      contents: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout product branch
+        uses: actions/checkout@v4
+        with:
+          ref: product/final-static-integer-relocation-v1
+          fetch-depth: 0
+
+      - name: Materialize, validate, and publish product slice
+        run: bash .github/scripts/productize-final-static-integer-relocation-v1.sh
