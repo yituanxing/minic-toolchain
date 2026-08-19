@@ -478,15 +478,31 @@ static bool static_object_address_relocation_path(const MinicParser *parser,
     return false;
 }
 
+static bool static_pointer_mask_bits(const MinicParser *parser, uint64_t value, uint64_t *bits) {
+    const MinicDataLayout *layout;
+    unsigned int pointer_bits;
+
+    if (parser == NULL || bits == NULL) {
+        return false;
+    }
+    layout = minic_target_info_data_layout(parser->target_info);
+    if (layout == NULL || layout->pointer_size == 0U || layout->pointer_size > 8U) {
+        return false;
+    }
+    pointer_bits = (unsigned int)(layout->pointer_size * 8U);
+    *bits = value;
+    if (pointer_bits < 64U) {
+        *bits &= (UINT64_C(1) << pointer_bits) - UINT64_C(1);
+    }
+    return true;
+}
+
 static bool static_pointer_integer_constant_bits(const MinicParser *parser,
                                                  MinicExpressionId expression_id,
                                                  uint64_t *bits) {
     const MinicExpression *expression;
     const MinicExpression *operand;
     MinicConstValue constant;
-    int64_t signed_value;
-    const MinicDataLayout *layout;
-    unsigned int pointer_bits;
 
     if (parser == NULL || bits == NULL) {
         return false;
@@ -499,19 +515,85 @@ static bool static_pointer_integer_constant_bits(const MinicParser *parser,
     operand = minic_c0_program_expression(parser->program, expression->value.unary.operand);
     if (operand == NULL || !minic_type_is_integer(operand->type) ||
         !minic_const_eval_integer(
-            parser->program, parser->target_info, expression->value.unary.operand, &constant) ||
-        !minic_const_value_as_int64(
-            parser->program, parser->target_info, &constant, &signed_value)) {
+            parser->program, parser->target_info, expression->value.unary.operand, &constant)) {
         return false;
     }
-    layout = minic_target_info_data_layout(parser->target_info);
-    if (layout == NULL || layout->pointer_size == 0U || layout->pointer_size > 8U) {
+    return static_pointer_mask_bits(parser, constant.bits, bits);
+}
+
+static bool static_pointer_absolute_offset_bits(const MinicParser *parser,
+                                                MinicType pointee_type,
+                                                MinicExpressionId offset_expression_id,
+                                                bool subtract,
+                                                uint64_t *byte_offset_bits) {
+    MinicConstValue constant;
+    int64_t signed_count;
+    uint64_t count_bits;
+    uint64_t product;
+    size_t size;
+
+    if (parser == NULL || byte_offset_bits == NULL ||
+        !minic_const_eval_integer(
+            parser->program, parser->target_info, offset_expression_id, &constant) ||
+        !minic_target_info_sizeof_type(parser->target_info, parser->program, pointee_type, &size) ||
+        size == 0U) {
         return false;
     }
-    pointer_bits = (unsigned int)(layout->pointer_size * 8U);
-    *bits = (uint64_t)signed_value;
-    if (pointer_bits < 64U) {
-        *bits &= (UINT64_C(1) << pointer_bits) - UINT64_C(1);
+    if (minic_const_value_as_int64(
+            parser->program, parser->target_info, &constant, &signed_count)) {
+        count_bits = (uint64_t)signed_count;
+    } else {
+        unsigned int width;
+
+        if (!minic_target_info_integer_width(
+                parser->target_info, parser->program, constant.type, &width) ||
+            width == 0U || width > 64U) {
+            return false;
+        }
+        count_bits = constant.bits;
+    }
+    product = count_bits * (uint64_t)size;
+    if (subtract) {
+        product = UINT64_C(0) - product;
+    }
+    return static_pointer_mask_bits(parser, product, byte_offset_bits);
+}
+
+static void static_pointer_initializer_reset(MinicStaticPointerInitializer *initializer) {
+    if (initializer == NULL) {
+        return;
+    }
+    (void)memset(initializer, 0, sizeof(*initializer));
+    initializer->function_id = MINIC_FUNCTION_INVALID;
+    initializer->relocation_target.object_id = MINIC_GLOBAL_OBJECT_INVALID;
+}
+
+static bool static_pointer_initializers_same_value(const MinicStaticPointerInitializer *left,
+                                                   const MinicStaticPointerInitializer *right) {
+    size_t index;
+
+    if (left == NULL || right == NULL || left->has_relocation != right->has_relocation) {
+        return false;
+    }
+    if (!left->has_relocation) {
+        return left->bits == right->bits;
+    }
+    if (left->relocation_is_function != right->relocation_is_function) {
+        return false;
+    }
+    if (left->relocation_is_function) {
+        return left->function_id == right->function_id;
+    }
+    if (left->relocation_target.object_id != right->relocation_target.object_id ||
+        left->relocation_target.member_depth != right->relocation_target.member_depth ||
+        left->relocation_target.byte_addend != right->relocation_target.byte_addend) {
+        return false;
+    }
+    for (index = 0U; index < left->relocation_target.member_depth; ++index) {
+        if (left->relocation_target.member_indices[index] !=
+            right->relocation_target.member_indices[index]) {
+            return false;
+        }
     }
     return true;
 }
@@ -548,23 +630,82 @@ static bool static_pointer_initializer_from_expression(MinicParser *parser,
     if (static_pointer_integer_constant_bits(parser, expression_id, &initializer->bits)) {
         return true;
     }
+    if (expression->kind == MINIC_EXPRESSION_BINARY &&
+        (expression->value.binary.operator_kind == MINIC_BINARY_ADD ||
+         expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT)) {
+        const MinicExpression *left;
+        const MinicExpression *right;
+        const MinicExpression *pointer_expression;
+        MinicExpressionId pointer_id;
+        MinicExpressionId offset_id;
+        MinicStaticPointerInitializer base_initializer;
+        MinicType pointee_type;
+        uint64_t delta_bits;
+        uint64_t result_bits;
+        bool subtract;
+
+        left = minic_c0_program_expression(parser->program, expression->value.binary.left);
+        right = minic_c0_program_expression(parser->program, expression->value.binary.right);
+        pointer_expression = NULL;
+        pointer_id = MINIC_EXPRESSION_INVALID;
+        offset_id = MINIC_EXPRESSION_INVALID;
+        subtract = expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT;
+        if (left != NULL && minic_type_is_pointer(left->type)) {
+            pointer_expression = left;
+            pointer_id = expression->value.binary.left;
+            offset_id = expression->value.binary.right;
+        } else if (!subtract && right != NULL && minic_type_is_pointer(right->type)) {
+            pointer_expression = right;
+            pointer_id = expression->value.binary.right;
+            offset_id = expression->value.binary.left;
+        }
+        static_pointer_initializer_reset(&base_initializer);
+        if (pointer_expression != NULL &&
+            minic_type_pointee(pointer_expression->type, &pointee_type) &&
+            static_pointer_initializer_from_expression(parser, pointer_id, &base_initializer) &&
+            !base_initializer.has_relocation &&
+            static_pointer_absolute_offset_bits(
+                parser, pointee_type, offset_id, subtract, &delta_bits) &&
+            static_pointer_mask_bits(parser, base_initializer.bits + delta_bits, &result_bits)) {
+            *initializer = base_initializer;
+            initializer->bits = result_bits;
+            return true;
+        }
+    }
     if (expression->kind == MINIC_EXPRESSION_CONDITIONAL &&
         !expression->value.conditional.uses_condition_value) {
         MinicConstValue condition_constant;
         int64_t condition_value;
         MinicExpressionId selected_id;
 
-        if (!minic_const_eval_integer(parser->program,
-                                      parser->target_info,
-                                      expression->value.conditional.condition,
-                                      &condition_constant) ||
-            !minic_const_value_as_int64(
+        if (minic_const_eval_integer(parser->program,
+                                     parser->target_info,
+                                     expression->value.conditional.condition,
+                                     &condition_constant) &&
+            minic_const_value_as_int64(
                 parser->program, parser->target_info, &condition_constant, &condition_value)) {
-            return false;
+            selected_id = condition_value != 0 ? expression->value.conditional.when_true
+                                               : expression->value.conditional.when_false;
+            return static_pointer_initializer_from_expression(parser, selected_id, initializer);
         }
-        selected_id = condition_value != 0 ? expression->value.conditional.when_true
-                                           : expression->value.conditional.when_false;
-        return static_pointer_initializer_from_expression(parser, selected_id, initializer);
+        {
+            MinicStaticPointerInitializer when_true;
+            MinicStaticPointerInitializer when_false;
+
+            static_pointer_initializer_reset(&when_true);
+            static_pointer_initializer_reset(&when_false);
+            if (!static_pointer_initializer_from_expression(
+                    parser, expression->value.conditional.when_true, &when_true) ||
+                !static_pointer_initializer_from_expression(
+                    parser, expression->value.conditional.when_false, &when_false) ||
+                !static_pointer_initializers_same_value(&when_true, &when_false)) {
+                return false;
+            }
+            when_true.has_explicit_pointer_cast =
+                when_true.has_explicit_pointer_cast || when_false.has_explicit_pointer_cast;
+            *initializer = when_true;
+            return true;
+        }
     }
     return false;
 }
@@ -593,9 +734,7 @@ static bool parse_static_pointer_initializer(MinicParser *parser,
         !minic_parser_parse_expression(parser, &expression_id, 0U)) {
         return false;
     }
-    (void)memset(initializer, 0, sizeof(*initializer));
-    initializer->function_id = MINIC_FUNCTION_INVALID;
-    initializer->relocation_target.object_id = MINIC_GLOBAL_OBJECT_INVALID;
+    static_pointer_initializer_reset(initializer);
     if (!static_pointer_initializer_type_compatible(parser, target_type, expression_id)) {
         minic_parser_error(parser, "static pointer initializer type mismatch");
         return false;
