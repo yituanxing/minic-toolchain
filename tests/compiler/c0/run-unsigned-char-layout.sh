@@ -59,25 +59,12 @@ HOST_CC="$host_cc" \
 BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
 sh "$root/tests/compiler/c0/run-signed-char-semantics.sh"
 
-expect_failure() {
-    name=$1
-    expected=$2
-
-    "$host_cc" -E -P -x c \
-        "$root/tests/compiler/c0/$name.c" \
-        -o "$work/$name.i"
-    if "$minic" -S \
-        "$work/$name.i" \
-        -o "$work/$name.s" \
-        >"$work/$name.stdout" \
-        2>"$work/$name.stderr"; then
-        printf '%s\n' \
-            "FAIL compiler/c0/$name: compilation unexpectedly succeeded" >&2
-        exit 1
-    fi
-    grep -F "$expected" "$work/$name.stderr" >/dev/null
-    printf '%s\n' "PASS compiler/c0/$name"
-}
-
-expect_failure invalid_plain_unsigned_char_pointer_assignment \
-    "assignment expression type does not match target type"
+"$host_cc" -E -P -std=gnu11 -x c \
+    "$root/tests/compiler/c0/gnu_plain_unsigned_char_pointer_assignment.c" \
+    -o "$work/gnu_plain_unsigned_char_pointer_assignment.i"
+"$minic" -S \
+    "$work/gnu_plain_unsigned_char_pointer_assignment.i" \
+    -o "$work/gnu_plain_unsigned_char_pointer_assignment.s"
+test -s "$work/gnu_plain_unsigned_char_pointer_assignment.s"
+printf '%s\n' \
+    'PASS compiler/c0/gnu_plain_unsigned_char_pointer_assignment same-rank=char pointer-sign=assignment'
