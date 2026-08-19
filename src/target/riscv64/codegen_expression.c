@@ -19,16 +19,10 @@ static bool minic_riscv64_pointer_element_size(const MinicC0Program *program,
                                                MinicType pointer_type,
                                                size_t *element_size) {
     MinicType pointee;
-    size_t element_alignment;
 
-    if (element_size == NULL || !minic_type_pointee(pointer_type, &pointee)) {
-        return false;
-    }
-    if (minic_type_is_void(pointee) || minic_type_is_function(pointee)) {
-        *element_size = 1U;
-        return true;
-    }
-    return minic_riscv64_type_layout(program, pointee, element_size, &element_alignment);
+    return program != NULL && element_size != NULL && minic_type_pointee(pointer_type, &pointee) &&
+           minic_data_layout_pointer_arithmetic_stride(
+               minic_default_data_layout(), program, pointee, element_size);
 }
 
 static bool minic_riscv64_emit_normalize_integer(FILE *file,

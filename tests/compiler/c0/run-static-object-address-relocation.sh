@@ -35,7 +35,12 @@ grep -F '.dword subobject_address_target+21' "$work/static_object_address_reloca
 grep -F '.dword subobject_address_target+24' "$work/static_object_address_relocation.s" >/dev/null
 grep -F '.dword -1' "$work/static_object_address_relocation.s" >/dev/null
 grep -F '.dword 4294967295' "$work/static_object_address_relocation.s" >/dev/null
-grep -F '.dword -2401263026318605568' "$work/static_object_address_relocation.s" >/dev/null
+high_pointer_count=$(grep -F -c '.dword -2401263026318605568' "$work/static_object_address_relocation.s")
+test "$high_pointer_count" -eq 2
+grep -F '.dword 4108' "$work/static_object_address_relocation.s" >/dev/null
+grep -F '.dword 4088' "$work/static_object_address_relocation.s" >/dev/null
+scaled_add_count=$(grep -F -c '.dword 4108' "$work/static_object_address_relocation.s")
+test "$scaled_add_count" -eq 2
 
 if "$minic" -S "$root/tests/compiler/c0/invalid_static_object_address_type.c" \
     -o "$work/invalid-type.s" >"$work/invalid-type.stdout" 2>"$work/invalid-type.stderr"; then
@@ -53,6 +58,15 @@ if "$minic" -S "$root/tests/compiler/c0/invalid_static_pointer_sign_qualifier_lo
 fi
 grep -F 'static pointer initializer type mismatch' \
     "$work/invalid-pointer-sign-qualifier.stderr" >/dev/null
+
+if "$minic" -S "$root/tests/compiler/c0/invalid_static_pointer_arithmetic_base.c" \
+    -o "$work/invalid-pointer-arithmetic.s" \
+    >"$work/invalid-pointer-arithmetic.stdout" 2>"$work/invalid-pointer-arithmetic.stderr"; then
+    printf '%s\n' 'FAIL compiler/c0/static-object-address: runtime pointer base accepted as static arithmetic' >&2
+    exit 1
+fi
+grep -F 'static pointer initializer requires a null or static symbol address constant' \
+    "$work/invalid-pointer-arithmetic.stderr" >/dev/null
 
 if "$minic" -S "$root/tests/compiler/c0/invalid_static_pointer_subscript_relocation.c" \
     -o "$work/invalid-pointer-subscript.s" \
