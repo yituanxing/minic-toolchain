@@ -372,6 +372,7 @@ typedef struct MinicFunctionType {
     MinicType return_type;
     MinicType parameter_types[MINIC_MAX_FUNCTION_PARAMETERS];
     size_t parameter_count;
+    bool is_variadic;
 } MinicFunctionType;
 
 typedef struct MinicTypeAlias {
@@ -670,6 +671,12 @@ bool minic_c0_program_complete_array_type(MinicC0Program *program,
                                           MinicType array_type,
                                           size_t element_count);
 bool minic_c0_program_discard_last_array_type(MinicC0Program *program, MinicType array_type);
+bool minic_c0_program_add_variadic_function_type(MinicC0Program *program,
+                                                 MinicType return_type,
+                                                 const MinicType *parameter_types,
+                                                 size_t parameter_count,
+                                                 bool is_variadic,
+                                                 MinicType *function_type);
 bool minic_c0_program_add_function_type(MinicC0Program *program,
                                         MinicType return_type,
                                         const MinicType *parameter_types,

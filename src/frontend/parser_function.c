@@ -584,10 +584,6 @@ static bool parse_function_pointer_parameter_declarator(MinicParser *parser,
             parser, require_name, true, &declarator)) {
         return false;
     }
-    if (declarator.is_variadic) {
-        minic_parser_error(parser, "variadic function pointer parameters are not supported yet");
-        return false;
-    }
     if (!minic_parser_build_function_declarator_type(
             parser, return_type, &declarator, parameter_type)) {
         minic_parser_error(parser, "cannot build function pointer parameter type");
@@ -688,6 +684,21 @@ static bool consume_parameter_declarator_attribute(MinicParser *parser,
     return false;
 }
 
+static bool apply_parameter_declarator_attribute_list(MinicParser *parser,
+                                                      const MinicParsedAttributeList *attributes) {
+    size_t index;
+
+    if (parser == NULL || attributes == NULL) {
+        return false;
+    }
+    for (index = 0U; index < attributes->count; ++index) {
+        if (!consume_parameter_declarator_attribute(parser, &attributes->values[index], NULL)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool minic_parser_parse_parameter_list(MinicParser *parser,
                                        MinicSourceSpan *parameter_name_spans,
                                        MinicType *parameter_types,
@@ -710,14 +721,20 @@ bool minic_parser_parse_parameter_list(MinicParser *parser,
     for (;;) {
         MinicSourceSpan declarator_name_span;
         MinicType parameter_type;
+        MinicParsedAttributeList leading_attributes;
+        MinicParsedAttributeList post_type_attributes;
         bool declarator_has_name;
         bool is_function_pointer_parameter;
 
+        leading_attributes.count = 0U;
+        post_type_attributes.count = 0U;
         if (*parameter_count >= MINIC_MAX_FUNCTION_PARAMETERS) {
             minic_parser_error(parser, "parameter count exceeds compiler limit");
             return false;
         }
-        if (!minic_parser_parse_type_name_preserving_incomplete(parser, &parameter_type)) {
+        if (!minic_parser_collect_gnu_attribute_lists(parser, &leading_attributes) ||
+            !minic_parser_parse_type_name_preserving_incomplete(parser, &parameter_type) ||
+            !minic_parser_collect_gnu_attribute_lists(parser, &post_type_attributes)) {
             return false;
         }
         (void)memset(&declarator_name_span, 0, sizeof(declarator_name_span));
@@ -775,7 +792,9 @@ bool minic_parser_parse_parameter_list(MinicParser *parser,
             return false;
         }
 
-        if (!minic_parser_parse_gnu_attribute_lists(
+        if (!apply_parameter_declarator_attribute_list(parser, &leading_attributes) ||
+            !apply_parameter_declarator_attribute_list(parser, &post_type_attributes) ||
+            !minic_parser_parse_gnu_attribute_lists(
                 parser, consume_parameter_declarator_attribute, NULL)) {
             return false;
         }

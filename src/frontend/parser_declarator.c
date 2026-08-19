@@ -292,11 +292,12 @@ bool minic_parser_build_function_declarator_type(MinicParser *parser,
         declarator->parameter_count > MINIC_MAX_FUNCTION_PARAMETERS) {
         return false;
     }
-    if (!minic_c0_program_add_function_type(parser->program,
-                                            return_type,
-                                            declarator->parameter_types,
-                                            declarator->parameter_count,
-                                            &function_type)) {
+    if (!minic_c0_program_add_variadic_function_type(parser->program,
+                                                     return_type,
+                                                     declarator->parameter_types,
+                                                     declarator->parameter_count,
+                                                     declarator->is_variadic,
+                                                     &function_type)) {
         return false;
     }
 

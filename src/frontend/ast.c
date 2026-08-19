@@ -1211,10 +1211,12 @@ bool minic_c0_program_discard_last_array_type(MinicC0Program *program, MinicType
 static bool minic_function_type_matches(const MinicFunctionType *descriptor,
                                         MinicType return_type,
                                         const MinicType *parameter_types,
-                                        size_t parameter_count) {
+                                        size_t parameter_count,
+                                        bool is_variadic) {
     size_t parameter_index;
 
     if (descriptor == NULL || descriptor->parameter_count != parameter_count ||
+        descriptor->is_variadic != is_variadic ||
         !minic_type_equal(descriptor->return_type, return_type)) {
         return false;
     }
@@ -1227,11 +1229,12 @@ static bool minic_function_type_matches(const MinicFunctionType *descriptor,
     return true;
 }
 
-bool minic_c0_program_add_function_type(MinicC0Program *program,
-                                        MinicType return_type,
-                                        const MinicType *parameter_types,
-                                        size_t parameter_count,
-                                        MinicType *function_type) {
+bool minic_c0_program_add_variadic_function_type(MinicC0Program *program,
+                                                 MinicType return_type,
+                                                 const MinicType *parameter_types,
+                                                 size_t parameter_count,
+                                                 bool is_variadic,
+                                                 MinicType *function_type) {
     MinicFunctionType descriptor;
     MinicType normalized_parameter_types[MINIC_MAX_FUNCTION_PARAMETERS];
     size_t function_type_index;
@@ -1256,7 +1259,8 @@ bool minic_c0_program_add_function_type(MinicC0Program *program,
         if (minic_function_type_matches(&program->function_types[function_type_index],
                                         return_type,
                                         normalized_parameter_types,
-                                        parameter_count)) {
+                                        parameter_count,
+                                        is_variadic)) {
             *function_type = minic_type_function(function_type_index);
             return true;
         }
@@ -1271,6 +1275,7 @@ bool minic_c0_program_add_function_type(MinicC0Program *program,
     (void)memset(&descriptor, 0, sizeof(descriptor));
     descriptor.return_type = return_type;
     descriptor.parameter_count = parameter_count;
+    descriptor.is_variadic = is_variadic;
     for (parameter_index = 0U; parameter_index < MINIC_MAX_FUNCTION_PARAMETERS; ++parameter_index) {
         if (parameter_index < parameter_count) {
             descriptor.parameter_types[parameter_index] =
@@ -1284,6 +1289,15 @@ bool minic_c0_program_add_function_type(MinicC0Program *program,
     program->function_type_count += 1U;
     *function_type = minic_type_function(function_type_index);
     return true;
+}
+
+bool minic_c0_program_add_function_type(MinicC0Program *program,
+                                        MinicType return_type,
+                                        const MinicType *parameter_types,
+                                        size_t parameter_count,
+                                        MinicType *function_type) {
+    return minic_c0_program_add_variadic_function_type(
+        program, return_type, parameter_types, parameter_count, false, function_type);
 }
 
 bool minic_c0_program_add_type_alias(MinicC0Program *program,
