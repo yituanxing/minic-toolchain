@@ -5,6 +5,7 @@ on:
     paths:
       - 'tools/dev/materialize-character-array-string-init-v1.py'
       - 'tools/dev/finalize-character-array-string-init-v1.py'
+      - 'tools/dev/fix-character-array-string-owner-v2.py'
       - '.github/workflows/productize-character-array-string-init-v1.yml'
       - 'src/frontend/parser_internal.h'
       - 'src/frontend/parser_string.c'
@@ -38,8 +39,10 @@ jobs:
           set -Eeuo pipefail
           python3 tools/dev/materialize-character-array-string-init-v1.py
           python3 tools/dev/finalize-character-array-string-init-v1.py
+          python3 tools/dev/fix-character-array-string-owner-v2.py
           rm tools/dev/materialize-character-array-string-init-v1.py
           rm tools/dev/finalize-character-array-string-init-v1.py
+          rm tools/dev/fix-character-array-string-owner-v2.py
           rm .github/workflows/productize-character-array-string-init-v1.yml
 
       - name: Format and validate focused ownership
