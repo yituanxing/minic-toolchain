@@ -55,9 +55,26 @@ if "MinicType minic_type_enum(MinicEnumId enum_id)" not in type_c:
 if "minic_type_enum(enum_id," in parser_enum:
     raise SystemExit("parser still embeds compatible integer facts in enum type")
 
+# A coherent replacement may create new focused fixtures. Plain `git diff --name-only` only sees
+# tracked paths, so include untracked, non-ignored paths in the manifest as well.
 changed = set(
     subprocess.check_output(
         ["git", "diff", "--name-only", "--", "src", "tests/compiler/c0"],
+        cwd=ROOT,
+        text=True,
+    ).splitlines()
+)
+changed.update(
+    subprocess.check_output(
+        [
+            "git",
+            "ls-files",
+            "--others",
+            "--exclude-standard",
+            "--",
+            "src",
+            "tests/compiler/c0",
+        ],
         cwd=ROOT,
         text=True,
     ).splitlines()
