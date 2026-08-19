@@ -1,0 +1,217 @@
+name: Linux 6.6.143 Batch Pressure
+
+on:
+  push:
+    branches:
+      - tests/linux-batch-pressure-convergence-v1
+  pull_request:
+    paths:
+      - 'Makefile'
+      - 'include/**'
+      - 'src/**'
+      - 'tests/external/linux/batch_probe.sh'
+      - 'tests/external/linux/replay-indices.txt'
+      - '.github/workflows/linux-batch-pressure.yml'
+  workflow_dispatch:
+    inputs:
+      offset:
+        description: Configured TU window offset
+        required: false
+        default: '0'
+      limit:
+        description: Number of configured C TUs; 0 means all remaining
+        required: false
+        default: '500'
+      minic_jobs:
+        description: Concurrent MiniC processes
+        required: false
+        default: '4'
+      indices:
+        description: Comma-separated configured TU indices; overrides offset/limit
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-batch-pressure-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  configured-tu-batch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Restore pinned Linux source archive
+        id: linux-source-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-cache/linux-6.6.143.tar.xz
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
+
+      - name: Restore RISC-V package archives
+        id: rv64-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/minic-apt/archives
+          key: rv64-apt-${{ runner.os }}-${{ runner.arch }}-noble-${{ hashFiles('tools/ci/ubuntu-24.04-packages.txt') }}
+
+      - name: Restore native Kbuild package archives
+        id: kbuild-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/minic-kbuild-apt/archives
+          key: kbuild-apt-${{ runner.os }}-${{ runner.arch }}-noble-flex-bison-bc-libelf-dev-libssl-dev-v1
+
+      - name: Install RISC-V Linux Kbuild dependencies
+        env:
+          RV64_CACHE_HIT: ${{ steps.rv64-cache.outputs.cache-hit }}
+          KBUILD_CACHE_HIT: ${{ steps.kbuild-cache.outputs.cache-hit }}
+        run: |
+          set -Eeuo pipefail
+          apt_cache="$HOME/.cache/minic-apt/archives"
+          native_cache="$HOME/.cache/minic-kbuild-apt/archives"
+          mkdir -p "$apt_cache/partial" "$native_cache/partial"
+
+          install_cached_debs() {
+            cache_dir=$1
+            label=$2
+            mapfile -d '' cached_packages < <(
+              find "$cache_dir" -maxdepth 1 -type f -name '*.deb' -print0 | sort -z
+            )
+            if (( ${#cached_packages[@]} == 0 )); then
+              printf '%s package cache reported a hit but contains no .deb archives\n' "$label" >&2
+              return 1
+            fi
+            printf 'Restoring %d cached %s packages without network access\n' \
+              "${#cached_packages[@]}" "$label"
+            sudo dpkg --unpack "${cached_packages[@]}"
+            sudo dpkg --configure -a
+          }
+
+          if [[ "$KBUILD_CACHE_HIT" == true ]]; then
+            install_cached_debs "$native_cache" 'native Kbuild'
+          fi
+
+          native_missing=()
+          command -v flex >/dev/null 2>&1 || native_missing+=(flex)
+          command -v bison >/dev/null 2>&1 || native_missing+=(bison)
+          command -v bc >/dev/null 2>&1 || native_missing+=(bc)
+          dpkg-query -W -f='${Status}' libelf-dev 2>/dev/null | grep -q 'ok installed' || native_missing+=(libelf-dev)
+          dpkg-query -W -f='${Status}' libssl-dev 2>/dev/null | grep -q 'ok installed' || native_missing+=(libssl-dev)
+
+          if [[ "$RV64_CACHE_HIT" != true ]]; then
+            sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 update
+          fi
+
+          if (( ${#native_missing[@]} != 0 )); then
+            printf 'Installing %d missing native Kbuild packages: %s\n' \
+              "${#native_missing[@]}" "${native_missing[*]}"
+            sudo apt-get \
+              -o Acquire::Retries=2 \
+              -o Acquire::http::Timeout=20 \
+              -o Dir::Cache::archives="$native_cache" \
+              -o APT::Keep-Downloaded-Packages=true \
+              install -y --no-install-recommends "${native_missing[@]}"
+          else
+            printf '%s\n' 'Native Kbuild dependencies already present or restored from cache.'
+          fi
+
+          if [[ "$RV64_CACHE_HIT" == true ]]; then
+            install_cached_debs "$apt_cache" 'RISC-V'
+          else
+            mapfile -t requested_packages < <(grep -Ev '^[[:space:]]*(#|$)' tools/ci/ubuntu-24.04-packages.txt)
+            printf 'Building RISC-V package cache from %d requested packages\n' "${#requested_packages[@]}"
+            sudo apt-get \
+              -o Acquire::Retries=2 \
+              -o Acquire::http::Timeout=20 \
+              -o Dir::Cache::archives="$apt_cache" \
+              -o APT::Keep-Downloaded-Packages=true \
+              install -y --no-install-recommends "${requested_packages[@]}"
+          fi
+
+      - name: Build exact MiniC candidate
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/linux-batch-compiler
+
+      - name: Drive configured Linux TU batch
+        env:
+          BATCH_OFFSET: ${{ github.event_name == 'workflow_dispatch' && inputs.offset || '0' }}
+          BATCH_LIMIT: ${{ github.event_name == 'workflow_dispatch' && inputs.limit || '500' }}
+          BATCH_JOBS: ${{ github.event_name == 'workflow_dispatch' && inputs.minic_jobs || '4' }}
+          BATCH_INDICES: ${{ github.event_name == 'workflow_dispatch' && inputs.indices || '' }}
+        run: |
+          set -Eeuo pipefail
+          if [[ "$GITHUB_EVENT_NAME" != workflow_dispatch && -z "$BATCH_INDICES" && \
+                -s tests/external/linux/replay-indices.txt ]]; then
+            BATCH_INDICES=$(grep -Ev '^[[:space:]]*(#|$)' tests/external/linux/replay-indices.txt | paste -sd, -)
+            printf 'LINUX_BATCH_REPLAY_FILE indices=%s\n' "$BATCH_INDICES"
+          fi
+          set +e
+          MINIC="$GITHUB_WORKSPACE/build/linux-batch-compiler/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/linux-batch" \
+          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-cache/linux-6.6.143.tar.xz" \
+          CROSS_COMPILE=riscv64-linux-gnu- \
+          LINUX_BATCH_OFFSET="$BATCH_OFFSET" \
+          LINUX_BATCH_LIMIT="$BATCH_LIMIT" \
+          LINUX_BATCH_JOBS="$BATCH_JOBS" \
+          LINUX_BATCH_SELECTION="$BATCH_INDICES" \
+            sh tests/external/linux/batch_probe.sh
+          batch_status=$?
+          set -e
+          if ! test -s build/linux-batch/batch-summary.txt; then
+            printf 'Linux pressure failed before producing a summary (status=%d)\n' "$batch_status" >&2
+            exit "$batch_status"
+          fi
+          printf 'LINUX_BATCH_MEASUREMENT status=%d (compiler frontier is data, not CI infrastructure failure)\n' \
+            "$batch_status"
+
+      - name: Show compact batch summary
+        if: always()
+        run: |
+          if test -s build/linux-batch/batch-summary.txt; then
+            cat build/linux-batch/batch-summary.txt
+          else
+            printf '%s\n' 'No batch summary was produced.'
+            test -s build/linux-batch/kbuild-plan.stderr && tail -n 120 build/linux-batch/kbuild-plan.stderr || true
+            test -s build/linux-batch/preprocess.log && tail -n 120 build/linux-batch/preprocess.log || true
+          fi
+
+      - name: Upload Linux batch evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-batch-${{ github.run_id }}
+          path: |
+            build/linux-batch/batch-summary.txt
+            build/linux-batch/batch-results.tsv
+            build/linux-batch/batch-results.json
+            build/linux-batch/failure-contexts.txt
+            build/linux-batch/tu-manifest.txt
+            build/linux-batch/selected-tus.txt
+            build/linux-batch/kbuild-plan.stderr
+            build/linux-batch/preprocess.log
+            build/linux-batch/minic-stderr/**/*.stderr
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Save native Kbuild package archives
+        if: always() && steps.kbuild-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/minic-kbuild-apt/archives
+          key: kbuild-apt-${{ runner.os }}-${{ runner.arch }}-noble-flex-bison-bc-libelf-dev-libssl-dev-v1
+
+      - name: Save pinned Linux source archive
+        if: always() && steps.linux-source-cache.outputs.cache-hit != 'true' && hashFiles('build/linux-cache/linux-6.6.143.tar.xz') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: build/linux-cache/linux-6.6.143.tar.xz
+          key: linux-source-6.6.143-dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
