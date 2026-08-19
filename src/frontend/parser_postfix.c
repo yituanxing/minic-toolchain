@@ -194,10 +194,18 @@ static bool parse_indirect_arguments(MinicParser *parser,
             indirect_argument_count_error(parser);
             return false;
         }
-        if (!minic_parser_parse_expression(parser, &argument_id, 0U) ||
-            !minic_parser_apply_fixed_call_argument_conversion(
-                parser, function_type->parameter_types[argument_index], &argument_id) ||
-            !minic_c0_fixed_call_argument_compatible(
+        if (!minic_parser_parse_expression(parser, &argument_id, 0U)) {
+            return false;
+        }
+        if (!minic_parser_apply_fixed_call_argument_conversion(
+                parser, function_type->parameter_types[argument_index], &argument_id)) {
+            if (parser->diagnostic == NULL || parser->diagnostic->message[0] == '\0') {
+                minic_parser_error(parser,
+                                   "indirect call argument type does not match declaration");
+            }
+            return false;
+        }
+        if (!minic_c0_fixed_call_argument_compatible(
                 parser->program, function_type->parameter_types[argument_index], argument_id)) {
             minic_parser_error(parser, "indirect call argument type does not match declaration");
             return false;
@@ -217,11 +225,19 @@ static bool parse_indirect_arguments(MinicParser *parser,
             const MinicExpression *argument;
             MinicExpressionId argument_id;
 
-            if (argument_index >= MINIC_MAX_FUNCTION_PARAMETERS || !minic_parser_advance(parser) ||
-                !minic_parser_parse_expression(parser, &argument_id, 0U) ||
-                !minic_parser_apply_array_decay(parser, argument_id, &argument_id)) {
+            if (argument_index >= MINIC_MAX_FUNCTION_PARAMETERS) {
                 minic_parser_error(parser,
                                    "variadic call argument count exceeds implementation limit");
+                return false;
+            }
+            if (!minic_parser_advance(parser) ||
+                !minic_parser_parse_expression(parser, &argument_id, 0U)) {
+                return false;
+            }
+            if (!minic_parser_apply_array_decay(parser, argument_id, &argument_id)) {
+                if (parser->diagnostic == NULL || parser->diagnostic->message[0] == '\0') {
+                    minic_parser_error(parser, "unsupported variadic call argument type");
+                }
                 return false;
             }
             argument = minic_c0_program_expression(parser->program, argument_id);
