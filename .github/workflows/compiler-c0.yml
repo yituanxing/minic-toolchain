@@ -58,3 +58,37 @@ jobs:
             build/ci-external/tests/external/tiny-aes-c/*.status
           if-no-files-found: ignore
           retention-days: 7
+
+  productize-rv64-codegen-frontier-diagnostics:
+    name: Productize RV64 codegen frontier diagnostics
+    if: github.event_name == 'pull_request' && github.head_ref == 'tests/linux-rv64-codegen-partial-asm-v1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Materialize diagnostic product
+        run: python3 tools/dev/productize-rv64-codegen-frontier-diagnostics-v1.py
+
+      - name: Validate diagnostic product
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/product-rv64-codegen-diagnostics
+
+      - name: Publish diagnostic product commit
+        run: |
+          set -Eeuo pipefail
+          if git diff --quiet -- src/target/riscv64/codegen_function.c; then
+            echo 'Diagnostic product already materialized.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/target/riscv64/codegen_function.c
+          git commit -m 'target: identify RV64 codegen failure entity'
+          git push origin HEAD:${{ github.head_ref }}
