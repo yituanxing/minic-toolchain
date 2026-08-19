@@ -6,6 +6,7 @@ on:
       - infra/linux-tail-batch5-productizer-v1
     paths:
       - 'tools/dev/materialize-linux-tail-batch5-v1.py'
+      - 'tools/dev/diagnose-linux-tail-batch5-rv64-v1.py'
       - 'tests/compiler/c0/run-linux-tail-batch5.sh'
 
 permissions:
@@ -25,10 +26,12 @@ jobs:
         run: |
           set -Eeuo pipefail
           python3 tools/dev/materialize-linux-tail-batch5-v1.py
+          python3 tools/dev/diagnose-linux-tail-batch5-rv64-v1.py
           clang-format -i \
             src/frontend/ast_global.c \
             src/frontend/parser_statement.c \
-            src/target/data_layout.c
+            src/target/data_layout.c \
+            src/target/riscv64/codegen_function.c
           git diff --check
 
       - name: Build and focused batch gate
@@ -43,7 +46,8 @@ jobs:
           set -Eeuo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git rm tools/dev/materialize-linux-tail-batch5-v1.py
+          git rm tools/dev/materialize-linux-tail-batch5-v1.py \
+                 tools/dev/diagnose-linux-tail-batch5-rv64-v1.py
           git add \
             src/frontend/ast_global.c \
             src/frontend/parser_statement.c \
