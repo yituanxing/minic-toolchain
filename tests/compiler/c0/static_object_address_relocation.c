@@ -8,6 +8,12 @@ static int function_address_target(int value) {
     return value + 1;
 }
 
+typedef int (*FunctionAddressType)(int);
+
+static FunctionAddressType conditional_function_address =
+    function_address_target == (FunctionAddressType)((void *)0) ? (FunctionAddressType)((void *)0)
+                                                                : function_address_target;
+
 struct FunctionAddressHolder {
     void *address;
 };

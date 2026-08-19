@@ -26,7 +26,7 @@ test "$pointer_sign_count" -eq 2
 grep -F 'string_literal_address:' "$work/static_object_address_relocation.s" >/dev/null
 grep -F '.dword .Lminic_string_' "$work/static_object_address_relocation.s" >/dev/null
 function_count=$(grep -F -c '.dword function_address_target' "$work/static_object_address_relocation.s")
-test "$function_count" -eq 2
+test "$function_count" -eq 3
 external_count=$(grep -F -c '.dword external_address_target' "$work/static_object_address_relocation.s")
 test "$external_count" -eq 2
 grep -F '.dword subobject_address_target+4' "$work/static_object_address_relocation.s" >/dev/null
