@@ -310,15 +310,16 @@ bool minic_parser_add_string_literal_initializer(MinicParser *parser,
     return true;
 }
 
-bool minic_parser_add_bounded_string_literal_initializer(MinicParser *parser,
-                                                         MinicGlobalObjectId object_id,
-                                                         size_t element_capacity) {
+bool minic_parser_parse_bounded_string_literal_values(MinicParser *parser,
+                                                      size_t element_capacity,
+                                                      int *values) {
     MinicParser probe;
     size_t decoded_length;
     size_t total_length;
     size_t stored_count;
 
-    if (parser == NULL || element_capacity == 0U ||
+    if (parser == NULL || values == NULL || element_capacity == 0U ||
+        element_capacity > SIZE_MAX / sizeof(*values) ||
         parser->current.kind != MINIC_TOKEN_STRING_LITERAL) {
         return false;
     }
@@ -337,32 +338,72 @@ bool minic_parser_add_bounded_string_literal_initializer(MinicParser *parser,
         return false;
     }
 
+    (void)memset(values, 0, element_capacity * sizeof(*values));
+    stored_count = 0U;
     while (parser->current.kind == MINIC_TOKEN_STRING_LITERAL) {
+        size_t cursor;
+        size_t literal_end;
         MinicSourceSpan literal_span;
 
         literal_span = parser->current.span;
-        if (!add_string_payload(parser, literal_span, MINIC_TOKEN_STRING_LITERAL, object_id) ||
-            !minic_parser_advance(parser)) {
+        if (!string_literal_payload_bounds(
+                parser, literal_span, MINIC_TOKEN_STRING_LITERAL, &cursor, &literal_end)) {
             return false;
         }
-    }
-    stored_count = total_length;
-    if (stored_count < element_capacity) {
-        if (!minic_c0_global_object_add_initializer(parser->program, object_id, 0)) {
-            minic_parser_error(parser,
-                               "out of memory while terminating bounded string initializer");
+        while (cursor < literal_end) {
+            int value;
+
+            if (stored_count >= element_capacity) {
+                return false;
+            }
+            if (parser->source[cursor] == '\\') {
+                cursor += 1U;
+                if (!decode_string_escape(parser->source, &cursor, literal_end, &value)) {
+                    minic_parser_error(parser, "unsupported string escape");
+                    return false;
+                }
+            } else {
+                value = (int)(unsigned char)parser->source[cursor];
+                cursor += 1U;
+            }
+            values[stored_count++] = value;
+        }
+        if (!minic_parser_advance(parser)) {
             return false;
         }
-        stored_count += 1U;
-    }
-    while (stored_count < element_capacity) {
-        if (!minic_c0_global_object_add_initializer(parser->program, object_id, 0)) {
-            minic_parser_error(parser, "out of memory while padding bounded string initializer");
-            return false;
-        }
-        stored_count += 1U;
     }
     return true;
+}
+
+bool minic_parser_add_bounded_string_literal_initializer(MinicParser *parser,
+                                                         MinicGlobalObjectId object_id,
+                                                         size_t element_capacity) {
+    int *values;
+    size_t index;
+    bool success;
+
+    if (parser == NULL || element_capacity == 0U) {
+        return false;
+    }
+    values = (int *)calloc(element_capacity, sizeof(*values));
+    if (values == NULL) {
+        minic_parser_error(parser, "out of memory while decoding bounded string initializer");
+        return false;
+    }
+    success = minic_parser_parse_bounded_string_literal_values(parser, element_capacity, values);
+    if (success) {
+        for (index = 0U; index < element_capacity; ++index) {
+            if (!minic_c0_global_object_add_initializer(
+                    parser->program, object_id, values[index])) {
+                minic_parser_error(parser,
+                                   "out of memory while storing bounded string initializer");
+                success = false;
+                break;
+            }
+        }
+    }
+    free(values);
+    return success;
 }
 
 static bool replace_zero_string_payload(MinicParser *parser,
