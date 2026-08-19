@@ -1,6 +1,6 @@
 #!/bin/sh
 set -eu
-# Batch5 isolates static aggregate materialization and exposes terminal counters on failure.
+# Batch5 isolates static aggregate materialization and covers union-first positional initialization.
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 minic=${MINIC:-"$root/build/debug/bin/minic"}
 work=${BUILD_DIR:-"$root/build/debug"}/tests/linux-tail-batch5
@@ -20,7 +20,7 @@ if ! "$minic" -S "$work/global-inferred.c" -o "$work/global-inferred.s"; then
     exit 1
 fi
 grep -F '.size tokens, 32' "$work/global-inferred.s" >/dev/null
-grep -F '__minic_str_' "$work/global-inferred.s" >/dev/null
+grep -F '.Lminic_string_' "$work/global-inferred.s" >/dev/null
 
 cat >"$work/local-inferred.c" <<'SRC'
 static int anchor;
@@ -41,4 +41,17 @@ if ! "$minic" -S "$work/local-inferred.c" -o "$work/local-inferred.s"; then
 fi
 grep -F '.size __minic_static_local_' "$work/local-inferred.s" >/dev/null
 
-printf '%s\n' 'PASS compiler/c0/linux-tail-batch5 inferred-aggregate=global+static-local relocation-slot=logical+layout runtime-access=decoupled'
+cat >"$work/union-positional.c" <<'SRC'
+struct parts { unsigned int hash; unsigned int len; };
+union packed { struct parts parts; unsigned long both; };
+struct qstr_like { union packed packed; const unsigned char *name; };
+int probe_qstr(unsigned int len, const unsigned char *name)
+{
+    struct qstr_like q = { { { .len = len } }, .name = name };
+    return q.packed.parts.len == len ? 0 : 1;
+}
+SRC
+"$minic" -S "$work/union-positional.c" -o "$work/union-positional.s"
+test -s "$work/union-positional.s"
+
+printf '%s\n' 'PASS compiler/c0/linux-tail-batch5 inferred-aggregate=global+static-local relocation-slot=logical+layout union-positional=first-member'
