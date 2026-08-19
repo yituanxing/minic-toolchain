@@ -6,6 +6,26 @@ git show origin/diagnostic/effective-convergence-snapshot-v1:tools/dev/materiali
 python3 tools/dev/materialize-backward-static-union-zero-overlay-v1.py
 rm tools/dev/materialize-backward-static-union-zero-overlay-v1.py
 
+# Designator parsing owns only the member path. Whether a selected union member
+# has a representable flattened scalar slot is a later storage-ownership
+# question. Keep the normal scalar-slot resolver strict, but allow a
+# noncanonical union member to reach the dedicated zero-overlay owner.
+python3 - <<'PY'
+from pathlib import Path
+path = Path('src/frontend/parser_global.c')
+text = path.read_text()
+early_guard = '''        if (current_record->is_union && field_index != 0U) {
+            minic_parser_error(
+                parser, "nested static union designator requires the representable first member");
+            return false;
+        }
+'''
+if text.count(early_guard) != 1:
+    raise SystemExit(f'early noncanonical union path guard count={text.count(early_guard)}')
+text = text.replace(early_guard, '', 1)
+path.write_text(text)
+PY
+
 cat > tests/compiler/c0/static_union_zero_overlay.c <<'EOF'
 union reader_special {
     long l;
