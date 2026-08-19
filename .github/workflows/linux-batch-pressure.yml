@@ -10,6 +10,7 @@ on:
       - 'include/**'
       - 'src/**'
       - 'tests/external/linux/batch_probe.sh'
+      - 'tests/external/linux/replay-indices.txt'
       - '.github/workflows/linux-batch-pressure.yml'
   workflow_dispatch:
     inputs:
@@ -94,8 +95,6 @@ jobs:
             sudo dpkg --configure -a
           }
 
-          # Restore native build tools before asking the network. This turns the
-          # repeated first500 loop into a local package install after the first fill.
           if [[ "$KBUILD_CACHE_HIT" == true ]]; then
             install_cached_debs "$native_cache" 'native Kbuild'
           fi
@@ -107,9 +106,6 @@ jobs:
           dpkg-query -W -f='${Status}' libelf-dev 2>/dev/null | grep -q 'ok installed' || native_missing+=(libelf-dev)
           dpkg-query -W -f='${Status}' libssl-dev 2>/dev/null | grep -q 'ok installed' || native_missing+=(libssl-dev)
 
-          # A hosted image already carries apt package indexes. On a warm RISC-V
-          # cache hit, install the few missing native packages directly and avoid
-          # a metadata refresh. Refresh only when the cross-package cache is cold.
           if [[ "$RV64_CACHE_HIT" != true ]]; then
             sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 update
           fi
@@ -153,6 +149,11 @@ jobs:
           BATCH_INDICES: ${{ github.event_name == 'workflow_dispatch' && inputs.indices || '' }}
         run: |
           set -Eeuo pipefail
+          if [[ "$GITHUB_EVENT_NAME" != workflow_dispatch && -z "$BATCH_INDICES" && \
+                -s tests/external/linux/replay-indices.txt ]]; then
+            BATCH_INDICES=$(grep -Ev '^[[:space:]]*(#|$)' tests/external/linux/replay-indices.txt | paste -sd, -)
+            printf 'LINUX_BATCH_REPLAY_FILE indices=%s\n' "$BATCH_INDICES"
+          fi
           set +e
           MINIC="$GITHUB_WORKSPACE/build/linux-batch-compiler/bin/minic" \
           BUILD_DIR="$GITHUB_WORKSPACE/build/linux-batch" \
