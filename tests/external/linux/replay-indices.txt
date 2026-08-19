@@ -1,7 +1,14 @@
-# Linux first500 TUs blocked by GNU enum definition suffix mode(byte).
-425
-426
-427
-428
-429
-499
+# All Linux first500 TUs at the promoted static-record-designator frontier.
+118
+122
+134
+197
+200
+202
+214
+216
+228
+251
+290
+340
+389
