@@ -1,0 +1,55 @@
+name: Diagnostic Main First100 Finalization V17
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  first100:
+    if: ${{ github.head_ref == 'diagnostic/main-first100-finalization-v17' }}
+    runs-on: ubuntu-24.04
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+      - name: Build exact canonical main compiler
+        run: |
+          set -Eeuo pipefail
+          printf 'base_sha=%s\n' '${{ github.event.pull_request.base.sha }}'
+          git rev-parse HEAD
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/product-main
+          make -j4 check-fast MODE=release BUILD_DIR=build/product-main-fast
+      - name: Install Linux probe tools
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu flex bison bc libelf-dev libssl-dev
+          mkdir -p tests/external/linux
+          git show origin/diagnostic/linux-first100-variadic-stack-v0:tests/external/linux/batch_probe.sh > tests/external/linux/batch_probe.sh
+          chmod +x tests/external/linux/batch_probe.sh
+      - name: Probe materializer-free unchanged Linux first100
+        run: |
+          set -Eeuo pipefail
+          build="$GITHUB_WORKSPACE/build/linux-main-first100-finalization-v17"
+          set +e
+          MINIC="$GITHUB_WORKSPACE/build/product-main/bin/minic" \
+          BUILD_DIR="$build" \
+          LINUX_ARCHIVE_CACHE="$GITHUB_WORKSPACE/build/linux-6.6.143.tar.xz" \
+          CROSS_COMPILE=riscv64-linux-gnu- \
+          LINUX_BATCH_OFFSET=0 LINUX_BATCH_LIMIT=100 LINUX_BATCH_JOBS=4 \
+            sh tests/external/linux/batch_probe.sh
+          status=$?
+          set -e
+          echo '=== batch-summary.txt ==='
+          cat "$build/batch-summary.txt" || true
+          echo '=== failure-contexts.txt ==='
+          cat "$build/failure-contexts.txt" || true
+          test -s "$build/batch-summary.txt"
+          grep -qx 'selected_c_tus=100' "$build/batch-summary.txt"
+          grep -qx 'pass=100' "$build/batch-summary.txt"
+          grep -qx 'fail=0' "$build/batch-summary.txt"
+          grep -qx 'preprocess_missing=0' "$build/batch-summary.txt"
+          test "$status" -eq 0
