@@ -332,8 +332,8 @@ operand_local_fixed_register_binding(const MinicC0Program *program,
 static bool operand_accepts_register(const MinicInlineAsmOperand *operand) {
     return constraint_is(operand, "r") || constraint_is(operand, "rJ") ||
            constraint_is(operand, "Jr") || constraint_is(operand, "rK") ||
-           constraint_is(operand, "=r") ||
-           constraint_is(operand, "=&r") || constraint_is_readwrite_register(operand);
+           constraint_is(operand, "=r") || constraint_is(operand, "=&r") ||
+           constraint_is_readwrite_register(operand);
 }
 
 static bool assign_operand_registers(const MinicInlineAsm *inline_asm,
