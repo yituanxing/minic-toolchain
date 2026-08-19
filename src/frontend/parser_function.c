@@ -1915,7 +1915,7 @@ static bool finish_function_declaration_entity(MinicParser *parser,
     }
     if (alias_target != MINIC_FUNCTION_INVALID) {
         alias_function = minic_c0_program_function(parser->program, alias_target);
-        if (alias_function == NULL || !alias_function->is_defined || has_section ||
+        if (alias_function == NULL || has_section ||
             !minic_parser_function_signature_matches(
                 alias_function, return_type, parameter_types, parameter_count, is_variadic) ||
             !minic_c0_program_set_function_alias(parser->program, function_id, alias_target)) {
