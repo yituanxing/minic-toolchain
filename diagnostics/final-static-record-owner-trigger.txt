@@ -1,1 +1,1 @@
-trigger final static record initializer owner productization
+retry final static record initializer owner productization with structural finalizer
