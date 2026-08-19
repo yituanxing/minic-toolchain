@@ -343,15 +343,73 @@ typedef struct MinicStaticArraySlot {
     MinicStaticPointerInitializer pointer_initializer;
 } MinicStaticArraySlot;
 
+static bool static_object_subobject_relocation_path(const MinicParser *parser,
+                                                    MinicExpressionId expression_id,
+                                                    MinicStaticObjectRelocationTarget *target) {
+    const MinicExpression *expression;
+
+    if (parser == NULL || target == NULL) {
+        return false;
+    }
+    expression = minic_c0_program_expression(parser->program, expression_id);
+    if (expression == NULL) {
+        return false;
+    }
+    if (expression->kind == MINIC_EXPRESSION_GLOBAL_OBJECT) {
+        if (expression->value.global_object_id == MINIC_GLOBAL_OBJECT_INVALID ||
+            minic_c0_program_global_object(parser->program, expression->value.global_object_id) ==
+                NULL) {
+            return false;
+        }
+        (void)memset(target, 0, sizeof(*target));
+        target->object_id = expression->value.global_object_id;
+        return true;
+    }
+    if (expression->kind == MINIC_EXPRESSION_MEMBER) {
+        const MinicExpression *base;
+        MinicExpressionId base_id;
+
+        base_id = expression->value.member.base;
+        base = minic_c0_program_expression(parser->program, base_id);
+        if (base == NULL || base->kind != MINIC_EXPRESSION_ADDRESS_OF) {
+            return false;
+        }
+        base_id = base->value.unary.operand;
+        if (!static_object_subobject_relocation_path(parser, base_id, target) ||
+            target->member_depth == MINIC_GLOBAL_RELOCATION_MAX_MEMBER_DEPTH) {
+            return false;
+        }
+        target->member_indices[target->member_depth++] = expression->value.member.field_index;
+        return true;
+    }
+    if (expression->kind == MINIC_EXPRESSION_SUBSCRIPT) {
+        const MinicExpression *base;
+        MinicArrayObjectInfo array_info;
+        int64_t delta;
+
+        base = minic_c0_program_expression(parser->program, expression->value.subscript.base);
+        if (base == NULL ||
+            !minic_c0_expression_array_object_info(parser->program, base, &array_info) ||
+            !static_object_subobject_relocation_path(
+                parser, expression->value.subscript.base, target) ||
+            !static_pointer_offset_bytes(parser,
+                                         array_info.element_type,
+                                         expression->value.subscript.index,
+                                         false,
+                                         &delta) ||
+            !static_add_pointer_offset(target->byte_addend, delta, &target->byte_addend)) {
+            return false;
+        }
+        return true;
+    }
+    return false;
+}
+
 static bool static_object_address_relocation_path(const MinicParser *parser,
                                                   MinicExpressionId expression_id,
                                                   MinicStaticObjectRelocationTarget *target) {
     const MinicC0Program *program;
     const MinicExpression *expression;
-    const MinicExpression *addressed;
-    size_t reverse_path[MINIC_GLOBAL_RELOCATION_MAX_MEMBER_DEPTH];
-    size_t depth;
-    size_t index;
 
     if (parser == NULL || target == NULL) {
         return false;
@@ -369,39 +427,55 @@ static bool static_object_address_relocation_path(const MinicParser *parser,
         expression_id = expression->value.unary.operand;
         expression = minic_c0_program_expression(program, expression_id);
     }
-    if (expression == NULL || expression->kind != MINIC_EXPRESSION_ADDRESS_OF) {
+    if (expression == NULL) {
         return false;
     }
-    addressed = minic_c0_program_expression(program, expression->value.unary.operand);
-    depth = 0U;
-    while (addressed != NULL && addressed->kind == MINIC_EXPRESSION_MEMBER) {
-        const MinicExpression *base;
+    if (expression->kind == MINIC_EXPRESSION_BINARY &&
+        (expression->value.binary.operator_kind == MINIC_BINARY_ADD ||
+         expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT)) {
+        const MinicExpression *left;
+        MinicType pointee_type;
+        int64_t delta;
 
-        if (depth == MINIC_GLOBAL_RELOCATION_MAX_MEMBER_DEPTH) {
-            return false;
+        left = minic_c0_program_expression(program, expression->value.binary.left);
+        if (left != NULL && minic_type_pointee(left->type, &pointee_type) &&
+            static_object_address_relocation_path(parser, expression->value.binary.left, target) &&
+            static_pointer_offset_bytes(parser,
+                                        pointee_type,
+                                        expression->value.binary.right,
+                                        expression->value.binary.operator_kind ==
+                                            MINIC_BINARY_SUBTRACT,
+                                        &delta) &&
+            static_add_pointer_offset(target->byte_addend, delta, &target->byte_addend)) {
+            return true;
         }
-        reverse_path[depth] = addressed->value.member.field_index;
-        depth += 1U;
-        base = minic_c0_program_expression(program, addressed->value.member.base);
-        if (base != NULL && base->kind == MINIC_EXPRESSION_ADDRESS_OF) {
-            addressed = minic_c0_program_expression(program, base->value.unary.operand);
-        } else {
-            addressed = base;
+        if (expression->value.binary.operator_kind == MINIC_BINARY_ADD) {
+            const MinicExpression *right;
+
+            right = minic_c0_program_expression(program, expression->value.binary.right);
+            if (right != NULL && minic_type_pointee(right->type, &pointee_type) &&
+                static_object_address_relocation_path(
+                    parser, expression->value.binary.right, target) &&
+                static_pointer_offset_bytes(
+                    parser, pointee_type, expression->value.binary.left, false, &delta) &&
+                static_add_pointer_offset(target->byte_addend, delta, &target->byte_addend)) {
+                return true;
+            }
         }
-    }
-    if (addressed == NULL || addressed->kind != MINIC_EXPRESSION_GLOBAL_OBJECT) {
         return false;
     }
-    target->object_id = addressed->value.global_object_id;
-    if (target->object_id >= program->global_object_count) {
-        return false;
+    if (expression->kind == MINIC_EXPRESSION_ADDRESS_OF) {
+        return static_object_subobject_relocation_path(
+            parser, expression->value.unary.operand, target);
     }
-    target->member_depth = depth;
-    target->byte_addend = 0;
-    for (index = 0U; index < depth; ++index) {
-        target->member_indices[index] = reverse_path[depth - index - 1U];
+    {
+        MinicArrayObjectInfo array_info;
+
+        if (minic_c0_expression_array_object_info(program, expression, &array_info)) {
+            return static_object_subobject_relocation_path(parser, expression_id, target);
+        }
     }
-    return true;
+    return false;
 }
 
 static bool static_pointer_integer_constant_bits(const MinicParser *parser,

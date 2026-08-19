@@ -29,6 +29,10 @@ function_count=$(grep -F -c '.dword function_address_target' "$work/static_objec
 test "$function_count" -eq 2
 external_count=$(grep -F -c '.dword external_address_target' "$work/static_object_address_relocation.s")
 test "$external_count" -eq 2
+grep -F '.dword subobject_address_target+4' "$work/static_object_address_relocation.s" >/dev/null
+grep -F '.dword subobject_address_target+12' "$work/static_object_address_relocation.s" >/dev/null
+grep -F '.dword subobject_address_target+21' "$work/static_object_address_relocation.s" >/dev/null
+grep -F '.dword subobject_address_target+24' "$work/static_object_address_relocation.s" >/dev/null
 
 if "$minic" -S "$root/tests/compiler/c0/invalid_static_object_address_type.c" \
     -o "$work/invalid-type.s" >"$work/invalid-type.stdout" 2>"$work/invalid-type.stderr"; then
