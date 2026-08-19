@@ -30,6 +30,7 @@ jobs:
       - name: Build and focused gate
         run: |
           make -j4 CFLAGS=-Werror
+          mkdir -p build/debug/tests
           cc -E -P -std=gnu11 -x c tests/compiler/c0/promoted_static_record_designator.c \
             -o build/debug/tests/promoted_static_record_designator.i
           build/debug/bin/minic -S build/debug/tests/promoted_static_record_designator.i \
