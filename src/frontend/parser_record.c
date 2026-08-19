@@ -328,10 +328,6 @@ static bool parse_record_field_declarator(MinicParser *parser,
         size_t bounds[8];
         size_t bound_count;
 
-        if (minic_type_is_pointer(field_type) && field_type.base_kind == MINIC_TYPE_BASE_FUNCTION) {
-            minic_parser_error(parser, "function pointer field arrays are unsupported");
-            return false;
-        }
         bound_count = 0U;
         while (parser->current.kind == MINIC_TOKEN_LBRACKET) {
             if (bound_count >= sizeof(bounds) / sizeof(bounds[0])) {
