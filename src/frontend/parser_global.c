@@ -3240,8 +3240,8 @@ static bool parse_static_inferred_char_array(MinicParser *parser,
 
     if (parser == NULL || section_name == NULL || section_capacity == 0U ||
         section_name_length == NULL || has_section == NULL || explicit_alignment == NULL ||
-        !minic_type_is_char_integer(element_type) || !minic_type_is_const(element_type) ||
-        parser->current.kind != MINIC_TOKEN_LBRACKET || !minic_parser_advance(parser) ||
+        !minic_type_is_char_integer(element_type) || parser->current.kind != MINIC_TOKEN_LBRACKET ||
+        !minic_parser_advance(parser) ||
         !minic_parser_expect(
             parser, MINIC_TOKEN_RBRACKET, "expected ']' in inferred static character array") ||
         !minic_parser_parse_gnu_object_attribute_lists(parser,
@@ -3256,7 +3256,7 @@ static bool parse_static_inferred_char_array(MinicParser *parser,
                                             minic_parser_span_length(name_span),
                                             object_type,
                                             true,
-                                            true,
+                                            minic_type_is_const(element_type),
                                             &object_id) ||
         !minic_parser_expect(parser, MINIC_TOKEN_EQUAL, "expected '=' after static array")) {
         if (parser != NULL && parser->diagnostic != NULL &&

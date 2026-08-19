@@ -13,6 +13,12 @@ static int *external_objects[] = {
     [STATIC_ARRAY_ONE] = &global_target,
     [STATIC_ARRAY_THREE] = &global_target,
 };
+static char mutable_codes[] = {
+    [STATIC_ARRAY_ZERO] = 'a',
+    [STATIC_ARRAY_THREE] = 'z',
+};
+static char mutable_string[] = "abc";
+static unsigned char mutable_bytes[] = "*?";
 
 static int probe(void) {
     static const char *const local_names[] = {
@@ -36,7 +42,9 @@ static int probe(void) {
                    external_objects[1] == &global_target && external_objects[3] == &global_target &&
                    local_names[0][0] == 'z' && local_names[3][0] == 't' && public_table[2] == 0 &&
                    public_table[3] == 1 && migration_types[0] == 'U' && migration_types[3] == 'M' &&
-                   matrix[0][1] == 2 && matrix[1][0] == 3
+                   matrix[0][1] == 2 && matrix[1][0] == 3 && mutable_codes[0] == 'a' &&
+                   mutable_codes[3] == 'z' && mutable_string[2] == 'c' && mutable_bytes[0] == '*' &&
+                   mutable_bytes[1] == '?'
                ? 0
                : 1;
 }

@@ -28,7 +28,6 @@ concurrency:
 jobs:
   full-validation:
     name: Full compiler validation
-    if: github.event_name != 'pull_request' || github.head_ref != 'frontend/linux-tail-batch-v1'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
@@ -59,79 +58,3 @@ jobs:
             build/ci-external/tests/external/tiny-aes-c/*.status
           if-no-files-found: ignore
           retention-days: 7
-
-  productize-linux-tail-batch:
-    name: Productize Linux tail batch
-    if: github.event_name == 'pull_request' && github.head_ref == 'frontend/linux-tail-batch-v1'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    permissions:
-      contents: write
-    steps:
-      - name: Checkout exact PR head
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 1
-
-      - name: Materialize batched product
-        run: |
-          set -Eeuo pipefail
-          python3 tools/dev/materialize-linux-tail-batch-v1.py
-          clang-format -i \
-            src/frontend/parser_global.c \
-            src/frontend/ast.h \
-            tests/compiler/c0/static_storage_scalar_array_owner.c \
-            tests/compiler/c0/variadic_direct_call.c \
-            tests/compiler/c0/variadic_direct_call_helper.c \
-            tests/compiler/c0/invalid_variadic_too_many_arguments.c
-
-      - name: Build exact candidate
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/linux-tail-batch
-
-      - name: Run focused ownership gates
-        run: |
-          set -Eeuo pipefail
-          export MINIC="$PWD/build/linux-tail-batch/bin/minic"
-          export BUILD_DIR="$PWD/build/linux-tail-batch"
-          export HOST_CC=cc
-          sh tests/compiler/c0/run-gnu-function-attributes.sh
-          sh tests/compiler/c0/run-static-storage-scalar-array-owner.sh
-
-          work="$PWD/build/linux-tail-batch/tests/call-capacity"
-          mkdir -p "$work"
-          cc -E -P -std=gnu11 -x c tests/compiler/c0/variadic_direct_call.c -o "$work/success.i"
-          "$MINIC" -S "$work/success.i" -o "$work/success.s"
-          grep -F 'call verify_variadic' "$work/success.s" >/dev/null
-
-          cc -E -P -std=gnu11 -x c tests/compiler/c0/invalid_variadic_too_many_arguments.c \
-            -o "$work/too-many.i"
-          if "$MINIC" -S "$work/too-many.i" -o "$work/too-many.s" 2>"$work/too-many.stderr"; then
-            echo 'expected >32 argument call to fail' >&2
-            exit 1
-          fi
-          grep -F 'call argument count exceeds implementation limit' "$work/too-many.stderr" >/dev/null
-          printf '%s\n' 'PASS compiler/c0/linux-tail-batch suffix-section mutable-inferred-char call-capacity=32'
-
-      - name: Run fast regression gate
-        run: make check-fast
-
-      - name: Publish clean batched product
-        run: |
-          set -Eeuo pipefail
-          git fetch origin main --depth=1
-          git show FETCH_HEAD:.github/workflows/compiler-c0.yml > .github/workflows/compiler-c0.yml
-          git rm tools/dev/materialize-linux-tail-batch-v1.py
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add \
-            .github/workflows/compiler-c0.yml \
-            src/frontend/ast.h \
-            src/frontend/parser_global.c \
-            tests/compiler/c0/static_storage_scalar_array_owner.c \
-            tests/compiler/c0/variadic_direct_call.c \
-            tests/compiler/c0/variadic_direct_call_helper.c \
-            tests/compiler/c0/invalid_variadic_too_many_arguments.c \
-            tests/compiler/c0/run-variadic-direct-calls.sh
-          git commit -m 'frontend: batch Linux tail convergence'
-          git push origin HEAD:${{ github.head_ref }}
