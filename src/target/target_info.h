@@ -50,10 +50,19 @@ bool minic_target_info_integer_width(const MinicTargetInfo *target,
 bool minic_target_info_integer_promotion(const MinicTargetInfo *target,
                                          MinicType type,
                                          MinicType *result);
+bool minic_target_info_integer_promotion_for_program(const MinicTargetInfo *target,
+                                                     const MinicC0Program *program,
+                                                     MinicType type,
+                                                     MinicType *result);
 bool minic_target_info_integer_common(const MinicTargetInfo *target,
                                       MinicType left,
                                       MinicType right,
                                       MinicType *result);
+bool minic_target_info_integer_common_for_program(const MinicTargetInfo *target,
+                                                  const MinicC0Program *program,
+                                                  MinicType left,
+                                                  MinicType right,
+                                                  MinicType *result);
 bool minic_target_info_integer_literal_type(const MinicTargetInfo *target,
                                             MinicIntegerLiteralBase base,
                                             bool has_unsigned_suffix,

@@ -1050,8 +1050,8 @@ static bool parse_offsetof_array_segment(MinicParser *parser,
     stride.value_category = MINIC_VALUE_RVALUE;
     stride.value.sizeof_type = selected_type;
     if (!minic_parser_add_expression(parser, &stride, &stride_id) ||
-        !minic_target_info_integer_common(
-            parser->target_info, index_type, stride.type, &scaled_type)) {
+        !minic_target_info_integer_common_for_program(
+            parser->target_info, parser->program, index_type, stride.type, &scaled_type)) {
         minic_parser_error(parser, "cannot type __builtin_offsetof array index scale");
         return false;
     }
@@ -2485,28 +2485,31 @@ static bool parse_unary(MinicParser *parser, MinicExpressionId *expression_id, b
     }
     if (operator_token.kind == MINIC_TOKEN_TILDE) {
         expression.value.unary.operator_kind = MINIC_UNARY_BITWISE_NOT;
-        if (!minic_target_info_integer_common(parser->target_info,
-                                              operand_expression->type,
-                                              operand_expression->type,
-                                              &expression.type)) {
+        if (!minic_target_info_integer_common_for_program(parser->target_info,
+                                                          parser->program,
+                                                          operand_expression->type,
+                                                          operand_expression->type,
+                                                          &expression.type)) {
             return false;
         }
         return minic_parser_add_expression(parser, &expression, expression_id);
     }
     if (operator_token.kind == MINIC_TOKEN_PLUS) {
         expression.value.unary.operator_kind = MINIC_UNARY_PLUS;
-        if (!minic_target_info_integer_common(parser->target_info,
-                                              operand_expression->type,
-                                              operand_expression->type,
-                                              &expression.type)) {
+        if (!minic_target_info_integer_common_for_program(parser->target_info,
+                                                          parser->program,
+                                                          operand_expression->type,
+                                                          operand_expression->type,
+                                                          &expression.type)) {
             return false;
         }
     } else {
         expression.value.unary.operator_kind = MINIC_UNARY_NEGATE;
-        if (!minic_target_info_integer_common(parser->target_info,
-                                              operand_expression->type,
-                                              operand_expression->type,
-                                              &expression.type)) {
+        if (!minic_target_info_integer_common_for_program(parser->target_info,
+                                                          parser->program,
+                                                          operand_expression->type,
+                                                          operand_expression->type,
+                                                          &expression.type)) {
             return false;
         }
     }
@@ -2712,9 +2715,10 @@ static bool binary_result_type(const MinicTargetInfo *target,
             return true;
         }
         if (binary_is_shift(kind)) {
-            return minic_target_info_integer_common(target, left, left, result);
+            return minic_target_info_integer_common_for_program(
+                target, program, left, left, result);
         }
-        return minic_target_info_integer_common(target, left, right, result);
+        return minic_target_info_integer_common_for_program(target, program, left, right, result);
     }
     has_double_operand = minic_type_is_double(left) || minic_type_is_double(right);
     has_numeric_operands = (minic_type_is_double(left) || minic_type_is_integer(left)) &&
@@ -3004,8 +3008,11 @@ static bool parse_expression_internal(MinicParser *parser,
 
             if (!minic_type_is_integer(target_type) ||
                 !minic_type_is_integer(value_expression->type) ||
-                !minic_target_info_integer_common(
-                    parser->target_info, target_type, value_expression->type, &common_type)) {
+                !minic_target_info_integer_common_for_program(parser->target_info,
+                                                              parser->program,
+                                                              target_type,
+                                                              value_expression->type,
+                                                              &common_type)) {
                 minic_parser_error(parser,
                                    "compound assignment expression requires integer operands");
                 return false;

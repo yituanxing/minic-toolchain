@@ -692,6 +692,9 @@ bool minic_c0_program_add_enumerator(MinicC0Program *program,
                                      MinicType type,
                                      uint64_t bits,
                                      MinicEnumeratorId *enumerator_id);
+bool minic_c0_type_effective_integer_type(const MinicC0Program *program,
+                                          MinicType type,
+                                          MinicType *result);
 bool minic_c0_types_compatible(const MinicC0Program *program, MinicType left, MinicType right);
 bool minic_c0_program_add_fixed_register_binding(MinicC0Program *program,
                                                  const char *name,

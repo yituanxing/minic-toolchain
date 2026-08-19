@@ -4,26 +4,16 @@
 #include <stdint.h>
 #include <stdio.h>
 
-static bool minic_riscv64_scalar_width(MinicType type, size_t *width) {
-    if (width == NULL) {
+static bool
+minic_riscv64_scalar_width(const MinicC0Program *program, MinicType type, size_t *width) {
+    size_t alignment;
+
+    if (program == NULL || width == NULL ||
+        (!minic_type_is_pointer(type) && !minic_type_is_integer(type) &&
+         !minic_type_is_float(type) && !minic_type_is_double(type))) {
         return false;
     }
-    if (minic_type_is_pointer(type) || minic_type_is_double(type)) {
-        *width = 8U;
-        return true;
-    }
-    if (minic_type_is_float(type)) {
-        *width = 4U;
-        return true;
-    }
-    if (!minic_type_is_integer(type)) {
-        return false;
-    }
-    *width = (minic_type_is_bool_integer(type) || minic_type_is_char_integer(type)) ? 1U
-             : minic_type_is_short_integer(type)                                    ? 2U
-             : minic_type_is_long_integer(type)                                     ? 8U
-                                                                                    : 4U;
-    return true;
+    return minic_riscv64_type_layout(program, type, width, &alignment) && *width <= 8U;
 }
 
 static const char *minic_riscv64_load_instruction(MinicType type) {
@@ -186,7 +176,7 @@ static bool minic_riscv64_scalar_object_access(const MinicC0Program *program,
     if (offset == NULL || width == NULL ||
         !minic_riscv64_local_object(
             program, function, function_layout, local_id, &object, &object_offset) ||
-        !minic_riscv64_scalar_width(object->type, &object_width) ||
+        !minic_riscv64_scalar_width(program, object->type, &object_width) ||
         object_width > function_layout->local_storage_size - object_offset) {
         return false;
     }
@@ -325,6 +315,21 @@ bool minic_riscv64_emit_integer_conversion(FILE *file, MinicType type, const cha
     return fprintf(file, "  addiw %s, %s, 0\n", register_name, register_name) >= 0;
 }
 
+bool minic_riscv64_emit_integer_conversion_for_program(FILE *file,
+                                                       const MinicC0Program *program,
+                                                       MinicType type,
+                                                       const char *register_name) {
+    MinicType effective_type;
+
+    if (minic_type_is_enum(type)) {
+        if (!minic_c0_type_effective_integer_type(program, type, &effective_type)) {
+            return false;
+        }
+        type = effective_type;
+    }
+    return minic_riscv64_emit_integer_conversion(file, type, register_name);
+}
+
 bool minic_riscv64_emit_scalar_load(FILE *file,
                                     MinicType type,
                                     const char *destination_register,
@@ -346,6 +351,38 @@ bool minic_riscv64_emit_scalar_store(FILE *file,
     instruction = minic_riscv64_store_instruction(type);
     return instruction != NULL && source_register != NULL && address_register != NULL &&
            fprintf(file, "  %s %s, 0(%s)\n", instruction, source_register, address_register) >= 0;
+}
+
+bool minic_riscv64_emit_scalar_load_for_program(FILE *file,
+                                                const MinicC0Program *program,
+                                                MinicType type,
+                                                const char *destination_register,
+                                                const char *address_register) {
+    MinicType effective_type;
+
+    if (minic_type_is_enum(type)) {
+        if (!minic_c0_type_effective_integer_type(program, type, &effective_type)) {
+            return false;
+        }
+        type = effective_type;
+    }
+    return minic_riscv64_emit_scalar_load(file, type, destination_register, address_register);
+}
+
+bool minic_riscv64_emit_scalar_store_for_program(FILE *file,
+                                                 const MinicC0Program *program,
+                                                 MinicType type,
+                                                 const char *source_register,
+                                                 const char *address_register) {
+    MinicType effective_type;
+
+    if (minic_type_is_enum(type)) {
+        if (!minic_c0_type_effective_integer_type(program, type, &effective_type)) {
+            return false;
+        }
+        type = effective_type;
+    }
+    return minic_riscv64_emit_scalar_store(file, type, source_register, address_register);
 }
 
 bool minic_riscv64_emit_object_address(FILE *file,
@@ -385,7 +422,14 @@ bool minic_riscv64_emit_object_load(FILE *file,
         return false;
     }
     (void)width;
-    instruction = minic_riscv64_load_instruction(local->type);
+    {
+        MinicType access_type = local->type;
+        if (minic_type_is_enum(access_type) &&
+            !minic_c0_type_effective_integer_type(program, access_type, &access_type)) {
+            return false;
+        }
+        instruction = minic_riscv64_load_instruction(access_type);
+    }
     return minic_riscv64_emit_s0_access(file, instruction, "a0", offset);
 }
 
@@ -406,7 +450,14 @@ bool minic_riscv64_emit_object_store_register(FILE *file,
         return false;
     }
     (void)width;
-    instruction = minic_riscv64_store_instruction(local->type);
+    {
+        MinicType access_type = local->type;
+        if (minic_type_is_enum(access_type) &&
+            !minic_c0_type_effective_integer_type(program, access_type, &access_type)) {
+            return false;
+        }
+        instruction = minic_riscv64_store_instruction(access_type);
+    }
     return minic_riscv64_emit_s0_access(file, instruction, register_name, offset);
 }
 
