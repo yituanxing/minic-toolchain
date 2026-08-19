@@ -9,8 +9,12 @@ patch=/tmp/minic-initializer-array-plan.patch
 run_materialization() {
   python3 tools/dev/materialize-initializer-array-plan-v1.py
 
+  # `initializer.c/.h` are already tracked on this stacked branch before the materializer runs,
+  # so they do not necessarily appear in `git diff`. Format the semantic owner explicitly along
+  # with every tracked/untracked C/H path produced by the grouped replacement.
   changed_c=$(
     {
+      printf '%s\n' src/frontend/initializer.c src/frontend/initializer.h
       git diff --name-only -- '*.c' '*.h'
       git ls-files --others --exclude-standard -- '*.c' '*.h'
     } | sort -u
