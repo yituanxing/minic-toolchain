@@ -1,1 +1,1 @@
-retry final static record initializer owner productization with structural finalizer
+retry final static record initializer owner productization with shared bounded-string overwrite owner
