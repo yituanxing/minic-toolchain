@@ -515,3 +515,6 @@ RISCV_CC="${RISCV_CC:-riscv64-linux-gnu-gcc}" \
 QEMU_RISCV64="${QEMU_RISCV64:-qemu-riscv64}" \
 BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
 sh "$root/tests/compiler/c0/run-builtin-va-copy.sh"
+
+MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+  sh "$root/tests/compiler/c0/run-static-storage-scalar-array-owner.sh"

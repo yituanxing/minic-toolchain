@@ -34,9 +34,9 @@ static int probe(void) {
 
     return external_names[1][0] == 'o' && external_names[3][0] == 't' &&
                    external_objects[1] == &global_target && external_objects[3] == &global_target &&
-                   local_names[0][0] == 'z' && local_names[3][0] == 't' &&
-                   public_table[2] == 0 && public_table[3] == 1 && migration_types[0] == 'U' &&
-                   migration_types[3] == 'M' && matrix[0][1] == 2 && matrix[1][0] == 3
+                   local_names[0][0] == 'z' && local_names[3][0] == 't' && public_table[2] == 0 &&
+                   public_table[3] == 1 && migration_types[0] == 'U' && migration_types[3] == 'M' &&
+                   matrix[0][1] == 2 && matrix[1][0] == 3
                ? 0
                : 1;
 }

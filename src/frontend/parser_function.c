@@ -915,6 +915,20 @@ static bool parse_external_integer_array_definition(MinicParser *parser,
         return false;
     }
 
+    if (inferred_bound && parser->current.kind == MINIC_TOKEN_LBRACE) {
+        MinicType object_type;
+
+        object_type = object->type;
+        if (!minic_parser_parse_static_storage_initializer_value(parser, object_id, object_type)) {
+            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                minic_parser_error(parser, "cannot initialize inferred external scalar array");
+            }
+            return false;
+        }
+        return minic_parser_expect(
+            parser, MINIC_TOKEN_SEMICOLON, "expected ';' after external array definition");
+    }
+
     if (minic_type_is_pointer(element_type)) {
         if (!minic_parser_expect(
                 parser, MINIC_TOKEN_LBRACE, "expected '{' in external pointer array initializer") ||
