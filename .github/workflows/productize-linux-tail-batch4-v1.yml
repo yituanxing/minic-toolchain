@@ -6,6 +6,7 @@ on:
       - infra/linux-tail-batch4-productizer-v1
     paths:
       - 'tools/dev/materialize-linux-tail-batch4-v1.py'
+      - 'tools/dev/materialize-linux-tail-batch4-weak-suffix-v1.py'
       - 'tests/compiler/c0/run-linux-tail-batch4.sh'
       - 'tests/compiler/c0/run-static-aggregate-array-designators.sh'
 
@@ -26,6 +27,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           python3 tools/dev/materialize-linux-tail-batch4-v1.py
+          python3 tools/dev/materialize-linux-tail-batch4-weak-suffix-v1.py
           clang-format -i src/frontend/parser_function.c src/frontend/parser_global.c
           git diff --check
 
@@ -43,7 +45,8 @@ jobs:
           set -Eeuo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git rm tools/dev/materialize-linux-tail-batch4-v1.py
+          git rm tools/dev/materialize-linux-tail-batch4-v1.py \
+                 tools/dev/materialize-linux-tail-batch4-weak-suffix-v1.py
           git add \
             src/frontend/parser_function.c \
             src/frontend/parser_global.c \
