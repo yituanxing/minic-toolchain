@@ -161,6 +161,10 @@ static bool consume_record_field_attribute(MinicParser *parser,
         context->is_packed = true;
         return true;
     }
+    if (descriptor->kind == MINIC_ATTRIBUTE_NONSTRING &&
+        descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_DIAGNOSTIC) {
+        return true;
+    }
     minic_parser_error(parser, "unsupported GNU record field attribute");
     return false;
 }

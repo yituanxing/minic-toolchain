@@ -411,6 +411,8 @@ static bool parse_cast(MinicParser *parser, MinicExpressionId *expression_id) {
     if (operand == NULL ||
         (!minic_type_is_void(target_type) &&
          !minic_type_cast_compatible(target_type, operand->type) &&
+         !(minic_type_is_record(target_type) && minic_type_is_record(operand->type) &&
+           minic_c0_types_compatible(parser->program, target_type, operand->type)) &&
          !(minic_type_is_pointer(target_type) && expression_is_integer_zero(operand)))) {
         minic_parser_error(parser, "unsupported cast between these types");
         return false;

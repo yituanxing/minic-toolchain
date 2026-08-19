@@ -767,6 +767,10 @@ bool minic_riscv64_emit_address_backed_record_value(
             return minic_riscv64_emit_lvalue_address(
                 file, program, function, function_layout, expression_id);
         }
+        if (expression->kind == MINIC_EXPRESSION_LVALUE_READ) {
+            return minic_riscv64_emit_lvalue_address(
+                file, program, function, function_layout, expression->value.unary.operand);
+        }
         return expression->kind == MINIC_EXPRESSION_STATEMENT &&
                minic_riscv64_emit_expression(
                    file, program, function, function_layout, expression_id);

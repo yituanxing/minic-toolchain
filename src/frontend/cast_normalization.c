@@ -115,6 +115,35 @@ static bool append_normalized_cast(MinicC0Program *rewritten,
     }
     operand_expression = &rewritten->expressions[mapped_operand];
 
+    if (minic_type_is_record(cast_expression->type) &&
+        minic_type_is_record(operand_expression->type) &&
+        cast_expression->type.record_id == operand_expression->type.record_id) {
+        MinicType cast_unqualified;
+        MinicType operand_unqualified;
+
+        if (!minic_type_unqualified(cast_expression->type, &cast_unqualified) ||
+            !minic_type_unqualified(operand_expression->type, &operand_unqualified) ||
+            !minic_type_equal(cast_unqualified, operand_unqualified)) {
+            return false;
+        }
+        if (operand_expression->value_category == MINIC_VALUE_RVALUE) {
+            *normalized_id = mapped_operand;
+            return true;
+        }
+        if (operand_expression->value_category == MINIC_VALUE_LVALUE) {
+            MinicExpression read;
+
+            (void)memset(&read, 0, sizeof(read));
+            read.kind = MINIC_EXPRESSION_LVALUE_READ;
+            read.span = cast_expression->span;
+            read.type = cast_expression->type;
+            read.value_category = MINIC_VALUE_RVALUE;
+            read.value.unary.operand = mapped_operand;
+            return minic_c0_program_add_expression(rewritten, &read, normalized_id);
+        }
+        return false;
+    }
+
     if (minic_type_is_void(cast_expression->type)) {
         return append_normalized_discard(rewritten, cast_expression, mapped_operand, normalized_id);
     }
