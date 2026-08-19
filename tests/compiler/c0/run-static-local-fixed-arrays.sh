@@ -19,7 +19,17 @@ grep -F '.type __minic_static_local_' "$work/static_local_fixed_array.s" >/dev/n
 grep -F '  .byte 1' "$work/static_local_fixed_array.s" >/dev/null
 grep -F '  .byte 2' "$work/static_local_fixed_array.s" >/dev/null
 grep -F '  .byte 3' "$work/static_local_fixed_array.s" >/dev/null
-grep -F '  .zero 2' "$work/static_local_fixed_array.s" >/dev/null
+# The shared static-storage initializer owner may materialize implicit tail zeroes
+# as explicit typed slots instead of relying on the emitter's .zero compression.
+# Keep this gate semantic: both spellings represent the same two-byte zero tail.
+if ! grep -F '  .zero 2' "$work/static_local_fixed_array.s" >/dev/null; then
+    explicit_zero_count=$(grep -c '^  \.byte 0$' "$work/static_local_fixed_array.s" || true)
+    if [ "$explicit_zero_count" -lt 2 ]; then
+        echo 'fixed static local array is missing its two-byte zero tail' >&2
+        cat "$work/static_local_fixed_array.s" >&2
+        exit 1
+    fi
+fi
 if grep -F '.globl __minic_static_local_' "$work/static_local_fixed_array.s" >/dev/null; then
     echo 'fixed static local array leaked external linkage' >&2
     exit 1
