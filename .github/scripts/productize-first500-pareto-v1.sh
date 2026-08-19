@@ -7,7 +7,7 @@ log=/tmp/minic-first500-pareto-v1.log
 patch=/tmp/minic-first500-pareto-v1.patch
 
 run_materialization() {
-  python3 tools/dev/materialize-first500-pareto-v1.py
+  python3 tools/dev/materialize-first500-pareto-v2.py
 
   changed_c=$(
     {
@@ -69,6 +69,6 @@ if git ls-files --error-unmatch diagnostics/first500-pareto-v1-failure.patch >/d
 fi
 
 git add src/frontend src/target/riscv64/codegen_expression.c tests/compiler/c0
-git reset tools/dev/materialize-first500-pareto-v1.py >/dev/null 2>&1 || true
+git reset tools/dev/materialize-first500-pareto-v1.py tools/dev/materialize-first500-pareto-v2.py >/dev/null 2>&1 || true
 git commit -m 'frontend: cover dominant first500 cast and field-attribute mechanisms'
 git push origin HEAD:refactor/linux-first500-capabilities-v1
