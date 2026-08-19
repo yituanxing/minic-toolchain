@@ -379,7 +379,7 @@ bool minic_parser_parse_enum_specifier(MinicParser *parser, MinicType *enum_type
             minic_parser_error(parser, "invalid enum tag entity");
             return false;
         }
-        *enum_type = minic_type_enum(enum_id, entity->compatible_type);
+        *enum_type = minic_type_enum(enum_id);
         return !minic_type_is_void(*enum_type);
     }
 
@@ -488,7 +488,7 @@ bool minic_parser_parse_enum_specifier(MinicParser *parser, MinicType *enum_type
                                "enum values do not fit a supported compatible integer type");
             return false;
         }
-        *enum_type = minic_type_enum(enum_id, compatible_type);
+        *enum_type = minic_type_enum(enum_id);
         return !minic_type_is_void(*enum_type);
     }
 }
