@@ -1,4 +1,4 @@
-# Linux first500 TUs in the static pointer address-constant failure group.
+# Linux first500 static-pointer frontier, replayed unchanged on #438.
 114
 121
 137
