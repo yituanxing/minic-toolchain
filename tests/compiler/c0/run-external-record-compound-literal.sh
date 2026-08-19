@@ -36,7 +36,7 @@ if "$minic" -S "$work/nonfirst-union.i" -o "$work/nonfirst-union.s" \
     printf '%s\n' 'FAIL compiler/c0/external-record-compound-literal: non-first union designator exceeded v0 representation' >&2
     exit 1
 fi
-grep -F 'nested static union designator requires the representable first member' \
+grep -F 'backward noncanonical static union designator requires an integer scalar leaf' \
     "$work/nonfirst-union.err" >/dev/null
 
 printf '%s\n' 'PASS compiler/c0/external-record-compound-literal linkage=external storage=static-duration initializer=shared-constant-owner compound-literal=record anonymous-union-first-designator=1 backward-direct-scalar-designators=1 relocation-order=canonical nonfirst=fail-closed'
