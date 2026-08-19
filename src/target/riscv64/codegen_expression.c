@@ -98,6 +98,27 @@ static bool minic_riscv64_emit_integer_to_double(FILE *file,
     return fprintf(file, "  %s %s, %s\n", instruction, fp_reg, int_reg) >= 0;
 }
 
+static bool minic_riscv64_emit_va_start_pointer(FILE *file,
+                                                const MinicC0Program *program,
+                                                const MinicFunction *function,
+                                                const MinicRiscv64FunctionLayout *function_layout) {
+    MinicRiscv64FrameLayout frame_layout;
+
+    if (file == NULL || program == NULL || function == NULL || function_layout == NULL ||
+        !function->is_variadic ||
+        !minic_riscv64_frame_layout_from_function_layout(
+            program, function, function_layout, &frame_layout)) {
+        return false;
+    }
+    if (frame_layout.varargs_offset <= 2047U) {
+        return fprintf(file, "  addi a0, s0, %zu\n", frame_layout.varargs_offset) >= 0;
+    }
+    return fprintf(file,
+                   "  li t0, %zu\n"
+                   "  add a0, s0, t0\n",
+                   frame_layout.varargs_offset) >= 0;
+}
+
 static bool type_is_condition_scalar(MinicType type) {
     return minic_type_is_integer(type) || minic_type_is_pointer(type);
 }
@@ -1422,6 +1443,34 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
                minic_type_is_function(function_type) &&
                fprintf(file, "  la a0, %s\n", minic_c0_function_symbol_name(designator)) >= 0;
     }
+    case MINIC_EXPRESSION_BUILTIN_VA_START: {
+        const MinicExpression *target;
+        MinicExpressionId target_id;
+
+        target_id = expression->value.unary.operand;
+        target = minic_c0_program_expression(program, target_id);
+        if (target == NULL || target->value_category != MINIC_VALUE_LVALUE ||
+            !minic_type_is_pointer(target->type) || minic_type_is_const(target->type) ||
+            !minic_riscv64_emit_lvalue_address(
+                file, program, function, function_layout, target_id) ||
+            fprintf(file, "  mv t4, a0\n") < 0 ||
+            !minic_riscv64_emit_va_start_pointer(file, program, function, function_layout)) {
+            return false;
+        }
+        return minic_riscv64_emit_lvalue_store_to_address(
+            file, program, target_id, target->type, "a0", "t4");
+    }
+    case MINIC_EXPRESSION_BUILTIN_VA_END: {
+        const MinicExpression *target;
+        MinicExpressionId target_id;
+
+        target_id = expression->value.unary.operand;
+        target = minic_c0_program_expression(program, target_id);
+        return target != NULL && target->value_category == MINIC_VALUE_LVALUE &&
+               minic_type_is_pointer(target->type) && !minic_type_is_const(target->type) &&
+               minic_riscv64_emit_lvalue_address(
+                   file, program, function, function_layout, target_id);
+    }
     case MINIC_EXPRESSION_BUILTIN_UNREACHABLE:
         /* Reaching this expression is undefined by GNU C. Keep the semantic
          * leaf for future CFG/IR reasoning, but do not invent a target trap or
@@ -2233,21 +2282,8 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
 
         if (!is_indirect && direct_callee != NULL && direct_callee->name_length == 16U &&
             strcmp(direct_callee->name, "__minic_va_start") == 0) {
-            MinicRiscv64FrameLayout frame_layout;
-
-            if (argument_count != 0U || !function->is_variadic ||
-                !minic_type_is_pointer(expression->type) ||
-                !minic_riscv64_frame_layout_from_function_layout(
-                    program, function, function_layout, &frame_layout)) {
-                return false;
-            }
-            if (frame_layout.varargs_offset <= 2047U) {
-                return fprintf(file, "  addi a0, s0, %zu\n", frame_layout.varargs_offset) >= 0;
-            }
-            return fprintf(file,
-                           "  li t0, %zu\n"
-                           "  add a0, s0, t0\n",
-                           frame_layout.varargs_offset) >= 0;
+            return argument_count == 0U && minic_type_is_pointer(expression->type) &&
+                   minic_riscv64_emit_va_start_pointer(file, program, function, function_layout);
         }
 
         for (argument_index = 0U; argument_index < argument_count; ++argument_index) {

@@ -222,7 +222,7 @@ bool minic_parser_parse_typedef(MinicParser *parser) {
             return false;
         }
         if (!minic_parser_parse_array_declarator_suffix(
-                parser, aliased_type, false, &aliased_type, &is_array) ||
+                parser, aliased_type, true, &aliased_type, &is_array) ||
             !is_array) {
             if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
                 minic_parser_error(parser, "cannot build typedef array declarator type");

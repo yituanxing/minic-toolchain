@@ -3008,13 +3008,26 @@ static bool parse_static_inferred_char_array(MinicParser *parser,
         }
         return false;
     }
-    if (parser->current.kind != MINIC_TOKEN_STRING_LITERAL ||
-        !minic_parser_add_string_literal_initializer(parser, object_id, &element_count) ||
-        !minic_c0_program_complete_array_type(parser->program, object_type, element_count)) {
-        if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
-            minic_parser_error(
-                parser, "inferred static character array requires a string literal initializer");
+    if (parser->current.kind == MINIC_TOKEN_STRING_LITERAL) {
+        if (!minic_parser_add_string_literal_initializer(parser, object_id, &element_count) ||
+            !minic_c0_program_complete_array_type(parser->program, object_type, element_count)) {
+            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                minic_parser_error(parser, "cannot initialize inferred static character array");
+            }
+            return false;
         }
+    } else if (parser->current.kind == MINIC_TOKEN_LBRACE) {
+        if (!parse_static_scalar_array_transaction(parser, object_id, element_type, 0U, true)) {
+            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                minic_parser_error(
+                    parser, "cannot initialize inferred static character array from scalar list");
+            }
+            return false;
+        }
+    } else {
+        minic_parser_error(
+            parser,
+            "inferred static character array requires a string or braced scalar initializer");
         return false;
     }
     return minic_parser_expect(
