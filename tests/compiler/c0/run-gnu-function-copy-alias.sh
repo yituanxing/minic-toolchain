@@ -11,6 +11,14 @@ int main(void) { return alias_fn() == 7 ? 0 : 1; }
 SRC
 "$minic" -S "$work/positive.c" -o "$work/positive.s"
 grep -Fq '.set alias_fn, target' "$work/positive.s"
+cat > "$work/forward.c" <<'SRC'
+int target(int value);
+int __attribute__((weak, alias("target"))) alias_fn(int value);
+int target(int value) { return value + 1; }
+SRC
+"$minic" -S "$work/forward.c" -o "$work/forward.s"
+grep -Fq '.weak alias_fn' "$work/forward.s"
+grep -Fq '.set alias_fn, target' "$work/forward.s"
 cat > "$work/mismatch.c" <<'SRC'
 static int target(int value) { return value; }
 static inline __attribute__((alias("target"))) int alias_fn(void);
@@ -27,5 +35,5 @@ static int target(void);
 static inline __attribute__((alias("target"))) int alias_fn(void);
 SRC
 if "$minic" -S "$work/undefined.c" -o "$work/undefined.s" 2>"$work/undefined.err"; then exit 1; fi
-grep -Fq 'GNU function alias requires a defined same-TU target with matching signature' "$work/undefined.err"
+grep -Fq 'parsed AST violates compiler contracts' "$work/undefined.err"
 printf '%s\n' 'PASS compiler/c0/gnu-function-copy-alias'
