@@ -15,7 +15,7 @@ permissions:
 jobs:
   productize:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 5
     steps:
       - name: Checkout exact head
         uses: actions/checkout@v4
@@ -34,26 +34,49 @@ jobs:
             src/frontend/parser_global.c \
             tests/compiler/c0/static_pointer_constant_conditional.c \
             tests/compiler/c0/invalid_static_pointer_nonconstant_conditional.c
-          CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
           git diff --check
 
-      - name: Build and focused gate
+      - name: Build and isolate nontermination
         run: |
           set -Eeuo pipefail
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/product-static-pointer-constant
-          MINIC="$GITHUB_WORKSPACE/build/product-static-pointer-constant/bin/minic" \
-            BUILD_DIR="$GITHUB_WORKSPACE/build/product-static-pointer-constant" \
-            sh tests/compiler/c0/run-static-pointer-constant-conditional.sh
-
-      - name: Publish clean product
-        run: |
-          set -Eeuo pipefail
-          git fetch origin frontend/static-subobject-address-constant-v1
-          git checkout origin/frontend/static-subobject-address-constant-v1 -- \
-            .github/workflows/productize-promoted-static-record-designator-v1.yml
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A
-          git diff --cached --check
-          git commit -m 'frontend: normalize static pointer constant expressions'
-          git push origin HEAD:frontend/static-pointer-constant-v1
+          minic="$GITHUB_WORKSPACE/build/product-static-pointer-constant/bin/minic"
+          mkdir -p build/static-pointer-probes
+          cat > build/static-pointer-probes/absolute-arithmetic.c <<'EOF'
+          static void *p = (void *)0x300UL + 0xdead000000000000UL;
+          int main(void) { return p == 0; }
+          EOF
+          cat > build/static-pointer-probes/full-width-bits.c <<'EOF'
+          static void *p = (void *)(0xeB9FUL + 0xdead000000000000UL);
+          int main(void) { return p == 0; }
+          EOF
+          cat > build/static-pointer-probes/identical-function-arms.c <<'EOF'
+          static int f(void) { return 0; }
+          static void *p = f == (void *)0 ? (void *)&f : (void *)&f;
+          int main(void) { return p == 0; }
+          EOF
+          cat > build/static-pointer-probes/old-ice-conditional.c <<'EOF'
+          static int value;
+          static int *p = 1 ? &value : 0;
+          int main(void) { return p == &value ? 0 : 1; }
+          EOF
+          status=0
+          for probe in absolute-arithmetic full-width-bits identical-function-arms old-ice-conditional; do
+            printf 'STATIC_POINTER_PROBE begin=%s\n' "$probe"
+            set +e
+            timeout 5s "$minic" -S "build/static-pointer-probes/$probe.c" \
+              -o "build/static-pointer-probes/$probe.s" \
+              >"build/static-pointer-probes/$probe.stdout" \
+              2>"build/static-pointer-probes/$probe.stderr"
+            rc=$?
+            set -e
+            printf 'STATIC_POINTER_PROBE end=%s rc=%d\n' "$probe" "$rc"
+            if test -s "build/static-pointer-probes/$probe.stderr"; then
+              tail -n 20 "build/static-pointer-probes/$probe.stderr"
+            fi
+            if [[ $rc -eq 124 ]]; then
+              printf 'STATIC_POINTER_PROBE HANG=%s\n' "$probe"
+              status=1
+            fi
+          done
+          exit "$status"
