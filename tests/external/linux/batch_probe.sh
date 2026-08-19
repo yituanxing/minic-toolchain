@@ -15,6 +15,7 @@ out="$work/kbuild"
 limit=${LINUX_BATCH_LIMIT:-100}
 offset=${LINUX_BATCH_OFFSET:-0}
 minic_jobs=${LINUX_BATCH_JOBS:-2}
+selection=${LINUX_BATCH_SELECTION:-}
 sha256=dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932
 url="https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-$version.tar.xz"
 
@@ -58,7 +59,7 @@ make -C "$src" O="$out" ARCH=riscv CROSS_COMPILE="$cross_compile" -n -j1 V=1 \
 plan_status=$?
 set -e
 
-python3 - "$work/kbuild-plan.raw" "$out" "$work/tu-manifest.txt" "$work/selected-tus.txt" "$offset" "$limit" "$cross_compile" <<'PY'
+python3 - "$work/kbuild-plan.raw" "$out" "$work/tu-manifest.txt" "$work/selected-tus.txt" "$offset" "$limit" "$cross_compile" "$selection" <<'PY'
 from pathlib import Path, PurePosixPath
 import re
 import sys
@@ -70,6 +71,7 @@ selected_path = Path(sys.argv[4])
 offset = int(sys.argv[5])
 limit = int(sys.argv[6])
 cross_prefix = sys.argv[7]
+selection = sys.argv[8].strip()
 
 object_pattern = re.compile(r"(?:^|\s)-o\s+([^\s;]+\.o)(?=\s|;|$)")
 source_pattern = re.compile(r"(?:^|\s)([^\s;]+\.c)(?=\s|;|$)")
@@ -112,15 +114,34 @@ with manifest_path.open("w") as output:
     for index, (obj, preprocessed, source) in enumerate(entries):
         output.write(f"{index}\t{obj}\t{preprocessed}\t{source}\n")
 
-window = entries[offset:] if limit == 0 else entries[offset:offset + limit]
+indexed_entries = list(enumerate(entries))
+if selection:
+    requested_indices = []
+    requested_seen = set()
+    for token in re.split(r"[\s,]+", selection):
+        if not token:
+            continue
+        if not token.isdigit():
+            raise SystemExit(f"LINUX_BATCH_ERROR invalid TU index in selection: {token!r}")
+        index = int(token)
+        if index >= len(entries):
+            raise SystemExit(
+                f"LINUX_BATCH_ERROR selected TU index {index} is outside manifest size {len(entries)}"
+            )
+        if index not in requested_seen:
+            requested_seen.add(index)
+            requested_indices.append(index)
+    window = [indexed_entries[index] for index in requested_indices]
+    mode = f"selection={','.join(str(index) for index in requested_indices)}"
+else:
+    window = indexed_entries[offset:] if limit == 0 else indexed_entries[offset:offset + limit]
+    mode = f"offset={offset} requested_limit={limit}"
+
 with selected_path.open("w") as output:
-    for index, (obj, preprocessed, source) in enumerate(window, start=offset):
+    for index, (obj, preprocessed, source) in window:
         output.write(f"{index}\t{obj}\t{preprocessed}\t{source}\n")
 
-print(
-    f"LINUX_BATCH_PLAN total_c_tus={len(entries)} offset={offset} "
-    f"requested_limit={limit} selected={len(window)}"
-)
+print(f"LINUX_BATCH_PLAN total_c_tus={len(entries)} {mode} selected={len(window)}")
 if not window:
     raise SystemExit("LINUX_BATCH_ERROR no C translation units selected from Kbuild plan")
 PY
