@@ -4,6 +4,13 @@ on:
   push:
     branches:
       - tests/linux-batch-pressure-convergence-v1
+  pull_request:
+    paths:
+      - 'Makefile'
+      - 'include/**'
+      - 'src/**'
+      - 'tests/external/linux/batch_probe.sh'
+      - '.github/workflows/linux-batch-pressure.yml'
   workflow_dispatch:
     inputs:
       offset:
