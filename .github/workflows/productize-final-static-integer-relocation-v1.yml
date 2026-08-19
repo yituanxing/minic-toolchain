@@ -31,14 +31,7 @@ jobs:
 
           path = Path('src/target/data_layout.c')
           source = path.read_text()
-          anchor = '''static bool aggregate_scalar_slot_layout(const MinicDataLayout *layout,
-                                                   const MinicC0Program *program,
-                                                   MinicType type,
-                                                   size_t base_offset,
-                                                   size_t *slot_index,
-                                                   MinicType *slot_type,
-                                                   size_t *slot_offset) {
-          '''
+          anchor = 'static bool aggregate_scalar_slot_layout('
           helper = '''static bool aggregate_scalar_slot_count_layout(const MinicC0Program *program,
                                                           MinicType type,
                                                           size_t *slot_count) {
