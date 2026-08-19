@@ -22,6 +22,17 @@ static void memory_output_store_like(int value, int *target) {
     __asm__ __volatile__("sw %z1, %0" : "=m"(*target) : "rJ"(value) : "memory");
 }
 
+static int futex_constraint_shape(int value, int *target) {
+    int ret = 0;
+    int previous = 0;
+
+    __asm__ __volatile__("amoswap.w.aqrl %[ov],%z[op],%[u]"
+                         : [r] "+r"(ret), [ov] "=&r"(previous), [u] "+m"(*target)
+                         : [op] "Jr"(value)
+                         : "memory");
+    return previous + ret;
+}
+
 typedef struct RegisterOutputs {
     unsigned long first;
     unsigned long second;
@@ -61,10 +72,13 @@ static int clobber_reservation(int left, int right) {
 
 int main(void) {
     int previous;
+    int swap_target = 21;
+    int swapped;
 
     atomic_add_like(5, &global_counter);
     previous = atomic_fetch_add_like(3, &global_counter);
-    return previous == 12 && global_counter.counter == 15 &&
+    swapped = futex_constraint_shape(9, &swap_target);
+    return previous == 12 && global_counter.counter == 15 && swapped == 21 && swap_target == 9 &&
                    linux_target_constraint_shape(5) == 12 && clobber_reservation(4, 6) == 10
                ? 0
                : 1;
