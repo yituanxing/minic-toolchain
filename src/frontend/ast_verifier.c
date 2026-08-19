@@ -1130,6 +1130,19 @@ static bool function_alias_signature_matches(const MinicC0Program *program,
     return true;
 }
 
+static bool function_alias_section_matches(const MinicFunction *alias,
+                                           const MinicFunction *target) {
+    if (alias == NULL || target == NULL) {
+        return false;
+    }
+    if (alias->section_name == NULL) {
+        return true;
+    }
+    return target->section_name != NULL &&
+           alias->section_name_length == target->section_name_length &&
+           memcmp(alias->section_name, target->section_name, alias->section_name_length) == 0;
+}
+
 bool minic_c0_program_verify_target(const MinicC0Program *program,
                                     MinicC0AstForm form,
                                     const MinicTargetInfo *target) {
@@ -1253,7 +1266,8 @@ bool minic_c0_program_verify_target(const MinicC0Program *program,
 
             alias_target_function = minic_c0_program_function(program, function->alias_target);
             if (alias_target_function == NULL || !alias_target_function->is_defined ||
-                function->is_defined || function->section_name != NULL ||
+                function->is_defined ||
+                !function_alias_section_matches(function, alias_target_function) ||
                 !function_alias_signature_matches(program, function, alias_target_function)) {
                 return false;
             }
