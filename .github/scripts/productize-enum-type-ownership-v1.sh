@@ -60,8 +60,6 @@ PY
   CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
   git diff --check
 
-  # Fail closed if the grouped replacement is incomplete. Do this again after post-processing,
-  # independently of the Python manifest.
   for path in \
     src/frontend/ast.c \
     src/frontend/ast.h \
@@ -97,9 +95,6 @@ PY
   make -j4 check-fast MODE=release BUILD_DIR=build/product-enum-type-fast
 }
 
-# Do not invoke run_materialization directly as the condition of `if ! ...`: Bash suppresses
-# errexit inside functions used as conditional commands. Run it in its own strict subshell,
-# capture the status outside, and make every failed command terminate the grouped slice.
 set +e
 (
   set -Eeuo pipefail
@@ -116,7 +111,7 @@ if test "$status" -ne 0; then
   cp "$patch" diagnostics/enum-type-ownership-failure.patch
   git config user.name github-actions[bot]
   git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-  git add diagnostics/enum-type-ownership-failure.log diagnostics/enum-type-ownership-failure.patch
+  git add -f diagnostics/enum-type-ownership-failure.log diagnostics/enum-type-ownership-failure.patch
   git commit -m 'diagnostic: capture enum ownership productizer failure'
   git push origin HEAD:refactor/frontend-semantic-ownership
   exit "$status"
@@ -127,7 +122,6 @@ git config user.email 41898282+github-actions[bot]@users.noreply.github.com
 rm -f diagnostics/enum-type-ownership-failure.log diagnostics/enum-type-ownership-failure.patch
 
 git add src/frontend src/target tests/compiler/c0
-# Product mainline contains canonical C, not temporary migration machinery.
 git reset tools/dev/materialize-enum-type-ownership-v1.py \
           tools/dev/materialize-enum-type-ownership-v2.py >/dev/null 2>&1 || true
 
