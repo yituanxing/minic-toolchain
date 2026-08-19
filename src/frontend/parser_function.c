@@ -2084,6 +2084,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
         MinicType typed_parameter_types[MINIC_MAX_FUNCTION_PARAMETERS];
         size_t typed_parameter_count;
         size_t parameter_index;
+        bool typed_is_variadic;
         bool declaration_is_weak;
 
         if (parser->current.kind == MINIC_TOKEN_LPAREN) {
@@ -2102,6 +2103,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
          * signature before any subsequent semantic operation can grow owner pools. */
         typed_return_type = function_type->return_type;
         typed_parameter_count = function_type->parameter_count;
+        typed_is_variadic = function_type->is_variadic;
         for (parameter_index = 0U; parameter_index < typed_parameter_count; ++parameter_index) {
             typed_parameter_types[parameter_index] =
                 function_type->parameter_types[parameter_index];
@@ -2156,7 +2158,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                                                     typed_return_type,
                                                     typed_parameter_types,
                                                     typed_parameter_count,
-                                                    false,
+                                                    typed_is_variadic,
                                                     is_internal,
                                                     entity_is_weak,
                                                     assembler_name,

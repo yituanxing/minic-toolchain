@@ -5,6 +5,9 @@ static int pick_first(int fixed, ...) {
     return fixed;
 }
 
+int variadic_redecl(int fixed, ...);
+extern typeof(variadic_redecl) variadic_redecl;
+
 static int use_prefix_parameter(__attribute__((__unused__)) int ignored) {
     return pick_first(7, 11, 13);
 }
