@@ -2292,21 +2292,19 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
             return false;
         }
         if (is_extern_declaration) {
-            if (object_is_weak) {
-                minic_parser_error(parser,
-                                   "GNU weak extern object declarations are not supported yet");
+            if (!minic_parser_parse_extern_global_after_head(parser,
+                                                             base_type,
+                                                             return_type,
+                                                             name_span,
+                                                             section_name,
+                                                             section_name_length,
+                                                             has_section,
+                                                             object_explicit_alignment,
+                                                             visibility,
+                                                             has_visibility)) {
                 return false;
             }
-            return minic_parser_parse_extern_global_after_head(parser,
-                                                               base_type,
-                                                               return_type,
-                                                               name_span,
-                                                               section_name,
-                                                               section_name_length,
-                                                               has_section,
-                                                               object_explicit_alignment,
-                                                               visibility,
-                                                               has_visibility);
+            return apply_external_object_weak(parser, name_span, object_is_weak);
         }
         if (!minic_parser_parse_gnu_object_attribute_lists_with_symbol_metadata(
                 parser,
@@ -2678,6 +2676,65 @@ static bool parse_top_level_preprocessor_directive(MinicParser *parser) {
         return false;
     }
     pragma_skip_horizontal_space(text, length, &cursor);
+    if (pragma_consume_word(text, length, &cursor, "GCC")) {
+        size_t option_begin;
+        const char *actions[] = {"push", "pop", "ignored", "warning", "error"};
+        size_t action_index;
+        size_t matched_action;
+
+        pragma_skip_horizontal_space(text, length, &cursor);
+        if (!pragma_consume_word(text, length, &cursor, "diagnostic")) {
+            minic_parser_error(parser, "unsupported GCC pragma directive");
+            return false;
+        }
+        pragma_skip_horizontal_space(text, length, &cursor);
+        matched_action = sizeof(actions) / sizeof(actions[0]);
+        for (action_index = 0U; action_index < sizeof(actions) / sizeof(actions[0]);
+             ++action_index) {
+            size_t probe = cursor;
+
+            if (pragma_consume_word(text, length, &probe, actions[action_index])) {
+                matched_action = action_index;
+                cursor = probe;
+                break;
+            }
+        }
+        if (matched_action == sizeof(actions) / sizeof(actions[0])) {
+            minic_parser_error(parser, "unsupported GCC diagnostic pragma action");
+            return false;
+        }
+        pragma_skip_horizontal_space(text, length, &cursor);
+        if (matched_action <= 1U) {
+            if (!pragma_only_trailing_space(text, length, cursor)) {
+                minic_parser_error(parser, "unexpected tokens after GCC diagnostic push/pop");
+                return false;
+            }
+            return minic_parser_advance(parser);
+        }
+        if (cursor >= length || text[cursor] != '"') {
+            minic_parser_error(parser, "GCC diagnostic pragma requires an option string");
+            return false;
+        }
+        cursor += 1U;
+        option_begin = cursor;
+        while (cursor < length && text[cursor] != '"') {
+            if (text[cursor] == '\\' && cursor + 1U < length) {
+                cursor += 2U;
+            } else {
+                cursor += 1U;
+            }
+        }
+        if (cursor >= length || text[cursor] != '"' || cursor == option_begin) {
+            minic_parser_error(parser, "invalid GCC diagnostic option string");
+            return false;
+        }
+        cursor += 1U;
+        if (!pragma_only_trailing_space(text, length, cursor)) {
+            minic_parser_error(parser, "unexpected tokens after GCC diagnostic option");
+            return false;
+        }
+        return minic_parser_advance(parser);
+    }
     if (!pragma_consume_word(text, length, &cursor, "pack")) {
         minic_parser_error(parser, "unsupported pragma directive");
         return false;
