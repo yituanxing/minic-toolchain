@@ -15,10 +15,11 @@ changed_path() {
 run_materialization() {
   python3 tools/dev/materialize-enum-type-ownership-v2.py
 
-  # Repair two deliberately broad source substitutions in the inherited v1 stage-2 materializer
-  # into strict, non-recursive C11 helpers.
+  # Repair deliberately broad source substitutions in the inherited v1 stage-2 materializer into
+  # strict C11, and thread `program` through the complete RV64 expression-helper family in one pass.
   python3 - <<'PY'
 from pathlib import Path
+import re
 
 for name in ["src/frontend/const_eval.c", "src/frontend/expression_semantics.c"]:
     path = Path(name)
@@ -56,6 +57,46 @@ old = '''({
 if old not in text:
     raise SystemExit("codegen_expression.c: temporary signed bit-field expression missing")
 text = text.replace(old, "minic_riscv64_integer_type_is_signed(program, field->type) &&", 1)
+
+# Mixed floating/integer helpers now need canonical enum queries while converting integer operands.
+# Thread the existing program context through the helper definitions and every call site together.
+text, count = re.subn(
+    r"static bool minic_riscv64_emit_double_binary\(FILE \*file,\n",
+    "static bool minic_riscv64_emit_double_binary(FILE *file,\n"
+    "                                             const MinicC0Program *program,\n",
+    text,
+    count=1,
+)
+if count != 1:
+    raise SystemExit("codegen_expression.c: double-binary signature not found")
+text, count = re.subn(
+    r"static bool minic_riscv64_emit_double_comparison\(FILE \*file,\n",
+    "static bool minic_riscv64_emit_double_comparison(FILE *file,\n"
+    "                                                 const MinicC0Program *program,\n",
+    text,
+    count=1,
+)
+if count != 1:
+    raise SystemExit("codegen_expression.c: double-comparison signature not found")
+
+# These call patterns cannot match definitions because definitions spell `FILE *file` on the same
+# line as `(`. Preserve the existing indentation while inserting the one semantic context argument.
+def add_program_to_calls(source, function_name, minimum=1):
+    pattern = rf"({re.escape(function_name)}\(\n\s*)file,"
+    result, found = re.subn(pattern, r"\1file, program,", source)
+    if found < minimum:
+        raise SystemExit(f"codegen_expression.c: no calls updated for {function_name}")
+    return result, found
+
+for function_name, minimum in [
+    ("minic_riscv64_emit_double_binary", 1),
+    ("minic_riscv64_emit_double_comparison", 1),
+    ("minic_riscv64_emit_bit_field_load_from_address", 1),
+    ("minic_riscv64_emit_integer_result_conversion", 5),
+    ("minic_riscv64_emit_conditional_result_conversion", 3),
+]:
+    text, _ = add_program_to_calls(text, function_name, minimum)
+
 path.write_text(text)
 PY
 
