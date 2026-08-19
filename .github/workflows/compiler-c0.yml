@@ -58,35 +58,3 @@ jobs:
             build/ci-external/tests/external/tiny-aes-c/*.status
           if-no-files-found: ignore
           retention-days: 7
-
-  format-pointer-sign-product:
-    name: Format GNU pointer-sign product
-    if: github.event_name == 'pull_request' && github.head_ref == 'frontend/gnu-pointer-sign-static-init-v1' && github.actor != 'github-actions[bot]'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      contents: write
-    steps:
-      - name: Checkout exact capability branch
-        uses: actions/checkout@v4
-        with:
-          ref: frontend/gnu-pointer-sign-static-init-v1
-          fetch-depth: 0
-
-      - name: Format exact product source
-        run: |
-          clang-format -i src/frontend/parser_global.c
-          git diff --check
-
-      - name: Commit formatting-only product
-        run: |
-          set -Eeuo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add src/frontend/parser_global.c
-          if git diff --cached --quiet; then
-            printf '%s\n' 'Product source already formatted.'
-            exit 0
-          fi
-          git commit -m 'style: format GNU pointer-sign static initializer'
-          git push origin HEAD:frontend/gnu-pointer-sign-static-init-v1
