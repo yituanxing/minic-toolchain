@@ -58,3 +58,43 @@ jobs:
             build/ci-external/tests/external/tiny-aes-c/*.status
           if-no-files-found: ignore
           retention-days: 7
+
+  finalize-static-record-array-designator-format:
+    name: Finalize static record array designator formatting
+    if: github.event_name == 'pull_request' && github.head_ref == 'frontend/static-record-array-member-designator-v1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Format stacked product files
+        run: sh tools/dev/format-static-record-array-member-designator-v1.sh
+
+      - name: Validate formatted product
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/final-static-record-array-designator-format
+          MINIC="$PWD/build/final-static-record-array-designator-format/bin/minic" \
+            BUILD_DIR="$PWD/build/final-static-record-array-designator-format" \
+            sh tests/compiler/c0/run-gnu-function-attributes.sh
+          MINIC="$PWD/build/final-static-record-array-designator-format/bin/minic" \
+            BUILD_DIR="$PWD/build/final-static-record-array-designator-format" \
+            sh tests/compiler/c0/run-static-record-array-member-designator.sh
+
+      - name: Publish formatted product
+        run: |
+          set -Eeuo pipefail
+          if git diff --quiet -- src/frontend/parser_function.c src/frontend/parser_global.c; then
+            echo 'Stacked product files are already formatted.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/frontend/parser_function.c src/frontend/parser_global.c
+          git commit -m 'style: format static record array designator stack'
+          git push origin HEAD:${{ github.head_ref }}
