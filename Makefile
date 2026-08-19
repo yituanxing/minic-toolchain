@@ -50,6 +50,7 @@ MINIC_SOURCES := \
 	src/frontend/expression_semantics.c \
 	src/frontend/ast_traversal.c \
 	src/frontend/function_body.c \
+	src/frontend/initializer.c \
 	src/frontend/ast_verifier.c \
 	src/frontend/cast_normalization.c \
 	src/frontend/const_eval.c \
