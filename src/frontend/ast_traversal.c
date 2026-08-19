@@ -57,6 +57,7 @@ bool minic_c0_expression_visit_child_id_refs(MinicExpression *expression,
     case MINIC_EXPRESSION_ASSIGNMENT:
     case MINIC_EXPRESSION_COMPOUND_ASSIGNMENT:
     case MINIC_EXPRESSION_BINARY:
+    case MINIC_EXPRESSION_BUILTIN_VA_COPY:
         return visit_expression_id(&expression->value.binary.left, visitor, context) &&
                visit_expression_id(&expression->value.binary.right, visitor, context);
 

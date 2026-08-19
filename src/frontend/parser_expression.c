@@ -1830,6 +1830,60 @@ static bool parse_builtin_va_start(MinicParser *parser, MinicExpressionId *expre
     return minic_parser_add_expression(parser, &expression, expression_id);
 }
 
+static bool parse_builtin_va_copy(MinicParser *parser, MinicExpressionId *expression_id) {
+    const MinicExpression *source;
+    const MinicExpression *target;
+    MinicExpression expression;
+    MinicExpressionId source_id;
+    MinicExpressionId target_id;
+    MinicSourcePosition begin;
+    MinicSourcePosition end;
+    MinicSourceSpan target_span;
+
+    if (parser == NULL || expression_id == NULL) {
+        return false;
+    }
+    begin = parser->current.span.begin;
+    if (!minic_parser_advance(parser) ||
+        !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '(' after __builtin_va_copy") ||
+        !parse_builtin_va_list_target(parser, &target_id, &target_span) ||
+        !minic_parser_expect(parser, MINIC_TOKEN_COMMA, "expected ',' in __builtin_va_copy") ||
+        !parse_expression_internal(parser, &source_id, 0U, false)) {
+        return false;
+    }
+    (void)target_span;
+
+    target = minic_c0_program_expression(parser->program, target_id);
+    source = minic_c0_program_expression(parser->program, source_id);
+    if (target == NULL || source == NULL || source->value_category != MINIC_VALUE_LVALUE ||
+        !minic_type_is_pointer(source->type)) {
+        minic_parser_error(parser, "__builtin_va_copy source must be a va_list lvalue");
+        return false;
+    }
+    if (!minic_c0_types_compatible(parser->program, target->type, source->type)) {
+        minic_parser_error(parser, "__builtin_va_copy source type must match destination type");
+        return false;
+    }
+    if (parser->current.kind != MINIC_TOKEN_RPAREN) {
+        minic_parser_error(parser, "expected ')' after __builtin_va_copy");
+        return false;
+    }
+    end = parser->current.span.end;
+    if (!minic_parser_advance(parser)) {
+        return false;
+    }
+
+    (void)memset(&expression, 0, sizeof(expression));
+    expression.kind = MINIC_EXPRESSION_BUILTIN_VA_COPY;
+    expression.span.begin = begin;
+    expression.span.end = end;
+    expression.type = minic_type_void();
+    expression.value_category = MINIC_VALUE_RVALUE;
+    expression.value.binary.left = target_id;
+    expression.value.binary.right = source_id;
+    return minic_parser_add_expression(parser, &expression, expression_id);
+}
+
 static bool parse_builtin_va_end(MinicParser *parser, MinicExpressionId *expression_id) {
     MinicExpression expression;
     MinicExpressionId target_id;
@@ -1878,6 +1932,12 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
 
     if (generic_token_text_equals(parser, "__builtin_va_start")) {
         if (!parse_builtin_va_start(parser, &primary_id)) {
+            return false;
+        }
+        return finish_value_expression(parser, primary_id, decay_array, expression_id);
+    }
+    if (generic_token_text_equals(parser, "__builtin_va_copy")) {
+        if (!parse_builtin_va_copy(parser, &primary_id)) {
             return false;
         }
         return finish_value_expression(parser, primary_id, decay_array, expression_id);

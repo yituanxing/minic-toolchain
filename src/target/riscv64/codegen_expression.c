@@ -1460,6 +1460,30 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
         return minic_riscv64_emit_lvalue_store_to_address(
             file, program, target_id, target->type, "a0", "t4");
     }
+    case MINIC_EXPRESSION_BUILTIN_VA_COPY: {
+        const MinicExpression *source;
+        const MinicExpression *target;
+        MinicExpressionId source_id;
+        MinicExpressionId target_id;
+
+        target_id = expression->value.binary.left;
+        source_id = expression->value.binary.right;
+        target = minic_c0_program_expression(program, target_id);
+        source = minic_c0_program_expression(program, source_id);
+        if (target == NULL || source == NULL || target->value_category != MINIC_VALUE_LVALUE ||
+            source->value_category != MINIC_VALUE_LVALUE || !minic_type_is_pointer(target->type) ||
+            !minic_type_is_pointer(source->type) || minic_type_is_const(target->type) ||
+            !minic_c0_types_compatible(program, target->type, source->type) ||
+            !minic_riscv64_emit_lvalue_address(
+                file, program, function, function_layout, target_id) ||
+            fprintf(file, "  addi sp, sp, -16\n  sd a0, 0(sp)\n") < 0 ||
+            !minic_riscv64_emit_expression(file, program, function, function_layout, source_id) ||
+            fprintf(file, "  ld t4, 0(sp)\n  addi sp, sp, 16\n") < 0) {
+            return false;
+        }
+        return minic_riscv64_emit_lvalue_store_to_address(
+            file, program, target_id, target->type, "a0", "t4");
+    }
     case MINIC_EXPRESSION_BUILTIN_VA_END: {
         const MinicExpression *target;
         MinicExpressionId target_id;
