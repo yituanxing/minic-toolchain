@@ -1,6 +1,6 @@
 #!/bin/sh
 set -eu
-# Batch6 validates one canonical lifecycle owner for inferred and fixed static record arrays.
+# Batch6 validates one canonical tentative-definition lifecycle for static aggregate/pointer arrays.
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 minic=${MINIC:-"$root/build/debug/bin/minic"}
 work=${BUILD_DIR:-"$root/build/debug"}/tests/linux-tail-batch6
@@ -31,6 +31,19 @@ grep -F '.size inferred, 12' "$work/record-array.s" >/dev/null
 grep -F '.size fixed, 8' "$work/record-array.s" >/dev/null
 grep -F '.size already, 4' "$work/record-array.s" >/dev/null
 
+cat >"$work/pointer-array.c" <<'SRC'
+struct clock { int id; };
+static const struct clock realtime = { 1 };
+static const struct clock monotonic = { 2 };
+static const struct clock * const clocks[];
+static const struct clock * const clocks[] = {
+    [0] = &realtime,
+    [1] = &monotonic,
+};
+SRC
+"$minic" -S "$work/pointer-array.c" -o "$work/pointer-array.s"
+grep -F '.size clocks, 16' "$work/pointer-array.s" >/dev/null
+
 cat >"$work/conflict.c" <<'SRC'
 struct row { int value; };
 static struct row rows[2];
@@ -42,4 +55,4 @@ if "$minic" -S "$work/conflict.c" -o "$work/conflict.s" 2>"$work/conflict.err"; 
 fi
 grep -F 'conflicting static record array' "$work/conflict.err" >/dev/null
 
-printf '%s\n' 'PASS compiler/c0/linux-tail-batch6 static-record-array=tentative+incomplete+definition composite=compatible conflict=fail-closed'
+printf '%s\n' 'PASS compiler/c0/linux-tail-batch6 record-array=tentative+incomplete+fixed pointer-array=incomplete+definition composite=compatible conflict=fail-closed'
