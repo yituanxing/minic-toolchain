@@ -490,6 +490,8 @@ static bool verify_expression(const MinicC0Program *program,
                expression->value_category == MINIC_VALUE_RVALUE &&
                (minic_type_is_void(expression->type) ||
                 minic_type_cast_compatible(expression->type, operand->type) ||
+                (minic_type_is_record(expression->type) && minic_type_is_record(operand->type) &&
+                 minic_c0_types_compatible(program, expression->type, operand->type)) ||
                 (minic_type_is_pointer(expression->type) && expression_is_integer_zero(operand)));
     case MINIC_EXPRESSION_BITCAST:
         operand = expression_before(program, expression->value.unary.operand, expression_index);
@@ -561,7 +563,8 @@ static bool verify_expression(const MinicC0Program *program,
                expression->value_category == MINIC_VALUE_RVALUE &&
                minic_type_equal(expression->type, operand->type) &&
                (minic_type_is_integer(expression->type) ||
-                minic_type_is_pointer(expression->type) || minic_type_is_double(expression->type));
+                minic_type_is_pointer(expression->type) || minic_type_is_double(expression->type) ||
+                minic_type_is_record(expression->type));
     case MINIC_EXPRESSION_ASSIGNMENT:
         left = expression_before(program, expression->value.binary.left, expression_index);
         right = expression_before(program, expression->value.binary.right, expression_index);

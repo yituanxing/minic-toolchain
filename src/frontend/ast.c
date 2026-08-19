@@ -1446,11 +1446,16 @@ bool minic_c0_record_value_is_address_backed(const MinicC0Program *program,
         if (expression->value_category == MINIC_VALUE_LVALUE) {
             return true;
         }
-        if (expression->value_category != MINIC_VALUE_RVALUE ||
-            expression->kind != MINIC_EXPRESSION_STATEMENT) {
+        if (expression->value_category != MINIC_VALUE_RVALUE) {
             return false;
         }
-        result_id = expression->value.statement_expression.result;
+        if (expression->kind == MINIC_EXPRESSION_LVALUE_READ) {
+            result_id = expression->value.unary.operand;
+        } else if (expression->kind == MINIC_EXPRESSION_STATEMENT) {
+            result_id = expression->value.statement_expression.result;
+        } else {
+            return false;
+        }
         if (result_id == MINIC_EXPRESSION_INVALID || result_id >= expression_id) {
             return false;
         }
