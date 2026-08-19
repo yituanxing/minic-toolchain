@@ -518,3 +518,9 @@ sh "$root/tests/compiler/c0/run-builtin-va-copy.sh"
 
 MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
   sh "$root/tests/compiler/c0/run-static-storage-scalar-array-owner.sh"
+
+
+MINIC="$minic" \
+HOST_CC="$host_cc" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+sh "$root/tests/compiler/c0/run-static-record-array-member-designator.sh"
