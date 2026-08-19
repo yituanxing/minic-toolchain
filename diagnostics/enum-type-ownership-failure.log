@@ -1,2 +1,323 @@
 ENUM_TYPE_OWNERSHIP_MATERIALIZED
-enum ownership materialization incomplete; missing changed paths: tests/compiler/c0/enum_forward_completion.c, tests/compiler/c0/run-enum-forward-completion.sh
+ENUM_TYPE_OWNERSHIP_V2_MANIFEST_OK
+src/frontend/ast.c
+src/frontend/ast.h
+src/frontend/ast_verifier.c
+src/frontend/const_eval.c
+src/frontend/expression_semantics.c
+src/frontend/parser_expression.c
+src/frontend/parser_statement.c
+src/target/data_layout.c
+src/target/riscv64/codegen_expression.c
+src/target/riscv64/codegen_internal.h
+src/target/riscv64/codegen_statement.c
+src/target/riscv64/codegen_support.c
+src/target/riscv64/core_codegen.c
+src/target/target_info.c
+src/target/target_info.h
+tests/compiler/c0/enum_forward_completion.c
+tests/compiler/c0/run-enum-forward-completion.sh
+tests/compiler/c0/run.sh
+PASS format mode=check formatter=clang-format-18 files=68 scope=include,src,tools/minic
+cc  -Iinclude -Isrc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -O2 -DNDEBUG -Werror -MMD -MP -c "src/compiler/compiler.c" -o "build/product-enum-type/obj/src/compiler/compiler.o"
+cc  -Iinclude -Isrc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -O2 -DNDEBUG -Werror -MMD -MP -c "src/core/core_ir.c" -o "build/product-enum-type/obj/src/core/core_ir.o"
+cc  -Iinclude -Isrc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -O2 -DNDEBUG -Werror -MMD -MP -c "src/core/core_lower.c" -o "build/product-enum-type/obj/src/core/core_lower.o"
+cc  -Iinclude -Isrc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -O2 -DNDEBUG -Werror -MMD -MP -c "src/frontend/attribute.c" -o "build/product-enum-type/obj/src/frontend/attribute.o"
+cc  -Iinclude -Isrc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -O2 -DNDEBUG -Werror -MMD -MP -c "src/frontend/ast.c" -o "build/product-enum-type/obj/src/frontend/ast.o"
+cc  -Iinclude -Isrc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -O2 -DNDEBUG -Werror -MMD -MP -c "src/frontend/expression_semantics.c" -o "build/product-enum-type/obj/src/frontend/expression_semantics.o"
+cc  -Iinclude -Isrc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -O2 -DNDEBUG -Werror -MMD -MP -c "src/frontend/ast_traversal.c" -o "build/product-enum-type/obj/src/frontend/ast_traversal.o"
+cc  -Iinclude -Isrc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -O2 -DNDEBUG -Werror -MMD -MP -c "src/frontend/function_body.c" -o "build/product-enum-type/obj/src/frontend/function_body.o"
+cc  -Iinclude -Isrc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -O2 -DNDEBUG -Werror -MMD -MP -c "src/frontend/ast_verifier.c" -o "build/product-enum-type/obj/src/frontend/ast_verifier.o"
+cc  -Iinclude -Isrc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -O2 -DNDEBUG -Werror -MMD -MP -c "src/frontend/cast_normalization.c" -o "build/product-enum-type/obj/src/frontend/cast_normalization.o"
+cc  -Iinclude -Isrc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -O2 -DNDEBUG -Werror -MMD -MP -c "src/frontend/const_eval.c" -o "build/product-enum-type/obj/src/frontend/const_eval.o"
+cc  -Iinclude -Isrc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -O2 -DNDEBUG -Werror -MMD -MP -c "src/frontend/ast_function.c" -o "build/product-enum-type/obj/src/frontend/ast_function.o"
+cc  -Iinclude -Isrc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -O2 -DNDEBUG -Werror -MMD -MP -c "src/frontend/ast_global.c" -o "build/product-enum-type/obj/src/frontend/ast_global.o"
+cc  -Iinclude -Isrc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -O2 -DNDEBUG -Werror -MMD -MP -c "src/frontend/lexer.c" -o "build/product-enum-type/obj/src/frontend/lexer.o"
+cc  -Iinclude -Isrc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -O2 -DNDEBUG -Werror -MMD -MP -c "src/frontend/parser_constant.c" -o "build/product-enum-type/obj/src/frontend/parser_constant.o"
+cc  -Iinclude -Isrc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -O2 -DNDEBUG -Werror -MMD -MP -c "src/frontend/parser_attribute.c" -o "build/product-enum-type/obj/src/frontend/parser_attribute.o"
+cc  -Iinclude -Isrc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -O2 -DNDEBUG -Werror -MMD -MP -c "src/frontend/parser_declarator.c" -o "build/product-enum-type/obj/src/frontend/parser_declarator.o"
+cc  -Iinclude -Isrc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -O2 -DNDEBUG -Werror -MMD -MP -c "src/frontend/parser_enum.c" -o "build/product-enum-type/obj/src/frontend/parser_enum.o"
+cc  -Iinclude -Isrc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -O2 -DNDEBUG -Werror -MMD -MP -c "src/frontend/parser_core.c" -o "build/product-enum-type/obj/src/frontend/parser_core.o"
+cc  -Iinclude -Isrc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -O2 -DNDEBUG -Werror -MMD -MP -c "src/frontend/parser_expression.c" -o "build/product-enum-type/obj/src/frontend/parser_expression.o"
+cc  -Iinclude -Isrc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -O2 -DNDEBUG -Werror -MMD -MP -c "src/frontend/parser_function.c" -o "build/product-enum-type/obj/src/frontend/parser_function.o"
+cc  -Iinclude -Isrc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -O2 -DNDEBUG -Werror -MMD -MP -c "src/frontend/parser_global.c" -o "build/product-enum-type/obj/src/frontend/parser_global.o"
+cc  -Iinclude -Isrc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -O2 -DNDEBUG -Werror -MMD -MP -c "src/frontend/parser_member.c" -o "build/product-enum-type/obj/src/frontend/parser_member.o"
+cc  -Iinclude -Isrc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -O2 -DNDEBUG -Werror -MMD -MP -c "src/frontend/parser_postfix.c" -o "build/product-enum-type/obj/src/frontend/parser_postfix.o"
+cc  -Iinclude -Isrc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -O2 -DNDEBUG -Werror -MMD -MP -c "src/frontend/parser_record.c" -o "build/product-enum-type/obj/src/frontend/parser_record.o"
+cc  -Iinclude -Isrc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -O2 -DNDEBUG -Werror -MMD -MP -c "src/frontend/parser_static_assert.c" -o "build/product-enum-type/obj/src/frontend/parser_static_assert.o"
+cc  -Iinclude -Isrc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -O2 -DNDEBUG -Werror -MMD -MP -c "src/frontend/parser_statement.c" -o "build/product-enum-type/obj/src/frontend/parser_statement.o"
+cc  -Iinclude -Isrc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -O2 -DNDEBUG -Werror -MMD -MP -c "src/frontend/parser_string.c" -o "build/product-enum-type/obj/src/frontend/parser_string.o"
+cc  -Iinclude -Isrc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -O2 -DNDEBUG -Werror -MMD -MP -c "src/frontend/parser_type.c" -o "build/product-enum-type/obj/src/frontend/parser_type.o"
+cc  -Iinclude -Isrc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -O2 -DNDEBUG -Werror -MMD -MP -c "src/frontend/parser_type_query.c" -o "build/product-enum-type/obj/src/frontend/parser_type_query.o"
+cc  -Iinclude -Isrc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -O2 -DNDEBUG -Werror -MMD -MP -c "src/frontend/parser_typedef.c" -o "build/product-enum-type/obj/src/frontend/parser_typedef.o"
+cc  -Iinclude -Isrc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -O2 -DNDEBUG -Werror -MMD -MP -c "src/frontend/token.c" -o "build/product-enum-type/obj/src/frontend/token.o"
+cc  -Iinclude -Isrc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -O2 -DNDEBUG -Werror -MMD -MP -c "src/frontend/type.c" -o "build/product-enum-type/obj/src/frontend/type.o"
+cc  -Iinclude -Isrc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -O2 -DNDEBUG -Werror -MMD -MP -c "src/target/data_layout.c" -o "build/product-enum-type/obj/src/target/data_layout.o"
+cc  -Iinclude -Isrc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -O2 -DNDEBUG -Werror -MMD -MP -c "src/target/target_info.c" -o "build/product-enum-type/obj/src/target/target_info.o"
+cc  -Iinclude -Isrc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -O2 -DNDEBUG -Werror -MMD -MP -c "src/target/riscv64/abi.c" -o "build/product-enum-type/obj/src/target/riscv64/abi.o"
+cc  -Iinclude -Isrc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -O2 -DNDEBUG -Werror -MMD -MP -c "src/target/riscv64/layout.c" -o "build/product-enum-type/obj/src/target/riscv64/layout.o"
+cc  -Iinclude -Isrc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -O2 -DNDEBUG -Werror -MMD -MP -c "src/target/riscv64/codegen_support.c" -o "build/product-enum-type/obj/src/target/riscv64/codegen_support.o"
+cc  -Iinclude -Isrc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -O2 -DNDEBUG -Werror -MMD -MP -c "src/target/riscv64/core_codegen.c" -o "build/product-enum-type/obj/src/target/riscv64/core_codegen.o"
+cc  -Iinclude -Isrc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -O2 -DNDEBUG -Werror -MMD -MP -c "src/target/riscv64/codegen_expression.c" -o "build/product-enum-type/obj/src/target/riscv64/codegen_expression.o"
+src/target/riscv64/codegen_expression.c: In function ‘minic_riscv64_emit_double_binary’:
+src/target/riscv64/codegen_expression.c:188:60: error: ‘program’ undeclared (first use in this function)
+  188 |     } else if (!minic_riscv64_emit_integer_to_double(file, program, left_type, "t0", "ft0")) {
+      |                                                            ^~~~~~~
+src/target/riscv64/codegen_expression.c:188:60: note: each undeclared identifier is reported only once for each function it appears in
+src/target/riscv64/codegen_expression.c: In function ‘minic_riscv64_emit_double_comparison’:
+src/target/riscv64/codegen_expression.c:212:60: error: ‘program’ undeclared (first use in this function)
+  212 |     } else if (!minic_riscv64_emit_integer_to_double(file, program, left_type, "t0", "ft0")) {
+      |                                                            ^~~~~~~
+src/target/riscv64/codegen_expression.c: In function ‘minic_riscv64_emit_lvalue_load_from_address’:
+src/target/riscv64/codegen_expression.c:470:19: error: passing argument 2 of ‘minic_riscv64_emit_bit_field_load_from_address’ from incompatible pointer type [-Werror=incompatible-pointer-types]
+  470 |             file, field, bit_offset, result_register, address_register);
+      |                   ^~~~~
+      |                   |
+      |                   const MinicRecordField *
+src/target/riscv64/codegen_expression.c:309:82: note: expected ‘const MinicC0Program *’ but argument is of type ‘const MinicRecordField *’
+  309 |                                                            const MinicC0Program *program,
+      |                                                            ~~~~~~~~~~~~~~~~~~~~~~^~~~~~~
+src/target/riscv64/codegen_expression.c:470:26: error: passing argument 3 of ‘minic_riscv64_emit_bit_field_load_from_address’ makes pointer from integer without a cast [-Werror=int-conversion]
+  470 |             file, field, bit_offset, result_register, address_register);
+      |                          ^~~~~~~~~~
+      |                          |
+      |                          size_t {aka long unsigned int}
+src/target/riscv64/codegen_expression.c:310:84: note: expected ‘const MinicRecordField *’ but argument is of type ‘size_t’ {aka ‘long unsigned int’}
+  310 |                                                            const MinicRecordField *field,
+      |                                                            ~~~~~~~~~~~~~~~~~~~~~~~~^~~~~
+src/target/riscv64/codegen_expression.c:470:38: error: passing argument 4 of ‘minic_riscv64_emit_bit_field_load_from_address’ makes integer from pointer without a cast [-Werror=int-conversion]
+  470 |             file, field, bit_offset, result_register, address_register);
+      |                                      ^~~~~~~~~~~~~~~
+      |                                      |
+      |                                      const char *
+src/target/riscv64/codegen_expression.c:311:67: note: expected ‘size_t’ {aka ‘long unsigned int’} but argument is of type ‘const char *’
+  311 |                                                            size_t bit_offset,
+      |                                                            ~~~~~~~^~~~~~~~~~
+src/target/riscv64/codegen_expression.c:469:16: error: too few arguments to function ‘minic_riscv64_emit_bit_field_load_from_address’
+  469 |         return minic_riscv64_emit_bit_field_load_from_address(
+      |                ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/target/riscv64/codegen_expression.c:308:13: note: declared here
+  308 | static bool minic_riscv64_emit_bit_field_load_from_address(FILE *file,
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/target/riscv64/codegen_expression.c: In function ‘minic_riscv64_emit_expression_impl’:
+src/target/riscv64/codegen_expression.c:1882:34: error: incompatible type for argument 2 of ‘minic_riscv64_emit_integer_result_conversion’
+ 1882 |                            file, common_integer_type, expression->type, "a0");
+      |                                  ^~~~~~~~~~~~~~~~~~~
+      |                                  |
+      |                                  MinicType
+src/target/riscv64/codegen_expression.c:60:80: note: expected ‘const MinicC0Program *’ but argument is of type ‘MinicType’
+   60 |                                                          const MinicC0Program *program,
+      |                                                          ~~~~~~~~~~~~~~~~~~~~~~^~~~~~~
+src/target/riscv64/codegen_expression.c:1882:73: error: incompatible type for argument 4 of ‘minic_riscv64_emit_integer_result_conversion’
+ 1882 |                            file, common_integer_type, expression->type, "a0");
+      |                                                                         ^~~~
+      |                                                                         |
+      |                                                                         char *
+src/target/riscv64/codegen_expression.c:62:68: note: expected ‘MinicType’ but argument is of type ‘char *’
+   62 |                                                          MinicType result_type,
+      |                                                          ~~~~~~~~~~^~~~~~~~~~~
+src/target/riscv64/codegen_expression.c:1881:24: error: too few arguments to function ‘minic_riscv64_emit_integer_result_conversion’
+ 1881 |                        minic_riscv64_emit_integer_result_conversion(
+      |                        ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/target/riscv64/codegen_expression.c:59:13: note: declared here
+   59 | static bool minic_riscv64_emit_integer_result_conversion(FILE *file,
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/target/riscv64/codegen_expression.c:1902:34: error: incompatible type for argument 2 of ‘minic_riscv64_emit_integer_result_conversion’
+ 1902 |                            file, common_integer_type, expression->type, "a0");
+      |                                  ^~~~~~~~~~~~~~~~~~~
+      |                                  |
+      |                                  MinicType
+src/target/riscv64/codegen_expression.c:60:80: note: expected ‘const MinicC0Program *’ but argument is of type ‘MinicType’
+   60 |                                                          const MinicC0Program *program,
+      |                                                          ~~~~~~~~~~~~~~~~~~~~~~^~~~~~~
+src/target/riscv64/codegen_expression.c:1902:73: error: incompatible type for argument 4 of ‘minic_riscv64_emit_integer_result_conversion’
+ 1902 |                            file, common_integer_type, expression->type, "a0");
+      |                                                                         ^~~~
+      |                                                                         |
+      |                                                                         char *
+src/target/riscv64/codegen_expression.c:62:68: note: expected ‘MinicType’ but argument is of type ‘char *’
+   62 |                                                          MinicType result_type,
+      |                                                          ~~~~~~~~~~^~~~~~~~~~~
+src/target/riscv64/codegen_expression.c:1901:24: error: too few arguments to function ‘minic_riscv64_emit_integer_result_conversion’
+ 1901 |                        minic_riscv64_emit_integer_result_conversion(
+      |                        ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/target/riscv64/codegen_expression.c:59:13: note: declared here
+   59 | static bool minic_riscv64_emit_integer_result_conversion(FILE *file,
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/target/riscv64/codegen_expression.c:1929:30: error: incompatible type for argument 2 of ‘minic_riscv64_emit_integer_result_conversion’
+ 1929 |                        file, common_integer_type, expression->type, "a0");
+      |                              ^~~~~~~~~~~~~~~~~~~
+      |                              |
+      |                              MinicType
+src/target/riscv64/codegen_expression.c:60:80: note: expected ‘const MinicC0Program *’ but argument is of type ‘MinicType’
+   60 |                                                          const MinicC0Program *program,
+      |                                                          ~~~~~~~~~~~~~~~~~~~~~~^~~~~~~
+src/target/riscv64/codegen_expression.c:1929:69: error: incompatible type for argument 4 of ‘minic_riscv64_emit_integer_result_conversion’
+ 1929 |                        file, common_integer_type, expression->type, "a0");
+      |                                                                     ^~~~
+      |                                                                     |
+      |                                                                     char *
+src/target/riscv64/codegen_expression.c:62:68: note: expected ‘MinicType’ but argument is of type ‘char *’
+   62 |                                                          MinicType result_type,
+      |                                                          ~~~~~~~~~~^~~~~~~~~~~
+src/target/riscv64/codegen_expression.c:1928:20: error: too few arguments to function ‘minic_riscv64_emit_integer_result_conversion’
+ 1928 |                    minic_riscv64_emit_integer_result_conversion(
+      |                    ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/target/riscv64/codegen_expression.c:59:13: note: declared here
+   59 | static bool minic_riscv64_emit_integer_result_conversion(FILE *file,
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/target/riscv64/codegen_expression.c:1941:30: error: incompatible type for argument 2 of ‘minic_riscv64_emit_integer_result_conversion’
+ 1941 |                        file, common_integer_type, expression->type, "a0");
+      |                              ^~~~~~~~~~~~~~~~~~~
+      |                              |
+      |                              MinicType
+src/target/riscv64/codegen_expression.c:60:80: note: expected ‘const MinicC0Program *’ but argument is of type ‘MinicType’
+   60 |                                                          const MinicC0Program *program,
+      |                                                          ~~~~~~~~~~~~~~~~~~~~~~^~~~~~~
+src/target/riscv64/codegen_expression.c:1941:69: error: incompatible type for argument 4 of ‘minic_riscv64_emit_integer_result_conversion’
+ 1941 |                        file, common_integer_type, expression->type, "a0");
+      |                                                                     ^~~~
+      |                                                                     |
+      |                                                                     char *
+src/target/riscv64/codegen_expression.c:62:68: note: expected ‘MinicType’ but argument is of type ‘char *’
+   62 |                                                          MinicType result_type,
+      |                                                          ~~~~~~~~~~^~~~~~~~~~~
+src/target/riscv64/codegen_expression.c:1940:20: error: too few arguments to function ‘minic_riscv64_emit_integer_result_conversion’
+ 1940 |                    minic_riscv64_emit_integer_result_conversion(
+      |                    ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/target/riscv64/codegen_expression.c:59:13: note: declared here
+   59 | static bool minic_riscv64_emit_integer_result_conversion(FILE *file,
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/target/riscv64/codegen_expression.c:1953:30: error: incompatible type for argument 2 of ‘minic_riscv64_emit_integer_result_conversion’
+ 1953 |                        file, common_integer_type, expression->type, "a0");
+      |                              ^~~~~~~~~~~~~~~~~~~
+      |                              |
+      |                              MinicType
+src/target/riscv64/codegen_expression.c:60:80: note: expected ‘const MinicC0Program *’ but argument is of type ‘MinicType’
+   60 |                                                          const MinicC0Program *program,
+      |                                                          ~~~~~~~~~~~~~~~~~~~~~~^~~~~~~
+src/target/riscv64/codegen_expression.c:1953:69: error: incompatible type for argument 4 of ‘minic_riscv64_emit_integer_result_conversion’
+ 1953 |                        file, common_integer_type, expression->type, "a0");
+      |                                                                     ^~~~
+      |                                                                     |
+      |                                                                     char *
+src/target/riscv64/codegen_expression.c:62:68: note: expected ‘MinicType’ but argument is of type ‘char *’
+   62 |                                                          MinicType result_type,
+      |                                                          ~~~~~~~~~~^~~~~~~~~~~
+src/target/riscv64/codegen_expression.c:1952:20: error: too few arguments to function ‘minic_riscv64_emit_integer_result_conversion’
+ 1952 |                    minic_riscv64_emit_integer_result_conversion(
+      |                    ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/target/riscv64/codegen_expression.c:59:13: note: declared here
+   59 | static bool minic_riscv64_emit_integer_result_conversion(FILE *file,
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/target/riscv64/codegen_expression.c:1975:30: error: incompatible type for argument 2 of ‘minic_riscv64_emit_integer_result_conversion’
+ 1975 |                        file, common_integer_type, expression->type, "a0");
+      |                              ^~~~~~~~~~~~~~~~~~~
+      |                              |
+      |                              MinicType
+src/target/riscv64/codegen_expression.c:60:80: note: expected ‘const MinicC0Program *’ but argument is of type ‘MinicType’
+   60 |                                                          const MinicC0Program *program,
+      |                                                          ~~~~~~~~~~~~~~~~~~~~~~^~~~~~~
+src/target/riscv64/codegen_expression.c:1975:69: error: incompatible type for argument 4 of ‘minic_riscv64_emit_integer_result_conversion’
+ 1975 |                        file, common_integer_type, expression->type, "a0");
+      |                                                                     ^~~~
+      |                                                                     |
+      |                                                                     char *
+src/target/riscv64/codegen_expression.c:62:68: note: expected ‘MinicType’ but argument is of type ‘char *’
+   62 |                                                          MinicType result_type,
+      |                                                          ~~~~~~~~~~^~~~~~~~~~~
+src/target/riscv64/codegen_expression.c:1974:20: error: too few arguments to function ‘minic_riscv64_emit_integer_result_conversion’
+ 1974 |                    minic_riscv64_emit_integer_result_conversion(
+      |                    ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/target/riscv64/codegen_expression.c:59:13: note: declared here
+   59 | static bool minic_riscv64_emit_integer_result_conversion(FILE *file,
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/target/riscv64/codegen_expression.c:1979:30: error: incompatible type for argument 2 of ‘minic_riscv64_emit_integer_result_conversion’
+ 1979 |                        file, common_integer_type, expression->type, "a0");
+      |                              ^~~~~~~~~~~~~~~~~~~
+      |                              |
+      |                              MinicType
+src/target/riscv64/codegen_expression.c:60:80: note: expected ‘const MinicC0Program *’ but argument is of type ‘MinicType’
+   60 |                                                          const MinicC0Program *program,
+      |                                                          ~~~~~~~~~~~~~~~~~~~~~~^~~~~~~
+src/target/riscv64/codegen_expression.c:1979:69: error: incompatible type for argument 4 of ‘minic_riscv64_emit_integer_result_conversion’
+ 1979 |                        file, common_integer_type, expression->type, "a0");
+      |                                                                     ^~~~
+      |                                                                     |
+      |                                                                     char *
+src/target/riscv64/codegen_expression.c:62:68: note: expected ‘MinicType’ but argument is of type ‘char *’
+   62 |                                                          MinicType result_type,
+      |                                                          ~~~~~~~~~~^~~~~~~~~~~
+src/target/riscv64/codegen_expression.c:1978:20: error: too few arguments to function ‘minic_riscv64_emit_integer_result_conversion’
+ 1978 |                    minic_riscv64_emit_integer_result_conversion(
+      |                    ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/target/riscv64/codegen_expression.c:59:13: note: declared here
+   59 | static bool minic_riscv64_emit_integer_result_conversion(FILE *file,
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/target/riscv64/codegen_expression.c:1983:30: error: incompatible type for argument 2 of ‘minic_riscv64_emit_integer_result_conversion’
+ 1983 |                        file, common_integer_type, expression->type, "a0");
+      |                              ^~~~~~~~~~~~~~~~~~~
+      |                              |
+      |                              MinicType
+src/target/riscv64/codegen_expression.c:60:80: note: expected ‘const MinicC0Program *’ but argument is of type ‘MinicType’
+   60 |                                                          const MinicC0Program *program,
+      |                                                          ~~~~~~~~~~~~~~~~~~~~~~^~~~~~~
+src/target/riscv64/codegen_expression.c:1983:69: error: incompatible type for argument 4 of ‘minic_riscv64_emit_integer_result_conversion’
+ 1983 |                        file, common_integer_type, expression->type, "a0");
+      |                                                                     ^~~~
+      |                                                                     |
+      |                                                                     char *
+src/target/riscv64/codegen_expression.c:62:68: note: expected ‘MinicType’ but argument is of type ‘char *’
+   62 |                                                          MinicType result_type,
+      |                                                          ~~~~~~~~~~^~~~~~~~~~~
+src/target/riscv64/codegen_expression.c:1982:20: error: too few arguments to function ‘minic_riscv64_emit_integer_result_conversion’
+ 1982 |                    minic_riscv64_emit_integer_result_conversion(
+      |                    ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/target/riscv64/codegen_expression.c:59:13: note: declared here
+   59 | static bool minic_riscv64_emit_integer_result_conversion(FILE *file,
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/target/riscv64/codegen_expression.c:2055:36: error: incompatible type for argument 2 of ‘minic_riscv64_emit_conditional_result_conversion’
+ 2055 |                     file, condition->type, expression->type)) {
+      |                           ~~~~~~~~~^~~~~~
+      |                                    |
+      |                                    MinicType
+src/target/riscv64/codegen_expression.c:242:84: note: expected ‘const MinicC0Program *’ but argument is of type ‘MinicType’
+  242 |                                                              const MinicC0Program *program,
+      |                                                              ~~~~~~~~~~~~~~~~~~~~~~^~~~~~~
+src/target/riscv64/codegen_expression.c:2054:18: error: too few arguments to function ‘minic_riscv64_emit_conditional_result_conversion’
+ 2054 |             if (!minic_riscv64_emit_conditional_result_conversion(
+      |                  ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/target/riscv64/codegen_expression.c:241:13: note: declared here
+  241 | static bool minic_riscv64_emit_conditional_result_conversion(FILE *file,
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/target/riscv64/codegen_expression.c:2064:39: error: incompatible type for argument 2 of ‘minic_riscv64_emit_conditional_result_conversion’
+ 2064 |                        file, when_true->type, expression->type)) {
+      |                              ~~~~~~~~~^~~~~~
+      |                                       |
+      |                                       MinicType
+src/target/riscv64/codegen_expression.c:242:84: note: expected ‘const MinicC0Program *’ but argument is of type ‘MinicType’
+  242 |                                                              const MinicC0Program *program,
+      |                                                              ~~~~~~~~~~~~~~~~~~~~~~^~~~~~~
+src/target/riscv64/codegen_expression.c:2063:21: error: too few arguments to function ‘minic_riscv64_emit_conditional_result_conversion’
+ 2063 |                    !minic_riscv64_emit_conditional_result_conversion(
+      |                     ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/target/riscv64/codegen_expression.c:241:13: note: declared here
+  241 | static bool minic_riscv64_emit_conditional_result_conversion(FILE *file,
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/target/riscv64/codegen_expression.c:2078:33: error: incompatible type for argument 2 of ‘minic_riscv64_emit_conditional_result_conversion’
+ 2078 |                 file, when_false->type, expression->type)) {
+      |                       ~~~~~~~~~~^~~~~~
+      |                                 |
+      |                                 MinicType
+src/target/riscv64/codegen_expression.c:242:84: note: expected ‘const MinicC0Program *’ but argument is of type ‘MinicType’
+  242 |                                                              const MinicC0Program *program,
+      |                                                              ~~~~~~~~~~~~~~~~~~~~~~^~~~~~~
+src/target/riscv64/codegen_expression.c:2077:14: error: too few arguments to function ‘minic_riscv64_emit_conditional_result_conversion’
+ 2077 |             !minic_riscv64_emit_conditional_result_conversion(
+      |              ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/target/riscv64/codegen_expression.c:241:13: note: declared here
+  241 | static bool minic_riscv64_emit_conditional_result_conversion(FILE *file,
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+cc1: all warnings being treated as errors
+make: *** [Makefile:220: build/product-enum-type/obj/src/target/riscv64/codegen_expression.o] Error 1
+make: *** Waiting for unfinished jobs....

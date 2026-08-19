@@ -1,5 +1,5 @@
 diff --git a/src/frontend/ast.c b/src/frontend/ast.c
-index 8fd11b31..157bea4b 100644
+index 8fd11b31..453a3a84 100644
 --- a/src/frontend/ast.c
 +++ b/src/frontend/ast.c
 @@ -139,77 +139,6 @@ void minic_c0_program_destroy(MinicC0Program *program) {
@@ -88,7 +88,7 @@ index 8fd11b31..157bea4b 100644
      return true;
  }
  
-@@ -291,7 +219,35 @@ bool minic_c0_program_add_enumerator(MinicC0Program *program,
+@@ -291,7 +219,34 @@ bool minic_c0_program_add_enumerator(MinicC0Program *program,
  }
  
  const MinicEnum *minic_c0_program_enum(const MinicC0Program *program, MinicEnumId enum_id) {
@@ -98,7 +98,6 @@ index 8fd11b31..157bea4b 100644
 +    }
 +    return &program->enums[enum_id];
 +}
-+
 +
 +bool minic_c0_type_effective_integer_type(const MinicC0Program *program,
 +                                          MinicType type,
@@ -177,7 +176,7 @@ index e3b0645a..117ca579 100644
          }
          return minic_type_equal(expression->type, expected_type);
 diff --git a/src/frontend/const_eval.c b/src/frontend/const_eval.c
-index d3d3958b..62e9b5f3 100644
+index d3d3958b..b368399a 100644
 --- a/src/frontend/const_eval.c
 +++ b/src/frontend/const_eval.c
 @@ -12,6 +12,13 @@ static bool integer_width(const MinicC0Program *program,
@@ -188,7 +187,7 @@ index d3d3958b..62e9b5f3 100644
 +    MinicType effective_type;
 +
 +    return minic_c0_type_effective_integer_type(program, type, &effective_type) &&
-+           integer_type_is_signed(program, effective_type);
++           minic_type_is_signed_integer(effective_type);
 +}
 +
  static uint64_t width_mask(unsigned int width) {
@@ -248,12 +247,13 @@ index d3d3958b..62e9b5f3 100644
          !integer_width(program, target, type, &width)) {
          return false;
      }
-@@ -349,12 +356,12 @@ static bool eval_binary(const MinicC0Program *program,
+@@ -349,12 +356,13 @@ static bool eval_binary(const MinicC0Program *program,
          expression->value.binary.operator_kind == MINIC_BINARY_GREATER_EQUAL) {
          bool comparison;
  
 -        if (!minic_target_info_integer_common(target, left.type, right.type, &operation_type) ||
-+        if (!minic_target_info_integer_common_for_program(target, program, left.type, right.type, &operation_type) ||
++        if (!minic_target_info_integer_common_for_program(
++                target, program, left.type, right.type, &operation_type) ||
              !convert_value(program, target, &left, operation_type, &converted_left) ||
              !convert_value(program, target, &right, operation_type, &converted_right)) {
              return false;
@@ -263,16 +263,17 @@ index d3d3958b..62e9b5f3 100644
              int64_t signed_left;
              int64_t signed_right;
  
-@@ -418,7 +425,7 @@ static bool eval_binary(const MinicC0Program *program,
+@@ -418,7 +426,8 @@ static bool eval_binary(const MinicC0Program *program,
      operation_type = expression->type;
      if (expression->value.binary.operator_kind == MINIC_BINARY_SHIFT_LEFT ||
          expression->value.binary.operator_kind == MINIC_BINARY_SHIFT_RIGHT) {
 -        if (!minic_target_info_integer_common(target, left.type, left.type, &operation_type)) {
-+        if (!minic_target_info_integer_common_for_program(target, program, left.type, left.type, &operation_type)) {
++        if (!minic_target_info_integer_common_for_program(
++                target, program, left.type, left.type, &operation_type)) {
              return false;
          }
      }
-@@ -433,7 +440,7 @@ static bool eval_binary(const MinicC0Program *program,
+@@ -433,7 +442,7 @@ static bool eval_binary(const MinicC0Program *program,
          int64_t signed_count;
          uint64_t count;
  
@@ -281,7 +282,7 @@ index d3d3958b..62e9b5f3 100644
              if (!value_signed(program, target, &right, &signed_count) || signed_count < 0) {
                  return false;
              }
-@@ -447,7 +454,7 @@ static bool eval_binary(const MinicC0Program *program,
+@@ -447,7 +456,7 @@ static bool eval_binary(const MinicC0Program *program,
          left_bits = converted_left.bits;
          value->type = operation_type;
          if (expression->value.binary.operator_kind == MINIC_BINARY_SHIFT_LEFT) {
@@ -290,7 +291,7 @@ index d3d3958b..62e9b5f3 100644
                  int64_t signed_left;
  
                  /* GNU C folds nonnegative signed left shifts in integer constant
-@@ -464,7 +471,7 @@ static bool eval_binary(const MinicC0Program *program,
+@@ -464,7 +473,7 @@ static bool eval_binary(const MinicC0Program *program,
              return normalize_bits(
                  program, target, operation_type, left_bits << count, &value->bits);
          }
@@ -299,7 +300,7 @@ index d3d3958b..62e9b5f3 100644
              (left_bits & (UINT64_C(1) << (width - 1U))) != 0U) {
              uint64_t fill =
                  width_mask(width) ^ ((UINT64_C(1) << (width - (unsigned int)count)) - UINT64_C(1));
-@@ -731,7 +738,7 @@ bool minic_const_value_as_int64(const MinicC0Program *program,
+@@ -731,7 +740,7 @@ bool minic_const_value_as_int64(const MinicC0Program *program,
      if (value == NULL || result == NULL) {
          return false;
      }
@@ -309,7 +310,7 @@ index d3d3958b..62e9b5f3 100644
      }
      if (!normalize_bits(program, target, value->type, value->bits, &bits) ||
 diff --git a/src/frontend/expression_semantics.c b/src/frontend/expression_semantics.c
-index 463117a0..d5d488e4 100644
+index 463117a0..71b47edd 100644
 --- a/src/frontend/expression_semantics.c
 +++ b/src/frontend/expression_semantics.c
 @@ -1,5 +1,12 @@
@@ -356,16 +357,15 @@ index 463117a0..d5d488e4 100644
      if (source_signed) {
          return destination_signed && destination_bits >= source_bits;
      }
-@@ -110,5 +119,6 @@ bool minic_c0_conditional_result_type(const MinicC0Program *program,
+@@ -110,5 +119,5 @@ bool minic_c0_conditional_result_type(const MinicC0Program *program,
           * dropping lvalue-only top-level qualification from either source arm. */
          return minic_type_unqualified(when_true->type, result) && minic_type_is_record(*result);
      }
 -    return conditional_type_only(target, when_true->type, when_false->type, result);
-+    return conditional_type_only(
-+        program, target, when_true->type, when_false->type, result);
++    return conditional_type_only(program, target, when_true->type, when_false->type, result);
  }
 diff --git a/src/frontend/parser_expression.c b/src/frontend/parser_expression.c
-index 5b22cb8b..6d963676 100644
+index 5b22cb8b..38ced404 100644
 --- a/src/frontend/parser_expression.c
 +++ b/src/frontend/parser_expression.c
 @@ -1050,8 +1050,8 @@ static bool parse_offsetof_array_segment(MinicParser *parser,
@@ -375,119 +375,149 @@ index 5b22cb8b..6d963676 100644
 -        !minic_target_info_integer_common(
 -            parser->target_info, index_type, stride.type, &scaled_type)) {
 +        !minic_target_info_integer_common_for_program(
-+                    parser->target_info, parser->program, index_type, stride.type, &scaled_type)) {
++            parser->target_info, parser->program, index_type, stride.type, &scaled_type)) {
          minic_parser_error(parser, "cannot type __builtin_offsetof array index scale");
          return false;
      }
-@@ -2485,7 +2485,8 @@ static bool parse_unary(MinicParser *parser, MinicExpressionId *expression_id, b
+@@ -2485,28 +2485,31 @@ static bool parse_unary(MinicParser *parser, MinicExpressionId *expression_id, b
      }
      if (operator_token.kind == MINIC_TOKEN_TILDE) {
          expression.value.unary.operator_kind = MINIC_UNARY_BITWISE_NOT;
 -        if (!minic_target_info_integer_common(parser->target_info,
-+        if (!minic_target_info_integer_common_for_program(
-+                    parser->target_info, parser->program,
-                                               operand_expression->type,
-                                               operand_expression->type,
-                                               &expression.type)) {
-@@ -2495,7 +2496,8 @@ static bool parse_unary(MinicParser *parser, MinicExpressionId *expression_id, b
+-                                              operand_expression->type,
+-                                              operand_expression->type,
+-                                              &expression.type)) {
++        if (!minic_target_info_integer_common_for_program(parser->target_info,
++                                                          parser->program,
++                                                          operand_expression->type,
++                                                          operand_expression->type,
++                                                          &expression.type)) {
+             return false;
+         }
+         return minic_parser_add_expression(parser, &expression, expression_id);
      }
      if (operator_token.kind == MINIC_TOKEN_PLUS) {
          expression.value.unary.operator_kind = MINIC_UNARY_PLUS;
 -        if (!minic_target_info_integer_common(parser->target_info,
-+        if (!minic_target_info_integer_common_for_program(
-+                    parser->target_info, parser->program,
-                                               operand_expression->type,
-                                               operand_expression->type,
-                                               &expression.type)) {
-@@ -2503,7 +2505,8 @@ static bool parse_unary(MinicParser *parser, MinicExpressionId *expression_id, b
+-                                              operand_expression->type,
+-                                              operand_expression->type,
+-                                              &expression.type)) {
++        if (!minic_target_info_integer_common_for_program(parser->target_info,
++                                                          parser->program,
++                                                          operand_expression->type,
++                                                          operand_expression->type,
++                                                          &expression.type)) {
+             return false;
          }
      } else {
          expression.value.unary.operator_kind = MINIC_UNARY_NEGATE;
 -        if (!minic_target_info_integer_common(parser->target_info,
-+        if (!minic_target_info_integer_common_for_program(
-+                    parser->target_info, parser->program,
-                                               operand_expression->type,
-                                               operand_expression->type,
-                                               &expression.type)) {
-@@ -2712,9 +2715,9 @@ static bool binary_result_type(const MinicTargetInfo *target,
+-                                              operand_expression->type,
+-                                              operand_expression->type,
+-                                              &expression.type)) {
++        if (!minic_target_info_integer_common_for_program(parser->target_info,
++                                                          parser->program,
++                                                          operand_expression->type,
++                                                          operand_expression->type,
++                                                          &expression.type)) {
+             return false;
+         }
+     }
+@@ -2712,9 +2715,10 @@ static bool binary_result_type(const MinicTargetInfo *target,
              return true;
          }
          if (binary_is_shift(kind)) {
 -            return minic_target_info_integer_common(target, left, left, result);
-+            return minic_target_info_integer_common_for_program(target, program, left, left, result);
++            return minic_target_info_integer_common_for_program(
++                target, program, left, left, result);
          }
 -        return minic_target_info_integer_common(target, left, right, result);
 +        return minic_target_info_integer_common_for_program(target, program, left, right, result);
      }
      has_double_operand = minic_type_is_double(left) || minic_type_is_double(right);
      has_numeric_operands = (minic_type_is_double(left) || minic_type_is_integer(left)) &&
-@@ -3004,8 +3007,8 @@ static bool parse_expression_internal(MinicParser *parser,
+@@ -3004,8 +3008,11 @@ static bool parse_expression_internal(MinicParser *parser,
  
              if (!minic_type_is_integer(target_type) ||
                  !minic_type_is_integer(value_expression->type) ||
 -                !minic_target_info_integer_common(
 -                    parser->target_info, target_type, value_expression->type, &common_type)) {
-+                !minic_target_info_integer_common_for_program(
-+                    parser->target_info, parser->program, target_type, value_expression->type, &common_type)) {
++                !minic_target_info_integer_common_for_program(parser->target_info,
++                                                              parser->program,
++                                                              target_type,
++                                                              value_expression->type,
++                                                              &common_type)) {
                  minic_parser_error(parser,
                                     "compound assignment expression requires integer operands");
                  return false;
 diff --git a/src/frontend/parser_statement.c b/src/frontend/parser_statement.c
-index 21e89836..b1c36486 100644
+index 21e89836..72bf37da 100644
 --- a/src/frontend/parser_statement.c
 +++ b/src/frontend/parser_statement.c
-@@ -2608,8 +2608,8 @@ static bool parse_expression_or_assignment_statement(MinicParser *parser,
+@@ -2608,8 +2608,11 @@ static bool parse_expression_or_assignment_statement(MinicParser *parser,
          right_expression = minic_c0_program_expression(parser->program, right_id);
          if (right_expression == NULL || !minic_type_is_integer(first_type) ||
              !minic_type_is_integer(right_expression->type) ||
 -            !minic_target_info_integer_common(
 -                parser->target_info, first_type, right_expression->type, &common_type)) {
-+            !minic_target_info_integer_common_for_program(
-+                       parser->target_info, parser->program, first_type, right_expression->type, &common_type)) {
++            !minic_target_info_integer_common_for_program(parser->target_info,
++                                                          parser->program,
++                                                          first_type,
++                                                          right_expression->type,
++                                                          &common_type)) {
              minic_parser_error(parser, "compound bitwise assignment requires integer operands");
              return false;
          }
-@@ -2664,8 +2664,8 @@ static bool parse_expression_or_assignment_statement(MinicParser *parser,
+@@ -2664,8 +2667,11 @@ static bool parse_expression_or_assignment_statement(MinicParser *parser,
              }
              common_type = first_type;
          } else if (!minic_type_is_integer(first_type) ||
 -                   !minic_target_info_integer_common(
 -                       parser->target_info, first_type, right_expression->type, &common_type)) {
-+                   !minic_target_info_integer_common_for_program(
-+                       parser->target_info, parser->program, first_type, right_expression->type, &common_type)) {
++                   !minic_target_info_integer_common_for_program(parser->target_info,
++                                                                 parser->program,
++                                                                 first_type,
++                                                                 right_expression->type,
++                                                                 &common_type)) {
              minic_parser_error(
                  parser,
                  "compound addition assignment requires pointer/integer or integer operands");
-@@ -2710,8 +2710,8 @@ static bool parse_expression_or_assignment_statement(MinicParser *parser,
+@@ -2710,8 +2716,11 @@ static bool parse_expression_or_assignment_statement(MinicParser *parser,
              }
              common_type = first_type;
          } else if (!minic_type_is_integer(first_type) ||
 -                   !minic_target_info_integer_common(
 -                       parser->target_info, first_type, right_expression->type, &common_type)) {
-+                   !minic_target_info_integer_common_for_program(
-+                       parser->target_info, parser->program, first_type, right_expression->type, &common_type)) {
++                   !minic_target_info_integer_common_for_program(parser->target_info,
++                                                                 parser->program,
++                                                                 first_type,
++                                                                 right_expression->type,
++                                                                 &common_type)) {
              minic_parser_error(parser,
                                 assignment_token == MINIC_TOKEN_STAR_EQUAL
                                     ? "compound multiplication assignment requires integer operands"
-@@ -2753,8 +2753,8 @@ static bool parse_expression_or_assignment_statement(MinicParser *parser,
+@@ -2753,8 +2762,8 @@ static bool parse_expression_or_assignment_statement(MinicParser *parser,
          shift.value.binary.operator_kind = MINIC_BINARY_SHIFT_RIGHT;
          shift.value.binary.left = statement.target_expression;
          shift.value.binary.right = right_id;
 -        if (!minic_target_info_integer_common(
 -                parser->target_info, first_type, first_type, &shift.type) ||
 +        if (!minic_target_info_integer_common_for_program(
-+                       parser->target_info, parser->program, first_type, first_type, &shift.type) ||
++                parser->target_info, parser->program, first_type, first_type, &shift.type) ||
              !minic_parser_add_expression(parser, &shift, &statement.expression)) {
              return false;
          }
-@@ -2772,8 +2772,8 @@ static bool parse_expression_or_assignment_statement(MinicParser *parser,
+@@ -2772,8 +2781,11 @@ static bool parse_expression_or_assignment_statement(MinicParser *parser,
  
              if (assigned_expression == NULL || !minic_type_is_integer(first_type) ||
                  !minic_type_is_integer(assigned_expression->type) ||
 -                !minic_target_info_integer_common(
 -                    parser->target_info, first_type, assigned_expression->type, &common_type)) {
-+                !minic_target_info_integer_common_for_program(
-+                       parser->target_info, parser->program, first_type, assigned_expression->type, &common_type)) {
++                !minic_target_info_integer_common_for_program(parser->target_info,
++                                                              parser->program,
++                                                              first_type,
++                                                              assigned_expression->type,
++                                                              &common_type)) {
                  minic_parser_error(parser, "compound XOR assignment requires integer operands");
                  return false;
              }
@@ -512,35 +542,40 @@ index 8a107c19..d5c5f5cc 100644
      if (minic_type_is_integer(type)) {
          size_t rank = (size_t)type.integer_rank;
 diff --git a/src/target/riscv64/codegen_expression.c b/src/target/riscv64/codegen_expression.c
-index 5eed884f..c42f260c 100644
+index 5eed884f..1143b960 100644
 --- a/src/target/riscv64/codegen_expression.c
 +++ b/src/target/riscv64/codegen_expression.c
-@@ -32,17 +32,21 @@ static bool minic_riscv64_pointer_element_size(const MinicC0Program *program,
+@@ -31,18 +31,25 @@ static bool minic_riscv64_pointer_element_size(const MinicC0Program *program,
+     return minic_riscv64_type_layout(program, pointee, element_size, &element_alignment);
  }
  
- static bool
+-static bool
 -minic_riscv64_emit_normalize_integer(FILE *file, MinicType type, const char *register_name) {
 -    return minic_riscv64_emit_integer_conversion(file, type, register_name);
-+minic_riscv64_emit_normalize_integer(FILE *file, const MinicC0Program *program, MinicType type, const char *register_name) {
++static bool minic_riscv64_emit_normalize_integer(FILE *file,
++                                                 const MinicC0Program *program,
++                                                 MinicType type,
++                                                 const char *register_name) {
 +    return minic_riscv64_emit_integer_conversion_for_program(file, program, type, register_name);
  }
  
 -static bool minic_riscv64_emit_variadic_argument_conversion(FILE *file, MinicType type) {
-+static bool minic_riscv64_emit_variadic_argument_conversion(FILE *file, const MinicC0Program *program, MinicType type) {
++static bool minic_riscv64_emit_variadic_argument_conversion(FILE *file,
++                                                            const MinicC0Program *program,
++                                                            MinicType type) {
      if (minic_type_is_pointer(type) || minic_type_is_double(type)) {
          return true;
      }
      if (!minic_type_is_integer(type)) {
          return false;
      }
-+    if (minic_type_is_enum(type) &&
-+        !minic_c0_type_effective_integer_type(program, type, &type)) {
++    if (minic_type_is_enum(type) && !minic_c0_type_effective_integer_type(program, type, &type)) {
 +        return false;
 +    }
      if (minic_type_is_long_integer(type)) {
          return true;
      }
-@@ -50,20 +54,25 @@ static bool minic_riscv64_emit_variadic_argument_conversion(FILE *file, MinicTyp
+@@ -50,20 +57,27 @@ static bool minic_riscv64_emit_variadic_argument_conversion(FILE *file, MinicTyp
  }
  
  static bool minic_riscv64_emit_integer_result_conversion(FILE *file,
@@ -549,27 +584,29 @@ index 5eed884f..c42f260c 100644
                                                           MinicType result_type,
                                                           const char *register_name) {
 -    if (!minic_riscv64_emit_integer_conversion(file, operation_type, register_name)) {
-+    if (!minic_riscv64_emit_integer_conversion_for_program(file, program, operation_type, register_name)) {
++    if (!minic_riscv64_emit_integer_conversion_for_program(
++            file, program, operation_type, register_name)) {
          return false;
      }
      return minic_type_equal(operation_type, result_type) ||
 -           minic_riscv64_emit_integer_conversion(file, result_type, register_name);
-+           minic_riscv64_emit_integer_conversion_for_program(file, program, result_type, register_name);
++           minic_riscv64_emit_integer_conversion_for_program(
++               file, program, result_type, register_name);
  }
  
 -static const char *minic_riscv64_integer_to_double_instruction(MinicType type) {
-+static const char *minic_riscv64_integer_to_double_instruction(const MinicC0Program *program, MinicType type) {
++static const char *minic_riscv64_integer_to_double_instruction(const MinicC0Program *program,
++                                                               MinicType type) {
      if (!minic_type_is_integer(type)) {
          return NULL;
      }
-+    if (minic_type_is_enum(type) &&
-+        !minic_c0_type_effective_integer_type(program, type, &type)) {
++    if (minic_type_is_enum(type) && !minic_c0_type_effective_integer_type(program, type, &type)) {
 +        return NULL;
 +    }
      if (minic_type_is_long_integer(type)) {
          return minic_type_is_unsigned_integer(type) ? "fcvt.d.lu" : "fcvt.d.l";
      }
-@@ -71,12 +80,13 @@ static const char *minic_riscv64_integer_to_double_instruction(MinicType type) {
+@@ -71,12 +85,13 @@ static const char *minic_riscv64_integer_to_double_instruction(MinicType type) {
  }
  
  static bool minic_riscv64_emit_integer_to_double(FILE *file,
@@ -584,7 +621,7 @@ index 5eed884f..c42f260c 100644
      if (instruction == NULL) {
          return false;
      }
-@@ -170,14 +180,14 @@ static bool minic_riscv64_emit_double_binary(FILE *file,
+@@ -170,14 +185,14 @@ static bool minic_riscv64_emit_double_binary(FILE *file,
          if (fprintf(file, "  fmv.d.x ft0, t0\n") < 0) {
              return false;
          }
@@ -601,7 +638,7 @@ index 5eed884f..c42f260c 100644
          return false;
      }
      return fprintf(file,
-@@ -194,14 +204,14 @@ static bool minic_riscv64_emit_double_comparison(FILE *file,
+@@ -194,14 +209,14 @@ static bool minic_riscv64_emit_double_comparison(FILE *file,
          if (fprintf(file, "  fmv.d.x ft0, t0\n") < 0) {
              return false;
          }
@@ -618,7 +655,7 @@ index 5eed884f..c42f260c 100644
          return false;
      }
  
-@@ -224,6 +234,7 @@ static bool minic_riscv64_emit_double_comparison(FILE *file,
+@@ -224,6 +239,7 @@ static bool minic_riscv64_emit_double_comparison(FILE *file,
  }
  
  static bool minic_riscv64_emit_conditional_result_conversion(FILE *file,
@@ -626,7 +663,7 @@ index 5eed884f..c42f260c 100644
                                                               MinicType source_type,
                                                               MinicType result_type) {
      MinicType unqualified_source;
-@@ -241,10 +252,10 @@ static bool minic_riscv64_emit_conditional_result_conversion(FILE *file,
+@@ -241,10 +257,10 @@ static bool minic_riscv64_emit_conditional_result_conversion(FILE *file,
          return true;
      }
      if (minic_type_is_integer(source_type) && minic_type_is_integer(result_type)) {
@@ -639,56 +676,62 @@ index 5eed884f..c42f260c 100644
                 fprintf(file, "  fmv.x.d a0, ft0\n") >= 0;
      }
      return false;
-@@ -283,6 +294,7 @@ static bool minic_riscv64_emit_scale_register(FILE *file,
+@@ -282,7 +298,15 @@ static bool minic_riscv64_emit_scale_register(FILE *file,
+                    scratch_register) >= 0;
  }
  
++static bool minic_riscv64_integer_type_is_signed(const MinicC0Program *program, MinicType type) {
++    MinicType effective_type;
++
++    return minic_c0_type_effective_integer_type(program, type, &effective_type) &&
++           minic_type_is_signed_integer(effective_type);
++}
++
  static bool minic_riscv64_emit_bit_field_load_from_address(FILE *file,
 +                                                           const MinicC0Program *program,
                                                             const MinicRecordField *field,
                                                             size_t bit_offset,
                                                             const char *result_register,
-@@ -325,7 +337,12 @@ static bool minic_riscv64_emit_bit_field_load_from_address(FILE *file,
+@@ -325,7 +349,7 @@ static bool minic_riscv64_emit_bit_field_load_from_address(FILE *file,
          return false;
      }
      return fprintf(file,
 -                   minic_type_is_signed_integer(field->type) &&
-+                   ({
-+                           MinicType effective_field_type;
-+                           minic_c0_type_effective_integer_type(
-+                               program, field->type, &effective_field_type) &&
-+                               minic_type_is_signed_integer(effective_field_type);
-+                       }) &&
++                   minic_riscv64_integer_type_is_signed(program, field->type) &&
                             !minic_type_is_bool_integer(field->type)
                         ? "  srai %s, %s, %u\n"
                         : "  srli %s, %s, %u\n",
-@@ -445,7 +462,7 @@ static bool minic_riscv64_emit_lvalue_load_from_address(FILE *file,
+@@ -445,7 +469,8 @@ static bool minic_riscv64_emit_lvalue_load_from_address(FILE *file,
          return minic_riscv64_emit_bit_field_load_from_address(
              file, field, bit_offset, result_register, address_register);
      }
 -    return minic_riscv64_emit_scalar_load(file, type, result_register, address_register);
-+    return minic_riscv64_emit_scalar_load_for_program(file, program, type, result_register, address_register);
++    return minic_riscv64_emit_scalar_load_for_program(
++        file, program, type, result_register, address_register);
  }
  
  static bool minic_riscv64_emit_lvalue_store_to_address(FILE *file,
-@@ -479,7 +496,7 @@ static bool minic_riscv64_emit_lvalue_store_to_address(FILE *file,
+@@ -479,7 +504,8 @@ static bool minic_riscv64_emit_lvalue_store_to_address(FILE *file,
          return minic_riscv64_emit_bit_field_store_to_address(
              file, field, bit_offset, value_register, address_register);
      }
 -    return minic_riscv64_emit_scalar_store(file, type, value_register, address_register);
-+    return minic_riscv64_emit_scalar_store_for_program(file, program, type, value_register, address_register);
++    return minic_riscv64_emit_scalar_store_for_program(
++        file, program, type, value_register, address_register);
  }
  
  static bool minic_riscv64_emit_update(FILE *file,
-@@ -537,7 +554,7 @@ static bool minic_riscv64_emit_update(FILE *file,
+@@ -537,7 +563,8 @@ static bool minic_riscv64_emit_update(FILE *file,
              return false;
          }
      } else if (fprintf(file, increment ? "  addi t0, t0, 1\n" : "  addi t0, t0, -1\n") < 0 ||
 -               !minic_riscv64_emit_integer_conversion(file, operand->type, "t0")) {
-+               !minic_riscv64_emit_integer_conversion_for_program(file, program, operand->type, "t0")) {
++               !minic_riscv64_emit_integer_conversion_for_program(
++                   file, program, operand->type, "t0")) {
          return false;
      }
      if (fprintf(file, "  ld t1, 0(sp)\n") < 0 ||
-@@ -1232,15 +1249,21 @@ static bool minic_riscv64_emit_overflow_builtin(FILE *file,
+@@ -1232,15 +1259,21 @@ static bool minic_riscv64_emit_overflow_builtin(FILE *file,
          return false;
      }
      (void)result_alignment;
@@ -713,7 +756,7 @@ index 5eed884f..c42f260c 100644
          !minic_riscv64_emit_stack_allocate(file, 16U) || fprintf(file, "  sd a0, 0(sp)\n") < 0 ||
          !minic_riscv64_emit_expression(
              file, program, function, function_layout, expression->value.overflow.result_pointer) ||
-@@ -1259,7 +1282,7 @@ static bool minic_riscv64_emit_overflow_builtin(FILE *file,
+@@ -1259,7 +1292,7 @@ static bool minic_riscv64_emit_overflow_builtin(FILE *file,
                        : expression->value.overflow.operator_kind == MINIC_OVERFLOW_SUBTRACT ? "sub"
                                                                                              : "mul";
          if (fprintf(file, "  %s t2, t0, t1\n  mv t4, t2\n", instruction) < 0 ||
@@ -722,7 +765,7 @@ index 5eed884f..c42f260c 100644
              fprintf(file, "  xor t4, t4, t2\n  snez a0, t4\n") < 0) {
              return false;
          }
-@@ -1318,7 +1341,7 @@ static bool minic_riscv64_emit_overflow_builtin(FILE *file,
+@@ -1318,7 +1351,7 @@ static bool minic_riscv64_emit_overflow_builtin(FILE *file,
              break;
          }
      }
@@ -731,16 +774,17 @@ index 5eed884f..c42f260c 100644
  }
  
  static bool minic_riscv64_emit_expression_impl(FILE *file,
-@@ -1337,7 +1360,7 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
+@@ -1337,7 +1370,8 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
      switch (expression->kind) {
      case MINIC_EXPRESSION_INTEGER:
          return fprintf(file, "  li a0, %" PRId64 "\n", expression->value.integer_value) >= 0 &&
 -               minic_riscv64_emit_integer_conversion(file, expression->type, "a0");
-+               minic_riscv64_emit_integer_conversion_for_program(file, program, expression->type, "a0");
++               minic_riscv64_emit_integer_conversion_for_program(
++                   file, program, expression->type, "a0");
      case MINIC_EXPRESSION_FLOATING:
          return minic_type_is_double(expression->type) &&
                 fprintf(file, "  li a0, 0x%016" PRIx64 "\n", expression->value.floating_bits) >= 0;
-@@ -1356,7 +1379,7 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
+@@ -1356,7 +1390,7 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
              fprintf(file, "  la a0, %s\n", object->name) < 0) {
              return false;
          }
@@ -749,66 +793,73 @@ index 5eed884f..c42f260c 100644
      }
      case MINIC_EXPRESSION_FIXED_REGISTER: {
          const MinicFixedRegisterBinding *binding;
-@@ -1369,7 +1392,7 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
+@@ -1369,7 +1403,8 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
              return false;
          }
          return minic_type_is_pointer(binding->type) ||
 -               minic_riscv64_emit_integer_conversion(file, binding->type, "a0");
-+               minic_riscv64_emit_integer_conversion_for_program(file, program, binding->type, "a0");
++               minic_riscv64_emit_integer_conversion_for_program(
++                   file, program, binding->type, "a0");
      }
      case MINIC_EXPRESSION_FUNCTION: {
          const MinicFunction *designator;
-@@ -1454,7 +1477,7 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
+@@ -1454,7 +1489,8 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
              return false;
          }
          if (minic_type_is_integer(expression->type)) {
 -            return minic_riscv64_emit_integer_conversion(file, expression->type, "a0");
-+            return minic_riscv64_emit_integer_conversion_for_program(file, program, expression->type, "a0");
++            return minic_riscv64_emit_integer_conversion_for_program(
++                file, program, expression->type, "a0");
          }
          return minic_type_is_pointer(expression->type);
      case MINIC_EXPRESSION_DISCARD: {
-@@ -1487,7 +1510,7 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
+@@ -1487,7 +1523,8 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
          if (minic_type_is_integer(expression->type) && minic_type_is_integer(operand->type)) {
              return minic_riscv64_emit_expression(
                         file, program, function, function_layout, expression->value.unary.operand) &&
 -                   minic_riscv64_emit_integer_conversion(file, expression->type, "a0");
-+                   minic_riscv64_emit_integer_conversion_for_program(file, program, expression->type, "a0");
++                   minic_riscv64_emit_integer_conversion_for_program(
++                       file, program, expression->type, "a0");
          }
          if (minic_type_is_double(expression->type) && minic_type_is_float(operand->type)) {
              return minic_riscv64_emit_expression(
-@@ -1500,7 +1523,7 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
+@@ -1500,7 +1537,8 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
          if (minic_type_is_double(expression->type) && minic_type_is_integer(operand->type)) {
              return minic_riscv64_emit_expression(
                         file, program, function, function_layout, expression->value.unary.operand) &&
 -                   minic_riscv64_emit_integer_to_double(file, operand->type, "a0", "ft0") &&
-+                   minic_riscv64_emit_integer_to_double(file, program, operand->type, "a0", "ft0") &&
++                   minic_riscv64_emit_integer_to_double(
++                       file, program, operand->type, "a0", "ft0") &&
                     fprintf(file, "  fmv.x.d a0, ft0\n") >= 0;
          }
          if (!minic_type_is_integer(expression->type) || !minic_type_is_double(operand->type)) {
-@@ -1519,7 +1542,7 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
+@@ -1519,7 +1557,8 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
                         "  fmv.d.x ft0, a0\n"
                         "  %s a0, ft0, rtz\n",
                         instruction) >= 0 &&
 -               minic_riscv64_emit_integer_conversion(file, expression->type, "a0");
-+               minic_riscv64_emit_integer_conversion_for_program(file, program, expression->type, "a0");
++               minic_riscv64_emit_integer_conversion_for_program(
++                   file, program, expression->type, "a0");
      }
      case MINIC_EXPRESSION_ADDRESS_OF: {
          const MinicExpression *operand;
-@@ -1542,11 +1565,11 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
+@@ -1542,11 +1581,13 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
          }
          return minic_riscv64_emit_expression(
                     file, program, function, function_layout, expression->value.unary.operand) &&
 -               minic_riscv64_emit_scalar_load(file, expression->type, "a0", "a0");
-+               minic_riscv64_emit_scalar_load_for_program(file, program, expression->type, "a0", "a0");
++               minic_riscv64_emit_scalar_load_for_program(
++                   file, program, expression->type, "a0", "a0");
      case MINIC_EXPRESSION_SUBSCRIPT:
          return minic_riscv64_emit_subscript_address(
                     file, program, function, function_layout, expression) &&
 -               minic_riscv64_emit_scalar_load(file, expression->type, "a0", "a0");
-+               minic_riscv64_emit_scalar_load_for_program(file, program, expression->type, "a0", "a0");
++               minic_riscv64_emit_scalar_load_for_program(
++                   file, program, expression->type, "a0", "a0");
      case MINIC_EXPRESSION_MEMBER: {
          const MinicRecord *record;
          const MinicRecordField *field;
-@@ -1597,7 +1620,7 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
+@@ -1597,7 +1638,7 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
              return false;
          }
          if (minic_type_is_integer(target->type) &&
@@ -817,15 +868,18 @@ index 5eed884f..c42f260c 100644
              return false;
          }
          return fprintf(file,
-@@ -1657,13 +1680,13 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
+@@ -1657,13 +1698,16 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
              const char *opcode;
  
              if (!minic_type_is_integer(target->type) || !minic_type_is_integer(value->type) ||
 -                !minic_target_info_integer_common(
 -                    minic_default_target_info(), target->type, value->type, &common_type) ||
 -                !minic_riscv64_emit_normalize_integer(file, common_type, "a0") ||
-+                !minic_target_info_integer_common_for_program(
-+                    minic_default_target_info(), program, target->type, value->type, &common_type) ||
++                !minic_target_info_integer_common_for_program(minic_default_target_info(),
++                                                              program,
++                                                              target->type,
++                                                              value->type,
++                                                              &common_type) ||
 +                !minic_riscv64_emit_normalize_integer(file, program, common_type, "a0") ||
                  fprintf(file, "  sd a0, 8(sp)\n") < 0 ||
                  !minic_riscv64_emit_expression(
@@ -835,16 +889,17 @@ index 5eed884f..c42f260c 100644
                  return false;
              }
              switch (operator_kind) {
-@@ -1716,7 +1739,7 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
+@@ -1716,7 +1760,8 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
                          "  ld t0, 8(sp)\n"
                          "  %s a0, t0, a0\n",
                          opcode) < 0 ||
 -                !minic_riscv64_emit_integer_conversion(file, target->type, "a0")) {
-+                !minic_riscv64_emit_integer_conversion_for_program(file, program, target->type, "a0")) {
++                !minic_riscv64_emit_integer_conversion_for_program(
++                    file, program, target->type, "a0")) {
                  return false;
              }
          }
-@@ -1744,7 +1767,7 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
+@@ -1744,7 +1789,7 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
              if (minic_type_is_double(expression->type)) {
                  return true;
              }
@@ -853,7 +908,7 @@ index 5eed884f..c42f260c 100644
          case MINIC_UNARY_NEGATE:
              if (minic_type_is_double(expression->type)) {
                  return fprintf(file,
-@@ -1755,12 +1778,12 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
+@@ -1755,12 +1800,12 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
              return fprintf(file,
                             minic_type_is_long_integer(expression->type) ? "  neg a0, a0\n"
                                                                          : "  negw a0, a0\n") >= 0 &&
@@ -868,18 +923,21 @@ index 5eed884f..c42f260c 100644
          }
          return false;
      case MINIC_EXPRESSION_BINARY: {
-@@ -1788,8 +1811,8 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
+@@ -1788,8 +1833,11 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
          right = minic_c0_program_expression(program, expression->value.binary.right);
          has_integer_common_type =
              left != NULL && right != NULL &&
 -            minic_target_info_integer_common(
 -                minic_default_target_info(), left->type, right->type, &common_integer_type);
-+            minic_target_info_integer_common_for_program(
-+                minic_default_target_info(), program, left->type, right->type, &common_integer_type);
++            minic_target_info_integer_common_for_program(minic_default_target_info(),
++                                                         program,
++                                                         left->type,
++                                                         right->type,
++                                                         &common_integer_type);
          has_pointer_equality = minic_c0_pointer_equality_compatible(
              program, expression->value.binary.left, expression->value.binary.right);
          has_pointer_relational = left != NULL && right != NULL &&
-@@ -1800,12 +1823,12 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
+@@ -1800,12 +1848,12 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
              !minic_riscv64_emit_expression(
                  file, program, function, function_layout, expression->value.binary.left) ||
              (has_integer_common_type &&
@@ -894,7 +952,7 @@ index 5eed884f..c42f260c 100644
              fprintf(file, "  ld t0, 0(sp)\n  addi sp, sp, 16\n") < 0) {
              return false;
          }
-@@ -1909,7 +1932,7 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
+@@ -1909,7 +1957,7 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
                             minic_type_is_long_integer(expression->type)
                                 ? "  sll a0, t0, a0\n"
                                 : "  sllw a0, t0, a0\n") >= 0 &&
@@ -903,7 +961,7 @@ index 5eed884f..c42f260c 100644
          case MINIC_BINARY_SHIFT_RIGHT:
              return has_integer_common_type &&
                     fprintf(file,
-@@ -1920,7 +1943,7 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
+@@ -1920,7 +1968,7 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
                                 : (minic_type_is_unsigned_integer(expression->type)
                                        ? "  srlw a0, t0, a0\n"
                                        : "  sraw a0, t0, a0\n")) >= 0 &&
@@ -912,21 +970,24 @@ index 5eed884f..c42f260c 100644
          case MINIC_BINARY_BITWISE_AND:
              return has_integer_common_type && fprintf(file, "  and a0, t0, a0\n") >= 0 &&
                     minic_riscv64_emit_integer_result_conversion(
-@@ -2258,7 +2281,7 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
+@@ -2257,8 +2305,8 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
+                         file, abi_parameter_types[argument_index], "a0")) {
                      return false;
                  }
-             } else if (!is_variadic ||
+-            } else if (!is_variadic ||
 -                       !minic_riscv64_emit_variadic_argument_conversion(file, argument->type)) {
-+                       !minic_riscv64_emit_variadic_argument_conversion(file, program, argument->type)) {
++            } else if (!is_variadic || !minic_riscv64_emit_variadic_argument_conversion(
++                                           file, program, argument->type)) {
                  return false;
              }
              if (staged_bytes > SIZE_MAX - 16U || !minic_riscv64_emit_stack_allocate(file, 16U) ||
-@@ -2625,7 +2648,7 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
+@@ -2625,7 +2673,8 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
          }
  
          if (minic_type_is_integer(expression->type)) {
 -            return minic_riscv64_emit_integer_conversion(file, expression->type, "a0");
-+            return minic_riscv64_emit_integer_conversion_for_program(file, program, expression->type, "a0");
++            return minic_riscv64_emit_integer_conversion_for_program(
++                file, program, expression->type, "a0");
          }
          if (minic_type_is_double(expression->type)) {
              return fprintf(file, "  fmv.x.d a0, fa0\n") >= 0;
@@ -964,21 +1025,25 @@ index 6c5af0b5..54a45116 100644
  bool minic_riscv64_emit_object_address(FILE *file,
                                         const MinicC0Program *program,
 diff --git a/src/target/riscv64/codegen_statement.c b/src/target/riscv64/codegen_statement.c
-index e29965f5..43ddabec 100644
+index e29965f5..fa06d33a 100644
 --- a/src/target/riscv64/codegen_statement.c
 +++ b/src/target/riscv64/codegen_statement.c
-@@ -34,8 +34,8 @@ minic_riscv64_emit_block_with_break_target(FILE *file,
+@@ -33,9 +33,11 @@ minic_riscv64_emit_block_with_break_target(FILE *file,
+                                            size_t *label_counter,
                                             MinicBreakTarget break_target);
  
- static bool
+-static bool
 -minic_riscv64_emit_normalize_word(FILE *file, MinicType type, const char *register_name) {
 -    return minic_riscv64_emit_integer_conversion(file, type, register_name);
-+minic_riscv64_emit_normalize_word(FILE *file, const MinicC0Program *program, MinicType type, const char *register_name) {
++static bool minic_riscv64_emit_normalize_word(FILE *file,
++                                              const MinicC0Program *program,
++                                              MinicType type,
++                                              const char *register_name) {
 +    return minic_riscv64_emit_integer_conversion_for_program(file, program, type, register_name);
  }
  
  static bool minic_riscv64_emit_assignment(FILE *file,
-@@ -67,10 +67,10 @@ static bool minic_riscv64_emit_assignment(FILE *file,
+@@ -67,10 +69,10 @@ static bool minic_riscv64_emit_assignment(FILE *file,
          return false;
      }
      if (minic_type_is_integer(target->type) &&
@@ -991,7 +1056,7 @@ index e29965f5..43ddabec 100644
          return false;
      }
      return true;
-@@ -103,25 +103,25 @@ static bool minic_riscv64_emit_xor_assignment(FILE *file,
+@@ -103,25 +105,25 @@ static bool minic_riscv64_emit_xor_assignment(FILE *file,
      value = minic_c0_program_expression(program, statement->expression);
      if (target == NULL || value == NULL || target->value_category != MINIC_VALUE_LVALUE ||
          !minic_type_is_integer(target->type) || !minic_type_is_integer(value->type) ||
@@ -1024,16 +1089,17 @@ index e29965f5..43ddabec 100644
          return false;
      }
      return true;
-@@ -242,7 +242,7 @@ static bool minic_riscv64_emit_return(FILE *file,
+@@ -242,7 +244,8 @@ static bool minic_riscv64_emit_return(FILE *file,
              return false;
          }
          if (minic_type_is_integer(function->return_type) &&
 -            !minic_riscv64_emit_integer_conversion(file, function->return_type, "a0")) {
-+            !minic_riscv64_emit_integer_conversion_for_program(file, program, function->return_type, "a0")) {
++            !minic_riscv64_emit_integer_conversion_for_program(
++                file, program, function->return_type, "a0")) {
              return false;
          }
      }
-@@ -370,7 +370,7 @@ static bool minic_riscv64_emit_switch(FILE *file,
+@@ -370,7 +373,7 @@ static bool minic_riscv64_emit_switch(FILE *file,
      *label_counter += 1U;
      if (!minic_riscv64_emit_expression(
              file, program, function, function_layout, statement->expression) ||
@@ -1043,10 +1109,10 @@ index e29965f5..43ddabec 100644
          return false;
      }
 diff --git a/src/target/riscv64/codegen_support.c b/src/target/riscv64/codegen_support.c
-index 6612cfda..a55189c8 100644
+index 6612cfda..31b9319e 100644
 --- a/src/target/riscv64/codegen_support.c
 +++ b/src/target/riscv64/codegen_support.c
-@@ -4,26 +4,17 @@
+@@ -4,26 +4,16 @@
  #include <stdint.h>
  #include <stdio.h>
  
@@ -1063,9 +1129,8 @@ index 6612cfda..a55189c8 100644
 -        return true;
 -    }
 -    if (!minic_type_is_integer(type)) {
-+static bool minic_riscv64_scalar_width(const MinicC0Program *program,
-+                                         MinicType type,
-+                                         size_t *width) {
++static bool
++minic_riscv64_scalar_width(const MinicC0Program *program, MinicType type, size_t *width) {
 +    size_t alignment;
 +
 +    if (program == NULL || width == NULL ||
@@ -1082,7 +1147,7 @@ index 6612cfda..a55189c8 100644
  }
  
  static const char *minic_riscv64_load_instruction(MinicType type) {
-@@ -186,7 +177,7 @@ static bool minic_riscv64_scalar_object_access(const MinicC0Program *program,
+@@ -186,7 +176,7 @@ static bool minic_riscv64_scalar_object_access(const MinicC0Program *program,
      if (offset == NULL || width == NULL ||
          !minic_riscv64_local_object(
              program, function, function_layout, local_id, &object, &object_offset) ||
@@ -1091,7 +1156,7 @@ index 6612cfda..a55189c8 100644
          object_width > function_layout->local_storage_size - object_offset) {
          return false;
      }
-@@ -325,6 +316,16 @@ bool minic_riscv64_emit_integer_conversion(FILE *file, MinicType type, const cha
+@@ -325,6 +315,16 @@ bool minic_riscv64_emit_integer_conversion(FILE *file, MinicType type, const cha
      return fprintf(file, "  addiw %s, %s, 0\n", register_name, register_name) >= 0;
  }
  
@@ -1108,7 +1173,7 @@ index 6612cfda..a55189c8 100644
  bool minic_riscv64_emit_scalar_load(FILE *file,
                                      MinicType type,
                                      const char *destination_register,
-@@ -348,6 +349,38 @@ bool minic_riscv64_emit_scalar_store(FILE *file,
+@@ -348,6 +348,38 @@ bool minic_riscv64_emit_scalar_store(FILE *file,
             fprintf(file, "  %s %s, 0(%s)\n", instruction, source_register, address_register) >= 0;
  }
  
@@ -1147,7 +1212,7 @@ index 6612cfda..a55189c8 100644
  bool minic_riscv64_emit_object_address(FILE *file,
                                         const MinicC0Program *program,
                                         const MinicFunction *function,
-@@ -385,7 +418,14 @@ bool minic_riscv64_emit_object_load(FILE *file,
+@@ -385,7 +417,14 @@ bool minic_riscv64_emit_object_load(FILE *file,
          return false;
      }
      (void)width;
@@ -1163,7 +1228,7 @@ index 6612cfda..a55189c8 100644
      return minic_riscv64_emit_s0_access(file, instruction, "a0", offset);
  }
  
-@@ -406,7 +446,14 @@ bool minic_riscv64_emit_object_store_register(FILE *file,
+@@ -406,7 +445,14 @@ bool minic_riscv64_emit_object_store_register(FILE *file,
          return false;
      }
      (void)width;
@@ -1180,7 +1245,7 @@ index 6612cfda..a55189c8 100644
  }
  
 diff --git a/src/target/riscv64/core_codegen.c b/src/target/riscv64/core_codegen.c
-index c535337f..f1bd64bf 100644
+index c535337f..4ff9e68e 100644
 --- a/src/target/riscv64/core_codegen.c
 +++ b/src/target/riscv64/core_codegen.c
 @@ -257,6 +257,7 @@ bool minic_riscv64_core_function_can_emit_basic_v0_for_program(const MinicC0Prog
@@ -1191,12 +1256,13 @@ index c535337f..f1bd64bf 100644
                             const MinicCoreFunction *function,
                             const MinicRiscv64CoreFrame *frame,
                             const MinicCoreInstruction *instruction) {
-@@ -285,13 +286,14 @@ static bool emit_parameter(FILE *file,
+@@ -285,13 +286,15 @@ static bool emit_parameter(FILE *file,
          }
      }
      if (minic_type_is_integer(instruction->type) &&
 -        !minic_riscv64_emit_integer_conversion(file, instruction->type, "t0")) {
-+        !minic_riscv64_emit_integer_conversion_for_program(file, program, instruction->type, "t0")) {
++        !minic_riscv64_emit_integer_conversion_for_program(
++            file, program, instruction->type, "t0")) {
          return false;
      }
      return store_core_value(file, frame, instruction->result, "t0");
@@ -1207,37 +1273,41 @@ index c535337f..f1bd64bf 100644
                        const MinicCoreFunction *function,
                        const MinicRiscv64CoreFrame *frame,
                        const MinicCoreInstruction *instruction) {
-@@ -323,7 +325,7 @@ static bool emit_call(FILE *file,
+@@ -323,7 +326,8 @@ static bool emit_call(FILE *file,
          return true;
      }
      if (minic_type_is_integer(instruction->type) &&
 -        !minic_riscv64_emit_integer_conversion(file, instruction->type, "a0")) {
-+        !minic_riscv64_emit_integer_conversion_for_program(file, program, instruction->type, "a0")) {
++        !minic_riscv64_emit_integer_conversion_for_program(
++            file, program, instruction->type, "a0")) {
          return false;
      }
      return store_core_value(file, frame, instruction->result, "a0");
-@@ -368,7 +370,7 @@ static bool emit_instruction(FILE *file,
+@@ -368,7 +372,8 @@ static bool emit_instruction(FILE *file,
      switch (instruction->kind) {
      case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT:
          if (fprintf(file, "  li t0, %" PRId64 "\n", instruction->value.integer_value) < 0 ||
 -            !minic_riscv64_emit_integer_conversion(file, instruction->type, "t0")) {
-+            !minic_riscv64_emit_integer_conversion_for_program(file, program, instruction->type, "t0")) {
++            !minic_riscv64_emit_integer_conversion_for_program(
++                file, program, instruction->type, "t0")) {
              return false;
          }
          return store_core_value(file, frame, instruction->result, "t0");
-@@ -376,20 +378,20 @@ static bool emit_instruction(FILE *file,
+@@ -376,20 +381,23 @@ static bool emit_instruction(FILE *file,
          if (!load_core_value(file, frame, instruction->value.binary.left, "t0") ||
              !load_core_value(file, frame, instruction->value.binary.right, "t1") ||
              fprintf(file, "  add t0, t0, t1\n") < 0 ||
 -            !minic_riscv64_emit_integer_conversion(file, instruction->type, "t0")) {
-+            !minic_riscv64_emit_integer_conversion_for_program(file, program, instruction->type, "t0")) {
++            !minic_riscv64_emit_integer_conversion_for_program(
++                file, program, instruction->type, "t0")) {
              return false;
          }
          return store_core_value(file, frame, instruction->result, "t0");
      case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION:
          if (!load_core_value(file, frame, instruction->value.operand, "t0") ||
 -            !minic_riscv64_emit_integer_conversion(file, instruction->type, "t0")) {
-+            !minic_riscv64_emit_integer_conversion_for_program(file, program, instruction->type, "t0")) {
++            !minic_riscv64_emit_integer_conversion_for_program(
++                file, program, instruction->type, "t0")) {
              return false;
          }
          return store_core_value(file, frame, instruction->result, "t0");
@@ -1245,11 +1315,12 @@ index c535337f..f1bd64bf 100644
          if (!load_core_value(file, frame, instruction->value.operand, "t0") ||
              fprintf(file, "  neg t0, t0\n") < 0 ||
 -            !minic_riscv64_emit_integer_conversion(file, instruction->type, "t0")) {
-+            !minic_riscv64_emit_integer_conversion_for_program(file, program, instruction->type, "t0")) {
++            !minic_riscv64_emit_integer_conversion_for_program(
++                file, program, instruction->type, "t0")) {
              return false;
          }
          return store_core_value(file, frame, instruction->result, "t0");
-@@ -400,7 +402,7 @@ static bool emit_instruction(FILE *file,
+@@ -400,7 +408,7 @@ static bool emit_instruction(FILE *file,
          }
          return store_core_value(file, frame, instruction->result, "t0");
      case MINIC_CORE_INSTRUCTION_PARAMETER:
@@ -1258,16 +1329,17 @@ index c535337f..f1bd64bf 100644
      case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS:
          if (!core_object_offset(frame, instruction->value.object_id, &object_offset) ||
              !emit_sp_address(file, "t0", object_offset)) {
-@@ -409,7 +411,7 @@ static bool emit_instruction(FILE *file,
+@@ -409,7 +417,8 @@ static bool emit_instruction(FILE *file,
          return store_core_value(file, frame, instruction->result, "t0");
      case MINIC_CORE_INSTRUCTION_LOAD:
          if (!load_core_value(file, frame, instruction->value.load.address, "t0") ||
 -            !minic_riscv64_emit_scalar_load(file, instruction->type, "t1", "t0")) {
-+            !minic_riscv64_emit_scalar_load_for_program(file, program, instruction->type, "t1", "t0")) {
++            !minic_riscv64_emit_scalar_load_for_program(
++                file, program, instruction->type, "t1", "t0")) {
              return false;
          }
          return store_core_value(file, frame, instruction->result, "t1");
-@@ -424,10 +426,10 @@ static bool emit_instruction(FILE *file,
+@@ -424,10 +433,10 @@ static bool emit_instruction(FILE *file,
          stored_type = function->values[stored_value].type;
          return load_core_value(file, frame, instruction->value.store.address, "t0") &&
                 load_core_value(file, frame, stored_value, "t1") &&
