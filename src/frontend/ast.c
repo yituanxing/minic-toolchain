@@ -1616,7 +1616,8 @@ bool minic_c0_assignment_compatible(const MinicC0Program *program,
     }
     if (minic_type_is_pointer(target_type) && minic_type_is_pointer(source->type) &&
         (minic_c0_types_compatible(program, target_type, source->type) ||
-         minic_c0_gnu_void_function_pointer_assignment_compatible(target_type, source->type))) {
+         minic_c0_gnu_void_function_pointer_assignment_compatible(target_type, source->type) ||
+         minic_type_gnu_pointer_sign_compatible(target_type, source->type))) {
         return true;
     }
     return minic_type_is_pointer(target_type) &&
