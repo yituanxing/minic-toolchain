@@ -6,6 +6,12 @@ cd "$root"
 log=/tmp/minic-enum-type-ownership.log
 patch=/tmp/minic-enum-type-ownership.patch
 
+changed_path() {
+  local path=$1
+  git diff --name-only -- "$path" | grep -Fx "$path" >/dev/null ||
+    git ls-files --others --exclude-standard -- "$path" | grep -Fx "$path" >/dev/null
+}
+
 run_materialization() {
   python3 tools/dev/materialize-enum-type-ownership-v2.py
 
@@ -53,13 +59,22 @@ text = text.replace(old, "minic_riscv64_integer_type_is_signed(program, field->t
 path.write_text(text)
 PY
 
-  changed_c=$(git diff --name-only -- '*.c' '*.h')
+  # Format both tracked modifications and newly-created C/H fixtures.
+  changed_c=$(
+    {
+      git diff --name-only -- '*.c' '*.h'
+      git ls-files --others --exclude-standard -- '*.c' '*.h'
+    } | sort -u
+  )
   test -n "$changed_c"
   # shellcheck disable=SC2086
   clang-format-18 -i $changed_c
   CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
   git diff --check
 
+  # The grouped replacement is indivisible: every semantic consumer and focused fixture must be
+  # present before we spend time compiling it. `changed_path` deliberately recognizes untracked
+  # test fixtures as part of the slice.
   for path in \
     src/frontend/ast.c \
     src/frontend/ast.h \
@@ -80,7 +95,7 @@ PY
     tests/compiler/c0/run-enum-forward-completion.sh \
     tests/compiler/c0/run.sh
   do
-    git diff --name-only -- "$path" | grep -Fx "$path" >/dev/null
+    changed_path "$path"
   done
 
   ! grep -R "minic_refresh_program_enum_types\|minic_refresh_enum_type" \
@@ -119,7 +134,14 @@ fi
 
 git config user.name github-actions[bot]
 git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-rm -f diagnostics/enum-type-ownership-failure.log diagnostics/enum-type-ownership-failure.patch
+
+# Canonical product commit replaces any previous failure diagnostic.
+if git ls-files --error-unmatch diagnostics/enum-type-ownership-failure.log >/dev/null 2>&1; then
+  git rm -f diagnostics/enum-type-ownership-failure.log
+fi
+if git ls-files --error-unmatch diagnostics/enum-type-ownership-failure.patch >/dev/null 2>&1; then
+  git rm -f diagnostics/enum-type-ownership-failure.patch
+fi
 
 git add src/frontend src/target tests/compiler/c0
 git reset tools/dev/materialize-enum-type-ownership-v1.py \
