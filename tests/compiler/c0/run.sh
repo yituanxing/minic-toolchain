@@ -537,3 +537,7 @@ MINIC="$minic" \
 HOST_CC="$host_cc" \
 BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
 sh "$root/tests/compiler/c0/run-static-record-array-member-designator.sh"
+
+MINIC="$minic" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+sh "$root/tests/compiler/c0/run-linux-tail-batch5.sh"

@@ -426,7 +426,22 @@ static bool aggregate_scalar_slot_type(const MinicC0Program *program,
         size_t element_index;
 
         array_type = minic_c0_program_array_type(program, type.array_type_id);
-        if (array_type == NULL || array_type->element_count == 0U) {
+        if (array_type == NULL) {
+            return false;
+        }
+        if (array_type->element_count == 0U && !array_type->is_zero_length) {
+            size_t element_slots;
+
+            if (!minic_c0_type_initializer_slot_count(
+                    program, array_type->element_type, &element_slots) ||
+                element_slots == 0U) {
+                return false;
+            }
+            *slot_index %= element_slots;
+            return aggregate_scalar_slot_type(
+                program, array_type->element_type, slot_index, slot_type);
+        }
+        if (array_type->element_count == 0U) {
             return false;
         }
         for (element_index = 0U; element_index < array_type->element_count; ++element_index) {

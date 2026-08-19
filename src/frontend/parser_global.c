@@ -1621,6 +1621,7 @@ static bool parse_static_forward_array_initializer(MinicParser *parser,
             }
         } else {
             first = next_index;
+            last = first;
             if (!infer_bound && first >= element_count) {
                 minic_parser_error(parser, "too many nested static array initializers");
                 return false;
