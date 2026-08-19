@@ -1,0 +1,19 @@
+INITIALIZER_ARRAY_PLAN_V1_MATERIALIZED
+/home/runner/work/minic-toolchain/minic-toolchain/src/frontend/initializer.c:14:48: error: code should be clang-formatted [-Wclang-format-violations]
+    if (new_capacity < plan->action_capacity ||
+                                               ^
+/home/runner/work/minic-toolchain/minic-toolchain/src/frontend/initializer.c:18:18: error: code should be clang-formatted [-Wclang-format-violations]
+    new_actions =
+                 ^
+/home/runner/work/minic-toolchain/minic-toolchain/src/frontend/initializer.c:19:62: error: code should be clang-formatted [-Wclang-format-violations]
+        (MinicArrayInitializerAction *)realloc(plan->actions, new_capacity * sizeof(*plan->actions));
+                                                             ^
+/home/runner/work/minic-toolchain/minic-toolchain/src/frontend/initializer.c:144:92: error: code should be clang-formatted [-Wclang-format-violations]
+    for (index = action->first_index; index <= action->last_index && index < element_count; ++index) {
+                                                                                           ^
+/home/runner/work/minic-toolchain/minic-toolchain/src/frontend/initializer.h:7:51: error: code should be clang-formatted [-Wclang-format-violations]
+#define MINIC_INITIALIZER_ACTION_INVALID ((size_t)-1)
+                                                  ^
+/home/runner/work/minic-toolchain/minic-toolchain/src/frontend/initializer.h:7:52: error: code should be clang-formatted [-Wclang-format-violations]
+#define MINIC_INITIALIZER_ACTION_INVALID ((size_t)-1)
+                                                   ^
