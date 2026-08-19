@@ -495,6 +495,42 @@ static bool static_pointer_initializer_from_expression(MinicParser *parser,
     return false;
 }
 
+static bool static_pointer_initializer_gnu_signedness_compatible(const MinicC0Program *program,
+                                                                 MinicType target_type,
+                                                                 MinicExpressionId expression_id) {
+    const MinicExpression *expression;
+    MinicType source_type;
+    MinicType target_pointee;
+    MinicType source_pointee;
+    MinicType target_unqualified;
+    MinicType source_unqualified;
+
+    if (program == NULL || target_type.pointer_depth != 1U) {
+        return false;
+    }
+    expression = minic_c0_program_expression(program, expression_id);
+    if (expression == NULL) {
+        return false;
+    }
+    source_type = expression->type;
+    if (source_type.pointer_depth != 1U || !minic_type_pointee(target_type, &target_pointee) ||
+        !minic_type_pointee(source_type, &source_pointee) ||
+        !minic_type_unqualified(target_pointee, &target_unqualified) ||
+        !minic_type_unqualified(source_pointee, &source_unqualified) ||
+        !minic_type_is_integer(target_unqualified) || !minic_type_is_integer(source_unqualified) ||
+        minic_type_is_enum(target_unqualified) || minic_type_is_enum(source_unqualified) ||
+        target_unqualified.base_kind != MINIC_TYPE_BASE_INT ||
+        source_unqualified.base_kind != MINIC_TYPE_BASE_INT ||
+        target_unqualified.integer_rank != source_unqualified.integer_rank ||
+        target_unqualified.is_plain_char != source_unqualified.is_plain_char ||
+        target_unqualified.explicit_alignment != source_unqualified.explicit_alignment ||
+        (minic_type_is_const(source_pointee) && !minic_type_is_const(target_pointee)) ||
+        (minic_type_is_volatile(source_pointee) && !minic_type_is_volatile(target_pointee))) {
+        return false;
+    }
+    return target_unqualified.integer_sign != source_unqualified.integer_sign;
+}
+
 static bool parse_static_pointer_initializer(MinicParser *parser,
                                              MinicType target_type,
                                              MinicStaticPointerInitializer *initializer) {
@@ -507,9 +543,26 @@ static bool parse_static_pointer_initializer(MinicParser *parser,
     (void)memset(initializer, 0, sizeof(*initializer));
     initializer->function_id = MINIC_FUNCTION_INVALID;
     initializer->relocation_target.object_id = MINIC_GLOBAL_OBJECT_INVALID;
-    if (!minic_c0_assignment_compatible(parser->program, target_type, expression_id)) {
-        minic_parser_error(parser, "static pointer initializer type mismatch");
-        return false;
+    {
+        bool strict_compatible;
+        bool gnu_signedness_compatible;
+
+        strict_compatible =
+            minic_c0_assignment_compatible(parser->program, target_type, expression_id);
+        gnu_signedness_compatible =
+            !strict_compatible && static_pointer_initializer_gnu_signedness_compatible(
+                                      parser->program, target_type, expression_id);
+        if (!strict_compatible && !gnu_signedness_compatible) {
+            minic_parser_error(parser, "static pointer initializer type mismatch");
+            return false;
+        }
+        if (gnu_signedness_compatible) {
+            /* Both an explicit pointer cast and GNU's incompatible-pointer-types
+             * continuation authorize the same address-bit reinterpretation in
+             * the persisted relocation contract. The source-level acceptance
+             * remains bounded by the predicate above. */
+            initializer->has_explicit_pointer_cast = true;
+        }
     }
     if (static_pointer_initializer_from_expression(parser, expression_id, initializer)) {
         return true;
