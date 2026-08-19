@@ -247,17 +247,14 @@ static bool parse_function_reference(MinicParser *parser,
         minic_parser_error(parser, "invalid function reference");
         return false;
     }
-    if (function->is_variadic) {
-        minic_parser_error(parser, "variadic function designator is not supported yet");
-        return false;
-    }
 
     (void)memset(&expression, 0, sizeof(expression));
-    if (!minic_c0_program_add_function_type(parser->program,
-                                            function->return_type,
-                                            function->parameter_types,
-                                            function->parameter_count,
-                                            &function_type) ||
+    if (!minic_c0_program_add_variadic_function_type(parser->program,
+                                                     function->return_type,
+                                                     function->parameter_types,
+                                                     function->parameter_count,
+                                                     function->is_variadic,
+                                                     &function_type) ||
         !minic_type_pointer_to(function_type, &expression.type)) {
         minic_parser_error(parser, "cannot form function pointer type");
         return false;

@@ -36,10 +36,6 @@ static bool parse_parenthesized_function_typedef(MinicParser *parser,
         !minic_parser_parse_parenthesized_function_declarator(parser, true, false, &declarator)) {
         return false;
     }
-    if (declarator.is_variadic) {
-        minic_parser_error(parser, "variadic function pointer typedefs are not supported yet");
-        return false;
-    }
     if (declarator.attributes.count != 0U) {
         minic_parser_error(
             parser,
@@ -141,6 +137,48 @@ static bool consume_typedef_attribute(MinicParser *parser,
     return false;
 }
 
+static bool typedef_declaration_attribute_class_is_parse_only(MinicAttributeClass semantic_class) {
+    return semantic_class == MINIC_ATTRIBUTE_CLASS_INFORMATIONAL ||
+           semantic_class == MINIC_ATTRIBUTE_CLASS_DIAGNOSTIC ||
+           semantic_class == MINIC_ATTRIBUTE_CLASS_OPTIMIZATION ||
+           semantic_class == MINIC_ATTRIBUTE_CLASS_CONTROL_FLOW;
+}
+
+static bool typedef_type_targets_function(MinicType type) {
+    MinicType pointee;
+
+    if (minic_type_is_function(type)) {
+        return true;
+    }
+    return minic_type_pointee(type, &pointee) && minic_type_is_function(pointee);
+}
+
+static bool apply_typedef_declaration_head_attributes(MinicParser *parser,
+                                                      const MinicParsedAttributeList *attributes,
+                                                      MinicType aliased_type) {
+    size_t index;
+    bool function_target;
+
+    if (parser == NULL || attributes == NULL) {
+        return false;
+    }
+    function_target = typedef_type_targets_function(aliased_type);
+    for (index = 0U; index < attributes->count; ++index) {
+        const MinicAttributeDescriptor *descriptor;
+
+        descriptor = attributes->values[index].descriptor;
+        if (descriptor == NULL ||
+            !typedef_declaration_attribute_class_is_parse_only(descriptor->semantic_class) ||
+            ((!minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_TYPE)) &&
+             (!function_target ||
+              !minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_FUNCTION)))) {
+            minic_parser_error(parser, "unsupported GNU declaration-head typedef attribute");
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool parse_typedef_attributes(MinicParser *parser, MinicType *aliased_type) {
     MinicTypedefAttributeContext context;
 
@@ -155,16 +193,22 @@ bool minic_parser_parse_typedef(MinicParser *parser) {
     MinicSourceSpan name_span;
     MinicType aliased_type;
     MinicTypeAliasId alias_id;
+    MinicParsedAttributeList leading_attributes;
+    MinicParsedAttributeList post_type_attributes;
     bool is_function_declarator;
 
+    leading_attributes.count = 0U;
+    post_type_attributes.count = 0U;
     is_function_declarator = false;
-    if (!minic_parser_expect(parser, MINIC_TOKEN_KW_TYPEDEF, "expected keyword 'typedef'")) {
+    if (!minic_parser_expect(parser, MINIC_TOKEN_KW_TYPEDEF, "expected keyword 'typedef'") ||
+        !minic_parser_collect_gnu_attribute_lists(parser, &leading_attributes)) {
         return false;
     }
     {
         MinicType base_type;
 
         if (!minic_parser_parse_type_specifiers(parser, &base_type) ||
+            !minic_parser_collect_gnu_attribute_lists(parser, &post_type_attributes) ||
             !minic_parser_parse_pointer_declarator(parser, base_type, &aliased_type)) {
             return false;
         }
@@ -190,10 +234,6 @@ bool minic_parser_parse_typedef(MinicParser *parser) {
                 declarator.name_span = name_span;
                 declarator.has_name = true;
                 if (!minic_parser_parse_function_parameter_suffix(parser, &declarator)) {
-                    return false;
-                }
-                if (declarator.is_variadic) {
-                    minic_parser_error(parser, "variadic function typedefs are not supported yet");
                     return false;
                 }
                 if (!minic_parser_build_function_declarator_type(
@@ -230,7 +270,9 @@ bool minic_parser_parse_typedef(MinicParser *parser) {
             return false;
         }
     }
-    if (!parse_typedef_attributes(parser, &aliased_type)) {
+    if (!apply_typedef_declaration_head_attributes(parser, &leading_attributes, aliased_type) ||
+        !apply_typedef_declaration_head_attributes(parser, &post_type_attributes, aliased_type) ||
+        !parse_typedef_attributes(parser, &aliased_type)) {
         return false;
     }
     if (parser->current.kind != MINIC_TOKEN_SEMICOLON) {

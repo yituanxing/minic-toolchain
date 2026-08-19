@@ -584,10 +584,6 @@ static bool parse_function_pointer_parameter_declarator(MinicParser *parser,
             parser, require_name, true, &declarator)) {
         return false;
     }
-    if (declarator.is_variadic) {
-        minic_parser_error(parser, "variadic function pointer parameters are not supported yet");
-        return false;
-    }
     if (!minic_parser_build_function_declarator_type(
             parser, return_type, &declarator, parameter_type)) {
         minic_parser_error(parser, "cannot build function pointer parameter type");
@@ -688,6 +684,21 @@ static bool consume_parameter_declarator_attribute(MinicParser *parser,
     return false;
 }
 
+static bool apply_parameter_declarator_attribute_list(MinicParser *parser,
+                                                      const MinicParsedAttributeList *attributes) {
+    size_t index;
+
+    if (parser == NULL || attributes == NULL) {
+        return false;
+    }
+    for (index = 0U; index < attributes->count; ++index) {
+        if (!consume_parameter_declarator_attribute(parser, &attributes->values[index], NULL)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool minic_parser_parse_parameter_list(MinicParser *parser,
                                        MinicSourceSpan *parameter_name_spans,
                                        MinicType *parameter_types,
@@ -710,14 +721,20 @@ bool minic_parser_parse_parameter_list(MinicParser *parser,
     for (;;) {
         MinicSourceSpan declarator_name_span;
         MinicType parameter_type;
+        MinicParsedAttributeList leading_attributes;
+        MinicParsedAttributeList post_type_attributes;
         bool declarator_has_name;
         bool is_function_pointer_parameter;
 
+        leading_attributes.count = 0U;
+        post_type_attributes.count = 0U;
         if (*parameter_count >= MINIC_MAX_FUNCTION_PARAMETERS) {
             minic_parser_error(parser, "parameter count exceeds compiler limit");
             return false;
         }
-        if (!minic_parser_parse_type_name_preserving_incomplete(parser, &parameter_type)) {
+        if (!minic_parser_collect_gnu_attribute_lists(parser, &leading_attributes) ||
+            !minic_parser_parse_type_name_preserving_incomplete(parser, &parameter_type) ||
+            !minic_parser_collect_gnu_attribute_lists(parser, &post_type_attributes)) {
             return false;
         }
         (void)memset(&declarator_name_span, 0, sizeof(declarator_name_span));
@@ -775,7 +792,9 @@ bool minic_parser_parse_parameter_list(MinicParser *parser,
             return false;
         }
 
-        if (!minic_parser_parse_gnu_attribute_lists(
+        if (!apply_parameter_declarator_attribute_list(parser, &leading_attributes) ||
+            !apply_parameter_declarator_attribute_list(parser, &post_type_attributes) ||
+            !minic_parser_parse_gnu_attribute_lists(
                 parser, consume_parameter_declarator_attribute, NULL)) {
             return false;
         }
@@ -2065,6 +2084,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
         MinicType typed_parameter_types[MINIC_MAX_FUNCTION_PARAMETERS];
         size_t typed_parameter_count;
         size_t parameter_index;
+        bool typed_is_variadic;
         bool declaration_is_weak;
 
         if (parser->current.kind == MINIC_TOKEN_LPAREN) {
@@ -2083,6 +2103,8 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
          * signature before any subsequent semantic operation can grow owner pools. */
         typed_return_type = function_type->return_type;
         typed_parameter_count = function_type->parameter_count;
+        typed_is_variadic = function_type->is_variadic;
+        typed_is_variadic = function_type->is_variadic;
         for (parameter_index = 0U; parameter_index < typed_parameter_count; ++parameter_index) {
             typed_parameter_types[parameter_index] =
                 function_type->parameter_types[parameter_index];
@@ -2137,7 +2159,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                                                     typed_return_type,
                                                     typed_parameter_types,
                                                     typed_parameter_count,
-                                                    false,
+                                                    typed_is_variadic,
                                                     is_internal,
                                                     entity_is_weak,
                                                     assembler_name,

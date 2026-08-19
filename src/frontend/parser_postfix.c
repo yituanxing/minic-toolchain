@@ -188,7 +188,6 @@ static bool parse_indirect_arguments(MinicParser *parser,
         return false;
     }
     for (argument_index = 0U; argument_index < function_type->parameter_count; ++argument_index) {
-        const MinicExpression *argument;
         MinicExpressionId argument_id;
 
         if (parser->current.kind == MINIC_TOKEN_RPAREN) {
@@ -198,11 +197,15 @@ static bool parse_indirect_arguments(MinicParser *parser,
         if (!minic_parser_parse_expression(parser, &argument_id, 0U)) {
             return false;
         }
-        argument = minic_c0_program_expression(parser->program, argument_id);
-        if (argument == NULL ||
-            !minic_parser_apply_fixed_call_argument_conversion(
-                parser, function_type->parameter_types[argument_index], &argument_id) ||
-            !minic_c0_fixed_call_argument_compatible(
+        if (!minic_parser_apply_fixed_call_argument_conversion(
+                parser, function_type->parameter_types[argument_index], &argument_id)) {
+            if (parser->diagnostic == NULL || parser->diagnostic->message[0] == '\0') {
+                minic_parser_error(parser,
+                                   "indirect call argument type does not match declaration");
+            }
+            return false;
+        }
+        if (!minic_c0_fixed_call_argument_compatible(
                 parser->program, function_type->parameter_types[argument_index], argument_id)) {
             minic_parser_error(parser, "indirect call argument type does not match declaration");
             return false;
@@ -215,11 +218,43 @@ static bool parse_indirect_arguments(MinicParser *parser,
             }
         }
     }
+
+    argument_index = function_type->parameter_count;
+    if (function_type->is_variadic && parser->current.kind == MINIC_TOKEN_COMMA) {
+        do {
+            const MinicExpression *argument;
+            MinicExpressionId argument_id;
+
+            if (argument_index >= MINIC_MAX_FUNCTION_PARAMETERS) {
+                minic_parser_error(parser,
+                                   "variadic call argument count exceeds implementation limit");
+                return false;
+            }
+            if (!minic_parser_advance(parser) ||
+                !minic_parser_parse_expression(parser, &argument_id, 0U)) {
+                return false;
+            }
+            if (!minic_parser_apply_array_decay(parser, argument_id, &argument_id)) {
+                if (parser->diagnostic == NULL || parser->diagnostic->message[0] == '\0') {
+                    minic_parser_error(parser, "unsupported variadic call argument type");
+                }
+                return false;
+            }
+            argument = minic_c0_program_expression(parser->program, argument_id);
+            if (argument == NULL ||
+                (!minic_type_is_integer(argument->type) && !minic_type_is_pointer(argument->type) &&
+                 !minic_type_is_double(argument->type))) {
+                minic_parser_error(parser, "unsupported variadic call argument type");
+                return false;
+            }
+            call->value.call.arguments[argument_index++] = argument_id;
+        } while (parser->current.kind == MINIC_TOKEN_COMMA);
+    }
     if (parser->current.kind != MINIC_TOKEN_RPAREN) {
         indirect_argument_count_error(parser);
         return false;
     }
-    call->value.call.argument_count = function_type->parameter_count;
+    call->value.call.argument_count = argument_index;
     return true;
 }
 

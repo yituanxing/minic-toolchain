@@ -499,3 +499,8 @@ MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" 
 
 MINIC="$minic" HOST_CC="$host_cc" BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
   sh "$root/tests/compiler/c0/run-enum-mode-byte.sh"
+
+MINIC="$minic" \
+HOST_CC="$host_cc" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+sh "$root/tests/compiler/c0/run-declaration-head-variadic.sh"
