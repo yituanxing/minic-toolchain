@@ -321,8 +321,13 @@ bool minic_riscv64_emit_integer_conversion_for_program(FILE *file,
                                                        const char *register_name) {
     MinicType effective_type;
 
-    return minic_c0_type_effective_integer_type(program, type, &effective_type) &&
-           minic_riscv64_emit_integer_conversion(file, effective_type, register_name);
+    if (minic_type_is_enum(type)) {
+        if (!minic_c0_type_effective_integer_type(program, type, &effective_type)) {
+            return false;
+        }
+        type = effective_type;
+    }
+    return minic_riscv64_emit_integer_conversion(file, type, register_name);
 }
 
 bool minic_riscv64_emit_scalar_load(FILE *file,

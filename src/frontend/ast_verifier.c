@@ -613,7 +613,8 @@ static bool verify_expression(const MinicC0Program *program,
             return false;
         }
         return minic_type_is_integer(left->type) && minic_type_is_integer(right->type) &&
-               minic_target_info_integer_common(target, left->type, right->type, &common_type);
+               minic_target_info_integer_common_for_program(
+                   target, program, left->type, right->type, &common_type);
     }
     case MINIC_EXPRESSION_UNARY: {
         MinicType expected_type;
@@ -650,7 +651,8 @@ static bool verify_expression(const MinicC0Program *program,
             return minic_type_equal(expression->type, operand->type);
         }
         if (!minic_type_is_integer(operand->type) ||
-            !minic_target_info_integer_promotion(target, operand->type, &expected_type)) {
+            !minic_target_info_integer_promotion_for_program(
+                target, program, operand->type, &expected_type)) {
             return false;
         }
         return minic_type_equal(expression->type, expected_type);
@@ -843,8 +845,8 @@ static bool verify_statement(const MinicC0Program *program,
         return target != NULL && expression != NULL &&
                target->value_category == MINIC_VALUE_LVALUE &&
                minic_type_is_integer(target->type) && minic_type_is_integer(expression->type) &&
-               minic_target_info_integer_common(
-                   target_info, target->type, expression->type, &common_type);
+               minic_target_info_integer_common_for_program(
+                   target_info, program, target->type, expression->type, &common_type);
     }
     case MINIC_STATEMENT_EXPRESSION:
         return expression != NULL;
