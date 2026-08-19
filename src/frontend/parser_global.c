@@ -2804,6 +2804,27 @@ bool minic_parser_inspect_array_initializer_extent(MinicParser *parser, size_t *
     return true;
 }
 
+static bool static_record_array_declaration_compatible(const MinicC0Program *program,
+                                                       MinicType existing_type,
+                                                       MinicType element_type,
+                                                       size_t declared_count,
+                                                       bool declared_incomplete) {
+    const MinicArrayType *existing_array;
+
+    if (program == NULL || !minic_type_is_array(existing_type)) {
+        return false;
+    }
+    existing_array = minic_c0_program_array_type(program, existing_type.array_type_id);
+    if (existing_array == NULL || !minic_type_equal(existing_array->element_type, element_type)) {
+        return false;
+    }
+    if (declared_incomplete ||
+        (existing_array->element_count == 0U && !existing_array->is_zero_length)) {
+        return true;
+    }
+    return !existing_array->is_zero_length && existing_array->element_count == declared_count;
+}
+
 static bool parse_static_record_array(MinicParser *parser,
                                       MinicType element_type,
                                       MinicSourceSpan name_span,
@@ -2815,6 +2836,7 @@ static bool parse_static_record_array(MinicParser *parser,
     const MinicRecord *record;
     MinicType object_type;
     MinicGlobalObjectId object_id;
+    MinicGlobalObjectId existing_id;
     size_t declared_count;
     bool inferred_bound;
 
@@ -2853,6 +2875,62 @@ static bool parse_static_record_array(MinicParser *parser,
                                                        explicit_alignment)) {
         return false;
     }
+
+    existing_id = minic_parser_find_global_object_entity(parser, name_span);
+    if (parser->current.kind == MINIC_TOKEN_SEMICOLON) {
+        const MinicGlobalObject *existing;
+        const MinicArrayType *existing_array;
+
+        if (existing_id == MINIC_GLOBAL_OBJECT_INVALID) {
+            if ((inferred_bound && !minic_c0_program_add_incomplete_array_type(
+                                       parser->program, element_type, &object_type)) ||
+                (!inferred_bound &&
+                 !minic_c0_program_add_array_type(
+                     parser->program, element_type, declared_count, &object_type)) ||
+                !minic_c0_program_add_tentative_global_object(parser->program,
+                                                              parser->source +
+                                                                  name_span.begin.offset,
+                                                              minic_parser_span_length(name_span),
+                                                              object_type,
+                                                              true,
+                                                              minic_type_is_const(element_type),
+                                                              &object_id)) {
+                minic_parser_error(parser,
+                                   "cannot create static record array tentative definition");
+                return false;
+            }
+        } else {
+            existing = minic_c0_program_global_object(parser->program, existing_id);
+            existing_array =
+                existing != NULL && minic_type_is_array(existing->type)
+                    ? minic_c0_program_array_type(parser->program, existing->type.array_type_id)
+                    : NULL;
+            if (existing == NULL || existing_array == NULL || !existing->is_internal ||
+                !static_record_array_declaration_compatible(parser->program,
+                                                            existing->type,
+                                                            element_type,
+                                                            declared_count,
+                                                            inferred_bound) ||
+                (!inferred_bound && existing_array->element_count == 0U &&
+                 !existing_array->is_zero_length &&
+                 !minic_c0_program_complete_array_type(
+                     parser->program, existing->type, declared_count)) ||
+                !minic_c0_global_object_merge_tentative(parser->program, existing_id)) {
+                minic_parser_error(parser, "conflicting static record array tentative definition");
+                return false;
+            }
+            object_id = existing_id;
+        }
+        if ((*has_section && !minic_c0_global_object_set_section(
+                                 parser->program, object_id, section_name, *section_name_length)) ||
+            (*explicit_alignment != 0U && !minic_c0_global_object_set_explicit_alignment(
+                                              parser->program, object_id, *explicit_alignment))) {
+            minic_parser_error(parser, "cannot persist static record array declaration metadata");
+            return false;
+        }
+        return minic_parser_advance(parser);
+    }
+
     if (!minic_parser_expect(parser, MINIC_TOKEN_EQUAL, "expected '=' after static record array") ||
         parser->current.kind != MINIC_TOKEN_LBRACE) {
         if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
@@ -2874,15 +2952,45 @@ static bool parse_static_record_array(MinicParser *parser,
         }
     }
 
-    if (!minic_c0_program_add_array_type(
-            parser->program, element_type, declared_count, &object_type) ||
-        !minic_c0_program_add_global_object(parser->program,
-                                            parser->source + name_span.begin.offset,
-                                            minic_parser_span_length(name_span),
-                                            object_type,
-                                            true,
-                                            minic_type_is_const(element_type),
-                                            &object_id) ||
+    if (existing_id != MINIC_GLOBAL_OBJECT_INVALID) {
+        MinicGlobalObject *existing;
+        const MinicArrayType *existing_array;
+
+        existing = &parser->program->global_objects[existing_id];
+        existing_array =
+            minic_type_is_array(existing->type)
+                ? minic_c0_program_array_type(parser->program, existing->type.array_type_id)
+                : NULL;
+        if (existing_array == NULL || !existing->is_internal || !existing->is_tentative ||
+            !static_record_array_declaration_compatible(
+                parser->program, existing->type, element_type, declared_count, false) ||
+            (existing_array->element_count == 0U && !existing_array->is_zero_length &&
+             !minic_c0_program_complete_array_type(
+                 parser->program, existing->type, declared_count)) ||
+            !minic_c0_global_object_begin_definition(parser->program, existing_id)) {
+            minic_parser_error(parser, "conflicting static record array definition");
+            return false;
+        }
+        object_id = existing_id;
+        object_type = parser->program->global_objects[object_id].type;
+    } else {
+        if (!minic_c0_program_add_array_type(
+                parser->program, element_type, declared_count, &object_type) ||
+            !minic_c0_program_add_global_object(parser->program,
+                                                parser->source + name_span.begin.offset,
+                                                minic_parser_span_length(name_span),
+                                                object_type,
+                                                true,
+                                                minic_type_is_const(element_type),
+                                                &object_id)) {
+            minic_parser_error(parser, "cannot create static record array definition");
+            return false;
+        }
+    }
+    if ((*has_section && !minic_c0_global_object_set_section(
+                             parser->program, object_id, section_name, *section_name_length)) ||
+        (*explicit_alignment != 0U && !minic_c0_global_object_set_explicit_alignment(
+                                          parser->program, object_id, *explicit_alignment)) ||
         !minic_parser_parse_static_storage_initializer_value(parser, object_id, object_type)) {
         if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
             minic_parser_error(parser, "cannot parse static record array initializer");
@@ -3363,10 +3471,6 @@ static bool parse_static_pointer_array(MinicParser *parser,
         const MinicArrayType *declared_array;
         bool discard_declared;
 
-        if (inferred_bound) {
-            minic_parser_error(parser, "incomplete static pointer array requires an initializer");
-            return false;
-        }
         if (existing_id == MINIC_GLOBAL_OBJECT_INVALID) {
             if (!minic_c0_program_add_tentative_global_object(parser->program,
                                                               parser->source +
@@ -3880,7 +3984,7 @@ bool minic_parser_parse_static_global_after_head(MinicParser *parser,
                                                        *has_section,
                                                        *explicit_alignment);
     }
-    if (minic_type_is_record(element_type) && parser->current.kind != MINIC_TOKEN_LBRACKET) {
+    if (minic_type_is_record(element_type)) {
         return parse_static_record(parser,
                                    element_type,
                                    name_span,
@@ -3916,16 +4020,6 @@ bool minic_parser_parse_static_global_after_head(MinicParser *parser,
             return false;
         }
         if (probe.current.kind == MINIC_TOKEN_RBRACKET) {
-            if (minic_type_is_record(element_type)) {
-                return parse_static_record(parser,
-                                           element_type,
-                                           name_span,
-                                           section_name,
-                                           section_capacity,
-                                           section_name_length,
-                                           has_section,
-                                           explicit_alignment);
-            }
             if (minic_type_is_char_integer(element_type)) {
                 return parse_static_inferred_char_array(parser,
                                                         element_type,
