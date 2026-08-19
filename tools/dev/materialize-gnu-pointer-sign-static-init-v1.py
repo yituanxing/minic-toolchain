@@ -9,6 +9,7 @@ TYPE_H = ROOT / "src/frontend/type.h"
 TYPE_C = ROOT / "src/frontend/type.c"
 EXPR_C = ROOT / "src/frontend/parser_expression.c"
 GLOBAL_C = ROOT / "src/frontend/parser_global.c"
+AST_GLOBAL_C = ROOT / "src/frontend/ast_global.c"
 
 
 def replace_once(text: str, old: str, new: str, label: str) -> str:
@@ -125,4 +126,34 @@ global_c = replace_once(
 )
 GLOBAL_C.write_text(global_c)
 
-print("materialized shared GNU pointer-sign compatibility for call/static-init contexts")
+# A persisted object relocation is itself a static-initializer contract. Reuse the
+# same type-layer GNU relation when validating its slot/target pair instead of
+# re-imposing ordinary assignment rules after the parser already accepted it.
+ast_global_c = AST_GLOBAL_C.read_text()
+relocation_helper = r'''static bool global_relocation_pointer_target_type_compatible(MinicType slot_type,
+                                                             MinicType source_pointer_type) {
+    return minic_type_assignment_compatible(slot_type, source_pointer_type) ||
+           minic_type_gnu_pointer_sign_compatible(slot_type, source_pointer_type);
+}
+
+'''
+relocation_anchor = "static bool global_relocation_object_target_type_compatible(const MinicC0Program *program,\n"
+if relocation_helper not in ast_global_c:
+    if ast_global_c.count(relocation_anchor) != 1:
+        raise SystemExit("ast_global.c relocation compatibility anchor changed")
+    ast_global_c = ast_global_c.replace(relocation_anchor, relocation_helper + relocation_anchor, 1)
+ast_global_c = ast_global_c.replace(
+    "minic_type_assignment_compatible(slot_type, source_pointer_type)",
+    "global_relocation_pointer_target_type_compatible(slot_type, source_pointer_type)",
+)
+# The helper body itself must keep the primitive assignment call, not recurse.
+ast_global_c = ast_global_c.replace(
+    "return global_relocation_pointer_target_type_compatible(slot_type, source_pointer_type) ||\n"
+    "           minic_type_gnu_pointer_sign_compatible(slot_type, source_pointer_type);",
+    "return minic_type_assignment_compatible(slot_type, source_pointer_type) ||\n"
+    "           minic_type_gnu_pointer_sign_compatible(slot_type, source_pointer_type);",
+    1,
+)
+AST_GLOBAL_C.write_text(ast_global_c)
+
+print("materialized shared GNU pointer-sign compatibility for call/static-init/relocation contexts")
