@@ -112,17 +112,42 @@ old_check = r'''    if (!minic_c0_assignment_compatible(parser->program, target_
         return false;
     }
 '''
-new_check = r'''    if (!minic_c0_assignment_compatible(parser->program, target_type, expression_id) &&
+intermediate_check = r'''    if (!minic_c0_assignment_compatible(parser->program, target_type, expression_id) &&
         !static_pointer_initializer_gnu_signedness_compatible(
             parser->program, target_type, expression_id)) {
         minic_parser_error(parser, "static pointer initializer type mismatch");
         return false;
     }
 '''
+new_check = r'''    {
+        bool strict_compatible;
+        bool gnu_signedness_compatible;
+
+        strict_compatible =
+            minic_c0_assignment_compatible(parser->program, target_type, expression_id);
+        gnu_signedness_compatible =
+            !strict_compatible && static_pointer_initializer_gnu_signedness_compatible(
+                                      parser->program, target_type, expression_id);
+        if (!strict_compatible && !gnu_signedness_compatible) {
+            minic_parser_error(parser, "static pointer initializer type mismatch");
+            return false;
+        }
+        if (gnu_signedness_compatible) {
+            /* Both an explicit pointer cast and GNU's incompatible-pointer-types
+             * continuation authorize the same address-bit reinterpretation in
+             * the persisted relocation contract. The source-level acceptance
+             * remains bounded by the predicate above. */
+            initializer->has_explicit_pointer_cast = true;
+        }
+    }
+'''
 if new_check not in global_text:
-    if global_text.count(old_check) != 1:
+    if intermediate_check in global_text:
+        global_text = global_text.replace(intermediate_check, new_check, 1)
+    elif old_check in global_text:
+        global_text = global_text.replace(old_check, new_check, 1)
+    else:
         raise SystemExit("static pointer assignment check changed")
-    global_text = global_text.replace(old_check, new_check, 1)
 global_path.write_text(global_text)
 
 gate = r'''
