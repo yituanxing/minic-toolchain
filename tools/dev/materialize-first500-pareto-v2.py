@@ -80,5 +80,18 @@ new_func = r'''def replace_once(path, old, new):
 if source.count(old_func) != 1:
     raise SystemExit("v1 replace_once definition changed")
 source = source.replace(old_func, new_func, 1)
+
+# The nonstring capability is declaration semantics only. Keep its focused
+# fixture independent from the separate runtime record-array initializer
+# capability so a failure here diagnoses the attribute mechanism itself.
+old_fixture = '''    struct ext4_like_super_block value = { .s_last_mounted = "x" };
+    return value.s_last_mounted[0] == 'x' ? 0 : 1;'''
+new_fixture = '''    struct ext4_like_super_block value;
+    value.s_last_mounted[0] = 'x';
+    return value.s_last_mounted[0] == 'x' ? 0 : 1;'''
+if source.count(old_fixture) != 1:
+    raise SystemExit("v1 nonstring fixture changed")
+source = source.replace(old_fixture, new_fixture, 1)
+
 namespace = {"__file__": str(V1), "__name__": "__main__"}
 exec(compile(source, str(V1), "exec"), namespace)
