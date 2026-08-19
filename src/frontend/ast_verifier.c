@@ -388,13 +388,13 @@ static bool verify_expression(const MinicC0Program *program,
         size_t parameter_index;
 
         function = minic_c0_program_function(program, expression->value.function_id);
-        if (function == NULL || function->is_variadic ||
-            expression->value_category != MINIC_VALUE_RVALUE ||
+        if (function == NULL || expression->value_category != MINIC_VALUE_RVALUE ||
             !minic_type_pointee(expression->type, &pointee) || !minic_type_is_function(pointee)) {
             return false;
         }
         function_type = minic_c0_program_function_type(program, pointee.function_type_id);
         if (function_type == NULL || function_type->parameter_count != function->parameter_count ||
+            function_type->is_variadic != function->is_variadic ||
             !minic_type_equal(function_type->return_type, function->return_type)) {
             return false;
         }
@@ -817,7 +817,7 @@ static bool verify_expression(const MinicC0Program *program,
                                          expression_index,
                                          function_type->parameter_types,
                                          function_type->parameter_count,
-                                         false);
+                                         function_type->is_variadic);
         }
     }
     return false;
