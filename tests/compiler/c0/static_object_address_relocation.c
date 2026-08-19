@@ -54,6 +54,10 @@ static int *member_array_element_address = &subobject_address_target.values[2];
 static char *nested_member_array_decay_address = subobject_address_target.nested.bytes;
 static char *nested_member_array_element_address = &subobject_address_target.nested.bytes[3];
 
+static void *signed_minus_one_pointer = (void *)-1;
+static void *unsigned_32_pointer = (void *)0xffffffffU;
+static void *high_unsigned_pointer = (void *)(0xdead000000000000UL + 0x300UL);
+
 int read_static_object_addresses(void) {
     return external_address != (void *)0 && explicit_object_cast_address != (void *)0 &&
            function_address != (void *)0 && aggregate_function_address.address != (void *)0 &&

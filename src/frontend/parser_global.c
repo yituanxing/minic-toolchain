@@ -484,14 +484,19 @@ static bool static_pointer_integer_constant_bits(const MinicParser *parser,
     const MinicExpression *expression;
     const MinicExpression *operand;
     MinicConstValue constant;
-    int64_t signed_value;
+    MinicType effective_type;
     const MinicDataLayout *layout;
+    unsigned int source_bits;
     unsigned int pointer_bits;
+    uint64_t value_bits;
 
     if (parser == NULL || bits == NULL) {
         return false;
     }
     expression = minic_c0_program_expression(parser->program, expression_id);
+    while (expression != NULL && expression->kind == MINIC_EXPRESSION_CONVERSION) {
+        expression = minic_c0_program_expression(parser->program, expression->value.unary.operand);
+    }
     if (expression == NULL || expression->kind != MINIC_EXPRESSION_CAST ||
         !minic_type_is_pointer(expression->type)) {
         return false;
@@ -500,16 +505,30 @@ static bool static_pointer_integer_constant_bits(const MinicParser *parser,
     if (operand == NULL || !minic_type_is_integer(operand->type) ||
         !minic_const_eval_integer(
             parser->program, parser->target_info, expression->value.unary.operand, &constant) ||
-        !minic_const_value_as_int64(
-            parser->program, parser->target_info, &constant, &signed_value)) {
+        !minic_c0_type_effective_integer_type(parser->program, constant.type, &effective_type) ||
+        !minic_target_info_integer_width(
+            parser->target_info, parser->program, effective_type, &source_bits) ||
+        source_bits == 0U || source_bits > 64U) {
         return false;
     }
+
+    value_bits = constant.bits;
+    if (source_bits < 64U) {
+        const uint64_t source_mask = (UINT64_C(1) << source_bits) - UINT64_C(1);
+
+        value_bits &= source_mask;
+        if (minic_type_is_signed_integer(effective_type) &&
+            (value_bits & (UINT64_C(1) << (source_bits - 1U))) != 0U) {
+            value_bits |= ~source_mask;
+        }
+    }
+
     layout = minic_target_info_data_layout(parser->target_info);
     if (layout == NULL || layout->pointer_size == 0U || layout->pointer_size > 8U) {
         return false;
     }
     pointer_bits = (unsigned int)(layout->pointer_size * 8U);
-    *bits = (uint64_t)signed_value;
+    *bits = value_bits;
     if (pointer_bits < 64U) {
         *bits &= (UINT64_C(1) << pointer_bits) - UINT64_C(1);
     }
