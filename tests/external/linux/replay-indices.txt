@@ -1,14 +1,3 @@
-# All Linux first500 TUs at the promoted static-record-designator frontier.
-118
-122
-134
-197
-200
-202
-214
-216
-228
-251
-290
-340
-389
+# Linux first500 character-array string initializer frontiers exposed after static-pointer convergence.
+114
+232
