@@ -92,6 +92,7 @@ bool minic_type_pointer_to(MinicType pointee, MinicType *result);
 bool minic_type_pointee(MinicType pointer, MinicType *result);
 bool minic_type_equal(MinicType left, MinicType right);
 bool minic_type_assignment_compatible(MinicType target, MinicType source);
+bool minic_type_gnu_pointer_sign_compatible(MinicType target, MinicType source);
 bool minic_type_conditional_pointer_common(MinicType left, MinicType right, MinicType *result);
 bool minic_type_pointer_equality_compatible(MinicType left, MinicType right);
 bool minic_type_cast_compatible(MinicType target, MinicType source);

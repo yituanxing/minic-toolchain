@@ -432,35 +432,6 @@ static bool variadic_argument_type_supported(MinicType type) {
     return minic_type_is_integer(type) || minic_type_is_pointer(type) || minic_type_is_double(type);
 }
 
-static bool pointer_sign_call_conversion_compatible(MinicType target, MinicType source) {
-    MinicType target_pointee;
-    MinicType source_pointee;
-
-    if (target.pointer_depth != 1U || source.pointer_depth != 1U ||
-        !minic_type_pointee(target, &target_pointee) ||
-        !minic_type_pointee(source, &source_pointee) || !minic_type_is_integer(target_pointee) ||
-        !minic_type_is_integer(source_pointee) ||
-        target_pointee.integer_rank != source_pointee.integer_rank) {
-        return false;
-    }
-    /* Fixed C calls in GNU/Linux routinely pass plain char buffers through APIs
-       whose byte-oriented parameter is signed or unsigned char. Keep that
-       compatibility local to the explicit call conversion: ordinary pointer
-       assignment still distinguishes the three character types. */
-    if (target_pointee.integer_rank != MINIC_INTEGER_RANK_CHAR &&
-        (target_pointee.integer_sign == source_pointee.integer_sign ||
-         target_pointee.is_plain_char != source_pointee.is_plain_char)) {
-        return false;
-    }
-    if (minic_type_is_const(source_pointee) && !minic_type_is_const(target_pointee)) {
-        return false;
-    }
-    if (minic_type_is_volatile(source_pointee) && !minic_type_is_volatile(target_pointee)) {
-        return false;
-    }
-    return true;
-}
-
 static bool gnu_function_pointer_to_void_call_conversion_compatible(MinicType target,
                                                                     MinicType source) {
     MinicType source_pointee;
@@ -513,7 +484,7 @@ bool minic_parser_apply_fixed_call_argument_conversion(MinicParser *parser,
     }
     needs_explicit_conversion =
         (minic_type_is_double(target_type) && minic_type_is_integer(source->type)) ||
-        pointer_sign_call_conversion_compatible(target_type, source->type) ||
+        minic_type_gnu_pointer_sign_compatible(target_type, source->type) ||
         gnu_function_pointer_to_void_call_conversion_compatible(target_type, source->type) ||
         gnu_function_pointer_bridge_call_conversion_compatible(
             parser->program, target_type, source);
