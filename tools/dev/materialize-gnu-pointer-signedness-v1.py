@@ -98,7 +98,7 @@ helper = r'''static bool static_pointer_initializer_gnu_signedness_compatible(
         (minic_type_is_volatile(source_pointee) && !minic_type_is_volatile(target_pointee))) {
         return false;
     }
-    return target_unqualified.is_unsigned != source_unqualified.is_unsigned;
+    return target_unqualified.integer_sign != source_unqualified.integer_sign;
 }
 
 '''
