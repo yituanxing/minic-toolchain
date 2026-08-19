@@ -690,6 +690,13 @@ static bool verify_expression(const MinicC0Program *program,
                                                 &expected_type) &&
                minic_type_equal(expression->type, expected_type);
     }
+    case MINIC_EXPRESSION_BUILTIN_VA_START:
+    case MINIC_EXPRESSION_BUILTIN_VA_END:
+        operand = expression_before(program, expression->value.unary.operand, expression_index);
+        return operand != NULL && operand->value_category == MINIC_VALUE_LVALUE &&
+               minic_type_is_pointer(operand->type) && !minic_type_is_const(operand->type) &&
+               expression->value_category == MINIC_VALUE_RVALUE &&
+               minic_type_is_void(expression->type);
     case MINIC_EXPRESSION_BUILTIN_UNARY: {
         const MinicExpression *builtin_operand;
         MinicType expected_operand_type;
