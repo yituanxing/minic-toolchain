@@ -340,6 +340,35 @@ bool minic_type_assignment_compatible(MinicType target, MinicType source) {
            minic_type_void_object_pointer_compatible(unqualified_target, unqualified_source);
 }
 
+bool minic_type_gnu_pointer_sign_compatible(MinicType target, MinicType source) {
+    MinicType target_pointee;
+    MinicType source_pointee;
+
+    if (target.pointer_depth != 1U || source.pointer_depth != 1U ||
+        !minic_type_pointee(target, &target_pointee) ||
+        !minic_type_pointee(source, &source_pointee) || !minic_type_is_integer(target_pointee) ||
+        !minic_type_is_integer(source_pointee) ||
+        target_pointee.integer_rank != source_pointee.integer_rank) {
+        return false;
+    }
+    /* GNU C accepts pointer-sign differences as a diagnosable conversion. Keep
+       representation-changing rank differences rejected, and never discard
+       pointee qualifiers. Plain/signed/unsigned char remain one byte-oriented
+       compatibility family, matching the existing call-conversion behavior. */
+    if (target_pointee.integer_rank != MINIC_INTEGER_RANK_CHAR &&
+        (target_pointee.integer_sign == source_pointee.integer_sign ||
+         target_pointee.is_plain_char != source_pointee.is_plain_char)) {
+        return false;
+    }
+    if (minic_type_is_const(source_pointee) && !minic_type_is_const(target_pointee)) {
+        return false;
+    }
+    if (minic_type_is_volatile(source_pointee) && !minic_type_is_volatile(target_pointee)) {
+        return false;
+    }
+    return true;
+}
+
 bool minic_type_conditional_pointer_common(MinicType left, MinicType right, MinicType *result) {
     MinicType left_pointer;
     MinicType right_pointer;

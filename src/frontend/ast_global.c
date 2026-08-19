@@ -529,6 +529,12 @@ bool minic_c0_global_relocation_object_target_type(const MinicC0Program *program
                                           target_type);
 }
 
+static bool global_relocation_pointer_target_type_compatible(MinicType slot_type,
+                                                             MinicType source_pointer_type) {
+    return minic_type_assignment_compatible(slot_type, source_pointer_type) ||
+           minic_type_gnu_pointer_sign_compatible(slot_type, source_pointer_type);
+}
+
 static bool global_relocation_object_target_type_compatible(const MinicC0Program *program,
                                                             MinicType slot_type,
                                                             MinicType target_type,
@@ -559,7 +565,7 @@ static bool global_relocation_object_target_type_compatible(const MinicC0Program
     }
     /* A symbolic object address can denote the object itself (`&object`). */
     if (minic_type_pointer_to(target_type, &source_pointer_type) &&
-        minic_type_assignment_compatible(slot_type, source_pointer_type)) {
+        global_relocation_pointer_target_type_compatible(slot_type, source_pointer_type)) {
         return true;
     }
     /* Array-to-pointer decay and `&array[0]` have the same symbol/addend as
@@ -571,7 +577,7 @@ static bool global_relocation_object_target_type_compatible(const MinicC0Program
         array_type = minic_c0_program_array_type(program, target_type.array_type_id);
         if (array_type != NULL &&
             minic_type_pointer_to(array_type->element_type, &source_pointer_type) &&
-            minic_type_assignment_compatible(slot_type, source_pointer_type)) {
+            global_relocation_pointer_target_type_compatible(slot_type, source_pointer_type)) {
             return true;
         }
     }

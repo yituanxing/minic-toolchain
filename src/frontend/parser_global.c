@@ -495,6 +495,21 @@ static bool static_pointer_initializer_from_expression(MinicParser *parser,
     return false;
 }
 
+static bool static_pointer_initializer_type_compatible(const MinicParser *parser,
+                                                       MinicType target_type,
+                                                       MinicExpressionId expression_id) {
+    const MinicExpression *source;
+
+    if (parser == NULL) {
+        return false;
+    }
+    if (minic_c0_assignment_compatible(parser->program, target_type, expression_id)) {
+        return true;
+    }
+    source = minic_c0_program_expression(parser->program, expression_id);
+    return source != NULL && minic_type_gnu_pointer_sign_compatible(target_type, source->type);
+}
+
 static bool parse_static_pointer_initializer(MinicParser *parser,
                                              MinicType target_type,
                                              MinicStaticPointerInitializer *initializer) {
@@ -507,7 +522,7 @@ static bool parse_static_pointer_initializer(MinicParser *parser,
     (void)memset(initializer, 0, sizeof(*initializer));
     initializer->function_id = MINIC_FUNCTION_INVALID;
     initializer->relocation_target.object_id = MINIC_GLOBAL_OBJECT_INVALID;
-    if (!minic_c0_assignment_compatible(parser->program, target_type, expression_id)) {
+    if (!static_pointer_initializer_type_compatible(parser, target_type, expression_id)) {
         minic_parser_error(parser, "static pointer initializer type mismatch");
         return false;
     }

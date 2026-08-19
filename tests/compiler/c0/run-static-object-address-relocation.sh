@@ -21,6 +21,8 @@ test "$array_count" -eq 4
 grep -F '.dword global_address_array+4' "$work/static_object_address_relocation.s" >/dev/null
 grep -F '.dword global_address_array+36' "$work/static_object_address_relocation.s" >/dev/null
 grep -F '.dword internal_address_target+4' "$work/static_object_address_relocation.s" >/dev/null
+pointer_sign_count=$(grep -F -c '.dword pointer_sign_ids' "$work/static_object_address_relocation.s")
+test "$pointer_sign_count" -eq 2
 grep -F 'string_literal_address:' "$work/static_object_address_relocation.s" >/dev/null
 grep -F '.dword .Lminic_string_' "$work/static_object_address_relocation.s" >/dev/null
 function_count=$(grep -F -c '.dword function_address_target' "$work/static_object_address_relocation.s")
@@ -35,6 +37,16 @@ if "$minic" -S "$root/tests/compiler/c0/invalid_static_object_address_type.c" \
 fi
 grep -F 'static pointer initializer type mismatch' "$work/invalid-type.stderr" >/dev/null
 
+if "$minic" -S "$root/tests/compiler/c0/invalid_static_pointer_sign_qualifier_loss.c" \
+    -o "$work/invalid-pointer-sign-qualifier.s" \
+    >"$work/invalid-pointer-sign-qualifier.stdout" \
+    2>"$work/invalid-pointer-sign-qualifier.stderr"; then
+    printf '%s\n' 'FAIL compiler/c0/static-object-address: pointer-sign qualifier loss accepted' >&2
+    exit 1
+fi
+grep -F 'static pointer initializer type mismatch' \
+    "$work/invalid-pointer-sign-qualifier.stderr" >/dev/null
+
 if "$minic" -S "$root/tests/compiler/c0/invalid_static_pointer_subscript_relocation.c" \
     -o "$work/invalid-pointer-subscript.s" \
     >"$work/invalid-pointer-subscript.stdout" 2>"$work/invalid-pointer-subscript.stderr"; then
@@ -44,4 +56,4 @@ fi
 grep -F 'static pointer initializer requires a null or static symbol address constant' \
     "$work/invalid-pointer-subscript.stderr" >/dev/null
 
-printf '%s\n' 'PASS compiler/c0/static-object-address relocation=symbolic-object+function explicit-pointer-cast=preserved scalar+aggregate=1 zero-offset-array-decay+string-literal null=shared addend=signed-static pointer-subscript=fail-closed type=checked'
+printf '%s\n' 'PASS compiler/c0/static-object-address relocation=symbolic-object+function explicit-pointer-cast=preserved scalar+aggregate=1 zero-offset-array-decay+string-literal pointer-sign=static-init-only pointer-sign-qualifier-loss=reject null=shared addend=signed-static pointer-subscript=fail-closed type=checked'
