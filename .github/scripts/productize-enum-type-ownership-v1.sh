@@ -7,13 +7,13 @@ log=/tmp/minic-enum-type-ownership.log
 patch=/tmp/minic-enum-type-ownership.patch
 
 run_materialization() {
-  python3 tools/dev/materialize-enum-type-ownership-v1.py
+  python3 tools/dev/materialize-enum-type-ownership-v2.py
 
-  # Repair two deliberately broad source substitutions in the materializer into strict C11.
+  # Repair two deliberately broad source substitutions in the inherited v1 stage-2 materializer
+  # into strict, non-recursive C11 helpers.
   python3 - <<'PY'
 from pathlib import Path
 
-# The broad signedness substitution also touches the helper body; restore its primitive leaf.
 for name in ["src/frontend/const_eval.c", "src/frontend/expression_semantics.c"]:
     path = Path(name)
     text = path.read_text()
@@ -25,7 +25,6 @@ for name in ["src/frontend/const_eval.c", "src/frontend/expression_semantics.c"]
     )
     path.write_text(text)
 
-# Replace the temporary GNU statement-expression spelling with a normal helper.
 path = Path("src/target/riscv64/codegen_expression.c")
 text = path.read_text()
 needle = "static bool minic_riscv64_emit_bit_field_load_from_address(FILE *file,"
@@ -55,12 +54,40 @@ path.write_text(text)
 PY
 
   changed_c=$(git diff --name-only -- '*.c' '*.h')
-  if test -n "$changed_c"; then
-    # shellcheck disable=SC2086
-    clang-format-18 -i $changed_c
-  fi
+  test -n "$changed_c"
+  # shellcheck disable=SC2086
+  clang-format-18 -i $changed_c
   CLANG_FORMAT=clang-format-18 bash tools/maintenance/run-format.sh check
   git diff --check
+
+  # Fail closed if the grouped replacement is incomplete. Do this again after post-processing,
+  # independently of the Python manifest.
+  for path in \
+    src/frontend/ast.c \
+    src/frontend/ast.h \
+    src/frontend/ast_verifier.c \
+    src/frontend/const_eval.c \
+    src/frontend/expression_semantics.c \
+    src/frontend/parser_expression.c \
+    src/frontend/parser_statement.c \
+    src/target/data_layout.c \
+    src/target/target_info.c \
+    src/target/target_info.h \
+    src/target/riscv64/codegen_internal.h \
+    src/target/riscv64/codegen_support.c \
+    src/target/riscv64/codegen_expression.c \
+    src/target/riscv64/codegen_statement.c \
+    src/target/riscv64/core_codegen.c \
+    tests/compiler/c0/enum_forward_completion.c \
+    tests/compiler/c0/run-enum-forward-completion.sh \
+    tests/compiler/c0/run.sh
+  do
+    git diff --name-only -- "$path" | grep -Fx "$path" >/dev/null
+  done
+
+  ! grep -R "minic_refresh_program_enum_types\|minic_refresh_enum_type" \
+      src/frontend/ast.c src/frontend/*.h
+  ! grep -R "minic_type_enum(enum_id," src/frontend/parser_enum.c src/frontend/type.c
 
   make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/product-enum-type
   MINIC="$root/build/product-enum-type/bin/minic" \
@@ -68,14 +95,20 @@ PY
     BUILD_DIR="$root/build/product-enum-type" \
     sh tests/compiler/c0/run-enum-forward-completion.sh
   make -j4 check-fast MODE=release BUILD_DIR=build/product-enum-type-fast
-
-  # Structural contract: completing an enum must touch only its canonical entity.
-  ! grep -R "minic_refresh_program_enum_types\|minic_refresh_enum_type" \
-      src/frontend/ast.c src/frontend/*.h
-  ! grep -R "minic_type_enum(enum_id," src/frontend/parser_enum.c src/frontend/type.c
 }
 
-if ! run_materialization > >(tee "$log") 2>&1; then
+# Do not invoke run_materialization directly as the condition of `if ! ...`: Bash suppresses
+# errexit inside functions used as conditional commands. Run it in its own strict subshell,
+# capture the status outside, and make every failed command terminate the grouped slice.
+set +e
+(
+  set -Eeuo pipefail
+  run_materialization
+) > >(tee "$log") 2>&1
+status=$?
+set -e
+
+if test "$status" -ne 0; then
   git diff > "$patch" || true
   git reset --hard HEAD
   mkdir -p diagnostics
@@ -86,7 +119,7 @@ if ! run_materialization > >(tee "$log") 2>&1; then
   git add diagnostics/enum-type-ownership-failure.log diagnostics/enum-type-ownership-failure.patch
   git commit -m 'diagnostic: capture enum ownership productizer failure'
   git push origin HEAD:refactor/frontend-semantic-ownership
-  exit 1
+  exit "$status"
 fi
 
 git config user.name github-actions[bot]
@@ -94,8 +127,9 @@ git config user.email 41898282+github-actions[bot]@users.noreply.github.com
 rm -f diagnostics/enum-type-ownership-failure.log diagnostics/enum-type-ownership-failure.patch
 
 git add src/frontend src/target tests/compiler/c0
-# Do not publish the development materializer as product source.
-git reset tools/dev/materialize-enum-type-ownership-v1.py >/dev/null 2>&1 || true
+# Product mainline contains canonical C, not temporary migration machinery.
+git reset tools/dev/materialize-enum-type-ownership-v1.py \
+          tools/dev/materialize-enum-type-ownership-v2.py >/dev/null 2>&1 || true
 
-git commit -m 'frontend: make enum completion canonical and query-driven'
+git commit -m 'frontend: finish canonical enum type ownership'
 git push origin HEAD:refactor/frontend-semantic-ownership
