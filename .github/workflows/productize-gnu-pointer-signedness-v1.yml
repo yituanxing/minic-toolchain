@@ -1,0 +1,51 @@
+name: Productize GNU pointer signedness v1
+
+on:
+  push:
+    branches:
+      - frontend/gnu-pointer-signedness-v1
+    paths:
+      - 'tools/dev/materialize-gnu-pointer-signedness-v1.py'
+      - '.github/workflows/productize-gnu-pointer-signedness-v1.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  productize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: frontend/gnu-pointer-signedness-v1
+
+      - name: Materialize bounded GNU compatibility
+        run: python3 tools/dev/materialize-gnu-pointer-signedness-v1.py
+
+      - name: Build exact MiniC
+        run: make -j4 CFLAGS=-Werror
+
+      - name: Run focused semantic gate
+        run: |
+          MINIC="$GITHUB_WORKSPACE/build/debug/bin/minic" \
+          HOST_CC=cc \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/debug" \
+            sh tests/compiler/c0/run-gnu-pointer-signedness.sh
+
+      - name: Check patch hygiene
+        run: git diff --check
+
+      - name: Commit product
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/frontend/type.c tests/compiler/c0/run.sh
+          if git diff --cached --quiet; then
+            echo 'product already materialized'
+            exit 0
+          fi
+          git commit -m 'frontend: accept GNU same-rank integer pointer signedness'
+          git push origin HEAD:frontend/gnu-pointer-signedness-v1
