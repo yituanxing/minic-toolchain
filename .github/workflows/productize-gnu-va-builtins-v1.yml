@@ -1,0 +1,32 @@
+name: Productize GNU va builtins v1
+
+on:
+  push:
+    branches:
+      - frontend/gnu-va-start-builtin-v1
+    paths:
+      - 'tools/dev/materialize-gnu-va-builtins-v1.py'
+      - '.github/scripts/productize-gnu-va-builtins-v1.sh'
+      - '.github/workflows/productize-gnu-va-builtins-v1.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: productize-gnu-va-builtins-v1
+  cancel-in-progress: true
+
+jobs:
+  productize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout capability branch
+        uses: actions/checkout@v4
+        with:
+          ref: frontend/gnu-va-start-builtin-v1
+          fetch-depth: 0
+
+      - name: Materialize, validate, and publish GNU va builtins
+        run: bash .github/scripts/productize-gnu-va-builtins-v1.sh
