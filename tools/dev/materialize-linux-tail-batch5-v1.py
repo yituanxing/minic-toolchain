@@ -40,6 +40,30 @@ replace_once(
     '''        if (!minic_type_is_integer(element_type) && !minic_type_is_pointer(element_type) &&\n            !minic_type_is_record(element_type)) {\n            minic_parser_error(\n                parser,\n                "brace-initialized inferred static array requires scalar or record elements");\n            return false;\n        }\n        if (minic_type_is_record(element_type) &&\n            !minic_parser_require_complete_object_type(\n                parser,\n                element_type,\n                "inferred static record array requires a complete element type")) {\n            return false;\n        }''',
 )
 
+# C positional initialization of a union initializes its first member. The
+# runtime record owner already handles recursive record members; admit complete
+# unions by limiting positional consumption/zero-fill to that first member.
+replace_once(
+    "src/frontend/parser_statement.c",
+    '''    MinicSourceSpan initializer_span;\n    size_t field_index;''',
+    '''    MinicSourceSpan initializer_span;\n    size_t field_index;\n    size_t field_limit;''',
+)
+replace_once(
+    "src/frontend/parser_statement.c",
+    '''    record = minic_c0_program_record(parser->program, record_id);\n    if (record == NULL || !record->is_complete || record->is_union) {\n        minic_parser_error(parser,\n                           "positional runtime initializer requires a complete struct type");\n        return false;\n    }\n    initializer_span.begin = begin;''',
+    '''    record = minic_c0_program_record(parser->program, record_id);\n    if (record == NULL || !record->is_complete) {\n        minic_parser_error(parser,\n                           "positional runtime initializer requires a complete record type");\n        return false;\n    }\n    field_limit = record->is_union ? (record->field_count == 0U ? 0U : 1U)\n                                   : record->field_count;\n    initializer_span.begin = begin;''',
+)
+replace_once(
+    "src/frontend/parser_statement.c",
+    '''        if (field_index >= record->field_count) {\n            minic_parser_error(parser, "too many positional record initializers");''',
+    '''        if (field_index >= field_limit) {\n            minic_parser_error(parser, "too many positional record initializers");''',
+)
+replace_once(
+    "src/frontend/parser_statement.c",
+    '''    while (field_index < record->field_count) {\n        MinicExpressionId member_id;''',
+    '''    while (field_index < field_limit) {\n        MinicExpressionId member_id;''',
+)
+
 p = Path("tests/compiler/c0/run.sh")
 text = p.read_text()
 gate = '''\n\nMINIC="$minic" \\\nBUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \\\nsh "$root/tests/compiler/c0/run-linux-tail-batch5.sh"\n'''
