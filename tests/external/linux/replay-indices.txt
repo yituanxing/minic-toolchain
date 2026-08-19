@@ -1,4 +1,5 @@
-# Current dominant first500 frontier: expected '=' after record designator
+# 367/500 v2 baseline: dominant expected '=' after record designator frontier
+# Replay these exact configured-TU indices before the next full500 freeze.
 193
 194
 195
