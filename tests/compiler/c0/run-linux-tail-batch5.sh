@@ -1,5 +1,6 @@
 #!/bin/sh
 set -eu
+# Batch5 validates logical relocation typing and physical DataLayout together.
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 minic=${MINIC:-"$root/build/debug/bin/minic"}
 work=${BUILD_DIR:-"$root/build/debug"}/tests/linux-tail-batch5
