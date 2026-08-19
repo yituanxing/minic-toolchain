@@ -55,3 +55,34 @@ jobs:
           git add src/frontend/type.h src/frontend/type.c src/frontend/parser_expression.c src/frontend/parser_global.c
           git commit -m 'frontend: share GNU pointer-sign conversion semantics'
           git push origin HEAD:frontend/gnu-pointer-sign-static-init-v1
+
+      - name: Capture productizer failure
+        if: failure()
+        run: |
+          set +e
+          log=tools/dev/gnu-pointer-sign-static-init-failure.log
+          {
+            printf '%s\n' '=== materializer ==='
+            python3 tools/dev/materialize-gnu-pointer-sign-static-init-v1.py
+            printf 'status=%d\n' "$?"
+            printf '%s\n' '=== release build ==='
+            make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/gnu-pointer-sign-static-init-diagnostic
+            printf 'status=%d\n' "$?"
+            printf '%s\n' '=== static relocation focused ==='
+            MINIC="$GITHUB_WORKSPACE/build/gnu-pointer-sign-static-init-diagnostic/bin/minic" \
+            BUILD_DIR="$GITHUB_WORKSPACE/build/gnu-pointer-sign-static-init-diagnostic-focused" \
+              sh tests/compiler/c0/run-static-object-address-relocation.sh
+            printf 'status=%d\n' "$?"
+            printf '%s\n' '=== pointer-sign call focused ==='
+            MINIC="$GITHUB_WORKSPACE/build/gnu-pointer-sign-static-init-diagnostic/bin/minic" \
+            HOST_CC=cc \
+            BUILD_DIR="$GITHUB_WORKSPACE/build/gnu-pointer-sign-static-init-diagnostic-focused" \
+              sh tests/compiler/c0/run-gnu-pointer-sign-call-conversion.sh
+            printf 'status=%d\n' "$?"
+          } >"$log" 2>&1
+          git checkout -- src/frontend/type.h src/frontend/type.c src/frontend/parser_expression.c src/frontend/parser_global.c
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add "$log"
+          git commit -m 'ci: capture GNU pointer-sign productizer failure'
+          git push origin HEAD:frontend/gnu-pointer-sign-static-init-v1
