@@ -1,10 +1,11 @@
 name: Productize GNU pointer signedness v2
 
 on:
-  push:
+  pull_request:
     branches:
-      - frontend/gnu-pointer-signedness-v1
+      - frontend/chained-record-designator-v1
     paths:
+      - 'tools/dev/materialize-gnu-pointer-signedness-v1.py'
       - '.github/workflows/productize-gnu-pointer-signedness-v2.yml'
 
 permissions:
@@ -12,10 +13,11 @@ permissions:
 
 jobs:
   productize:
+    if: github.event.pull_request.number == 425
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - name: Checkout exact branch
+      - name: Checkout exact head branch
         uses: actions/checkout@v4
         with:
           ref: frontend/gnu-pointer-signedness-v1
