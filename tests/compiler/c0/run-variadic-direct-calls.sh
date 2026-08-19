@@ -50,7 +50,7 @@ if test "$status" -ne 0; then
     exit 1
 fi
 printf '%s\n' \
-    "PASS compiler/c0/$name exit=$status abi=rv64-varargs fixed=1 extras=int,char,long,pointer,double,int,int,int stack=yes"
+    "PASS compiler/c0/$name exit=$status abi=rv64-varargs fixed=1 total-arguments=20 stack=yes capacity=32"
 
 name=variadic_callee_save
 "$riscv_cc" -E -P -x c "$root/tests/compiler/c0/$name.c" -o "$work/$name.i"
