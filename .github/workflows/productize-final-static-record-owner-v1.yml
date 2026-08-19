@@ -38,20 +38,23 @@ jobs:
           insert_at = source.index(helper_end_marker)
           source = source[:insert_at] + helpers + source[insert_at:]
 
-          array_block = '''    if (field->is_array) {
-              return overwrite_static_zero_array_constant(
-                  parser, object_id, field->type, field->element_count, field_base_slot);
-          }
-          '''
-          if source.count(array_block) != 1:
-              raise SystemExit(f'backward array block count={source.count(array_block)}')
+          field_start_marker = 'static bool overwrite_static_zero_field_value('
+          field_end_marker = '\nstatic bool overwrite_static_zero_array_element('
+          field_start = source.index(field_start_marker)
+          field_end = source.index(field_end_marker, field_start)
+          field_body = source[field_start:field_end]
+          if 'minic_parser_replace_zero_bounded_string_literal_initializer' in field_body:
+              raise SystemExit('backward character-array string overlay already present')
+          generic_array_marker = '    if (field->is_array) {'
+          generic_array_offset = field_body.index(generic_array_marker)
           char_overlay = '''    if (field->is_array && minic_type_is_char_integer(field->type) &&
               parser->current.kind == MINIC_TOKEN_STRING_LITERAL) {
               return minic_parser_replace_zero_bounded_string_literal_initializer(
                   parser, object_id, field_base_slot, field->element_count);
           }
           '''
-          source = source.replace(array_block, char_overlay + array_block, 1)
+          insert_char_at = field_start + generic_array_offset
+          source = source[:insert_char_at] + char_overlay + source[insert_char_at:]
 
           function_start = 'static bool parse_static_record_constant('
           function_end = '\nbool minic_parser_parse_static_storage_initializer_value('
