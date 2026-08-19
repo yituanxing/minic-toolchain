@@ -365,6 +365,102 @@ bool minic_parser_add_bounded_string_literal_initializer(MinicParser *parser,
     return true;
 }
 
+static bool replace_zero_string_payload(MinicParser *parser,
+                                        MinicSourceSpan span,
+                                        MinicTokenKind kind,
+                                        MinicGlobalObjectId object_id,
+                                        size_t *slot_index,
+                                        size_t slot_limit) {
+    size_t cursor;
+    size_t end;
+
+    if (slot_index == NULL || !string_literal_payload_bounds(parser, span, kind, &cursor, &end)) {
+        return false;
+    }
+    while (cursor < end) {
+        int value;
+
+        if (*slot_index >= slot_limit) {
+            return false;
+        }
+        if (parser->source[cursor] == '\\') {
+            cursor += 1U;
+            if (!decode_string_escape(parser->source, &cursor, end, &value)) {
+                minic_parser_error(parser, "unsupported string escape");
+                return false;
+            }
+        } else {
+            value = (int)(unsigned char)parser->source[cursor];
+            cursor += 1U;
+        }
+        if (!minic_c0_global_object_replace_zero_initializer_bits(
+                parser->program, object_id, *slot_index, (uint64_t)(int64_t)value)) {
+            minic_parser_error(parser,
+                               "backward string initializer can only replace implicit zero slots");
+            return false;
+        }
+        *slot_index += 1U;
+    }
+    return true;
+}
+
+bool minic_parser_replace_zero_bounded_string_literal_initializer(MinicParser *parser,
+                                                                  MinicGlobalObjectId object_id,
+                                                                  size_t first_slot,
+                                                                  size_t element_capacity) {
+    MinicParser probe;
+    size_t decoded_length;
+    size_t total_length;
+    size_t slot_index;
+    size_t slot_limit;
+
+    if (parser == NULL || element_capacity == 0U ||
+        parser->current.kind != MINIC_TOKEN_STRING_LITERAL ||
+        first_slot > SIZE_MAX - element_capacity) {
+        return false;
+    }
+    probe = *parser;
+    total_length = 0U;
+    while (probe.current.kind == MINIC_TOKEN_STRING_LITERAL) {
+        if (!decoded_string_length(
+                &probe, probe.current.span, probe.current.kind, &decoded_length) ||
+            total_length > SIZE_MAX - decoded_length || !minic_parser_advance(&probe)) {
+            return false;
+        }
+        total_length += decoded_length;
+    }
+    if (total_length > element_capacity) {
+        minic_parser_error(parser, "string initializer is too long for character array");
+        return false;
+    }
+    slot_index = first_slot;
+    slot_limit = first_slot + element_capacity;
+    while (parser->current.kind == MINIC_TOKEN_STRING_LITERAL) {
+        MinicSourceSpan literal_span;
+
+        literal_span = parser->current.span;
+        if (!replace_zero_string_payload(parser,
+                                         literal_span,
+                                         MINIC_TOKEN_STRING_LITERAL,
+                                         object_id,
+                                         &slot_index,
+                                         slot_limit) ||
+            !minic_parser_advance(parser)) {
+            return false;
+        }
+    }
+    while (slot_index < slot_limit) {
+        if (!minic_c0_global_object_replace_zero_initializer_bits(
+                parser->program, object_id, slot_index, 0U)) {
+            minic_parser_error(parser,
+                               "backward string initializer can only replace implicit zero slots");
+            return false;
+        }
+        slot_index += 1U;
+    }
+    return true;
+}
+
 bool minic_parser_get_predefined_function_name_object(MinicParser *parser,
                                                       MinicGlobalObjectId *object_id) {
     const MinicFunction *function;
