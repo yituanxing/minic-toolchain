@@ -1,2 +1,2 @@
-# Verify permanent GNU zero-length static pointer-array product.
+# Re-run 185 with precise RV64 emitter owner diagnostics.
 185
