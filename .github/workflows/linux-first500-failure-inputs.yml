@@ -6,6 +6,9 @@ on:
       - tests/linux-batch-pressure-convergence-v1
     paths:
       - '.github/workflows/linux-first500-failure-inputs.yml'
+  pull_request:
+    paths:
+      - '.github/workflows/linux-first500-failure-inputs.yml'
 
 permissions:
   contents: read
