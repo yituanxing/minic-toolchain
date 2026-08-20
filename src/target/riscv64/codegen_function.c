@@ -596,9 +596,6 @@ static bool minic_riscv64_emit_constant_value(FILE *file,
                  * field rather than materializing one element. */
                 continue;
             }
-            if (field->element_count == 0U) {
-                return false;
-            }
             if (field->is_flexible_array) {
                 size_t flexible_element_count;
 
@@ -630,6 +627,9 @@ static bool minic_riscv64_emit_constant_value(FILE *file,
                     cursor += element_emitted;
                 }
                 continue;
+            }
+            if (field->element_count == 0U) {
+                return false;
             }
             if (field->is_bit_field) {
                 if (!minic_riscv64_emit_record_bit_field_run(file,

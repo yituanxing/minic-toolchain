@@ -15,6 +15,7 @@ struct holder {
     struct payload zero[0];
     int *pointer;
     int after;
+    int *tail[];
 };
 
 static struct holder state = {
@@ -24,8 +25,8 @@ static struct holder state = {
 };
 
 int main(void) {
-    return (state.before == 3 && state.pointer == &target &&
-            *state.pointer == 7 && state.after == 5)
+    return (state.before == 3 && state.pointer == &target && *state.pointer == 7 &&
+            state.after == 5)
                ? 0
                : 1;
 }

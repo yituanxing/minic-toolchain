@@ -12,7 +12,7 @@ grep -F 'vm_numa_event' "$work/zero.s" >/dev/null || true
 "$minic" -S "$work/record-field.i" -o "$work/record-field.s"
 test -s "$work/record-field.s"
 grep -Fq 'target' "$work/record-field.s"
-printf '%s\n' 'PASS compiler/c0/gnu_zero_length_array extern=1 incomplete-to-zero=1 sizeof=0 decay=1 type-identity=complete-zero record-field=zero-storage+following-relocation'
+printf '%s\n' 'PASS compiler/c0/gnu_zero_length_array extern=1 incomplete-to-zero=1 sizeof=0 decay=1 type-identity=complete-zero record-field=zero-storage+following-relocation nested-fam=zero-tail'
 "$host_cc" -E -P -x c "$root/tests/compiler/c0/invalid_zero_length_array_redeclaration.c" -o "$work/conflict.i"
 if "$minic" -S "$work/conflict.i" -o "$work/conflict.s" >"$work/conflict.stdout" 2>"$work/conflict.stderr"; then
   echo 'FAIL zero-length vs positive-bound redeclaration unexpectedly compiled' >&2
