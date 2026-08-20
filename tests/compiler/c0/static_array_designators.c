@@ -32,7 +32,12 @@ static int mutable_inferred[] = {
     [1] = 4,
 };
 
+static const unsigned long chained[3][2] = {
+    [1][0] = 11UL,
+    [2][1] = 13UL,
+};
+
 int main(void) {
     return (int)(indexed[1] + ranged[1] + (syscall_shape[0] != 0) + (names[2] != 0) +
-                 mutable_inferred[3]);
+                 mutable_inferred[3] + chained[1][0] + chained[2][1]);
 }

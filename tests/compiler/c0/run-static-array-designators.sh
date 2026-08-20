@@ -22,6 +22,20 @@ grep -F 'mutable_inferred:' "$asm" >/dev/null
 grep -F '.size mutable_inferred, 16' "$asm" >/dev/null
 grep -F 'names:' "$asm" >/dev/null
 grep -F '.size names, 24' "$asm" >/dev/null
+grep -F 'chained:' "$asm" >/dev/null
+grep -F '.size chained, 48' "$asm" >/dev/null
+
+sed -n '/^chained:/,/^.size chained, 48/p' "$asm" | \
+    grep '^  \.dword ' >"$work/chained.actual"
+cat >"$work/chained.expected" <<'EOF'
+  .dword 0
+  .dword 0
+  .dword 11
+  .dword 0
+  .dword 0
+  .dword 13
+EOF
+diff -u "$work/chained.expected" "$work/chained.actual"
 
 sed -n '/^syscall_shape:/,/^.size syscall_shape, 32/p' "$asm" | \
     grep '^  \.dword ' >"$work/syscall.actual"
@@ -59,4 +73,4 @@ expect_failure invalid_static_array_designator_nonconstant \
     'array designator requires an integer constant expression'
 
 printf '%s\n' \
-    'PASS compiler/c0/static_array_designators c99=1 gnu-range=1 overwrite=1 function-reloc=4 string-reloc=2 inferred-backward=1'
+    'PASS compiler/c0/static_array_designators c99=1 gnu-range=1 overwrite=1 function-reloc=4 string-reloc=2 inferred-backward=1 chained=1'

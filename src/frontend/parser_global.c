@@ -1742,6 +1742,61 @@ materialize_static_aggregate_array_action(MinicParser *parser,
     return true;
 }
 
+static bool append_static_chained_array_designator_value(MinicParser *parser,
+                                                         MinicGlobalObjectId object_id,
+                                                         MinicType array_type) {
+    const MinicArrayType *array;
+    size_t first;
+    size_t last;
+    size_t index;
+
+    if (parser == NULL || !minic_type_is_array(array_type) ||
+        parser->current.kind != MINIC_TOKEN_LBRACKET) {
+        return false;
+    }
+    array = minic_c0_program_array_type(parser->program, array_type.array_type_id);
+    if (array == NULL || array->element_count == 0U || array->is_zero_length ||
+        !minic_parser_parse_array_designator_component(
+            parser, array->element_count, false, &first, &last)) {
+        return false;
+    }
+    if (first != last) {
+        minic_parser_error(
+            parser, "GNU range designators inside chained static arrays are not supported yet");
+        return false;
+    }
+    for (index = 0U; index < first; ++index) {
+        if (!append_static_constant_zero(parser, object_id, array->element_type)) {
+            minic_parser_error(parser, "cannot zero-fill chained static array prefix");
+            return false;
+        }
+    }
+    if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
+        if (!minic_type_is_array(array->element_type) ||
+            !append_static_chained_array_designator_value(parser, object_id, array->element_type)) {
+            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                minic_parser_error(parser,
+                                   "chained array designator requires another array dimension");
+            }
+            return false;
+        }
+    } else {
+        if (!minic_parser_expect(
+                parser, MINIC_TOKEN_EQUAL, "expected '=' after chained array designator") ||
+            !minic_parser_parse_static_storage_initializer_value(
+                parser, object_id, array->element_type)) {
+            return false;
+        }
+    }
+    for (index = first + 1U; index < array->element_count; ++index) {
+        if (!append_static_constant_zero(parser, object_id, array->element_type)) {
+            minic_parser_error(parser, "cannot zero-fill chained static array suffix");
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool parse_static_forward_array_initializer(MinicParser *parser,
                                                    MinicGlobalObjectId object_id,
                                                    MinicType element_type,
@@ -1778,18 +1833,34 @@ static bool parse_static_forward_array_initializer(MinicParser *parser,
         size_t initializer_begin;
         size_t relocation_begin;
         size_t union_selection_begin;
+        bool chained_designator;
 
+        chained_designator = false;
         if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
             size_t first;
             size_t last;
 
-            if (!minic_parser_parse_array_designator(
+            if (!minic_parser_parse_array_designator_component(
                     parser, element_count, infer_bound, &first, &last) ||
                 !minic_array_initializer_plan_add_designated(&plan, first, last, &action_id)) {
                 if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
                     minic_parser_error(parser,
                                        "static aggregate array designator extent overflows");
                 }
+                goto done;
+            }
+            if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
+                if (first != last) {
+                    minic_parser_error(parser, "outer GNU range designator cannot be chained yet");
+                    goto done;
+                }
+                if (!minic_type_is_array(element_type)) {
+                    minic_parser_error(parser, "chained array designator exceeds array dimensions");
+                    goto done;
+                }
+                chained_designator = true;
+            } else if (!minic_parser_expect(
+                           parser, MINIC_TOKEN_EQUAL, "expected '=' after array designator")) {
                 goto done;
             }
         } else if (!minic_array_initializer_plan_add_positional(&plan, &action_id)) {
@@ -1810,7 +1881,10 @@ static bool parse_static_forward_array_initializer(MinicParser *parser,
         initializer_begin = object->initializer_count;
         relocation_begin = object->relocation_count;
         union_selection_begin = object->union_selection_count;
-        if (!minic_parser_parse_static_storage_initializer_value(parser, object_id, element_type) ||
+        if ((chained_designator
+                 ? !append_static_chained_array_designator_value(parser, object_id, element_type)
+                 : !minic_parser_parse_static_storage_initializer_value(
+                       parser, object_id, element_type)) ||
             !capture_static_aggregate_array_action(parser,
                                                    object_id,
                                                    initializer_begin,
