@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Converge GNU pointer-update and zero-length-array verifier ownership once."""
 from pathlib import Path
+import runpy
 
 
 def replace_once(path: Path, before: str, after: str) -> None:
@@ -76,3 +77,5 @@ replace_once(
              !incomplete_array_has_semantic_owner(program, index)) ||
 """,
 )
+
+runpy.run_path("tools/dev/materialize-linux-first500-nested-designator-v1.py", run_name="__main__")
