@@ -1,2 +1,2 @@
-# Verify permanent inferred multidimensional static-array product.
+# Verify permanent static-local inferred multidimensional array product.
 148
