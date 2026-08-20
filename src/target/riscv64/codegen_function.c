@@ -1026,20 +1026,30 @@ static bool minic_riscv64_emit_global_object(FILE *file,
 static bool minic_riscv64_emit_function(FILE *file,
                                         const MinicC0Program *program,
                                         const MinicFunction *function,
-                                        size_t *label_counter) {
+                                        size_t *label_counter,
+                                        const char **failure_stage) {
     MinicRiscv64FunctionLayout function_layout;
     MinicRiscv64FrameLayout frame_layout;
     MinicRiscv64FunctionSymbol symbol;
     size_t frame_size;
     bool success;
 
+    if (failure_stage != NULL) {
+        *failure_stage = "validation";
+    }
     if (function == NULL || !function->is_defined || function->name_length == 0U ||
         function->body_block >= program->block_count) {
         return false;
     }
     minic_riscv64_function_layout_initialize(&function_layout);
+    if (failure_stage != NULL) {
+        *failure_stage = "layout";
+    }
     if (!minic_riscv64_layout_function(NULL, program, function, &function_layout, NULL)) {
         return false;
+    }
+    if (failure_stage != NULL) {
+        *failure_stage = "frame-layout";
     }
     if (!minic_riscv64_frame_layout_from_function_layout(
             program, function, &function_layout, &frame_layout)) {
@@ -1047,9 +1057,15 @@ static bool minic_riscv64_emit_function(FILE *file,
         return false;
     }
     frame_size = frame_layout.frame_size;
+    if (failure_stage != NULL) {
+        *failure_stage = "symbol";
+    }
     if (!minic_riscv64_function_symbol_from_function(function, &symbol)) {
         minic_riscv64_function_layout_destroy(&function_layout);
         return false;
+    }
+    if (failure_stage != NULL) {
+        *failure_stage = "prologue";
     }
     success = minic_riscv64_emit_function_symbol_begin(file, &symbol);
     if (success) {
@@ -1081,6 +1097,9 @@ static bool minic_riscv64_emit_function(FILE *file,
         MinicRiscv64AbiValue return_value;
         size_t parameter_index;
 
+        if (failure_stage != NULL) {
+            *failure_stage = "abi-parameters";
+        }
         if (!minic_riscv64_abi_cursor_initialize_for_return(
                 program, function->return_type, &abi_cursor, &return_value) ||
             (return_value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) !=
@@ -1253,10 +1272,16 @@ static bool minic_riscv64_emit_function(FILE *file,
         }
     }
     if (success) {
+        if (failure_stage != NULL) {
+            *failure_stage = "body";
+        }
         success = minic_riscv64_emit_block(
             file, program, function, &function_layout, function->body_block, label_counter);
     }
     if (success) {
+        if (failure_stage != NULL) {
+            *failure_stage = "epilogue";
+        }
         success = fprintf(file,
                           "  li a0, 0\n"
                           ".L%s_return:\n",
@@ -1274,6 +1299,9 @@ static bool minic_riscv64_emit_function(FILE *file,
             fprintf(file, "  ret\n") >= 0 && minic_riscv64_emit_function_symbol_end(file, &symbol);
     }
     minic_riscv64_function_layout_destroy(&function_layout);
+    if (success && failure_stage != NULL) {
+        *failure_stage = NULL;
+    }
     return success;
 }
 
@@ -1418,7 +1446,24 @@ bool minic_riscv64_write_c0_program_with_core_candidates(const char *path,
                       minic_riscv64_emit_core_function_basic_v0_for_program_with_symbol(
                           file, program, core_function, &symbol);
         } else {
-            success = minic_riscv64_emit_function(file, program, function, &label_counter);
+            const char *failure_stage;
+
+            failure_stage = NULL;
+            success = minic_riscv64_emit_function(
+                file, program, function, &label_counter, &failure_stage);
+            if (!success && diagnostic != NULL && diagnostic->message[0] == '\0') {
+                char message[256];
+                const char *symbol_name;
+
+                symbol_name = minic_c0_function_symbol_name(function);
+                (void)snprintf(message,
+                               sizeof(message),
+                               "cannot emit RISC-V function '%s' (index=%zu stage=%s)",
+                               symbol_name != NULL ? symbol_name : "<unnamed>",
+                               function_index,
+                               failure_stage != NULL ? failure_stage : "unknown");
+                minic_riscv64_set_diagnostic(diagnostic, path, message);
+            }
         }
         if (!success && diagnostic != NULL && diagnostic->message[0] == '\0') {
             char message[256];
