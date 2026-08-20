@@ -1,2 +1,2 @@
-# Exact human replay of permanent chained static array-designator product.
-238
+# Exact human replay of permanent runtime record-array value-copy product.
+195
