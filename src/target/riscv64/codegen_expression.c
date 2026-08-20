@@ -1406,8 +1406,15 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
         return minic_riscv64_emit_object_load(
             file, program, function, function_layout, expression->value.local_id);
     case MINIC_EXPRESSION_COMPOUND_LITERAL:
-        return minic_riscv64_emit_lvalue_address(
-            file, program, function, function_layout, expression_id);
+        if (!minic_riscv64_emit_lvalue_address(
+                file, program, function, function_layout, expression_id)) {
+            return false;
+        }
+        if (minic_type_is_record(expression->type)) {
+            return true;
+        }
+        return minic_riscv64_emit_lvalue_load_from_address(
+            file, program, expression_id, expression->type, "a0", "a0");
     case MINIC_EXPRESSION_GLOBAL_OBJECT: {
         const MinicGlobalObject *object;
 
