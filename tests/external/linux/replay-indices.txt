@@ -1,2 +1,2 @@
-# Re-run 185 with precise RV64 emitter owner diagnostics.
+# Verify active-union-aware aggregate relocation layout on Linux index 185.
 185
