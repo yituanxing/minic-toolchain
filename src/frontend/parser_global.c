@@ -1716,7 +1716,14 @@ materialize_static_aggregate_array_action(MinicParser *parser,
                                  relocation->target_byte_addend);
         }
         if (!recorded) {
-            minic_parser_error(parser, "cannot materialize static aggregate array relocation");
+            minic_parser_error(parser,
+                               "cannot materialize static aggregate array relocation "
+                               "(captured-location=%u target=%u relative-slot=%zu "
+                               "destination-slot=%zu)",
+                               (unsigned int)relocation->location_kind,
+                               (unsigned int)relocation->target_kind,
+                               relocation->location_index,
+                               location_index);
             return false;
         }
     }
