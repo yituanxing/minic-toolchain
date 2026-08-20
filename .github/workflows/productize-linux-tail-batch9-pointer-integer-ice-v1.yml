@@ -1,0 +1,51 @@
+name: Productize Linux tail batch9 pointer integer ICE v1
+
+on:
+  pull_request:
+    branches:
+      - infra/linux-tail-batch9-ice-productizer-v1
+    paths:
+      - 'tools/dev/materialize-linux-tail-batch9-pointer-integer-ice-v1.py'
+      - 'tests/compiler/c0/switch_typed_consteval.c'
+      - 'tests/compiler/c0/invalid_case_symbolic_pointer.c'
+      - 'tests/compiler/c0/run-switch-control-flow.sh'
+
+permissions:
+  contents: write
+
+jobs:
+  productize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact feature head
+        uses: actions/checkout@v4
+        with:
+          ref: frontend/linux-tail-batch9-ice-v1
+
+      - name: Materialize GNU pointer integer ICE semantics
+        run: |
+          python3 tools/dev/materialize-linux-tail-batch9-pointer-integer-ice-v1.py
+          clang-format -i src/frontend/const_eval.c tests/compiler/c0/switch_typed_consteval.c tests/compiler/c0/invalid_case_symbolic_pointer.c
+
+      - name: Build and focused gate
+        run: |
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/batch9-ice
+          MINIC="$PWD/build/batch9-ice/bin/minic" \
+          HOST_CC=cc \
+          BUILD_DIR="$PWD/build/batch9-ice-focused" \
+            sh tests/compiler/c0/run-switch-control-flow.sh
+          git diff --check
+
+      - name: Commit product
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/frontend/const_eval.c
+          if git diff --cached --quiet; then
+            echo 'pointer integer ICE product already materialized'
+            exit 0
+          fi
+          git commit -m 'frontend: fold GNU pointer integer ICE roundtrips'
+          git push origin HEAD:frontend/linux-tail-batch9-ice-v1
