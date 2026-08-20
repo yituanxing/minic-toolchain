@@ -1,2 +1,2 @@
-# Verify active-union semantic member with preserved initializer span.
-6
+# Verify final historic first500 tail with RV64 emission stage diagnostics.
+353
