@@ -2,4 +2,4 @@
 """Materialize the next unresolved first500 semantic slice."""
 import runpy
 
-runpy.run_path("tools/dev/materialize-riscv64-emitter-owner-diagnostic-v1.py", run_name="__main__")
+runpy.run_path("tools/dev/materialize-linux-first500-active-union-relocation-layout-v1.py", run_name="__main__")
