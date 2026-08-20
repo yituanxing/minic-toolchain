@@ -2935,20 +2935,6 @@ static bool pointer_arithmetic_shape(MinicTokenKind kind,
     return false;
 }
 
-static bool
-pointer_difference_compatible(const MinicC0Program *program, MinicType left, MinicType right) {
-    MinicType left_pointee;
-    MinicType right_pointee;
-    MinicType left_unqualified;
-    MinicType right_unqualified;
-
-    return minic_type_pointee(left, &left_pointee) && minic_type_pointee(right, &right_pointee) &&
-           minic_type_unqualified(left_pointee, &left_unqualified) &&
-           minic_type_unqualified(right_pointee, &right_unqualified) &&
-           minic_type_equal(left_unqualified, right_unqualified) &&
-           minic_c0_pointer_arithmetic_pointee_allowed(program, left_unqualified);
-}
-
 static bool normalize_conditional_null_pointer_arm(MinicParser *parser,
                                                    MinicExpressionId *arm_id,
                                                    MinicType result_type) {
@@ -3031,7 +3017,7 @@ static bool binary_result_type(const MinicTargetInfo *target,
         return true;
     }
     if (kind == MINIC_TOKEN_MINUS && minic_type_is_pointer(left) && minic_type_is_pointer(right) &&
-        pointer_difference_compatible(program, left, right)) {
+        minic_c0_pointer_difference_compatible(program, left, right)) {
         *result = minic_type_long();
         return true;
     }

@@ -1678,6 +1678,23 @@ bool minic_c0_pointer_arithmetic_pointee_allowed(const MinicC0Program *program,
            minic_c0_type_is_complete_object(program, pointee_type);
 }
 
+bool minic_c0_pointer_difference_compatible(const MinicC0Program *program,
+                                            MinicType left,
+                                            MinicType right) {
+    MinicType left_pointee;
+    MinicType right_pointee;
+    MinicType left_unqualified;
+    MinicType right_unqualified;
+
+    return program != NULL && minic_type_pointee(left, &left_pointee) &&
+           minic_type_pointee(right, &right_pointee) &&
+           minic_type_unqualified(left_pointee, &left_unqualified) &&
+           minic_type_unqualified(right_pointee, &right_unqualified) &&
+           minic_c0_types_compatible(program, left_unqualified, right_unqualified) &&
+           minic_c0_pointer_arithmetic_pointee_allowed(program, left_unqualified) &&
+           minic_c0_pointer_arithmetic_pointee_allowed(program, right_unqualified);
+}
+
 bool minic_c0_pointer_relational_compatible(const MinicC0Program *program,
                                             MinicType left,
                                             MinicType right) {

@@ -237,7 +237,7 @@ static bool verify_binary_type(const MinicC0Program *program,
     if (expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT &&
         minic_type_is_pointer(left->type) && minic_type_is_pointer(right->type)) {
         return minic_type_equal(expression->type, minic_type_long()) &&
-               minic_c0_pointer_relational_compatible(program, left->type, right->type);
+               minic_c0_pointer_difference_compatible(program, left->type, right->type);
     }
 
     if (expression->value.binary.operator_kind == MINIC_BINARY_ADD) {
