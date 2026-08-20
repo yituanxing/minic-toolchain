@@ -59,10 +59,27 @@ jobs:
           print(f'FIRST500_FAILURE_INPUTS copied={copied}')
           PY
 
+      - name: Build exact MiniC debug snapshot
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/first500-minic
+          mkdir -p build/first500-source
+          cp -a Makefile include src tools/minic tests/compiler/c0 tests/programs/c0 build/first500-source/
+
       - name: Upload failure inputs
         uses: actions/upload-artifact@v4
         with:
           name: first500-failure-inputs-${{ github.run_id }}
           path: build/first500-failure-inputs/**/*.i
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload exact MiniC snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: first500-minic-snapshot-${{ github.run_id }}
+          path: |
+            build/first500-minic/bin/minic
+            build/first500-source/**
           if-no-files-found: error
           retention-days: 7
