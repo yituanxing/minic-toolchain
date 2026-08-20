@@ -1,4 +1,4 @@
-# Focused unchanged Linux 6.6.143 replay after index 340 static-FAM convergence.
+# Focused unchanged Linux 6.6.143 replay on exact post-FAM product; keep 340 closed and drive remaining initializer tails.
 122
 197
 389
