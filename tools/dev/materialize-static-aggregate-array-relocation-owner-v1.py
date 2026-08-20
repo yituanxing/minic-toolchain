@@ -1,19 +1,11 @@
 #!/usr/bin/env python3
-"""Normalize captured aggregate-array relocations to the destination array owner."""
+"""Normalize and diagnose captured aggregate-array relocation replay ownership."""
 from pathlib import Path
 
-
-def replace_once(text: str, old: str, new: str, label: str) -> str:
-    count = text.count(old)
-    if count != 1:
-        raise SystemExit(f"{label}: expected 1 match, found {count}")
-    return text.replace(old, new, 1)
-
-
 # A captured aggregate-array action stores relocation indexes relative to its
-# flattened initializer payload.  On replay the owner is the destination array,
+# flattened initializer payload. On replay the owner is the destination array,
 # not the temporary record subobject that originally produced the relocation.
-# Keep the target metadata intact, but canonicalize the location to the array's
+# Keep target metadata intact, but canonicalize the location to the array's
 # aggregate-scalar slot namespace before calling the GlobalObject relocation API.
 path = Path("src/frontend/parser_global.c")
 text = path.read_text()
@@ -24,18 +16,41 @@ end = text.find(end_marker, start)
 if start < 0 or end < 0:
     raise SystemExit("cannot locate static aggregate array relocation replay block")
 block = text[start:end]
-old = "relocation->location_kind"
-count = block.count(old)
-if count == 0:
-    if "MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR" in block:
-        print("aggregate-array relocation owner already normalized")
-    else:
-        raise SystemExit("aggregate-array relocation replay block has unexpected shape")
-else:
-    block = block.replace(old, "MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR")
+old_location = "relocation->location_kind"
+count = block.count(old_location)
+if count != 0:
+    block = block.replace(old_location, "MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR")
     text = text[:start] + block + text[end:]
-    path.write_text(text)
     print(f"normalized {count} aggregate-array relocation replay call sites")
+else:
+    print("aggregate-array relocation owner already normalized")
+
+# Keep a precise generic diagnostic at this ownership boundary. If an AST
+# relocation contract still rejects a replay, the next focused run must expose
+# the captured kind/target and both relative/final slots rather than collapsing
+# the failure to a generic initializer message.
+old_diag = '''        if (!recorded) {
+            minic_parser_error(parser, "cannot materialize static aggregate array relocation");
+            return false;
+        }
+'''
+new_diag = '''        if (!recorded) {
+            minic_parser_error(parser,
+                               "cannot materialize static aggregate array relocation "
+                               "(captured-location=%u target=%u relative-slot=%zu "
+                               "destination-slot=%zu)",
+                               (unsigned int)relocation->location_kind,
+                               (unsigned int)relocation->target_kind,
+                               relocation->location_index,
+                               location_index);
+            return false;
+        }
+'''
+if new_diag not in text:
+    if old_diag not in text:
+        raise SystemExit("aggregate-array relocation diagnostic anchor not found")
+    text = text.replace(old_diag, new_diag, 1)
+path.write_text(text)
 
 # Extend the existing permanent aggregate-array regression with the Linux-shaped
 # combination that exposed the ownership bug: a direct object relocation plus a
