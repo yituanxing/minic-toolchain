@@ -586,7 +586,17 @@ static bool minic_riscv64_emit_constant_value(FILE *file,
             size_t field_offset;
 
             field = minic_c0_record_field(record, field_index);
-            if (field == NULL || field->element_count == 0U) {
+            if (field == NULL) {
+                return false;
+            }
+            if (field->is_zero_length_array) {
+                /* GNU zero-length record fields own no semantic initializer slots
+                 * and no storage bytes. DataLayout already places the following
+                 * field at the same cursor, so recursive emission must skip the
+                 * field rather than materializing one element. */
+                continue;
+            }
+            if (field->element_count == 0U) {
                 return false;
             }
             if (field->is_flexible_array) {
