@@ -1,2 +1,6 @@
-# Verify permanent interleaved return-pointer attribute product.
-148
+# Focused unchanged Linux replay after 148 closure.
+6
+195
+238
+250
+353
