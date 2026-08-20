@@ -34,6 +34,7 @@ struct StaticFlexibleArray static_flexible_array = {
 EOF
 "$minic" -S "$build_dir/static_flexible_array.c" \
     -o "$build_dir/static_flexible_array.s"
+grep -F '  .word 7' "$build_dir/static_flexible_array.s" >/dev/null
 grep -F '.size static_flexible_array, 32' "$build_dir/static_flexible_array.s" >/dev/null
 test "$(grep -c '  .dword 11' "$build_dir/static_flexible_array.s")" -eq 3
 
