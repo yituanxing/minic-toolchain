@@ -232,6 +232,25 @@ signed_mul(int64_t left, int64_t right, int64_t minimum, int64_t maximum, int64_
     return true;
 }
 
+static bool integer_cast_operand_is_null_pointer(const MinicC0Program *program,
+                                                 const MinicExpression *expression) {
+    const MinicExpression *pointer_cast;
+    const MinicExpression *zero;
+
+    if (program == NULL || expression == NULL || !minic_type_is_integer(expression->type)) {
+        return false;
+    }
+    pointer_cast = minic_c0_program_expression(program, expression->value.unary.operand);
+    if (pointer_cast == NULL || !minic_type_is_pointer(pointer_cast->type) ||
+        (pointer_cast->kind != MINIC_EXPRESSION_CAST &&
+         pointer_cast->kind != MINIC_EXPRESSION_BITCAST)) {
+        return false;
+    }
+    zero = minic_c0_program_expression(program, pointer_cast->value.unary.operand);
+    return zero != NULL && zero->kind == MINIC_EXPRESSION_INTEGER &&
+           minic_type_is_integer(zero->type) && zero->value.integer_value == 0;
+}
+
 static bool eval_expression(const MinicC0Program *program,
                             const MinicTargetInfo *target,
                             MinicExpressionId expression_id,
@@ -630,6 +649,11 @@ static bool eval_expression(const MinicC0Program *program,
     case MINIC_EXPRESSION_CONVERSION: {
         MinicConstValue operand;
 
+        if (expression->kind == MINIC_EXPRESSION_CAST &&
+            integer_cast_operand_is_null_pointer(program, expression)) {
+            value->type = expression->type;
+            return normalize_bits(program, target, expression->type, 0U, &value->bits);
+        }
         return eval_expression(
                    program, target, expression->value.unary.operand, depth + 1U, &operand) &&
                convert_value(program, target, &operand, expression->type, value);
