@@ -1,3 +1,2 @@
-# Verify transactional static aggregate-array ownership.
-246
-387
+# Verify GNU zero-length static pointer-array support.
+185
