@@ -1,2 +1,2 @@
-# Diagnose aggregate-array relocation replay on the exact permanent compiler.
+# Verify active-union metadata precedes aggregate-array relocation replay.
 390
