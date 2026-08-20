@@ -1,0 +1,50 @@
+name: Productize Linux tail batch7 v1
+
+on:
+  pull_request:
+    branches:
+      - infra/linux-tail-batch7-productizer-v1
+    paths:
+      - 'tools/dev/materialize-linux-tail-batch7-v1.py'
+      - 'tests/compiler/c0/run-linux-tail-batch7.sh'
+
+permissions:
+  contents: write
+
+jobs:
+  productize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact work head
+        uses: actions/checkout@v4
+        with:
+          ref: frontend/linux-tail-batch7-v1
+
+      - name: Materialize parser tail convergence
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/materialize-linux-tail-batch7-v1.py
+          clang-format -i src/frontend/parser_statement.c src/frontend/parser_record.c
+          git diff --check
+
+      - name: Build and focused batch gate
+        run: |
+          set -Eeuo pipefail
+          make -j4 CFLAGS=-Werror
+          MINIC="$PWD/build/debug/bin/minic" BUILD_DIR="$PWD/build/debug" \
+            sh tests/compiler/c0/run-linux-tail-batch7.sh
+
+      - name: Publish clean product
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm tools/dev/materialize-linux-tail-batch7-v1.py
+          git add src/frontend/parser_statement.c \
+                  src/frontend/parser_record.c \
+                  tests/compiler/c0/run.sh \
+                  tests/compiler/c0/run-linux-tail-batch7.sh
+          git diff --cached --check
+          git commit -m 'frontend: converge Linux parser tail semantics'
+          git push origin HEAD:frontend/linux-tail-batch7-v1
