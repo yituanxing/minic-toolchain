@@ -1,2 +1,2 @@
-# Focused unchanged Linux replay for inferred runtime record-array value initialization.
+# Verify permanent runtime record-array value-copy product on unchanged Linux index 195.
 195
