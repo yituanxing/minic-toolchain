@@ -1,2 +1,2 @@
-# Verify permanent nested zero-length/FAM RV64 record emitter on Linux index 185.
+# Verify zero-storage equals zero-slot ownership on Linux index 185.
 185
