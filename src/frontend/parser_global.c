@@ -4492,48 +4492,56 @@ bool minic_parser_parse_static_global_after_head(MinicParser *parser,
     }
     {
         MinicParser probe;
+        bool incomplete_multidimensional;
 
+        incomplete_multidimensional = false;
         probe = *parser;
         if (!minic_parser_advance(&probe)) {
             return false;
         }
         if (probe.current.kind == MINIC_TOKEN_RBRACKET) {
-            if (minic_type_is_char_integer(element_type)) {
-                return parse_static_inferred_char_array(parser,
-                                                        element_type,
-                                                        name_span,
-                                                        section_name,
-                                                        section_capacity,
-                                                        section_name_length,
-                                                        has_section,
-                                                        explicit_alignment);
+            if (!minic_parser_advance(&probe)) {
+                return false;
             }
-            return parse_static_inferred_integer_array(parser,
-                                                       element_type,
-                                                       name_span,
-                                                       section_name,
-                                                       section_capacity,
-                                                       section_name_length,
-                                                       has_section,
-                                                       explicit_alignment);
-        }
-    }
-    {
-        bool is_array;
-
-        if (!minic_parser_parse_array_declarator_suffix(
-                parser, element_type, false, &object_type, &is_array) ||
-            !is_array ||
-            !minic_parser_parse_gnu_object_attribute_lists(parser,
+            incomplete_multidimensional = probe.current.kind == MINIC_TOKEN_LBRACKET;
+            if (!incomplete_multidimensional) {
+                if (minic_type_is_char_integer(element_type)) {
+                    return parse_static_inferred_char_array(parser,
+                                                            element_type,
+                                                            name_span,
+                                                            section_name,
+                                                            section_capacity,
+                                                            section_name_length,
+                                                            has_section,
+                                                            explicit_alignment);
+                }
+                return parse_static_inferred_integer_array(parser,
+                                                           element_type,
+                                                           name_span,
                                                            section_name,
                                                            section_capacity,
                                                            section_name_length,
                                                            has_section,
-                                                           explicit_alignment)) {
-            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
-                minic_parser_error(parser, "cannot build fixed static array type");
+                                                           explicit_alignment);
             }
-            return false;
+        }
+        {
+            bool is_array;
+
+            if (!minic_parser_parse_array_declarator_suffix(
+                    parser, element_type, incomplete_multidimensional, &object_type, &is_array) ||
+                !is_array ||
+                !minic_parser_parse_gnu_object_attribute_lists(parser,
+                                                               section_name,
+                                                               section_capacity,
+                                                               section_name_length,
+                                                               has_section,
+                                                               explicit_alignment)) {
+                if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                    minic_parser_error(parser, "cannot build fixed static array type");
+                }
+                return false;
+            }
         }
     }
     if (existing_object_id != MINIC_GLOBAL_OBJECT_INVALID) {
