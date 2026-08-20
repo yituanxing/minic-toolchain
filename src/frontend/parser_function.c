@@ -2606,6 +2606,22 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
             return false;
         }
     }
+    {
+        size_t statement_index;
+
+        for (statement_index = parser->function_statement_begin;
+             statement_index < parser->program->statement_count;
+             ++statement_index) {
+            const MinicStatement *statement;
+
+            statement = minic_c0_program_statement(parser->program, statement_index);
+            if (statement != NULL && statement->kind == MINIC_STATEMENT_LABEL &&
+                statement->target_statement == statement_index) {
+                minic_parser_error(parser, "address of unknown label");
+                return false;
+            }
+        }
+    }
     if (!minic_parser_materialize_cleanup_contexts(parser, MINIC_CLEANUP_CONTEXT_ROOT) ||
         ((!minic_type_is_pointer(return_type) && !minic_type_is_double(return_type) &&
           !minic_type_is_record(return_type) && !minic_parser_add_default_return(parser)) ||

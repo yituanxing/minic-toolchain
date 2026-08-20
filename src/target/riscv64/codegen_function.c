@@ -155,8 +155,18 @@ static bool minic_riscv64_emit_symbol_value(FILE *file,
     int64_t target_addend;
 
     directive = minic_riscv64_integer_data_directive(width);
+    if (file == NULL || directive == NULL) {
+        return false;
+    }
+    if (relocation->target_kind == MINIC_GLOBAL_RELOCATION_LABEL) {
+        const MinicStatement *label;
+
+        label = minic_c0_program_statement(program, relocation->target_id);
+        return label != NULL && label->kind == MINIC_STATEMENT_LABEL &&
+               fprintf(file, "  %s .Luser_%zu\n", directive, relocation->target_id) >= 0;
+    }
     target_name = minic_riscv64_global_relocation_target_name(program, relocation);
-    if (file == NULL || directive == NULL || target_name == NULL || target_name[0] == '\0' ||
+    if (target_name == NULL || target_name[0] == '\0' ||
         !minic_data_layout_global_relocation_target_addend(
             minic_default_data_layout(), program, relocation, &target_addend)) {
         return false;

@@ -705,12 +705,17 @@ static bool add_global_symbol_relocation(MinicC0Program *program,
         target_member_depth > MINIC_GLOBAL_RELOCATION_MAX_MEMBER_DEPTH ||
         (target_member_depth != 0U && target_member_indices == NULL) ||
         (target_kind != MINIC_GLOBAL_RELOCATION_OBJECT &&
-         target_kind != MINIC_GLOBAL_RELOCATION_FUNCTION) ||
+         target_kind != MINIC_GLOBAL_RELOCATION_FUNCTION &&
+         target_kind != MINIC_GLOBAL_RELOCATION_LABEL) ||
         (target_kind == MINIC_GLOBAL_RELOCATION_OBJECT &&
          target_id >= program->global_object_count) ||
         (target_kind == MINIC_GLOBAL_RELOCATION_FUNCTION &&
          (target_id >= program->function_count || target_member_depth != 0U ||
-          target_byte_addend != 0))) {
+          target_byte_addend != 0)) ||
+        (target_kind == MINIC_GLOBAL_RELOCATION_LABEL &&
+         (target_id >= program->statement_count ||
+          program->statements[target_id].kind != MINIC_STATEMENT_LABEL ||
+          target_member_depth != 0U || target_byte_addend != 0 || has_explicit_pointer_cast))) {
         return false;
     }
     object = &program->global_objects[global_object_id];
@@ -725,6 +730,7 @@ static bool add_global_symbol_relocation(MinicC0Program *program,
         (target_kind == MINIC_GLOBAL_RELOCATION_FUNCTION && slot_is_pointer &&
          !minic_c0_global_relocation_function_target_compatible(
              program, slot_type, (MinicFunctionId)target_id, has_explicit_pointer_cast)) ||
+        (target_kind == MINIC_GLOBAL_RELOCATION_LABEL && !slot_is_pointer) ||
         (target_kind == MINIC_GLOBAL_RELOCATION_OBJECT && slot_is_pointer &&
          minic_type_is_function(slot_pointee) && !has_explicit_pointer_cast) ||
         (target_kind == MINIC_GLOBAL_RELOCATION_OBJECT &&
@@ -821,6 +827,23 @@ bool minic_c0_global_object_add_function_relocation_cast(
                                         0U,
                                         0,
                                         true);
+}
+
+bool minic_c0_global_object_add_label_relocation(MinicC0Program *program,
+                                                 MinicGlobalObjectId global_object_id,
+                                                 MinicGlobalRelocationLocationKind location_kind,
+                                                 size_t location_index,
+                                                 MinicStatementId label_statement_id) {
+    return add_global_symbol_relocation(program,
+                                        global_object_id,
+                                        location_kind,
+                                        location_index,
+                                        MINIC_GLOBAL_RELOCATION_LABEL,
+                                        label_statement_id,
+                                        NULL,
+                                        0U,
+                                        0,
+                                        false);
 }
 
 bool minic_c0_global_object_set_extern(MinicC0Program *program,

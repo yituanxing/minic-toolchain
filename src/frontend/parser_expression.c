@@ -2608,8 +2608,25 @@ static bool parse_label_address(MinicParser *parser, MinicExpressionId *expressi
     name_span = parser->current.span;
     statement_id = minic_parser_find_label_statement(parser, name_span);
     if (statement_id == MINIC_STATEMENT_INVALID) {
-        minic_parser_error(parser, "address of unknown label");
-        return false;
+        MinicStatement pending_label;
+
+        if (parser->current_function == MINIC_FUNCTION_INVALID) {
+            minic_parser_error(parser, "GNU label address requires a function label");
+            return false;
+        }
+        statement_id = parser->program->statement_count;
+        (void)memset(&pending_label, 0, sizeof(pending_label));
+        pending_label.kind = MINIC_STATEMENT_LABEL;
+        pending_label.span = name_span;
+        pending_label.target_expression = MINIC_EXPRESSION_INVALID;
+        pending_label.expression = MINIC_EXPRESSION_INVALID;
+        pending_label.target_statement = statement_id;
+        pending_label.then_block = MINIC_BLOCK_INVALID;
+        pending_label.else_block = MINIC_BLOCK_INVALID;
+        if (!minic_c0_program_add_statement(parser->program, &pending_label, &statement_id)) {
+            minic_parser_error(parser, "cannot reserve forward GNU label address");
+            return false;
+        }
     }
 
     (void)memset(&expression, 0, sizeof(expression));

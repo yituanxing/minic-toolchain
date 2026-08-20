@@ -532,6 +532,7 @@ static bool validate_semantic_edges(const MinicFunctionBodyValidation *validatio
             return false;
         }
         if (statement->kind == MINIC_STATEMENT_GOTO &&
+            statement->expression == MINIC_EXPRESSION_INVALID &&
             (statement->target_statement >= program->statement_count ||
              validation->statement_owners[statement->target_statement] !=
                  validation->function_id)) {

@@ -332,9 +332,11 @@ typedef struct MinicStaticObjectRelocationTarget {
 typedef struct MinicStaticPointerInitializer {
     bool has_relocation;
     bool relocation_is_function;
+    bool relocation_is_label;
     bool has_explicit_pointer_cast;
     uint64_t bits;
     MinicFunctionId function_id;
+    MinicStatementId label_statement_id;
     MinicStaticObjectRelocationTarget relocation_target;
 } MinicStaticPointerInitializer;
 
@@ -565,6 +567,7 @@ static void static_pointer_initializer_reset(MinicStaticPointerInitializer *init
     }
     (void)memset(initializer, 0, sizeof(*initializer));
     initializer->function_id = MINIC_FUNCTION_INVALID;
+    initializer->label_statement_id = MINIC_STATEMENT_INVALID;
     initializer->relocation_target.object_id = MINIC_GLOBAL_OBJECT_INVALID;
 }
 
@@ -578,11 +581,15 @@ static bool static_pointer_initializers_same_value(const MinicStaticPointerIniti
     if (!left->has_relocation) {
         return left->bits == right->bits;
     }
-    if (left->relocation_is_function != right->relocation_is_function) {
+    if (left->relocation_is_function != right->relocation_is_function ||
+        left->relocation_is_label != right->relocation_is_label) {
         return false;
     }
     if (left->relocation_is_function) {
         return left->function_id == right->function_id;
+    }
+    if (left->relocation_is_label) {
+        return left->label_statement_id == right->label_statement_id;
     }
     if (left->relocation_target.object_id != right->relocation_target.object_id ||
         left->relocation_target.member_depth != right->relocation_target.member_depth ||
@@ -614,6 +621,12 @@ static bool static_pointer_initializer_from_expression(MinicParser *parser,
         initializer->has_explicit_pointer_cast ||
         static_pointer_expression_has_explicit_cast(parser->program, expression_id);
     if (minic_c0_expression_is_null_pointer_constant_v0(parser->program, expression_id)) {
+        return true;
+    }
+    if (expression->kind == MINIC_EXPRESSION_LABEL_ADDRESS) {
+        initializer->has_relocation = true;
+        initializer->relocation_is_label = true;
+        initializer->label_statement_id = expression->value.label_statement_id;
         return true;
     }
     if (static_function_address_relocation_target(
@@ -799,7 +812,14 @@ bool minic_parser_parse_static_pointer_object_initializer(MinicParser *parser,
         }
         return true;
     }
-    if (initializer.relocation_is_function) {
+    if (initializer.relocation_is_label) {
+        recorded =
+            minic_c0_global_object_add_label_relocation(parser->program,
+                                                        object_id,
+                                                        MINIC_GLOBAL_RELOCATION_LOCATION_SCALAR,
+                                                        0U,
+                                                        initializer.label_statement_id);
+    } else if (initializer.relocation_is_function) {
         recorded = initializer.has_explicit_pointer_cast
                        ? minic_c0_global_object_add_function_relocation_cast(
                              parser->program,
@@ -1118,7 +1138,14 @@ static bool parse_static_scalar_constant_at(MinicParser *parser,
                 minic_parser_error(parser, "cannot reserve nested static relocation slot");
                 return false;
             }
-            if (initializer.relocation_is_function) {
+            if (initializer.relocation_is_label) {
+                recorded = minic_c0_global_object_add_label_relocation(
+                    parser->program,
+                    object_id,
+                    MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR,
+                    slot_index,
+                    initializer.label_statement_id);
+            } else if (initializer.relocation_is_function) {
                 recorded = initializer.has_explicit_pointer_cast
                                ? minic_c0_global_object_add_function_relocation_cast(
                                      parser->program,
@@ -1272,7 +1299,14 @@ materialize_static_pointer_array_slot(MinicParser *parser,
     if (!initializer->has_relocation) {
         return true;
     }
-    if (initializer->relocation_is_function) {
+    if (initializer->relocation_is_label) {
+        recorded = minic_c0_global_object_add_label_relocation(
+            parser->program,
+            object_id,
+            MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR,
+            slot_index,
+            initializer->label_statement_id);
+    } else if (initializer->relocation_is_function) {
         recorded = initializer->has_explicit_pointer_cast
                        ? minic_c0_global_object_add_function_relocation_cast(
                              parser->program,

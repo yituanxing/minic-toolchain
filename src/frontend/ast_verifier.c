@@ -954,11 +954,17 @@ static bool verify_statement(const MinicC0Program *program,
         const MinicStatement *target_statement;
 
         target_statement = minic_c0_program_statement(program, statement->target_statement);
-        return statement->target_expression == MINIC_EXPRESSION_INVALID &&
-               statement->expression == MINIC_EXPRESSION_INVALID && target_statement != NULL &&
-               target_statement->kind == MINIC_STATEMENT_LABEL &&
-               statement->then_block == MINIC_BLOCK_INVALID &&
-               statement->else_block == MINIC_BLOCK_INVALID;
+        if (statement->target_expression != MINIC_EXPRESSION_INVALID ||
+            statement->then_block != MINIC_BLOCK_INVALID ||
+            statement->else_block != MINIC_BLOCK_INVALID) {
+            return false;
+        }
+        if (statement->expression != MINIC_EXPRESSION_INVALID) {
+            return statement->target_statement == MINIC_STATEMENT_INVALID && expression != NULL &&
+                   minic_type_is_pointer(expression->type) &&
+                   statement->cleanup_context == MINIC_CLEANUP_CONTEXT_ROOT;
+        }
+        return target_statement != NULL && target_statement->kind == MINIC_STATEMENT_LABEL;
     }
     case MINIC_STATEMENT_LABEL:
         return statement->target_expression == MINIC_EXPRESSION_INVALID &&
@@ -1398,8 +1404,15 @@ bool minic_c0_program_verify_target(const MinicC0Program *program,
                                               (MinicFunctionId)relocation->target_id,
                                               relocation->has_explicit_pointer_cast)) ||
                       (slot_is_integer && relocation->target_id >= program->function_count))) ||
+                    (relocation->target_kind == MINIC_GLOBAL_RELOCATION_LABEL &&
+                     (!slot_is_pointer || relocation->target_id >= program->statement_count ||
+                      program->statements[relocation->target_id].kind != MINIC_STATEMENT_LABEL ||
+                      relocation->target_member_depth != 0U ||
+                      relocation->target_byte_addend != 0 ||
+                      relocation->has_explicit_pointer_cast)) ||
                     (relocation->target_kind != MINIC_GLOBAL_RELOCATION_OBJECT &&
-                     relocation->target_kind != MINIC_GLOBAL_RELOCATION_FUNCTION)) {
+                     relocation->target_kind != MINIC_GLOBAL_RELOCATION_FUNCTION &&
+                     relocation->target_kind != MINIC_GLOBAL_RELOCATION_LABEL)) {
                     return false;
                 }
                 if (slot_is_pointer && relocation->target_kind == MINIC_GLOBAL_RELOCATION_OBJECT &&

@@ -494,6 +494,13 @@ static bool minic_riscv64_emit_statement(FILE *file,
                minic_riscv64_emit_break(file, break_target);
 
     case MINIC_STATEMENT_GOTO:
+        if (statement->expression != MINIC_EXPRESSION_INVALID) {
+            return statement->target_statement == MINIC_STATEMENT_INVALID &&
+                   statement->cleanup_context == MINIC_CLEANUP_CONTEXT_ROOT &&
+                   minic_riscv64_emit_expression(
+                       file, program, function, function_layout, statement->expression) &&
+                   fprintf(file, "  jr a0\n") >= 0;
+        }
         return statement->target_statement != MINIC_STATEMENT_INVALID &&
                minic_riscv64_emit_cleanup_contexts(file,
                                                    program,

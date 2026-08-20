@@ -664,7 +664,8 @@ bool minic_data_layout_global_relocation_target_addend(const MinicDataLayout *la
     if (layout == NULL || program == NULL || relocation == NULL || addend == NULL) {
         return false;
     }
-    if (relocation->target_kind == MINIC_GLOBAL_RELOCATION_FUNCTION) {
+    if (relocation->target_kind == MINIC_GLOBAL_RELOCATION_FUNCTION ||
+        relocation->target_kind == MINIC_GLOBAL_RELOCATION_LABEL) {
         if (relocation->target_member_depth != 0U || relocation->target_byte_addend != 0) {
             return false;
         }

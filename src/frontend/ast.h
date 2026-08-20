@@ -409,7 +409,8 @@ typedef struct MinicFixedRegisterBinding {
 
 typedef enum MinicGlobalRelocationTargetKind {
     MINIC_GLOBAL_RELOCATION_OBJECT = 0,
-    MINIC_GLOBAL_RELOCATION_FUNCTION
+    MINIC_GLOBAL_RELOCATION_FUNCTION,
+    MINIC_GLOBAL_RELOCATION_LABEL
 } MinicGlobalRelocationTargetKind;
 
 #define MINIC_GLOBAL_RELOCATION_MAX_MEMBER_DEPTH 8U
@@ -777,6 +778,11 @@ bool minic_c0_global_object_add_function_relocation_cast(
     MinicGlobalRelocationLocationKind location_kind,
     size_t location_index,
     MinicFunctionId function_id);
+bool minic_c0_global_object_add_label_relocation(MinicC0Program *program,
+                                                 MinicGlobalObjectId global_object_id,
+                                                 MinicGlobalRelocationLocationKind location_kind,
+                                                 size_t location_index,
+                                                 MinicStatementId label_statement_id);
 bool minic_c0_global_object_add_object_relocation(MinicC0Program *program,
                                                   MinicGlobalObjectId global_object_id,
                                                   MinicGlobalRelocationLocationKind location_kind,
