@@ -37,7 +37,15 @@ static const unsigned long chained[3][2] = {
     [2][1] = 13UL,
 };
 
+static const unsigned long chained_sizeof_bound[64 + 1]
+                                                [(((64) + ((sizeof(long) * 8)) - 1) /
+                                                  ((sizeof(long) * 8)))] = {
+    [0 + 1][0] = (1UL << 0),
+    [0 + 1 + 1][0] = (1UL << 1),
+};
+
 int main(void) {
     return (int)(indexed[1] + ranged[1] + (syscall_shape[0] != 0) + (names[2] != 0) +
-                 mutable_inferred[3] + chained[1][0] + chained[2][1]);
+                 mutable_inferred[3] + chained[1][0] + chained[2][1] +
+                 chained_sizeof_bound[1][0]);
 }
