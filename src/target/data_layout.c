@@ -468,7 +468,8 @@ static bool data_layout_global_object_union_member_selection(const MinicC0Progra
                                                              const MinicGlobalObject *object,
                                                              size_t initializer_slot,
                                                              MinicRecordId record_id,
-                                                             size_t *field_index) {
+                                                             size_t *field_index,
+                                                             size_t *initializer_span) {
     size_t index;
 
     if (program == NULL || object == NULL || field_index == NULL ||
@@ -481,6 +482,9 @@ static bool data_layout_global_object_union_member_selection(const MinicC0Progra
         selection = &object->union_selections[index];
         if (selection->initializer_slot == initializer_slot && selection->record_id == record_id) {
             *field_index = selection->field_index;
+            if (initializer_span != NULL) {
+                *initializer_span = selection->initializer_span;
+            }
             return true;
         }
     }
@@ -597,9 +601,7 @@ static bool aggregate_scalar_slot_layout_for_object(const MinicDataLayout *layou
 
             selected = 0U;
             (void)data_layout_global_object_union_member_selection(
-                program, object, record_base_slot, type.record_id, &selected);
-            (void)minic_c0_global_object_union_member_initializer_span(
-                program, object, record_base_slot, type.record_id, &initializer_span);
+                program, object, record_base_slot, type.record_id, &selected, &initializer_span);
             if (selected >= record->field_count) {
                 return false;
             }
