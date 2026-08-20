@@ -1,1 +1,0 @@
-# Run the exact unchanged Linux 6.6.143 first500 cohort.
