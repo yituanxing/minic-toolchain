@@ -1579,6 +1579,35 @@ static bool local_declarator_starts_function_pointer(const MinicParser *parser) 
     return minic_parser_advance(&probe) && probe.current.kind == MINIC_TOKEN_STAR;
 }
 
+static bool local_declarator_starts_pointer_to_array(const MinicParser *parser) {
+    MinicParser probe;
+    size_t parenthesis_depth;
+
+    if (!local_declarator_starts_function_pointer(parser)) {
+        return false;
+    }
+    probe = *parser;
+    parenthesis_depth = 0U;
+    for (;;) {
+        if (probe.current.kind == MINIC_TOKEN_LPAREN) {
+            parenthesis_depth += 1U;
+        } else if (probe.current.kind == MINIC_TOKEN_RPAREN) {
+            if (parenthesis_depth == 0U) {
+                return false;
+            }
+            parenthesis_depth -= 1U;
+            if (parenthesis_depth == 0U) {
+                return minic_parser_advance(&probe) && probe.current.kind == MINIC_TOKEN_LBRACKET;
+            }
+        } else if (probe.current.kind == MINIC_TOKEN_EOF) {
+            return false;
+        }
+        if (!minic_parser_advance(&probe)) {
+            return false;
+        }
+    }
+}
+
 static bool
 parse_local_declarator(MinicParser *parser, MinicType base_type, bool is_register_storage) {
     MinicLocal local;
@@ -1598,7 +1627,12 @@ parse_local_declarator(MinicParser *parser, MinicType base_type, bool is_registe
         !parse_local_object_attributes(parser, &attributes)) {
         return false;
     }
-    if (local_declarator_starts_function_pointer(parser)) {
+    if (local_declarator_starts_pointer_to_array(parser)) {
+        if (!minic_parser_parse_parenthesized_pointer_to_array_declarator(
+                parser, declared_type, &local.name_span, &declared_type)) {
+            return false;
+        }
+    } else if (local_declarator_starts_function_pointer(parser)) {
         MinicParsedFunctionDeclarator declarator;
 
         if (!minic_parser_parse_parenthesized_function_declarator(

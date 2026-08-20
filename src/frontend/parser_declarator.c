@@ -93,6 +93,68 @@ bool minic_parser_parse_function_parameter_suffix(MinicParser *parser,
                parser, MINIC_TOKEN_RPAREN, "expected ')' after function parameter list");
 }
 
+bool minic_parser_parse_parenthesized_pointer_to_array_declarator(MinicParser *parser,
+                                                                  MinicType element_type,
+                                                                  MinicSourceSpan *name_span,
+                                                                  MinicType *declarator_type) {
+    MinicType type;
+    size_t pointer_depth;
+    size_t level;
+    unsigned int pointer_const_qualifiers;
+    unsigned int pointer_volatile_qualifiers;
+    bool is_array;
+
+    if (parser == NULL || name_span == NULL || declarator_type == NULL ||
+        !minic_parser_expect(
+            parser, MINIC_TOKEN_LPAREN, "expected '(' before parenthesized pointer declarator")) {
+        return false;
+    }
+    pointer_depth = 0U;
+    pointer_const_qualifiers = 0U;
+    pointer_volatile_qualifiers = 0U;
+    while (parser->current.kind == MINIC_TOKEN_STAR) {
+        pointer_depth += 1U;
+        if (!minic_parser_advance(parser) ||
+            !minic_parser_parse_pointer_qualifier_sequence(
+                parser, pointer_depth, &pointer_const_qualifiers, &pointer_volatile_qualifiers)) {
+            return false;
+        }
+    }
+    if (pointer_depth == 0U || parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
+        minic_parser_error(parser, "pointer-to-array declarator requires a named pointer");
+        return false;
+    }
+    *name_span = parser->current.span;
+    if (!minic_parser_advance(parser) ||
+        !minic_parser_expect(
+            parser, MINIC_TOKEN_RPAREN, "expected ')' after parenthesized pointer declarator") ||
+        !minic_parser_parse_array_declarator_suffix(
+            parser, element_type, false, &type, &is_array) ||
+        !is_array) {
+        if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+            minic_parser_error(parser, "parenthesized object pointer requires an array suffix");
+        }
+        return false;
+    }
+    for (level = 0U; level < pointer_depth; ++level) {
+        unsigned int bit;
+
+        if (!minic_type_pointer_to(type, &type)) {
+            minic_parser_error(parser, "pointer-to-array declarator depth is unsupported");
+            return false;
+        }
+        bit = 1U << level;
+        if ((pointer_const_qualifiers & bit) != 0U && !minic_type_add_const(type, &type)) {
+            return false;
+        }
+        if ((pointer_volatile_qualifiers & bit) != 0U && !minic_type_add_volatile(type, &type)) {
+            return false;
+        }
+    }
+    *declarator_type = type;
+    return true;
+}
+
 static bool parse_array_bound_allow_zero(MinicParser *parser, size_t *element_count);
 
 static bool parse_parenthesized_function_array_suffix(MinicParser *parser,
