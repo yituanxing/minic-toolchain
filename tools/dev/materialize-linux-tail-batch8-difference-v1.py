@@ -12,6 +12,7 @@ def replace_once(path: str, old: str, new: str) -> None:
 
 # Pointer subtraction and relational comparison are distinct C/GNU semantics.
 # Keep one Program-owned compatibility helper for each and make parser/verifier share it.
+# This temporary materializer is removed once both focused contracts pass.
 header_old = '''bool minic_c0_pointer_arithmetic_pointee_allowed(const MinicC0Program *program,
                                                  MinicType pointee_type);
 bool minic_c0_pointer_relational_compatible(const MinicC0Program *program,
