@@ -1,2 +1,2 @@
-# Verify active-union-aware aggregate relocation layout on Linux index 185.
+# Human-triggered verification of active-union-aware aggregate relocation layout on Linux index 185.
 185
