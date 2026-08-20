@@ -1,2 +1,2 @@
-# Human-triggered verification of active-union-aware aggregate relocation layout on Linux index 185.
+# Verify permanent nested zero-length/FAM RV64 record emitter on Linux index 185.
 185
