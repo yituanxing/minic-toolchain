@@ -1677,7 +1677,7 @@ materialize_static_aggregate_array_action(MinicParser *parser,
             recorded = minic_c0_global_object_add_label_relocation(
                 parser->program,
                 object_id,
-                relocation->location_kind,
+                MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR,
                 location_index,
                 (MinicStatementId)relocation->target_id);
         } else if (relocation->target_kind == MINIC_GLOBAL_RELOCATION_FUNCTION) {
@@ -1685,13 +1685,13 @@ materialize_static_aggregate_array_action(MinicParser *parser,
                            ? minic_c0_global_object_add_function_relocation_cast(
                                  parser->program,
                                  object_id,
-                                 relocation->location_kind,
+                                 MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR,
                                  location_index,
                                  (MinicFunctionId)relocation->target_id)
                            : minic_c0_global_object_add_function_relocation(
                                  parser->program,
                                  object_id,
-                                 relocation->location_kind,
+                                 MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR,
                                  location_index,
                                  (MinicFunctionId)relocation->target_id);
         } else {
@@ -1699,7 +1699,7 @@ materialize_static_aggregate_array_action(MinicParser *parser,
                            ? minic_c0_global_object_add_object_relocation_path_addend_cast(
                                  parser->program,
                                  object_id,
-                                 relocation->location_kind,
+                                 MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR,
                                  location_index,
                                  (MinicGlobalObjectId)relocation->target_id,
                                  relocation->target_member_indices,
@@ -1708,7 +1708,7 @@ materialize_static_aggregate_array_action(MinicParser *parser,
                            : minic_c0_global_object_add_object_relocation_path_addend(
                                  parser->program,
                                  object_id,
-                                 relocation->location_kind,
+                                 MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR,
                                  location_index,
                                  (MinicGlobalObjectId)relocation->target_id,
                                  relocation->target_member_indices,
