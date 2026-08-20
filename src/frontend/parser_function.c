@@ -2000,10 +2000,22 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     is_inline = declaration_prefix.is_inline;
     deferred_attributes = declaration_prefix.attributes;
     if (!minic_parser_parse_type_specifiers(parser, &base_type) ||
-        !minic_parser_collect_gnu_attribute_lists(parser, &deferred_attributes) ||
-        !minic_parser_parse_pointer_declarator(parser, base_type, &return_type) ||
         !minic_parser_collect_gnu_attribute_lists(parser, &deferred_attributes)) {
         return false;
+    }
+    return_type = base_type;
+    for (;;) {
+        if (!minic_parser_parse_pointer_declarator(parser, return_type, &return_type) ||
+            !minic_parser_collect_gnu_attribute_lists(parser, &deferred_attributes)) {
+            return false;
+        }
+        /* GNU permits declarator attributes between pointer levels, for example
+           `char * __attribute__((unused)) *fn(void)`.  Keep those attributes in
+           the existing deferred entity-routing list, then resume the same pointer
+           declarator rather than mistaking the following `*` for a missing name. */
+        if (parser->current.kind != MINIC_TOKEN_STAR) {
+            break;
+        }
     }
     if (parser->current.kind == MINIC_TOKEN_IDENTIFIER) {
         name_span = parser->current.span;

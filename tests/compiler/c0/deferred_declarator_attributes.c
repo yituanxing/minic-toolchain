@@ -11,6 +11,10 @@ void *map_after_pointer(int value) {
     return value ? (void *)0 : (void *)0;
 }
 
+char *__attribute__((__unused__)) * interleaved_return_pointer_attribute(void) {
+    return (char **)0;
+}
+
 extern char __attribute__((__section__(".data.preptr"))) * extern_slot_before_pointer;
 
 int use_deferred_declarator_attributes(void) {
