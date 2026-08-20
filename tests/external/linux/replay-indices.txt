@@ -1,2 +1,2 @@
-# Verify final historic first500 tail with RV64 statement-owner diagnostics.
+# Verify final historic first500 tail with RV64 int128 pair semantics.
 353
