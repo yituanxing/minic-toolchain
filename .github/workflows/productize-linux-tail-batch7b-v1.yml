@@ -1,12 +1,12 @@
-name: Productize Linux tail batch7b v1
+name: Productize Linux tail batch8 v1
 
 on:
   pull_request:
     branches:
-      - infra/linux-tail-batch7b-productizer-v1
+      - infra/linux-tail-batch8-productizer-v2
     paths:
-      - 'tools/dev/materialize-linux-tail-batch7b-v1.py'
-      - 'tests/compiler/c0/run-scalar-compound-literal.sh'
+      - 'tools/dev/materialize-linux-tail-batch8-v1.py'
+      - 'tests/compiler/c0/run-linux-tail-batch8.sh'
 
 permissions:
   contents: write
@@ -19,35 +19,41 @@ jobs:
       - name: Checkout exact work head
         uses: actions/checkout@v4
         with:
-          ref: frontend/linux-tail-batch7b-v1
+          ref: frontend/linux-tail-batch8-v1
 
-      - name: Materialize scalar compound literal ownership
+      - name: Materialize low-risk Linux declarator and expression tails
         run: |
           set -Eeuo pipefail
-          python3 tools/dev/materialize-linux-tail-batch7b-v1.py
-          clang-format -i src/frontend/parser_expression.c \
-                          src/frontend/ast_verifier.c \
-                          src/target/riscv64/codegen_expression.c
+          python3 tools/dev/materialize-linux-tail-batch8-v1.py
+          clang-format -i src/frontend/parser_declarator.c \
+                          src/frontend/parser_internal.h \
+                          src/frontend/parser_statement.c \
+                          src/frontend/parser_type.c \
+                          src/frontend/const_eval.c \
+                          src/frontend/ast.c
           git diff --check
 
-      - name: Build and focused scalar compound literal gate
+      - name: Build and focused batch8 gate
         run: |
           set -Eeuo pipefail
           make -j4 CFLAGS=-Werror
           MINIC="$PWD/build/debug/bin/minic" BUILD_DIR="$PWD/build/debug" \
-            sh tests/compiler/c0/run-scalar-compound-literal.sh
+            sh tests/compiler/c0/run-linux-tail-batch8.sh
 
       - name: Publish clean product
         run: |
           set -Eeuo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git rm tools/dev/materialize-linux-tail-batch7b-v1.py
-          git add src/frontend/parser_expression.c \
-                  src/frontend/ast_verifier.c \
-                  src/target/riscv64/codegen_expression.c \
+          git rm tools/dev/materialize-linux-tail-batch8-v1.py
+          git add src/frontend/parser_declarator.c \
+                  src/frontend/parser_internal.h \
+                  src/frontend/parser_statement.c \
+                  src/frontend/parser_type.c \
+                  src/frontend/const_eval.c \
+                  src/frontend/ast.c \
                   tests/compiler/c0/run.sh \
-                  tests/compiler/c0/run-scalar-compound-literal.sh
+                  tests/compiler/c0/run-linux-tail-batch8.sh
           git diff --cached --check
-          git commit -m 'frontend: share compound literal ownership with scalars'
-          git push origin HEAD:frontend/linux-tail-batch7b-v1
+          git commit -m 'frontend: converge low-risk Linux declarator and constant tails'
+          git push origin HEAD:frontend/linux-tail-batch8-v1
