@@ -1,2 +1,3 @@
+# Verify transactional static aggregate-array ownership.
 246
 387
