@@ -623,6 +623,15 @@ minic_riscv64_emit_block_with_break_target(FILE *file,
                                           statement,
                                           label_counter,
                                           break_target)) {
+            (void)fprintf(stderr,
+                          "RV64_EMIT_STATEMENT_FAILURE block=%zu ordinal=%zu statement=%zu "
+                          "kind=%u expression=%zu target_expression=%zu\n",
+                          (size_t)block_id,
+                          index,
+                          (size_t)statement_id,
+                          statement != NULL ? (unsigned int)statement->kind : (unsigned int)-1,
+                          statement != NULL ? (size_t)statement->expression : SIZE_MAX,
+                          statement != NULL ? (size_t)statement->target_expression : SIZE_MAX);
             return false;
         }
     }
