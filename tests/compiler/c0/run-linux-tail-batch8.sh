@@ -7,6 +7,7 @@ work=${BUILD_DIR:-"$root/build/debug"}/tests/linux-tail-batch8
 rm -rf "$work"
 mkdir -p "$work"
 
+# Keep this gate limited to the four shared semantics targeted by batch8.
 cat >"$work/local-pointer-to-array.c" <<'SRC'
 int probe(void)
 {
