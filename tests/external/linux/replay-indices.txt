@@ -1,0 +1,2 @@
+# Verify aggregate-array relocation ownership on the exact permanent compiler.
+390
