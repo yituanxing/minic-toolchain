@@ -6,6 +6,7 @@ on:
       - infra/linux-first500-final-productizer-v1
     paths:
       - 'tools/dev/materialize-linux-first500-final-v1.py'
+      - 'tools/dev/materialize-linux-first500-bpf-core-v1.py'
       - '.github/workflows/productize-linux-first500-final-pr-v1.yml'
 
 permissions:
@@ -25,6 +26,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           python3 tools/dev/materialize-linux-first500-final-v1.py
+          python3 tools/dev/materialize-linux-first500-bpf-core-v1.py
           git status --short
           while IFS= read -r path; do
             case "$path" in
@@ -49,5 +51,5 @@ jobs:
             echo 'first500 final semantic product already materialized'
             exit 0
           fi
-          git commit -m 'frontend: converge Linux first500 remaining semantics'
+          git commit -m 'frontend: converge GNU static computed goto semantics'
           git push origin HEAD:frontend/linux-first500-final-v1
