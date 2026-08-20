@@ -16,7 +16,7 @@ mkdir -p "$work"
 
 test -s "$assembly"
 for symbol in signed128_size unsigned128_size direct_unsigned128_size int128_record_size \
-    int128_pair_equal int128_pair_copy; do
+    int128_pair_equal int128_pair_copy int128_mul_shift; do
     grep -F "$symbol:" "$assembly" >/dev/null
 done
 size16=$(grep -c '  li a0, 16' "$assembly" || true)
@@ -27,5 +27,7 @@ test "$size32" -ge 1
 grep -Eq 'ld a1, 8\(t0\)' "$assembly"
 grep -Eq 'sd a1, 8\(t0\)' "$assembly"
 grep -F 'or a0, t0, t1' "$assembly" >/dev/null
+grep -F 'mulhu t2, t0, a0' "$assembly" >/dev/null
+grep -F '.Lminic_i128_shift_ge64_' "$assembly" >/dev/null
 
-printf '%s\n' 'PASS compiler/c0/gnu_int128_type signed=1 unsigned=2 pair-load-store-equality=1'
+printf '%s\n' 'PASS compiler/c0/gnu_int128_type signed=1 unsigned=2 pair-load-store-equality-mul-shift=1'

@@ -1384,6 +1384,121 @@ static bool minic_riscv64_emit_overflow_builtin(FILE *file,
     return minic_riscv64_emit_scalar_store_for_program(file, program, result_type, "t2", "t3");
 }
 
+/* RV64_INT128_ARITH_V2: materialize an integer expression as a0=low64/a1=high64. */
+static bool minic_riscv64_emit_int128_value(FILE *file,
+                                            const MinicC0Program *program,
+                                            const MinicFunction *function,
+                                            const MinicRiscv64FunctionLayout *function_layout,
+                                            MinicExpressionId expression_id) {
+    const MinicExpression *value;
+
+    value = minic_c0_program_expression(program, expression_id);
+    if (value == NULL || !minic_type_is_integer(value->type) ||
+        !minic_riscv64_emit_expression(file, program, function, function_layout, expression_id)) {
+        return false;
+    }
+    if (minic_type_is_int128_integer(value->type)) {
+        return true;
+    }
+    if (!minic_riscv64_emit_integer_conversion_for_program(file, program, value->type, "a0")) {
+        return false;
+    }
+    return minic_type_is_signed_integer(value->type) ? fprintf(file, "  srai a1, a0, 63\n") >= 0
+                                                     : fprintf(file, "  li a1, 0\n") >= 0;
+}
+
+static bool minic_riscv64_emit_int128_shift(FILE *file,
+                                            const MinicC0Program *program,
+                                            const MinicFunction *function,
+                                            const MinicRiscv64FunctionLayout *function_layout,
+                                            const MinicExpression *expression,
+                                            MinicExpressionId expression_id) {
+    const MinicExpression *left;
+    const MinicExpression *right;
+    bool shift_right;
+    bool arithmetic_right;
+
+    if (expression == NULL || expression->kind != MINIC_EXPRESSION_BINARY) {
+        return false;
+    }
+    shift_right = expression->value.binary.operator_kind == MINIC_BINARY_SHIFT_RIGHT;
+    if (!shift_right && expression->value.binary.operator_kind != MINIC_BINARY_SHIFT_LEFT) {
+        return false;
+    }
+    left = minic_c0_program_expression(program, expression->value.binary.left);
+    right = minic_c0_program_expression(program, expression->value.binary.right);
+    if (left == NULL || right == NULL || !minic_type_is_int128_integer(left->type) ||
+        !minic_type_is_int128_integer(expression->type) || !minic_type_is_integer(right->type) ||
+        minic_type_is_int128_integer(right->type) ||
+        !minic_riscv64_emit_int128_value(
+            file, program, function, function_layout, expression->value.binary.left) ||
+        fprintf(file,
+                "  addi sp, sp, -16\n"
+                "  sd a0, 0(sp)\n"
+                "  sd a1, 8(sp)\n") < 0 ||
+        !minic_riscv64_emit_expression(
+            file, program, function, function_layout, expression->value.binary.right) ||
+        !minic_riscv64_emit_integer_conversion_for_program(file, program, right->type, "a0") ||
+        fprintf(file,
+                "  mv t2, a0\n"
+                "  ld t0, 0(sp)\n"
+                "  ld t1, 8(sp)\n"
+                "  addi sp, sp, 16\n"
+                "  beqz t2, .Lminic_i128_shift_zero_%zu\n"
+                "  li t3, 64\n"
+                "  bgeu t2, t3, .Lminic_i128_shift_ge64_%zu\n",
+                expression_id,
+                expression_id) < 0) {
+        return false;
+    }
+    arithmetic_right = shift_right && minic_type_is_signed_integer(expression->type);
+    if (shift_right) {
+        if (fprintf(file,
+                    "  sub t3, t3, t2\n"
+                    "  srl t4, t0, t2\n"
+                    "  sll t5, t1, t3\n"
+                    "  or a0, t4, t5\n"
+                    "  %s a1, t1, t2\n"
+                    "  j .Lminic_i128_shift_end_%zu\n"
+                    ".Lminic_i128_shift_ge64_%zu:\n"
+                    "  addi t2, t2, -64\n"
+                    "  %s a0, t1, t2\n"
+                    "  %s\n"
+                    "  j .Lminic_i128_shift_end_%zu\n",
+                    arithmetic_right ? "sra" : "srl",
+                    expression_id,
+                    expression_id,
+                    arithmetic_right ? "sra" : "srl",
+                    arithmetic_right ? "  srai a1, t1, 63" : "  li a1, 0",
+                    expression_id) < 0) {
+            return false;
+        }
+    } else if (fprintf(file,
+                       "  sub t3, t3, t2\n"
+                       "  sll t4, t1, t2\n"
+                       "  srl t5, t0, t3\n"
+                       "  or a1, t4, t5\n"
+                       "  sll a0, t0, t2\n"
+                       "  j .Lminic_i128_shift_end_%zu\n"
+                       ".Lminic_i128_shift_ge64_%zu:\n"
+                       "  addi t2, t2, -64\n"
+                       "  sll a1, t0, t2\n"
+                       "  li a0, 0\n"
+                       "  j .Lminic_i128_shift_end_%zu\n",
+                       expression_id,
+                       expression_id,
+                       expression_id) < 0) {
+        return false;
+    }
+    return fprintf(file,
+                   ".Lminic_i128_shift_zero_%zu:\n"
+                   "  mv a0, t0\n"
+                   "  mv a1, t1\n"
+                   ".Lminic_i128_shift_end_%zu:\n",
+                   expression_id,
+                   expression_id) >= 0;
+}
+
 static bool minic_riscv64_emit_expression_impl(FILE *file,
                                                const MinicC0Program *program,
                                                const MinicFunction *function,
@@ -1621,15 +1736,33 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
             return false;
         }
         if (minic_type_is_integer(expression->type) && minic_type_is_integer(operand->type)) {
-            if (minic_type_is_int128_integer(expression->type) ||
-                minic_type_is_int128_integer(operand->type)) {
-                return minic_type_is_int128_integer(expression->type) &&
-                       minic_type_is_int128_integer(operand->type) &&
-                       minic_riscv64_emit_expression(file,
+            if (minic_type_is_int128_integer(expression->type)) {
+                if (!minic_riscv64_emit_expression(file,
+                                                   program,
+                                                   function,
+                                                   function_layout,
+                                                   expression->value.unary.operand)) {
+                    return false;
+                }
+                if (minic_type_is_int128_integer(operand->type)) {
+                    return true;
+                }
+                if (!minic_riscv64_emit_integer_conversion_for_program(
+                        file, program, operand->type, "a0")) {
+                    return false;
+                }
+                return minic_type_is_signed_integer(operand->type)
+                           ? fprintf(file, "  srai a1, a0, 63\n") >= 0
+                           : fprintf(file, "  li a1, 0\n") >= 0;
+            }
+            if (minic_type_is_int128_integer(operand->type)) {
+                return minic_riscv64_emit_expression(file,
                                                      program,
                                                      function,
                                                      function_layout,
-                                                     expression->value.unary.operand);
+                                                     expression->value.unary.operand) &&
+                       minic_riscv64_emit_integer_conversion_for_program(
+                           file, program, expression->type, "a0");
             }
             return minic_riscv64_emit_expression(
                        file, program, function, function_layout, expression->value.unary.operand) &&
@@ -1991,33 +2124,93 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
                                  minic_type_is_pointer(left->type) &&
                                  minic_type_is_pointer(right->type) &&
                                  minic_type_equal(expression->type, minic_type_int());
+        if (left != NULL && minic_type_is_int128_integer(left->type) &&
+            (expression->value.binary.operator_kind == MINIC_BINARY_SHIFT_LEFT ||
+             expression->value.binary.operator_kind == MINIC_BINARY_SHIFT_RIGHT)) {
+            return minic_riscv64_emit_int128_shift(
+                file, program, function, function_layout, expression, expression_id);
+        }
         if (has_integer_common_type && minic_type_is_int128_integer(common_integer_type)) {
-            const char *finish;
+            MinicBinaryOperator operator_kind;
 
-            if (left == NULL || right == NULL || !minic_type_is_int128_integer(left->type) ||
-                !minic_type_is_int128_integer(right->type) ||
-                (expression->value.binary.operator_kind != MINIC_BINARY_EQUAL &&
-                 expression->value.binary.operator_kind != MINIC_BINARY_NOT_EQUAL) ||
-                !minic_type_equal(expression->type, minic_type_int()) ||
-                !minic_riscv64_emit_expression(
+            operator_kind = expression->value.binary.operator_kind;
+            if (left == NULL || right == NULL ||
+                !minic_riscv64_emit_int128_value(
                     file, program, function, function_layout, expression->value.binary.left) ||
                 fprintf(file,
                         "  addi sp, sp, -16\n"
                         "  sd a0, 0(sp)\n"
                         "  sd a1, 8(sp)\n") < 0 ||
-                !minic_riscv64_emit_expression(
+                !minic_riscv64_emit_int128_value(
                     file, program, function, function_layout, expression->value.binary.right) ||
                 fprintf(file,
                         "  ld t0, 0(sp)\n"
                         "  ld t1, 8(sp)\n"
-                        "  addi sp, sp, 16\n"
-                        "  xor t0, t0, a0\n"
-                        "  xor t1, t1, a1\n"
-                        "  or a0, t0, t1\n") < 0) {
+                        "  addi sp, sp, 16\n") < 0) {
                 return false;
             }
-            finish = expression->value.binary.operator_kind == MINIC_BINARY_EQUAL ? "seqz" : "snez";
-            return fprintf(file, "  %s a0, a0\n", finish) >= 0;
+            switch (operator_kind) {
+            case MINIC_BINARY_ADD:
+                return minic_type_is_int128_integer(expression->type) &&
+                       fprintf(file,
+                               "  add t2, t0, a0\n"
+                               "  sltu t3, t2, t0\n"
+                               "  add a1, t1, a1\n"
+                               "  add a1, a1, t3\n"
+                               "  mv a0, t2\n") >= 0;
+            case MINIC_BINARY_SUBTRACT:
+                return minic_type_is_int128_integer(expression->type) &&
+                       fprintf(file,
+                               "  sltu t3, t0, a0\n"
+                               "  sub t2, t0, a0\n"
+                               "  sub a1, t1, a1\n"
+                               "  sub a1, a1, t3\n"
+                               "  mv a0, t2\n") >= 0;
+            case MINIC_BINARY_MULTIPLY:
+                return minic_type_is_int128_integer(expression->type) &&
+                       fprintf(file,
+                               "  mulhu t2, t0, a0\n"
+                               "  mul t3, t1, a0\n"
+                               "  add t2, t2, t3\n"
+                               "  mul t3, t0, a1\n"
+                               "  add t2, t2, t3\n"
+                               "  mul a0, t0, a0\n"
+                               "  mv a1, t2\n") >= 0;
+            case MINIC_BINARY_BITWISE_AND:
+                return minic_type_is_int128_integer(expression->type) &&
+                       fprintf(file, "  and a0, t0, a0\n  and a1, t1, a1\n") >= 0;
+            case MINIC_BINARY_BITWISE_XOR:
+                return minic_type_is_int128_integer(expression->type) &&
+                       fprintf(file, "  xor a0, t0, a0\n  xor a1, t1, a1\n") >= 0;
+            case MINIC_BINARY_BITWISE_OR:
+                return minic_type_is_int128_integer(expression->type) &&
+                       fprintf(file, "  or a0, t0, a0\n  or a1, t1, a1\n") >= 0;
+            case MINIC_BINARY_EQUAL:
+            case MINIC_BINARY_NOT_EQUAL:
+                if (!minic_type_equal(expression->type, minic_type_int()) ||
+                    fprintf(file,
+                            "  xor t0, t0, a0\n"
+                            "  xor t1, t1, a1\n"
+                            "  or a0, t0, t1\n") < 0) {
+                    return false;
+                }
+                return fprintf(file,
+                               operator_kind == MINIC_BINARY_EQUAL ? "  seqz a0, a0\n"
+                                                                   : "  snez a0, a0\n") >= 0;
+            case MINIC_BINARY_DIVIDE:
+            case MINIC_BINARY_REMAINDER:
+            case MINIC_BINARY_SHIFT_LEFT:
+            case MINIC_BINARY_SHIFT_RIGHT:
+            case MINIC_BINARY_LESS:
+            case MINIC_BINARY_LESS_EQUAL:
+            case MINIC_BINARY_GREATER:
+            case MINIC_BINARY_GREATER_EQUAL:
+            case MINIC_BINARY_LOGICAL_AND:
+            case MINIC_BINARY_LOGICAL_OR:
+            case MINIC_BINARY_COMMA:
+                return false;
+            }
+            return false;
         }
         if (left == NULL || right == NULL ||
             !minic_riscv64_emit_expression(

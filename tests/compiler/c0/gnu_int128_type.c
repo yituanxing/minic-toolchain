@@ -41,3 +41,7 @@ void int128_pair_copy(Int128Words *target, const Int128Words *source) {
     unsigned128_t value = source->full;
     target->full = value;
 }
+
+unsigned long int128_mul_shift(unsigned long value, unsigned int scale, unsigned int shift) {
+    return (unsigned long)(((unsigned128_t)value * scale) >> shift);
+}
