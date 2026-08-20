@@ -3803,13 +3803,24 @@ static bool parse_static_pointer_array(MinicParser *parser,
                                                  parser->program, element_type, &object_type)) {
             return false;
         }
-    } else if (!minic_parser_parse_fixed_array_bound(parser, &element_count) ||
-               !minic_c0_program_add_array_type(
-                   parser->program, element_type, element_count, &object_type)) {
-        if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
-            minic_parser_error(parser, "cannot build static pointer array type");
+    } else {
+        size_t parsed_element_count;
+        bool is_zero_length;
+
+        parsed_element_count = 0U;
+        is_zero_length = false;
+        if (!minic_parser_parse_record_array_bound(
+                parser, &parsed_element_count, &is_zero_length)) {
+            return false;
         }
-        return false;
+        element_count = is_zero_length ? 0U : parsed_element_count;
+        if ((is_zero_length && !minic_c0_program_add_zero_length_array_type(
+                                   parser->program, element_type, &object_type)) ||
+            (!is_zero_length && !minic_c0_program_add_array_type(
+                                    parser->program, element_type, element_count, &object_type))) {
+            minic_parser_error(parser, "cannot build static pointer array type");
+            return false;
+        }
     }
     if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
         minic_parser_error(parser, "multi-dimensional static pointer arrays are not supported yet");
@@ -3946,10 +3957,28 @@ static bool parse_static_pointer_array(MinicParser *parser,
         return false;
     }
     if (!minic_parser_expect(
-            parser, MINIC_TOKEN_EQUAL, "expected '=' after static pointer array") ||
-        !parse_static_scalar_array_transaction(
-            parser, object_id, element_type, element_count, inferred_bound)) {
+            parser, MINIC_TOKEN_EQUAL, "expected '=' after static pointer array")) {
         return false;
+    }
+    {
+        const MinicArrayType *array_type;
+
+        array_type = minic_c0_program_array_type(parser->program, object_type.array_type_id);
+        if (array_type == NULL) {
+            minic_parser_error(parser, "invalid static pointer array type");
+            return false;
+        }
+        if (array_type->is_zero_length) {
+            if (!minic_parser_expect(
+                    parser, MINIC_TOKEN_LBRACE, "expected '{' for zero-length array initializer") ||
+                !minic_parser_expect(
+                    parser, MINIC_TOKEN_RBRACE, "zero-length array initializer must be empty")) {
+                return false;
+            }
+        } else if (!parse_static_scalar_array_transaction(
+                       parser, object_id, element_type, element_count, inferred_bound)) {
+            return false;
+        }
     }
     return minic_parser_expect(
         parser, MINIC_TOKEN_SEMICOLON, "expected ';' after static pointer array");
