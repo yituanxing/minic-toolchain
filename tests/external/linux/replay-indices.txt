@@ -1,2 +1,2 @@
-# Verify permanent static-local inferred multidimensional array product.
+# Verify permanent interleaved return-pointer attribute product.
 148
