@@ -981,6 +981,33 @@ bool minic_c0_global_object_add_object_relocation(MinicC0Program *program,
         program, global_object_id, location_kind, location_index, target_object_id, NULL, 0U);
 }
 
+bool minic_c0_global_object_set_flexible_array_initializer_count(
+    MinicC0Program *program, MinicGlobalObjectId global_object_id, size_t element_count) {
+    MinicGlobalObject *object;
+    const MinicRecord *record;
+    const MinicRecordField *field;
+
+    if (program == NULL || global_object_id >= program->global_object_count ||
+        element_count == 0U) {
+        return false;
+    }
+    object = &program->global_objects[global_object_id];
+    if (object->is_extern || object->is_tentative || object->is_zero_initialized ||
+        object->flexible_array_initializer_count != 0U || !minic_type_is_record(object->type)) {
+        return false;
+    }
+    record = minic_c0_program_record(program, object->type.record_id);
+    if (record == NULL || !record->is_complete || record->is_union || record->field_count == 0U) {
+        return false;
+    }
+    field = &record->fields[record->field_count - 1U];
+    if (!field->is_flexible_array || field->is_bit_field) {
+        return false;
+    }
+    object->flexible_array_initializer_count = element_count;
+    return true;
+}
+
 bool minic_c0_global_object_set_zero_initialized(MinicC0Program *program,
                                                  MinicGlobalObjectId global_object_id) {
     MinicGlobalObject *object;

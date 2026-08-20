@@ -535,10 +535,25 @@ static bool minic_riscv64_emit_constant_value(FILE *file,
         size_t cursor;
         size_t field_index;
         size_t field_limit;
+        size_t record_storage_size;
 
         record = minic_c0_program_record(program, type.record_id);
         if (record == NULL || !record->is_complete) {
             return false;
+        }
+        record_storage_size = type_size;
+        if (object->flexible_array_initializer_count != 0U && minic_type_is_record(object->type) &&
+            object->type.record_id == type.record_id) {
+            size_t object_alignment;
+
+            if (!minic_data_layout_global_object(minic_default_data_layout(),
+                                                 program,
+                                                 object,
+                                                 &record_storage_size,
+                                                 &object_alignment)) {
+                return false;
+            }
+            (void)object_alignment;
         }
         if (record->field_count == 0U) {
             if (type_size != 0U) {
@@ -559,10 +574,34 @@ static bool minic_riscv64_emit_constant_value(FILE *file,
                 return false;
             }
             if (field->is_flexible_array) {
-                /* DataLayout gives a trailing FAM zero storage bytes. Its semantic
-                 * initializer likewise owns zero scalar slots, so emit nothing. */
-                if (record->is_union || field_index + 1U != field_limit) {
+                size_t flexible_element_count;
+
+                if (record->is_union || field_index + 1U != field_limit ||
+                    !minic_data_layout_record_field_offset(
+                        minic_default_data_layout(), program, record, field_index, &field_offset) ||
+                    field_offset < cursor || field_offset > record_storage_size ||
+                    !minic_riscv64_emit_zero_bytes(file, field_offset - cursor)) {
                     return false;
+                }
+                cursor = field_offset;
+                flexible_element_count =
+                    minic_type_is_record(object->type) && object->type.record_id == type.record_id
+                        ? object->flexible_array_initializer_count
+                        : 0U;
+                for (element_index = 0U; element_index < flexible_element_count; ++element_index) {
+                    size_t element_emitted;
+
+                    if (!minic_riscv64_emit_constant_value(file,
+                                                           program,
+                                                           object,
+                                                           field->type,
+                                                           initializer_index,
+                                                           relocation_index,
+                                                           &element_emitted) ||
+                        cursor > record_storage_size - element_emitted) {
+                        return false;
+                    }
+                    cursor += element_emitted;
                 }
                 continue;
             }
@@ -617,10 +656,11 @@ static bool minic_riscv64_emit_constant_value(FILE *file,
                 break;
             }
         }
-        if (cursor > type_size || !minic_riscv64_emit_zero_bytes(file, type_size - cursor)) {
+        if (cursor > record_storage_size ||
+            !minic_riscv64_emit_zero_bytes(file, record_storage_size - cursor)) {
             return false;
         }
-        *emitted_size = type_size;
+        *emitted_size = record_storage_size;
         return true;
     }
     return false;

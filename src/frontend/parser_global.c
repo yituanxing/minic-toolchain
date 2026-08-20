@@ -2468,7 +2468,49 @@ static bool parse_static_record_constant(MinicParser *parser,
             return false;
         }
         field = &record->fields[field_index];
-        if (field->element_count == 0U || field->is_flexible_array) {
+        if (field->is_flexible_array) {
+            const MinicGlobalObject *object;
+            size_t flexible_element_count;
+
+            object = minic_c0_program_global_object(parser->program, object_id);
+            flexible_element_count = 0U;
+            if (object == NULL || !minic_type_is_record(object->type) ||
+                minic_c0_program_record(parser->program, object->type.record_id) != record ||
+                record->is_union || field_index + 1U != record->field_count ||
+                field_index != materialized_field_limit || field->is_bit_field ||
+                !minic_type_is_integer(field->type) ||
+                (has_designator && (designator.depth != 1U || designator.has_array_index)) ||
+                parser->current.kind != MINIC_TOKEN_LBRACE ||
+                !minic_parser_inspect_array_initializer_extent(parser, &flexible_element_count) ||
+                flexible_element_count == 0U ||
+                !parse_static_scalar_array_transaction(
+                    parser, object_id, field->type, flexible_element_count, false) ||
+                !minic_c0_global_object_set_flexible_array_initializer_count(
+                    parser->program, object_id, flexible_element_count)) {
+                if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                    minic_parser_error(
+                        parser,
+                        "GNU static flexible array initializer requires a direct integer tail");
+                }
+                return false;
+            }
+            materialized_field_limit += 1U;
+            field_index += 1U;
+            if (parser->current.kind == MINIC_TOKEN_COMMA) {
+                if (!minic_parser_advance(parser)) {
+                    return false;
+                }
+                if (parser->current.kind == MINIC_TOKEN_RBRACE) {
+                    break;
+                }
+            } else if (parser->current.kind != MINIC_TOKEN_RBRACE) {
+                minic_parser_error(parser,
+                                   "expected ',' or '}' after static flexible array initializer");
+                return false;
+            }
+            continue;
+        }
+        if (field->element_count == 0U) {
             minic_parser_error(parser, "unsupported nested static record field");
             return false;
         }

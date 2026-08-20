@@ -22,6 +22,21 @@ grep -F '  .dword 2' "$build_dir/static_nested_record_nonzero.s" >/dev/null
 grep -E '^\.size __minic_static_local_[0-9_]+, 0$' \
     "$build_dir/static_zero_size_local_array.s" >/dev/null
 
+cat >"$build_dir/static_flexible_array.c" <<'EOF'
+struct StaticFlexibleArray {
+    int tag;
+    unsigned long tail[];
+};
+struct StaticFlexibleArray static_flexible_array = {
+    .tag = 7,
+    .tail = { [0 ... 2] = 11UL },
+};
+EOF
+"$minic" -S "$build_dir/static_flexible_array.c" \
+    -o "$build_dir/static_flexible_array.s"
+grep -F '.size static_flexible_array, 32' "$build_dir/static_flexible_array.s" >/dev/null
+test "$(grep -c '  .dword 11' "$build_dir/static_flexible_array.s")" -eq 3
+
 if "$minic" -S "$root/tests/compiler/c0/invalid_static_record_compound_literal_type.c" \
     -o "$build_dir/invalid.s" >"$build_dir/invalid.stdout" 2>"$build_dir/invalid.stderr"; then
     echo 'FAIL static aggregate discovery: mismatched record compound literal accepted' >&2
@@ -29,4 +44,4 @@ if "$minic" -S "$root/tests/compiler/c0/invalid_static_record_compound_literal_t
 fi
 grep -F 'static record compound literal type mismatch' "$build_dir/invalid.stderr" >/dev/null
 printf '%s\n' \
-    'PASS compiler/c0/static-aggregate-initializers compound-literal=record nested-nonzero=recursive zero-size-local-array=accepted designated-inner=shared mismatch=fail-closed'
+    'PASS compiler/c0/static-aggregate-initializers compound-literal=record nested-nonzero=recursive zero-size-local-array=accepted static-fam=gnu-range+extended-storage designated-inner=shared mismatch=fail-closed'

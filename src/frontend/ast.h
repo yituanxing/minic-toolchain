@@ -445,6 +445,7 @@ typedef struct MinicGlobalObject {
     MinicGlobalRelocation *relocations;
     size_t relocation_count;
     size_t relocation_capacity;
+    size_t flexible_array_initializer_count;
     size_t explicit_alignment;
     MinicSymbolVisibility visibility;
     bool is_internal;
@@ -757,6 +758,8 @@ bool minic_c0_global_object_replace_zero_initializer_bits(MinicC0Program *progra
                                                           MinicGlobalObjectId global_object_id,
                                                           size_t initializer_index,
                                                           uint64_t bits);
+bool minic_c0_global_object_set_flexible_array_initializer_count(
+    MinicC0Program *program, MinicGlobalObjectId global_object_id, size_t element_count);
 bool minic_c0_type_initializer_slot_count(const MinicC0Program *program,
                                           MinicType type,
                                           size_t *slot_count);
