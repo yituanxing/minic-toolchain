@@ -2,4 +2,4 @@
 """Materialize the next unresolved first500 semantic slice."""
 import runpy
 
-runpy.run_path("tools/dev/materialize-linux-first500-chained-array-designator-v1.py", run_name="__main__")
+runpy.run_path("tools/dev/materialize-linux-first500-inferred-multidim-array-v1.py", run_name="__main__")
