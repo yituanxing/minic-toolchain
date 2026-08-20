@@ -1,4 +1,1 @@
-# Focused unchanged Linux 6.6.143 replay on exact active-union product; verify 122/197/389 only.
-122
-197
-389
+# Full first500 replay after focused trio closure.
