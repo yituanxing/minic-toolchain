@@ -1708,7 +1708,7 @@ bool minic_c0_pointer_relational_compatible(const MinicC0Program *program,
            minic_type_unqualified(left_pointee, &left_unqualified) &&
            minic_type_unqualified(right_pointee, &right_unqualified) &&
            minic_c0_types_compatible(program, left_unqualified, right_unqualified) &&
-           !minic_type_is_void(left_unqualified) && !minic_type_is_function(left_unqualified);
+           !minic_type_is_function(left_unqualified);
 }
 
 bool minic_c0_pointer_equality_compatible(const MinicC0Program *program,
