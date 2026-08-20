@@ -1,2 +1,2 @@
-# Verify permanent aggregate flexible-array tail support.
+# Verify aggregate FAM relocation after provisional extent publication.
 250
