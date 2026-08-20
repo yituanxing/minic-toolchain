@@ -533,10 +533,13 @@ static bool minic_riscv64_emit_constant_value(FILE *file,
     if (minic_type_is_record(type)) {
         const MinicRecord *record;
         size_t cursor;
+        size_t field_begin;
         size_t field_index;
         size_t field_limit;
+        size_t record_base_slot;
         size_t record_storage_size;
 
+        record_base_slot = *initializer_index;
         record = minic_c0_program_record(program, type.record_id);
         if (record == NULL || !record->is_complete) {
             return false;
@@ -563,8 +566,21 @@ static bool minic_riscv64_emit_constant_value(FILE *file,
             return true;
         }
         cursor = 0U;
-        field_limit = record->is_union ? 1U : record->field_count;
-        for (field_index = 0U; field_index < field_limit; ++field_index) {
+        field_begin = 0U;
+        field_limit = record->field_count;
+        if (record->is_union) {
+            size_t selected;
+
+            selected = 0U;
+            (void)minic_c0_global_object_union_member_selection(
+                program, object, record_base_slot, type.record_id, &selected);
+            if (selected >= record->field_count) {
+                return false;
+            }
+            field_begin = selected;
+            field_limit = selected + 1U;
+        }
+        for (field_index = field_begin; field_index < field_limit; ++field_index) {
             const MinicRecordField *field;
             size_t element_index;
             size_t field_offset;

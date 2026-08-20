@@ -753,8 +753,23 @@ parse_local_array_initializer(MinicParser *parser, MinicLocalId local_id, bool i
             minic_parser_error(parser, "too many local array initializers");
             return false;
         }
-        if (!minic_parser_parse_expression(parser, &value_id, 0U) ||
-            !add_local_array_element_assignment(parser, local_id, initializer_count, value_id)) {
+        if (minic_type_is_record(local->type)) {
+            MinicExpressionId base_id;
+            MinicExpressionId element_id;
+
+            if (parser->current.kind != MINIC_TOKEN_LBRACE) {
+                minic_parser_error(parser, "inferred runtime record array element requires braces");
+                return false;
+            }
+            if (!add_local_lvalue_expression(parser, local_id, local->name_span, &base_id) ||
+                !add_array_object_element_lvalue(
+                    parser, base_id, initializer_count, parser->current.span, &element_id) ||
+                !minic_parser_parse_runtime_record_initializer(parser, element_id)) {
+                return false;
+            }
+        } else if (!minic_parser_parse_expression(parser, &value_id, 0U) ||
+                   !add_local_array_element_assignment(
+                       parser, local_id, initializer_count, value_id)) {
             return false;
         }
         initializer_count += 1U;

@@ -585,7 +585,7 @@ static bool parse_function_pointer_parameter_declarator(MinicParser *parser,
 
     if (parser == NULL || name_span == NULL || has_name == NULL || parameter_type == NULL ||
         !minic_parser_parse_parenthesized_function_declarator(
-            parser, require_name, true, &declarator)) {
+            parser, require_name, false, &declarator)) {
         return false;
     }
     if (!minic_parser_build_function_declarator_type(
@@ -807,8 +807,7 @@ bool minic_parser_parse_parameter_list(MinicParser *parser,
             !adjust_array_parameter_type(parser, &parameter_type)) {
             return false;
         }
-        if (!is_function_pointer_parameter &&
-            !adjust_function_parameter_type(parser, &parameter_type)) {
+        if (!adjust_function_parameter_type(parser, &parameter_type)) {
             return false;
         }
 

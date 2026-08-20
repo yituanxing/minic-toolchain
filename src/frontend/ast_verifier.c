@@ -1325,8 +1325,38 @@ bool minic_c0_program_verify_target(const MinicC0Program *program,
                               object->initializer_count,
                               object->initializer_capacity) ||
             !storage_is_valid(
-                object->relocations, object->relocation_count, object->relocation_capacity)) {
+                object->relocations, object->relocation_count, object->relocation_capacity) ||
+            !storage_is_valid(object->union_selections,
+                              object->union_selection_count,
+                              object->union_selection_capacity) ||
+            ((object->is_extern || object->is_tentative || object->is_zero_initialized) &&
+             object->union_selection_count != 0U)) {
             return false;
+        }
+        {
+            size_t selection_index;
+
+            for (selection_index = 0U; selection_index < object->union_selection_count;
+                 ++selection_index) {
+                const MinicGlobalUnionSelection *selection;
+                const MinicRecord *record;
+                size_t prior_index;
+
+                selection = &object->union_selections[selection_index];
+                record = minic_c0_program_record(program, selection->record_id);
+                if (record == NULL || !record->is_complete || !record->is_union ||
+                    selection->field_index >= record->field_count ||
+                    selection->initializer_slot > object->initializer_count) {
+                    return false;
+                }
+                for (prior_index = 0U; prior_index < selection_index; ++prior_index) {
+                    if (object->union_selections[prior_index].initializer_slot ==
+                            selection->initializer_slot &&
+                        object->union_selections[prior_index].record_id == selection->record_id) {
+                        return false;
+                    }
+                }
+            }
         }
         if (object->relocation_count != 0U && !object->is_zero_initialized) {
             size_t relocation_index;

@@ -433,6 +433,12 @@ typedef struct MinicGlobalRelocation {
     bool has_explicit_pointer_cast;
 } MinicGlobalRelocation;
 
+typedef struct MinicGlobalUnionSelection {
+    size_t initializer_slot;
+    MinicRecordId record_id;
+    size_t field_index;
+} MinicGlobalUnionSelection;
+
 typedef struct MinicGlobalObject {
     char *name;
     size_t name_length;
@@ -445,6 +451,9 @@ typedef struct MinicGlobalObject {
     MinicGlobalRelocation *relocations;
     size_t relocation_count;
     size_t relocation_capacity;
+    MinicGlobalUnionSelection *union_selections;
+    size_t union_selection_count;
+    size_t union_selection_capacity;
     size_t flexible_array_initializer_count;
     size_t explicit_alignment;
     MinicSymbolVisibility visibility;
@@ -766,6 +775,16 @@ bool minic_c0_type_initializer_slot_count(const MinicC0Program *program,
 bool minic_c0_global_initializer_slot_count(const MinicC0Program *program,
                                             MinicType type,
                                             size_t *slot_count);
+bool minic_c0_global_object_select_union_member(MinicC0Program *program,
+                                                MinicGlobalObjectId global_object_id,
+                                                size_t initializer_slot,
+                                                MinicRecordId record_id,
+                                                size_t field_index);
+bool minic_c0_global_object_union_member_selection(const MinicC0Program *program,
+                                                   const MinicGlobalObject *object,
+                                                   size_t initializer_slot,
+                                                   MinicRecordId record_id,
+                                                   size_t *field_index);
 bool minic_c0_global_record_field_initializer_slot(const MinicC0Program *program,
                                                    const MinicRecord *record,
                                                    size_t field_index,

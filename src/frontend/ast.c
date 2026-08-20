@@ -119,6 +119,7 @@ void minic_c0_program_destroy(MinicC0Program *program) {
         free(program->global_objects[index].section_name);
         free(program->global_objects[index].initializer_values);
         free(program->global_objects[index].relocations);
+        free(program->global_objects[index].union_selections);
     }
     free(program->expressions);
     free(program->locals);

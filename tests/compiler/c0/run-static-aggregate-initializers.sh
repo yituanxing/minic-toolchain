@@ -38,6 +38,50 @@ grep -F '  .word 7' "$build_dir/static_flexible_array.s" >/dev/null
 grep -F '.size static_flexible_array, 32' "$build_dir/static_flexible_array.s" >/dev/null
 test "$(grep -c '  .dword 11' "$build_dir/static_flexible_array.s")" -eq 3
 
+cat >"$build_dir/static_union_selection.c" <<'EOF'
+struct CallbackNode {
+    int count;
+    union {
+        void (*func)(unsigned long);
+        void (*callback)(struct CallbackNode *);
+    };
+    int tail;
+};
+static void callback_node(struct CallbackNode *node) { (void)node; }
+static struct CallbackNode callback_holder = {
+    .count = 1,
+    .callback = callback_node,
+    .tail = 2,
+};
+
+struct AnonymousStructUnion {
+    union {
+        struct { void *a0; void *a1; };
+        struct { unsigned long s0; unsigned long s1; };
+    };
+};
+static struct AnonymousStructUnion anonymous_struct_union = { .s1 = 8UL };
+
+static long backward_target;
+struct BackwardUnion {
+    int prefix;
+    union {
+        int *as_int;
+        long *as_long;
+    };
+    int tail;
+};
+static struct BackwardUnion backward_union = {
+    .tail = 3,
+    .as_long = &backward_target,
+};
+EOF
+"$minic" -S "$build_dir/static_union_selection.c" \
+    -o "$build_dir/static_union_selection.s"
+grep -F '  .dword callback_node' "$build_dir/static_union_selection.s" >/dev/null
+grep -F '  .dword 8' "$build_dir/static_union_selection.s" >/dev/null
+grep -F '  .dword backward_target' "$build_dir/static_union_selection.s" >/dev/null
+
 if "$minic" -S "$root/tests/compiler/c0/invalid_static_record_compound_literal_type.c" \
     -o "$build_dir/invalid.s" >"$build_dir/invalid.stdout" 2>"$build_dir/invalid.stderr"; then
     echo 'FAIL static aggregate discovery: mismatched record compound literal accepted' >&2
@@ -45,4 +89,4 @@ if "$minic" -S "$root/tests/compiler/c0/invalid_static_record_compound_literal_t
 fi
 grep -F 'static record compound literal type mismatch' "$build_dir/invalid.stderr" >/dev/null
 printf '%s\n' \
-    'PASS compiler/c0/static-aggregate-initializers compound-literal=record nested-nonzero=recursive zero-size-local-array=accepted static-fam=gnu-range+extended-storage designated-inner=shared mismatch=fail-closed'
+    'PASS compiler/c0/static-aggregate-initializers compound-literal=record nested-nonzero=recursive zero-size-local-array=accepted static-fam=gnu-range+extended-storage union-selection=forward+anonymous-struct+backward-reloc designated-inner=shared mismatch=fail-closed'

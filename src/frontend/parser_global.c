@@ -1933,6 +1933,11 @@ static bool static_record_designator_leaf_slot(const MinicC0Program *program,
     return false;
 }
 
+static bool overwrite_static_zero_field_value(MinicParser *parser,
+                                              MinicGlobalObjectId object_id,
+                                              const MinicRecordField *field,
+                                              size_t field_base_slot);
+
 static bool try_overwrite_static_zero_noncanonical_union_designator(
     MinicParser *parser,
     MinicGlobalObjectId object_id,
@@ -1965,20 +1970,23 @@ static bool try_overwrite_static_zero_noncanonical_union_designator(
         }
         if (current_record->is_union && field_index != 0U) {
             const MinicRecordField *canonical_field;
+            MinicRecordId union_record_id;
             size_t canonical_element_slots;
             size_t canonical_slots;
+            size_t selected_element_slots;
+            size_t selected_slots;
             size_t slot_begin;
             size_t slot_end;
             size_t slot;
             size_t relocation_index;
-            uint64_t bits;
 
             *handled = true;
-            if (depth + 1U != designator->depth || !minic_type_is_integer(field->type) ||
-                current_record->field_count == 0U) {
+            if (depth + 1U != designator->depth || current_record->field_count == 0U ||
+                current_record < parser->program->records ||
+                current_record >= parser->program->records + parser->program->record_count) {
                 minic_parser_error(parser,
-                                   "backward noncanonical static union designator requires an "
-                                   "integer scalar leaf");
+                                   "backward noncanonical static union designator requires a "
+                                   "direct active member");
                 return false;
             }
             canonical_field = &current_record->fields[0];
@@ -1986,11 +1994,21 @@ static bool try_overwrite_static_zero_noncanonical_union_designator(
                 !minic_c0_global_initializer_slot_count(
                     parser->program, canonical_field->type, &canonical_element_slots) ||
                 (canonical_element_slots != 0U &&
-                 canonical_field->element_count > SIZE_MAX / canonical_element_slots)) {
-                minic_parser_error(parser, "cannot resolve canonical static union storage");
+                 canonical_field->element_count > SIZE_MAX / canonical_element_slots) ||
+                !minic_c0_global_initializer_slot_count(
+                    parser->program, field->type, &selected_element_slots) ||
+                (selected_element_slots != 0U &&
+                 field->element_count > SIZE_MAX / selected_element_slots)) {
+                minic_parser_error(parser, "cannot resolve static union storage shape");
                 return false;
             }
             canonical_slots = canonical_field->element_count * canonical_element_slots;
+            selected_slots = field->element_count * selected_element_slots;
+            if (canonical_slots != selected_slots) {
+                minic_parser_error(parser,
+                                   "backward static union member changes flattened storage shape");
+                return false;
+            }
             if (record_base_slot > SIZE_MAX - total) {
                 return false;
             }
@@ -2005,7 +2023,7 @@ static bool try_overwrite_static_zero_noncanonical_union_designator(
                 if (object->initializer_values[slot] != 0U) {
                     minic_parser_error(
                         parser,
-                        "backward noncanonical static union zero requires zero canonical storage");
+                        "backward static union member can only replace implicit zero storage");
                     return false;
                 }
             }
@@ -2019,17 +2037,17 @@ static bool try_overwrite_static_zero_noncanonical_union_designator(
                     relocation->location_index >= slot_begin &&
                     relocation->location_index < slot_end) {
                     minic_parser_error(parser,
-                                       "backward noncanonical static union zero cannot overwrite "
-                                       "symbolic storage");
+                                       "backward static union member cannot overwrite symbolic "
+                                       "storage");
                     return false;
                 }
             }
-            if (!minic_parser_parse_integer_initializer_bits(parser, field->type, &bits) ||
-                bits != 0U) {
+            union_record_id = (MinicRecordId)(current_record - parser->program->records);
+            if (!minic_c0_global_object_select_union_member(
+                    parser->program, object_id, slot_begin, union_record_id, field_index) ||
+                !overwrite_static_zero_field_value(parser, object_id, field, slot_begin)) {
                 if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
-                    minic_parser_error(
-                        parser,
-                        "backward noncanonical static union member requires a zero initializer");
+                    minic_parser_error(parser, "cannot replace static union active member");
                 }
                 return false;
             }
@@ -2073,15 +2091,32 @@ static bool append_static_record_designator_value(MinicParser *parser,
         depth == 0U) {
         return false;
     }
-    field_limit = record->is_union ? 1U : record->field_count;
+    field_limit = record->field_count;
     selected_index = field_indices[0];
     if (selected_index >= field_limit) {
         return false;
     }
-    for (field_index = 0U; field_index < selected_index; ++field_index) {
-        if (!append_static_field_zeros(parser, object_id, &record->fields[field_index])) {
-            minic_parser_error(parser, "cannot zero-fill static record designator prefix");
+    if (record->is_union) {
+        MinicRecordId union_record_id;
+        size_t union_base_slot;
+
+        if (record < parser->program->records ||
+            record >= parser->program->records + parser->program->record_count) {
             return false;
+        }
+        union_record_id = (MinicRecordId)(record - parser->program->records);
+        union_base_slot = parser->program->global_objects[object_id].initializer_count;
+        if (!minic_c0_global_object_select_union_member(
+                parser->program, object_id, union_base_slot, union_record_id, selected_index)) {
+            minic_parser_error(parser, "cannot record static union active member");
+            return false;
+        }
+    } else {
+        for (field_index = 0U; field_index < selected_index; ++field_index) {
+            if (!append_static_field_zeros(parser, object_id, &record->fields[field_index])) {
+                minic_parser_error(parser, "cannot zero-fill static record designator prefix");
+                return false;
+            }
         }
     }
     field = &record->fields[selected_index];
@@ -2121,10 +2156,12 @@ static bool append_static_record_designator_value(MinicParser *parser,
             return false;
         }
     }
-    for (field_index = selected_index + 1U; field_index < field_limit; ++field_index) {
-        if (!append_static_field_zeros(parser, object_id, &record->fields[field_index])) {
-            minic_parser_error(parser, "cannot zero-fill static record designator suffix");
-            return false;
+    if (!record->is_union) {
+        for (field_index = selected_index + 1U; field_index < field_limit; ++field_index) {
+            if (!append_static_field_zeros(parser, object_id, &record->fields[field_index])) {
+                minic_parser_error(parser, "cannot zero-fill static record designator suffix");
+                return false;
+            }
         }
     }
     return true;
@@ -2417,6 +2454,112 @@ static bool overwrite_static_zero_record_constant(MinicParser *parser,
     }
     return minic_parser_expect(
         parser, MINIC_TOKEN_RBRACE, "expected '}' after backward aggregate initializer");
+}
+
+static bool parse_static_union_constant(MinicParser *parser,
+                                        MinicGlobalObjectId object_id,
+                                        const MinicRecord *record) {
+    MinicStaticRecordDesignator designator;
+    const MinicRecordField *field;
+    MinicRecordId record_id;
+    size_t selected_index;
+    size_t union_base_slot;
+    bool has_designator;
+
+    if (parser == NULL || record == NULL || !record->is_complete || !record->is_union ||
+        record->field_count == 0U || object_id >= parser->program->global_object_count ||
+        record < parser->program->records ||
+        record >= parser->program->records + parser->program->record_count ||
+        !minic_parser_expect(parser, MINIC_TOKEN_LBRACE, "expected '{' in union initializer")) {
+        return false;
+    }
+    record_id = (MinicRecordId)(record - parser->program->records);
+    union_base_slot = parser->program->global_objects[object_id].initializer_count;
+    if (parser->current.kind == MINIC_TOKEN_RBRACE) {
+        if (!minic_c0_global_object_select_union_member(
+                parser->program, object_id, union_base_slot, record_id, 0U) ||
+            !append_static_field_zeros(parser, object_id, &record->fields[0])) {
+            return false;
+        }
+        return minic_parser_advance(parser);
+    }
+
+    (void)memset(&designator, 0, sizeof(designator));
+    has_designator = parser->current.kind == MINIC_TOKEN_DOT;
+    if (has_designator) {
+        if (!parse_static_record_designator_path(parser, record, &designator) ||
+            designator.depth == 0U) {
+            return false;
+        }
+        selected_index = designator.field_indices[0];
+    } else {
+        selected_index = 0U;
+    }
+    if (selected_index >= record->field_count ||
+        !minic_c0_global_object_select_union_member(
+            parser->program, object_id, union_base_slot, record_id, selected_index)) {
+        minic_parser_error(parser, "cannot select static union initializer member");
+        return false;
+    }
+    field = &record->fields[selected_index];
+    if (field->element_count == 0U || field->is_flexible_array) {
+        minic_parser_error(parser, "unsupported static union initializer member");
+        return false;
+    }
+
+    if (has_designator && designator.has_array_index) {
+        if (designator.depth != 1U || !field->is_array || field->is_bit_field ||
+            designator.array_index >= field->element_count ||
+            !append_static_record_array_element_designator_value(
+                parser, object_id, field, designator.array_index)) {
+            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                minic_parser_error(parser,
+                                   "cannot initialize designated static union array member");
+            }
+            return false;
+        }
+    } else if (has_designator && designator.depth > 1U) {
+        const MinicRecord *nested_record;
+
+        if (field->element_count != 1U || field->is_array || field->is_bit_field ||
+            !minic_type_is_record(field->type)) {
+            minic_parser_error(parser, "nested static union designator requires a record member");
+            return false;
+        }
+        nested_record = minic_c0_program_record(parser->program, field->type.record_id);
+        if (nested_record == NULL ||
+            !append_static_record_designator_value(parser,
+                                                   object_id,
+                                                   nested_record,
+                                                   designator.field_indices + 1U,
+                                                   designator.depth - 1U)) {
+            return false;
+        }
+    } else if (field->element_count == 1U && !field->is_array) {
+        if (!minic_parser_parse_static_storage_initializer_value(parser, object_id, field->type)) {
+            return false;
+        }
+    } else if (field->is_array && minic_type_is_char_integer(field->type) &&
+               parser->current.kind == MINIC_TOKEN_STRING_LITERAL) {
+        if (!minic_parser_add_bounded_string_literal_initializer(
+                parser, object_id, field->element_count)) {
+            return false;
+        }
+    } else if (!parse_static_forward_array_initializer(
+                   parser, object_id, field->type, field->element_count, false, NULL)) {
+        return false;
+    }
+
+    if (parser->current.kind == MINIC_TOKEN_COMMA) {
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
+    }
+    if (parser->current.kind != MINIC_TOKEN_RBRACE) {
+        minic_parser_error(parser, "union initializer may initialize only one active member");
+        return false;
+    }
+    return minic_parser_advance(parser);
 }
 
 static bool parse_static_record_constant(MinicParser *parser,
@@ -2724,8 +2867,16 @@ bool minic_parser_parse_static_storage_initializer_value(MinicParser *parser,
                 return false;
             }
         }
-        return parse_static_record_constant(
-            parser, object_id, minic_c0_program_record(parser->program, type.record_id));
+        {
+            const MinicRecord *record;
+
+            record = minic_c0_program_record(parser->program, type.record_id);
+            if (record == NULL) {
+                return false;
+            }
+            return record->is_union ? parse_static_union_constant(parser, object_id, record)
+                                    : parse_static_record_constant(parser, object_id, record);
+        }
     }
     minic_parser_error(parser, "unsupported nested static aggregate initializer type");
     return false;
