@@ -6,6 +6,7 @@ on:
       - infra/linux-tail-batch8-productizer-v2
     paths:
       - 'tools/dev/materialize-linux-tail-batch8-v1.py'
+      - 'tools/dev/materialize-linux-tail-batch8-relational-v1.py'
       - 'tests/compiler/c0/run-linux-tail-batch8.sh'
 
 permissions:
@@ -25,6 +26,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           python3 tools/dev/materialize-linux-tail-batch8-v1.py
+          python3 tools/dev/materialize-linux-tail-batch8-relational-v1.py
           clang-format -i src/frontend/parser_declarator.c \
                           src/frontend/parser_internal.h \
                           src/frontend/parser_statement.c \
@@ -45,7 +47,8 @@ jobs:
           set -Eeuo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git rm tools/dev/materialize-linux-tail-batch8-v1.py
+          git rm tools/dev/materialize-linux-tail-batch8-v1.py \
+                 tools/dev/materialize-linux-tail-batch8-relational-v1.py
           git add src/frontend/parser_declarator.c \
                   src/frontend/parser_internal.h \
                   src/frontend/parser_statement.c \
