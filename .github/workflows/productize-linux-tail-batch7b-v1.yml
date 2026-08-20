@@ -1,11 +1,12 @@
-name: Productize Linux tail batch8 repair v1
+name: Productize Linux tail batch8 void relational v1
 
 on:
   pull_request:
     branches:
       - infra/linux-tail-batch8-productizer-v2
     paths:
-      - 'tools/dev/materialize-linux-tail-batch8-difference-v1.py'
+      - 'tools/dev/materialize-linux-tail-batch8-void-relational-v1.py'
+      - 'tests/compiler/c0/run-linux-tail-batch8.sh'
 
 permissions:
   contents: write
@@ -20,17 +21,14 @@ jobs:
         with:
           ref: frontend/linux-tail-batch8-v1
 
-      - name: Separate pointer relational and difference semantics
+      - name: Materialize GNU void pointer relational compatibility
         run: |
           set -Eeuo pipefail
-          python3 tools/dev/materialize-linux-tail-batch8-difference-v1.py
-          clang-format -i src/frontend/ast.c \
-                          src/frontend/ast.h \
-                          src/frontend/parser_expression.c \
-                          src/frontend/ast_verifier.c
+          python3 tools/dev/materialize-linux-tail-batch8-void-relational-v1.py
+          clang-format -i src/frontend/ast.c
           git diff --check
 
-      - name: Build and focused regression gates
+      - name: Build and focused pointer gates
         run: |
           set -Eeuo pipefail
           make -j4 CFLAGS=-Werror
@@ -39,16 +37,13 @@ jobs:
           MINIC="$PWD/build/debug/bin/minic" BUILD_DIR="$PWD/build/debug" \
             sh tests/compiler/c0/run-linux-tail-batch8.sh
 
-      - name: Publish repaired clean product
+      - name: Publish clean void relational product
         run: |
           set -Eeuo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git rm tools/dev/materialize-linux-tail-batch8-difference-v1.py
-          git add src/frontend/ast.c \
-                  src/frontend/ast.h \
-                  src/frontend/parser_expression.c \
-                  src/frontend/ast_verifier.c
+          git rm tools/dev/materialize-linux-tail-batch8-void-relational-v1.py
+          git add src/frontend/ast.c tests/compiler/c0/run-linux-tail-batch8.sh
           git diff --cached --check
-          git commit -m 'frontend: separate pointer relational and difference semantics'
+          git commit -m 'frontend: admit GNU void pointer relational comparisons'
           git push origin HEAD:frontend/linux-tail-batch8-v1
