@@ -52,6 +52,27 @@ fi
 printf '%s\n' \
     "PASS compiler/c0/$name exit=$status abi=rv64-varargs fixed=1 total-arguments=20 stack=yes capacity=32"
 
+name=variadic_indirect_call
+"$riscv_cc" -E -P -x c "$root/tests/compiler/c0/$name.c" -o "$work/$name.i"
+"$minic" -S "$work/$name.i" -o "$work/$name.s"
+grep -F '  jalr ra, t0, 0' "$work/$name.s" >/dev/null
+"$riscv_cc" -static \
+    "$work/$name.s" \
+    "$root/tests/compiler/c0/${name}_helper.c" \
+    -o "$work/$name.elf"
+
+set +e
+"$qemu" "$work/$name.elf"
+status=$?
+set -e
+
+if test "$status" -ne 0; then
+    printf '%s\n' "FAIL compiler/c0/$name: expected=0 actual=$status" >&2
+    exit 1
+fi
+printf '%s\n' \
+    "PASS compiler/c0/$name exit=$status abi=rv64-indirect-varargs fixed=1 total-arguments=10 stack=yes"
+
 name=variadic_callee_save
 "$riscv_cc" -E -P -x c "$root/tests/compiler/c0/$name.c" -o "$work/$name.i"
 "$minic" -S "$work/$name.i" -o "$work/$name.s"
