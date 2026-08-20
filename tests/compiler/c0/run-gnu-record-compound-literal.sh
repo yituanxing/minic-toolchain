@@ -30,19 +30,6 @@ test -n "$left_call"
 test -n "$init_call"
 test "$left_call" -lt "$init_call"
 
-cat >"$work/scalar.c" <<'EOF'
-int scalar_compound(void)
-{
-    return (int) { 1 };
-}
-EOF
-"$host_cc" -E -P -std=gnu11 -x c "$work/scalar.c" -o "$work/scalar.i"
-if "$minic" -S "$work/scalar.i" -o "$work/scalar.s" 2>"$work/scalar.stderr"; then
-  printf '%s\n' 'FAIL compiler/c0/gnu_record_compound_literal: scalar compound literal accepted' >&2
-  exit 1
-fi
-grep -F 'compound literals currently require a block-scope record type' "$work/scalar.stderr" >/dev/null
-
 cat >"$work/fam-designated.c" <<'EOF'
 struct FlexibleRuntime { int tag; unsigned long count; unsigned char payload[]; };
 void bad_designated(struct FlexibleRuntime *out)
@@ -98,4 +85,4 @@ else
     printf '%s\n' 'SKIP compiler/c0/gnu_record_compound_literal FAM-fixed-prefix-differential tools=missing'
 fi
 
-printf '%s\n' 'PASS compiler/c0/gnu_record_compound_literal record-lvalue=1 hidden-auto-local=1 initializer-block=expression-owned empty-aggregate=compound+local promoted-designators=1 record-copy=1 member-postfix=1 address-of=1 positional-runtime=1 nested-designated-braces=1 remaining-zero-fill=1 flexible-tail=excluded-from-zero-fill+copy-tail-preserved flexible-explicit-init=fail-closed evaluation-order=preserved scalar=bounded-reject'
+printf '%s\n' 'PASS compiler/c0/gnu_record_compound_literal record-lvalue=1 hidden-auto-local=1 initializer-block=expression-owned empty-aggregate=compound+local promoted-designators=1 record-copy=1 member-postfix=1 address-of=1 positional-runtime=1 nested-designated-braces=1 remaining-zero-fill=1 flexible-tail=excluded-from-zero-fill+copy-tail-preserved flexible-explicit-init=fail-closed evaluation-order=preserved scalar=owned-by-shared-compound-literal-gate'
