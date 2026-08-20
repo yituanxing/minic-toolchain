@@ -1294,11 +1294,23 @@ bool minic_riscv64_write_c0_program_with_core_candidates(const char *path,
             const MinicGlobalObject *object;
 
             object = &program->global_objects[global_index];
-            (void)snprintf(message,
-                           sizeof(message),
-                           "cannot emit RISC-V global object '%s' (index=%zu)",
-                           object->name,
-                           global_index);
+            {
+                const MinicGlobalRelocation *first_relocation;
+
+                first_relocation = object->relocation_count != 0U ? &object->relocations[0] : NULL;
+                (void)snprintf(
+                    message,
+                    sizeof(message),
+                    "cannot emit RISC-V global object '%s' (index=%zu init=%zu reloc=%zu "
+                    "union=%zu first-kind=%u first-slot=%zu)",
+                    object->name,
+                    global_index,
+                    object->initializer_count,
+                    object->relocation_count,
+                    object->union_selection_count,
+                    first_relocation != NULL ? (unsigned int)first_relocation->location_kind : 999U,
+                    first_relocation != NULL ? first_relocation->location_index : 0U);
+            }
             minic_riscv64_set_diagnostic(diagnostic, path, message);
             success = false;
         }
