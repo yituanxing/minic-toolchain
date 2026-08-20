@@ -1,2 +1,2 @@
-# Verify permanent runtime record-array value-copy product on unchanged Linux index 195.
+# Exact human replay of permanent runtime record-array value-copy product.
 195
