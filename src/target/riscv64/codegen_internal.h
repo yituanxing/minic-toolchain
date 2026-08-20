@@ -40,6 +40,9 @@ bool minic_riscv64_emit_scalar_store_for_program(FILE *file,
                                                  MinicType type,
                                                  const char *source_register,
                                                  const char *address_register);
+/* RV64_INT128_PAIR_V1: int128 rvalues use a0=low64 and a1=high64. */
+bool minic_riscv64_emit_int128_load_from_address(FILE *file, const char *address_register);
+bool minic_riscv64_emit_int128_store_to_address(FILE *file, const char *address_register);
 
 bool minic_riscv64_emit_object_address(FILE *file,
                                        const MinicC0Program *program,

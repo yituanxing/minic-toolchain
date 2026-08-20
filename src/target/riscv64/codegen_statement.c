@@ -58,6 +58,21 @@ static bool minic_riscv64_emit_assignment(FILE *file,
             file, program, function, function_layout, statement->expression)) {
         return false;
     }
+    if (minic_type_is_int128_integer(target->type)) {
+        if (!minic_type_is_int128_integer(value->type) ||
+            fprintf(file, "  addi sp, sp, -16\n  sd a0, 0(sp)\n  sd a1, 8(sp)\n") < 0 ||
+            !minic_riscv64_emit_lvalue_address(
+                file, program, function, function_layout, statement->target_expression) ||
+            fprintf(file,
+                    "  mv t0, a0\n"
+                    "  ld a0, 0(sp)\n"
+                    "  ld a1, 8(sp)\n"
+                    "  addi sp, sp, 16\n") < 0 ||
+            !minic_riscv64_emit_int128_store_to_address(file, "t0")) {
+            return false;
+        }
+        return true;
+    }
     if (fprintf(file, "  addi sp, sp, -16\n  sd a0, 0(sp)\n") < 0) {
         return false;
     }

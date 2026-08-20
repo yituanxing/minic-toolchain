@@ -22,3 +22,22 @@ unsigned long direct_unsigned128_size(void) {
 unsigned long int128_record_size(void) {
     return sizeof(struct Int128Layout);
 }
+
+typedef union Int128Words {
+    struct {
+        unsigned long low;
+        unsigned long high;
+    } words;
+    unsigned128_t full;
+} Int128Words;
+
+int int128_pair_equal(const Int128Words *left, const Int128Words *right) {
+    unsigned128_t left_value = left->full;
+    unsigned128_t right_value = right->full;
+    return left_value == right_value;
+}
+
+void int128_pair_copy(Int128Words *target, const Int128Words *source) {
+    unsigned128_t value = source->full;
+    target->full = value;
+}

@@ -1406,6 +1406,11 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
         return minic_type_is_double(expression->type) &&
                fprintf(file, "  li a0, 0x%016" PRIx64 "\n", expression->value.floating_bits) >= 0;
     case MINIC_EXPRESSION_LOCAL:
+        if (minic_type_is_int128_integer(expression->type)) {
+            return minic_riscv64_emit_object_address(
+                       file, program, function, function_layout, expression->value.local_id) &&
+                   minic_riscv64_emit_int128_load_from_address(file, "a0");
+        }
         return minic_riscv64_emit_object_load(
             file, program, function, function_layout, expression->value.local_id);
     case MINIC_EXPRESSION_COMPOUND_LITERAL:
@@ -1415,6 +1420,9 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
         }
         if (minic_type_is_record(expression->type)) {
             return true;
+        }
+        if (minic_type_is_int128_integer(expression->type)) {
+            return minic_riscv64_emit_int128_load_from_address(file, "a0");
         }
         return minic_riscv64_emit_lvalue_load_from_address(
             file, program, expression_id, expression->type, "a0", "a0");
@@ -1427,7 +1435,10 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
             fprintf(file, "  la a0, %s\n", object->name) < 0) {
             return false;
         }
-        return minic_riscv64_emit_scalar_load_for_program(file, program, object->type, "a0", "a0");
+        return minic_type_is_int128_integer(object->type)
+                   ? minic_riscv64_emit_int128_load_from_address(file, "a0")
+                   : minic_riscv64_emit_scalar_load_for_program(
+                         file, program, object->type, "a0", "a0");
     }
     case MINIC_EXPRESSION_FIXED_REGISTER: {
         const MinicFixedRegisterBinding *binding;
@@ -1610,6 +1621,16 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
             return false;
         }
         if (minic_type_is_integer(expression->type) && minic_type_is_integer(operand->type)) {
+            if (minic_type_is_int128_integer(expression->type) ||
+                minic_type_is_int128_integer(operand->type)) {
+                return minic_type_is_int128_integer(expression->type) &&
+                       minic_type_is_int128_integer(operand->type) &&
+                       minic_riscv64_emit_expression(file,
+                                                     program,
+                                                     function,
+                                                     function_layout,
+                                                     expression->value.unary.operand);
+            }
             return minic_riscv64_emit_expression(
                        file, program, function, function_layout, expression->value.unary.operand) &&
                    minic_riscv64_emit_integer_conversion_for_program(
@@ -1668,15 +1689,23 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
             return minic_riscv64_emit_expression(
                 file, program, function, function_layout, expression->value.unary.operand);
         }
-        return minic_riscv64_emit_expression(
-                   file, program, function, function_layout, expression->value.unary.operand) &&
-               minic_riscv64_emit_scalar_load_for_program(
-                   file, program, expression->type, "a0", "a0");
+        if (!minic_riscv64_emit_expression(
+                file, program, function, function_layout, expression->value.unary.operand)) {
+            return false;
+        }
+        return minic_type_is_int128_integer(expression->type)
+                   ? minic_riscv64_emit_int128_load_from_address(file, "a0")
+                   : minic_riscv64_emit_scalar_load_for_program(
+                         file, program, expression->type, "a0", "a0");
     case MINIC_EXPRESSION_SUBSCRIPT:
-        return minic_riscv64_emit_subscript_address(
-                   file, program, function, function_layout, expression) &&
-               minic_riscv64_emit_scalar_load_for_program(
-                   file, program, expression->type, "a0", "a0");
+        if (!minic_riscv64_emit_subscript_address(
+                file, program, function, function_layout, expression)) {
+            return false;
+        }
+        return minic_type_is_int128_integer(expression->type)
+                   ? minic_riscv64_emit_int128_load_from_address(file, "a0")
+                   : minic_riscv64_emit_scalar_load_for_program(
+                         file, program, expression->type, "a0", "a0");
     case MINIC_EXPRESSION_MEMBER: {
         const MinicRecord *record;
         const MinicRecordField *field;
@@ -1697,14 +1726,25 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
         if (field->is_array) {
             return expression->value_category == MINIC_VALUE_LVALUE;
         }
+        if (minic_type_is_int128_integer(expression->type)) {
+            return minic_riscv64_emit_int128_load_from_address(file, "a0");
+        }
         return minic_riscv64_emit_lvalue_load_from_address(
             file, program, expression_id, expression->type, "a0", "a0");
     }
     case MINIC_EXPRESSION_LVALUE_READ:
-        return minic_riscv64_emit_lvalue_address(
-                   file, program, function, function_layout, expression->value.unary.operand) &&
-               minic_riscv64_emit_lvalue_load_from_address(
-                   file, program, expression->value.unary.operand, expression->type, "a0", "a0");
+        if (!minic_riscv64_emit_lvalue_address(
+                file, program, function, function_layout, expression->value.unary.operand)) {
+            return false;
+        }
+        return minic_type_is_int128_integer(expression->type)
+                   ? minic_riscv64_emit_int128_load_from_address(file, "a0")
+                   : minic_riscv64_emit_lvalue_load_from_address(file,
+                                                                 program,
+                                                                 expression->value.unary.operand,
+                                                                 expression->type,
+                                                                 "a0",
+                                                                 "a0");
     case MINIC_EXPRESSION_ASSIGNMENT: {
         const MinicExpression *target;
         const MinicExpression *value;
@@ -1714,6 +1754,23 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
         if (target != NULL && minic_type_is_record(target->type)) {
             return minic_riscv64_emit_record_assignment_expression(
                 file, program, function, function_layout, expression);
+        }
+        if (target != NULL && minic_type_is_int128_integer(target->type)) {
+            if (value == NULL || !minic_type_is_int128_integer(value->type) ||
+                target->value_category != MINIC_VALUE_LVALUE ||
+                !minic_type_equal(expression->type, target->type) ||
+                !minic_c0_assignment_compatible(
+                    program, target->type, expression->value.binary.right) ||
+                !minic_riscv64_emit_lvalue_address(
+                    file, program, function, function_layout, expression->value.binary.left) ||
+                fprintf(file, "  addi sp, sp, -16\n  sd a0, 0(sp)\n") < 0 ||
+                !minic_riscv64_emit_expression(
+                    file, program, function, function_layout, expression->value.binary.right) ||
+                fprintf(file, "  ld t0, 0(sp)\n  addi sp, sp, 16\n") < 0 ||
+                !minic_riscv64_emit_int128_store_to_address(file, "t0")) {
+                return false;
+            }
+            return true;
         }
         if (target == NULL || value == NULL || target->value_category != MINIC_VALUE_LVALUE ||
             !minic_type_equal(expression->type, target->type) ||
@@ -1934,6 +1991,34 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
                                  minic_type_is_pointer(left->type) &&
                                  minic_type_is_pointer(right->type) &&
                                  minic_type_equal(expression->type, minic_type_int());
+        if (has_integer_common_type && minic_type_is_int128_integer(common_integer_type)) {
+            const char *finish;
+
+            if (left == NULL || right == NULL || !minic_type_is_int128_integer(left->type) ||
+                !minic_type_is_int128_integer(right->type) ||
+                (expression->value.binary.operator_kind != MINIC_BINARY_EQUAL &&
+                 expression->value.binary.operator_kind != MINIC_BINARY_NOT_EQUAL) ||
+                !minic_type_equal(expression->type, minic_type_int()) ||
+                !minic_riscv64_emit_expression(
+                    file, program, function, function_layout, expression->value.binary.left) ||
+                fprintf(file,
+                        "  addi sp, sp, -16\n"
+                        "  sd a0, 0(sp)\n"
+                        "  sd a1, 8(sp)\n") < 0 ||
+                !minic_riscv64_emit_expression(
+                    file, program, function, function_layout, expression->value.binary.right) ||
+                fprintf(file,
+                        "  ld t0, 0(sp)\n"
+                        "  ld t1, 8(sp)\n"
+                        "  addi sp, sp, 16\n"
+                        "  xor t0, t0, a0\n"
+                        "  xor t1, t1, a1\n"
+                        "  or a0, t0, t1\n") < 0) {
+                return false;
+            }
+            finish = expression->value.binary.operator_kind == MINIC_BINARY_EQUAL ? "seqz" : "snez";
+            return fprintf(file, "  %s a0, a0\n", finish) >= 0;
+        }
         if (left == NULL || right == NULL ||
             !minic_riscv64_emit_expression(
                 file, program, function, function_layout, expression->value.binary.left) ||
