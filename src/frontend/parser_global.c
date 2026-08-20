@@ -3832,22 +3832,35 @@ bool minic_parser_parse_static_zero_declaration_list_after_head(MinicParser *par
             }
             return false;
         }
-        if (minic_parser_find_global_object(parser, name_span) != MINIC_GLOBAL_OBJECT_INVALID ||
-            !minic_c0_program_add_global_object(parser->program,
-                                                parser->source + name_span.begin.offset,
-                                                minic_parser_span_length(name_span),
-                                                object_type,
-                                                true,
-                                                minic_type_is_const(object_type),
-                                                &object_id) ||
-            !minic_c0_global_object_set_zero_initialized(parser->program, object_id) ||
-            (has_section && !minic_c0_global_object_set_section(
+        object_id = minic_parser_find_global_object_entity(parser, name_span);
+        if (object_id == MINIC_GLOBAL_OBJECT_INVALID) {
+            if (!minic_c0_program_add_tentative_global_object(
+                    parser->program,
+                    parser->source + name_span.begin.offset,
+                    minic_parser_span_length(name_span),
+                    object_type,
+                    true,
+                    static_object_type_is_read_only(parser->program, object_type),
+                    &object_id)) {
+                minic_parser_error(parser, "cannot create static tentative declarator");
+                return false;
+            }
+        } else {
+            const MinicGlobalObject *existing;
+
+            existing = minic_c0_program_global_object(parser->program, object_id);
+            if (existing == NULL || !existing->is_internal ||
+                !minic_type_equal(existing->type, object_type) ||
+                !minic_c0_global_object_merge_tentative(parser->program, object_id)) {
+                minic_parser_error(parser, "conflicting static tentative declarator");
+                return false;
+            }
+        }
+        if ((has_section && !minic_c0_global_object_set_section(
                                 parser->program, object_id, section_name, section_name_length)) ||
             (explicit_alignment != 0U && !minic_c0_global_object_set_explicit_alignment(
                                              parser->program, object_id, explicit_alignment))) {
-            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
-                minic_parser_error(parser, "cannot create static zero-definition declarator");
-            }
+            minic_parser_error(parser, "cannot persist static tentative declarator metadata");
             return false;
         }
 

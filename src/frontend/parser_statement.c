@@ -3975,6 +3975,29 @@ static void resolve_pending_inline_asm_labels(MinicParser *parser,
     }
 }
 
+static bool consume_gnu_label_attribute(MinicParser *parser,
+                                        const MinicParsedAttribute *attribute,
+                                        void *opaque_context) {
+    const MinicAttributeDescriptor *descriptor;
+
+    (void)opaque_context;
+    if (parser == NULL || attribute == NULL) {
+        return false;
+    }
+    descriptor = attribute->descriptor;
+    if (descriptor == NULL ||
+        !minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_STATEMENT)) {
+        minic_parser_error(parser, "unsupported GNU label attribute");
+        return false;
+    }
+    if (descriptor->kind == MINIC_ATTRIBUTE_UNUSED &&
+        descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_INFORMATIONAL) {
+        return true;
+    }
+    minic_parser_error(parser, "GNU label attribute semantics are not implemented");
+    return false;
+}
+
 static bool parse_label(MinicParser *parser, bool allow_declaration) {
     MinicStatement statement;
     MinicSourceSpan name_span;
@@ -4013,7 +4036,8 @@ static bool parse_label(MinicParser *parser, bool allow_declaration) {
     }
 
     if (!minic_parser_advance(parser) ||
-        !minic_parser_expect(parser, MINIC_TOKEN_COLON, "expected ':' after label")) {
+        !minic_parser_expect(parser, MINIC_TOKEN_COLON, "expected ':' after label") ||
+        !minic_parser_parse_gnu_attribute_lists(parser, consume_gnu_label_attribute, NULL)) {
         return false;
     }
     if (is_local_label) {
