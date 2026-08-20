@@ -7,7 +7,7 @@ work=${BUILD_DIR:-"$root/build/debug"}/tests/linux-tail-batch8
 rm -rf "$work"
 mkdir -p "$work"
 
-# Keep this gate limited to the four shared semantics targeted by batch8.
+# Keep this gate limited to the shared semantics targeted by batch8.
 cat >"$work/local-pointer-to-array.c" <<'SRC'
 int probe(void)
 {
@@ -55,4 +55,13 @@ SRC
 "$minic" -S "$work/incomplete-array-pointer-relational.c" -o "$work/incomplete-array-pointer-relational.s"
 grep -F '.globl probe' "$work/incomplete-array-pointer-relational.s" >/dev/null
 
-printf '%s\n' 'PASS compiler/c0/linux-tail-batch8 pointer-to-array=local function-pointer-type=leading-return-pointer null-pointer-integer-ice=zero relational=incomplete-object'
+cat >"$work/gnu-void-pointer-relational.c" <<'SRC'
+int probe(void *entry, void *limit)
+{
+    return entry >= limit && entry < limit + 32;
+}
+SRC
+"$minic" -S "$work/gnu-void-pointer-relational.c" -o "$work/gnu-void-pointer-relational.s"
+grep -F '.globl probe' "$work/gnu-void-pointer-relational.s" >/dev/null
+
+printf '%s\n' 'PASS compiler/c0/linux-tail-batch8 pointer-to-array=local function-pointer-type=leading-return-pointer null-pointer-integer-ice=zero relational=incomplete-object+gnu-void'
