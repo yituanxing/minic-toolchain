@@ -1,2 +1,2 @@
-# Exact human replay of permanent runtime record-array value-copy product.
-195
+# Focused unchanged Linux replay for the remaining cgroup global-emission frontier.
+185
