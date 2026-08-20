@@ -79,4 +79,4 @@ replace_once(
 )
 
 runpy.run_path("tools/dev/materialize-linux-first500-nested-designator-v1.py", run_name="__main__")
-runpy.run_path("tools/dev/materialize-linux-first500-static-fam-v1.py", run_name="__main__")
+runpy.run_path("tools/dev/materialize-linux-first500-static-fam-v2.py", run_name="__main__")
