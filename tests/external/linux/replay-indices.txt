@@ -1,7 +1,2 @@
-# Focused unchanged Linux replay for remaining first500 tails after 185 closure.
-6
+# Verify permanent inferred multidimensional static-array product.
 148
-195
-238
-250
-353
