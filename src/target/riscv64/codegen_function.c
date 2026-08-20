@@ -653,6 +653,7 @@ static bool minic_riscv64_emit_record_values(FILE *file,
     }
     {
         bool has_recursive_relocation;
+        bool has_nonscalar_field;
         size_t index;
 
         has_recursive_relocation = false;
@@ -663,8 +664,20 @@ static bool minic_riscv64_emit_record_values(FILE *file,
                 break;
             }
         }
+        has_nonscalar_field = false;
+        for (index = 0U; index < record->field_count; ++index) {
+            const MinicRecordField *field;
+
+            field = minic_c0_record_field(record, index);
+            if (field == NULL || field->element_count != 1U ||
+                (!minic_type_is_integer(field->type) && !minic_type_is_pointer(field->type))) {
+                has_nonscalar_field = true;
+                break;
+            }
+        }
         if (!record->is_union && object->initializer_count == record->field_count &&
-            !has_recursive_relocation && !minic_riscv64_record_has_bit_fields(record)) {
+            !has_recursive_relocation && !has_nonscalar_field &&
+            !minic_riscv64_record_has_bit_fields(record)) {
             return minic_riscv64_emit_direct_record_values(file, program, object, record);
         }
     }
