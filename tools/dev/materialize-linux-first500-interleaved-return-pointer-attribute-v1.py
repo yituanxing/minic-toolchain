@@ -39,6 +39,7 @@ parser_path.write_text(text)
 
 test_path = Path("tests/compiler/c0/deferred_declarator_attributes.c")
 test = test_path.read_text()
+marker = "interleaved_return_pointer_attribute(void)"
 anchor = '''void *map_after_pointer(int value) {
     return value ? (void *)0 : (void *)0;
 }
@@ -48,15 +49,17 @@ addition = '''void *map_after_pointer(int value) {
     return value ? (void *)0 : (void *)0;
 }
 
-char * __attribute__((__unused__)) *interleaved_return_pointer_attribute(void) {
+char *__attribute__((__unused__)) *interleaved_return_pointer_attribute(void) {
     return (char **)0;
 }
 
 '''
-if addition not in test:
+if marker not in test:
     if anchor not in test:
         raise SystemExit("interleaved return-pointer attribute test anchor not found")
     test = test.replace(anchor, addition, 1)
+elif test.count(marker) != 1:
+    raise SystemExit("interleaved return-pointer attribute regression is duplicated")
 test_path.write_text(test)
 
 run_path = Path("tests/compiler/c0/run-deferred-declarator-attributes.sh")
@@ -68,7 +71,7 @@ addition = '''grep -F 'map_after_pointer:' "$work/deferred_declarator_attributes
 grep -F 'interleaved_return_pointer_attribute:' "$work/deferred_declarator_attributes.s" >/dev/null
 grep -F 'call map_before_pointer' "$work/deferred_declarator_attributes.s" >/dev/null
 '''
-if addition not in run:
+if "grep -F 'interleaved_return_pointer_attribute:'" not in run:
     if anchor not in run:
         raise SystemExit("interleaved return-pointer attribute run anchor not found")
     run = run.replace(anchor, addition, 1)
