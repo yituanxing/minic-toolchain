@@ -16,3 +16,9 @@ test -s "$work/nonzero.s"
 test -s "$work/active-relocation.s"
 grep -Fq 'target' "$work/active-relocation.s"
 echo 'PASS compiler/c0/static-union-active-member zero+nonzero=accepted relocation=layout-aware'
+"$host_cc" -E -P -std=gnu11 -x c \
+    "$root/tests/compiler/c0/static_union_shape_overlay.c" -o "$work/shape-overlay.i"
+"$minic" -S "$work/shape-overlay.i" -o "$work/shape-overlay.s"
+test -s "$work/shape-overlay.s"
+grep -Fq '.dword target' "$work/shape-overlay.s"
+echo 'PASS compiler/c0/static-union-shape-overlay span-preserved relocation-after-union=correct'

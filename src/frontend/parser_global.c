@@ -2216,9 +2216,10 @@ static bool try_overwrite_static_zero_noncanonical_union_designator(
             }
             canonical_slots = canonical_field->element_count * canonical_element_slots;
             selected_slots = field->element_count * selected_element_slots;
-            if (canonical_slots != selected_slots) {
-                minic_parser_error(parser,
-                                   "backward static union member changes flattened storage shape");
+            if (selected_slots > canonical_slots) {
+                minic_parser_error(
+                    parser,
+                    "selected union member needs more initializer slots than materialized storage");
                 return false;
             }
             if (record_base_slot > SIZE_MAX - total) {
@@ -2255,8 +2256,12 @@ static bool try_overwrite_static_zero_noncanonical_union_designator(
                 }
             }
             union_record_id = (MinicRecordId)(current_record - parser->program->records);
-            if (!minic_c0_global_object_select_union_member(
-                    parser->program, object_id, slot_begin, union_record_id, field_index) ||
+            if (!minic_c0_global_object_select_union_member_with_span(parser->program,
+                                                                      object_id,
+                                                                      slot_begin,
+                                                                      union_record_id,
+                                                                      field_index,
+                                                                      canonical_slots) ||
                 !overwrite_static_zero_field_value(parser, object_id, field, slot_begin)) {
                 if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
                     minic_parser_error(parser, "cannot replace static union active member");

@@ -538,6 +538,7 @@ static bool minic_riscv64_emit_constant_value(FILE *file,
         size_t field_limit;
         size_t record_base_slot;
         size_t record_storage_size;
+        size_t union_initializer_span;
 
         record_base_slot = *initializer_index;
         record = minic_c0_program_record(program, type.record_id);
@@ -566,6 +567,7 @@ static bool minic_riscv64_emit_constant_value(FILE *file,
             return true;
         }
         cursor = 0U;
+        union_initializer_span = 0U;
         field_begin = 0U;
         field_limit = record->field_count;
         if (record->is_union) {
@@ -574,6 +576,8 @@ static bool minic_riscv64_emit_constant_value(FILE *file,
             selected = 0U;
             (void)minic_c0_global_object_union_member_selection(
                 program, object, record_base_slot, type.record_id, &selected);
+            (void)minic_c0_global_object_union_member_initializer_span(
+                program, object, record_base_slot, type.record_id, &union_initializer_span);
             if (selected >= record->field_count) {
                 return false;
             }
@@ -685,6 +689,35 @@ static bool minic_riscv64_emit_constant_value(FILE *file,
         if (cursor > record_storage_size ||
             !minic_riscv64_emit_zero_bytes(file, record_storage_size - cursor)) {
             return false;
+        }
+        if (record->is_union && union_initializer_span != 0U) {
+            size_t span_end;
+            size_t slot;
+
+            if (record_base_slot > SIZE_MAX - union_initializer_span) {
+                return false;
+            }
+            span_end = record_base_slot + union_initializer_span;
+            if (*initializer_index > span_end || span_end > object->initializer_count) {
+                return false;
+            }
+            for (slot = *initializer_index; slot < span_end; ++slot) {
+                const MinicGlobalRelocation *relocation;
+
+                if (object->initializer_values[slot] != 0U) {
+                    return false;
+                }
+                relocation = *relocation_index < object->relocation_count
+                                 ? &object->relocations[*relocation_index]
+                                 : NULL;
+                if (relocation != NULL &&
+                    relocation->location_kind ==
+                        MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR &&
+                    relocation->location_index < span_end) {
+                    return false;
+                }
+            }
+            *initializer_index = span_end;
         }
         *emitted_size = record_storage_size;
         return true;

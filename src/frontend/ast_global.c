@@ -396,13 +396,40 @@ bool minic_c0_global_object_union_member_selection(const MinicC0Program *program
     return false;
 }
 
-bool minic_c0_global_object_select_union_member(MinicC0Program *program,
-                                                MinicGlobalObjectId global_object_id,
-                                                size_t initializer_slot,
-                                                MinicRecordId record_id,
-                                                size_t field_index) {
+bool minic_c0_global_object_union_member_initializer_span(const MinicC0Program *program,
+                                                          const MinicGlobalObject *object,
+                                                          size_t initializer_slot,
+                                                          MinicRecordId record_id,
+                                                          size_t *initializer_span) {
+    size_t index;
+
+    if (program == NULL || object == NULL || initializer_span == NULL ||
+        record_id >= program->record_count) {
+        return false;
+    }
+    for (index = 0U; index < object->union_selection_count; ++index) {
+        const MinicGlobalUnionSelection *selection;
+
+        selection = &object->union_selections[index];
+        if (selection->initializer_slot == initializer_slot && selection->record_id == record_id) {
+            *initializer_span = selection->initializer_span;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool minic_c0_global_object_select_union_member_with_span(MinicC0Program *program,
+                                                          MinicGlobalObjectId global_object_id,
+                                                          size_t initializer_slot,
+                                                          MinicRecordId record_id,
+                                                          size_t field_index,
+                                                          size_t initializer_span) {
     MinicGlobalObject *object;
     const MinicRecord *record;
+    const MinicRecordField *field;
+    size_t element_slots;
+    size_t selected_slots;
     size_t index;
 
     if (program == NULL || global_object_id >= program->global_object_count ||
@@ -410,17 +437,27 @@ bool minic_c0_global_object_select_union_member(MinicC0Program *program,
         return false;
     }
     record = minic_c0_program_record(program, record_id);
-    if (record == NULL || !record->is_complete || !record->is_union ||
-        field_index >= record->field_count) {
+    field = record != NULL ? minic_c0_record_field(record, field_index) : NULL;
+    if (record == NULL || !record->is_complete || !record->is_union || field == NULL ||
+        field->element_count == 0U ||
+        !minic_c0_global_initializer_slot_count(program, field->type, &element_slots) ||
+        (element_slots != 0U && field->element_count > SIZE_MAX / element_slots)) {
         return false;
     }
+    selected_slots = field->element_count * element_slots;
     object = &program->global_objects[global_object_id];
+    if (initializer_span != 0U &&
+        (selected_slots > initializer_span || initializer_slot > object->initializer_count ||
+         initializer_span > object->initializer_count - initializer_slot)) {
+        return false;
+    }
     for (index = 0U; index < object->union_selection_count; ++index) {
         MinicGlobalUnionSelection *selection;
 
         selection = &object->union_selections[index];
         if (selection->initializer_slot == initializer_slot && selection->record_id == record_id) {
             selection->field_index = field_index;
+            selection->initializer_span = initializer_span;
             return true;
         }
     }
@@ -431,10 +468,20 @@ bool minic_c0_global_object_select_union_member(MinicC0Program *program,
         return false;
     }
     object->union_selections[object->union_selection_count].initializer_slot = initializer_slot;
+    object->union_selections[object->union_selection_count].initializer_span = initializer_span;
     object->union_selections[object->union_selection_count].record_id = record_id;
     object->union_selections[object->union_selection_count].field_index = field_index;
     object->union_selection_count += 1U;
     return true;
+}
+
+bool minic_c0_global_object_select_union_member(MinicC0Program *program,
+                                                MinicGlobalObjectId global_object_id,
+                                                size_t initializer_slot,
+                                                MinicRecordId record_id,
+                                                size_t field_index) {
+    return minic_c0_global_object_select_union_member_with_span(
+        program, global_object_id, initializer_slot, record_id, field_index, 0U);
 }
 
 bool minic_c0_global_record_field_initializer_slot(const MinicC0Program *program,
@@ -562,6 +609,19 @@ static bool global_object_type_initializer_slot_count_at(const MinicC0Program *p
                     return false;
                 }
                 total += child_count;
+            }
+        }
+        if (record->is_union) {
+            size_t initializer_span;
+
+            initializer_span = 0U;
+            if (minic_c0_global_object_union_member_initializer_span(
+                    program, object, base_slot, type.record_id, &initializer_span) &&
+                initializer_span != 0U) {
+                if (total > initializer_span) {
+                    return false;
+                }
+                total = initializer_span;
             }
         }
         *slot_count = total;

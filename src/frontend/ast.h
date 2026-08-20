@@ -435,6 +435,7 @@ typedef struct MinicGlobalRelocation {
 
 typedef struct MinicGlobalUnionSelection {
     size_t initializer_slot;
+    size_t initializer_span;
     MinicRecordId record_id;
     size_t field_index;
 } MinicGlobalUnionSelection;
@@ -780,11 +781,22 @@ bool minic_c0_global_object_select_union_member(MinicC0Program *program,
                                                 size_t initializer_slot,
                                                 MinicRecordId record_id,
                                                 size_t field_index);
+bool minic_c0_global_object_select_union_member_with_span(MinicC0Program *program,
+                                                          MinicGlobalObjectId global_object_id,
+                                                          size_t initializer_slot,
+                                                          MinicRecordId record_id,
+                                                          size_t field_index,
+                                                          size_t initializer_span);
 bool minic_c0_global_object_union_member_selection(const MinicC0Program *program,
                                                    const MinicGlobalObject *object,
                                                    size_t initializer_slot,
                                                    MinicRecordId record_id,
                                                    size_t *field_index);
+bool minic_c0_global_object_union_member_initializer_span(const MinicC0Program *program,
+                                                          const MinicGlobalObject *object,
+                                                          size_t initializer_slot,
+                                                          MinicRecordId record_id,
+                                                          size_t *initializer_span);
 bool minic_c0_global_record_field_initializer_slot(const MinicC0Program *program,
                                                    const MinicRecord *record,
                                                    size_t field_index,

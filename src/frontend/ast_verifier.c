@@ -1349,6 +1349,25 @@ bool minic_c0_program_verify_target(const MinicC0Program *program,
                     selection->initializer_slot > object->initializer_count) {
                     return false;
                 }
+                if (selection->initializer_span != 0U) {
+                    const MinicRecordField *field;
+                    size_t element_slots;
+                    size_t selected_slots;
+
+                    field = minic_c0_record_field(record, selection->field_index);
+                    if (field == NULL || field->element_count == 0U ||
+                        !minic_c0_global_initializer_slot_count(
+                            program, field->type, &element_slots) ||
+                        (element_slots != 0U && field->element_count > SIZE_MAX / element_slots)) {
+                        return false;
+                    }
+                    selected_slots = field->element_count * element_slots;
+                    if (selected_slots > selection->initializer_span ||
+                        selection->initializer_span >
+                            object->initializer_count - selection->initializer_slot) {
+                        return false;
+                    }
+                }
                 for (prior_index = 0U; prior_index < selection_index; ++prior_index) {
                     if (object->union_selections[prior_index].initializer_slot ==
                             selection->initializer_slot &&

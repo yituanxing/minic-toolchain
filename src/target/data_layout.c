@@ -581,6 +581,7 @@ static bool aggregate_scalar_slot_layout_for_object(const MinicDataLayout *layou
         size_t field_begin;
         size_t field_end;
         size_t field_index;
+        size_t initializer_span;
         size_t record_base_slot;
 
         record = minic_c0_program_record(program, type.record_id);
@@ -588,6 +589,7 @@ static bool aggregate_scalar_slot_layout_for_object(const MinicDataLayout *layou
             return false;
         }
         record_base_slot = *slot_cursor;
+        initializer_span = 0U;
         field_begin = 0U;
         field_end = record->field_count;
         if (record->is_union && record->field_count != 0U) {
@@ -596,6 +598,8 @@ static bool aggregate_scalar_slot_layout_for_object(const MinicDataLayout *layou
             selected = 0U;
             (void)data_layout_global_object_union_member_selection(
                 program, object, record_base_slot, type.record_id, &selected);
+            (void)minic_c0_global_object_union_member_initializer_span(
+                program, object, record_base_slot, type.record_id, &initializer_span);
             if (selected >= record->field_count) {
                 return false;
             }
@@ -654,6 +658,18 @@ static bool aggregate_scalar_slot_layout_for_object(const MinicDataLayout *layou
                     return true;
                 }
             }
+        }
+        if (record->is_union && initializer_span != 0U && !*found) {
+            size_t consumed;
+
+            if (*slot_cursor < record_base_slot) {
+                return false;
+            }
+            consumed = *slot_cursor - record_base_slot;
+            if (consumed > initializer_span || record_base_slot > SIZE_MAX - initializer_span) {
+                return false;
+            }
+            *slot_cursor = record_base_slot + initializer_span;
         }
         return true;
     }
