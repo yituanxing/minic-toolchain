@@ -1,2 +1,2 @@
-# Verify aggregate-array relocation ownership on the exact permanent compiler.
+# Diagnose aggregate-array relocation replay on the exact permanent compiler.
 390
