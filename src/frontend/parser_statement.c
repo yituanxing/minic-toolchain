@@ -1594,7 +1594,8 @@ parse_local_declarator(MinicParser *parser, MinicType base_type, bool is_registe
     fixed_register_name_length = 0U;
     has_fixed_register_binding = false;
     attributes.cleanup_function = MINIC_FUNCTION_INVALID;
-    if (!minic_parser_parse_pointer_declarator(parser, base_type, &declared_type)) {
+    if (!minic_parser_parse_pointer_declarator(parser, base_type, &declared_type) ||
+        !parse_local_object_attributes(parser, &attributes)) {
         return false;
     }
     if (local_declarator_starts_function_pointer(parser)) {
@@ -1931,6 +1932,10 @@ static bool parse_declaration(MinicParser *parser) {
         !minic_parser_parse_type_specifiers(parser, &base_type) ||
         !parse_local_declaration_head_attributes(parser)) {
         return false;
+    }
+    if (parser->current.kind == MINIC_TOKEN_SEMICOLON &&
+        (minic_type_is_record(base_type) || minic_type_is_enum(base_type))) {
+        return minic_parser_advance(parser);
     }
 
     for (;;) {

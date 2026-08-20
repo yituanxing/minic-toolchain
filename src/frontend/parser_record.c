@@ -312,25 +312,28 @@ static bool parse_record_field_declarator(MinicParser *parser,
     if (!minic_parser_parse_pointer_declarator(parser, base_type, &field_type)) {
         return false;
     }
-    if (parser->current.kind == MINIC_TOKEN_LPAREN) {
-        if (record_field_starts_parenthesized_pointer_array(parser)) {
-            if (!parse_pointer_to_array_field_declarator(
+    if (parser->current.kind == MINIC_TOKEN_LPAREN &&
+        record_field_starts_parenthesized_pointer_array(parser)) {
+        if (!parse_pointer_to_array_field_declarator(parser, field_type, &name_span, &field_type)) {
+            return false;
+        }
+    } else if (parser->current.kind == MINIC_TOKEN_LPAREN) {
+        MinicParser probe;
+
+        probe = *parser;
+        if (!minic_parser_advance(&probe)) {
+            return false;
+        }
+        if (probe.current.kind == MINIC_TOKEN_STAR) {
+            if (!parse_function_pointer_field_declarator(
                     parser, field_type, &name_span, &field_type)) {
                 return false;
             }
-        } else if (!parse_function_pointer_field_declarator(
-                       parser, field_type, &name_span, &field_type)) {
+        } else if (!minic_parser_parse_direct_declarator_name(parser, &name_span)) {
             return false;
         }
-    } else {
-        if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
-            minic_parser_error(parser, "expected record field name");
-            return false;
-        }
-        name_span = parser->current.span;
-        if (!minic_parser_advance(parser)) {
-            return false;
-        }
+    } else if (!minic_parser_parse_direct_declarator_name(parser, &name_span)) {
+        return false;
     }
 
     if (minic_type_is_void(field_type)) {
