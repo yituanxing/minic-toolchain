@@ -1,2 +1,2 @@
-# Verify final historic first500 tail with RV64 emission stage diagnostics.
+# Verify final historic first500 tail with RV64 statement-owner diagnostics.
 353
