@@ -72,3 +72,5 @@ runtime_record_array_initializer
 predefined_func_name
 static_nested_record_designator
 static_record_compound_literal
+static_nested_record_nonzero
+static_zero_size_local_array
