@@ -1,2 +1,10 @@
-# Verify final historic first500 tail with RV64 int128 arithmetic semantics.
+# Revalidate every historical first500 tail on one permanent compiler head.
+6
+148
+185
+195
+238
+246
+250
 353
+387
