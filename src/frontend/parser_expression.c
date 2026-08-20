@@ -2698,8 +2698,9 @@ static bool parse_unary(MinicParser *parser, MinicExpressionId *expression_id, b
         }
         if (minic_type_is_pointer(operand_expression->type)) {
             if (!minic_type_pointee(operand_expression->type, &pointee_type) ||
-                !minic_parser_require_complete_object_type(
-                    parser, pointee_type, "pointer update requires a complete object type")) {
+                !minic_c0_pointer_arithmetic_pointee_allowed(parser->program, pointee_type)) {
+                minic_parser_error(parser,
+                                   "pointer update requires an arithmetic-compatible pointee type");
                 return false;
             }
         } else if (!minic_type_is_integer(operand_expression->type)) {

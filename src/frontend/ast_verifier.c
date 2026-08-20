@@ -642,7 +642,7 @@ static bool verify_expression(const MinicC0Program *program,
             }
             return minic_type_is_pointer(operand->type) &&
                    minic_type_pointee(operand->type, &pointee_type) &&
-                   minic_c0_type_is_complete_object(program, pointee_type);
+                   minic_c0_pointer_arithmetic_pointee_allowed(program, pointee_type);
         }
         if (expression->value.unary.operator_kind == MINIC_UNARY_LOGICAL_NOT) {
             return type_is_condition_scalar(operand->type) &&
@@ -1184,8 +1184,8 @@ bool minic_c0_program_verify_target(const MinicC0Program *program,
         const MinicArrayType *array_type;
 
         array_type = &program->array_types[index];
-        if ((array_type->element_count == 0U && !array_type->is_query_materialized &&
-
+        if ((array_type->element_count == 0U && !array_type->is_zero_length &&
+             !array_type->is_query_materialized &&
              !incomplete_array_has_semantic_owner(program, index)) ||
 
             (array_type->is_query_materialized &&

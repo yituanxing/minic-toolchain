@@ -319,8 +319,9 @@ static bool parse_one_postfix_update(MinicParser *parser,
     }
     if (minic_type_is_pointer(operand_type)) {
         if (!minic_type_pointee(operand_type, &pointee_type) ||
-            !minic_parser_require_complete_object_type(
-                parser, pointee_type, "pointer update requires a complete object type")) {
+            !minic_c0_pointer_arithmetic_pointee_allowed(parser->program, pointee_type)) {
+            minic_parser_error(parser,
+                               "pointer update requires an arithmetic-compatible pointee type");
             return false;
         }
     } else if (!minic_type_is_integer(operand_type)) {
