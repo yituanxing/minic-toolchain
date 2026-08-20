@@ -466,12 +466,38 @@ static bool aggregate_scalar_slot_layout(const MinicDataLayout *layout,
         size_t element_index;
 
         array_type = minic_c0_program_array_type(program, type.array_type_id);
-        if (array_type == NULL || array_type->element_count == 0U ||
+        if (array_type == NULL ||
             !minic_data_layout_type(
                 layout, program, array_type->element_type, &element_size, &element_alignment)) {
             return false;
         }
         (void)element_alignment;
+        if (array_type->element_count == 0U && !array_type->is_zero_length) {
+            size_t element_slots;
+            size_t selected_element;
+
+            if (!minic_c0_type_initializer_slot_count(
+                    program, array_type->element_type, &element_slots) ||
+                element_slots == 0U) {
+                return false;
+            }
+            selected_element = *slot_index / element_slots;
+            *slot_index %= element_slots;
+            if (selected_element > SIZE_MAX / element_size ||
+                base_offset > SIZE_MAX - selected_element * element_size) {
+                return false;
+            }
+            return aggregate_scalar_slot_layout(layout,
+                                                program,
+                                                array_type->element_type,
+                                                base_offset + selected_element * element_size,
+                                                slot_index,
+                                                slot_type,
+                                                slot_offset);
+        }
+        if (array_type->element_count == 0U) {
+            return false;
+        }
         for (element_index = 0U; element_index < array_type->element_count; ++element_index) {
             size_t before = *slot_index;
             if (aggregate_scalar_slot_layout(layout,
@@ -665,8 +691,10 @@ bool minic_data_layout_global_relocation_target_addend(const MinicDataLayout *la
         field = record == NULL
                     ? NULL
                     : minic_c0_record_field(record, relocation->target_member_indices[depth]);
-        if (field == NULL || field->element_count != 1U || field->is_bit_field ||
+        if (field == NULL || field->element_count == 0U || field->is_bit_field ||
             field->is_flexible_array ||
+            (field->is_array && depth + 1U != relocation->target_member_depth) ||
+            (!field->is_array && field->element_count != 1U) ||
             !minic_data_layout_record_field_offset(
                 layout, program, record, relocation->target_member_indices[depth], &field_offset) ||
             result > SIZE_MAX - field_offset) {

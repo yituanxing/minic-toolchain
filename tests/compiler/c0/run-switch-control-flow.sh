@@ -29,7 +29,8 @@ printf '%s\n' "PASS compiler/c0/switch_control_flow_lowering"
     -o "$work/switch_typed_consteval.s"
 grep -F 'linux_casted_case:' "$work/switch_typed_consteval.s" >/dev/null
 grep -F 'typed_narrowing_case:' "$work/switch_typed_consteval.s" >/dev/null
-printf '%s\n' "PASS compiler/c0/switch_typed_consteval casted-typedef=1 binary=1 range=1 narrowing=target-aware"
+grep -F 'pointer_integer_roundtrip_case:' "$work/switch_typed_consteval.s" >/dev/null
+printf '%s\n' "PASS compiler/c0/switch_typed_consteval casted-typedef=1 binary=1 range=1 narrowing=target-aware pointer-integer-roundtrip=gnu-ice"
 
 "$host_cc" -E -P -std=gnu11 -x c \
     "$root/tests/compiler/c0/gnu_fallthrough_statement.c" \
@@ -78,6 +79,9 @@ expect_failure \
     "switch selector requires an integer expression"
 expect_failure \
     invalid_case_nonconstant \
+    "case label currently requires an integer constant expression"
+expect_failure \
+    invalid_case_symbolic_pointer \
     "case label currently requires an integer constant expression"
 
 expect_failure \

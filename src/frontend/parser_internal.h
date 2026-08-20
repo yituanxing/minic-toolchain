@@ -289,6 +289,10 @@ bool minic_parser_parse_parenthesized_function_declarator(
     bool require_name,
     bool require_pointer,
     MinicParsedFunctionDeclarator *declarator);
+bool minic_parser_parse_parenthesized_pointer_to_array_declarator(MinicParser *parser,
+                                                                  MinicType element_type,
+                                                                  MinicSourceSpan *name_span,
+                                                                  MinicType *declarator_type);
 bool minic_parser_parse_array_declarator_suffix(MinicParser *parser,
                                                 MinicType element_type,
                                                 bool allow_incomplete_outermost,
@@ -435,6 +439,9 @@ bool minic_parser_parse_string_literal_size(MinicParser *parser, uint64_t *size)
 bool minic_parser_add_string_literal_initializer(MinicParser *parser,
                                                  MinicGlobalObjectId object_id,
                                                  size_t *element_count);
+bool minic_parser_parse_bounded_string_literal_values(MinicParser *parser,
+                                                      size_t element_capacity,
+                                                      int *values);
 bool minic_parser_add_bounded_string_literal_initializer(MinicParser *parser,
                                                          MinicGlobalObjectId object_id,
                                                          size_t element_capacity);

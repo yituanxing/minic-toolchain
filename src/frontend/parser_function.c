@@ -403,6 +403,10 @@ bool minic_parser_parse_gnu_prefix_function_attributes(MinicParser *parser,
 
 static bool parse_persistent_function_attributes(MinicParser *parser,
                                                  bool is_internal,
+                                                 char *section_name,
+                                                 size_t section_capacity,
+                                                 size_t *section_name_length,
+                                                 bool *has_section,
                                                  bool *is_weak,
                                                  MinicFunctionId *alias_target) {
     MinicFunctionAttributeContext context;
@@ -411,10 +415,10 @@ static bool parse_persistent_function_attributes(MinicParser *parser,
     context.is_internal = is_internal;
     context.is_inline = false;
     context.is_extern = false;
-    context.section_name = NULL;
-    context.section_capacity = 0U;
-    context.section_name_length = NULL;
-    context.has_section = NULL;
+    context.section_name = section_name;
+    context.section_capacity = section_capacity;
+    context.section_name_length = section_name_length;
+    context.has_section = has_section;
     context.is_weak = is_weak;
     context.alias_target = alias_target;
     context.unsupported_message =
@@ -913,6 +917,20 @@ static bool parse_external_integer_array_definition(MinicParser *parser,
     if ((reused_existing && !minic_c0_global_object_begin_definition(parser->program, object_id)) ||
         !minic_parser_expect(parser, MINIC_TOKEN_EQUAL, "expected '=' after external array")) {
         return false;
+    }
+
+    if (inferred_bound && parser->current.kind == MINIC_TOKEN_LBRACE) {
+        MinicType object_type;
+
+        object_type = object->type;
+        if (!minic_parser_parse_static_storage_initializer_value(parser, object_id, object_type)) {
+            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                minic_parser_error(parser, "cannot initialize inferred external scalar array");
+            }
+            return false;
+        }
+        return minic_parser_expect(
+            parser, MINIC_TOKEN_SEMICOLON, "expected ';' after external array definition");
     }
 
     if (minic_type_is_pointer(element_type)) {
@@ -1897,7 +1915,7 @@ static bool finish_function_declaration_entity(MinicParser *parser,
     }
     if (alias_target != MINIC_FUNCTION_INVALID) {
         alias_function = minic_c0_program_function(parser->program, alias_target);
-        if (alias_function == NULL || !alias_function->is_defined || has_section ||
+        if (alias_function == NULL || has_section ||
             !minic_parser_function_signature_matches(
                 alias_function, return_type, parameter_types, parameter_count, is_variadic) ||
             !minic_c0_program_set_function_alias(parser->program, function_id, alias_target)) {
@@ -2145,7 +2163,8 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                                               sizeof(assembler_name),
                                               &assembler_name_length,
                                               &has_assembler_name) ||
-                !parse_persistent_function_attributes(parser, is_internal, &entity_is_weak, NULL)) {
+                !parse_persistent_function_attributes(
+                    parser, is_internal, NULL, 0U, NULL, NULL, &entity_is_weak, NULL)) {
                 return false;
             }
             if (parser->current.kind != MINIC_TOKEN_COMMA &&
@@ -2273,21 +2292,19 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
             return false;
         }
         if (is_extern_declaration) {
-            if (object_is_weak) {
-                minic_parser_error(parser,
-                                   "GNU weak extern object declarations are not supported yet");
+            if (!minic_parser_parse_extern_global_after_head(parser,
+                                                             base_type,
+                                                             return_type,
+                                                             name_span,
+                                                             section_name,
+                                                             section_name_length,
+                                                             has_section,
+                                                             object_explicit_alignment,
+                                                             visibility,
+                                                             has_visibility)) {
                 return false;
             }
-            return minic_parser_parse_extern_global_after_head(parser,
-                                                               base_type,
-                                                               return_type,
-                                                               name_span,
-                                                               section_name,
-                                                               section_name_length,
-                                                               has_section,
-                                                               object_explicit_alignment,
-                                                               visibility,
-                                                               has_visibility);
+            return apply_external_object_weak(parser, name_span, object_is_weak);
         }
         if (!minic_parser_parse_gnu_object_attribute_lists_with_symbol_metadata(
                 parser,
@@ -2397,7 +2414,14 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                                       sizeof(assembler_name),
                                       &assembler_name_length,
                                       &has_assembler_name) ||
-        !parse_persistent_function_attributes(parser, is_internal, &is_weak, &alias_target)) {
+        !parse_persistent_function_attributes(parser,
+                                              is_internal,
+                                              section_name,
+                                              sizeof(section_name),
+                                              &section_name_length,
+                                              &has_section,
+                                              &is_weak,
+                                              &alias_target)) {
         return false;
     }
     if (is_main && (parameter_count != 0U || is_variadic)) {
@@ -2652,6 +2676,65 @@ static bool parse_top_level_preprocessor_directive(MinicParser *parser) {
         return false;
     }
     pragma_skip_horizontal_space(text, length, &cursor);
+    if (pragma_consume_word(text, length, &cursor, "GCC")) {
+        size_t option_begin;
+        const char *actions[] = {"push", "pop", "ignored", "warning", "error"};
+        size_t action_index;
+        size_t matched_action;
+
+        pragma_skip_horizontal_space(text, length, &cursor);
+        if (!pragma_consume_word(text, length, &cursor, "diagnostic")) {
+            minic_parser_error(parser, "unsupported GCC pragma directive");
+            return false;
+        }
+        pragma_skip_horizontal_space(text, length, &cursor);
+        matched_action = sizeof(actions) / sizeof(actions[0]);
+        for (action_index = 0U; action_index < sizeof(actions) / sizeof(actions[0]);
+             ++action_index) {
+            size_t probe = cursor;
+
+            if (pragma_consume_word(text, length, &probe, actions[action_index])) {
+                matched_action = action_index;
+                cursor = probe;
+                break;
+            }
+        }
+        if (matched_action == sizeof(actions) / sizeof(actions[0])) {
+            minic_parser_error(parser, "unsupported GCC diagnostic pragma action");
+            return false;
+        }
+        pragma_skip_horizontal_space(text, length, &cursor);
+        if (matched_action <= 1U) {
+            if (!pragma_only_trailing_space(text, length, cursor)) {
+                minic_parser_error(parser, "unexpected tokens after GCC diagnostic push/pop");
+                return false;
+            }
+            return minic_parser_advance(parser);
+        }
+        if (cursor >= length || text[cursor] != '"') {
+            minic_parser_error(parser, "GCC diagnostic pragma requires an option string");
+            return false;
+        }
+        cursor += 1U;
+        option_begin = cursor;
+        while (cursor < length && text[cursor] != '"') {
+            if (text[cursor] == '\\' && cursor + 1U < length) {
+                cursor += 2U;
+            } else {
+                cursor += 1U;
+            }
+        }
+        if (cursor >= length || text[cursor] != '"' || cursor == option_begin) {
+            minic_parser_error(parser, "invalid GCC diagnostic option string");
+            return false;
+        }
+        cursor += 1U;
+        if (!pragma_only_trailing_space(text, length, cursor)) {
+            minic_parser_error(parser, "unexpected tokens after GCC diagnostic option");
+            return false;
+        }
+        return minic_parser_advance(parser);
+    }
     if (!pragma_consume_word(text, length, &cursor, "pack")) {
         minic_parser_error(parser, "unsupported pragma directive");
         return false;
