@@ -2194,8 +2194,24 @@ static bool parse_inferred_static_local_array(MinicParser *parser,
         return false;
     }
     if (!minic_parser_advance(parser) ||
-        !minic_parser_expect(parser, MINIC_TOKEN_RBRACKET, "expected ']'") ||
-        !minic_parser_parse_gnu_attribute_lists(
+        !minic_parser_expect(parser, MINIC_TOKEN_RBRACKET, "expected ']'")) {
+        return false;
+    }
+    /* The omitted outer bound belongs to the source-level array. Parse any
+       following fixed dimensions as the complete element type of that outer
+       inferred array, so T[][N] reuses the normal declarator/type registry. */
+    if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
+        MinicType nested_element_type;
+        bool is_array;
+
+        if (!minic_parser_parse_array_declarator_suffix(
+                parser, element_type, false, &nested_element_type, &is_array) ||
+            !is_array) {
+            return false;
+        }
+        element_type = nested_element_type;
+    }
+    if (!minic_parser_parse_gnu_attribute_lists(
             parser, consume_static_local_interleaved_attribute, attributes) ||
         !minic_parser_expect(parser, MINIC_TOKEN_EQUAL, "expected '=' after inferred array")) {
         return false;
@@ -2236,10 +2252,10 @@ static bool parse_inferred_static_local_array(MinicParser *parser,
         int symbol_length;
 
         if (!minic_type_is_integer(element_type) && !minic_type_is_pointer(element_type) &&
-            !minic_type_is_record(element_type)) {
+            !minic_type_is_record(element_type) && !minic_type_is_array(element_type)) {
             minic_parser_error(
                 parser,
-                "brace-initialized inferred static array requires scalar or record elements");
+                "brace-initialized inferred static array requires scalar or aggregate elements");
             return false;
         }
         if (minic_type_is_record(element_type) &&
