@@ -1,10 +1,1 @@
-# Revalidate every historical first500 tail on one permanent compiler head.
-6
-148
-185
-195
-238
-246
-250
-353
-387
+# Run the exact unchanged Linux 6.6.143 first500 cohort.
