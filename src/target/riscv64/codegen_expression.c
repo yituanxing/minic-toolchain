@@ -2275,16 +2275,21 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
             indirect_type = minic_c0_program_function_type(program, function_type.function_type_id);
             if (indirect_type == NULL ||
                 indirect_type->parameter_count > MINIC_MAX_FUNCTION_PARAMETERS ||
-                argument_count != indirect_type->parameter_count ||
-                !minic_type_equal(expression->type, indirect_type->return_type) ||
+                argument_count > MINIC_MAX_FUNCTION_PARAMETERS ||
+                !minic_type_equal(expression->type, indirect_type->return_type)) {
+                return false;
+            }
+            parameter_types = indirect_type->parameter_types;
+            parameter_count = indirect_type->parameter_count;
+            is_variadic = indirect_type->is_variadic;
+            if (argument_count < parameter_count ||
+                (!is_variadic && argument_count != parameter_count) ||
                 !minic_riscv64_emit_expression(
                     file, program, function, function_layout, expression->value.call.callee) ||
                 fprintf(file, "  addi sp, sp, -16\n  sd a0, 0(sp)\n") < 0) {
                 return false;
             }
             staged_bytes = 16U;
-            parameter_types = indirect_type->parameter_types;
-            parameter_count = indirect_type->parameter_count;
         } else {
             direct_callee = minic_c0_program_function(program, expression->value.call.function_id);
             if (direct_callee == NULL || direct_callee->name_length == 0U ||
@@ -2390,8 +2395,9 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
             staged_bytes += 16U;
             argument_stage_end[argument_index] = staged_bytes;
         }
-        use_formal_location_path = true;
-        for (argument_index = 0U; argument_index < argument_count; ++argument_index) {
+        use_formal_location_path = argument_count == parameter_count;
+        for (argument_index = 0U; use_formal_location_path && argument_index < argument_count;
+             ++argument_index) {
             const MinicRiscv64AbiValue *value;
 
             value = &abi_values[argument_index];
