@@ -1,2 +1,2 @@
-# Verify aggregate FAM relocation after provisional extent publication.
-250
+# Verify active-union semantic member with preserved initializer span.
+6
