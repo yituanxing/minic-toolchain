@@ -36,4 +36,4 @@ grep -F 'backward static aggregate array designator is not supported yet' \
     "$work/backward.stderr" >/dev/null
 
 printf '%s\n' \
-    'PASS compiler/c0/static_aggregate_array_designators inferred-bound=designator-extent nested-field=1 compound-literal=1 relocation-owner=aggregate-scalar backward=fail-closed range=shared-owner'
+    'PASS compiler/c0/static_aggregate_array_designators inferred-bound=designator-extent nested-field=1 compound-literal=1 relocation-owner=aggregate-scalar union-before-relocation=1 backward=fail-closed range=shared-owner'

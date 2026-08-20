@@ -1662,6 +1662,26 @@ materialize_static_aggregate_array_action(MinicParser *parser,
             return false;
         }
     }
+    for (index = 0U; index < action->union_selection_count; ++index) {
+        const MinicGlobalUnionSelection *selection;
+        size_t initializer_slot;
+
+        selection = &action->union_selections[index];
+        if (selection->initializer_slot > SIZE_MAX - destination_begin) {
+            minic_parser_error(parser, "static aggregate array union selection index overflows");
+            return false;
+        }
+        initializer_slot = destination_begin + selection->initializer_slot;
+        if (!minic_c0_global_object_select_union_member_with_span(parser->program,
+                                                                  object_id,
+                                                                  initializer_slot,
+                                                                  selection->record_id,
+                                                                  selection->field_index,
+                                                                  selection->initializer_span)) {
+            minic_parser_error(parser, "cannot materialize static aggregate array union selection");
+            return false;
+        }
+    }
     for (index = 0U; index < action->relocation_count; ++index) {
         const MinicGlobalRelocation *relocation;
         size_t location_index;
@@ -1724,25 +1744,6 @@ materialize_static_aggregate_array_action(MinicParser *parser,
                                (unsigned int)relocation->target_kind,
                                relocation->location_index,
                                location_index);
-            return false;
-        }
-    }
-    for (index = 0U; index < action->union_selection_count; ++index) {
-        const MinicGlobalUnionSelection *selection;
-        size_t initializer_slot;
-
-        selection = &action->union_selections[index];
-        if (selection->initializer_slot > SIZE_MAX - destination_begin) {
-            minic_parser_error(parser, "static aggregate array union selection index overflows");
-            return false;
-        }
-        initializer_slot = destination_begin + selection->initializer_slot;
-        if (!minic_c0_global_object_select_union_member(parser->program,
-                                                        object_id,
-                                                        initializer_slot,
-                                                        selection->record_id,
-                                                        selection->field_index)) {
-            minic_parser_error(parser, "cannot materialize static aggregate array union selection");
             return false;
         }
     }

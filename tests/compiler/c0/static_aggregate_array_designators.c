@@ -30,13 +30,14 @@ static const pair_t fixed_records[4] = {
 
 static int relocation_target;
 
-struct relocation_op {
+union relocation_op {
+    int (*show)(void);
     const char *lsm;
 };
 
 struct relocation_row {
     int *target;
-    struct relocation_op op;
+    union relocation_op op;
 };
 
 static const struct relocation_row relocation_records[] = {
