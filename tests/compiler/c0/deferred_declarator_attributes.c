@@ -11,19 +11,7 @@ void *map_after_pointer(int value) {
     return value ? (void *)0 : (void *)0;
 }
 
-char *__attribute__((__unused__)) * interleaved_return_pointer_attribute(void) {
-    return (char **)0;
-}
-
-char *__attribute__((__unused__)) * interleaved_return_pointer_attribute(void) {
-    return (char **)0;
-}
-
-char *__attribute__((__unused__)) * interleaved_return_pointer_attribute(void) {
-    return (char **)0;
-}
-
-char *__attribute__((__unused__)) * interleaved_return_pointer_attribute(void) {
+char *__attribute__((__unused__)) *interleaved_return_pointer_attribute(void) {
     return (char **)0;
 }
 
