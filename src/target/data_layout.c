@@ -464,6 +464,29 @@ bool minic_data_layout_record_field_offset(const MinicDataLayout *layout,
         layout, program, record, field_index, offset, &bit_offset);
 }
 
+static bool data_layout_global_object_union_member_selection(const MinicC0Program *program,
+                                                             const MinicGlobalObject *object,
+                                                             size_t initializer_slot,
+                                                             MinicRecordId record_id,
+                                                             size_t *field_index) {
+    size_t index;
+
+    if (program == NULL || object == NULL || field_index == NULL ||
+        record_id >= program->record_count) {
+        return false;
+    }
+    for (index = 0U; index < object->union_selection_count; ++index) {
+        const MinicGlobalUnionSelection *selection;
+
+        selection = &object->union_selections[index];
+        if (selection->initializer_slot == initializer_slot && selection->record_id == record_id) {
+            *field_index = selection->field_index;
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool aggregate_scalar_slot_layout_for_object(const MinicDataLayout *layout,
                                                     const MinicC0Program *program,
                                                     const MinicGlobalObject *object,
@@ -571,7 +594,7 @@ static bool aggregate_scalar_slot_layout_for_object(const MinicDataLayout *layou
             size_t selected;
 
             selected = 0U;
-            (void)minic_c0_global_object_union_member_selection(
+            (void)data_layout_global_object_union_member_selection(
                 program, object, record_base_slot, type.record_id, &selected);
             if (selected >= record->field_count) {
                 return false;
