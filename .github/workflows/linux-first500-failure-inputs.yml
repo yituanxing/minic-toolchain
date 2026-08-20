@@ -1,0 +1,65 @@
+name: Linux first500 failure inputs
+
+on:
+  push:
+    branches:
+      - tests/linux-batch-pressure-convergence-v1
+    paths:
+      - '.github/workflows/linux-first500-failure-inputs.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  collect:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Restore exact frozen first500 corpus
+        id: corpus
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-a46b2d3cd5243569d3a5ad3ca72ff473bac4c87370e1bf4030f2fa47cf4f4edb
+          fail-on-cache-miss: true
+
+      - name: Collect failing preprocessed inputs
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import shutil
+
+          failures = {122,137,148,166,183,185,193,194,195,197,217,238,246,250,293,300,310,340,353,387,389,390,454,456}
+          corpus = Path('build/linux-focus-corpus')
+          selected = corpus / 'selected-tus.txt'
+          src_root = corpus / 'kbuild'
+          out_root = Path('build/first500-failure-inputs')
+          out_root.mkdir(parents=True, exist_ok=True)
+          copied = 0
+          for line in selected.read_text().splitlines():
+              index_text, obj, rel_i, source = line.split('\t', 3)
+              index = int(index_text)
+              if index not in failures:
+                  continue
+              src = src_root / rel_i
+              if not src.is_file() or src.stat().st_size == 0:
+                  raise SystemExit(f'missing frozen failure input: {index} {src}')
+              dst = out_root / rel_i
+              dst.parent.mkdir(parents=True, exist_ok=True)
+              shutil.copy2(src, dst)
+              copied += 1
+          if copied != len(failures):
+              raise SystemExit(f'copied {copied} failure inputs, expected {len(failures)}')
+          print(f'FIRST500_FAILURE_INPUTS copied={copied}')
+          PY
+
+      - name: Upload failure inputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: first500-failure-inputs-${{ github.run_id }}
+          path: build/first500-failure-inputs/**/*.i
+          if-no-files-found: error
+          retention-days: 7
