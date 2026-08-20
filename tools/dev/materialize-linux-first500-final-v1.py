@@ -1,12 +1,115 @@
 #!/usr/bin/env python3
-"""Materialize the locally validated Linux first500 final semantic patch once."""
-from __future__ import annotations
+"""Materialize the first validated Linux first500 convergence slice once."""
+from pathlib import Path
 
-import base64
-import gzip
-import subprocess
 
-PAYLOAD = """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...snip...AA=="""
+def replace_once(path: Path, before: str, after: str) -> None:
+    text = path.read_text()
+    if after in text:
+        return
+    count = text.count(before)
+    if count != 1:
+        raise SystemExit(f"{path}: expected one materialization anchor, found {count}")
+    path.write_text(text.replace(before, after, 1))
 
-patch_bytes = gzip.decompress(base64.b64decode(PAYLOAD))
-subprocess.run(["patch", "--batch", "--forward", "-p1"], input=patch_bytes, check=True)
+
+statement_path = Path("src/frontend/parser_statement.c")
+replace_once(
+    statement_path,
+    "static bool parse_label(MinicParser *parser, bool allow_declaration) {\n",
+    """static bool consume_gnu_label_attribute(MinicParser *parser,
+                                        const MinicParsedAttribute *attribute,
+                                        void *opaque_context) {
+    const MinicAttributeDescriptor *descriptor;
+
+    (void)opaque_context;
+    if (parser == NULL || attribute == NULL) {
+        return false;
+    }
+    descriptor = attribute->descriptor;
+    if (descriptor == NULL ||
+        !minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_STATEMENT)) {
+        minic_parser_error(parser, \"unsupported GNU label attribute\");
+        return false;
+    }
+    if (descriptor->kind == MINIC_ATTRIBUTE_UNUSED &&
+        descriptor->semantic_class == MINIC_ATTRIBUTE_CLASS_INFORMATIONAL) {
+        return true;
+    }
+    minic_parser_error(parser, \"GNU label attribute semantics are not implemented\");
+    return false;
+}
+
+static bool parse_label(MinicParser *parser, bool allow_declaration) {
+""",
+)
+replace_once(
+    statement_path,
+    """    if (!minic_parser_advance(parser) ||
+        !minic_parser_expect(parser, MINIC_TOKEN_COLON, \"expected ':' after label\")) {
+        return false;
+    }
+""",
+    """    if (!minic_parser_advance(parser) ||
+        !minic_parser_expect(parser, MINIC_TOKEN_COLON, \"expected ':' after label\") ||
+        !minic_parser_parse_gnu_attribute_lists(parser, consume_gnu_label_attribute, NULL)) {
+        return false;
+    }
+""",
+)
+
+global_path = Path("src/frontend/parser_global.c")
+replace_once(
+    global_path,
+    """        if (minic_parser_find_global_object(parser, name_span) != MINIC_GLOBAL_OBJECT_INVALID ||
+            !minic_c0_program_add_global_object(parser->program,
+                                                parser->source + name_span.begin.offset,
+                                                minic_parser_span_length(name_span),
+                                                object_type,
+                                                true,
+                                                minic_type_is_const(object_type),
+                                                &object_id) ||
+            !minic_c0_global_object_set_zero_initialized(parser->program, object_id) ||
+            (has_section && !minic_c0_global_object_set_section(
+                                parser->program, object_id, section_name, section_name_length)) ||
+            (explicit_alignment != 0U && !minic_c0_global_object_set_explicit_alignment(
+                                             parser->program, object_id, explicit_alignment))) {
+            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\\0') {
+                minic_parser_error(parser, \"cannot create static zero-definition declarator\");
+            }
+            return false;
+        }
+""",
+    """        object_id = minic_parser_find_global_object_entity(parser, name_span);
+        if (object_id == MINIC_GLOBAL_OBJECT_INVALID) {
+            if (!minic_c0_program_add_tentative_global_object(
+                    parser->program,
+                    parser->source + name_span.begin.offset,
+                    minic_parser_span_length(name_span),
+                    object_type,
+                    true,
+                    static_object_type_is_read_only(parser->program, object_type),
+                    &object_id)) {
+                minic_parser_error(parser, \"cannot create static tentative declarator\");
+                return false;
+            }
+        } else {
+            const MinicGlobalObject *existing;
+
+            existing = minic_c0_program_global_object(parser->program, object_id);
+            if (existing == NULL || !existing->is_internal ||
+                !minic_type_equal(existing->type, object_type) ||
+                !minic_c0_global_object_merge_tentative(parser->program, object_id)) {
+                minic_parser_error(parser, \"conflicting static tentative declarator\");
+                return false;
+            }
+        }
+        if ((has_section && !minic_c0_global_object_set_section(
+                                parser->program, object_id, section_name, section_name_length)) ||
+            (explicit_alignment != 0U && !minic_c0_global_object_set_explicit_alignment(
+                                             parser->program, object_id, explicit_alignment))) {
+            minic_parser_error(parser, \"cannot persist static tentative declarator metadata\");
+            return false;
+        }
+""",
+)
