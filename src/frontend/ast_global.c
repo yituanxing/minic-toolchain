@@ -455,7 +455,10 @@ bool minic_c0_global_record_field_initializer_slot(const MinicC0Program *program
         size_t field_slots;
 
         field = &record->fields[index];
-        if (field->element_count == 0U || field->is_flexible_array ||
+        if (field->is_flexible_array || field->is_zero_length_array) {
+            continue;
+        }
+        if (field->element_count == 0U ||
             !minic_c0_type_initializer_slot_count(program, field->type, &element_slots) ||
             (element_slots != 0U && field->element_count > SIZE_MAX / element_slots)) {
             return false;

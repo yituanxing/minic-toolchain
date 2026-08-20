@@ -918,9 +918,9 @@ static bool append_static_field_zeros(MinicParser *parser,
     if (field == NULL || field->element_count == 0U) {
         return false;
     }
-    /* A flexible array member participates in the record type and alignment,
-     * but contributes no scalar initializer slot to the fixed object extent. */
-    if (field->is_flexible_array) {
+    /* Flexible and GNU zero-length array members participate in record layout,
+     * but contribute no scalar initializer slot to the fixed object extent. */
+    if (field->is_flexible_array || field->is_zero_length_array) {
         return true;
     }
     for (element_index = 0U; element_index < field->element_count; ++element_index) {
