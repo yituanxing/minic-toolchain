@@ -1,0 +1,62 @@
+name: Productize Linux first500 final v1
+
+on:
+  push:
+    branches:
+      - frontend/linux-first500-final-v1
+    paths:
+      - 'tools/dev/materialize-linux-first500-final-v1.py'
+      - '.github/workflows/productize-linux-first500-final-v1.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: productize-linux-first500-final-v1
+  cancel-in-progress: false
+
+jobs:
+  productize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact final branch
+        uses: actions/checkout@v4
+        with:
+          ref: frontend/linux-first500-final-v1
+
+      - name: Materialize semantic patch
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/materialize-linux-first500-final-v1.py
+          git status --short
+          while IFS= read -r path; do
+            case "$path" in
+              *.c|*.h) clang-format -i "$path" ;;
+            esac
+          done < <(git diff --name-only -- src include tests/compiler/c0)
+          git diff --check
+
+      - name: Build exact product
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/first500-final
+          test -x build/first500-final/bin/minic
+
+      - name: Commit permanent product
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src include tests/compiler/c0 tests/programs/c0
+          if git diff --cached --quiet; then
+            echo 'first500 final semantic product already materialized'
+            exit 0
+          fi
+          if test -n "$(git status --short | grep '^ M ' | grep -vE ' (src|include|tests/compiler/c0|tests/programs/c0)/' || true)"; then
+            echo 'materializer changed files outside the approved permanent product set' >&2
+            git status --short >&2
+            exit 1
+          fi
+          git commit -m 'frontend: converge Linux first500 remaining semantics'
+          git push origin HEAD:frontend/linux-first500-final-v1
