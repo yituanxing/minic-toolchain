@@ -296,8 +296,11 @@ static bool minic_riscv64_emit_scale_register(FILE *file,
     size_t value;
     unsigned int shift;
 
-    if (file == NULL || register_name == NULL || scratch_register == NULL || element_size == 0U) {
+    if (file == NULL || register_name == NULL || scratch_register == NULL) {
         return false;
+    }
+    if (element_size == 0U) {
+        return fprintf(file, "  li %s, 0\n", register_name) >= 0;
     }
     if (element_size == 1U) {
         return true;

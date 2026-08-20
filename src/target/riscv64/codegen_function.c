@@ -763,7 +763,7 @@ static bool minic_riscv64_emit_file_asm(FILE *file, const MinicFileAsm *file_asm
     return fputc('\n', file) != EOF;
 }
 
-static bool minic_riscv64_zero_size_record_definition(const MinicC0Program *program,
+static bool minic_riscv64_zero_size_object_definition(const MinicC0Program *program,
                                                       const MinicGlobalObject *object) {
     size_t object_alignment;
     size_t storage_size;
@@ -774,15 +774,23 @@ static bool minic_riscv64_zero_size_record_definition(const MinicC0Program *prog
         return false;
     }
     (void)object_alignment;
-
-    const MinicRecord *record;
-
-    if (storage_size != 0U || !minic_type_is_record(object->type) ||
-        object->initializer_count != 0U || object->relocation_count != 0U) {
+    if (storage_size != 0U || object->initializer_count != 0U || object->relocation_count != 0U) {
         return false;
     }
-    record = minic_c0_program_record(program, object->type.record_id);
-    return record != NULL && record->is_complete && record->field_count == 0U;
+    if (minic_type_is_record(object->type)) {
+        const MinicRecord *record;
+
+        record = minic_c0_program_record(program, object->type.record_id);
+        return record != NULL && record->is_complete && record->field_count == 0U;
+    }
+    if (minic_type_is_array(object->type)) {
+        const MinicArrayType *array_type;
+
+        array_type = minic_c0_program_array_type(program, object->type.array_type_id);
+        return array_type != NULL &&
+               (array_type->is_zero_length || array_type->element_count != 0U);
+    }
+    return false;
 }
 
 static bool minic_riscv64_emit_global_object(FILE *file,
@@ -801,15 +809,15 @@ static bool minic_riscv64_emit_global_object(FILE *file,
     unsigned int alignment_power;
     size_t scalar_width;
     size_t initializer_index;
-    bool zero_size_record_definition;
+    bool zero_size_object_definition;
 
     if (file == NULL || program == NULL || object == NULL || object->name_length == 0U ||
         object_alignment == 0U ||
         !minic_riscv64_alignment_power(object_alignment, &alignment_power)) {
         return false;
     }
-    zero_size_record_definition = minic_riscv64_zero_size_record_definition(program, object);
-    if (storage_size == 0U && !zero_size_record_definition) {
+    zero_size_object_definition = minic_riscv64_zero_size_object_definition(program, object);
+    if (storage_size == 0U && !zero_size_object_definition) {
         return false;
     }
 
@@ -824,7 +832,7 @@ static bool minic_riscv64_emit_global_object(FILE *file,
 
         record = minic_c0_program_record(program, object->type.record_id);
         if (record == NULL || !record->is_complete ||
-            (object->initializer_count == 0U && !zero_size_record_definition)) {
+            (object->initializer_count == 0U && !zero_size_object_definition)) {
             return false;
         }
     } else if (minic_riscv64_record_array_info(program, object->type, NULL, NULL) ||
