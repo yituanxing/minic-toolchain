@@ -549,3 +549,13 @@ sh "$root/tests/compiler/c0/run-linux-tail-batch6.sh"
 MINIC="$minic" \
 BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
 sh "$root/tests/compiler/c0/run-linux-tail-batch7.sh"
+
+MINIC="$minic" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+sh "$root/tests/compiler/c0/run-scalar-compound-literal.sh"
+
+
+MINIC="$minic" \
+HOST_CC="$host_cc" \
+BUILD_DIR="${BUILD_DIR:-"$root/build/debug"}" \
+sh "$root/tests/compiler/c0/run-linux-tail-batch8.sh"

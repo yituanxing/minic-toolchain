@@ -889,6 +889,9 @@ bool minic_c0_pointer_equality_compatible(const MinicC0Program *program,
 bool minic_c0_type_is_complete_object(const MinicC0Program *program, MinicType type);
 bool minic_c0_pointer_arithmetic_pointee_allowed(const MinicC0Program *program,
                                                  MinicType pointee_type);
+bool minic_c0_pointer_difference_compatible(const MinicC0Program *program,
+                                            MinicType left,
+                                            MinicType right);
 bool minic_c0_pointer_relational_compatible(const MinicC0Program *program,
                                             MinicType left,
                                             MinicType right);

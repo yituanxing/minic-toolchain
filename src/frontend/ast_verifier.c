@@ -237,7 +237,7 @@ static bool verify_binary_type(const MinicC0Program *program,
     if (expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT &&
         minic_type_is_pointer(left->type) && minic_type_is_pointer(right->type)) {
         return minic_type_equal(expression->type, minic_type_long()) &&
-               minic_c0_pointer_relational_compatible(program, left->type, right->type);
+               minic_c0_pointer_difference_compatible(program, left->type, right->type);
     }
 
     if (expression->value.binary.operator_kind == MINIC_BINARY_ADD) {
@@ -760,17 +760,17 @@ static bool verify_expression(const MinicC0Program *program,
     case MINIC_EXPRESSION_COMPOUND_LITERAL: {
         const MinicLocal *local;
         const MinicBlock *initializer_block;
-        const MinicRecord *record;
+        bool complete_object;
 
         local = minic_c0_program_local(program, expression->value.compound_literal.local_id);
         initializer_block =
             minic_c0_program_block(program, expression->value.compound_literal.initializer_block);
-        record = minic_type_is_record(expression->type)
-                     ? minic_c0_program_record(program, expression->type.record_id)
-                     : NULL;
-        return local != NULL && initializer_block != NULL && record != NULL &&
-               record->is_complete && expression->value_category == MINIC_VALUE_LVALUE &&
-               !local->is_array && !local->is_register_storage && local->element_count == 1U &&
+        complete_object = minic_c0_type_is_complete_object(program, expression->type);
+        return local != NULL && initializer_block != NULL && complete_object &&
+               !minic_type_is_array(expression->type) &&
+               !minic_type_is_function(expression->type) && !minic_type_is_void(expression->type) &&
+               expression->value_category == MINIC_VALUE_LVALUE && !local->is_array &&
+               !local->is_register_storage && local->element_count == 1U &&
                minic_type_equal(local->type, expression->type);
     }
     case MINIC_EXPRESSION_STATEMENT: {
