@@ -157,4 +157,38 @@ static inline bool minic_semantic_snapshot_rollback_declarator_types(
     return true;
 }
 
+static inline bool minic_semantic_snapshot_only_probe_values_changed(
+    const MinicSemanticSnapshot *snapshot, const MinicC0Program *program) {
+    if (snapshot == NULL || program == NULL ||
+        program->expression_count < snapshot->expression_count ||
+        program->array_type_count < snapshot->array_type_count ||
+        program->function_type_count < snapshot->function_type_count) {
+        return false;
+    }
+    return program->local_count == snapshot->local_count &&
+           program->cleanup_context_count == snapshot->cleanup_context_count &&
+           program->statement_count == snapshot->statement_count &&
+           program->inline_asm_count == snapshot->inline_asm_count &&
+           program->file_asm_count == snapshot->file_asm_count &&
+           program->block_count == snapshot->block_count &&
+           program->function_count == snapshot->function_count &&
+           program->record_count == snapshot->record_count &&
+           program->type_alias_count == snapshot->type_alias_count &&
+           program->enum_count == snapshot->enum_count &&
+           program->enumerator_count == snapshot->enumerator_count &&
+           program->global_object_count == snapshot->global_object_count &&
+           program->fixed_register_binding_count == snapshot->fixed_register_binding_count;
+}
+
+static inline bool minic_semantic_snapshot_rollback_probe_values(
+    const MinicSemanticSnapshot *snapshot, MinicC0Program *program) {
+    if (!minic_semantic_snapshot_only_probe_values_changed(snapshot, program)) {
+        return false;
+    }
+    program->expression_count = snapshot->expression_count;
+    program->array_type_count = snapshot->array_type_count;
+    program->function_type_count = snapshot->function_type_count;
+    return true;
+}
+
 #endif
