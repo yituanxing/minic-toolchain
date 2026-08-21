@@ -34,7 +34,8 @@ static bool rollback_declarator_probe_transaction(MinicParser *parser,
         return true;
     }
     if (parser != NULL) {
-        minic_parser_error(parser, "internal error: declarator probe escaped semantic value arenas");
+        minic_parser_error(
+            parser, "internal error: declarator probe escaped semantic value arenas");
     }
     return false;
 }
