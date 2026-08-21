@@ -83,6 +83,7 @@ int main(void)
         const MinicArrayType *committed_outer;
         const MinicArrayType *committed_inner;
         size_t array_type_count_before;
+        size_t array_type_count_after_commit;
 
         (void)memset(&declarator, 0, sizeof(declarator));
         declarator.bounds[0] = 3U;
@@ -109,6 +110,37 @@ int main(void)
             !minic_type_equal(committed_inner->element_type, minic_type_unsigned_char())) {
             minic_c0_program_destroy(&program);
             return fail("array declarator semantic materialization");
+        }
+
+        array_type_count_after_commit = program.array_type_count;
+        if (!minic_sema_array_declarator_compatible_with_type(
+                &program, committed_type, minic_type_unsigned_char(), &declarator) ||
+            program.array_type_count != array_type_count_after_commit) {
+            minic_c0_program_destroy(&program);
+            return fail("array declarator compatibility query mutated Program");
+        }
+        declarator.bounds[1] = 6U;
+        if (minic_sema_array_declarator_compatible_with_type(
+                &program, committed_type, minic_type_unsigned_char(), &declarator) ||
+            program.array_type_count != array_type_count_after_commit) {
+            minic_c0_program_destroy(&program);
+            return fail("array declarator incompatible bound accepted");
+        }
+        declarator.bounds[1] = 5U;
+        declarator.outermost_incomplete = true;
+        if (!minic_sema_array_declarator_compatible_with_type(
+                &program, committed_type, minic_type_unsigned_char(), &declarator) ||
+            program.array_type_count != array_type_count_after_commit) {
+            minic_c0_program_destroy(&program);
+            return fail("incomplete outer array compatibility");
+        }
+        declarator.outermost_incomplete = false;
+        declarator.zero_length_mask = 1U << 1U;
+        if (minic_sema_array_declarator_compatible_with_type(
+                &program, committed_type, minic_type_unsigned_char(), &declarator) ||
+            program.array_type_count != array_type_count_after_commit) {
+            minic_c0_program_destroy(&program);
+            return fail("zero-length inner array mismatch accepted");
         }
     }
 
