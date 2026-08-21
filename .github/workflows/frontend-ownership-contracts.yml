@@ -10,6 +10,7 @@ on:
       - 'src/target/target_info.h'
       - 'tests/frontend/ast_traversal_test.c'
       - 'tests/frontend/function_body_view_test.c'
+      - 'tests/frontend/semantic_snapshot_test.c'
       - '.github/workflows/frontend-ownership-contracts.yml'
   push:
     branches:
@@ -29,6 +30,21 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Build semantic snapshot contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p build/frontend-ownership
+          cc -std=c11 \
+            -Wall -Wextra -Wpedantic -Wconversion -Wshadow \
+            -Wstrict-prototypes -Wmissing-prototypes -Werror \
+            -Iinclude -Isrc \
+            tests/frontend/semantic_snapshot_test.c \
+            -o build/frontend-ownership/semantic-snapshot-test
+
+      - name: Run semantic snapshot contract
+        run: build/frontend-ownership/semantic-snapshot-test
 
       - name: Build AST traversal ownership contract
         shell: bash
