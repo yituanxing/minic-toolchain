@@ -27,19 +27,6 @@ static bool rollback_declarator_type_transaction(MinicParser *parser,
     return false;
 }
 
-static bool rollback_declarator_probe_transaction(MinicParser *parser,
-                                                  const MinicSemanticSnapshot *snapshot) {
-    if (parser != NULL && parser->program != NULL && snapshot != NULL &&
-        minic_semantic_snapshot_rollback_probe_values(snapshot, parser->program)) {
-        return true;
-    }
-    if (parser != NULL) {
-        minic_parser_error(parser,
-                           "internal error: declarator probe escaped semantic value arenas");
-    }
-    return false;
-}
-
 bool minic_parser_parse_pointer_qualifier_sequence(MinicParser *parser,
                                                    size_t pointer_depth,
                                                    unsigned int *const_qualifiers,
@@ -273,18 +260,10 @@ bool minic_parser_parse_parenthesized_function_declarator(
 }
 
 static bool parse_array_bound_allow_zero(MinicParser *parser, size_t *element_count) {
-    MinicSemanticSnapshot snapshot;
     int64_t value;
 
-    if (parser == NULL || element_count == NULL) {
-        return false;
-    }
-    snapshot = minic_semantic_snapshot_capture(parser->program);
-    if (!minic_parser_parse_typed_integer_constant_expression(parser, &value)) {
-        (void)rollback_declarator_probe_transaction(parser, &snapshot);
-        return false;
-    }
-    if (!rollback_declarator_probe_transaction(parser, &snapshot)) {
+    if (parser == NULL || element_count == NULL ||
+        !minic_parser_parse_typed_integer_constant_expression(parser, &value)) {
         return false;
     }
     if (value < 0) {
