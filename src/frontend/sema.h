@@ -23,12 +23,10 @@ typedef struct MinicArrayDeclaratorSyntax {
  * This is the first Declaration/Sema transaction seam. Keep target, ABI, OS,
  * and object-format facts out of this representation.
  */
-static inline bool minic_sema_materialize_array_declarator(
-    MinicC0Program *program,
-    MinicType element_type,
-    const MinicArrayDeclaratorSyntax *declarator,
-    MinicType *result_type)
-{
+static inline bool minic_sema_materialize_array_declarator(MinicC0Program *program,
+                                                            MinicType element_type,
+                                                            const MinicArrayDeclaratorSyntax *declarator,
+                                                            MinicType *result_type) {
     MinicType type;
     size_t dimension;
 
