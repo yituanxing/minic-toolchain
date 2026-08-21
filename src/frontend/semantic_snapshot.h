@@ -7,22 +7,17 @@
 #include <stddef.h>
 
 /*
- * A narrow transition aid for parser probes and semantic builders that still
- * materialize directly into Program-owned value arenas.
+ * A narrow transition aid for declarator semantic construction.
  *
  * This is deliberately not a general Program transaction/rollback facility:
- * Program-owned records, functions, blocks, globals, and other entities may own
- * nested allocations that cannot be made safe merely by restoring arena counts.
- * Long-term syntax probes must build transient syntax and avoid Program mutation.
+ * Program-owned records, functions, blocks, globals, expressions, and other
+ * entities may have ownership or semantic dependencies that cannot be made safe
+ * merely by restoring arena counts.
  *
- * The bounded rollback classes below are value-only arenas:
- * - expressions;
- * - array types;
- * - function types.
- *
- * Each rollback rejects any mutation outside its declared class. This makes the
- * existing mutation boundary explicit while declaration/Sema ownership is moved
- * out of the parser; it is not the long-term substitute for a semantic commit.
+ * ArrayType and FunctionType are the only rollback classes currently admitted.
+ * They are value-only arenas, and the rollback below rejects any simultaneous
+ * mutation outside those two arenas. Long term, transient declarator syntax
+ * should be formed first and persistent semantic state changed only at commit.
  */
 typedef struct MinicSemanticSnapshot {
     size_t expression_count;
@@ -92,40 +87,6 @@ static inline bool minic_semantic_snapshot_matches(const MinicSemanticSnapshot *
 }
 
 static inline bool
-minic_semantic_snapshot_only_expressions_changed(const MinicSemanticSnapshot *snapshot,
-                                                 const MinicC0Program *program) {
-    if (snapshot == NULL || program == NULL ||
-        program->expression_count < snapshot->expression_count) {
-        return false;
-    }
-    return program->local_count == snapshot->local_count &&
-           program->cleanup_context_count == snapshot->cleanup_context_count &&
-           program->statement_count == snapshot->statement_count &&
-           program->inline_asm_count == snapshot->inline_asm_count &&
-           program->file_asm_count == snapshot->file_asm_count &&
-           program->block_count == snapshot->block_count &&
-           program->function_count == snapshot->function_count &&
-           program->record_count == snapshot->record_count &&
-           program->array_type_count == snapshot->array_type_count &&
-           program->function_type_count == snapshot->function_type_count &&
-           program->type_alias_count == snapshot->type_alias_count &&
-           program->enum_count == snapshot->enum_count &&
-           program->enumerator_count == snapshot->enumerator_count &&
-           program->global_object_count == snapshot->global_object_count &&
-           program->fixed_register_binding_count == snapshot->fixed_register_binding_count;
-}
-
-static inline bool
-minic_semantic_snapshot_rollback_expressions(const MinicSemanticSnapshot *snapshot,
-                                             MinicC0Program *program) {
-    if (!minic_semantic_snapshot_only_expressions_changed(snapshot, program)) {
-        return false;
-    }
-    program->expression_count = snapshot->expression_count;
-    return true;
-}
-
-static inline bool
 minic_semantic_snapshot_only_declarator_types_changed(const MinicSemanticSnapshot *snapshot,
                                                       const MinicC0Program *program) {
     if (snapshot == NULL || program == NULL ||
@@ -155,42 +116,6 @@ minic_semantic_snapshot_rollback_declarator_types(const MinicSemanticSnapshot *s
     if (!minic_semantic_snapshot_only_declarator_types_changed(snapshot, program)) {
         return false;
     }
-    program->array_type_count = snapshot->array_type_count;
-    program->function_type_count = snapshot->function_type_count;
-    return true;
-}
-
-static inline bool
-minic_semantic_snapshot_only_probe_values_changed(const MinicSemanticSnapshot *snapshot,
-                                                  const MinicC0Program *program) {
-    if (snapshot == NULL || program == NULL ||
-        program->expression_count < snapshot->expression_count ||
-        program->array_type_count < snapshot->array_type_count ||
-        program->function_type_count < snapshot->function_type_count) {
-        return false;
-    }
-    return program->local_count == snapshot->local_count &&
-           program->cleanup_context_count == snapshot->cleanup_context_count &&
-           program->statement_count == snapshot->statement_count &&
-           program->inline_asm_count == snapshot->inline_asm_count &&
-           program->file_asm_count == snapshot->file_asm_count &&
-           program->block_count == snapshot->block_count &&
-           program->function_count == snapshot->function_count &&
-           program->record_count == snapshot->record_count &&
-           program->type_alias_count == snapshot->type_alias_count &&
-           program->enum_count == snapshot->enum_count &&
-           program->enumerator_count == snapshot->enumerator_count &&
-           program->global_object_count == snapshot->global_object_count &&
-           program->fixed_register_binding_count == snapshot->fixed_register_binding_count;
-}
-
-static inline bool
-minic_semantic_snapshot_rollback_probe_values(const MinicSemanticSnapshot *snapshot,
-                                              MinicC0Program *program) {
-    if (!minic_semantic_snapshot_only_probe_values_changed(snapshot, program)) {
-        return false;
-    }
-    program->expression_count = snapshot->expression_count;
     program->array_type_count = snapshot->array_type_count;
     program->function_type_count = snapshot->function_type_count;
     return true;
