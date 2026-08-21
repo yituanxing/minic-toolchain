@@ -1,5 +1,6 @@
 #include "frontend/parser_internal.h"
 #include "frontend/initializer.h"
+#include "frontend/sema.h"
 
 #include <limits.h>
 #include <stdint.h>
@@ -3888,13 +3889,15 @@ static bool parse_static_pointer_array(MinicParser *parser,
                                        size_t *section_name_length,
                                        bool *has_section,
                                        size_t *explicit_alignment) {
+    MinicArrayDeclaratorSyntax declarator;
     MinicType object_type;
-    MinicType declared_object_type;
     MinicGlobalObjectId object_id;
     MinicGlobalObjectId existing_id;
     size_t element_count;
     bool inferred_bound;
 
+    (void)memset(&declarator, 0, sizeof(declarator));
+    declarator.dimension_count = 1U;
     element_count = 0U;
     inferred_bound = false;
     if (parser == NULL || section_name == NULL || section_capacity == 0U ||
@@ -3904,9 +3907,9 @@ static bool parse_static_pointer_array(MinicParser *parser,
         return false;
     }
     if (parser->current.kind == MINIC_TOKEN_RBRACKET) {
+        declarator.outermost_incomplete = true;
         inferred_bound = true;
-        if (!minic_parser_advance(parser) || !minic_c0_program_add_incomplete_array_type(
-                                                 parser->program, element_type, &object_type)) {
+        if (!minic_parser_advance(parser)) {
             return false;
         }
     } else {
@@ -3919,13 +3922,11 @@ static bool parse_static_pointer_array(MinicParser *parser,
                 parser, &parsed_element_count, &is_zero_length)) {
             return false;
         }
-        element_count = is_zero_length ? 0U : parsed_element_count;
-        if ((is_zero_length && !minic_c0_program_add_zero_length_array_type(
-                                   parser->program, element_type, &object_type)) ||
-            (!is_zero_length && !minic_c0_program_add_array_type(
-                                    parser->program, element_type, element_count, &object_type))) {
-            minic_parser_error(parser, "cannot build static pointer array type");
-            return false;
+        declarator.bounds[0] = parsed_element_count;
+        if (is_zero_length) {
+            declarator.zero_length_mask = 1U;
+        } else {
+            element_count = parsed_element_count;
         }
     }
     if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
@@ -3941,17 +3942,16 @@ static bool parse_static_pointer_array(MinicParser *parser,
         return false;
     }
 
-    declared_object_type = object_type;
     existing_id = minic_parser_find_global_object_entity(parser, name_span);
     object_id = MINIC_GLOBAL_OBJECT_INVALID;
     if (parser->current.kind == MINIC_TOKEN_SEMICOLON) {
         const MinicGlobalObject *existing;
         const MinicArrayType *existing_array;
-        const MinicArrayType *declared_array;
-        bool discard_declared;
 
         if (existing_id == MINIC_GLOBAL_OBJECT_INVALID) {
-            if (!minic_c0_program_add_tentative_global_object(parser->program,
+            if (!minic_sema_materialize_array_declarator(
+                    parser->program, element_type, &declarator, &object_type) ||
+                !minic_c0_program_add_tentative_global_object(parser->program,
                                                               parser->source +
                                                                   name_span.begin.offset,
                                                               minic_parser_span_length(name_span),
@@ -3969,26 +3969,14 @@ static bool parse_static_pointer_array(MinicParser *parser,
                 existing != NULL && minic_type_is_array(existing->type)
                     ? minic_c0_program_array_type(parser->program, existing->type.array_type_id)
                     : NULL;
-            declared_array =
-                minic_c0_program_array_type(parser->program, object_type.array_type_id);
-            discard_declared =
-                object_type.array_type_id + 1U == parser->program->array_type_count &&
-                (existing == NULL || existing->type.array_type_id != object_type.array_type_id);
-            if (existing == NULL || existing_array == NULL || declared_array == NULL ||
-                !existing->is_internal ||
-                !minic_type_equal(existing_array->element_type, declared_array->element_type) ||
-                existing_array->element_count != declared_array->element_count ||
+            if (existing == NULL || existing_array == NULL || !existing->is_internal ||
+                !minic_type_equal(existing_array->element_type, element_type) ||
+                existing_array->element_count != element_count ||
                 !minic_c0_global_object_merge_tentative(parser->program, existing_id)) {
                 minic_parser_error(parser, "conflicting static pointer array tentative definition");
                 return false;
             }
             object_id = existing_id;
-            if (discard_declared &&
-                !minic_c0_program_discard_last_array_type(parser->program, object_type)) {
-                minic_parser_error(parser,
-                                   "cannot retire transient static pointer array declaration");
-                return false;
-            }
         }
         if ((*has_section && !minic_c0_global_object_set_section(
                                  parser->program, object_id, section_name, *section_name_length)) ||
@@ -4001,7 +3989,9 @@ static bool parse_static_pointer_array(MinicParser *parser,
     }
 
     if (existing_id == MINIC_GLOBAL_OBJECT_INVALID) {
-        if (!minic_c0_program_add_global_object(parser->program,
+        if (!minic_sema_materialize_array_declarator(
+                parser->program, element_type, &declarator, &object_type) ||
+            !minic_c0_program_add_global_object(parser->program,
                                                 parser->source + name_span.begin.offset,
                                                 minic_parser_span_length(name_span),
                                                 object_type,
@@ -4014,28 +4004,20 @@ static bool parse_static_pointer_array(MinicParser *parser,
     } else {
         const MinicGlobalObject *existing;
         const MinicArrayType *existing_array;
-        const MinicArrayType *declared_array;
-        size_t declared_count;
-        bool discard_declared;
 
         existing = minic_c0_program_global_object(parser->program, existing_id);
         existing_array =
             existing != NULL && minic_type_is_array(existing->type)
                 ? minic_c0_program_array_type(parser->program, existing->type.array_type_id)
                 : NULL;
-        declared_array = minic_c0_program_array_type(parser->program, object_type.array_type_id);
-        declared_count = declared_array == NULL ? 0U : declared_array->element_count;
-        discard_declared =
-            object_type.array_type_id + 1U == parser->program->array_type_count &&
-            (existing == NULL || existing->type.array_type_id != object_type.array_type_id);
-        if (existing == NULL || existing_array == NULL || declared_array == NULL ||
-            !existing->is_internal || !existing->is_tentative ||
-            !minic_type_equal(existing_array->element_type, declared_array->element_type) ||
-            (existing_array->element_count != 0U && declared_count != 0U &&
-             existing_array->element_count != declared_count) ||
-            (existing_array->element_count == 0U && declared_count != 0U &&
+        if (existing == NULL || existing_array == NULL || !existing->is_internal ||
+            !existing->is_tentative ||
+            !minic_type_equal(existing_array->element_type, element_type) ||
+            (existing_array->element_count != 0U && element_count != 0U &&
+             existing_array->element_count != element_count) ||
+            (existing_array->element_count == 0U && element_count != 0U &&
              !minic_c0_program_complete_array_type(
-                 parser->program, existing->type, declared_count)) ||
+                 parser->program, existing->type, element_count)) ||
             !minic_c0_global_object_begin_definition(parser->program, existing_id)) {
             minic_parser_error(parser, "conflicting static pointer array definition");
             return false;
@@ -4048,11 +4030,6 @@ static bool parse_static_pointer_array(MinicParser *parser,
         }
         element_count = existing_array->element_count;
         inferred_bound = element_count == 0U && !existing_array->is_zero_length;
-        if (discard_declared &&
-            !minic_c0_program_discard_last_array_type(parser->program, declared_object_type)) {
-            minic_parser_error(parser, "cannot retire transient static pointer array definition");
-            return false;
-        }
     }
 
     if ((*has_section && !minic_c0_global_object_set_section(
