@@ -1,0 +1,283 @@
+name: Temporary P1 Static Pointer Array Refactor
+
+on:
+  push:
+    branches:
+      - refactor/post-first500-foundation-v2
+    paths:
+      - '.github/workflows/refactor-apply-p1-static-pointer-array.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout refactor branch
+        uses: actions/checkout@v4
+        with:
+          ref: refactor/post-first500-foundation-v2
+
+      - name: Apply exact ownership refactor
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/frontend/parser_global.c')
+          text = path.read_text()
+
+          include_anchor = '#include "frontend/initializer.h"\n'
+          if '#include "frontend/sema.h"\n' not in text:
+              if text.count(include_anchor) != 1:
+                  raise SystemExit('unexpected initializer include anchor count')
+              text = text.replace(
+                  include_anchor,
+                  include_anchor + '#include "frontend/sema.h"\n',
+                  1,
+              )
+
+          start_marker = 'static bool parse_static_pointer_array('
+          end_marker = '\nstatic bool static_object_type_is_read_only'
+          if text.count(start_marker) != 1:
+              raise SystemExit('static pointer array function anchor is not unique')
+          start = text.index(start_marker)
+          end = text.index(end_marker, start)
+
+          replacement = r'''static bool parse_static_pointer_array(MinicParser *parser,
+                                                 MinicType element_type,
+                                                 MinicSourceSpan name_span,
+                                                 char *section_name,
+                                                 size_t section_capacity,
+                                                 size_t *section_name_length,
+                                                 bool *has_section,
+                                                 size_t *explicit_alignment) {
+              MinicArrayDeclaratorSyntax declarator;
+              MinicType object_type;
+              MinicGlobalObjectId object_id;
+              MinicGlobalObjectId existing_id;
+              size_t element_count;
+              bool inferred_bound;
+
+              (void)memset(&declarator, 0, sizeof(declarator));
+              declarator.dimension_count = 1U;
+              element_count = 0U;
+              inferred_bound = false;
+              if (parser == NULL || section_name == NULL || section_capacity == 0U ||
+                  section_name_length == NULL || has_section == NULL || explicit_alignment == NULL ||
+                  !minic_type_is_pointer(element_type) ||
+                  !minic_parser_expect(parser, MINIC_TOKEN_LBRACKET, "expected '['")) {
+                  return false;
+              }
+              if (parser->current.kind == MINIC_TOKEN_RBRACKET) {
+                  declarator.outermost_incomplete = true;
+                  inferred_bound = true;
+                  if (!minic_parser_advance(parser)) {
+                      return false;
+                  }
+              } else {
+                  size_t parsed_element_count;
+                  bool is_zero_length;
+
+                  parsed_element_count = 0U;
+                  is_zero_length = false;
+                  if (!minic_parser_parse_record_array_bound(
+                          parser, &parsed_element_count, &is_zero_length)) {
+                      return false;
+                  }
+                  declarator.bounds[0] = parsed_element_count;
+                  if (is_zero_length) {
+                      declarator.zero_length_mask = 1U;
+                  } else {
+                      element_count = parsed_element_count;
+                  }
+              }
+              if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
+                  minic_parser_error(parser, "multi-dimensional static pointer arrays are not supported yet");
+                  return false;
+              }
+              if (!minic_parser_parse_gnu_object_attribute_lists(parser,
+                                                                 section_name,
+                                                                 section_capacity,
+                                                                 section_name_length,
+                                                                 has_section,
+                                                                 explicit_alignment)) {
+                  return false;
+              }
+
+              existing_id = minic_parser_find_global_object_entity(parser, name_span);
+              object_id = MINIC_GLOBAL_OBJECT_INVALID;
+              if (parser->current.kind == MINIC_TOKEN_SEMICOLON) {
+                  const MinicGlobalObject *existing;
+                  const MinicArrayType *existing_array;
+
+                  if (existing_id == MINIC_GLOBAL_OBJECT_INVALID) {
+                      if (!minic_sema_materialize_array_declarator(
+                              parser->program, element_type, &declarator, &object_type) ||
+                          !minic_c0_program_add_tentative_global_object(parser->program,
+                                                                        parser->source +
+                                                                            name_span.begin.offset,
+                                                                        minic_parser_span_length(
+                                                                            name_span),
+                                                                        object_type,
+                                                                        true,
+                                                                        minic_type_is_const(
+                                                                            element_type),
+                                                                        &object_id)) {
+                          minic_parser_error(parser,
+                                             "cannot create static pointer array tentative definition");
+                          return false;
+                      }
+                  } else {
+                      existing = minic_c0_program_global_object(parser->program, existing_id);
+                      existing_array =
+                          existing != NULL && minic_type_is_array(existing->type)
+                              ? minic_c0_program_array_type(
+                                    parser->program, existing->type.array_type_id)
+                              : NULL;
+                      if (existing == NULL || existing_array == NULL || !existing->is_internal ||
+                          !minic_type_equal(existing_array->element_type, element_type) ||
+                          existing_array->element_count != element_count ||
+                          !minic_c0_global_object_merge_tentative(parser->program, existing_id)) {
+                          minic_parser_error(
+                              parser, "conflicting static pointer array tentative definition");
+                          return false;
+                      }
+                      object_id = existing_id;
+                  }
+                  if ((*has_section && !minic_c0_global_object_set_section(
+                                           parser->program,
+                                           object_id,
+                                           section_name,
+                                           *section_name_length)) ||
+                      (*explicit_alignment != 0U && !minic_c0_global_object_set_explicit_alignment(
+                                                            parser->program,
+                                                            object_id,
+                                                            *explicit_alignment))) {
+                      minic_parser_error(parser, "cannot persist static pointer array metadata");
+                      return false;
+                  }
+                  return minic_parser_advance(parser);
+              }
+
+              if (existing_id == MINIC_GLOBAL_OBJECT_INVALID) {
+                  if (!minic_sema_materialize_array_declarator(
+                          parser->program, element_type, &declarator, &object_type) ||
+                      !minic_c0_program_add_global_object(parser->program,
+                                                          parser->source + name_span.begin.offset,
+                                                          minic_parser_span_length(name_span),
+                                                          object_type,
+                                                          true,
+                                                          minic_type_is_const(element_type),
+                                                          &object_id)) {
+                      minic_parser_error(parser, "cannot create static pointer array object");
+                      return false;
+                  }
+              } else {
+                  const MinicGlobalObject *existing;
+                  const MinicArrayType *existing_array;
+
+                  existing = minic_c0_program_global_object(parser->program, existing_id);
+                  existing_array =
+                      existing != NULL && minic_type_is_array(existing->type)
+                          ? minic_c0_program_array_type(parser->program, existing->type.array_type_id)
+                          : NULL;
+                  if (existing == NULL || existing_array == NULL || !existing->is_internal ||
+                      !existing->is_tentative ||
+                      !minic_type_equal(existing_array->element_type, element_type) ||
+                      (existing_array->element_count != 0U && element_count != 0U &&
+                       existing_array->element_count != element_count) ||
+                      (existing_array->element_count == 0U && element_count != 0U &&
+                       !minic_c0_program_complete_array_type(
+                           parser->program, existing->type, element_count)) ||
+                      !minic_c0_global_object_begin_definition(parser->program, existing_id)) {
+                      minic_parser_error(parser, "conflicting static pointer array definition");
+                      return false;
+                  }
+                  object_id = existing_id;
+                  object_type = parser->program->global_objects[object_id].type;
+                  existing_array =
+                      minic_c0_program_array_type(parser->program, object_type.array_type_id);
+                  if (existing_array == NULL) {
+                      return false;
+                  }
+                  element_count = existing_array->element_count;
+                  inferred_bound = element_count == 0U && !existing_array->is_zero_length;
+              }
+
+              if ((*has_section && !minic_c0_global_object_set_section(
+                                       parser->program,
+                                       object_id,
+                                       section_name,
+                                       *section_name_length)) ||
+                  (*explicit_alignment != 0U && !minic_c0_global_object_set_explicit_alignment(
+                                                        parser->program,
+                                                        object_id,
+                                                        *explicit_alignment))) {
+                  minic_parser_error(parser, "cannot persist static pointer array metadata");
+                  return false;
+              }
+              if (!minic_parser_expect(
+                      parser, MINIC_TOKEN_EQUAL, "expected '=' after static pointer array")) {
+                  return false;
+              }
+              {
+                  const MinicArrayType *array_type;
+
+                  array_type = minic_c0_program_array_type(parser->program, object_type.array_type_id);
+                  if (array_type == NULL) {
+                      minic_parser_error(parser, "invalid static pointer array type");
+                      return false;
+                  }
+                  if (array_type->is_zero_length) {
+                      if (!minic_parser_expect(parser,
+                                               MINIC_TOKEN_LBRACE,
+                                               "expected '{' for zero-length array initializer") ||
+                          !minic_parser_expect(parser,
+                                               MINIC_TOKEN_RBRACE,
+                                               "zero-length array initializer must be empty")) {
+                          return false;
+                      }
+                  } else if (!parse_static_scalar_array_transaction(
+                                 parser, object_id, element_type, element_count, inferred_bound)) {
+                      return false;
+                  }
+              }
+              return minic_parser_expect(
+                  parser, MINIC_TOKEN_SEMICOLON, "expected ';' after static pointer array");
+          }
+          '''
+
+          text = text[:start] + replacement + text[end:]
+          path.write_text(text)
+          PY
+
+      - name: Format touched production file
+        run: clang-format-18 -i src/frontend/parser_global.c
+
+      - name: Verify exact diff and release build
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git diff --check -- src/frontend/parser_global.c
+          grep -n "discard_declared\|declared_object_type" src/frontend/parser_global.c && {
+            echo "stale static pointer array rollback marker remains" >&2
+            exit 1
+          } || true
+          make MODE=release CFLAGS=-Werror
+
+      - name: Commit production slice
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if git diff --quiet -- src/frontend/parser_global.c; then
+            echo "no production change to commit" >&2
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- src/frontend/parser_global.c
+          git commit -m "frontend: stop materializing static pointer array probes"
+          git push origin HEAD:refactor/post-first500-foundation-v2
