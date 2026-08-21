@@ -115,8 +115,9 @@ minic_semantic_snapshot_only_expressions_changed(const MinicSemanticSnapshot *sn
            program->fixed_register_binding_count == snapshot->fixed_register_binding_count;
 }
 
-static inline bool minic_semantic_snapshot_rollback_expressions(
-    const MinicSemanticSnapshot *snapshot, MinicC0Program *program) {
+static inline bool
+minic_semantic_snapshot_rollback_expressions(const MinicSemanticSnapshot *snapshot,
+                                             MinicC0Program *program) {
     if (!minic_semantic_snapshot_only_expressions_changed(snapshot, program)) {
         return false;
     }
@@ -124,8 +125,9 @@ static inline bool minic_semantic_snapshot_rollback_expressions(
     return true;
 }
 
-static inline bool minic_semantic_snapshot_only_declarator_types_changed(
-    const MinicSemanticSnapshot *snapshot, const MinicC0Program *program) {
+static inline bool
+minic_semantic_snapshot_only_declarator_types_changed(const MinicSemanticSnapshot *snapshot,
+                                                      const MinicC0Program *program) {
     if (snapshot == NULL || program == NULL ||
         program->array_type_count < snapshot->array_type_count ||
         program->function_type_count < snapshot->function_type_count) {
@@ -147,8 +149,9 @@ static inline bool minic_semantic_snapshot_only_declarator_types_changed(
            program->fixed_register_binding_count == snapshot->fixed_register_binding_count;
 }
 
-static inline bool minic_semantic_snapshot_rollback_declarator_types(
-    const MinicSemanticSnapshot *snapshot, MinicC0Program *program) {
+static inline bool
+minic_semantic_snapshot_rollback_declarator_types(const MinicSemanticSnapshot *snapshot,
+                                                  MinicC0Program *program) {
     if (!minic_semantic_snapshot_only_declarator_types_changed(snapshot, program)) {
         return false;
     }
@@ -157,8 +160,9 @@ static inline bool minic_semantic_snapshot_rollback_declarator_types(
     return true;
 }
 
-static inline bool minic_semantic_snapshot_only_probe_values_changed(
-    const MinicSemanticSnapshot *snapshot, const MinicC0Program *program) {
+static inline bool
+minic_semantic_snapshot_only_probe_values_changed(const MinicSemanticSnapshot *snapshot,
+                                                  const MinicC0Program *program) {
     if (snapshot == NULL || program == NULL ||
         program->expression_count < snapshot->expression_count ||
         program->array_type_count < snapshot->array_type_count ||
@@ -180,8 +184,9 @@ static inline bool minic_semantic_snapshot_only_probe_values_changed(
            program->fixed_register_binding_count == snapshot->fixed_register_binding_count;
 }
 
-static inline bool minic_semantic_snapshot_rollback_probe_values(
-    const MinicSemanticSnapshot *snapshot, MinicC0Program *program) {
+static inline bool
+minic_semantic_snapshot_rollback_probe_values(const MinicSemanticSnapshot *snapshot,
+                                              MinicC0Program *program) {
     if (!minic_semantic_snapshot_only_probe_values_changed(snapshot, program)) {
         return false;
     }
