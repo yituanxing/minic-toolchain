@@ -102,6 +102,18 @@ int main(void) {
         minic_c0_program_destroy(&program);
         return fail("complete redeclaration did not match existing incomplete array");
     }
+    if (!minic_sema_merge_array_declarator_composite_type(
+            &program, incomplete_type, minic_type_unsigned_char(), &declarator) ||
+        program.array_type_count != count_after_incomplete) {
+        minic_c0_program_destroy(&program);
+        return fail("composite merge allocated a transient array type");
+    }
+    outer = minic_c0_program_array_type(&program, incomplete_type.array_type_id);
+    if (outer == NULL || outer->is_zero_length || outer->element_count != 7U ||
+        !minic_type_equal(outer->element_type, minic_type_unsigned_char())) {
+        minic_c0_program_destroy(&program);
+        return fail("composite merge did not complete canonical array type");
+    }
 
     minic_c0_program_destroy(&program);
     (void)printf("PASS frontend/sema-declarator\n");
