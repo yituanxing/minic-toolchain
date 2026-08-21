@@ -1,4 +1,5 @@
 #include "frontend/ast.h"
+#include "frontend/sema.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -74,6 +75,41 @@ int main(void)
         !minic_type_equal(outer_array, alias->type)) {
         minic_c0_program_destroy(&program);
         return fail("pointer to multidimensional array");
+    }
+
+    {
+        MinicArrayDeclaratorSyntax declarator;
+        MinicType committed_type;
+        const MinicArrayType *committed_outer;
+        const MinicArrayType *committed_inner;
+        size_t array_type_count_before;
+
+        (void)memset(&declarator, 0, sizeof(declarator));
+        declarator.bounds[0] = 3U;
+        declarator.bounds[1] = 5U;
+        declarator.dimension_count = 2U;
+        array_type_count_before = program.array_type_count;
+
+        if (program.array_type_count != array_type_count_before ||
+            !minic_sema_materialize_array_declarator(
+                &program, minic_type_unsigned_char(), &declarator, &committed_type) ||
+            program.array_type_count != array_type_count_before + 2U ||
+            !minic_type_is_array(committed_type)) {
+            minic_c0_program_destroy(&program);
+            return fail("array declarator semantic commit boundary");
+        }
+        committed_outer =
+            minic_c0_program_array_type(&program, committed_type.array_type_id);
+        committed_inner = committed_outer != NULL && minic_type_is_array(committed_outer->element_type)
+                              ? minic_c0_program_array_type(
+                                    &program, committed_outer->element_type.array_type_id)
+                              : NULL;
+        if (committed_outer == NULL || committed_outer->element_count != 3U ||
+            committed_inner == NULL || committed_inner->element_count != 5U ||
+            !minic_type_equal(committed_inner->element_type, minic_type_unsigned_char())) {
+            minic_c0_program_destroy(&program);
+            return fail("array declarator semantic materialization");
+        }
     }
 
     if (minic_c0_program_add_type_alias(
