@@ -10,6 +10,7 @@ on:
       - 'src/target/target_info.h'
       - 'tests/frontend/ast_traversal_test.c'
       - 'tests/frontend/function_body_view_test.c'
+      - 'tests/frontend/sema_declarator_test.c'
       - '.github/workflows/frontend-ownership-contracts.yml'
   push:
     branches:
@@ -76,3 +77,19 @@ jobs:
 
       - name: Run FunctionBody ownership contract
         run: build/frontend-ownership/function-body-view-test
+
+      - name: Build declaration Sema ownership contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cc -std=c11 \
+            -Wall -Wextra -Wpedantic -Wconversion -Wshadow \
+            -Wstrict-prototypes -Wmissing-prototypes -Werror \
+            -Iinclude -Isrc \
+            src/frontend/ast.c \
+            src/frontend/type.c \
+            tests/frontend/sema_declarator_test.c \
+            -o build/frontend-ownership/sema-declarator-test
+
+      - name: Run declaration Sema ownership contract
+        run: build/frontend-ownership/sema-declarator-test
