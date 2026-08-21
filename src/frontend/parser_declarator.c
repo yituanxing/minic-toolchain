@@ -1,4 +1,5 @@
 #include "frontend/parser_internal.h"
+#include "frontend/semantic_snapshot.h"
 
 #include <limits.h>
 #include <string.h>
@@ -12,6 +13,18 @@ static bool declarator_identifier_is(const MinicParser *parser, const char *text
     length = minic_parser_span_length(parser->current.span);
     return strlen(text) == length &&
            memcmp(parser->source + parser->current.span.begin.offset, text, length) == 0;
+}
+
+static bool rollback_declarator_type_transaction(MinicParser *parser,
+                                                 const MinicSemanticSnapshot *snapshot) {
+    if (parser != NULL && parser->program != NULL && snapshot != NULL &&
+        minic_semantic_snapshot_rollback_declarator_types(snapshot, parser->program)) {
+        return true;
+    }
+    if (parser != NULL) {
+        minic_parser_error(parser, "internal error: declarator type transaction escaped");
+    }
+    return false;
 }
 
 bool minic_parser_parse_pointer_qualifier_sequence(MinicParser *parser,
@@ -278,6 +291,7 @@ bool minic_parser_parse_array_declarator_suffix(MinicParser *parser,
     size_t dimension;
     bool zero_length[8];
     bool outermost_incomplete;
+    MinicSemanticSnapshot snapshot;
     MinicType type;
 
     if (parser == NULL || declarator_type == NULL || is_array == NULL) {
@@ -318,22 +332,32 @@ bool minic_parser_parse_array_declarator_suffix(MinicParser *parser,
         bound_count += 1U;
     }
 
+    snapshot = minic_semantic_snapshot_capture(parser->program);
     type = element_type;
     dimension = bound_count;
     while (dimension > 0U) {
         dimension -= 1U;
         if (dimension == 0U && outermost_incomplete) {
             if (!minic_c0_program_add_incomplete_array_type(parser->program, type, &type)) {
+                if (!rollback_declarator_type_transaction(parser, &snapshot)) {
+                    return false;
+                }
                 minic_parser_error(parser, "cannot build incomplete array declarator type");
                 return false;
             }
         } else if (zero_length[dimension]) {
             if (!minic_c0_program_add_zero_length_array_type(parser->program, type, &type)) {
+                if (!rollback_declarator_type_transaction(parser, &snapshot)) {
+                    return false;
+                }
                 minic_parser_error(parser, "cannot build GNU zero-length array declarator type");
                 return false;
             }
         } else if (!minic_c0_program_add_array_type(
                        parser->program, type, bounds[dimension], &type)) {
+            if (!rollback_declarator_type_transaction(parser, &snapshot)) {
+                return false;
+            }
             minic_parser_error(parser, "cannot build array declarator type");
             return false;
         }
@@ -347,6 +371,7 @@ bool minic_parser_build_function_declarator_type(MinicParser *parser,
                                                  MinicType return_type,
                                                  const MinicParsedFunctionDeclarator *declarator,
                                                  MinicType *declarator_type) {
+    MinicSemanticSnapshot snapshot;
     MinicType function_type;
     size_t pointer_depth;
 
@@ -354,12 +379,14 @@ bool minic_parser_build_function_declarator_type(MinicParser *parser,
         declarator->parameter_count > MINIC_MAX_FUNCTION_PARAMETERS) {
         return false;
     }
+    snapshot = minic_semantic_snapshot_capture(parser->program);
     if (!minic_c0_program_add_variadic_function_type(parser->program,
                                                      return_type,
                                                      declarator->parameter_types,
                                                      declarator->parameter_count,
                                                      declarator->is_variadic,
                                                      &function_type)) {
+        (void)rollback_declarator_type_transaction(parser, &snapshot);
         return false;
     }
 
@@ -368,15 +395,18 @@ bool minic_parser_build_function_declarator_type(MinicParser *parser,
         unsigned int bit;
 
         if (!minic_type_pointer_to(function_type, &function_type)) {
+            (void)rollback_declarator_type_transaction(parser, &snapshot);
             return false;
         }
         bit = 1U << pointer_depth;
         if ((declarator->pointer_const_qualifiers & bit) != 0U &&
             !minic_type_add_const(function_type, &function_type)) {
+            (void)rollback_declarator_type_transaction(parser, &snapshot);
             return false;
         }
         if ((declarator->pointer_volatile_qualifiers & bit) != 0U &&
             !minic_type_add_volatile(function_type, &function_type)) {
+            (void)rollback_declarator_type_transaction(parser, &snapshot);
             return false;
         }
         pointer_depth += 1U;
@@ -392,17 +422,20 @@ bool minic_parser_build_function_declarator_type(MinicParser *parser,
             if (dimension == 0U && declarator->array_outermost_incomplete) {
                 if (!minic_c0_program_add_incomplete_array_type(
                         parser->program, function_type, &function_type)) {
+                    (void)rollback_declarator_type_transaction(parser, &snapshot);
                     return false;
                 }
             } else if ((declarator->array_zero_length_mask & bit) != 0U) {
                 if (!minic_c0_program_add_zero_length_array_type(
                         parser->program, function_type, &function_type)) {
+                    (void)rollback_declarator_type_transaction(parser, &snapshot);
                     return false;
                 }
             } else if (!minic_c0_program_add_array_type(parser->program,
                                                         function_type,
                                                         declarator->array_bounds[dimension],
                                                         &function_type)) {
+                (void)rollback_declarator_type_transaction(parser, &snapshot);
                 return false;
             }
         }
