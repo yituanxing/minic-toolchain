@@ -1,4 +1,5 @@
 #include "frontend/parser_internal.h"
+#include "frontend/sema.h"
 
 #include <limits.h>
 #include <string.h>
@@ -268,17 +269,49 @@ static bool parse_array_bound_allow_zero(MinicParser *parser, size_t *element_co
     return true;
 }
 
+static bool parse_array_declarator_syntax(MinicParser *parser,
+                                          bool allow_incomplete_outermost,
+                                          MinicArrayDeclaratorSyntax *declarator) {
+    size_t dimension;
+
+    if (parser == NULL || declarator == NULL || parser->current.kind != MINIC_TOKEN_LBRACKET) {
+        return false;
+    }
+    (void)memset(declarator, 0, sizeof(*declarator));
+    while (parser->current.kind == MINIC_TOKEN_LBRACKET) {
+        if (declarator->dimension_count >= MINIC_ARRAY_DECLARATOR_MAX_DIMENSIONS) {
+            minic_parser_error(parser, "array declarator supports at most eight dimensions");
+            return false;
+        }
+        dimension = declarator->dimension_count;
+        if (!minic_parser_advance(parser)) {
+            return false;
+        }
+        if (parser->current.kind == MINIC_TOKEN_RBRACKET) {
+            if (!allow_incomplete_outermost || dimension != 0U) {
+                minic_parser_error(parser, "only the outermost array dimension may be incomplete");
+                return false;
+            }
+            declarator->outermost_incomplete = true;
+            if (!minic_parser_advance(parser)) {
+                return false;
+            }
+        } else if (!parse_array_bound_allow_zero(parser, &declarator->bounds[dimension])) {
+            return false;
+        } else if (declarator->bounds[dimension] == 0U) {
+            declarator->zero_length_mask |= 1U << dimension;
+        }
+        declarator->dimension_count += 1U;
+    }
+    return true;
+}
+
 bool minic_parser_parse_array_declarator_suffix(MinicParser *parser,
                                                 MinicType element_type,
                                                 bool allow_incomplete_outermost,
                                                 MinicType *declarator_type,
                                                 bool *is_array) {
-    size_t bounds[8];
-    size_t bound_count;
-    size_t dimension;
-    bool zero_length[8];
-    bool outermost_incomplete;
-    MinicType type;
+    MinicArrayDeclaratorSyntax declarator;
 
     if (parser == NULL || declarator_type == NULL || is_array == NULL) {
         return false;
@@ -288,57 +321,14 @@ bool minic_parser_parse_array_declarator_suffix(MinicParser *parser,
     if (parser->current.kind != MINIC_TOKEN_LBRACKET) {
         return true;
     }
-
-    bound_count = 0U;
-    (void)memset(zero_length, 0, sizeof(zero_length));
-    outermost_incomplete = false;
-    while (parser->current.kind == MINIC_TOKEN_LBRACKET) {
-        if (bound_count >= sizeof(bounds) / sizeof(bounds[0])) {
-            minic_parser_error(parser, "array declarator supports at most eight dimensions");
-            return false;
-        }
-        if (!minic_parser_advance(parser)) {
-            return false;
-        }
-        if (parser->current.kind == MINIC_TOKEN_RBRACKET) {
-            if (!allow_incomplete_outermost || bound_count != 0U) {
-                minic_parser_error(parser, "only the outermost array dimension may be incomplete");
-                return false;
-            }
-            outermost_incomplete = true;
-            bounds[bound_count] = 0U;
-            if (!minic_parser_advance(parser)) {
-                return false;
-            }
-        } else if (!parse_array_bound_allow_zero(parser, &bounds[bound_count])) {
-            return false;
-        } else {
-            zero_length[bound_count] = bounds[bound_count] == 0U;
-        }
-        bound_count += 1U;
+    if (!parse_array_declarator_syntax(parser, allow_incomplete_outermost, &declarator)) {
+        return false;
     }
-
-    type = element_type;
-    dimension = bound_count;
-    while (dimension > 0U) {
-        dimension -= 1U;
-        if (dimension == 0U && outermost_incomplete) {
-            if (!minic_c0_program_add_incomplete_array_type(parser->program, type, &type)) {
-                minic_parser_error(parser, "cannot build incomplete array declarator type");
-                return false;
-            }
-        } else if (zero_length[dimension]) {
-            if (!minic_c0_program_add_zero_length_array_type(parser->program, type, &type)) {
-                minic_parser_error(parser, "cannot build GNU zero-length array declarator type");
-                return false;
-            }
-        } else if (!minic_c0_program_add_array_type(
-                       parser->program, type, bounds[dimension], &type)) {
-            minic_parser_error(parser, "cannot build array declarator type");
-            return false;
-        }
+    if (!minic_sema_materialize_array_declarator(
+            parser->program, element_type, &declarator, declarator_type)) {
+        minic_parser_error(parser, "cannot build array declarator type");
+        return false;
     }
-    *declarator_type = type;
     *is_array = true;
     return true;
 }
@@ -351,7 +341,8 @@ bool minic_parser_build_function_declarator_type(MinicParser *parser,
     size_t pointer_depth;
 
     if (parser == NULL || declarator == NULL || declarator_type == NULL ||
-        declarator->parameter_count > MINIC_MAX_FUNCTION_PARAMETERS) {
+        declarator->parameter_count > MINIC_MAX_FUNCTION_PARAMETERS ||
+        declarator->array_dimension_count > MINIC_ARRAY_DECLARATOR_MAX_DIMENSIONS) {
         return false;
     }
     if (!minic_c0_program_add_variadic_function_type(parser->program,
@@ -381,30 +372,19 @@ bool minic_parser_build_function_declarator_type(MinicParser *parser,
         }
         pointer_depth += 1U;
     }
-    {
-        size_t dimension = declarator->array_dimension_count;
+    if (declarator->array_dimension_count != 0U) {
+        MinicArrayDeclaratorSyntax array_declarator;
 
-        while (dimension > 0U) {
-            unsigned int bit;
-
-            dimension -= 1U;
-            bit = 1U << dimension;
-            if (dimension == 0U && declarator->array_outermost_incomplete) {
-                if (!minic_c0_program_add_incomplete_array_type(
-                        parser->program, function_type, &function_type)) {
-                    return false;
-                }
-            } else if ((declarator->array_zero_length_mask & bit) != 0U) {
-                if (!minic_c0_program_add_zero_length_array_type(
-                        parser->program, function_type, &function_type)) {
-                    return false;
-                }
-            } else if (!minic_c0_program_add_array_type(parser->program,
-                                                        function_type,
-                                                        declarator->array_bounds[dimension],
-                                                        &function_type)) {
-                return false;
-            }
+        (void)memset(&array_declarator, 0, sizeof(array_declarator));
+        (void)memcpy(array_declarator.bounds,
+                     declarator->array_bounds,
+                     declarator->array_dimension_count * sizeof(array_declarator.bounds[0]));
+        array_declarator.dimension_count = declarator->array_dimension_count;
+        array_declarator.zero_length_mask = declarator->array_zero_length_mask;
+        array_declarator.outermost_incomplete = declarator->array_outermost_incomplete;
+        if (!minic_sema_materialize_array_declarator(
+                parser->program, function_type, &array_declarator, &function_type)) {
+            return false;
         }
     }
     *declarator_type = function_type;
