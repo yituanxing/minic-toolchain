@@ -2,18 +2,10 @@
 #define MINIC_FRONTEND_SEMA_H
 
 #include "frontend/ast.h"
+#include "frontend/declarator.h"
 
 #include <stdbool.h>
 #include <stddef.h>
-
-#define MINIC_ARRAY_DECLARATOR_MAX_DIMENSIONS 8U
-
-typedef struct MinicArrayDeclaratorSyntax {
-    size_t bounds[MINIC_ARRAY_DECLARATOR_MAX_DIMENSIONS];
-    size_t dimension_count;
-    unsigned int zero_length_mask;
-    bool outermost_incomplete;
-} MinicArrayDeclaratorSyntax;
 
 /*
  * Array declarator syntax is intentionally transient. Parsing fills this value
@@ -67,6 +59,53 @@ minic_sema_array_declarator_compatible_with_type(const MinicC0Program *program,
         existing_type = existing_array->element_type;
     }
     return minic_type_equal(existing_type, element_type);
+}
+
+static inline bool
+minic_sema_merge_array_declarator_composite_type(MinicC0Program *program,
+                                                  MinicType existing_type,
+                                                  MinicType element_type,
+                                                  const MinicArrayDeclaratorSyntax *declarator) {
+    size_t dimension;
+
+    if (!minic_sema_array_declarator_compatible_with_type(
+            program, existing_type, element_type, declarator)) {
+        return false;
+    }
+
+    for (dimension = 0U; dimension < declarator->dimension_count; ++dimension) {
+        const MinicArrayType *existing_array;
+        MinicType next_type;
+        unsigned int bit;
+        bool existing_incomplete;
+        bool declared_incomplete;
+        bool declared_zero_length;
+
+        existing_array = minic_c0_program_array_type(program, existing_type.array_type_id);
+        if (existing_array == NULL) {
+            return false;
+        }
+        next_type = existing_array->element_type;
+        bit = 1U << dimension;
+        existing_incomplete =
+            existing_array->element_count == 0U && !existing_array->is_zero_length;
+        declared_incomplete = dimension == 0U && declarator->outermost_incomplete;
+        declared_zero_length = (declarator->zero_length_mask & bit) != 0U;
+
+        if (existing_incomplete && !declared_incomplete) {
+            if (declared_zero_length) {
+                if (!minic_c0_program_complete_zero_length_array_type(program, existing_type)) {
+                    return false;
+                }
+            } else if (declarator->bounds[dimension] != 0U &&
+                       !minic_c0_program_complete_array_type(
+                           program, existing_type, declarator->bounds[dimension])) {
+                return false;
+            }
+        }
+        existing_type = next_type;
+    }
+    return true;
 }
 
 static inline bool
