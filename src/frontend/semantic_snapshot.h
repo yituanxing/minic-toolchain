@@ -7,15 +7,22 @@
 #include <stddef.h>
 
 /*
- * A narrow transition aid for parser probes that still reuse semantic parsers.
+ * A narrow transition aid for parser probes and semantic builders that still
+ * materialize directly into Program-owned value arenas.
  *
  * This is deliberately not a general Program transaction/rollback facility:
  * Program-owned records, functions, blocks, globals, and other entities may own
  * nested allocations that cannot be made safe merely by restoring arena counts.
  * Long-term syntax probes must build transient syntax and avoid Program mutation.
  *
- * Expressions are the one currently supported rollback class because
- * MinicExpression is an arena value with no independently owned heap payload.
+ * The bounded rollback classes below are value-only arenas:
+ * - expressions;
+ * - array types;
+ * - function types.
+ *
+ * Each rollback rejects any mutation outside its declared class. This makes the
+ * existing mutation boundary explicit while declaration/Sema ownership is moved
+ * out of the parser; it is not the long-term substitute for a semantic commit.
  */
 typedef struct MinicSemanticSnapshot {
     size_t expression_count;
@@ -114,6 +121,39 @@ static inline bool minic_semantic_snapshot_rollback_expressions(
         return false;
     }
     program->expression_count = snapshot->expression_count;
+    return true;
+}
+
+static inline bool minic_semantic_snapshot_only_declarator_types_changed(
+    const MinicSemanticSnapshot *snapshot, const MinicC0Program *program) {
+    if (snapshot == NULL || program == NULL ||
+        program->array_type_count < snapshot->array_type_count ||
+        program->function_type_count < snapshot->function_type_count) {
+        return false;
+    }
+    return program->expression_count == snapshot->expression_count &&
+           program->local_count == snapshot->local_count &&
+           program->cleanup_context_count == snapshot->cleanup_context_count &&
+           program->statement_count == snapshot->statement_count &&
+           program->inline_asm_count == snapshot->inline_asm_count &&
+           program->file_asm_count == snapshot->file_asm_count &&
+           program->block_count == snapshot->block_count &&
+           program->function_count == snapshot->function_count &&
+           program->record_count == snapshot->record_count &&
+           program->type_alias_count == snapshot->type_alias_count &&
+           program->enum_count == snapshot->enum_count &&
+           program->enumerator_count == snapshot->enumerator_count &&
+           program->global_object_count == snapshot->global_object_count &&
+           program->fixed_register_binding_count == snapshot->fixed_register_binding_count;
+}
+
+static inline bool minic_semantic_snapshot_rollback_declarator_types(
+    const MinicSemanticSnapshot *snapshot, MinicC0Program *program) {
+    if (!minic_semantic_snapshot_only_declarator_types_changed(snapshot, program)) {
+        return false;
+    }
+    program->array_type_count = snapshot->array_type_count;
+    program->function_type_count = snapshot->function_type_count;
     return true;
 }
 
