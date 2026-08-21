@@ -58,6 +58,21 @@ static bool minic_riscv64_emit_assignment(FILE *file,
             file, program, function, function_layout, statement->expression)) {
         return false;
     }
+    if (minic_type_is_int128_integer(target->type)) {
+        if (!minic_type_is_int128_integer(value->type) ||
+            fprintf(file, "  addi sp, sp, -16\n  sd a0, 0(sp)\n  sd a1, 8(sp)\n") < 0 ||
+            !minic_riscv64_emit_lvalue_address(
+                file, program, function, function_layout, statement->target_expression) ||
+            fprintf(file,
+                    "  mv t0, a0\n"
+                    "  ld a0, 0(sp)\n"
+                    "  ld a1, 8(sp)\n"
+                    "  addi sp, sp, 16\n") < 0 ||
+            !minic_riscv64_emit_int128_store_to_address(file, "t0")) {
+            return false;
+        }
+        return true;
+    }
     if (fprintf(file, "  addi sp, sp, -16\n  sd a0, 0(sp)\n") < 0) {
         return false;
     }
@@ -494,6 +509,13 @@ static bool minic_riscv64_emit_statement(FILE *file,
                minic_riscv64_emit_break(file, break_target);
 
     case MINIC_STATEMENT_GOTO:
+        if (statement->expression != MINIC_EXPRESSION_INVALID) {
+            return statement->target_statement == MINIC_STATEMENT_INVALID &&
+                   statement->cleanup_context == MINIC_CLEANUP_CONTEXT_ROOT &&
+                   minic_riscv64_emit_expression(
+                       file, program, function, function_layout, statement->expression) &&
+                   fprintf(file, "  jr a0\n") >= 0;
+        }
         return statement->target_statement != MINIC_STATEMENT_INVALID &&
                minic_riscv64_emit_cleanup_contexts(file,
                                                    program,
@@ -616,6 +638,15 @@ minic_riscv64_emit_block_with_break_target(FILE *file,
                                           statement,
                                           label_counter,
                                           break_target)) {
+            (void)fprintf(stderr,
+                          "RV64_EMIT_STATEMENT_FAILURE block=%zu ordinal=%zu statement=%zu "
+                          "kind=%u expression=%zu target_expression=%zu\n",
+                          (size_t)block_id,
+                          index,
+                          (size_t)statement_id,
+                          statement != NULL ? (unsigned int)statement->kind : (unsigned int)-1,
+                          statement != NULL ? (size_t)statement->expression : SIZE_MAX,
+                          statement != NULL ? (size_t)statement->target_expression : SIZE_MAX);
             return false;
         }
     }

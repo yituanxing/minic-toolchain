@@ -31,6 +31,16 @@ grep -F '.dword .Lminic_string_' \
     "$work/static_nested_flexible_array_initializer.s" >/dev/null
 printf '%s\n' 'PASS compiler/c0/static_nested_flexible_array_initializer linux-wrapper zero-slot-fam + relocation'
 
+"$host_cc" -E -P -x c \
+    "$root/tests/compiler/c0/static_record_flexible_array_initializer.c" \
+    -o "$work/static_record_flexible_array_initializer.i"
+"$minic" -S \
+    "$work/static_record_flexible_array_initializer.i" \
+    -o "$work/static_record_flexible_array_initializer.s"
+grep -F '.dword init_namespace' \
+    "$work/static_record_flexible_array_initializer.s" >/dev/null
+printf '%s\n' 'PASS compiler/c0/static_record_flexible_array_initializer aggregate-tail+relocation'
+
 expect_failure() {
     name=$1
     expected=$2

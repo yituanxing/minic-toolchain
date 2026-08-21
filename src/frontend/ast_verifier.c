@@ -642,7 +642,7 @@ static bool verify_expression(const MinicC0Program *program,
             }
             return minic_type_is_pointer(operand->type) &&
                    minic_type_pointee(operand->type, &pointee_type) &&
-                   minic_c0_type_is_complete_object(program, pointee_type);
+                   minic_c0_pointer_arithmetic_pointee_allowed(program, pointee_type);
         }
         if (expression->value.unary.operator_kind == MINIC_UNARY_LOGICAL_NOT) {
             return type_is_condition_scalar(operand->type) &&
@@ -954,11 +954,17 @@ static bool verify_statement(const MinicC0Program *program,
         const MinicStatement *target_statement;
 
         target_statement = minic_c0_program_statement(program, statement->target_statement);
-        return statement->target_expression == MINIC_EXPRESSION_INVALID &&
-               statement->expression == MINIC_EXPRESSION_INVALID && target_statement != NULL &&
-               target_statement->kind == MINIC_STATEMENT_LABEL &&
-               statement->then_block == MINIC_BLOCK_INVALID &&
-               statement->else_block == MINIC_BLOCK_INVALID;
+        if (statement->target_expression != MINIC_EXPRESSION_INVALID ||
+            statement->then_block != MINIC_BLOCK_INVALID ||
+            statement->else_block != MINIC_BLOCK_INVALID) {
+            return false;
+        }
+        if (statement->expression != MINIC_EXPRESSION_INVALID) {
+            return statement->target_statement == MINIC_STATEMENT_INVALID && expression != NULL &&
+                   minic_type_is_pointer(expression->type) &&
+                   statement->cleanup_context == MINIC_CLEANUP_CONTEXT_ROOT;
+        }
+        return target_statement != NULL && target_statement->kind == MINIC_STATEMENT_LABEL;
     }
     case MINIC_STATEMENT_LABEL:
         return statement->target_expression == MINIC_EXPRESSION_INVALID &&
@@ -1178,8 +1184,8 @@ bool minic_c0_program_verify_target(const MinicC0Program *program,
         const MinicArrayType *array_type;
 
         array_type = &program->array_types[index];
-        if ((array_type->element_count == 0U && !array_type->is_query_materialized &&
-
+        if ((array_type->element_count == 0U && !array_type->is_zero_length &&
+             !array_type->is_query_materialized &&
              !incomplete_array_has_semantic_owner(program, index)) ||
 
             (array_type->is_query_materialized &&
@@ -1319,8 +1325,57 @@ bool minic_c0_program_verify_target(const MinicC0Program *program,
                               object->initializer_count,
                               object->initializer_capacity) ||
             !storage_is_valid(
-                object->relocations, object->relocation_count, object->relocation_capacity)) {
+                object->relocations, object->relocation_count, object->relocation_capacity) ||
+            !storage_is_valid(object->union_selections,
+                              object->union_selection_count,
+                              object->union_selection_capacity) ||
+            ((object->is_extern || object->is_tentative || object->is_zero_initialized) &&
+             object->union_selection_count != 0U)) {
             return false;
+        }
+        {
+            size_t selection_index;
+
+            for (selection_index = 0U; selection_index < object->union_selection_count;
+                 ++selection_index) {
+                const MinicGlobalUnionSelection *selection;
+                const MinicRecord *record;
+                size_t prior_index;
+
+                selection = &object->union_selections[selection_index];
+                record = minic_c0_program_record(program, selection->record_id);
+                if (record == NULL || !record->is_complete || !record->is_union ||
+                    selection->field_index >= record->field_count ||
+                    selection->initializer_slot > object->initializer_count) {
+                    return false;
+                }
+                if (selection->initializer_span != 0U) {
+                    const MinicRecordField *field;
+                    size_t element_slots;
+                    size_t selected_slots;
+
+                    field = minic_c0_record_field(record, selection->field_index);
+                    if (field == NULL || field->element_count == 0U ||
+                        !minic_c0_global_initializer_slot_count(
+                            program, field->type, &element_slots) ||
+                        (element_slots != 0U && field->element_count > SIZE_MAX / element_slots)) {
+                        return false;
+                    }
+                    selected_slots = field->element_count * element_slots;
+                    if (selected_slots > selection->initializer_span ||
+                        selection->initializer_span >
+                            object->initializer_count - selection->initializer_slot) {
+                        return false;
+                    }
+                }
+                for (prior_index = 0U; prior_index < selection_index; ++prior_index) {
+                    if (object->union_selections[prior_index].initializer_slot ==
+                            selection->initializer_slot &&
+                        object->union_selections[prior_index].record_id == selection->record_id) {
+                        return false;
+                    }
+                }
+            }
         }
         if (object->relocation_count != 0U && !object->is_zero_initialized) {
             size_t relocation_index;
@@ -1398,8 +1453,15 @@ bool minic_c0_program_verify_target(const MinicC0Program *program,
                                               (MinicFunctionId)relocation->target_id,
                                               relocation->has_explicit_pointer_cast)) ||
                       (slot_is_integer && relocation->target_id >= program->function_count))) ||
+                    (relocation->target_kind == MINIC_GLOBAL_RELOCATION_LABEL &&
+                     (!slot_is_pointer || relocation->target_id >= program->statement_count ||
+                      program->statements[relocation->target_id].kind != MINIC_STATEMENT_LABEL ||
+                      relocation->target_member_depth != 0U ||
+                      relocation->target_byte_addend != 0 ||
+                      relocation->has_explicit_pointer_cast)) ||
                     (relocation->target_kind != MINIC_GLOBAL_RELOCATION_OBJECT &&
-                     relocation->target_kind != MINIC_GLOBAL_RELOCATION_FUNCTION)) {
+                     relocation->target_kind != MINIC_GLOBAL_RELOCATION_FUNCTION &&
+                     relocation->target_kind != MINIC_GLOBAL_RELOCATION_LABEL)) {
                     return false;
                 }
                 if (slot_is_pointer && relocation->target_kind == MINIC_GLOBAL_RELOCATION_OBJECT &&

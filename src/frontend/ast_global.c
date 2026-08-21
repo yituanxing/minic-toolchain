@@ -373,6 +373,117 @@ bool minic_c0_global_initializer_slot_count(const MinicC0Program *program,
     return minic_c0_type_initializer_slot_count(program, type, slot_count);
 }
 
+bool minic_c0_global_object_union_member_selection(const MinicC0Program *program,
+                                                   const MinicGlobalObject *object,
+                                                   size_t initializer_slot,
+                                                   MinicRecordId record_id,
+                                                   size_t *field_index) {
+    size_t index;
+
+    if (program == NULL || object == NULL || field_index == NULL ||
+        record_id >= program->record_count) {
+        return false;
+    }
+    for (index = 0U; index < object->union_selection_count; ++index) {
+        const MinicGlobalUnionSelection *selection;
+
+        selection = &object->union_selections[index];
+        if (selection->initializer_slot == initializer_slot && selection->record_id == record_id) {
+            *field_index = selection->field_index;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool minic_c0_global_object_union_member_initializer_span(const MinicC0Program *program,
+                                                          const MinicGlobalObject *object,
+                                                          size_t initializer_slot,
+                                                          MinicRecordId record_id,
+                                                          size_t *initializer_span) {
+    size_t index;
+
+    if (program == NULL || object == NULL || initializer_span == NULL ||
+        record_id >= program->record_count) {
+        return false;
+    }
+    for (index = 0U; index < object->union_selection_count; ++index) {
+        const MinicGlobalUnionSelection *selection;
+
+        selection = &object->union_selections[index];
+        if (selection->initializer_slot == initializer_slot && selection->record_id == record_id) {
+            *initializer_span = selection->initializer_span;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool minic_c0_global_object_select_union_member_with_span(MinicC0Program *program,
+                                                          MinicGlobalObjectId global_object_id,
+                                                          size_t initializer_slot,
+                                                          MinicRecordId record_id,
+                                                          size_t field_index,
+                                                          size_t initializer_span) {
+    MinicGlobalObject *object;
+    const MinicRecord *record;
+    const MinicRecordField *field;
+    size_t element_slots;
+    size_t selected_slots;
+    size_t index;
+
+    if (program == NULL || global_object_id >= program->global_object_count ||
+        record_id >= program->record_count) {
+        return false;
+    }
+    record = minic_c0_program_record(program, record_id);
+    field = record != NULL ? minic_c0_record_field(record, field_index) : NULL;
+    if (record == NULL || !record->is_complete || !record->is_union || field == NULL ||
+        field->element_count == 0U ||
+        !minic_c0_global_initializer_slot_count(program, field->type, &element_slots) ||
+        (element_slots != 0U && field->element_count > SIZE_MAX / element_slots)) {
+        return false;
+    }
+    selected_slots = field->element_count * element_slots;
+    object = &program->global_objects[global_object_id];
+    if (initializer_span != 0U &&
+        (selected_slots > initializer_span || initializer_slot > object->initializer_count ||
+         initializer_span > object->initializer_count - initializer_slot)) {
+        return false;
+    }
+    for (index = 0U; index < object->union_selection_count; ++index) {
+        MinicGlobalUnionSelection *selection;
+
+        selection = &object->union_selections[index];
+        if (selection->initializer_slot == initializer_slot && selection->record_id == record_id) {
+            selection->field_index = field_index;
+            selection->initializer_span = initializer_span;
+            return true;
+        }
+    }
+    if (!grow_array((void **)&object->union_selections,
+                    &object->union_selection_capacity,
+                    object->union_selection_count,
+                    sizeof(*object->union_selections))) {
+        return false;
+    }
+    object->union_selections[object->union_selection_count].initializer_slot = initializer_slot;
+    object->union_selections[object->union_selection_count].initializer_span = initializer_span;
+    object->union_selections[object->union_selection_count].record_id = record_id;
+    object->union_selections[object->union_selection_count].field_index = field_index;
+    object->union_selection_count += 1U;
+    return true;
+}
+
+bool minic_c0_global_object_select_union_member(MinicC0Program *program,
+                                                MinicGlobalObjectId global_object_id,
+                                                size_t initializer_slot,
+                                                MinicRecordId record_id,
+                                                size_t field_index) {
+    return minic_c0_global_object_select_union_member_with_span(
+        program, global_object_id, initializer_slot, record_id, field_index, 0U);
+}
+
 bool minic_c0_global_record_field_initializer_slot(const MinicC0Program *program,
                                                    const MinicRecord *record,
                                                    size_t field_index,
@@ -391,7 +502,10 @@ bool minic_c0_global_record_field_initializer_slot(const MinicC0Program *program
         size_t field_slots;
 
         field = &record->fields[index];
-        if (field->element_count == 0U || field->is_flexible_array ||
+        if (field->is_flexible_array || field->is_zero_length_array) {
+            continue;
+        }
+        if (field->element_count == 0U ||
             !minic_c0_type_initializer_slot_count(program, field->type, &element_slots) ||
             (element_slots != 0U && field->element_count > SIZE_MAX / element_slots)) {
             return false;
@@ -406,23 +520,135 @@ bool minic_c0_global_record_field_initializer_slot(const MinicC0Program *program
     return true;
 }
 
-static bool aggregate_scalar_slot_type(const MinicC0Program *program,
-                                       MinicType type,
-                                       size_t *slot_index,
-                                       MinicType *slot_type) {
-    if (program == NULL || slot_index == NULL || slot_type == NULL) {
+static bool global_object_type_initializer_slot_count_at(const MinicC0Program *program,
+                                                         const MinicGlobalObject *object,
+                                                         MinicType type,
+                                                         size_t base_slot,
+                                                         size_t *slot_count) {
+    size_t total;
+
+    if (program == NULL || object == NULL || slot_count == NULL) {
         return false;
     }
     if (minic_type_is_integer(type) || minic_type_is_pointer(type)) {
-        if (*slot_index == 0U) {
-            *slot_type = type;
-            return true;
-        }
-        *slot_index -= 1U;
-        return false;
+        *slot_count = 1U;
+        return true;
     }
     if (minic_type_is_array(type)) {
         const MinicArrayType *array_type;
+        size_t element_index;
+
+        array_type = minic_c0_program_array_type(program, type.array_type_id);
+        if (array_type == NULL || array_type->element_count == 0U) {
+            return false;
+        }
+        total = 0U;
+        for (element_index = 0U; element_index < array_type->element_count; ++element_index) {
+            size_t child_count;
+
+            if (!global_object_type_initializer_slot_count_at(
+                    program, object, array_type->element_type, base_slot + total, &child_count) ||
+                total > SIZE_MAX - child_count) {
+                return false;
+            }
+            total += child_count;
+        }
+        *slot_count = total;
+        return true;
+    }
+    if (minic_type_is_record(type)) {
+        const MinicRecord *record;
+        size_t field_begin;
+        size_t field_end;
+        size_t field_index;
+
+        record = minic_c0_program_record(program, type.record_id);
+        if (record == NULL || !record->is_complete) {
+            return false;
+        }
+        field_begin = 0U;
+        field_end = record->field_count;
+        if (record->is_union) {
+            size_t selected;
+
+            selected = 0U;
+            (void)minic_c0_global_object_union_member_selection(
+                program, object, base_slot, type.record_id, &selected);
+            if (selected >= record->field_count) {
+                return false;
+            }
+            field_begin = selected;
+            field_end = selected + 1U;
+        }
+        total = 0U;
+        for (field_index = field_begin; field_index < field_end; ++field_index) {
+            const MinicRecordField *field;
+            size_t element_index;
+            size_t element_count;
+
+            field = minic_c0_record_field(record, field_index);
+            if (field == NULL || field->element_count == 0U) {
+                return false;
+            }
+            if (field->is_zero_length_array) {
+                continue;
+            }
+            element_count = field->element_count;
+            if (field->is_flexible_array) {
+                if (base_slot != 0U || !minic_type_equal(type, object->type)) {
+                    continue;
+                }
+                element_count = object->flexible_array_initializer_count;
+            }
+            for (element_index = 0U; element_index < element_count; ++element_index) {
+                size_t child_count;
+
+                if (!global_object_type_initializer_slot_count_at(
+                        program, object, field->type, base_slot + total, &child_count) ||
+                    total > SIZE_MAX - child_count) {
+                    return false;
+                }
+                total += child_count;
+            }
+        }
+        if (record->is_union) {
+            size_t initializer_span;
+
+            initializer_span = 0U;
+            if (minic_c0_global_object_union_member_initializer_span(
+                    program, object, base_slot, type.record_id, &initializer_span) &&
+                initializer_span != 0U) {
+                if (total > initializer_span) {
+                    return false;
+                }
+                total = initializer_span;
+            }
+        }
+        *slot_count = total;
+        return true;
+    }
+    return false;
+}
+
+static bool aggregate_scalar_slot_type_for_object(const MinicC0Program *program,
+                                                  const MinicGlobalObject *object,
+                                                  MinicType type,
+                                                  size_t base_slot,
+                                                  size_t target_slot,
+                                                  MinicType *slot_type) {
+    if (program == NULL || object == NULL || slot_type == NULL || target_slot < base_slot) {
+        return false;
+    }
+    if (minic_type_is_integer(type) || minic_type_is_pointer(type)) {
+        if (target_slot != base_slot) {
+            return false;
+        }
+        *slot_type = type;
+        return true;
+    }
+    if (minic_type_is_array(type)) {
+        const MinicArrayType *array_type;
+        size_t cursor;
         size_t element_index;
 
         array_type = minic_c0_program_array_type(program, type.array_type_id);
@@ -430,66 +656,107 @@ static bool aggregate_scalar_slot_type(const MinicC0Program *program,
             return false;
         }
         if (array_type->element_count == 0U && !array_type->is_zero_length) {
-            size_t element_slots;
+            size_t child_count;
+            size_t selected;
 
             if (!minic_c0_type_initializer_slot_count(
-                    program, array_type->element_type, &element_slots) ||
-                element_slots == 0U) {
+                    program, array_type->element_type, &child_count) ||
+                child_count == 0U) {
                 return false;
             }
-            *slot_index %= element_slots;
-            return aggregate_scalar_slot_type(
-                program, array_type->element_type, slot_index, slot_type);
+            selected = (target_slot - base_slot) / child_count;
+            if (selected > (SIZE_MAX - base_slot) / child_count) {
+                return false;
+            }
+            return aggregate_scalar_slot_type_for_object(program,
+                                                         object,
+                                                         array_type->element_type,
+                                                         base_slot + selected * child_count,
+                                                         target_slot,
+                                                         slot_type);
         }
         if (array_type->element_count == 0U) {
             return false;
         }
+        cursor = base_slot;
         for (element_index = 0U; element_index < array_type->element_count; ++element_index) {
-            size_t before = *slot_index;
-            size_t element_slots;
+            size_t child_count;
 
-            if (aggregate_scalar_slot_type(
-                    program, array_type->element_type, slot_index, slot_type)) {
-                return true;
-            }
-            if (*slot_index == before && (!minic_c0_type_initializer_slot_count(
-                                              program, array_type->element_type, &element_slots) ||
-                                          element_slots != 0U)) {
+            if (!global_object_type_initializer_slot_count_at(
+                    program, object, array_type->element_type, cursor, &child_count)) {
                 return false;
             }
+            if (target_slot >= cursor && target_slot - cursor < child_count) {
+                return aggregate_scalar_slot_type_for_object(
+                    program, object, array_type->element_type, cursor, target_slot, slot_type);
+            }
+            if (cursor > SIZE_MAX - child_count) {
+                return false;
+            }
+            cursor += child_count;
         }
         return false;
     }
     if (minic_type_is_record(type)) {
         const MinicRecord *record;
+        size_t cursor;
+        size_t field_begin;
+        size_t field_end;
         size_t field_index;
-        size_t field_limit;
 
         record = minic_c0_program_record(program, type.record_id);
-        if (record == NULL || !record->is_complete || record->field_count == 0U) {
+        if (record == NULL || !record->is_complete) {
             return false;
         }
-        field_limit = record->is_union ? 1U : record->field_count;
-        for (field_index = 0U; field_index < field_limit; ++field_index) {
+        field_begin = 0U;
+        field_end = record->field_count;
+        if (record->is_union) {
+            size_t selected;
+
+            selected = 0U;
+            (void)minic_c0_global_object_union_member_selection(
+                program, object, base_slot, type.record_id, &selected);
+            if (selected >= record->field_count) {
+                return false;
+            }
+            field_begin = selected;
+            field_end = selected + 1U;
+        }
+        cursor = base_slot;
+        for (field_index = field_begin; field_index < field_end; ++field_index) {
             const MinicRecordField *field;
+            size_t element_count;
             size_t element_index;
 
             field = minic_c0_record_field(record, field_index);
-            if (field == NULL || field->element_count == 0U || field->is_flexible_array) {
+            if (field == NULL || field->element_count == 0U) {
                 return false;
             }
-            for (element_index = 0U; element_index < field->element_count; ++element_index) {
-                size_t before = *slot_index;
-                size_t field_slots;
-
-                if (aggregate_scalar_slot_type(program, field->type, slot_index, slot_type)) {
-                    return true;
+            if (field->is_zero_length_array) {
+                continue;
+            }
+            element_count = field->element_count;
+            if (field->is_flexible_array) {
+                if (base_slot != 0U || !minic_type_equal(type, object->type)) {
+                    continue;
                 }
-                if (*slot_index == before &&
-                    (!minic_c0_type_initializer_slot_count(program, field->type, &field_slots) ||
-                     field_slots != 0U)) {
+                element_count = object->flexible_array_initializer_count;
+            }
+            for (element_index = 0U; element_index < element_count; ++element_index) {
+                size_t child_count;
+
+                if (!global_object_type_initializer_slot_count_at(
+                        program, object, field->type, cursor, &child_count)) {
                     return false;
                 }
+                if (target_slot >= cursor && target_slot - cursor < child_count) {
+                    return aggregate_scalar_slot_type_for_object(
+                        program, object, field->type, cursor, target_slot, slot_type);
+                }
+                if (cursor > SIZE_MAX - child_count) {
+                    return false;
+                }
+                cursor += child_count;
             }
         }
     }
@@ -672,10 +939,8 @@ bool minic_c0_global_relocation_slot_type(const MinicC0Program *program,
         return true;
     }
     if (location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR) {
-        size_t remaining;
-
-        remaining = location_index;
-        return aggregate_scalar_slot_type(program, object->type, &remaining, slot_type) &&
+        return aggregate_scalar_slot_type_for_object(
+                   program, object, object->type, 0U, location_index, slot_type) &&
                (minic_type_is_pointer(*slot_type) || minic_type_is_integer(*slot_type));
     }
     return false;
@@ -705,12 +970,17 @@ static bool add_global_symbol_relocation(MinicC0Program *program,
         target_member_depth > MINIC_GLOBAL_RELOCATION_MAX_MEMBER_DEPTH ||
         (target_member_depth != 0U && target_member_indices == NULL) ||
         (target_kind != MINIC_GLOBAL_RELOCATION_OBJECT &&
-         target_kind != MINIC_GLOBAL_RELOCATION_FUNCTION) ||
+         target_kind != MINIC_GLOBAL_RELOCATION_FUNCTION &&
+         target_kind != MINIC_GLOBAL_RELOCATION_LABEL) ||
         (target_kind == MINIC_GLOBAL_RELOCATION_OBJECT &&
          target_id >= program->global_object_count) ||
         (target_kind == MINIC_GLOBAL_RELOCATION_FUNCTION &&
          (target_id >= program->function_count || target_member_depth != 0U ||
-          target_byte_addend != 0))) {
+          target_byte_addend != 0)) ||
+        (target_kind == MINIC_GLOBAL_RELOCATION_LABEL &&
+         (target_id >= program->statement_count ||
+          program->statements[target_id].kind != MINIC_STATEMENT_LABEL ||
+          target_member_depth != 0U || target_byte_addend != 0 || has_explicit_pointer_cast))) {
         return false;
     }
     object = &program->global_objects[global_object_id];
@@ -725,6 +995,7 @@ static bool add_global_symbol_relocation(MinicC0Program *program,
         (target_kind == MINIC_GLOBAL_RELOCATION_FUNCTION && slot_is_pointer &&
          !minic_c0_global_relocation_function_target_compatible(
              program, slot_type, (MinicFunctionId)target_id, has_explicit_pointer_cast)) ||
+        (target_kind == MINIC_GLOBAL_RELOCATION_LABEL && !slot_is_pointer) ||
         (target_kind == MINIC_GLOBAL_RELOCATION_OBJECT && slot_is_pointer &&
          minic_type_is_function(slot_pointee) && !has_explicit_pointer_cast) ||
         (target_kind == MINIC_GLOBAL_RELOCATION_OBJECT &&
@@ -821,6 +1092,23 @@ bool minic_c0_global_object_add_function_relocation_cast(
                                         0U,
                                         0,
                                         true);
+}
+
+bool minic_c0_global_object_add_label_relocation(MinicC0Program *program,
+                                                 MinicGlobalObjectId global_object_id,
+                                                 MinicGlobalRelocationLocationKind location_kind,
+                                                 size_t location_index,
+                                                 MinicStatementId label_statement_id) {
+    return add_global_symbol_relocation(program,
+                                        global_object_id,
+                                        location_kind,
+                                        location_index,
+                                        MINIC_GLOBAL_RELOCATION_LABEL,
+                                        label_statement_id,
+                                        NULL,
+                                        0U,
+                                        0,
+                                        false);
 }
 
 bool minic_c0_global_object_set_extern(MinicC0Program *program,
@@ -956,6 +1244,33 @@ bool minic_c0_global_object_add_object_relocation(MinicC0Program *program,
                                                   MinicGlobalObjectId target_object_id) {
     return minic_c0_global_object_add_object_relocation_path(
         program, global_object_id, location_kind, location_index, target_object_id, NULL, 0U);
+}
+
+bool minic_c0_global_object_set_flexible_array_initializer_count(
+    MinicC0Program *program, MinicGlobalObjectId global_object_id, size_t element_count) {
+    MinicGlobalObject *object;
+    const MinicRecord *record;
+    const MinicRecordField *field;
+
+    if (program == NULL || global_object_id >= program->global_object_count ||
+        element_count == 0U) {
+        return false;
+    }
+    object = &program->global_objects[global_object_id];
+    if (object->is_extern || object->is_tentative || object->is_zero_initialized ||
+        object->flexible_array_initializer_count != 0U || !minic_type_is_record(object->type)) {
+        return false;
+    }
+    record = minic_c0_program_record(program, object->type.record_id);
+    if (record == NULL || !record->is_complete || record->is_union || record->field_count == 0U) {
+        return false;
+    }
+    field = &record->fields[record->field_count - 1U];
+    if (!field->is_flexible_array || field->is_bit_field) {
+        return false;
+    }
+    object->flexible_array_initializer_count = element_count;
+    return true;
 }
 
 bool minic_c0_global_object_set_zero_initialized(MinicC0Program *program,

@@ -119,6 +119,7 @@ void minic_c0_program_destroy(MinicC0Program *program) {
         free(program->global_objects[index].section_name);
         free(program->global_objects[index].initializer_values);
         free(program->global_objects[index].relocations);
+        free(program->global_objects[index].union_selections);
     }
     free(program->expressions);
     free(program->locals);
@@ -319,7 +320,14 @@ static bool minic_c0_type_initializer_slot_count_impl(const MinicC0Program *prog
         size_t element_slots;
 
         array_type = minic_c0_program_array_type(program, type.array_type_id);
-        if (array_type == NULL || array_type->element_count == 0U ||
+        if (array_type == NULL) {
+            return false;
+        }
+        if (array_type->is_zero_length) {
+            *slot_count = 0U;
+            return true;
+        }
+        if (array_type->element_count == 0U ||
             !minic_c0_type_initializer_slot_count_impl(
                 program, array_type->element_type, &element_slots) ||
             (element_slots != 0U && array_type->element_count > SIZE_MAX / element_slots)) {
@@ -346,7 +354,10 @@ static bool minic_c0_type_initializer_slot_count_impl(const MinicC0Program *prog
             size_t field_slots;
 
             field = &record->fields[field_index];
-            if (field->element_count == 0U || field->is_flexible_array ||
+            if (field->is_flexible_array || field->is_zero_length_array) {
+                continue;
+            }
+            if (field->element_count == 0U ||
                 !minic_c0_type_initializer_slot_count_impl(program, field->type, &element_slots) ||
                 (element_slots != 0U && field->element_count > SIZE_MAX / element_slots)) {
                 return false;

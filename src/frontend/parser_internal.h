@@ -209,6 +209,8 @@ bool minic_parser_parse_gnu_prefix_function_attributes(MinicParser *parser,
                                                        bool is_inline);
 bool minic_parser_parse_integer_constant_expression_value(MinicParser *parser, int64_t *value);
 bool minic_parser_parse_fixed_array_bound(MinicParser *parser, size_t *element_count);
+bool minic_parser_parse_array_designator_component(
+    MinicParser *parser, size_t element_count, bool infer_bound, size_t *first, size_t *last);
 bool minic_parser_parse_array_designator(
     MinicParser *parser, size_t element_count, bool infer_bound, size_t *first, size_t *last);
 bool minic_parser_inspect_array_initializer_extent(MinicParser *parser, size_t *element_count);

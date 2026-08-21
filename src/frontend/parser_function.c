@@ -585,7 +585,7 @@ static bool parse_function_pointer_parameter_declarator(MinicParser *parser,
 
     if (parser == NULL || name_span == NULL || has_name == NULL || parameter_type == NULL ||
         !minic_parser_parse_parenthesized_function_declarator(
-            parser, require_name, true, &declarator)) {
+            parser, require_name, false, &declarator)) {
         return false;
     }
     if (!minic_parser_build_function_declarator_type(
@@ -807,8 +807,7 @@ bool minic_parser_parse_parameter_list(MinicParser *parser,
             !adjust_array_parameter_type(parser, &parameter_type)) {
             return false;
         }
-        if (!is_function_pointer_parameter &&
-            !adjust_function_parameter_type(parser, &parameter_type)) {
+        if (!adjust_function_parameter_type(parser, &parameter_type)) {
             return false;
         }
 
@@ -2001,10 +2000,22 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     is_inline = declaration_prefix.is_inline;
     deferred_attributes = declaration_prefix.attributes;
     if (!minic_parser_parse_type_specifiers(parser, &base_type) ||
-        !minic_parser_collect_gnu_attribute_lists(parser, &deferred_attributes) ||
-        !minic_parser_parse_pointer_declarator(parser, base_type, &return_type) ||
         !minic_parser_collect_gnu_attribute_lists(parser, &deferred_attributes)) {
         return false;
+    }
+    return_type = base_type;
+    for (;;) {
+        if (!minic_parser_parse_pointer_declarator(parser, return_type, &return_type) ||
+            !minic_parser_collect_gnu_attribute_lists(parser, &deferred_attributes)) {
+            return false;
+        }
+        /* GNU permits declarator attributes between pointer levels, for example
+           `char * __attribute__((unused)) *fn(void)`.  Keep those attributes in
+           the existing deferred entity-routing list, then resume the same pointer
+           declarator rather than mistaking the following `*` for a missing name. */
+        if (parser->current.kind != MINIC_TOKEN_STAR) {
+            break;
+        }
     }
     if (parser->current.kind == MINIC_TOKEN_IDENTIFIER) {
         name_span = parser->current.span;
@@ -2604,6 +2615,22 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
         }
         if (!minic_parser_parse_statement(parser, true)) {
             return false;
+        }
+    }
+    {
+        size_t statement_index;
+
+        for (statement_index = parser->function_statement_begin;
+             statement_index < parser->program->statement_count;
+             ++statement_index) {
+            const MinicStatement *statement;
+
+            statement = minic_c0_program_statement(parser->program, statement_index);
+            if (statement != NULL && statement->kind == MINIC_STATEMENT_LABEL &&
+                statement->target_statement == statement_index) {
+                minic_parser_error(parser, "address of unknown label");
+                return false;
+            }
         }
     }
     if (!minic_parser_materialize_cleanup_contexts(parser, MINIC_CLEANUP_CONTEXT_ROOT) ||

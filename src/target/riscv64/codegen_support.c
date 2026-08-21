@@ -23,7 +23,7 @@ static const char *minic_riscv64_load_instruction(MinicType type) {
     if (minic_type_is_float(type)) {
         return "lwu";
     }
-    if (!minic_type_is_integer(type)) {
+    if (!minic_type_is_integer(type) || minic_type_is_int128_integer(type)) {
         return NULL;
     }
     if (minic_type_is_bool_integer(type)) {
@@ -48,7 +48,7 @@ static const char *minic_riscv64_store_instruction(MinicType type) {
     if (minic_type_is_float(type)) {
         return "sw";
     }
-    if (!minic_type_is_integer(type)) {
+    if (!minic_type_is_integer(type) || minic_type_is_int128_integer(type)) {
         return NULL;
     }
     return (minic_type_is_bool_integer(type) || minic_type_is_char_integer(type)) ? "sb"
@@ -272,7 +272,8 @@ bool minic_riscv64_emit_sp_load64(FILE *file, const char *register_name, size_t 
 }
 
 bool minic_riscv64_emit_integer_conversion(FILE *file, MinicType type, const char *register_name) {
-    if (register_name == NULL || !minic_type_is_integer(type)) {
+    if (register_name == NULL || !minic_type_is_integer(type) ||
+        minic_type_is_int128_integer(type)) {
         return false;
     }
     if (minic_type_is_bool_integer(type)) {
@@ -383,6 +384,26 @@ bool minic_riscv64_emit_scalar_store_for_program(FILE *file,
         type = effective_type;
     }
     return minic_riscv64_emit_scalar_store(file, type, source_register, address_register);
+}
+
+/* RV64_INT128_PAIR_V1: keep the address stable while a0 becomes the low half. */
+bool minic_riscv64_emit_int128_load_from_address(FILE *file, const char *address_register) {
+    if (file == NULL || address_register == NULL) {
+        return false;
+    }
+    return fprintf(file,
+                   "  mv t0, %s\n"
+                   "  ld a0, 0(t0)\n"
+                   "  ld a1, 8(t0)\n",
+                   address_register) >= 0;
+}
+
+bool minic_riscv64_emit_int128_store_to_address(FILE *file, const char *address_register) {
+    if (file == NULL || address_register == NULL) {
+        return false;
+    }
+    return fprintf(file, "  sd a0, 0(%s)\n  sd a1, 8(%s)\n", address_register, address_register) >=
+           0;
 }
 
 bool minic_riscv64_emit_object_address(FILE *file,

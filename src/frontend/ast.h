@@ -409,7 +409,8 @@ typedef struct MinicFixedRegisterBinding {
 
 typedef enum MinicGlobalRelocationTargetKind {
     MINIC_GLOBAL_RELOCATION_OBJECT = 0,
-    MINIC_GLOBAL_RELOCATION_FUNCTION
+    MINIC_GLOBAL_RELOCATION_FUNCTION,
+    MINIC_GLOBAL_RELOCATION_LABEL
 } MinicGlobalRelocationTargetKind;
 
 #define MINIC_GLOBAL_RELOCATION_MAX_MEMBER_DEPTH 8U
@@ -432,6 +433,13 @@ typedef struct MinicGlobalRelocation {
     bool has_explicit_pointer_cast;
 } MinicGlobalRelocation;
 
+typedef struct MinicGlobalUnionSelection {
+    size_t initializer_slot;
+    size_t initializer_span;
+    MinicRecordId record_id;
+    size_t field_index;
+} MinicGlobalUnionSelection;
+
 typedef struct MinicGlobalObject {
     char *name;
     size_t name_length;
@@ -444,6 +452,10 @@ typedef struct MinicGlobalObject {
     MinicGlobalRelocation *relocations;
     size_t relocation_count;
     size_t relocation_capacity;
+    MinicGlobalUnionSelection *union_selections;
+    size_t union_selection_count;
+    size_t union_selection_capacity;
+    size_t flexible_array_initializer_count;
     size_t explicit_alignment;
     MinicSymbolVisibility visibility;
     bool is_internal;
@@ -756,12 +768,35 @@ bool minic_c0_global_object_replace_zero_initializer_bits(MinicC0Program *progra
                                                           MinicGlobalObjectId global_object_id,
                                                           size_t initializer_index,
                                                           uint64_t bits);
+bool minic_c0_global_object_set_flexible_array_initializer_count(
+    MinicC0Program *program, MinicGlobalObjectId global_object_id, size_t element_count);
 bool minic_c0_type_initializer_slot_count(const MinicC0Program *program,
                                           MinicType type,
                                           size_t *slot_count);
 bool minic_c0_global_initializer_slot_count(const MinicC0Program *program,
                                             MinicType type,
                                             size_t *slot_count);
+bool minic_c0_global_object_select_union_member(MinicC0Program *program,
+                                                MinicGlobalObjectId global_object_id,
+                                                size_t initializer_slot,
+                                                MinicRecordId record_id,
+                                                size_t field_index);
+bool minic_c0_global_object_select_union_member_with_span(MinicC0Program *program,
+                                                          MinicGlobalObjectId global_object_id,
+                                                          size_t initializer_slot,
+                                                          MinicRecordId record_id,
+                                                          size_t field_index,
+                                                          size_t initializer_span);
+bool minic_c0_global_object_union_member_selection(const MinicC0Program *program,
+                                                   const MinicGlobalObject *object,
+                                                   size_t initializer_slot,
+                                                   MinicRecordId record_id,
+                                                   size_t *field_index);
+bool minic_c0_global_object_union_member_initializer_span(const MinicC0Program *program,
+                                                          const MinicGlobalObject *object,
+                                                          size_t initializer_slot,
+                                                          MinicRecordId record_id,
+                                                          size_t *initializer_span);
 bool minic_c0_global_record_field_initializer_slot(const MinicC0Program *program,
                                                    const MinicRecord *record,
                                                    size_t field_index,
@@ -777,6 +812,11 @@ bool minic_c0_global_object_add_function_relocation_cast(
     MinicGlobalRelocationLocationKind location_kind,
     size_t location_index,
     MinicFunctionId function_id);
+bool minic_c0_global_object_add_label_relocation(MinicC0Program *program,
+                                                 MinicGlobalObjectId global_object_id,
+                                                 MinicGlobalRelocationLocationKind location_kind,
+                                                 size_t location_index,
+                                                 MinicStatementId label_statement_id);
 bool minic_c0_global_object_add_object_relocation(MinicC0Program *program,
                                                   MinicGlobalObjectId global_object_id,
                                                   MinicGlobalRelocationLocationKind location_kind,

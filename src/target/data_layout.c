@@ -359,6 +359,36 @@ bool minic_data_layout_global_object(const MinicDataLayout *layout,
     if (!minic_data_layout_type(layout, program, object->type, &object_size, &object_alignment)) {
         return false;
     }
+    if (object->flexible_array_initializer_count != 0U) {
+        const MinicRecord *record;
+        const MinicRecordField *field;
+        size_t element_size;
+        size_t element_alignment;
+        size_t tail_size;
+
+        if (!minic_type_is_record(object->type)) {
+            return false;
+        }
+        record = minic_c0_program_record(program, object->type.record_id);
+        if (record == NULL || !record->is_complete || record->is_union ||
+            record->field_count == 0U) {
+            return false;
+        }
+        field = &record->fields[record->field_count - 1U];
+        if (!field->is_flexible_array || field->is_bit_field ||
+            !minic_data_layout_type(
+                layout, program, field->type, &element_size, &element_alignment) ||
+            element_size == 0U ||
+            object->flexible_array_initializer_count > SIZE_MAX / element_size) {
+            return false;
+        }
+        (void)element_alignment;
+        tail_size = object->flexible_array_initializer_count * element_size;
+        if (object_size > SIZE_MAX - tail_size) {
+            return false;
+        }
+        object_size += tail_size;
+    }
     if (object->explicit_alignment != 0U) {
         if ((object->explicit_alignment & (object->explicit_alignment - 1U)) != 0U) {
             return false;
@@ -434,35 +464,71 @@ bool minic_data_layout_record_field_offset(const MinicDataLayout *layout,
         layout, program, record, field_index, offset, &bit_offset);
 }
 
-static bool aggregate_scalar_slot_layout(const MinicDataLayout *layout,
-                                         const MinicC0Program *program,
-                                         MinicType type,
-                                         size_t base_offset,
-                                         size_t *slot_index,
-                                         MinicType *slot_type,
-                                         size_t *slot_offset) {
-    size_t type_size;
-    size_t type_alignment;
+static bool data_layout_global_object_union_member_selection(const MinicC0Program *program,
+                                                             const MinicGlobalObject *object,
+                                                             size_t initializer_slot,
+                                                             MinicRecordId record_id,
+                                                             size_t *field_index,
+                                                             size_t *initializer_span) {
+    size_t index;
 
-    if (layout == NULL || program == NULL || slot_index == NULL || slot_type == NULL ||
-        slot_offset == NULL ||
-        !minic_data_layout_type(layout, program, type, &type_size, &type_alignment)) {
+    if (program == NULL || object == NULL || field_index == NULL ||
+        record_id >= program->record_count) {
         return false;
     }
-    (void)type_alignment;
-    if (minic_type_is_integer(type) || minic_type_is_pointer(type)) {
-        if (*slot_index == 0U) {
-            *slot_type = type;
-            *slot_offset = base_offset;
+    for (index = 0U; index < object->union_selection_count; ++index) {
+        const MinicGlobalUnionSelection *selection;
+
+        selection = &object->union_selections[index];
+        if (selection->initializer_slot == initializer_slot && selection->record_id == record_id) {
+            *field_index = selection->field_index;
+            if (initializer_span != NULL) {
+                *initializer_span = selection->initializer_span;
+            }
             return true;
         }
-        *slot_index -= 1U;
+    }
+    return false;
+}
+
+static bool aggregate_scalar_slot_layout_for_object(const MinicDataLayout *layout,
+                                                    const MinicC0Program *program,
+                                                    const MinicGlobalObject *object,
+                                                    MinicType type,
+                                                    size_t base_offset,
+                                                    size_t *slot_cursor,
+                                                    size_t target_slot,
+                                                    MinicType *slot_type,
+                                                    size_t *slot_offset,
+                                                    bool *found) {
+    if (layout == NULL || program == NULL || object == NULL || slot_cursor == NULL ||
+        slot_type == NULL || slot_offset == NULL || found == NULL) {
         return false;
+    }
+    if (*found || *slot_cursor > target_slot) {
+        return true;
+    }
+    if (minic_type_is_integer(type) || minic_type_is_pointer(type) || minic_type_is_float(type) ||
+        minic_type_is_double(type) || minic_type_is_enum(type)) {
+        if (*slot_cursor == target_slot) {
+            if (!minic_type_is_integer(type) && !minic_type_is_pointer(type)) {
+                return false;
+            }
+            *slot_type = type;
+            *slot_offset = base_offset;
+            *found = true;
+            return true;
+        }
+        if (*slot_cursor == SIZE_MAX) {
+            return false;
+        }
+        *slot_cursor += 1U;
+        return true;
     }
     if (minic_type_is_array(type)) {
         const MinicArrayType *array_type;
-        size_t element_size;
         size_t element_alignment;
+        size_t element_size;
         size_t element_index;
 
         array_type = minic_c0_program_array_type(program, type.array_type_id);
@@ -472,74 +538,86 @@ static bool aggregate_scalar_slot_layout(const MinicDataLayout *layout,
             return false;
         }
         (void)element_alignment;
-        if (array_type->element_count == 0U && !array_type->is_zero_length) {
-            size_t element_slots;
-            size_t selected_element;
+        if (array_type->is_zero_length) {
+            return true;
+        }
+        element_index = 0U;
+        while (array_type->element_count == 0U || element_index < array_type->element_count) {
+            size_t before_cursor;
+            size_t element_offset;
 
-            if (!minic_c0_type_initializer_slot_count(
-                    program, array_type->element_type, &element_slots) ||
-                element_slots == 0U) {
+            if (array_type->element_count == 0U && *slot_cursor > target_slot) {
+                break;
+            }
+            if (element_index > SIZE_MAX / element_size ||
+                base_offset > SIZE_MAX - element_index * element_size) {
                 return false;
             }
-            selected_element = *slot_index / element_slots;
-            *slot_index %= element_slots;
-            if (selected_element > SIZE_MAX / element_size ||
-                base_offset > SIZE_MAX - selected_element * element_size) {
+            element_offset = base_offset + element_index * element_size;
+            before_cursor = *slot_cursor;
+            if (!aggregate_scalar_slot_layout_for_object(layout,
+                                                         program,
+                                                         object,
+                                                         array_type->element_type,
+                                                         element_offset,
+                                                         slot_cursor,
+                                                         target_slot,
+                                                         slot_type,
+                                                         slot_offset,
+                                                         found)) {
                 return false;
             }
-            return aggregate_scalar_slot_layout(layout,
-                                                program,
-                                                array_type->element_type,
-                                                base_offset + selected_element * element_size,
-                                                slot_index,
-                                                slot_type,
-                                                slot_offset);
-        }
-        if (array_type->element_count == 0U) {
-            return false;
-        }
-        for (element_index = 0U; element_index < array_type->element_count; ++element_index) {
-            size_t before = *slot_index;
-            if (aggregate_scalar_slot_layout(layout,
-                                             program,
-                                             array_type->element_type,
-                                             base_offset + element_index * element_size,
-                                             slot_index,
-                                             slot_type,
-                                             slot_offset)) {
+            if (*found) {
                 return true;
             }
-            if (*slot_index == before) {
-                size_t child_slots;
-
-                if (!minic_c0_type_initializer_slot_count(
-                        program, array_type->element_type, &child_slots) ||
-                    child_slots != 0U) {
-                    return false;
-                }
+            if (*slot_cursor == before_cursor) {
+                return false;
             }
+            if (element_index == SIZE_MAX) {
+                return false;
+            }
+            element_index += 1U;
         }
-        return false;
+        return true;
     }
     if (minic_type_is_record(type)) {
         const MinicRecord *record;
+        size_t field_begin;
+        size_t field_end;
         size_t field_index;
-        size_t field_limit;
+        size_t initializer_span;
+        size_t record_base_slot;
 
         record = minic_c0_program_record(program, type.record_id);
-        if (record == NULL || !record->is_complete || record->field_count == 0U) {
+        if (record == NULL || !record->is_complete) {
             return false;
         }
-        field_limit = record->is_union ? 1U : record->field_count;
-        for (field_index = 0U; field_index < field_limit; ++field_index) {
+        record_base_slot = *slot_cursor;
+        initializer_span = 0U;
+        field_begin = 0U;
+        field_end = record->field_count;
+        if (record->is_union && record->field_count != 0U) {
+            size_t selected;
+
+            selected = 0U;
+            (void)data_layout_global_object_union_member_selection(
+                program, object, record_base_slot, type.record_id, &selected, &initializer_span);
+            if (selected >= record->field_count) {
+                return false;
+            }
+            field_begin = selected;
+            field_end = selected + 1U;
+        }
+        for (field_index = field_begin; field_index < field_end; ++field_index) {
             const MinicRecordField *field;
-            size_t field_offset;
-            size_t element_size;
             size_t element_alignment;
+            size_t element_count;
             size_t element_index;
+            size_t element_size;
+            size_t field_offset;
 
             field = minic_c0_record_field(record, field_index);
-            if (field == NULL || field->element_count == 0U || field->is_flexible_array ||
+            if (field == NULL || field->element_count == 0U ||
                 !minic_data_layout_record_field_offset(
                     layout, program, record, field_index, &field_offset) ||
                 !minic_data_layout_type(
@@ -547,28 +625,55 @@ static bool aggregate_scalar_slot_layout(const MinicDataLayout *layout,
                 return false;
             }
             (void)element_alignment;
-            for (element_index = 0U; element_index < field->element_count; ++element_index) {
-                size_t before = *slot_index;
-                if (aggregate_scalar_slot_layout(layout,
-                                                 program,
-                                                 field->type,
-                                                 base_offset + field_offset +
-                                                     element_index * element_size,
-                                                 slot_index,
-                                                 slot_type,
-                                                 slot_offset)) {
-                    return true;
-                }
-                if (*slot_index == before) {
-                    size_t child_slots;
+            if (field->is_zero_length_array) {
+                continue;
+            }
+            element_count = field->element_count;
+            if (field->is_flexible_array) {
+                element_count = base_offset == 0U && record_base_slot == 0U &&
+                                        minic_type_equal(type, object->type)
+                                    ? object->flexible_array_initializer_count
+                                    : 0U;
+            }
+            for (element_index = 0U; element_index < element_count; ++element_index) {
+                size_t element_offset;
 
-                    if (!minic_c0_type_initializer_slot_count(program, field->type, &child_slots) ||
-                        child_slots != 0U) {
-                        return false;
-                    }
+                if (element_index > SIZE_MAX / element_size ||
+                    field_offset > SIZE_MAX - element_index * element_size ||
+                    base_offset > SIZE_MAX - field_offset - element_index * element_size) {
+                    return false;
+                }
+                element_offset = base_offset + field_offset + element_index * element_size;
+                if (!aggregate_scalar_slot_layout_for_object(layout,
+                                                             program,
+                                                             object,
+                                                             field->type,
+                                                             element_offset,
+                                                             slot_cursor,
+                                                             target_slot,
+                                                             slot_type,
+                                                             slot_offset,
+                                                             found)) {
+                    return false;
+                }
+                if (*found || *slot_cursor > target_slot) {
+                    return true;
                 }
             }
         }
+        if (record->is_union && initializer_span != 0U && !*found) {
+            size_t consumed;
+
+            if (*slot_cursor < record_base_slot) {
+                return false;
+            }
+            consumed = *slot_cursor - record_base_slot;
+            if (consumed > initializer_span || record_base_slot > SIZE_MAX - initializer_span) {
+                return false;
+            }
+            *slot_cursor = record_base_slot + initializer_span;
+        }
+        return true;
     }
     return false;
 }
@@ -585,7 +690,8 @@ bool minic_data_layout_global_relocation_offset(const MinicDataLayout *layout,
 
     if (layout == NULL || program == NULL || object == NULL || relocation == NULL ||
         offset == NULL ||
-        !minic_data_layout_type(layout, program, object->type, &object_size, &object_alignment)) {
+        !minic_data_layout_global_object(
+            layout, program, object, &object_size, &object_alignment)) {
         return false;
     }
     (void)object_alignment;
@@ -630,13 +736,23 @@ bool minic_data_layout_global_relocation_offset(const MinicDataLayout *layout,
         }
     } else if (relocation->location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR) {
         MinicType slot_type;
-        size_t remaining;
+        bool found;
         size_t slot_alignment;
+        size_t slot_cursor;
 
-        remaining = relocation->location_index;
-        if (!aggregate_scalar_slot_layout(
-                layout, program, object->type, 0U, &remaining, &slot_type, &resolved_offset) ||
-            (!minic_type_is_pointer(slot_type) && !minic_type_is_integer(slot_type)) ||
+        found = false;
+        slot_cursor = 0U;
+        if (!aggregate_scalar_slot_layout_for_object(layout,
+                                                     program,
+                                                     object,
+                                                     object->type,
+                                                     0U,
+                                                     &slot_cursor,
+                                                     relocation->location_index,
+                                                     &slot_type,
+                                                     &resolved_offset,
+                                                     &found) ||
+            !found || (!minic_type_is_pointer(slot_type) && !minic_type_is_integer(slot_type)) ||
             !minic_data_layout_type(
                 layout, program, slot_type, &relocation_width, &slot_alignment)) {
             return false;
@@ -664,7 +780,8 @@ bool minic_data_layout_global_relocation_target_addend(const MinicDataLayout *la
     if (layout == NULL || program == NULL || relocation == NULL || addend == NULL) {
         return false;
     }
-    if (relocation->target_kind == MINIC_GLOBAL_RELOCATION_FUNCTION) {
+    if (relocation->target_kind == MINIC_GLOBAL_RELOCATION_FUNCTION ||
+        relocation->target_kind == MINIC_GLOBAL_RELOCATION_LABEL) {
         if (relocation->target_member_depth != 0U || relocation->target_byte_addend != 0) {
             return false;
         }

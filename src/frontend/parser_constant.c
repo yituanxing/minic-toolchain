@@ -369,7 +369,7 @@ static bool parse_array_designator_bound(MinicParser *parser,
     return true;
 }
 
-bool minic_parser_parse_array_designator(
+bool minic_parser_parse_array_designator_component(
     MinicParser *parser, size_t element_count, bool infer_bound, size_t *first, size_t *last) {
     if (parser == NULL || first == NULL || last == NULL ||
         parser->current.kind != MINIC_TOKEN_LBRACKET || !minic_parser_advance(parser) ||
@@ -388,7 +388,12 @@ bool minic_parser_parse_array_designator(
             return false;
         }
     }
-    return minic_parser_expect(
-               parser, MINIC_TOKEN_RBRACKET, "expected ']' after array designator") &&
+    return minic_parser_expect(parser, MINIC_TOKEN_RBRACKET, "expected ']' after array designator");
+}
+
+bool minic_parser_parse_array_designator(
+    MinicParser *parser, size_t element_count, bool infer_bound, size_t *first, size_t *last) {
+    return minic_parser_parse_array_designator_component(
+               parser, element_count, infer_bound, first, last) &&
            minic_parser_expect(parser, MINIC_TOKEN_EQUAL, "expected '=' after array designator");
 }
