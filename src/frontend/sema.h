@@ -24,6 +24,52 @@ typedef struct MinicArrayDeclaratorSyntax {
  * and object-format facts out of this representation.
  */
 static inline bool
+minic_sema_array_declarator_compatible_with_type(const MinicC0Program *program,
+                                                 MinicType existing_type,
+                                                 MinicType element_type,
+                                                 const MinicArrayDeclaratorSyntax *declarator) {
+    size_t dimension;
+
+    if (program == NULL || declarator == NULL || declarator->dimension_count == 0U ||
+        declarator->dimension_count > MINIC_ARRAY_DECLARATOR_MAX_DIMENSIONS) {
+        return false;
+    }
+
+    for (dimension = 0U; dimension < declarator->dimension_count; ++dimension) {
+        const MinicArrayType *existing_array;
+        unsigned int bit;
+        bool existing_incomplete;
+        bool declared_incomplete;
+        bool declared_zero_length;
+
+        if (!minic_type_is_array(existing_type)) {
+            return false;
+        }
+        existing_array = minic_c0_program_array_type(program, existing_type.array_type_id);
+        if (existing_array == NULL) {
+            return false;
+        }
+        bit = 1U << dimension;
+        existing_incomplete =
+            existing_array->element_count == 0U && !existing_array->is_zero_length;
+        declared_incomplete = dimension == 0U && declarator->outermost_incomplete;
+        declared_zero_length = (declarator->zero_length_mask & bit) != 0U;
+
+        if (!declared_incomplete && !existing_incomplete) {
+            if (declared_zero_length != existing_array->is_zero_length) {
+                return false;
+            }
+            if (!declared_zero_length &&
+                declarator->bounds[dimension] != existing_array->element_count) {
+                return false;
+            }
+        }
+        existing_type = existing_array->element_type;
+    }
+    return minic_type_equal(existing_type, element_type);
+}
+
+static inline bool
 minic_sema_materialize_array_declarator(MinicC0Program *program,
                                         MinicType element_type,
                                         const MinicArrayDeclaratorSyntax *declarator,
