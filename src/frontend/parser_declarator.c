@@ -269,9 +269,9 @@ static bool parse_array_bound_allow_zero(MinicParser *parser, size_t *element_co
     return true;
 }
 
-static bool parse_array_declarator_syntax(MinicParser *parser,
-                                          bool allow_incomplete_outermost,
-                                          MinicArrayDeclaratorSyntax *declarator) {
+bool minic_parser_parse_array_declarator_syntax(MinicParser *parser,
+                                                bool allow_incomplete_outermost,
+                                                MinicArrayDeclaratorSyntax *declarator) {
     size_t dimension;
 
     if (parser == NULL || declarator == NULL || parser->current.kind != MINIC_TOKEN_LBRACKET) {
@@ -321,7 +321,8 @@ bool minic_parser_parse_array_declarator_suffix(MinicParser *parser,
     if (parser->current.kind != MINIC_TOKEN_LBRACKET) {
         return true;
     }
-    if (!parse_array_declarator_syntax(parser, allow_incomplete_outermost, &declarator)) {
+    if (!minic_parser_parse_array_declarator_syntax(
+            parser, allow_incomplete_outermost, &declarator)) {
         return false;
     }
     if (!minic_sema_materialize_array_declarator(
