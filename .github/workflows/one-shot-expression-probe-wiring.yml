@@ -1,0 +1,81 @@
+name: One-shot Expression Probe Wiring
+
+on:
+  push:
+    branches:
+      - refactor/declaration-sema-v1
+
+permissions:
+  contents: write
+
+jobs:
+  wire:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+          fetch-depth: 0
+
+      - name: Route inferred-array probe rollback through semantic snapshot
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("src/frontend/parser_global.c")
+          text = path.read_text()
+
+          include_anchor = '#include "frontend/initializer.h"\n'
+          include_line = '#include "frontend/semantic_snapshot.h"\n'
+          if include_line not in text:
+              if text.count(include_anchor) != 1:
+                  raise SystemExit("parser_global semantic snapshot include anchor is not unique")
+              text = text.replace(include_anchor, include_anchor + include_line, 1)
+
+          start_marker = "static bool probe_static_array_designator_extent("
+          end_marker = "bool minic_parser_inspect_array_initializer_extent("
+          if text.count(start_marker) != 1 or text.count(end_marker) != 1:
+              raise SystemExit("inferred-array probe anchors are not unique")
+          start = text.index(start_marker)
+          end = text.index(end_marker, start)
+
+          replacement = '''static bool probe_static_array_designator_extent(MinicParser *probe,
+                                                        size_t *first,
+                                                        size_t *last) {
+              MinicSemanticSnapshot snapshot;
+              MinicC0Program *program;
+
+              if (probe == NULL || first == NULL || last == NULL || probe->program == NULL) {
+                  return false;
+              }
+              program = probe->program;
+              snapshot = minic_semantic_snapshot_capture(program);
+              if (!minic_parser_parse_array_designator(probe, 0U, true, first, last)) {
+                  return false;
+              }
+              if (!minic_semantic_snapshot_rollback_probe_expressions(&snapshot, program)) {
+                  minic_parser_error(probe,
+                                     "inferred aggregate array designator probe requires a "
+                                     "side-effect-free integer constant expression");
+                  return false;
+              }
+              return true;
+          }
+
+          '''
+          text = text[:start] + replacement + text[end:]
+          path.write_text(text)
+          PY
+
+          clang-format -i src/frontend/parser_global.c
+          rm .github/workflows/one-shot-expression-probe-wiring.yml
+          git diff --check
+          git diff -- src/frontend/parser_global.c
+          git status --short
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "frontend: centralize expression-only probe rollback"
+          git push origin HEAD:refactor/declaration-sema-v1
