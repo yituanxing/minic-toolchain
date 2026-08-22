@@ -72,7 +72,8 @@ static inline MinicDeclarationArrayMaterializeStatus minic_declaration_materiali
             added = minic_c0_program_add_zero_length_array_type(program, result, &result);
             failure = MINIC_DECLARATION_ARRAY_MATERIALIZE_ZERO_LENGTH_FAILED;
         } else {
-            added = minic_c0_program_add_array_type(program, result, suffix->bounds[dimension], &result);
+            added = minic_c0_program_add_array_type(
+                program, result, suffix->bounds[dimension], &result);
             failure = MINIC_DECLARATION_ARRAY_MATERIALIZE_FIXED_FAILED;
         }
         if (!added) {
@@ -127,7 +128,8 @@ static inline bool minic_declaration_build_function_type(
                                                      parameter_count,
                                                      is_variadic,
                                                      &result)) {
-        return minic_semantic_snapshot_rollback_declarator_types(&snapshot, program) && false;
+        (void)minic_semantic_snapshot_rollback_declarator_types(&snapshot, program);
+        return false;
     }
     for (level = 0U; level < pointer_depth; ++level) {
         unsigned int bit;
