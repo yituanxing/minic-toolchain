@@ -11,6 +11,39 @@ def replace_once(path: str, old: str, new: str) -> None:
 
 
 replace_once(
+    "src/core/core_lower.c",
+    "        if (!minic_type_is_integer(context->source_function->return_type)) {\n"
+    "            return MINIC_CORE_LOWER_UNSUPPORTED;\n"
+    "        }\n"
+    "        status = lower_integer_assignment_value(context,\n"
+    "                                                context->source_function->return_type,\n"
+    "                                                statement->expression,\n"
+    "                                                &terminator.return_value);\n"
+    "        if (status != MINIC_CORE_LOWER_OK) {\n"
+    "            return status;\n"
+    "        }\n",
+    "        if (minic_type_is_integer(context->source_function->return_type)) {\n"
+    "            status = lower_integer_assignment_value(context,\n"
+    "                                                    context->source_function->return_type,\n"
+    "                                                    statement->expression,\n"
+    "                                                    &terminator.return_value);\n"
+    "        } else if (minic_type_is_pointer(context->source_function->return_type)) {\n"
+    "            status = lower_expression(context, statement->expression, &terminator.return_value);\n"
+    "            if (status == MINIC_CORE_LOWER_OK &&\n"
+    "                (terminator.return_value >= context->function->value_count ||\n"
+    "                 !minic_type_equal(context->function->values[terminator.return_value].type,\n"
+    "                                   context->source_function->return_type))) {\n"
+    "                return MINIC_CORE_LOWER_UNSUPPORTED;\n"
+    "            }\n"
+    "        } else {\n"
+    "            return MINIC_CORE_LOWER_UNSUPPORTED;\n"
+    "        }\n"
+    "        if (status != MINIC_CORE_LOWER_OK) {\n"
+    "            return status;\n"
+    "        }\n",
+)
+
+replace_once(
     "tests/target/riscv64/core_hybrid_differential.i",
     "int core_hybrid_fallback_load(int *value) {\n"
     "    return *value;\n"
