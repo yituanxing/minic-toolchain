@@ -1441,6 +1441,102 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                    ? MINIC_CORE_LOWER_OK
                    : MINIC_CORE_LOWER_ERROR;
     }
+    if (expression->kind == MINIC_EXPRESSION_BINARY &&
+        expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_OR) {
+        const MinicExpression *left_expression;
+        const MinicExpression *right_expression;
+        MinicCoreValueId left;
+        MinicCoreValueId left_source;
+        MinicCoreValueId right;
+        MinicCoreValueId right_source;
+        MinicCoreLowerStatus status;
+
+        if (!minic_type_is_integer(expression->type)) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        left_expression =
+            minic_c0_program_expression(context->body->program, expression->value.binary.left);
+        right_expression =
+            minic_c0_program_expression(context->body->program, expression->value.binary.right);
+        if (left_expression == NULL || right_expression == NULL) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        status = lower_expression(context, expression->value.binary.left, &left_source);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        status = append_integer_conversion(
+            context, left_expression->span, expression->type, left_source, &left);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        status = lower_expression(context, expression->value.binary.right, &right_source);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        status = append_integer_conversion(
+            context, right_expression->span, expression->type, right_source, &right);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR;
+        instruction.value.binary.left = left;
+        instruction.value.binary.right = right;
+        return minic_core_function_append_value_instruction(
+                   context->function, context->block_id, &instruction, value_id)
+                   ? MINIC_CORE_LOWER_OK
+                   : MINIC_CORE_LOWER_ERROR;
+    }
+    if (expression->kind == MINIC_EXPRESSION_BINARY &&
+        (expression->value.binary.operator_kind == MINIC_BINARY_SHIFT_LEFT ||
+         expression->value.binary.operator_kind == MINIC_BINARY_SHIFT_RIGHT)) {
+        const MinicExpression *left_expression;
+        const MinicExpression *right_expression;
+        MinicCoreValueId left;
+        MinicCoreValueId left_source;
+        MinicCoreValueId right;
+        MinicCoreLowerStatus status;
+
+        if (!minic_type_is_integer(expression->type)) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        left_expression =
+            minic_c0_program_expression(context->body->program, expression->value.binary.left);
+        right_expression =
+            minic_c0_program_expression(context->body->program, expression->value.binary.right);
+        if (left_expression == NULL || right_expression == NULL ||
+            !minic_type_is_integer(left_expression->type) ||
+            !minic_type_is_integer(right_expression->type)) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        status = lower_expression(context, expression->value.binary.left, &left_source);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        status = append_integer_conversion(
+            context, left_expression->span, expression->type, left_source, &left);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        status = lower_expression(context, expression->value.binary.right, &right);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        if (left >= context->function->value_count || right >= context->function->value_count ||
+            !minic_type_equal(context->function->values[left].type, expression->type) ||
+            !minic_type_is_integer(context->function->values[right].type)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        instruction.kind = expression->value.binary.operator_kind == MINIC_BINARY_SHIFT_LEFT
+                               ? MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT
+                               : MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT;
+        instruction.value.binary.left = left;
+        instruction.value.binary.right = right;
+        return minic_core_function_append_value_instruction(
+                   context->function, context->block_id, &instruction, value_id)
+                   ? MINIC_CORE_LOWER_OK
+                   : MINIC_CORE_LOWER_ERROR;
+    }
     if (expression->kind == MINIC_EXPRESSION_COMPOUND_ASSIGNMENT &&
         expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_AND) {
         const MinicExpression *source;
