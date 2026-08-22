@@ -1811,7 +1811,8 @@ static MinicCoreLowerStatus lower_condition_branch(MinicCoreLowerContext *contex
         return MINIC_CORE_LOWER_ERROR;
     }
     expression = minic_c0_program_expression(context->body->program, expression_id);
-    if (expression == NULL || !minic_type_is_integer(expression->type)) {
+    if (expression == NULL ||
+        (!minic_type_is_integer(expression->type) && !minic_type_is_pointer(expression->type))) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
     if (expression->kind == MINIC_EXPRESSION_UNARY &&
@@ -1820,7 +1821,8 @@ static MinicCoreLowerStatus lower_condition_branch(MinicCoreLowerContext *contex
 
         operand =
             minic_c0_program_expression(context->body->program, expression->value.unary.operand);
-        if (operand != NULL && minic_type_is_integer(operand->type)) {
+        if (operand != NULL &&
+            (minic_type_is_integer(operand->type) || minic_type_is_pointer(operand->type))) {
             return lower_condition_branch(
                 context, expression->value.unary.operand, span, when_false, when_true);
         }
@@ -1881,11 +1883,33 @@ static MinicCoreLowerStatus lower_condition_branch(MinicCoreLowerContext *contex
     if (status != MINIC_CORE_LOWER_OK) {
         return status;
     }
-    condition_block = context->block_id;
-    if (condition >= context->function->value_count ||
-        !minic_type_is_integer(context->function->values[condition].type)) {
+    if (condition >= context->function->value_count) {
         return MINIC_CORE_LOWER_ERROR;
     }
+    if (minic_type_is_pointer(expression->type)) {
+        MinicCoreInstruction zero_test;
+        MinicCoreBlockId original_true;
+
+        if (!minic_type_is_pointer(context->function->values[condition].type)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        (void)memset(&zero_test, 0, sizeof(zero_test));
+        zero_test.kind = MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO;
+        zero_test.span = span;
+        zero_test.type = minic_type_int();
+        zero_test.result = MINIC_CORE_VALUE_INVALID;
+        zero_test.value.operand = condition;
+        if (!minic_core_function_append_value_instruction(
+                context->function, context->block_id, &zero_test, &condition)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        original_true = when_true;
+        when_true = when_false;
+        when_false = original_true;
+    } else if (!minic_type_is_integer(context->function->values[condition].type)) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    condition_block = context->block_id;
     (void)memset(&terminator, 0, sizeof(terminator));
     terminator.kind = MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH;
     terminator.span = span;
@@ -1924,7 +1948,8 @@ lower_if(MinicCoreLowerContext *context, const MinicStatement *statement, bool *
         minic_c0_program_expression(context->body->program, statement->expression);
     then_source = minic_c0_program_block(context->body->program, statement->then_block);
     if (condition_expression == NULL || then_source == NULL ||
-        !minic_type_is_integer(condition_expression->type)) {
+        (!minic_type_is_integer(condition_expression->type) &&
+         !minic_type_is_pointer(condition_expression->type))) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
     else_source = NULL;
