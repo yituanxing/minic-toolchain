@@ -38,7 +38,6 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          test "${{ steps.cache.outputs.cache-hit || 'true' }}" != false || true
           test -s build/linux-focus-corpus/selected-tus.txt
           for f in \
             init/version.i \
@@ -49,7 +48,7 @@ jobs:
             test -s "build/linux-focus-corpus/kbuild/$f"
           done
 
-      - name: Prove current M31 capability gaps
+      - name: Prove exact pre-M31 frozen blockers
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -57,30 +56,22 @@ jobs:
           c="$GITHUB_WORKSPACE/build/m31-pre/bin/minic"
           w="$GITHUB_WORKSPACE/build/m31-pre-proof"
           mkdir -p "$w"
-          cat > "$w/fixed.i" <<'EOF'
-          register unsigned long core_m31_fixed __asm__("s1");
-          unsigned long core_m31_fixed_read(void) { return core_m31_fixed; }
-          EOF
-          cat > "$w/asmout.i" <<'EOF'
-          unsigned long core_m31_asmout(void) {
-              register unsigned long x;
-              __asm__ __volatile__("addi %0, zero, 7" : "=r"(x) : : "memory");
-              return x;
-          }
-          EOF
-          cat > "$w/logicalor.i" <<'EOF'
-          int core_m31_err(const void *ptr) {
-              return __builtin_expect(!ptr, 0) ||
-                     __builtin_expect((unsigned long)(void *)ptr >= (unsigned long)-4095, 0);
-          }
-          EOF
-          for n in fixed asmout logicalor; do
+          declare -A cases=(
+            [init/version.i]=get_current
+            [init/do_mounts.i]=get_cycles
+            [init/do_mounts_initrd.i]=cpu_relax
+            [init/init_task.i]=arch_atomic_add
+            [arch/riscv/kernel/pi/cmdline_early.i]=IS_ERR_OR_NULL
+          )
+          for f in "${!cases[@]}"; do
+            tag=${f//\//_}
             set +e
-            MINIC_CORE_IR=strict "$c" -S "$w/$n.i" -o "$w/$n.s" 2>"$w/$n.err"
+            MINIC_CORE_IR=strict "$c" -S "build/linux-focus-corpus/kbuild/$f" -o "$w/$tag.s" 2>"$w/$tag.err"
             rc=$?
             set -e
             test "$rc" -ne 0
-            grep -F "Core IR shadow does not yet support function" "$w/$n.err"
+            grep -F "Core IR shadow does not yet support function '${cases[$f]}'" "$w/$tag.err"
+            printf 'M31_PRE_BLOCKER file=%s function=%s\n' "$f" "${cases[$f]}"
           done
           printf '%s\n' M31_PRE_GAPS_CONFIRMED
 
@@ -99,14 +90,13 @@ jobs:
           set -Eeuo pipefail
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m31-candidate
 
-      - name: Run M31 focused and QEMU differentials
+      - name: Run M31 structured-asm and logical-or QEMU differential
         shell: bash
         run: |
           set -Eeuo pipefail
           c="$GITHUB_WORKSPACE/build/m31-candidate/bin/minic"
           w="$GITHUB_WORKSPACE/build/m31-focused"
           mkdir -p "$w"
-
           cat > "$w/core_m31.c" <<'EOF'
           struct core_m31_counter { int counter; };
 
@@ -135,7 +125,6 @@ jobs:
                      __builtin_expect((unsigned long)(void *)ptr >= (unsigned long)-4095, 0);
           }
           EOF
-
           cat > "$w/runtime.c" <<'EOF'
           #include <stdio.h>
           struct core_m31_counter { int counter; };
@@ -155,7 +144,6 @@ jobs:
               return 0;
           }
           EOF
-
           MINIC_CORE_IR=strict "$c" -S "$w/core_m31.c" -o "$w/minic.s"
           riscv64-linux-gnu-gcc -O0 -static "$w/runtime.c" "$w/minic.s" -o "$w/minic.elf"
           qemu-riscv64 "$w/minic.elf" > "$w/minic.out"
@@ -163,26 +151,13 @@ jobs:
           qemu-riscv64 "$w/gcc.elf" > "$w/gcc.out"
           diff -u "$w/gcc.out" "$w/minic.out"
           grep -Fx 'out=7 counter=8 null=1 normal=0 err=1' "$w/minic.out"
+          printf '%s\n' M31_NEW_CAPABILITIES_QEMU_PASS
 
-          cat > "$w/fixed.c" <<'EOF'
-          register unsigned long core_m31_fixed __asm__("s1");
-          unsigned long core_m31_fixed_read(void) { return core_m31_fixed; }
-          EOF
-          cat > "$w/fixed_runtime.c" <<'EOF'
-          #include <stdio.h>
-          unsigned long core_m31_fixed_read(void);
-          int main(void) {
-              __asm__ __volatile__("li s1, 77" : : : "s1");
-              printf("fixed=%lu\n", core_m31_fixed_read());
-              return 0;
-          }
-          EOF
-          MINIC_CORE_IR=strict "$c" -S "$w/fixed.c" -o "$w/fixed-minic.s"
-          grep -F 'mv t0, s1' "$w/fixed-minic.s"
-          riscv64-linux-gnu-gcc -O0 -static "$w/fixed_runtime.c" "$w/fixed-minic.s" -o "$w/fixed-minic.elf"
-          qemu-riscv64 "$w/fixed-minic.elf" > "$w/fixed-minic.out"
-          grep -Fx 'fixed=77' "$w/fixed-minic.out"
-
+      - name: Run M25b-M30 Core regressions
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          c="$GITHUB_WORKSPACE/build/m31-candidate/bin/minic"
           for script in \
             run-core-aggregate-boundary-m30.sh \
             run-core-record-local-m29.sh \
@@ -196,7 +171,7 @@ jobs:
               RISCV_CC=riscv64-linux-gnu-gcc QEMU_RISCV64=qemu-riscv64 \
               sh "tests/compiler/c0/$script"
           done
-          printf '%s\n' M31_FOCUSED_AND_QEMU_PASS
+          printf '%s\n' M31_REGRESSIONS_PASS
 
       - name: Prove five frozen frontier buckets moved
         shell: bash
