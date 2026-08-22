@@ -296,8 +296,8 @@ grep -F "Core IR shadow does not yet support function 'variadic_caller'" \
     "$work_dir/variadic-call-unsupported-strict.err" >/dev/null
 
 cat >"$work_dir/unsupported.i" <<'EOF'
-int main(void) {
-    return 1 - 2;
+int main(int value) {
+    return value - 2;
 }
 EOF
 
