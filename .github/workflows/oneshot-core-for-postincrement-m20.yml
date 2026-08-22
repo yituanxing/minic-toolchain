@@ -1,0 +1,120 @@
+name: One-shot Core For Postincrement M20
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    if: github.actor != 'github-actions[bot]' && github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+          fetch-depth: 0
+      - name: Install RISC-V runtime tools
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mapfile -t packages < <(grep -Ev '^[[:space:]]*(#|$)' tools/ci/ubuntu-24.04-packages.txt)
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends "${packages[@]}"
+          sh tools/ci/verify-validation-tools.sh
+      - name: Restore frozen Linux corpus
+        id: linux-corpus-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+      - name: Prove M20 gaps
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-m20-before
+          compiler="$GITHUB_WORKSPACE/build/core-m20-before/bin/minic"
+          for shape in for_assign postinc; do
+            case "$shape" in
+              for_assign) body='struct node { struct node *next; }; int probe(struct node *h) { struct node *p; int n=0; for (p=h->next; p!=h; p=p->next) n=n+1; return n; }' ;;
+              postinc) body='int probe(int x) { x++; return x; }' ;;
+            esac
+            printf '%s\n' "$body" > "build/core-m20-before-$shape.i"
+            if MINIC_CORE_IR=strict "$compiler" -S "build/core-m20-before-$shape.i" -o /tmp/m20.s 2>/tmp/m20.err; then
+              echo "M20 $shape gap unexpectedly absent" >&2
+              exit 1
+            fi
+            grep -F "Core IR shadow does not yet support function 'probe'" /tmp/m20.err >/dev/null
+          done
+      - name: Apply M20
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 -m py_compile tools/dev/patch-core-for-postincrement-m20.py
+          python3 tools/dev/patch-core-for-postincrement-m20.py
+          clang-format-18 -i src/core/core_lower.c tests/compiler/c0/core_for_postincrement_m20.c tests/compiler/c0/core_for_postincrement_m20_runtime.c
+          sh -n tests/compiler/c0/run-core-for-postincrement-m20.sh
+          git diff --check
+          grep -F 'normalized_for_update_tail(' src/core/core_lower.c >/dev/null
+          grep -F 'lower_discarded_postfix_integer_increment(' src/core/core_lower.c >/dev/null
+      - name: Build and validate M20
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-m20-compiler
+          compiler="$GITHUB_WORKSPACE/build/core-m20-compiler/bin/minic"
+          MINIC="$compiler" BUILD_DIR="$GITHUB_WORKSPACE/build/core-m20-focused" RISCV_CC=riscv64-linux-gnu-gcc QEMU_RISCV64=qemu-riscv64 sh tests/compiler/c0/run-core-for-postincrement-m20.sh
+          MINIC="$compiler" BUILD_DIR="$GITHUB_WORKSPACE/build/core-m20-m19" RISCV_CC=riscv64-linux-gnu-gcc QEMU_RISCV64=qemu-riscv64 sh tests/compiler/c0/run-core-logical-and-value.sh
+          MINIC="$compiler" bash tests/core/run-core-ir-shadow.sh
+      - name: Replay frozen strict frontier
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/core-m20-compiler/bin/minic"
+          set +e
+          MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" --work "$GITHUB_WORKSPACE/build/core-m20-strict" --jobs 4 --offset 0 --limit 500 --sample-count 64 --indices ''
+          replay_status=$?
+          set -e
+          printf 'CORE_M20_REPLAY_STATUS=%d\n' "$replay_status"
+          python3 - <<'PY'
+          from collections import Counter
+          import json, re
+          from pathlib import Path
+          rows = json.loads(Path('build/core-m20-strict/batch-results.json').read_text())
+          unsupported_re = re.compile(r"^Core IR shadow does not yet support function '([^']+)'$")
+          unsupported = Counter()
+          errors = []
+          passes = 0
+          for row in rows:
+              if row['status'] == 'PASS':
+                  passes += 1
+                  continue
+              message = str(row['message'])
+              match = unsupported_re.match(message)
+              if match:
+                  unsupported[match.group(1)] += 1
+              else:
+                  errors.append((row['index'], message))
+          print(f'CORE_M20_FRONTIER selected={len(rows)} pass={passes} unsupported={sum(unsupported.values())} error={len(errors)}')
+          for function, count in unsupported.most_common():
+              print(f'CORE_M20_BLOCKER count={count} function={function}')
+          for index, message in errors:
+              print(f'CORE_M20_ERROR index={index} message={message}')
+          if errors:
+              raise SystemExit('M20 introduced non-UNSUPPORTED strict failures')
+          if unsupported.get('list_count_nodes', 0) != 0:
+              raise SystemExit('M20 did not pierce list_count_nodes')
+          PY
+      - name: Publish M20 product
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm tools/dev/patch-core-for-postincrement-m20.py .github/workflows/oneshot-core-for-postincrement-m20.yml .github/workflows/oneshot-core-list-count-nodes-probe.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/core/core_lower.c tests/compiler/c0/core_for_postincrement_m20.c tests/compiler/c0/core_for_postincrement_m20_runtime.c tests/compiler/c0/run-core-for-postincrement-m20.sh tools/dev/patch-core-for-postincrement-m20.py .github/workflows/oneshot-core-for-postincrement-m20.yml .github/workflows/oneshot-core-list-count-nodes-probe.yml
+          git diff --cached --check
+          git commit -m 'core: lower normalized for updates and discarded postfix increment'
+          git push origin HEAD:refactor/declaration-sema-v1
