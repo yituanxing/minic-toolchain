@@ -32,35 +32,47 @@ jobs:
           path: build/linux-focus-corpus
           key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
 
-      - name: Prove M23 gap
+      - name: Prove M23 gaps
         shell: bash
         run: |
           set -Eeuo pipefail
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-m23-before
           compiler="$GITHUB_WORKSPACE/build/core-m23-before/bin/minic"
-          cat > build/core-m23-before.i <<'EOF'
+          cat > build/core-m23-before-conditional.i <<'EOF'
           unsigned long helper(unsigned long x) { return x; }
           unsigned long probe(int c, unsigned long x) { return c ? 7UL : helper(x); }
           EOF
-          if MINIC_CORE_IR=strict "$compiler" -S build/core-m23-before.i -o /tmp/m23-before.s 2>/tmp/m23-before.err; then
+          if MINIC_CORE_IR=strict "$compiler" -S build/core-m23-before-conditional.i -o /tmp/m23-before-conditional.s 2>/tmp/m23-before-conditional.err; then
             echo 'M23 conditional gap unexpectedly absent' >&2
             exit 1
           fi
-          grep -F "Core IR shadow does not yet support function 'probe'" /tmp/m23-before.err >/dev/null
+          grep -F "Core IR shadow does not yet support function 'probe'" /tmp/m23-before-conditional.err >/dev/null
+          cat > build/core-m23-before-const.i <<'EOF'
+          unsigned long probe(const unsigned long x) { return x; }
+          EOF
+          if MINIC_CORE_IR=strict "$compiler" -S build/core-m23-before-const.i -o /tmp/m23-before-const.s 2>/tmp/m23-before-const.err; then
+            echo 'M23 const-parameter gap unexpectedly absent' >&2
+            exit 1
+          fi
+          grep -F "Core IR shadow does not yet support function 'probe'" /tmp/m23-before-const.err >/dev/null
 
       - name: Apply M23
         shell: bash
         run: |
           set -Eeuo pipefail
-          python3 -m py_compile tools/dev/patch-core-integer-conditional-m23.py
+          python3 -m py_compile tools/dev/patch-core-integer-conditional-m23.py tools/dev/patch-core-const-parameter-m23b.py
           python3 tools/dev/patch-core-integer-conditional-m23.py
-          clang-format-18 -i src/core/core_lower.c \
+          python3 tools/dev/patch-core-const-parameter-m23b.py
+          clang-format-18 -i src/core/core_ir.c src/core/core_lower.c \
             tests/compiler/c0/core_integer_conditional_m23.c \
-            tests/compiler/c0/core_integer_conditional_m23_runtime.c
+            tests/compiler/c0/core_integer_conditional_m23_runtime.c \
+            tests/compiler/c0/core_const_parameter_m23b.c \
+            tests/compiler/c0/core_const_parameter_m23b_runtime.c
           sh -n tests/compiler/c0/run-core-integer-conditional-m23.sh
+          sh -n tests/compiler/c0/run-core-const-parameter-m23b.sh
           git diff --check
-          git diff --exit-code -- src/core/core_ir.h src/core/core_ir.c src/target/riscv64/core_codegen.c
+          git diff --exit-code -- src/core/core_ir.h src/target/riscv64/core_codegen.c
 
       - name: Build and validate M23
         shell: bash
@@ -69,6 +81,7 @@ jobs:
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-m23-compiler
           compiler="$GITHUB_WORKSPACE/build/core-m23-compiler/bin/minic"
           MINIC="$compiler" BUILD_DIR="$GITHUB_WORKSPACE/build/core-m23-focused" RISCV_CC=riscv64-linux-gnu-gcc QEMU_RISCV64=qemu-riscv64 sh tests/compiler/c0/run-core-integer-conditional-m23.sh
+          MINIC="$compiler" BUILD_DIR="$GITHUB_WORKSPACE/build/core-m23b-focused" RISCV_CC=riscv64-linux-gnu-gcc QEMU_RISCV64=qemu-riscv64 sh tests/compiler/c0/run-core-const-parameter-m23b.sh
           MINIC="$compiler" BUILD_DIR="$GITHUB_WORKSPACE/build/core-m23-m22" RISCV_CC=riscv64-linux-gnu-gcc QEMU_RISCV64=qemu-riscv64 sh tests/compiler/c0/run-core-integer-or-shifts-m22.sh
           MINIC="$compiler" BUILD_DIR="$GITHUB_WORKSPACE/build/core-m23-m21" RISCV_CC=riscv64-linux-gnu-gcc QEMU_RISCV64=qemu-riscv64 sh tests/compiler/c0/run-core-pointer-condition-m21.sh
           MINIC="$compiler" BUILD_DIR="$GITHUB_WORKSPACE/build/core-m23-m20" RISCV_CC=riscv64-linux-gnu-gcc QEMU_RISCV64=qemu-riscv64 sh tests/compiler/c0/run-core-for-postincrement-m20.sh
@@ -118,19 +131,28 @@ jobs:
         run: |
           set -Eeuo pipefail
           rm tools/dev/patch-core-integer-conditional-m23.py \
+             tools/dev/patch-core-const-parameter-m23b.py \
              .github/workflows/oneshot-core-integer-conditional-m23.yml \
              .github/workflows/oneshot-core-swab-shape-v1.yml \
-             .github/workflows/oneshot-core-swab-source-v2.yml
+             .github/workflows/oneshot-core-swab-source-v2.yml \
+             .github/workflows/oneshot-core-swab-exact-types-v3.yml \
+             .github/workflows/oneshot-core-swab-const-param-v4.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add src/core/core_lower.c \
+          git add src/core/core_ir.c src/core/core_lower.c \
                   tests/compiler/c0/core_integer_conditional_m23.c \
                   tests/compiler/c0/core_integer_conditional_m23_runtime.c \
                   tests/compiler/c0/run-core-integer-conditional-m23.sh \
+                  tests/compiler/c0/core_const_parameter_m23b.c \
+                  tests/compiler/c0/core_const_parameter_m23b_runtime.c \
+                  tests/compiler/c0/run-core-const-parameter-m23b.sh \
                   tools/dev/patch-core-integer-conditional-m23.py \
+                  tools/dev/patch-core-const-parameter-m23b.py \
                   .github/workflows/oneshot-core-integer-conditional-m23.yml \
                   .github/workflows/oneshot-core-swab-shape-v1.yml \
-                  .github/workflows/oneshot-core-swab-source-v2.yml
+                  .github/workflows/oneshot-core-swab-source-v2.yml \
+                  .github/workflows/oneshot-core-swab-exact-types-v3.yml \
+                  .github/workflows/oneshot-core-swab-const-param-v4.yml
           git diff --cached --check
-          git commit -m 'core: lower integer conditional values'
+          git commit -m 'core: lower integer conditionals and const parameters'
           git push origin HEAD:refactor/declaration-sema-v1
