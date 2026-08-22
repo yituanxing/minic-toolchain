@@ -1206,6 +1206,8 @@ lower_if(MinicCoreLowerContext *context, const MinicStatement *statement, bool *
     MinicCoreBlockId false_target;
     MinicCoreBlockId merge_block;
     MinicCoreBlockId then_block;
+    MinicCoreBlockId then_continuation_block;
+    MinicCoreBlockId else_continuation_block;
     MinicCoreBlockId continuation_block;
     MinicCoreLowerStatus status;
     bool else_terminated;
@@ -1245,6 +1247,8 @@ lower_if(MinicCoreLowerContext *context, const MinicStatement *statement, bool *
     if (status != MINIC_CORE_LOWER_OK) {
         return status;
     }
+    then_continuation_block = context->block_id;
+    else_continuation_block = MINIC_CORE_BLOCK_INVALID;
     else_terminated = false;
     if (else_source != NULL) {
         context->block_id = else_block;
@@ -1252,6 +1256,7 @@ lower_if(MinicCoreLowerContext *context, const MinicStatement *statement, bool *
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
+        else_continuation_block = context->block_id;
     }
 
     needs_merge = !then_terminated || else_source == NULL || !else_terminated;
@@ -1261,13 +1266,13 @@ lower_if(MinicCoreLowerContext *context, const MinicStatement *statement, bool *
             return MINIC_CORE_LOWER_ERROR;
         }
         if (!then_terminated) {
-            status = set_branch(context, then_block, statement->span, merge_block);
+            status = set_branch(context, then_continuation_block, statement->span, merge_block);
             if (status != MINIC_CORE_LOWER_OK) {
                 return status;
             }
         }
         if (else_source != NULL && !else_terminated) {
-            status = set_branch(context, else_block, statement->span, merge_block);
+            status = set_branch(context, else_continuation_block, statement->span, merge_block);
             if (status != MINIC_CORE_LOWER_OK) {
                 return status;
             }
