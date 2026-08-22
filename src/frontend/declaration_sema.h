@@ -124,9 +124,13 @@ static inline bool minic_declaration_merge_external_array_composite_type(
     if (minic_type_equal(existing_type, declared_type)) {
         return true;
     }
+    if (!minic_declaration_external_object_types_compatible(
+            program, existing_type, declared_type)) {
+        return false;
+    }
     if (program == NULL || !minic_type_is_array(existing_type) ||
         !minic_type_is_array(declared_type)) {
-        return minic_type_equal(existing_type, declared_type);
+        return false;
     }
     existing_array = minic_c0_program_array_type(program, existing_type.array_type_id);
     declared_array = minic_c0_program_array_type(program, declared_type.array_type_id);
@@ -136,9 +140,7 @@ static inline bool minic_declaration_merge_external_array_composite_type(
     existing_element = existing_array->element_type;
     declared_element = declared_array->element_type;
     declared_count = declared_array->element_count;
-    if (!minic_declaration_external_object_types_compatible(
-            program, existing_element, declared_element) ||
-        !minic_declaration_merge_external_array_composite_type(
+    if (!minic_declaration_merge_external_array_composite_type(
             program, existing_element, declared_element)) {
         return false;
     }
