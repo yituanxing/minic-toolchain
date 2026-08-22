@@ -38,6 +38,28 @@ static MinicCoreLowerStatus lower_condition_branch(MinicCoreLowerContext *contex
     "Core M19 CFG helper declarations",
 )
 
+# A condition expression may itself create CFG (for example a GNU statement expression
+# containing an if/do-while before its final scalar value).  The conditional terminator
+# belongs to the expression's continuation block, not the block where lowering started.
+replace_once(
+    "src/core/core_lower.c",
+    '''    condition_block = context->block_id;
+    status = lower_expression(context, expression_id, &condition);
+    if (status != MINIC_CORE_LOWER_OK) {
+        return status;
+    }
+    if (condition >= context->function->value_count ||
+''',
+    '''    status = lower_expression(context, expression_id, &condition);
+    if (status != MINIC_CORE_LOWER_OK) {
+        return status;
+    }
+    condition_block = context->block_id;
+    if (condition >= context->function->value_count ||
+''',
+    "Core M19 condition-expression continuation ownership",
+)
+
 logical_and_lowering = r'''    if (expression->kind == MINIC_EXPRESSION_BINARY &&
         expression->value.binary.operator_kind == MINIC_BINARY_LOGICAL_AND) {
         MinicCoreBlockId false_block;
@@ -212,6 +234,14 @@ int core_m19_nested(int first, int second, int third) {
     return first && second && third;
 }
 
+int core_m19_cfg_statement_rhs(int left, int right) {
+    return left && ({
+        if (right < 0)
+            core_m19_rhs(0);
+        right;
+    });
+}
+
 int core_m19_list_empty_careful_shape(const struct core_m19_node *head) {
     struct core_m19_node *next = ({
         struct core_m19_node *value =
@@ -239,6 +269,7 @@ int core_m19_short_false(void);
 int core_m19_short_true(void);
 int core_m19_get_rhs_calls(void);
 int core_m19_nested(int first, int second, int third);
+int core_m19_cfg_statement_rhs(int left, int right);
 int core_m19_list_empty_careful_shape(const struct core_m19_node *head);
 
 int main(void) {
@@ -269,6 +300,10 @@ int main(void) {
            core_m19_nested(1, 2, 3),
            core_m19_nested(1, 0, 3));
     printf("short=%d/%d,%d/%d\n", false_result, false_calls, true_result, true_calls);
+    printf("cfg=%d,%d,%d\n",
+           core_m19_cfg_statement_rhs(0, -1),
+           core_m19_cfg_statement_rhs(1, 0),
+           core_m19_cfg_statement_rhs(1, 7));
     printf("list=%d,%d\n",
            core_m19_list_empty_careful_shape(&empty),
            core_m19_list_empty_careful_shape(&not_empty));
@@ -293,7 +328,8 @@ cc -E -P -std=gnu11 "$source_file" -o "$work/input.i"
 MINIC_CORE_IR=strict "$MINIC" -S "$work/input.i" -o "$work/strict.s"
 MINIC_CORE_CODEGEN=basic-v0 "$MINIC" -S "$work/input.i" -o "$work/core.s"
 for symbol in core_m19_plain core_m19_short_false core_m19_short_true \
-              core_m19_get_rhs_calls core_m19_nested core_m19_list_empty_careful_shape; do
+              core_m19_get_rhs_calls core_m19_nested core_m19_cfg_statement_rhs \
+              core_m19_list_empty_careful_shape; do
     grep -q "^${symbol}:" "$work/core.s"
 done
 "$RISCV_CC" -static -O2 "$source_file" "$runtime_file" -o "$work/reference-rv64"
@@ -303,6 +339,7 @@ done
 cmp "$work/reference.out" "$work/minic.out"
 grep -F 'plain=0,0,1 nested=1,0' "$work/minic.out" >/dev/null
 grep -F 'short=0/0,1/1' "$work/minic.out" >/dev/null
+grep -F 'cfg=0,0,1' "$work/minic.out" >/dev/null
 grep -F 'list=1,0' "$work/minic.out" >/dev/null
 printf '%s\n' 'PASS compiler/c0/core-logical-and-value'
 ''',
