@@ -1308,6 +1308,7 @@ static bool minic_riscv64_emit_function(FILE *file,
 bool minic_riscv64_write_c0_program_with_core_candidates(const char *path,
                                                          const MinicC0Program *program,
                                                          const MinicCoreFunction *core_functions,
+                                                         const bool *core_required_functions,
                                                          size_t core_function_count,
                                                          MinicDiagnostic *diagnostic) {
     FILE *file;
@@ -1320,7 +1321,8 @@ bool minic_riscv64_write_c0_program_with_core_candidates(const char *path,
         minic_riscv64_set_diagnostic(diagnostic, path, "program is required");
         return false;
     }
-    if ((core_functions == NULL && core_function_count != 0U) ||
+    if ((core_functions == NULL) != (core_required_functions == NULL) ||
+        (core_functions == NULL && core_function_count != 0U) ||
         (core_functions != NULL && core_function_count != program->function_count)) {
         minic_riscv64_set_diagnostic(
             diagnostic, path, "Core candidate map does not match program functions");
@@ -1394,6 +1396,7 @@ bool minic_riscv64_write_c0_program_with_core_candidates(const char *path,
          ++function_index) {
         const MinicFunction *function;
         const MinicCoreFunction *core_function;
+        bool core_required;
 
         function = &program->functions[function_index];
         if (!function->is_defined) {
@@ -1437,11 +1440,25 @@ bool minic_riscv64_write_c0_program_with_core_candidates(const char *path,
             }
             continue;
         }
+        core_required = core_required_functions != NULL && core_required_functions[function_index];
         core_function = core_functions != NULL ? &core_functions[function_index] : NULL;
-        if (core_function != NULL &&
-            minic_riscv64_core_function_can_emit_basic_v0_for_program(program, core_function)) {
+        if (core_required) {
             MinicRiscv64FunctionSymbol symbol;
 
+            if (core_function == NULL || !minic_riscv64_core_function_can_emit_basic_v0_for_program(
+                                             program, core_function)) {
+                char message[256];
+                const char *symbol_name;
+
+                symbol_name = minic_c0_function_symbol_name(function);
+                (void)snprintf(message,
+                               sizeof(message),
+                               "Core-owned function '%s' cannot be emitted by RV64 basic-v0",
+                               symbol_name != NULL ? symbol_name : "<unnamed>");
+                minic_riscv64_set_diagnostic(diagnostic, path, message);
+                success = false;
+                continue;
+            }
             success = minic_riscv64_function_symbol_from_function(function, &symbol) &&
                       minic_riscv64_emit_core_function_basic_v0_for_program_with_symbol(
                           file, program, core_function, &symbol);
@@ -1492,5 +1509,6 @@ bool minic_riscv64_write_c0_program_with_core_candidates(const char *path,
 bool minic_riscv64_write_c0_program(const char *path,
                                     const MinicC0Program *program,
                                     MinicDiagnostic *diagnostic) {
-    return minic_riscv64_write_c0_program_with_core_candidates(path, program, NULL, 0U, diagnostic);
+    return minic_riscv64_write_c0_program_with_core_candidates(
+        path, program, NULL, NULL, 0U, diagnostic);
 }

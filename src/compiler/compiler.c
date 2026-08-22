@@ -38,6 +38,7 @@ typedef enum MinicCoreCodegenMode {
 typedef struct MinicCoreCandidates {
     MinicCoreFunction *functions;
     MinicCoreLowerStatus *statuses;
+    bool *core_required;
     size_t function_count;
 } MinicCoreCandidates;
 
@@ -66,6 +67,7 @@ static void minic_core_candidates_initialize(MinicCoreCandidates *candidates) {
     }
     candidates->functions = NULL;
     candidates->statuses = NULL;
+    candidates->core_required = NULL;
     candidates->function_count = 0U;
 }
 
@@ -82,6 +84,7 @@ static void minic_core_candidates_destroy(MinicCoreCandidates *candidates) {
     }
     free(candidates->functions);
     free(candidates->statuses);
+    free(candidates->core_required);
     minic_core_candidates_initialize(candidates);
 }
 
@@ -102,9 +105,13 @@ static bool minic_prepare_core_candidates(const MinicC0Program *program,
             (MinicCoreFunction *)calloc(candidates.function_count, sizeof(*candidates.functions));
         candidates.statuses = (MinicCoreLowerStatus *)malloc(candidates.function_count *
                                                              sizeof(*candidates.statuses));
-        if (candidates.functions == NULL || candidates.statuses == NULL) {
+        candidates.core_required =
+            (bool *)calloc(candidates.function_count, sizeof(*candidates.core_required));
+        if (candidates.functions == NULL || candidates.statuses == NULL ||
+            candidates.core_required == NULL) {
             free(candidates.functions);
             free(candidates.statuses);
+            free(candidates.core_required);
             return false;
         }
     }
@@ -130,6 +137,8 @@ static bool minic_prepare_core_candidates(const MinicC0Program *program,
         }
         candidates.statuses[function_index] =
             minic_core_lower_function(&body, &candidates.functions[function_index]);
+        candidates.core_required[function_index] =
+            candidates.statuses[function_index] == MINIC_CORE_LOWER_OK;
     }
     minic_core_candidates_destroy(output);
     *output = candidates;
@@ -199,7 +208,8 @@ static bool minic_validate_core_shadow(const char *input_path,
     }
     if (candidates->function_count != program->function_count ||
         (candidates->function_count != 0U &&
-         (candidates->functions == NULL || candidates->statuses == NULL))) {
+         (candidates->functions == NULL || candidates->statuses == NULL ||
+          candidates->core_required == NULL))) {
         minic_set_diagnostic(
             diagnostic, input_path, 1U, 1U, "Core IR candidates do not match source program");
         return false;
@@ -384,6 +394,7 @@ int minic_compile_preprocessed_file(const char *input_path,
             minic_riscv64_write_c0_program_with_core_candidates(output_path,
                                                                 &program,
                                                                 core_candidates.functions,
+                                                                core_candidates.core_required,
                                                                 core_candidates.function_count,
                                                                 diagnostic);
     } else if (success) {

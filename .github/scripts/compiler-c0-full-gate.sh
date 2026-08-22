@@ -206,6 +206,13 @@ runtime_record_array_initializer_focused() {
         sh tests/compiler/c0/run-runtime-record-array-initializers.sh
 }
 
+core_required_no_fallback_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" \
+    HOST_CC=cc \
+    BUILD_DIR="$root/build/ci-core-required-no-fallback" \
+        sh tests/compiler/c0/run-core-required-no-fallback.sh
+}
+
 runtime_record_fam_prefix_focused() {
     MINIC="$root/build/ci-debug/bin/minic" \
     HOST_CC=cc \
@@ -352,6 +359,7 @@ start_gate static-object-address-focused static_object_address_focused
 start_gate file-scope-basic-asm-focused file_scope_basic_asm_focused
 start_gate wide-string-focused wide_string_focused
 start_gate record-array-init-focused runtime_record_array_initializer_focused
+start_gate core-required-no-fallback-focused core_required_no_fallback_focused
 start_gate record-fam-prefix-focused runtime_record_fam_prefix_focused
 start_gate linenoise-driven-focused linenoise_driven_focused
 start_gate sds-driven-focused sds_driven_focused
