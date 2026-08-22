@@ -34,33 +34,38 @@ jobs:
           printf '%s\n' "$version_i" > build/core-m27-version-path.txt
           printf 'M27_VERSION_PATH=%s\n' "$version_i"
 
-      - name: Classify short-circuit and switch shapes
+      - name: Prove narrow integer equality gap
         shell: bash
         run: |
           set -Eeuo pipefail
           c="$GITHUB_WORKSPACE/build/core-m27-probe/bin/minic"
           mkdir -p build/core-m27-shapes
-
           cat > build/core-m27-shapes/equality.i <<'EOF'
           int probe_equality(const char *p) { return p[0] == '\001'; }
           EOF
-          cat > build/core-m27-shapes/if_equality.i <<'EOF'
-          int probe_if_equality(const char *p) { if (p[0] == '\001') return p[1]; return 0; }
-          EOF
-          cat > build/core-m27-shapes/scalar_truth.i <<'EOF'
-          int probe_scalar_truth(const char *p) { if (p[1]) return p[1]; return 0; }
-          EOF
-          cat > build/core-m27-shapes/logical_and_value.i <<'EOF'
-          int probe_logical_and_value(int a, int b) { return a && b; }
-          EOF
-          cat > build/core-m27-shapes/logical_or_value.i <<'EOF'
-          int probe_logical_or_value(int a, int b) { return a || b; }
-          EOF
-          cat > build/core-m27-shapes/if_logical_and.i <<'EOF'
-          int probe_if_logical_and(int a, int b) { if (a && b) return 7; return 0; }
-          EOF
-          cat > build/core-m27-shapes/if_logical_or.i <<'EOF'
-          int probe_if_logical_or(int a, int b) { if (a || b) return 7; return 0; }
+          if MINIC_CORE_IR=strict "$c" -S build/core-m27-shapes/equality.i -o /tmp/m27-eq-before.s 2>/tmp/m27-eq-before.err; then
+              echo 'M27a equality gap unexpectedly absent' >&2
+              exit 1
+          fi
+          grep -F "Core IR shadow does not yet support function 'probe_equality'" /tmp/m27-eq-before.err >/dev/null
+
+      - name: Apply M27a equality candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 -m py_compile tools/dev/patch-core-integer-equality-common-m27a.py
+          python3 tools/dev/patch-core-integer-equality-common-m27a.py
+          clang-format-18 -i src/core/core_lower.c
+          git diff --check
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-m27a-compiler
+
+      - name: Prove M27a and expose switch seam
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          c="$GITHUB_WORKSPACE/build/core-m27a-compiler/bin/minic"
+          cat > build/core-m27-shapes/equality_unsigned.i <<'EOF'
+          int probe_equality_unsigned(const unsigned char *p) { return p[0] != 255; }
           EOF
           cat > build/core-m27-shapes/nested_if_equivalent.i <<'EOF'
           int probe_nested_if_equivalent(const char *p) { if (p[0] == '\001') { if (p[1]) return p[1]; } return 0; }
@@ -75,28 +80,26 @@ jobs:
           int probe_switch_range(const char *p) { switch (p[1]) { case '0' ... '7': return p[1]; case 'c': return p[1]; default: return 0; } }
           EOF
 
-          for f in build/core-m27-shapes/*.i; do
-              name=$(basename "$f" .i)
+          for name in equality equality_unsigned nested_if_equivalent exact_if_condition; do
+              MINIC_CORE_IR=strict "$c" -S "build/core-m27-shapes/$name.i" -o "build/core-m27-shapes/$name.after.s"
+              printf 'M27A_PASS name=%s\n' "$name"
+          done
+          for name in switch_simple switch_range; do
               set +e
-              MINIC_CORE_IR=strict "$c" -S "$f" -o "build/core-m27-shapes/$name.s" 2>"build/core-m27-shapes/$name.err"
+              MINIC_CORE_IR=strict "$c" -S "build/core-m27-shapes/$name.i" -o "build/core-m27-shapes/$name.after.s" 2>"build/core-m27-shapes/$name.after.err"
               rc=$?
               set -e
-              printf 'M27_SHAPE name=%s rc=%d\n' "$name" "$rc"
-              if [ -s "build/core-m27-shapes/$name.err" ]; then
-                  sed -n '1,12p' "build/core-m27-shapes/$name.err"
-              fi
+              printf 'M27A_SWITCH_GAP name=%s rc=%d\n' "$name" "$rc"
+              test "$rc" -ne 0
+              grep -F "Core IR shadow does not yet support function 'probe_" "build/core-m27-shapes/$name.after.err" >/dev/null
           done
 
-      - name: Compile exact representative and report blocker
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          c="$GITHUB_WORKSPACE/build/core-m27-probe/bin/minic"
           version_i=$(cat build/core-m27-version-path.txt)
           set +e
-          MINIC_CORE_IR=strict "$c" -S "$version_i" -o /tmp/m27-version.s 2>/tmp/m27-version.err
+          MINIC_CORE_IR=strict "$c" -S "$version_i" -o /tmp/m27a-version.s 2>/tmp/m27a-version.err
           rc=$?
           set -e
-          printf 'M27_EXACT_VERSION_RC=%d\n' "$rc"
-          sed -n '1,30p' /tmp/m27-version.err
-          grep -F "Core IR shadow does not yet support function 'printk_get_level'" /tmp/m27-version.err >/dev/null
+          printf 'M27A_EXACT_VERSION_RC=%d\n' "$rc"
+          sed -n '1,20p' /tmp/m27a-version.err
+          test "$rc" -ne 0
+          grep -F "Core IR shadow does not yet support function 'printk_get_level'" /tmp/m27a-version.err >/dev/null
