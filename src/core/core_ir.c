@@ -621,6 +621,17 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
                instruction->value.parameter_index < function->parameter_count &&
                minic_type_equal(function->parameter_types[instruction->value.parameter_index],
                                 instruction->type);
+    case MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT:
+        return instruction->result == MINIC_CORE_VALUE_INVALID &&
+               minic_type_is_void(instruction->type) &&
+               instruction->value.parameter_object.parameter_index < function->parameter_count &&
+               instruction->value.parameter_object.object_id < function->object_count &&
+               minic_type_is_record(
+                   function
+                       ->parameter_types[instruction->value.parameter_object.parameter_index]) &&
+               minic_type_equal(
+                   function->parameter_types[instruction->value.parameter_object.parameter_index],
+                   function->objects[instruction->value.parameter_object.object_id].type);
     case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS: {
         MinicType pointer_type;
 
@@ -769,6 +780,12 @@ static bool terminator_is_valid(const MinicCoreFunction *function,
     case MINIC_CORE_TERMINATOR_RETURN:
         if (minic_type_is_void(function->return_type)) {
             return terminator->return_value == MINIC_CORE_VALUE_INVALID;
+        }
+        if (minic_type_is_record(function->return_type)) {
+            return terminator->return_value == MINIC_CORE_VALUE_INVALID &&
+                   terminator->return_object < function->object_count &&
+                   minic_type_equal(function->objects[terminator->return_object].type,
+                                    function->return_type);
         }
         return terminator->return_value < function->value_count &&
                available_values[terminator->return_value] &&
@@ -1052,6 +1069,11 @@ static bool dump_instruction(FILE *output,
                        "  %%%" PRIu32 " = parameter %zu\n",
                        instruction->result,
                        instruction->value.parameter_index) >= 0;
+    case MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT:
+        return fprintf(output,
+                       "  parameter.object %zu, %%o%" PRIu32 "\n",
+                       instruction->value.parameter_object.parameter_index,
+                       instruction->value.parameter_object.object_id) >= 0;
     case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS:
         return fprintf(output,
                        "  %%%" PRIu32 " = object.addr %%o%" PRIu32 "\n",
@@ -1141,9 +1163,15 @@ static bool dump_instruction(FILE *output,
     return false;
 }
 
-static bool dump_terminator(FILE *output, const MinicCoreTerminator *terminator) {
+static bool dump_terminator(FILE *output,
+                            const MinicCoreFunction *function,
+                            const MinicCoreTerminator *terminator) {
     switch (terminator->kind) {
     case MINIC_CORE_TERMINATOR_RETURN:
+        if (function != NULL && minic_type_is_record(function->return_type)) {
+            return fprintf(output, "  return.object %%o%" PRIu32 "\n", terminator->return_object) >=
+                   0;
+        }
         if (terminator->return_value == MINIC_CORE_VALUE_INVALID) {
             return fprintf(output, "  return\n") >= 0;
         }
@@ -1193,7 +1221,7 @@ bool minic_core_function_dump(FILE *output, const MinicCoreFunction *function) {
                 return false;
             }
         }
-        if (!dump_terminator(output, &block->terminator)) {
+        if (!dump_terminator(output, function, &block->terminator)) {
             return false;
         }
     }

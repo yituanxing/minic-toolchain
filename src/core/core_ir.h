@@ -54,6 +54,7 @@ typedef enum MinicCoreInstructionKind {
     MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT,
     MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO,
     MINIC_CORE_INSTRUCTION_PARAMETER,
+    MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT,
     MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS,
     MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS,
     MINIC_CORE_INSTRUCTION_FIELD_ADDRESS,
@@ -120,6 +121,10 @@ typedef struct MinicCoreInstruction {
         } integer_overflow;
         MinicCoreValueId operand;
         size_t parameter_index;
+        struct {
+            size_t parameter_index;
+            MinicCoreObjectId object_id;
+        } parameter_object;
         MinicCoreObjectId object_id;
         MinicCoreGlobalId global_id;
         struct {
@@ -154,6 +159,7 @@ typedef struct MinicCoreTerminator {
     MinicCoreTerminatorKind kind;
     MinicSourceSpan span;
     MinicCoreValueId return_value;
+    MinicCoreObjectId return_object;
     MinicCoreBlockId branch_target;
     struct {
         MinicCoreValueId condition;

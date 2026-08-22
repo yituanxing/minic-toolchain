@@ -122,71 +122,86 @@ static MinicCoreLowerStatus lower_parameter_ingress(MinicCoreLowerContext *conte
         const MinicLocal *parameter;
         MinicCoreInstruction instruction;
         MinicCoreObjectId object_id;
-        MinicCoreValueId address_id;
-        MinicCoreValueId parameter_value;
         MinicCoreLowerStatus status;
         MinicLocalId local_id;
         MinicType parameter_value_type;
-        MinicType pointer_type;
 
         local_id = context->source_function->local_begin + parameter_index;
         parameter = minic_c0_program_local(context->body->program, local_id);
         if (parameter == NULL) {
             return MINIC_CORE_LOWER_ERROR;
         }
-        if (!core_memory_scalar_type(parameter->type) || minic_type_is_volatile(parameter->type) ||
-            parameter->is_array || parameter->is_register_storage) {
-            return MINIC_CORE_LOWER_UNSUPPORTED;
-        }
-        if (!minic_type_unqualified(parameter->type, &parameter_value_type) ||
-            !core_memory_scalar_type(parameter_value_type) ||
-            minic_type_is_const(parameter_value_type) ||
-            minic_type_is_volatile(parameter_value_type) ||
+        if (minic_type_is_volatile(parameter->type) || parameter->is_array ||
+            parameter->is_register_storage ||
+            !minic_type_unqualified(parameter->type, &parameter_value_type) ||
             !minic_type_equal(parameter_value_type,
                               context->source_function->parameter_types[parameter_index])) {
-            return MINIC_CORE_LOWER_ERROR;
+            return MINIC_CORE_LOWER_UNSUPPORTED;
         }
         status = lower_local_object(context, local_id, &object_id);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
 
-        (void)memset(&instruction, 0, sizeof(instruction));
-        instruction.kind = MINIC_CORE_INSTRUCTION_PARAMETER;
-        instruction.span = parameter->name_span;
-        instruction.type = parameter_value_type;
-        instruction.result = MINIC_CORE_VALUE_INVALID;
-        instruction.value.parameter_index = parameter_index;
-        if (!minic_core_function_append_value_instruction(
-                context->function, context->block_id, &instruction, &parameter_value)) {
-            return MINIC_CORE_LOWER_ERROR;
+        if (minic_type_is_record(parameter_value_type)) {
+            (void)memset(&instruction, 0, sizeof(instruction));
+            instruction.kind = MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT;
+            instruction.span = parameter->name_span;
+            instruction.type = minic_type_void();
+            instruction.result = MINIC_CORE_VALUE_INVALID;
+            instruction.value.parameter_object.parameter_index = parameter_index;
+            instruction.value.parameter_object.object_id = object_id;
+            if (!minic_core_function_append_effect_instruction(
+                    context->function, context->block_id, &instruction)) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            continue;
         }
+        if (!core_memory_scalar_type(parameter_value_type)) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        {
+            MinicCoreValueId address_id;
+            MinicCoreValueId parameter_value;
+            MinicType pointer_type;
 
-        if (!minic_type_pointer_to(parameter->type, &pointer_type)) {
-            return MINIC_CORE_LOWER_ERROR;
-        }
-        (void)memset(&instruction, 0, sizeof(instruction));
-        instruction.kind = MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS;
-        instruction.span = parameter->name_span;
-        instruction.type = pointer_type;
-        instruction.result = MINIC_CORE_VALUE_INVALID;
-        instruction.value.object_id = object_id;
-        if (!minic_core_function_append_value_instruction(
-                context->function, context->block_id, &instruction, &address_id)) {
-            return MINIC_CORE_LOWER_ERROR;
-        }
+            (void)memset(&instruction, 0, sizeof(instruction));
+            instruction.kind = MINIC_CORE_INSTRUCTION_PARAMETER;
+            instruction.span = parameter->name_span;
+            instruction.type = parameter_value_type;
+            instruction.result = MINIC_CORE_VALUE_INVALID;
+            instruction.value.parameter_index = parameter_index;
+            if (!minic_core_function_append_value_instruction(
+                    context->function, context->block_id, &instruction, &parameter_value)) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
 
-        (void)memset(&instruction, 0, sizeof(instruction));
-        instruction.kind = MINIC_CORE_INSTRUCTION_STORE;
-        instruction.span = parameter->name_span;
-        instruction.type = minic_type_void();
-        instruction.result = MINIC_CORE_VALUE_INVALID;
-        instruction.value.store.address = address_id;
-        instruction.value.store.stored_value = parameter_value;
-        instruction.value.store.is_volatile = false;
-        if (!minic_core_function_append_effect_instruction(
-                context->function, context->block_id, &instruction)) {
-            return MINIC_CORE_LOWER_ERROR;
+            if (!minic_type_pointer_to(parameter->type, &pointer_type)) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            (void)memset(&instruction, 0, sizeof(instruction));
+            instruction.kind = MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS;
+            instruction.span = parameter->name_span;
+            instruction.type = pointer_type;
+            instruction.result = MINIC_CORE_VALUE_INVALID;
+            instruction.value.object_id = object_id;
+            if (!minic_core_function_append_value_instruction(
+                    context->function, context->block_id, &instruction, &address_id)) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+
+            (void)memset(&instruction, 0, sizeof(instruction));
+            instruction.kind = MINIC_CORE_INSTRUCTION_STORE;
+            instruction.span = parameter->name_span;
+            instruction.type = minic_type_void();
+            instruction.result = MINIC_CORE_VALUE_INVALID;
+            instruction.value.store.address = address_id;
+            instruction.value.store.stored_value = parameter_value;
+            instruction.value.store.is_volatile = false;
+            if (!minic_core_function_append_effect_instruction(
+                    context->function, context->block_id, &instruction)) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
         }
     }
     return MINIC_CORE_LOWER_OK;
@@ -2033,7 +2048,8 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                    : MINIC_CORE_LOWER_ERROR;
     }
     if (expression->kind == MINIC_EXPRESSION_COMPOUND_ASSIGNMENT &&
-        (expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT ||
+        (expression->value.binary.operator_kind == MINIC_BINARY_ADD ||
+         expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT ||
          expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_AND ||
          expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_XOR ||
          expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_OR)) {
@@ -2119,6 +2135,9 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         }
         (void)memset(&instruction, 0, sizeof(instruction));
         switch (expression->value.binary.operator_kind) {
+        case MINIC_BINARY_ADD:
+            instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_ADD;
+            break;
         case MINIC_BINARY_SUBTRACT:
             instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT;
             break;
@@ -2450,6 +2469,7 @@ static MinicCoreLowerStatus lower_return(MinicCoreLowerContext *context,
     terminator.kind = MINIC_CORE_TERMINATOR_RETURN;
     terminator.span = statement->span;
     terminator.return_value = MINIC_CORE_VALUE_INVALID;
+    terminator.return_object = MINIC_CORE_OBJECT_INVALID;
     if (minic_type_is_void(context->source_function->return_type)) {
         if (statement->expression != MINIC_EXPRESSION_INVALID) {
             return MINIC_CORE_LOWER_UNSUPPORTED;
@@ -2471,6 +2491,24 @@ static MinicCoreLowerStatus lower_return(MinicCoreLowerContext *context,
                                    context->source_function->return_type))) {
                 return MINIC_CORE_LOWER_UNSUPPORTED;
             }
+        } else if (minic_type_is_record(context->source_function->return_type)) {
+            const MinicExpression *expression;
+            const MinicLocal *local;
+            MinicType value_type;
+
+            expression = minic_c0_program_expression(context->body->program, statement->expression);
+            if (expression == NULL || expression->kind != MINIC_EXPRESSION_LOCAL ||
+                expression->value_category != MINIC_VALUE_LVALUE ||
+                !minic_type_unqualified(expression->type, &value_type) ||
+                !minic_type_equal(value_type, context->source_function->return_type)) {
+                return MINIC_CORE_LOWER_UNSUPPORTED;
+            }
+            local = minic_c0_program_local(context->body->program, expression->value.local_id);
+            if (local == NULL || !minic_type_is_record(local->type)) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            status =
+                lower_local_object(context, expression->value.local_id, &terminator.return_object);
         } else {
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
