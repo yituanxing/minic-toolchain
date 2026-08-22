@@ -1,0 +1,172 @@
+name: One-shot Core Opaque Inline Asm M18
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    if: github.actor != 'github-actions[bot]' && github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+          fetch-depth: 0
+
+      - name: Install RISC-V runtime tools
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mapfile -t packages < <(grep -Ev '^[[:space:]]*(#|$)' tools/ci/ubuntu-24.04-packages.txt)
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends "${packages[@]}"
+          sh tools/ci/verify-validation-tools.sh
+
+      - name: Restore frozen Linux corpus
+        id: linux-corpus-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+
+      - name: Prove M18 inline-asm gap
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
+          test -s build/linux-focus-corpus/selected-tus.txt
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-m18-before-compiler
+          compiler="$GITHUB_WORKSPACE/build/core-m18-before-compiler/bin/minic"
+          cat > build/core-m18-store.i <<'EOF'
+          struct node { struct node *next; struct node *prev; };
+          void core_m18_store(struct node *entry) {
+              (*(struct node * volatile *)&(entry->next)) = entry;
+          }
+          EOF
+          MINIC_CORE_IR=strict "$compiler" -S build/core-m18-store.i -o build/core-m18-store.s
+          cat > build/core-m18-before.i <<'EOF'
+          void core_m18_before(void) {
+              __asm__ __volatile__("fence rw,w" : : : "memory");
+          }
+          EOF
+          if MINIC_CORE_IR=strict "$compiler" -S build/core-m18-before.i \
+              -o build/core-m18-before.s 2>build/core-m18-before.err; then
+            echo 'M18 zero-operand inline-asm gap unexpectedly absent before patch' >&2
+            exit 1
+          fi
+          grep -F "Core IR shadow does not yet support function 'core_m18_before'" \
+            build/core-m18-before.err >/dev/null
+          printf '%s\n' 'PROVED core/m18 volatile-store=pass opaque-inline-asm=unsupported'
+
+      - name: Apply M18
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 -m py_compile tools/dev/patch-core-opaque-inline-asm-m18.py
+          python3 tools/dev/patch-core-opaque-inline-asm-m18.py
+          clang-format-18 -i \
+            src/core/core_ir.h \
+            src/core/core_ir.c \
+            src/core/core_lower.c \
+            src/target/riscv64/core_codegen.c \
+            tests/compiler/c0/core_opaque_inline_asm.c \
+            tests/compiler/c0/core_opaque_inline_asm_runtime.c
+          sh -n tests/compiler/c0/run-core-opaque-inline-asm.sh
+          bash -n .github/scripts/compiler-c0-full-gate.sh
+          git diff --check
+          grep -F 'MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM' src/core/core_ir.h >/dev/null
+          grep -F 'minic_core_function_add_opaque_inline_asm' src/core/core_lower.c >/dev/null
+          grep -F 'source->output_count != 0U' src/core/core_lower.c >/dev/null
+          grep -F 'source->input_count != 0U' src/core/core_lower.c >/dev/null
+          grep -F 'source->is_goto' src/core/core_lower.c >/dev/null
+          grep -F 'emit_opaque_inline_asm' src/target/riscv64/core_codegen.c >/dev/null
+
+      - name: Build and validate M18
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-m18-compiler
+          compiler="$GITHUB_WORKSPACE/build/core-m18-compiler/bin/minic"
+          MINIC="$compiler" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/core-m18-focused" \
+          RISCV_CC=riscv64-linux-gnu-gcc \
+          QEMU_RISCV64=qemu-riscv64 \
+            sh tests/compiler/c0/run-core-opaque-inline-asm.sh
+          MINIC="$compiler" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/core-m18-legacy-fence" \
+            sh tests/compiler/c0/run-gnu-inline-asm-fence.sh
+          MINIC="$compiler" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/core-m18-statement-expression-regression" \
+          RISCV_CC=riscv64-linux-gnu-gcc \
+          QEMU_RISCV64=qemu-riscv64 \
+            sh tests/compiler/c0/run-core-statement-expression.sh
+          MINIC="$compiler" bash tests/core/run-core-ir-shadow.sh
+
+      - name: Replay frozen strict frontier
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/core-m18-compiler/bin/minic"
+          set +e
+          MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
+            --minic "$compiler" \
+            --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
+            --work "$GITHUB_WORKSPACE/build/core-m18-strict" \
+            --jobs 4 --offset 0 --limit 500 --sample-count 64 --indices ''
+          replay_status=$?
+          set -e
+          printf 'CORE_M18_REPLAY_STATUS=%d\n' "$replay_status"
+          python3 - <<'PY'
+          from collections import Counter
+          import json, re
+          from pathlib import Path
+          rows = json.loads(Path('build/core-m18-strict/batch-results.json').read_text())
+          unsupported_re = re.compile(r"^Core IR shadow does not yet support function '([^']+)'$")
+          unsupported = Counter()
+          errors = []
+          passes = 0
+          for row in rows:
+              if row['status'] == 'PASS':
+                  passes += 1
+                  continue
+              message = str(row['message'])
+              match = unsupported_re.match(message)
+              if match:
+                  unsupported[match.group(1)] += 1
+              else:
+                  errors.append((row['index'], message))
+          print(f'CORE_M18_FRONTIER selected={len(rows)} pass={passes} unsupported={sum(unsupported.values())} error={len(errors)}')
+          for function, count in unsupported.most_common():
+              print(f'CORE_M18_BLOCKER count={count} function={function}')
+          for index, message in errors:
+              print(f'CORE_M18_ERROR index={index} message={message}')
+          if errors:
+              raise SystemExit('M18 introduced non-UNSUPPORTED strict failures')
+          if unsupported.get('list_del_init_careful', 0) != 0:
+              raise SystemExit('M18 did not pierce the proven list_del_init_careful inline-asm blocker')
+          PY
+
+      - name: Publish M18 product
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm tools/dev/patch-core-opaque-inline-asm-m18.py
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            src/core/core_ir.h \
+            src/core/core_ir.c \
+            src/core/core_lower.c \
+            src/target/riscv64/core_codegen.c \
+            tests/compiler/c0/core_opaque_inline_asm.c \
+            tests/compiler/c0/core_opaque_inline_asm_runtime.c \
+            tests/compiler/c0/run-core-opaque-inline-asm.sh \
+            .github/scripts/compiler-c0-full-gate.sh \
+            tools/dev/patch-core-opaque-inline-asm-m18.py
+          git diff --cached --check
+          git commit -m 'core: carry zero-operand opaque inline asm'
+          git push origin HEAD:refactor/declaration-sema-v1
