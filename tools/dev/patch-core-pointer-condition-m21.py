@@ -100,8 +100,8 @@ int main(void) {
 }
 ''')
 
-Path("tests/compiler/c0/run-core-pointer-condition-m21.sh").write_text(r'''#!/usr/bin/env bash
-set -Eeuo pipefail
+Path("tests/compiler/c0/run-core-pointer-condition-m21.sh").write_text(r'''#!/bin/sh
+set -eu
 
 : "${MINIC:?MINIC is required}"
 : "${BUILD_DIR:?BUILD_DIR is required}"
