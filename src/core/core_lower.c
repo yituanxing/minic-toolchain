@@ -2032,7 +2032,9 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                    : MINIC_CORE_LOWER_ERROR;
     }
     if (expression->kind == MINIC_EXPRESSION_COMPOUND_ASSIGNMENT &&
-        (expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_AND ||
+        (expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT ||
+         expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_AND ||
+         expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_XOR ||
          expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_OR)) {
         const MinicExpression *source;
         const MinicExpression *target;
@@ -2115,9 +2117,22 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
             return status;
         }
         (void)memset(&instruction, 0, sizeof(instruction));
-        instruction.kind = expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_AND
-                               ? MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND
-                               : MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR;
+        switch (expression->value.binary.operator_kind) {
+        case MINIC_BINARY_SUBTRACT:
+            instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT;
+            break;
+        case MINIC_BINARY_BITWISE_AND:
+            instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND;
+            break;
+        case MINIC_BINARY_BITWISE_XOR:
+            instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR;
+            break;
+        case MINIC_BINARY_BITWISE_OR:
+            instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR;
+            break;
+        default:
+            return MINIC_CORE_LOWER_ERROR;
+        }
         instruction.span = expression->span;
         instruction.type = common_type;
         instruction.result = MINIC_CORE_VALUE_INVALID;
@@ -2949,6 +2964,37 @@ static MinicCoreLowerStatus lower_opaque_inline_asm(MinicCoreLowerContext *conte
     if (source == NULL) {
         return MINIC_CORE_LOWER_ERROR;
     }
+    if (!source->is_volatile && !source->is_goto && source->template_text != NULL &&
+        source->template_length == 0U && source->outputs != NULL && source->output_count == 1U &&
+        source->input_count == 0U && source->label_count == 0U && source->clobber_count == 0U &&
+        source->register_clobber_count == 0U && !source->has_memory_clobber) {
+        const MinicInlineAsmOperand *output;
+        const MinicExpression *output_expression;
+        const MinicLocal *local;
+
+        output = &source->outputs[0];
+        output_expression = minic_c0_program_expression(context->body->program, output->expression);
+        if (output->access == MINIC_INLINE_ASM_OPERAND_READ_WRITE &&
+            output->constraint_text != NULL && output->constraint_length == 3U &&
+            memcmp(output->constraint_text, "+rm", 3U) == 0 && output_expression != NULL &&
+            output_expression->kind == MINIC_EXPRESSION_LOCAL &&
+            output_expression->value_category == MINIC_VALUE_LVALUE &&
+            core_memory_scalar_type(output_expression->type) &&
+            !minic_type_is_const(output_expression->type) &&
+            !minic_type_is_volatile(output_expression->type)) {
+            local =
+                minic_c0_program_local(context->body->program, output_expression->value.local_id);
+            if (local == NULL) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            if (!local->is_array && !local->is_register_storage &&
+                minic_type_equal(local->type, output_expression->type) &&
+                !minic_type_is_const(local->type) && !minic_type_is_volatile(local->type)) {
+                return MINIC_CORE_LOWER_OK;
+            }
+        }
+    }
+
     if (!source->is_volatile || source->is_goto || source->template_text == NULL ||
         source->template_length == 0U || source->output_count != 0U || source->input_count != 0U ||
         source->label_count != 0U || source->register_clobber_count != 0U) {
