@@ -285,6 +285,14 @@ core_integer_subtract_overflow_focused() {
         sh tests/compiler/c0/run-core-integer-subtract-overflow.sh
 }
 
+core_target_constant_fallback_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" \
+    BUILD_DIR="$root/build/ci-core-target-constant-fallback" \
+    RISCV_CC=riscv64-linux-gnu-gcc \
+    QEMU_RISCV64=qemu-riscv64 \
+        sh tests/compiler/c0/run-core-target-constant-fallback.sh
+}
+
 core_integer_bitwise_not_focused() {
     MINIC="$root/build/ci-debug/bin/minic" \
     BUILD_DIR="$root/build/ci-core-integer-bitwise-not" \
@@ -454,6 +462,7 @@ start_gate core-integer-multiply-overflow-focused core_integer_multiply_overflow
 start_gate core-integer-add-overflow-focused core_integer_add_overflow_focused
 start_gate core-short-circuit-or-focused core_short_circuit_or_focused
 start_gate core-integer-subtract-overflow-focused core_integer_subtract_overflow_focused
+start_gate core-target-constant-fallback-focused core_target_constant_fallback_focused
 start_gate core-integer-bitwise-not-focused core_integer_bitwise_not_focused
 start_gate record-fam-prefix-focused runtime_record_fam_prefix_focused
 start_gate linenoise-driven-focused linenoise_driven_focused

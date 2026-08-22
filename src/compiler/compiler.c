@@ -89,11 +89,12 @@ static void minic_core_candidates_destroy(MinicCoreCandidates *candidates) {
 }
 
 static bool minic_prepare_core_candidates(const MinicC0Program *program,
+                                          const MinicTargetInfo *target,
                                           MinicCoreCandidates *output) {
     MinicCoreCandidates candidates;
     size_t function_index;
 
-    if (program == NULL || output == NULL ||
+    if (program == NULL || target == NULL || output == NULL ||
         program->function_count > SIZE_MAX / sizeof(*candidates.functions) ||
         program->function_count > SIZE_MAX / sizeof(*candidates.statuses)) {
         return false;
@@ -136,7 +137,7 @@ static bool minic_prepare_core_candidates(const MinicC0Program *program,
             continue;
         }
         candidates.statuses[function_index] =
-            minic_core_lower_function(&body, &candidates.functions[function_index]);
+            minic_core_lower_function(&body, target, &candidates.functions[function_index]);
         candidates.core_required[function_index] =
             candidates.statuses[function_index] == MINIC_CORE_LOWER_OK;
     }
@@ -377,7 +378,7 @@ int minic_compile_preprocessed_file(const char *input_path,
         success = false;
     }
     if (success && core_validation_mode != MINIC_CORE_SHADOW_DISABLED &&
-        !minic_prepare_core_candidates(&program, &core_candidates)) {
+        !minic_prepare_core_candidates(&program, target_info, &core_candidates)) {
         minic_set_diagnostic(
             diagnostic, input_path, 1U, 1U, "cannot retain Core IR lowering results");
         success = false;

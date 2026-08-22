@@ -1,5 +1,6 @@
 #include "core/core_lower.h"
 
+#include "frontend/const_eval.h"
 #include "frontend/expression_semantics.h"
 #include <stdlib.h>
 #include <string.h>
@@ -7,6 +8,7 @@
 typedef struct MinicCoreLowerContext {
     const MinicFunctionBodyView *body;
     const MinicFunction *source_function;
+    const MinicTargetInfo *target;
     MinicCoreFunction *function;
     MinicCoreBlockId block_id;
     MinicCoreObjectId *local_objects;
@@ -913,6 +915,28 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                    ? MINIC_CORE_LOWER_OK
                    : MINIC_CORE_LOWER_ERROR;
     }
+    if (minic_type_is_integer(expression->type) && context->target != NULL) {
+        MinicConstValue constant;
+        uint64_t constant_bits;
+
+        if (minic_const_eval_integer(
+                context->body->program, context->target, expression_id, &constant) &&
+            minic_type_equal(constant.type, expression->type)) {
+            (void)memset(&instruction, 0, sizeof(instruction));
+            instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+            instruction.span = expression->span;
+            instruction.type = expression->type;
+            instruction.result = MINIC_CORE_VALUE_INVALID;
+            constant_bits = constant.bits;
+            (void)memcpy(&instruction.value.integer_value,
+                         &constant_bits,
+                         sizeof(instruction.value.integer_value));
+            return minic_core_function_append_value_instruction(
+                       context->function, context->block_id, &instruction, value_id)
+                       ? MINIC_CORE_LOWER_OK
+                       : MINIC_CORE_LOWER_ERROR;
+        }
+    }
     return MINIC_CORE_LOWER_UNSUPPORTED;
 }
 
@@ -1475,6 +1499,7 @@ lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool
 }
 
 MinicCoreLowerStatus minic_core_lower_function(const MinicFunctionBodyView *body,
+                                               const MinicTargetInfo *target,
                                                MinicCoreFunction *output) {
     const MinicFunction *source_function;
     const MinicBlock *source_block;
@@ -1486,7 +1511,7 @@ MinicCoreLowerStatus minic_core_lower_function(const MinicFunctionBodyView *body
     size_t local_index;
     bool terminated;
 
-    if (body == NULL || body->program == NULL || output == NULL) {
+    if (body == NULL || body->program == NULL || target == NULL || output == NULL) {
         return MINIC_CORE_LOWER_ERROR;
     }
     source_function = minic_c0_function_body_function(body);
@@ -1527,6 +1552,7 @@ MinicCoreLowerStatus minic_core_lower_function(const MinicFunctionBodyView *body
     (void)memset(&context, 0, sizeof(context));
     context.body = body;
     context.source_function = source_function;
+    context.target = target;
     context.function = &lowered;
     context.block_id = block_id;
     context.local_objects = local_objects;

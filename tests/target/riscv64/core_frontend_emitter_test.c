@@ -103,7 +103,7 @@ static bool emit_frontend_functions(FILE *file, const MinicC0Program *program) {
             return false;
         }
         minic_core_function_initialize(&core);
-        status = minic_core_lower_function(&body, &core);
+        status = minic_core_lower_function(&body, minic_default_target_info(), &core);
         success = status == MINIC_CORE_LOWER_OK && minic_core_function_verify(&core) &&
                   minic_riscv64_core_function_can_emit_basic_v0_for_program(program, &core) &&
                   minic_riscv64_function_symbol_from_function(function, &symbol);
