@@ -3543,8 +3543,8 @@ static bool parse_extern_object_declarator(MinicParser *parser,
 }
 
 bool minic_parser_external_object_types_compatible(const MinicC0Program *program,
-                                               MinicType existing_type,
-                                               MinicType declared_type) {
+                                                   MinicType existing_type,
+                                                   MinicType declared_type) {
     return minic_declaration_external_object_types_compatible(
         program, existing_type, declared_type);
 }
