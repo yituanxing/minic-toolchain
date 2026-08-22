@@ -238,6 +238,10 @@ static bool core_instruction_supported(const MinicC0Program *program,
     case MINIC_CORE_INSTRUCTION_LOAD:
     case MINIC_CORE_INSTRUCTION_STORE:
         return true;
+    case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS:
+        return instruction->value.global_id < function->global_count &&
+               function->globals[instruction->value.global_id].name != NULL &&
+               function->globals[instruction->value.global_id].name_length != 0U;
     case MINIC_CORE_INSTRUCTION_CALL:
         if (instruction->value.call.callee_id >= function->callee_count ||
             instruction->value.call.argument_count > 8U) {
@@ -268,6 +272,12 @@ static bool core_function_can_emit_basic_v0(const MinicC0Program *program,
     }
     for (index = 0U; index < function->object_count; ++index) {
         if (!core_scalar_type(function->objects[index].type)) {
+            return false;
+        }
+    }
+    for (index = 0U; index < function->global_count; ++index) {
+        if (function->globals[index].name == NULL || function->globals[index].name_length == 0U ||
+            !core_scalar_type(function->globals[index].type)) {
             return false;
         }
     }
@@ -459,6 +469,13 @@ static bool emit_instruction(FILE *file,
     case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS:
         if (!core_object_offset(frame, instruction->value.object_id, &object_offset) ||
             !emit_sp_address(file, "t0", object_offset)) {
+            return false;
+        }
+        return store_core_value(file, frame, instruction->result, "t0");
+    case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS:
+        if (instruction->value.global_id >= function->global_count ||
+            fprintf(file, "  la t0, %s\n", function->globals[instruction->value.global_id].name) <
+                0) {
             return false;
         }
         return store_core_value(file, frame, instruction->result, "t0");

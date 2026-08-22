@@ -211,6 +211,38 @@ static MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
                    ? MINIC_CORE_LOWER_OK
                    : MINIC_CORE_LOWER_ERROR;
     }
+    if (expression->kind == MINIC_EXPRESSION_GLOBAL_OBJECT) {
+        const MinicGlobalObject *global;
+        MinicCoreGlobalId global_id;
+
+        global = minic_c0_program_global_object(context->body->program,
+                                                expression->value.global_object_id);
+        if (global == NULL || global->name == NULL || global->name_length == 0U) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        if (!minic_type_equal(global->type, expression->type)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        if (!core_memory_scalar_type(global->type)) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        if (!minic_core_function_add_global(
+                context->function, global->name, global->name_length, global->type, &global_id)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        (void)memset(&instruction, 0, sizeof(instruction));
+        instruction.kind = MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS;
+        instruction.span = expression->span;
+        instruction.result = MINIC_CORE_VALUE_INVALID;
+        instruction.value.global_id = global_id;
+        if (!minic_type_pointer_to(expression->type, &instruction.type)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        return minic_core_function_append_value_instruction(
+                   context->function, context->block_id, &instruction, address_id)
+                   ? MINIC_CORE_LOWER_OK
+                   : MINIC_CORE_LOWER_ERROR;
+    }
     if (expression->kind == MINIC_EXPRESSION_DEREFERENCE) {
         MinicCoreValueId pointer_id;
         MinicType expected_pointer;

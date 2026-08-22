@@ -13,12 +13,14 @@ typedef uint32_t MinicCoreValueId;
 typedef uint32_t MinicCoreInstructionId;
 typedef uint32_t MinicCoreBlockId;
 typedef uint32_t MinicCoreObjectId;
+typedef uint32_t MinicCoreGlobalId;
 typedef uint32_t MinicCoreCalleeId;
 
 #define MINIC_CORE_VALUE_INVALID UINT32_MAX
 #define MINIC_CORE_INSTRUCTION_INVALID UINT32_MAX
 #define MINIC_CORE_BLOCK_INVALID UINT32_MAX
 #define MINIC_CORE_OBJECT_INVALID UINT32_MAX
+#define MINIC_CORE_GLOBAL_INVALID UINT32_MAX
 #define MINIC_CORE_CALLEE_INVALID UINT32_MAX
 
 typedef enum MinicCorePhase { MINIC_CORE_PHASE_EXECUTION_SHADOW = 0 } MinicCorePhase;
@@ -32,6 +34,7 @@ typedef enum MinicCoreInstructionKind {
     MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO,
     MINIC_CORE_INSTRUCTION_PARAMETER,
     MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS,
+    MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS,
     MINIC_CORE_INSTRUCTION_FIELD_ADDRESS,
     MINIC_CORE_INSTRUCTION_LOAD,
     MINIC_CORE_INSTRUCTION_STORE,
@@ -53,6 +56,12 @@ typedef struct MinicCoreObject {
     MinicSourceSpan span;
     MinicType type;
 } MinicCoreObject;
+
+typedef struct MinicCoreGlobal {
+    char *name;
+    size_t name_length;
+    MinicType type;
+} MinicCoreGlobal;
 
 typedef struct MinicCoreCallee {
     char *name;
@@ -76,6 +85,7 @@ typedef struct MinicCoreInstruction {
         MinicCoreValueId operand;
         size_t parameter_index;
         MinicCoreObjectId object_id;
+        MinicCoreGlobalId global_id;
         struct {
             MinicCoreValueId base;
             MinicRecordId record_id;
@@ -125,6 +135,9 @@ typedef struct MinicCoreFunction {
     MinicType return_type;
     MinicType *parameter_types;
     size_t parameter_count;
+    MinicCoreGlobal *globals;
+    size_t global_count;
+    size_t global_capacity;
     MinicCoreCallee *callees;
     size_t callee_count;
     size_t callee_capacity;
@@ -159,6 +172,11 @@ bool minic_core_function_add_object(MinicCoreFunction *function,
                                     MinicSourceSpan span,
                                     MinicType type,
                                     MinicCoreObjectId *object_id);
+bool minic_core_function_add_global(MinicCoreFunction *function,
+                                    const char *name,
+                                    size_t name_length,
+                                    MinicType type,
+                                    MinicCoreGlobalId *global_id);
 bool minic_core_function_add_callee(MinicCoreFunction *function,
                                     const char *name,
                                     size_t name_length,

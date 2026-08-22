@@ -55,6 +55,7 @@ void minic_core_function_initialize(MinicCoreFunction *function) {
 void minic_core_function_destroy(MinicCoreFunction *function) {
     size_t block_index;
     size_t callee_index;
+    size_t global_index;
 
     if (function == NULL) {
         return;
@@ -66,8 +67,12 @@ void minic_core_function_destroy(MinicCoreFunction *function) {
         free(function->callees[callee_index].name);
         free(function->callees[callee_index].parameter_types);
     }
+    for (global_index = 0U; global_index < function->global_count; ++global_index) {
+        free(function->globals[global_index].name);
+    }
     free(function->name);
     free(function->parameter_types);
+    free(function->globals);
     free(function->callees);
     free(function->call_arguments);
     free(function->objects);
@@ -152,6 +157,48 @@ bool minic_core_function_add_object(MinicCoreFunction *function,
     function->objects[function->object_count].type = type;
     function->object_count += 1U;
     *object_id = new_id;
+    return true;
+}
+
+bool minic_core_function_add_global(MinicCoreFunction *function,
+                                    const char *name,
+                                    size_t name_length,
+                                    MinicType type,
+                                    MinicCoreGlobalId *global_id) {
+    char *name_copy;
+    size_t index;
+
+    if (function == NULL || name == NULL || name_length == 0U || global_id == NULL ||
+        function->global_count >= (size_t)UINT32_MAX ||
+        (!minic_type_is_integer(type) && !minic_type_is_pointer(type))) {
+        return false;
+    }
+    for (index = 0U; index < function->global_count; ++index) {
+        const MinicCoreGlobal *existing;
+
+        existing = &function->globals[index];
+        if (existing->name_length == name_length &&
+            memcmp(existing->name, name, name_length) == 0) {
+            if (!minic_type_equal(existing->type, type)) {
+                return false;
+            }
+            *global_id = (MinicCoreGlobalId)index;
+            return true;
+        }
+    }
+    name_copy = copy_name(name, name_length);
+    if (name_copy == NULL || !grow_array((void **)&function->globals,
+                                         &function->global_capacity,
+                                         function->global_count,
+                                         sizeof(*function->globals))) {
+        free(name_copy);
+        return false;
+    }
+    function->globals[function->global_count].name = name_copy;
+    function->globals[function->global_count].name_length = name_length;
+    function->globals[function->global_count].type = type;
+    *global_id = (MinicCoreGlobalId)function->global_count;
+    function->global_count += 1U;
     return true;
 }
 
@@ -465,6 +512,17 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
         }
         return minic_type_equal(pointer_type, instruction->type);
     }
+    case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS: {
+        MinicType pointer_type;
+
+        if (!instruction_result_is_valid(function, instruction) ||
+            instruction->value.global_id >= function->global_count ||
+            !minic_type_pointer_to(function->globals[instruction->value.global_id].type,
+                                   &pointer_type)) {
+            return false;
+        }
+        return minic_type_equal(pointer_type, instruction->type);
+    }
     case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS: {
         MinicCoreValueId base;
         MinicType base_pointee;
@@ -639,6 +697,8 @@ bool minic_core_function_verify(const MinicCoreFunction *function) {
         function->name == NULL || function->name_length == 0U ||
         (function->parameter_count != 0U && function->parameter_types == NULL) ||
         !storage_shape_is_valid(
+            function->globals, function->global_count, function->global_capacity) ||
+        !storage_shape_is_valid(
             function->callees, function->callee_count, function->callee_capacity) ||
         !storage_shape_is_valid(function->call_arguments,
                                 function->call_argument_count,
@@ -654,6 +714,15 @@ bool minic_core_function_verify(const MinicCoreFunction *function) {
         function->block_count == 0U || function->entry_block != 0U ||
         function->value_count > function->instruction_count) {
         return false;
+    }
+    for (index = 0U; index < function->global_count; ++index) {
+        const MinicCoreGlobal *global;
+
+        global = &function->globals[index];
+        if (global->name == NULL || global->name_length == 0U ||
+            (!minic_type_is_integer(global->type) && !minic_type_is_pointer(global->type))) {
+            return false;
+        }
     }
     for (index = 0U; index < function->callee_count; ++index) {
         const MinicCoreCallee *callee;
@@ -753,6 +822,14 @@ static bool dump_instruction(FILE *output,
                        "  %%%" PRIu32 " = object.addr %%o%" PRIu32 "\n",
                        instruction->result,
                        instruction->value.object_id) >= 0;
+    case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS:
+        if (function == NULL || instruction->value.global_id >= function->global_count) {
+            return false;
+        }
+        return fprintf(output,
+                       "  %%%" PRIu32 " = global.addr @%s\n",
+                       instruction->result,
+                       function->globals[instruction->value.global_id].name) >= 0;
     case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:
         return fprintf(output,
                        "  %%%" PRIu32 " = field.addr %%%" PRIu32 ", record=%zu, field=%zu\n",
