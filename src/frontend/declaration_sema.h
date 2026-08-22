@@ -7,6 +7,8 @@
 #include <limits.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
+#include <string.h>
 
 #define MINIC_DECLARATION_MAX_ARRAY_DIMENSIONS 8U
 
@@ -25,6 +27,23 @@ typedef enum MinicDeclarationArrayMaterializeStatus {
     MINIC_DECLARATION_ARRAY_MATERIALIZE_FIXED_FAILED,
     MINIC_DECLARATION_ARRAY_MATERIALIZE_TRANSACTION_ESCAPED
 } MinicDeclarationArrayMaterializeStatus;
+
+typedef struct MinicDeclarationExternalObjectAttributes {
+    const char *section_name;
+    size_t section_name_length;
+    size_t explicit_alignment;
+    MinicSymbolVisibility visibility;
+    bool has_section;
+    bool has_visibility;
+} MinicDeclarationExternalObjectAttributes;
+
+typedef enum MinicDeclarationExternalObjectMergeStatus {
+    MINIC_DECLARATION_EXTERNAL_OBJECT_MERGE_OK = 0,
+    MINIC_DECLARATION_EXTERNAL_OBJECT_MERGE_INVALID,
+    MINIC_DECLARATION_EXTERNAL_OBJECT_MERGE_TYPE_CONFLICT,
+    MINIC_DECLARATION_EXTERNAL_OBJECT_MERGE_ATTRIBUTE_CONFLICT,
+    MINIC_DECLARATION_EXTERNAL_OBJECT_MERGE_COMMIT_FAILED
+} MinicDeclarationExternalObjectMergeStatus;
 
 static inline bool minic_declaration_array_suffix_valid(const MinicDeclarationArraySuffix *suffix) {
     unsigned int valid_zero_length_bits;
@@ -166,6 +185,76 @@ static inline bool minic_declaration_merge_external_array_composite_type(MinicC0
     }
     return existing_array->is_zero_length == declared_array->is_zero_length &&
            existing_array->element_count == declared_count;
+}
+
+static inline bool minic_declaration_external_object_attributes_valid(
+    const MinicDeclarationExternalObjectAttributes *attributes) {
+    size_t alignment;
+
+    if (attributes == NULL) {
+        return false;
+    }
+    if (attributes->has_section &&
+        (attributes->section_name == NULL || attributes->section_name_length == 0U ||
+         attributes->section_name_length == SIZE_MAX)) {
+        return false;
+    }
+    alignment = attributes->explicit_alignment;
+    if (alignment != 0U && (alignment & (alignment - 1U)) != 0U) {
+        return false;
+    }
+    return !attributes->has_visibility ||
+           (attributes->visibility >= MINIC_SYMBOL_VISIBILITY_DEFAULT &&
+            attributes->visibility <= MINIC_SYMBOL_VISIBILITY_PROTECTED);
+}
+
+static inline MinicDeclarationExternalObjectMergeStatus minic_declaration_merge_external_object(
+    MinicC0Program *program,
+    MinicGlobalObjectId object_id,
+    MinicType declared_type,
+    const MinicDeclarationExternalObjectAttributes *attributes) {
+    const MinicGlobalObject *object;
+
+    if (program == NULL || object_id >= program->global_object_count ||
+        !minic_declaration_external_object_attributes_valid(attributes)) {
+        return MINIC_DECLARATION_EXTERNAL_OBJECT_MERGE_INVALID;
+    }
+    object = minic_c0_program_global_object(program, object_id);
+    if (object == NULL || !minic_declaration_external_object_types_compatible(
+                              program, object->type, declared_type)) {
+        return MINIC_DECLARATION_EXTERNAL_OBJECT_MERGE_TYPE_CONFLICT;
+    }
+    if (attributes->has_section && object->section_name != NULL &&
+        (object->section_name_length != attributes->section_name_length ||
+         memcmp(object->section_name, attributes->section_name, attributes->section_name_length) !=
+             0)) {
+        return MINIC_DECLARATION_EXTERNAL_OBJECT_MERGE_ATTRIBUTE_CONFLICT;
+    }
+    if (attributes->has_visibility && object->visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT &&
+        object->visibility != attributes->visibility) {
+        return MINIC_DECLARATION_EXTERNAL_OBJECT_MERGE_ATTRIBUTE_CONFLICT;
+    }
+
+    /* All semantic conflicts are rejected above. A new section is the only
+     * commit step that may allocate, so perform it before composite-type mutation.
+     * Array completion and the remaining metadata setters are allocation-free after
+     * this preflight and therefore cannot introduce a semantic half-commit. */
+    if ((attributes->has_section &&
+         !minic_c0_global_object_set_section(program,
+                                             object_id,
+                                             attributes->section_name,
+                                             attributes->section_name_length)) ||
+        (minic_type_is_array(object->type) &&
+         !minic_declaration_merge_external_array_composite_type(
+             program, object->type, declared_type)) ||
+        (attributes->explicit_alignment != 0U &&
+         !minic_c0_global_object_set_explicit_alignment(
+             program, object_id, attributes->explicit_alignment)) ||
+        (attributes->has_visibility &&
+         !minic_c0_global_object_set_visibility(program, object_id, attributes->visibility))) {
+        return MINIC_DECLARATION_EXTERNAL_OBJECT_MERGE_COMMIT_FAILED;
+    }
+    return MINIC_DECLARATION_EXTERNAL_OBJECT_MERGE_OK;
 }
 
 static inline bool
