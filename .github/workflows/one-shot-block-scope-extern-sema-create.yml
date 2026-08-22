@@ -1,0 +1,43 @@
+name: One-shot Block-Scope Extern Sema Create
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  wire:
+    if: >-
+      github.actor != 'github-actions[bot]' &&
+      github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+          fetch-depth: 0
+
+      - name: Route new block-scope extern objects through Declaration Sema
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/one-shot-block-scope-extern-sema-create.py
+          clang-format -i src/frontend/parser_global.c
+
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/block-scope-extern-sema
+          MINIC="$PWD/build/block-scope-extern-sema/bin/minic" \
+            BUILD_DIR="$PWD/build/block-scope-extern-focused" \
+            sh tests/compiler/c0/run-block-scope-extern-object.sh
+          MINIC="$PWD/build/block-scope-extern-sema/bin/minic" \
+            BUILD_DIR="$PWD/build/block-scope-extern-focused" \
+            sh tests/compiler/c0/run-block-scope-extern-multi-declarator.sh
+
+          rm tools/dev/one-shot-block-scope-extern-sema-create.py
+          git diff --check
+          git status --short
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/frontend/parser_global.c tools/dev/one-shot-block-scope-extern-sema-create.py
+          git commit -m "frontend: create block-scope extern objects through sema"
+          git push origin HEAD:refactor/declaration-sema-v1
