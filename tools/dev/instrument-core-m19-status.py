@@ -60,12 +60,12 @@ statement_new = '''        status = lower_block(context, statement_block, &termi
         if (context->source_function != NULL && context->source_function->name != NULL &&
             strcmp(context->source_function->name, "list_empty_careful") == 0) {
             (void)fprintf(stderr,
-                          "CORE_M19_STMT expression=%zu block=%zu stage=block status=%d terminated=%d continuation=%zu\\n",
+                          "CORE_M19_STMT expression=%zu block=%zu stage=block status=%d terminated=%d continuation=%u\\n",
                           expression_id,
                           expression->value.statement_expression.block,
                           (int)status,
                           terminated ? 1 : 0,
-                          context->block_id);
+                          (unsigned int)context->block_id);
         }
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
@@ -78,11 +78,11 @@ statement_new = '''        status = lower_block(context, statement_block, &termi
         if (context->source_function != NULL && context->source_function->name != NULL &&
             strcmp(context->source_function->name, "list_empty_careful") == 0) {
             (void)fprintf(stderr,
-                          "CORE_M19_STMT expression=%zu stage=result status=%d result=%zu continuation=%zu values=%zu\\n",
+                          "CORE_M19_STMT expression=%zu stage=result status=%d result=%u continuation=%u values=%zu\\n",
                           expression_id,
                           (int)status,
-                          result_value,
-                          context->block_id,
+                          (unsigned int)result_value,
+                          (unsigned int)context->block_id,
                           context->function->value_count);
         }
         if (status != MINIC_CORE_LOWER_OK) {
