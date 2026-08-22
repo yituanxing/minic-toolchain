@@ -28,6 +28,9 @@ static MinicCoreLowerStatus lower_condition_branch(MinicCoreLowerContext *contex
                                                    MinicSourceSpan span,
                                                    MinicCoreBlockId when_true,
                                                    MinicCoreBlockId when_false);
+static MinicCoreLowerStatus lower_postfix_scalar_update(MinicCoreLowerContext *context,
+                                                        const MinicExpression *expression,
+                                                        MinicCoreValueId *value_id);
 
 static bool core_memory_scalar_type(MinicType type) {
     return minic_type_is_integer(type) || minic_type_is_pointer(type);
@@ -1125,6 +1128,11 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         return lower_direct_call(context, expression, value_id);
     }
     if (expression->kind == MINIC_EXPRESSION_UNARY &&
+        (expression->value.unary.operator_kind == MINIC_UNARY_POST_INCREMENT ||
+         expression->value.unary.operator_kind == MINIC_UNARY_POST_DECREMENT)) {
+        return lower_postfix_scalar_update(context, expression, value_id);
+    }
+    if (expression->kind == MINIC_EXPRESSION_UNARY &&
         expression->value.unary.operator_kind == MINIC_UNARY_NEGATE) {
         MinicCoreValueId operand_value;
         MinicCoreLowerStatus status;
@@ -1841,30 +1849,36 @@ static MinicCoreLowerStatus lower_assignment(MinicCoreLowerContext *context,
     return lower_assignment_pair(context, target_id, source_id, statement->span);
 }
 
-static MinicCoreLowerStatus
-lower_discarded_postfix_integer_increment(MinicCoreLowerContext *context,
-                                          const MinicExpression *expression) {
+static MinicCoreLowerStatus lower_postfix_scalar_update(MinicCoreLowerContext *context,
+                                                        const MinicExpression *expression,
+                                                        MinicCoreValueId *value_id) {
     const MinicExpression *operand;
     MinicCoreInstruction instruction;
     MinicCoreValueId address;
     MinicCoreValueId current;
+    MinicCoreValueId delta;
     MinicCoreValueId one;
     MinicCoreValueId updated;
     MinicCoreLowerStatus status;
     MinicType stored_type;
+    bool increment;
 
     if (context == NULL || context->body == NULL || context->body->program == NULL ||
-        context->function == NULL || expression == NULL ||
+        context->function == NULL || expression == NULL || value_id == NULL ||
         expression->kind != MINIC_EXPRESSION_UNARY ||
-        expression->value.unary.operator_kind != MINIC_UNARY_POST_INCREMENT) {
+        (expression->value.unary.operator_kind != MINIC_UNARY_POST_INCREMENT &&
+         expression->value.unary.operator_kind != MINIC_UNARY_POST_DECREMENT)) {
         return MINIC_CORE_LOWER_ERROR;
     }
+    increment = expression->value.unary.operator_kind == MINIC_UNARY_POST_INCREMENT;
     operand = minic_c0_program_expression(context->body->program, expression->value.unary.operand);
     if (operand == NULL || operand->value_category != MINIC_VALUE_LVALUE ||
-        !minic_type_is_integer(operand->type) || minic_type_is_bool_integer(operand->type) ||
-        minic_type_is_const(operand->type) ||
+        !core_memory_scalar_type(operand->type) || minic_type_is_const(operand->type) ||
         !minic_type_unqualified(operand->type, &stored_type) ||
-        !minic_type_equal(expression->type, operand->type)) {
+        !minic_type_equal(expression->type, stored_type)) {
+        return MINIC_CORE_LOWER_UNSUPPORTED;
+    }
+    if (minic_type_is_integer(stored_type) && minic_type_is_bool_integer(stored_type)) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
     status = lower_address(context, expression->value.unary.operand, &address);
@@ -1884,27 +1898,72 @@ lower_discarded_postfix_integer_increment(MinicCoreLowerContext *context,
         return MINIC_CORE_LOWER_ERROR;
     }
 
-    (void)memset(&instruction, 0, sizeof(instruction));
-    instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
-    instruction.span = expression->span;
-    instruction.type = stored_type;
-    instruction.result = MINIC_CORE_VALUE_INVALID;
-    instruction.value.integer_value = 1;
-    if (!minic_core_function_append_value_instruction(
-            context->function, context->block_id, &instruction, &one)) {
-        return MINIC_CORE_LOWER_ERROR;
-    }
+    if (minic_type_is_integer(stored_type)) {
+        (void)memset(&instruction, 0, sizeof(instruction));
+        instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+        instruction.span = expression->span;
+        instruction.type = stored_type;
+        instruction.result = MINIC_CORE_VALUE_INVALID;
+        instruction.value.integer_value = 1;
+        if (!minic_core_function_append_value_instruction(
+                context->function, context->block_id, &instruction, &one)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        delta = one;
+        if (!increment) {
+            (void)memset(&instruction, 0, sizeof(instruction));
+            instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_NEGATE;
+            instruction.span = expression->span;
+            instruction.type = stored_type;
+            instruction.result = MINIC_CORE_VALUE_INVALID;
+            instruction.value.operand = one;
+            if (!minic_core_function_append_value_instruction(
+                    context->function, context->block_id, &instruction, &delta)) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+        }
+        (void)memset(&instruction, 0, sizeof(instruction));
+        instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_ADD;
+        instruction.span = expression->span;
+        instruction.type = stored_type;
+        instruction.result = MINIC_CORE_VALUE_INVALID;
+        instruction.value.binary.left = current;
+        instruction.value.binary.right = delta;
+        if (!minic_core_function_append_value_instruction(
+                context->function, context->block_id, &instruction, &updated)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+    } else if (minic_type_is_pointer(stored_type)) {
+        size_t element_size;
 
-    (void)memset(&instruction, 0, sizeof(instruction));
-    instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_ADD;
-    instruction.span = expression->span;
-    instruction.type = stored_type;
-    instruction.result = MINIC_CORE_VALUE_INVALID;
-    instruction.value.binary.left = current;
-    instruction.value.binary.right = one;
-    if (!minic_core_function_append_value_instruction(
-            context->function, context->block_id, &instruction, &updated)) {
-        return MINIC_CORE_LOWER_ERROR;
+        if (!minic_c0_pointer_arithmetic_element_size(
+                context->body->program, minic_default_data_layout(), stored_type, &element_size)) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        (void)memset(&instruction, 0, sizeof(instruction));
+        instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+        instruction.span = expression->span;
+        instruction.type = minic_type_int();
+        instruction.result = MINIC_CORE_VALUE_INVALID;
+        instruction.value.integer_value = increment ? 1 : -1;
+        if (!minic_core_function_append_value_instruction(
+                context->function, context->block_id, &instruction, &delta)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        (void)memset(&instruction, 0, sizeof(instruction));
+        instruction.kind = MINIC_CORE_INSTRUCTION_POINTER_OFFSET;
+        instruction.span = expression->span;
+        instruction.type = stored_type;
+        instruction.result = MINIC_CORE_VALUE_INVALID;
+        instruction.value.pointer_offset.base = current;
+        instruction.value.pointer_offset.index = delta;
+        instruction.value.pointer_offset.element_size = element_size;
+        if (!minic_core_function_append_value_instruction(
+                context->function, context->block_id, &instruction, &updated)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+    } else {
+        return MINIC_CORE_LOWER_UNSUPPORTED;
     }
 
     (void)memset(&instruction, 0, sizeof(instruction));
@@ -1915,10 +1974,12 @@ lower_discarded_postfix_integer_increment(MinicCoreLowerContext *context,
     instruction.value.store.address = address;
     instruction.value.store.stored_value = updated;
     instruction.value.store.is_volatile = minic_type_is_volatile(operand->type);
-    return minic_core_function_append_effect_instruction(
-               context->function, context->block_id, &instruction)
-               ? MINIC_CORE_LOWER_OK
-               : MINIC_CORE_LOWER_ERROR;
+    if (!minic_core_function_append_effect_instruction(
+            context->function, context->block_id, &instruction)) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    *value_id = current;
+    return MINIC_CORE_LOWER_OK;
 }
 
 static MinicCoreLowerStatus lower_expression_statement(MinicCoreLowerContext *context,
@@ -1946,8 +2007,11 @@ static MinicCoreLowerStatus lower_expression_statement(MinicCoreLowerContext *co
         return lower_expression(context, statement->expression, &discarded_value);
     }
     if (expression->kind == MINIC_EXPRESSION_UNARY &&
-        expression->value.unary.operator_kind == MINIC_UNARY_POST_INCREMENT) {
-        return lower_discarded_postfix_integer_increment(context, expression);
+        (expression->value.unary.operator_kind == MINIC_UNARY_POST_INCREMENT ||
+         expression->value.unary.operator_kind == MINIC_UNARY_POST_DECREMENT)) {
+        MinicCoreValueId discarded_value;
+
+        return lower_postfix_scalar_update(context, expression, &discarded_value);
     }
     if (expression->kind != MINIC_EXPRESSION_ASSIGNMENT) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
