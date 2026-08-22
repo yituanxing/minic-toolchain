@@ -57,8 +57,24 @@ text = text.replace(helper_anchor, helper + helper_anchor, 1)
 conditional_anchor = '''    if (expression->kind == MINIC_EXPRESSION_BINARY &&
         expression->value.binary.operator_kind == MINIC_BINARY_LOGICAL_AND) {
 '''
-if text.count(conditional_anchor) != 2:
-    raise SystemExit(f'M23 conditional anchor count={text.count(conditional_anchor)}')
+lower_expression_anchor = '''static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
+                                             MinicExpressionId expression_id,
+                                             MinicCoreValueId *value_id) {
+'''
+lower_condition_anchor = '''static MinicCoreLowerStatus lower_condition_branch(MinicCoreLowerContext *context,
+'''
+if text.count(lower_expression_anchor) != 1:
+    raise SystemExit(f'M23 lower_expression anchor count={text.count(lower_expression_anchor)}')
+lower_expression_begin = text.index(lower_expression_anchor)
+lower_condition_begin = text.find(lower_condition_anchor, lower_expression_begin)
+if lower_condition_begin < 0:
+    raise SystemExit('M23 lower_condition_branch boundary missing')
+lower_expression_body = text[lower_expression_begin:lower_condition_begin]
+if lower_expression_body.count(conditional_anchor) != 1:
+    raise SystemExit(
+        f'M23 logical-and anchor in lower_expression count={lower_expression_body.count(conditional_anchor)}'
+    )
+conditional_position = lower_expression_begin + lower_expression_body.index(conditional_anchor)
 conditional = r'''    if (expression->kind == MINIC_EXPRESSION_CONDITIONAL) {
         const MinicExpression *false_expression;
         const MinicExpression *true_expression;
@@ -143,9 +159,6 @@ conditional = r'''    if (expression->kind == MINIC_EXPRESSION_CONDITIONAL) {
             context, expression->span, expression->type, result_object, value_id);
     }
 '''
-conditional_position = text.rfind(conditional_anchor)
-if conditional_position < 0:
-    raise SystemExit('M23 value conditional anchor disappeared')
 text = text[:conditional_position] + conditional + text[conditional_position:]
 path.write_text(text)
 
