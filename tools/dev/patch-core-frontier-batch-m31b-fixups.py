@@ -19,13 +19,6 @@ replace_once(
 )
 
 replace_once(
-    "src/core/core_lower.c",
-    '''        if (!minic_type_equal(global->type, expression->type)) {\n            return MINIC_CORE_LOWER_ERROR;\n        }\n        if (!core_memory_scalar_type(global->type)) {\n            return MINIC_CORE_LOWER_UNSUPPORTED;\n        }\n''',
-    '''        if (!minic_type_equal(global->type, expression->type)) {\n            return MINIC_CORE_LOWER_ERROR;\n        }\n        if (!core_memory_scalar_type(global->type) && !minic_type_is_array(global->type)) {\n            return MINIC_CORE_LOWER_UNSUPPORTED;\n        }\n''',
-    "global array address lowering",
-)
-
-replace_once(
     "src/core/core_ir.c",
     '''        if (global->name == NULL || global->name_length == 0U ||\n            (!minic_type_is_integer(global->type) && !minic_type_is_pointer(global->type))) {\n            return false;\n        }\n''',
     '''        if (global->name == NULL || global->name_length == 0U ||\n            (!minic_type_is_integer(global->type) && !minic_type_is_pointer(global->type) &&\n             !minic_type_is_array(global->type))) {\n            return false;\n        }\n''',
