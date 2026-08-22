@@ -111,10 +111,10 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          rm tools/dev/patch-core-for-postincrement-m20.py .github/workflows/oneshot-core-for-postincrement-m20.yml .github/workflows/oneshot-core-list-count-nodes-probe.yml
+          rm tools/dev/patch-core-for-postincrement-m20.py .github/workflows/oneshot-core-for-postincrement-m20.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add src/core/core_lower.c tests/compiler/c0/core_for_postincrement_m20.c tests/compiler/c0/core_for_postincrement_m20_runtime.c tests/compiler/c0/run-core-for-postincrement-m20.sh tools/dev/patch-core-for-postincrement-m20.py .github/workflows/oneshot-core-for-postincrement-m20.yml .github/workflows/oneshot-core-list-count-nodes-probe.yml
+          git add src/core/core_lower.c tests/compiler/c0/core_for_postincrement_m20.c tests/compiler/c0/core_for_postincrement_m20_runtime.c tests/compiler/c0/run-core-for-postincrement-m20.sh tools/dev/patch-core-for-postincrement-m20.py .github/workflows/oneshot-core-for-postincrement-m20.yml
           git diff --cached --check
           git commit -m 'core: lower normalized for updates and discarded postfix increment'
           git push origin HEAD:refactor/declaration-sema-v1
