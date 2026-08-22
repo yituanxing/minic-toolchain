@@ -381,6 +381,14 @@ core_postfix_update_m24_focused() {
         sh tests/compiler/c0/run-core-postfix-update-m24.sh
 }
 
+core_discard_expression_m25_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" BUILD_DIR="$root/build/ci-core-discard-expression-m25" RISCV_CC=riscv64-linux-gnu-gcc QEMU_RISCV64=qemu-riscv64 sh tests/compiler/c0/run-core-discard-expression-m25.sh
+}
+
+core_integer_binary_preservation_m25b_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" BUILD_DIR="$root/build/ci-core-integer-binary-preservation-m25b" RISCV_CC=riscv64-linux-gnu-gcc QEMU_RISCV64=qemu-riscv64 sh tests/compiler/c0/run-core-integer-binary-preservation-m25b.sh
+}
+
 runtime_record_fam_prefix_focused() {
     MINIC="$root/build/ci-debug/bin/minic" \
     HOST_CC=cc \
@@ -554,6 +562,8 @@ start_gate core-integer-subtract-overflow-focused core_integer_subtract_overflow
 start_gate core-target-constant-fallback-focused core_target_constant_fallback_focused
 start_gate core-integer-bitwise-not-focused core_integer_bitwise_not_focused
 start_gate core-postfix-update-m24-focused core_postfix_update_m24_focused
+start_gate core-discard-expression-m25-focused core_discard_expression_m25_focused
+start_gate core-integer-binary-preservation-m25b-focused core_integer_binary_preservation_m25b_focused
 start_gate record-fam-prefix-focused runtime_record_fam_prefix_focused
 start_gate linenoise-driven-focused linenoise_driven_focused
 start_gate sds-driven-focused sds_driven_focused
