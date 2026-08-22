@@ -30,6 +30,9 @@ text = replace_once(
         case MINIC_BINARY_SUBTRACT:
             instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT;
             break;
+        case MINIC_BINARY_BITWISE_AND:
+            instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND;
+            break;
 ''',
     '''        switch (expression->value.binary.operator_kind) {
         case MINIC_BINARY_ADD:
@@ -37,6 +40,9 @@ text = replace_once(
             break;
         case MINIC_BINARY_SUBTRACT:
             instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT;
+            break;
+        case MINIC_BINARY_BITWISE_AND:
+            instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND;
             break;
 ''',
     'compound opcode',
