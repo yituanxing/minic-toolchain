@@ -31,6 +31,23 @@ replace_once(
 
 replace_once(
     'src/core/core_lower.c',
+    '''        if (expression->value.conditional.uses_condition_value ||
+            expression->value.conditional.when_true == MINIC_EXPRESSION_INVALID ||
+            expression->value.conditional.when_false == MINIC_EXPRESSION_INVALID ||
+            !minic_type_is_integer(expression->type) || minic_type_is_const(expression->type) ||
+            minic_type_is_volatile(expression->type)) {
+''',
+    '''        if (expression->value.conditional.uses_condition_value ||
+            expression->value.conditional.when_true == MINIC_EXPRESSION_INVALID ||
+            expression->value.conditional.when_false == MINIC_EXPRESSION_INVALID ||
+            !core_memory_scalar_type(expression->type) || minic_type_is_const(expression->type) ||
+            minic_type_is_volatile(expression->type)) {
+''',
+    'conditional result scalar family',
+)
+
+replace_once(
+    'src/core/core_lower.c',
     '''        if (!core_scalar_expression_value_type(context->body, true_expression, &true_type) ||
             !core_scalar_expression_value_type(context->body, false_expression, &false_type) ||
             !minic_type_is_integer(true_type) || !minic_type_is_integer(false_type)) {
