@@ -29,6 +29,10 @@ jobs:
           set -Eeuo pipefail
           test "${{ steps.corpus.outputs.cache-hit }}" = true
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-m27-probe
+          version_i=$(find build/linux-focus-corpus -type f -path '*/init/version.i' -print -quit)
+          test -n "$version_i"
+          printf '%s\n' "$version_i" > build/core-m27-version-path.txt
+          printf 'M27_VERSION_PATH=%s\n' "$version_i"
 
       - name: Extract exact frozen printk_get_level body
         shell: bash
@@ -37,7 +41,7 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
 
-          path = Path('build/linux-focus-corpus/init/version.i')
+          path = Path(Path('build/core-m27-version-path.txt').read_text().strip())
           text = path.read_text(errors='replace')
           needle = 'printk_get_level'
           pos = 0
@@ -74,16 +78,16 @@ jobs:
                                   end = i + 1
                                   break
                       i += 1
-                  start = text.rfind('\n', 0, max(0, hit - 500)) + 1
+                  start = text.rfind('\n', 0, max(0, hit - 800)) + 1
                   snippet = text[start:end]
                   print('PRINTK_GET_LEVEL_EXACT_BEGIN')
-                  print(snippet[-8000:])
+                  print(snippet[-12000:])
                   print('PRINTK_GET_LEVEL_EXACT_END')
                   found = True
                   break
               pos = hit + len(needle)
           if not found:
-              raise SystemExit('printk_get_level definition not found in frozen init/version.i')
+              raise SystemExit(f'printk_get_level definition not found in {path}')
           PY
 
       - name: Classify minimal strict shapes
@@ -126,8 +130,9 @@ jobs:
         run: |
           set -Eeuo pipefail
           c="$GITHUB_WORKSPACE/build/core-m27-probe/bin/minic"
+          version_i=$(cat build/core-m27-version-path.txt)
           set +e
-          MINIC_CORE_IR=strict "$c" -S build/linux-focus-corpus/init/version.i -o /tmp/m27-version.s 2>/tmp/m27-version.err
+          MINIC_CORE_IR=strict "$c" -S "$version_i" -o /tmp/m27-version.s 2>/tmp/m27-version.err
           rc=$?
           set -e
           printf 'M27_EXACT_VERSION_RC=%d\n' "$rc"
