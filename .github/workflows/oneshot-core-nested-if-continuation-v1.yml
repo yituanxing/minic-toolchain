@@ -1,0 +1,170 @@
+name: One-shot Core Nested If Continuation
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    if: github.actor != 'github-actions[bot]' && github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+          fetch-depth: 0
+
+      - name: Install RISC-V runtime tools
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mapfile -t packages < <(grep -Ev '^[[:space:]]*(#|$)' tools/ci/ubuntu-24.04-packages.txt)
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends "${packages[@]}"
+          sh tools/ci/verify-validation-tools.sh
+
+      - name: Restore frozen Linux corpus
+        id: linux-corpus-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+
+      - name: Require frozen corpus
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
+          test -s build/linux-focus-corpus/selected-tus.txt
+
+      - name: Prove current nested-if bug
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-nested-before-compiler
+          compiler="$GITHUB_WORKSPACE/build/core-nested-before-compiler/bin/minic"
+          cat > build/core-nested-before.i <<'EOF'
+          int nested_before(int outer, int inner) {
+              int value = 9;
+              if (outer) {
+                  if (inner)
+                      return 1;
+                  value = 2;
+              }
+              return value;
+          }
+          EOF
+          if MINIC_CORE_IR=strict "$compiler" -S build/core-nested-before.i \
+              -o build/core-nested-before.s 2>build/core-nested-before.err; then
+            echo 'nested-if bug unexpectedly absent before patch' >&2
+            exit 1
+          fi
+          grep -F "Core IR shadow lowering failed for function 'nested_before'" \
+            build/core-nested-before.err >/dev/null
+          printf '%s\n' 'PROVED core/nested-if-continuation prepatch-lowering-error'
+
+      - name: Apply continuation fix
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 -m py_compile tools/dev/patch-core-nested-if-continuation-v1.py
+          python3 tools/dev/patch-core-nested-if-continuation-v1.py
+          clang-format-18 -i \
+            src/core/core_lower.c \
+            tests/compiler/c0/core_nested_if_continuation.c \
+            tests/compiler/c0/core_nested_if_continuation_runtime.c
+          sh -n tests/compiler/c0/run-core-nested-if-continuation.sh
+          bash -n .github/scripts/compiler-c0-full-gate.sh
+          git diff --check
+
+      - name: Build fixed compiler
+        shell: bash
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-nested-fixed-compiler
+
+      - name: Validate nested-if continuation
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/core-nested-fixed-compiler/bin/minic"
+          MINIC="$compiler" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/core-nested-fixed" \
+          RISCV_CC=riscv64-linux-gnu-gcc \
+          QEMU_RISCV64=qemu-riscv64 \
+            sh tests/compiler/c0/run-core-nested-if-continuation.sh
+
+      - name: Apply M13 on fixed CFG and replay strict sample
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/patch-core-scalar-not-equal-v1.py
+          clang-format-18 -i src/core/core_lower.c tests/compiler/c0/core_scalar_not_equal.c tests/compiler/c0/core_scalar_not_equal_runtime.c
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-m13-fixed-compiler
+          compiler="$GITHUB_WORKSPACE/build/core-m13-fixed-compiler/bin/minic"
+          MINIC="$compiler" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/core-m13-fixed-not-equal" \
+          RISCV_CC=riscv64-linux-gnu-gcc \
+          QEMU_RISCV64=qemu-riscv64 \
+            sh tests/compiler/c0/run-core-scalar-not-equal.sh
+
+          set +e
+          MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
+            --minic "$compiler" \
+            --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
+            --work "$GITHUB_WORKSPACE/build/core-m13-fixed-strict" \
+            --jobs 4 --offset 0 --limit 500 --sample-count 64 --indices ''
+          replay_status=$?
+          set -e
+          printf 'CORE_M13_FIXED_REPLAY_STATUS=%d\n' "$replay_status"
+
+          python3 - <<'PY'
+          from collections import Counter
+          import json, re
+          from pathlib import Path
+          rows = json.loads(Path('build/core-m13-fixed-strict/batch-results.json').read_text())
+          unsupported_re = re.compile(r"^Core IR shadow does not yet support function '([^']+)'$")
+          unsupported = Counter()
+          errors = []
+          passes = 0
+          for row in rows:
+              if row['status'] == 'PASS':
+                  passes += 1
+                  continue
+              message = str(row['message'])
+              match = unsupported_re.match(message)
+              if match:
+                  unsupported[match.group(1)] += 1
+              else:
+                  errors.append((row['index'], message))
+          print(f'CORE_M13_FIXED_FRONTIER selected={len(rows)} pass={passes} unsupported={sum(unsupported.values())} error={len(errors)}')
+          for function, count in unsupported.most_common():
+              print(f'CORE_M13_FIXED_BLOCKER count={count} function={function}')
+          for index, message in errors:
+              print(f'CORE_M13_FIXED_ERROR index={index} message={message}')
+          if errors:
+              raise SystemExit('nested-if continuation fix did not restore clean strict classification')
+          PY
+
+      - name: Publish CFG fix only
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          # Drop the experimental M13 working-tree changes.  Productize only the independently proven CFG fix.
+          git reset --hard HEAD
+          python3 tools/dev/patch-core-nested-if-continuation-v1.py
+          clang-format-18 -i src/core/core_lower.c tests/compiler/c0/core_nested_if_continuation.c tests/compiler/c0/core_nested_if_continuation_runtime.c
+          rm tools/dev/patch-core-nested-if-continuation-v1.py
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            src/core/core_lower.c \
+            tests/compiler/c0/core_nested_if_continuation.c \
+            tests/compiler/c0/core_nested_if_continuation_runtime.c \
+            tests/compiler/c0/run-core-nested-if-continuation.sh \
+            .github/scripts/compiler-c0-full-gate.sh \
+            tools/dev/patch-core-nested-if-continuation-v1.py
+          git diff --cached --check
+          git commit -m 'core: branch from nested if continuations'
+          git push origin HEAD:refactor/declaration-sema-v1
