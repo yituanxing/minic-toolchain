@@ -50,6 +50,45 @@ identity_guard = '''    if (!source->is_volatile && !source->is_goto && source->
 
 ''' + old_guard
 core = replace_once(core, old_guard, identity_guard, "Core inline-asm guard")
+
+old_compound_guard = '''    if (expression->kind == MINIC_EXPRESSION_COMPOUND_ASSIGNMENT &&
+        (expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_AND ||
+         expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_OR)) {
+'''
+new_compound_guard = '''    if (expression->kind == MINIC_EXPRESSION_COMPOUND_ASSIGNMENT &&
+        (expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT ||
+         expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_AND ||
+         expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_XOR ||
+         expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_OR)) {
+'''
+core = replace_once(core, old_compound_guard, new_compound_guard, "compound update guard")
+
+old_compound_instruction = '''        (void)memset(&instruction, 0, sizeof(instruction));
+        instruction.kind = expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_AND
+                               ? MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND
+                               : MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR;
+        instruction.span = expression->span;
+'''
+new_compound_instruction = '''        (void)memset(&instruction, 0, sizeof(instruction));
+        switch (expression->value.binary.operator_kind) {
+        case MINIC_BINARY_SUBTRACT:
+            instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT;
+            break;
+        case MINIC_BINARY_BITWISE_AND:
+            instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND;
+            break;
+        case MINIC_BINARY_BITWISE_XOR:
+            instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR;
+            break;
+        case MINIC_BINARY_BITWISE_OR:
+            instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR;
+            break;
+        default:
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        instruction.span = expression->span;
+'''
+core = replace_once(core, old_compound_instruction, new_compound_instruction, "compound update opcode")
 core_path.write_text(core)
 
 gate_path = Path(".github/scripts/compiler-c0-full-gate.sh")
