@@ -20,48 +20,93 @@ jobs:
         shell: bash
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-init-list-probe-compiler
 
-      - name: Generate layered INIT_LIST_HEAD shapes
+      - name: Generate atomic compiletime-assert shapes
         shell: bash
         run: |
           set -Eeuo pipefail
-          mkdir -p build/core-init-list-shapes
+          work=build/core-init-list-shapes
+          mkdir -p "$work"
 
-          cat > build/core-init-list-shapes/a-plain.i <<'EOF'
-          struct list_head { struct list_head *next; struct list_head *prev; };
-          void probe_plain(struct list_head *list) {
-              list->next = list;
-              list->prev = list;
+          cat > "$work/a-local-extern.i" <<'EOF'
+          void probe_local_extern(void) {
+              extern void probe_external(void);
           }
           EOF
 
-          cat > build/core-init-list-shapes/b-volatile-lvalue.i <<'EOF'
-          struct list_head { struct list_head *next; struct list_head *prev; };
-          void probe_volatile_lvalue(struct list_head *list) {
-              *(volatile __typeof__(list->next) *)&(list->next) = list;
-              *(volatile __typeof__(list->prev) *)&(list->prev) = list;
+          cat > "$work/b-local-extern-noreturn.i" <<'EOF'
+          void probe_local_extern_noreturn(void) {
+              __attribute__((noreturn)) extern void probe_external(void);
           }
           EOF
 
-          cat > build/core-init-list-shapes/c-do-while.i <<'EOF'
-          struct list_head { struct list_head *next; struct list_head *prev; };
-          void probe_do_while(struct list_head *list) {
+          cat > "$work/c-local-extern-error.i" <<'EOF'
+          void probe_local_extern_error(void) {
+              __attribute__((noreturn, error("compiletime failure")))
+              extern void probe_external(void);
+          }
+          EOF
+
+          cat > "$work/d-file-extern-if-zero.i" <<'EOF'
+          extern void probe_external(void);
+          void probe_file_extern_if_zero(void) {
+              if (0)
+                  probe_external();
+          }
+          EOF
+
+          cat > "$work/e-local-extern-if-zero.i" <<'EOF'
+          void probe_local_extern_if_zero(void) {
+              extern void probe_external(void);
+              if (0)
+                  probe_external();
+          }
+          EOF
+
+          cat > "$work/f-local-error-if-zero.i" <<'EOF'
+          void probe_local_error_if_zero(void) {
+              __attribute__((noreturn, error("compiletime failure")))
+              extern void probe_external(void);
+              if (0)
+                  probe_external();
+          }
+          EOF
+
+          cat > "$work/g-file-extern-sizeof-false.i" <<'EOF'
+          extern void probe_external(void);
+          void probe_file_extern_sizeof_false(void) {
+              if (!(sizeof(void *) == sizeof(void *)))
+                  probe_external();
+          }
+          EOF
+
+          cat > "$work/h-local-error-sizeof-false.i" <<'EOF'
+          void probe_local_error_sizeof_false(void) {
+              __attribute__((noreturn, error("compiletime failure")))
+              extern void probe_external(void);
+              if (!(sizeof(void *) == sizeof(void *)))
+                  probe_external();
+          }
+          EOF
+
+          cat > "$work/i-do-local-error-sizeof-false.i" <<'EOF'
+          void probe_do_local_error_sizeof_false(void) {
               do {
-                  *(volatile __typeof__(list->next) *)&(list->next) = list;
-              } while (0);
-              do {
-                  *(volatile __typeof__(list->prev) *)&(list->prev) = list;
+                  __attribute__((noreturn, error("compiletime failure")))
+                  extern void probe_external(void);
+                  if (!(sizeof(void *) == sizeof(void *)))
+                      probe_external();
               } while (0);
           }
           EOF
 
-          cat > build/core-init-list-shapes/d-compiletime-assert.i <<'EOF'
+          cat > "$work/j-write-once-after-assert.i" <<'EOF'
           struct list_head { struct list_head *next; struct list_head *prev; };
-          void probe_compiletime_assert(struct list_head *list) {
+          void probe_write_once_after_assert(struct list_head *list) {
               do {
                   __attribute__((noreturn, error("rwonce type")))
-                  extern void __probe_compiletime_assert_0(void);
+                  extern void probe_external(void);
                   if (!(sizeof(list->next) == sizeof(void *)))
-                      __probe_compiletime_assert_0();
+                      probe_external();
               } while (0);
               do {
                   *(volatile __typeof__(list->next) *)&(list->next) = list;
@@ -69,43 +114,7 @@ jobs:
           }
           EOF
 
-          cat > build/core-init-list-shapes/e-full-expanded.i <<'EOF'
-          struct list_head { struct list_head *next; struct list_head *prev; };
-          void probe_full_expanded(struct list_head *list) {
-              do {
-                  do {
-                      __attribute__((noreturn, error("Unsupported access size for WRITE_ONCE")))
-                      extern void __probe_compiletime_assert_1(void);
-                      if (!((sizeof(list->next) == sizeof(char) ||
-                             sizeof(list->next) == sizeof(short) ||
-                             sizeof(list->next) == sizeof(int) ||
-                             sizeof(list->next) == sizeof(long)) ||
-                            sizeof(list->next) == sizeof(long long)))
-                          __probe_compiletime_assert_1();
-                  } while (0);
-                  do {
-                      *(volatile __typeof__(list->next) *)&(list->next) = list;
-                  } while (0);
-              } while (0);
-              do {
-                  do {
-                      __attribute__((noreturn, error("Unsupported access size for WRITE_ONCE")))
-                      extern void __probe_compiletime_assert_2(void);
-                      if (!((sizeof(list->prev) == sizeof(char) ||
-                             sizeof(list->prev) == sizeof(short) ||
-                             sizeof(list->prev) == sizeof(int) ||
-                             sizeof(list->prev) == sizeof(long)) ||
-                            sizeof(list->prev) == sizeof(long long)))
-                          __probe_compiletime_assert_2();
-                  } while (0);
-                  do {
-                      *(volatile __typeof__(list->prev) *)&(list->prev) = list;
-                  } while (0);
-              } while (0);
-          }
-          EOF
-
-      - name: Run layered strict probes
+      - name: Run atomic strict probes
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -122,17 +131,11 @@ jobs:
             set -e
             if [ "$status" -eq 0 ]; then
               passes=$((passes + 1))
-              printf 'CORE_INIT_LIST_SHAPE name=%s status=PASS\n' "$name"
+              printf 'CORE_CTASSERT_SHAPE name=%s status=PASS\n' "$name"
             else
               failures=$((failures + 1))
-              printf 'CORE_INIT_LIST_SHAPE name=%s status=FAIL rc=%d\n' "$name" "$status"
-              sed 's/^/CORE_INIT_LIST_DIAG /' "$work/$name.stderr"
+              printf 'CORE_CTASSERT_SHAPE name=%s status=FAIL rc=%d\n' "$name" "$status"
+              sed 's/^/CORE_CTASSERT_DIAG /' "$work/$name.stderr"
             fi
           done
-          printf 'CORE_INIT_LIST_SHAPE_SUMMARY pass=%d fail=%d\n' "$passes" "$failures"
-          test -s "$work/a-plain.s"
-          if [ "$passes" -eq 5 ]; then
-            printf '%s\n' 'CORE_INIT_LIST_SHAPE_RESULT all-layered-synthetic-shapes-pass'
-          else
-            printf '%s\n' 'CORE_INIT_LIST_SHAPE_RESULT first-failing-layer-visible-above'
-          fi
+          printf 'CORE_CTASSERT_SHAPE_SUMMARY pass=%d fail=%d\n' "$passes" "$failures"
