@@ -60,7 +60,7 @@ statement_new = '''        status = lower_block(context, statement_block, &termi
         if (context->source_function != NULL && context->source_function->name != NULL &&
             strcmp(context->source_function->name, "list_empty_careful") == 0) {
             (void)fprintf(stderr,
-                          "CORE_M19_STMT expression=%zu block=%zu stage=block status=%d terminated=%d continuation=%u\\n",
+                          "Core IR shadow M19_STMT expression=%zu block=%zu stage=block status=%d terminated=%d continuation=%u\\n",
                           expression_id,
                           expression->value.statement_expression.block,
                           (int)status,
@@ -78,7 +78,7 @@ statement_new = '''        status = lower_block(context, statement_block, &termi
         if (context->source_function != NULL && context->source_function->name != NULL &&
             strcmp(context->source_function->name, "list_empty_careful") == 0) {
             (void)fprintf(stderr,
-                          "CORE_M19_STMT expression=%zu stage=result status=%d result=%u continuation=%u values=%zu\\n",
+                          "Core IR shadow M19_STMT expression=%zu stage=result status=%d result=%u continuation=%u values=%zu\\n",
                           expression_id,
                           (int)status,
                           (unsigned int)result_value,
@@ -91,7 +91,7 @@ statement_new = '''        status = lower_block(context, statement_block, &termi
         if (context->source_function != NULL && context->source_function->name != NULL &&
             strcmp(context->source_function->name, "list_empty_careful") == 0) {
             (void)fprintf(stderr,
-                          "CORE_M19_STMT expression=%zu stage=type result_in_range=%d type_equal=%d\\n",
+                          "Core IR shadow M19_STMT expression=%zu stage=type result_in_range=%d type_equal=%d\\n",
                           expression_id,
                           result_value < context->function->value_count ? 1 : 0,
                           result_value < context->function->value_count &&
