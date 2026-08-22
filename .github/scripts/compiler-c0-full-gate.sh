@@ -293,6 +293,14 @@ core_condition_and_focused() {
         sh tests/compiler/c0/run-core-condition-and.sh
 }
 
+core_logical_and_value_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" \
+    BUILD_DIR="$root/build/ci-core-logical-and-value" \
+    RISCV_CC=riscv64-linux-gnu-gcc \
+    QEMU_RISCV64=qemu-riscv64 \
+        sh tests/compiler/c0/run-core-logical-and-value.sh
+}
+
 core_integer_bitwise_and_assignment_focused() {
     MINIC="$root/build/ci-debug/bin/minic" \
     BUILD_DIR="$root/build/ci-core-integer-bitwise-and-assignment" \
@@ -527,6 +535,7 @@ start_gate core-integer-add-overflow-focused core_integer_add_overflow_focused
 start_gate core-short-circuit-or-focused core_short_circuit_or_focused
 start_gate core-nested-if-continuation-focused core_nested_if_continuation_focused
 start_gate core-condition-and-focused core_condition_and_focused
+start_gate core-logical-and-value-focused core_logical_and_value_focused
 start_gate core-scalar-not-equal-focused core_scalar_not_equal_focused
 start_gate core-integer-bitwise-and-assignment-focused core_integer_bitwise_and_assignment_focused
 start_gate core-pointer-offset-focused core_pointer_offset_focused
