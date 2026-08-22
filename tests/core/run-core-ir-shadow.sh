@@ -296,7 +296,7 @@ grep -F "Core IR shadow does not yet support function 'variadic_caller'" \
     "$work_dir/variadic-call-unsupported-strict.err" >/dev/null
 
 cat >"$work_dir/unsupported.i" <<'EOF'
-int main(int value) {
+int runtime_subtract(int value) {
     return value - 2;
 }
 EOF
@@ -310,7 +310,7 @@ if MINIC_CORE_IR=strict "$MINIC" -S "$work_dir/unsupported.i" \
     echo "strict Core IR shadow unexpectedly accepted an unsupported function" >&2
     exit 1
 fi
-grep -F "Core IR shadow does not yet support function 'main'" \
+grep -F "Core IR shadow does not yet support function 'runtime_subtract'" \
     "$work_dir/unsupported-strict.err" >/dev/null
 
 if MINIC_CORE_IR=invalid "$MINIC" -S "$work_dir/supported.i" \
