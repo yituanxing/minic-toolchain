@@ -295,120 +295,95 @@ static bool parse_runtime_array_designator(
     return true;
 }
 
-static bool runtime_array_multi_range_value_is_repeatable(MinicParser *parser,
-                                                          MinicExpressionId value_id) {
-    MinicConstValue constant;
-
-    /* GNU range designators evaluate their value once for the whole range. The current
-       runtime-initializer representation expands to assignment statements, so a multi-element
-       range is limited to an integer constant expression until one evaluated value can be reused.
-     */
-    if (minic_const_eval_integer(parser->program, parser->target_info, value_id, &constant)) {
-        return true;
-    }
-    minic_parser_error(
-        parser, "multi-element runtime array range initializer requires an integer constant value");
-    return false;
-}
-
-static bool parse_fixed_runtime_record_array_initializer_legacy(MinicParser *parser,
-                                                                MinicExpressionId base_id,
-                                                                size_t element_count) {
+static bool parse_fixed_runtime_record_array_initializer(MinicParser *parser,
+                                                         MinicExpressionId base_id,
+                                                         size_t element_count) {
     const MinicExpression *base;
     MinicArrayObjectInfo array_info;
+    MinicArrayInitializerPlan plan;
     MinicSourceSpan initializer_span;
-    size_t initializer_count;
+    bool success;
 
+    if (parser == NULL || element_count == 0U || parser->current.kind != MINIC_TOKEN_LBRACE) {
+        if (parser != NULL) {
+            minic_parser_error(
+                parser, "fixed runtime record array initializer requires a nonempty record array");
+        }
+        return false;
+    }
     base = minic_c0_program_expression(parser->program, base_id);
-    if (parser == NULL || base == NULL || element_count == 0U ||
-        parser->current.kind != MINIC_TOKEN_LBRACE ||
-        !minic_c0_expression_array_object_info(parser->program, base, &array_info)) {
-        minic_parser_error(parser,
-                           "fixed runtime array initializer requires a nonempty array type");
-        return false;
-    }
-    initializer_span.begin = parser->current.span.begin;
-    if (!minic_parser_advance(parser)) {
+    if (base == NULL ||
+        !minic_c0_expression_array_object_info(parser->program, base, &array_info) ||
+        !minic_type_is_record(array_info.element_type)) {
+        minic_parser_error(
+            parser, "fixed runtime record array initializer requires a nonempty record array");
         return false;
     }
 
-    initializer_count = 0U;
+    minic_array_initializer_plan_initialize(&plan, element_count, false);
+    initializer_span.begin = parser->current.span.begin;
+    success = false;
+    if (!minic_parser_advance(parser)) {
+        goto done;
+    }
+
     while (parser->current.kind != MINIC_TOKEN_RBRACE) {
-        MinicExpressionId value_id;
+        size_t action_id;
+        size_t target_index;
 
         if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
             MinicSourceSpan zero_span;
             size_t first;
             size_t last;
+            size_t previous_next;
             size_t index;
 
+            previous_next = plan.next_index;
             if (!parse_runtime_array_designator(
-                    parser, element_count, initializer_count, &first, &last)) {
-                return false;
+                    parser, element_count, plan.next_index, &first, &last)) {
+                goto done;
             }
             zero_span = parser->current.span;
-            for (index = initializer_count; index < first; ++index) {
+            if (first != last) {
+                minic_parser_error(parser, "record array range designators require one element");
+                goto done;
+            }
+            if (!minic_array_initializer_plan_add_designated(&plan, first, last, &action_id)) {
+                minic_parser_error(parser, "cannot plan runtime record array initializer");
+                goto done;
+            }
+            for (index = previous_next; index < first; ++index) {
                 if (!add_array_object_zero_element(parser, base_id, index, zero_span)) {
-                    return false;
+                    goto done;
                 }
             }
-            if (minic_type_is_record(array_info.element_type)) {
-                MinicExpressionId element_id;
-
-                if (first != last) {
-                    minic_parser_error(parser,
-                                       "record array range designators require one element");
-                    return false;
-                }
-                if (!add_array_object_element_lvalue(
-                        parser, base_id, first, parser->current.span, &element_id) ||
-                    !parse_runtime_record_array_element_initializer(
-                        parser, element_id, array_info.element_type)) {
-                    return false;
-                }
-            } else {
-                if (!minic_parser_parse_expression(parser, &value_id, 0U)) {
-                    return false;
-                }
-                if (last > first &&
-                    !runtime_array_multi_range_value_is_repeatable(parser, value_id)) {
-                    return false;
-                }
-                for (index = first;; ++index) {
-                    if (!add_array_object_element_assignment(parser, base_id, index, value_id)) {
-                        return false;
-                    }
-                    if (index == last) {
-                        break;
-                    }
-                }
-            }
-            initializer_count = last + 1U;
+            target_index = plan.actions[action_id].first_index;
         } else {
-            if (initializer_count >= element_count) {
+            if (plan.next_index >= element_count) {
                 minic_parser_error(parser, "too many runtime array initializer elements");
-                return false;
+                goto done;
             }
-            if (minic_type_is_record(array_info.element_type)) {
-                MinicExpressionId element_id;
+            if (!minic_array_initializer_plan_add_positional(&plan, &action_id)) {
+                minic_parser_error(parser, "cannot plan runtime record array initializer");
+                goto done;
+            }
+            target_index = plan.actions[action_id].first_index;
+        }
 
-                if (!add_array_object_element_lvalue(
-                        parser, base_id, initializer_count, parser->current.span, &element_id) ||
-                    !parse_runtime_record_array_element_initializer(
-                        parser, element_id, array_info.element_type)) {
-                    return false;
-                }
-            } else if (!minic_parser_parse_expression(parser, &value_id, 0U) ||
-                       !add_array_object_element_assignment(
-                           parser, base_id, initializer_count, value_id)) {
-                return false;
+        {
+            MinicExpressionId element_id;
+
+            if (!add_array_object_element_lvalue(
+                    parser, base_id, target_index, parser->current.span, &element_id) ||
+                !parse_runtime_record_array_element_initializer(
+                    parser, element_id, array_info.element_type)) {
+                goto done;
             }
-            initializer_count += 1U;
         }
 
         if (parser->current.kind == MINIC_TOKEN_COMMA) {
             if (!minic_parser_advance(parser)) {
-                return false;
+                goto done;
             }
             if (parser->current.kind == MINIC_TOKEN_RBRACE) {
                 break;
@@ -417,17 +392,25 @@ static bool parse_fixed_runtime_record_array_initializer_legacy(MinicParser *par
         }
         if (parser->current.kind != MINIC_TOKEN_RBRACE) {
             minic_parser_error(parser, "expected ',' or '}' in runtime array initializer");
-            return false;
+            goto done;
         }
     }
+
     initializer_span.end = parser->current.span.end;
-    while (initializer_count < element_count) {
-        if (!add_array_object_zero_element(parser, base_id, initializer_count, initializer_span)) {
-            return false;
+    {
+        size_t index;
+
+        for (index = plan.next_index; index < element_count; ++index) {
+            if (!add_array_object_zero_element(parser, base_id, index, initializer_span)) {
+                goto done;
+            }
         }
-        initializer_count += 1U;
     }
-    return minic_parser_advance(parser);
+    success = minic_parser_advance(parser);
+
+done:
+    minic_array_initializer_plan_destroy(&plan);
+    return success;
 }
 
 static bool grow_runtime_array_action_values(MinicParser *parser,
@@ -665,7 +648,7 @@ static bool parse_fixed_runtime_array_initializer(MinicParser *parser,
         return false;
     }
     if (minic_type_is_record(array_info.element_type)) {
-        return parse_fixed_runtime_record_array_initializer_legacy(parser, base_id, element_count);
+        return parse_fixed_runtime_record_array_initializer(parser, base_id, element_count);
     }
     return parse_fixed_runtime_scalar_array_initializer(
         parser, base_id, array_info.element_type, element_count);
