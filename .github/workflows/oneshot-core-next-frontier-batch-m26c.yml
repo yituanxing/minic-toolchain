@@ -120,7 +120,14 @@ jobs:
           unsigned long probe(unsigned long value) { return ++value; }
           EOF
 
-          for n in compound_xor logical_or_value pre_update; do
+          cat > "$w/inline_asm_readwrite.i" <<'EOF'
+          unsigned long probe(unsigned long dividend) {
+              __asm__("" : "+rm"(dividend));
+              return dividend;
+          }
+          EOF
+
+          for n in compound_xor logical_or_value pre_update inline_asm_readwrite; do
               set +e
               MINIC_CORE_IR=strict "$c" -S "$w/$n.i" -o "$w/$n.s" 2>"$w/$n.err"
               rc=$?
