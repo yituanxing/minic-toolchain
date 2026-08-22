@@ -25,6 +25,8 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
+          sed -i 's/minic_type_const_int()/minic_type_int()/g' \
+            tools/dev/one-shot-extern-publish-primitive.py
           python3 tools/dev/one-shot-extern-publish-primitive.py
           clang-format -i \
             src/frontend/ast.h \
