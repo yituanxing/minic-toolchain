@@ -1,0 +1,164 @@
+name: One-shot Core Pointer Offset M15
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    if: github.actor != 'github-actions[bot]' && github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+          fetch-depth: 0
+
+      - name: Install RISC-V runtime tools
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mapfile -t packages < <(grep -Ev '^[[:space:]]*(#|$)' tools/ci/ubuntu-24.04-packages.txt)
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends "${packages[@]}"
+          sh tools/ci/verify-validation-tools.sh
+
+      - name: Restore frozen Linux corpus
+        id: linux-corpus-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+
+      - name: Prove M15 pointer-arithmetic gap
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
+          test -s build/linux-focus-corpus/selected-tus.txt
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-m15-before-compiler
+          compiler="$GITHUB_WORKSPACE/build/core-m15-before-compiler/bin/minic"
+          cat > build/core-m15-before.i <<'EOF'
+          struct node { struct node *next; };
+          void core_m15_before(struct node *entry) {
+              entry->next = (void *)0x100 + 0UL;
+          }
+          EOF
+          if MINIC_CORE_IR=strict "$compiler" -S build/core-m15-before.i -o build/core-m15-before.s \
+              2>build/core-m15-before.err; then
+            echo 'M15 pointer arithmetic gap unexpectedly absent before patch' >&2
+            exit 1
+          fi
+          grep -F "Core IR shadow does not yet support function 'core_m15_before'" \
+            build/core-m15-before.err >/dev/null
+          printf '%s\n' 'PROVED core/m15 pointer-add prepatch unsupported'
+
+      - name: Apply M15
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 -m py_compile tools/dev/patch-core-pointer-offset-m15.py
+          python3 tools/dev/patch-core-pointer-offset-m15.py
+          clang-format-18 -i \
+            src/frontend/expression_semantics.h \
+            src/frontend/expression_semantics.c \
+            src/core/core_ir.h \
+            src/core/core_ir.c \
+            src/core/core_lower.c \
+            src/target/riscv64/codegen_expression.c \
+            src/target/riscv64/core_codegen.c \
+            tests/compiler/c0/core_pointer_offset.c \
+            tests/compiler/c0/core_pointer_offset_runtime.c
+          sh -n tests/compiler/c0/run-core-pointer-offset.sh
+          bash -n .github/scripts/compiler-c0-full-gate.sh
+          git diff --check
+          grep -F 'minic_c0_pointer_arithmetic_element_size' src/core/core_lower.c >/dev/null
+          grep -F 'minic_c0_pointer_arithmetic_element_size' src/target/riscv64/codegen_expression.c >/dev/null
+          if grep -F 'minic_riscv64_pointer_element_size' src/target/riscv64/codegen_expression.c >/dev/null; then
+            echo 'legacy private pointer-stride owner survived M15' >&2
+            exit 1
+          fi
+
+      - name: Build and validate M15
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-m15-compiler
+          compiler="$GITHUB_WORKSPACE/build/core-m15-compiler/bin/minic"
+          MINIC="$compiler" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/core-m15-focused" \
+          RISCV_CC=riscv64-linux-gnu-gcc \
+          QEMU_RISCV64=qemu-riscv64 \
+            sh tests/compiler/c0/run-core-pointer-offset.sh
+          MINIC="$compiler" bash tests/core/run-core-ir-shadow.sh
+
+      - name: Replay frozen strict frontier
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/core-m15-compiler/bin/minic"
+          set +e
+          MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
+            --minic "$compiler" \
+            --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
+            --work "$GITHUB_WORKSPACE/build/core-m15-strict" \
+            --jobs 4 --offset 0 --limit 500 --sample-count 64 --indices ''
+          replay_status=$?
+          set -e
+          printf 'CORE_M15_REPLAY_STATUS=%d\n' "$replay_status"
+          python3 - <<'PY'
+          from collections import Counter
+          import json, re
+          from pathlib import Path
+          rows = json.loads(Path('build/core-m15-strict/batch-results.json').read_text())
+          unsupported_re = re.compile(r"^Core IR shadow does not yet support function '([^']+)'$")
+          unsupported = Counter()
+          errors = []
+          passes = 0
+          for row in rows:
+              if row['status'] == 'PASS':
+                  passes += 1
+                  continue
+              message = str(row['message'])
+              match = unsupported_re.match(message)
+              if match:
+                  unsupported[match.group(1)] += 1
+              else:
+                  errors.append((row['index'], message))
+          print(f'CORE_M15_FRONTIER selected={len(rows)} pass={passes} unsupported={sum(unsupported.values())} error={len(errors)}')
+          for function, count in unsupported.most_common():
+              print(f'CORE_M15_BLOCKER count={count} function={function}')
+          for index, message in errors:
+              print(f'CORE_M15_ERROR index={index} message={message}')
+          if errors:
+              raise SystemExit('M15 introduced non-UNSUPPORTED strict failures')
+          if unsupported.get('list_del', 0) != 0:
+              raise SystemExit('M15 did not pierce the proven list_del pointer-arithmetic blocker')
+          PY
+
+      - name: Publish M15 product
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm tools/dev/patch-core-pointer-offset-m15.py
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            src/frontend/expression_semantics.h \
+            src/frontend/expression_semantics.c \
+            src/core/core_ir.h \
+            src/core/core_ir.c \
+            src/core/core_lower.c \
+            src/target/riscv64/codegen_expression.c \
+            src/target/riscv64/core_codegen.c \
+            tests/compiler/c0/core_pointer_offset.c \
+            tests/compiler/c0/core_pointer_offset_runtime.c \
+            tests/compiler/c0/run-core-pointer-offset.sh \
+            .github/scripts/compiler-c0-full-gate.sh \
+            tools/dev/patch-core-pointer-offset-m15.py
+          git diff --cached --check
+          git commit -m 'core: lower resolved pointer offsets'
+          git push origin HEAD:refactor/declaration-sema-v1
