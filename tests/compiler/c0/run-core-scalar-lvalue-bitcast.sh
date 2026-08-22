@@ -1,5 +1,5 @@
-#!/usr/bin/env bash
-set -Eeuo pipefail
+#!/bin/sh
+set -eu
 
 : "${MINIC:?MINIC must point to the compiler binary}"
 : "${RISCV_CC:=riscv64-linux-gnu-gcc}"
