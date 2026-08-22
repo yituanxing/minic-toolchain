@@ -3,6 +3,15 @@ from pathlib import Path
 
 path = Path("src/frontend/parser_statement.c")
 text = path.read_text()
+
+zero_start_marker = "static bool add_local_array_zero_element("
+zero_end_marker = "static bool add_array_object_zero_element("
+zero_start = text.find(zero_start_marker)
+zero_end = text.find(zero_end_marker, zero_start)
+if zero_start < 0 or zero_end < 0:
+    raise SystemExit("local array zero helper anchors not found")
+text = text[:zero_start] + text[zero_end:]
+
 start_marker = "static bool\nparse_local_array_initializer("
 end_marker = "static bool add_zero_assignment_to_lvalue("
 start = text.find(start_marker)
