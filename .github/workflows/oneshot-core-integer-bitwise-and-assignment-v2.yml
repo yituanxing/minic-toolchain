@@ -1,4 +1,4 @@
-name: One-shot Core Integer Bitwise And Assignment M14
+name: One-shot Core Integer Bitwise And Assignment M14 v2
 
 on:
   pull_request:
@@ -63,12 +63,15 @@ jobs:
             build/core-m14-before.err >/dev/null
           printf '%s\n' 'PROVED core/m14 compound-bitwise-and prepatch unsupported'
 
-      - name: Apply M14
+      - name: Apply M14 through current TargetInfo owner
         shell: bash
         run: |
           set -Eeuo pipefail
-          python3 -m py_compile tools/dev/patch-core-integer-bitwise-and-assignment-v1.py
+          python3 -m py_compile \
+            tools/dev/patch-core-integer-bitwise-and-assignment-v1.py \
+            tools/dev/fix-core-integer-bitwise-and-assignment-target-v1.py
           python3 tools/dev/patch-core-integer-bitwise-and-assignment-v1.py
+          python3 tools/dev/fix-core-integer-bitwise-and-assignment-target-v1.py
           clang-format-18 -i \
             src/core/core_ir.h \
             src/core/core_ir.c \
@@ -79,6 +82,11 @@ jobs:
           sh -n tests/compiler/c0/run-core-integer-bitwise-and-assignment.sh
           bash -n .github/scripts/compiler-c0-full-gate.sh
           git diff --check
+          grep -F 'minic_target_info_integer_common_for_program' src/core/core_lower.c >/dev/null
+          if grep -F 'minic_type_integer_common' src/core/core_lower.c >/dev/null; then
+            echo 'obsolete common-integer owner leaked into Core lowering' >&2
+            exit 1
+          fi
 
       - name: Build patched compiler
         shell: bash
@@ -142,7 +150,9 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          rm tools/dev/patch-core-integer-bitwise-and-assignment-v1.py
+          rm \
+            tools/dev/patch-core-integer-bitwise-and-assignment-v1.py \
+            tools/dev/fix-core-integer-bitwise-and-assignment-target-v1.py
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add \
@@ -154,7 +164,8 @@ jobs:
             tests/compiler/c0/core_integer_bitwise_and_assignment_runtime.c \
             tests/compiler/c0/run-core-integer-bitwise-and-assignment.sh \
             .github/scripts/compiler-c0-full-gate.sh \
-            tools/dev/patch-core-integer-bitwise-and-assignment-v1.py
+            tools/dev/patch-core-integer-bitwise-and-assignment-v1.py \
+            tools/dev/fix-core-integer-bitwise-and-assignment-target-v1.py
           git diff --cached --check
           git commit -m 'core: compose integer bitwise and assignment'
           git push origin HEAD:refactor/declaration-sema-v1
