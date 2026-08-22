@@ -17,3 +17,8 @@ unsigned int core_m28_iter_div_u64_rem(unsigned long dividend,
     *remainder = dividend;
     return ret;
 }
+
+unsigned long core_m28_compound_xor(unsigned long *value, unsigned long mask) {
+    *value ^= mask;
+    return *value;
+}
