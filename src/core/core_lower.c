@@ -759,6 +759,7 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
     }
     if (expression->kind == MINIC_EXPRESSION_BUILTIN_OVERFLOW &&
         (expression->value.overflow.operator_kind == MINIC_OVERFLOW_ADD ||
+         expression->value.overflow.operator_kind == MINIC_OVERFLOW_SUBTRACT ||
          expression->value.overflow.operator_kind == MINIC_OVERFLOW_MULTIPLY)) {
         const MinicExpression *left_expression;
         const MinicExpression *result_pointer_expression;
@@ -823,6 +824,8 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         instruction.value.integer_overflow.operator_kind =
             expression->value.overflow.operator_kind == MINIC_OVERFLOW_ADD
                 ? MINIC_CORE_INTEGER_OVERFLOW_ADD
+            : expression->value.overflow.operator_kind == MINIC_OVERFLOW_SUBTRACT
+                ? MINIC_CORE_INTEGER_OVERFLOW_SUBTRACT
                 : MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY;
         instruction.value.integer_overflow.left = left;
         instruction.value.integer_overflow.right = right;
@@ -1064,6 +1067,64 @@ static MinicCoreLowerStatus set_branch(MinicCoreLowerContext *context,
                : MINIC_CORE_LOWER_ERROR;
 }
 
+static MinicCoreLowerStatus lower_condition_branch(MinicCoreLowerContext *context,
+                                                   MinicExpressionId expression_id,
+                                                   MinicSourceSpan span,
+                                                   MinicCoreBlockId when_true,
+                                                   MinicCoreBlockId when_false) {
+    const MinicExpression *expression;
+    MinicCoreBlockId condition_block;
+    MinicCoreTerminator terminator;
+    MinicCoreValueId condition;
+    MinicCoreLowerStatus status;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        context->function == NULL || expression_id == MINIC_EXPRESSION_INVALID ||
+        when_true == MINIC_CORE_BLOCK_INVALID || when_false == MINIC_CORE_BLOCK_INVALID) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    expression = minic_c0_program_expression(context->body->program, expression_id);
+    if (expression == NULL || !minic_type_is_integer(expression->type)) {
+        return MINIC_CORE_LOWER_UNSUPPORTED;
+    }
+    if (expression->kind == MINIC_EXPRESSION_BINARY &&
+        expression->value.binary.operator_kind == MINIC_BINARY_LOGICAL_OR) {
+        MinicCoreBlockId right_block;
+
+        if (!minic_core_function_add_block(context->function, &right_block)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        status = lower_condition_branch(
+            context, expression->value.binary.left, span, when_true, right_block);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        context->block_id = right_block;
+        return lower_condition_branch(
+            context, expression->value.binary.right, span, when_true, when_false);
+    }
+
+    condition_block = context->block_id;
+    status = lower_expression(context, expression_id, &condition);
+    if (status != MINIC_CORE_LOWER_OK) {
+        return status;
+    }
+    if (condition >= context->function->value_count ||
+        !minic_type_is_integer(context->function->values[condition].type)) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    (void)memset(&terminator, 0, sizeof(terminator));
+    terminator.kind = MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH;
+    terminator.span = span;
+    terminator.return_value = MINIC_CORE_VALUE_INVALID;
+    terminator.conditional.condition = condition;
+    terminator.conditional.when_true = when_true;
+    terminator.conditional.when_false = when_false;
+    return minic_core_function_set_terminator(context->function, condition_block, &terminator)
+               ? MINIC_CORE_LOWER_OK
+               : MINIC_CORE_LOWER_ERROR;
+}
+
 static MinicCoreLowerStatus
 lower_if(MinicCoreLowerContext *context, const MinicStatement *statement, bool *terminated) {
     const MinicBlock *else_source;
@@ -1074,8 +1135,7 @@ lower_if(MinicCoreLowerContext *context, const MinicStatement *statement, bool *
     MinicCoreBlockId false_target;
     MinicCoreBlockId merge_block;
     MinicCoreBlockId then_block;
-    MinicCoreTerminator terminator;
-    MinicCoreValueId condition;
+    MinicCoreBlockId continuation_block;
     MinicCoreLowerStatus status;
     bool else_terminated;
     bool needs_merge;
@@ -1101,12 +1161,7 @@ lower_if(MinicCoreLowerContext *context, const MinicStatement *statement, bool *
     }
 
     condition_block = context->block_id;
-    status = lower_expression(context, statement->expression, &condition);
-    if (status != MINIC_CORE_LOWER_OK) {
-        return status;
-    }
-    if (!minic_type_is_integer(context->function->values[condition].type) ||
-        !minic_core_function_add_block(context->function, &then_block)) {
+    if (!minic_core_function_add_block(context->function, &then_block)) {
         return MINIC_CORE_LOWER_ERROR;
     }
     else_block = MINIC_CORE_BLOCK_INVALID;
@@ -1153,16 +1208,14 @@ lower_if(MinicCoreLowerContext *context, const MinicStatement *statement, bool *
         context->block_id = condition_block;
     }
 
-    (void)memset(&terminator, 0, sizeof(terminator));
-    terminator.kind = MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH;
-    terminator.span = statement->span;
-    terminator.return_value = MINIC_CORE_VALUE_INVALID;
-    terminator.conditional.condition = condition;
-    terminator.conditional.when_true = then_block;
-    terminator.conditional.when_false = false_target;
-    if (!minic_core_function_set_terminator(context->function, condition_block, &terminator)) {
-        return MINIC_CORE_LOWER_ERROR;
+    continuation_block = context->block_id;
+    context->block_id = condition_block;
+    status = lower_condition_branch(
+        context, statement->expression, statement->span, then_block, false_target);
+    if (status != MINIC_CORE_LOWER_OK) {
+        return status;
     }
+    context->block_id = continuation_block;
     *terminated = !needs_merge;
     return MINIC_CORE_LOWER_OK;
 }

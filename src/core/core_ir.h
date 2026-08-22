@@ -27,6 +27,7 @@ typedef enum MinicCorePhase { MINIC_CORE_PHASE_EXECUTION_SHADOW = 0 } MinicCoreP
 
 typedef enum MinicCoreIntegerOverflowOperator {
     MINIC_CORE_INTEGER_OVERFLOW_ADD = 0,
+    MINIC_CORE_INTEGER_OVERFLOW_SUBTRACT,
     MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY
 } MinicCoreIntegerOverflowOperator;
 

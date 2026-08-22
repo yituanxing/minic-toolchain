@@ -489,6 +489,8 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
             !minic_type_equal(instruction->type, minic_type_bool()) ||
             (instruction->value.integer_overflow.operator_kind != MINIC_CORE_INTEGER_OVERFLOW_ADD &&
              instruction->value.integer_overflow.operator_kind !=
+                 MINIC_CORE_INTEGER_OVERFLOW_SUBTRACT &&
+             instruction->value.integer_overflow.operator_kind !=
                  MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY) ||
             instruction->value.integer_overflow.left >= function->value_count ||
             instruction->value.integer_overflow.right >= function->value_count ||
@@ -841,6 +843,9 @@ static bool dump_instruction(FILE *output,
         const char *operator_name =
             instruction->value.integer_overflow.operator_kind == MINIC_CORE_INTEGER_OVERFLOW_ADD
                 ? "add"
+            : instruction->value.integer_overflow.operator_kind ==
+                    MINIC_CORE_INTEGER_OVERFLOW_SUBTRACT
+                ? "sub"
                 : "mul";
         return fprintf(output,
                        "  %%%" PRIu32 " = %s.overflow.int %%%" PRIu32 ", %%%" PRIu32 ", %%%" PRIu32

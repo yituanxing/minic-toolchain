@@ -234,6 +234,8 @@ static bool core_integer_overflow_supported(const MinicC0Program *program,
         !minic_type_equal(instruction->type, minic_type_bool()) ||
         (instruction->value.integer_overflow.operator_kind != MINIC_CORE_INTEGER_OVERFLOW_ADD &&
          instruction->value.integer_overflow.operator_kind !=
+             MINIC_CORE_INTEGER_OVERFLOW_SUBTRACT &&
+         instruction->value.integer_overflow.operator_kind !=
              MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY) ||
         instruction->value.integer_overflow.left >= function->value_count ||
         instruction->value.integer_overflow.right >= function->value_count ||
@@ -524,6 +526,29 @@ static bool emit_instruction(FILE *file,
                                "  add t2, t0, t1\n"
                                "  xor t4, t0, t1\n"
                                "  xori t4, t4, -1\n"
+                               "  xor t5, t0, t2\n"
+                               "  and t4, t4, t5\n"
+                               "  srli t4, t4, 63\n") < 0) {
+                return false;
+            }
+        } else if (instruction->value.integer_overflow.operator_kind ==
+                   MINIC_CORE_INTEGER_OVERFLOW_SUBTRACT) {
+            if (result_size < 8U) {
+                if (fprintf(file, "  sub t2, t0, t1\n  mv t4, t2\n") < 0 ||
+                    !minic_riscv64_emit_integer_conversion_for_program(
+                        file, program, result_type, "t2") ||
+                    fprintf(file, "  xor t4, t4, t2\n  snez t4, t4\n") < 0) {
+                    return false;
+                }
+            } else if (is_unsigned) {
+                if (fprintf(file,
+                            "  sub t2, t0, t1\n"
+                            "  sltu t4, t0, t1\n") < 0) {
+                    return false;
+                }
+            } else if (fprintf(file,
+                               "  sub t2, t0, t1\n"
+                               "  xor t4, t0, t1\n"
                                "  xor t5, t0, t2\n"
                                "  and t4, t4, t5\n"
                                "  srli t4, t4, 63\n") < 0) {
