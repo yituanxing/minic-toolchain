@@ -1,0 +1,138 @@
+name: One-shot Core INIT_LIST_HEAD Shape Probe
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    if: github.actor != 'github-actions[bot]' && github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+
+      - name: Build exact compiler
+        shell: bash
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-init-list-probe-compiler
+
+      - name: Generate layered INIT_LIST_HEAD shapes
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p build/core-init-list-shapes
+
+          cat > build/core-init-list-shapes/a-plain.i <<'EOF'
+          struct list_head { struct list_head *next; struct list_head *prev; };
+          void probe_plain(struct list_head *list) {
+              list->next = list;
+              list->prev = list;
+          }
+          EOF
+
+          cat > build/core-init-list-shapes/b-volatile-lvalue.i <<'EOF'
+          struct list_head { struct list_head *next; struct list_head *prev; };
+          void probe_volatile_lvalue(struct list_head *list) {
+              *(volatile __typeof__(list->next) *)&(list->next) = list;
+              *(volatile __typeof__(list->prev) *)&(list->prev) = list;
+          }
+          EOF
+
+          cat > build/core-init-list-shapes/c-do-while.i <<'EOF'
+          struct list_head { struct list_head *next; struct list_head *prev; };
+          void probe_do_while(struct list_head *list) {
+              do {
+                  *(volatile __typeof__(list->next) *)&(list->next) = list;
+              } while (0);
+              do {
+                  *(volatile __typeof__(list->prev) *)&(list->prev) = list;
+              } while (0);
+          }
+          EOF
+
+          cat > build/core-init-list-shapes/d-compiletime-assert.i <<'EOF'
+          struct list_head { struct list_head *next; struct list_head *prev; };
+          void probe_compiletime_assert(struct list_head *list) {
+              do {
+                  __attribute__((noreturn, error("rwonce type")))
+                  extern void __probe_compiletime_assert_0(void);
+                  if (!(sizeof(list->next) == sizeof(void *)))
+                      __probe_compiletime_assert_0();
+              } while (0);
+              do {
+                  *(volatile __typeof__(list->next) *)&(list->next) = list;
+              } while (0);
+          }
+          EOF
+
+          cat > build/core-init-list-shapes/e-full-expanded.i <<'EOF'
+          struct list_head { struct list_head *next; struct list_head *prev; };
+          void probe_full_expanded(struct list_head *list) {
+              do {
+                  do {
+                      __attribute__((noreturn, error("Unsupported access size for WRITE_ONCE")))
+                      extern void __probe_compiletime_assert_1(void);
+                      if (!((sizeof(list->next) == sizeof(char) ||
+                             sizeof(list->next) == sizeof(short) ||
+                             sizeof(list->next) == sizeof(int) ||
+                             sizeof(list->next) == sizeof(long)) ||
+                            sizeof(list->next) == sizeof(long long)))
+                          __probe_compiletime_assert_1();
+                  } while (0);
+                  do {
+                      *(volatile __typeof__(list->next) *)&(list->next) = list;
+                  } while (0);
+              } while (0);
+              do {
+                  do {
+                      __attribute__((noreturn, error("Unsupported access size for WRITE_ONCE")))
+                      extern void __probe_compiletime_assert_2(void);
+                      if (!((sizeof(list->prev) == sizeof(char) ||
+                             sizeof(list->prev) == sizeof(short) ||
+                             sizeof(list->prev) == sizeof(int) ||
+                             sizeof(list->prev) == sizeof(long)) ||
+                            sizeof(list->prev) == sizeof(long long)))
+                          __probe_compiletime_assert_2();
+                  } while (0);
+                  do {
+                      *(volatile __typeof__(list->prev) *)&(list->prev) = list;
+                  } while (0);
+              } while (0);
+          }
+          EOF
+
+      - name: Run layered strict probes
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/core-init-list-probe-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-init-list-shapes"
+          passes=0
+          failures=0
+          for input in "$work"/*.i; do
+            name=$(basename "$input" .i)
+            set +e
+            MINIC_CORE_IR=strict "$compiler" -S "$input" -o "$work/$name.s" \
+              >"$work/$name.stdout" 2>"$work/$name.stderr"
+            status=$?
+            set -e
+            if [ "$status" -eq 0 ]; then
+              passes=$((passes + 1))
+              printf 'CORE_INIT_LIST_SHAPE name=%s status=PASS\n' "$name"
+            else
+              failures=$((failures + 1))
+              printf 'CORE_INIT_LIST_SHAPE name=%s status=FAIL rc=%d\n' "$name" "$status"
+              sed 's/^/CORE_INIT_LIST_DIAG /' "$work/$name.stderr"
+            fi
+          done
+          printf 'CORE_INIT_LIST_SHAPE_SUMMARY pass=%d fail=%d\n' "$passes" "$failures"
+          test -s "$work/a-plain.s"
+          if [ "$passes" -eq 5 ]; then
+            printf '%s\n' 'CORE_INIT_LIST_SHAPE_RESULT all-layered-synthetic-shapes-pass'
+          else
+            printf '%s\n' 'CORE_INIT_LIST_SHAPE_RESULT first-failing-layer-visible-above'
+          fi
