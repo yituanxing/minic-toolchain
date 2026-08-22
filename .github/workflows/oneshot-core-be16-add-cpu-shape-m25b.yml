@@ -1,0 +1,118 @@
+name: One-shot Core be16_add_cpu Shape M25b
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    if: github.actor != 'github-actions[bot]' && github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+
+      - name: Restore frozen Linux corpus
+        id: corpus
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+
+      - name: Apply M25 candidate and build
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.corpus.outputs.cache-hit }}" = true
+          python3 tools/dev/patch-core-discard-expression-m25.py
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-m25b-probe
+
+      - name: Extract exact frozen be16_add_cpu
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          root = Path('build/linux-focus-corpus/kbuild')
+          needle = 'be16_add_cpu'
+          for p in root.rglob('*.i'):
+              try:
+                  s = p.read_text(errors='replace')
+              except OSError:
+                  continue
+              pos = s.find(needle)
+              if pos < 0:
+                  continue
+              brace = s.find('{', pos)
+              if brace < 0:
+                  continue
+              start = s.rfind('\n', 0, max(0, pos - 1800)) + 1
+              depth = 0
+              end = None
+              for i in range(brace, len(s)):
+                  c = s[i]
+                  if c == '{':
+                      depth += 1
+                  elif c == '}':
+                      depth -= 1
+                      if depth == 0:
+                          end = i + 1
+                          break
+              if end is None:
+                  continue
+              print('CORE_M25B_FILE', p)
+              print('CORE_M25B_CONTEXT_BEGIN')
+              print(s[start:end])
+              print('CORE_M25B_CONTEXT_END')
+              break
+          else:
+              raise SystemExit('be16_add_cpu not found in frozen corpus')
+          PY
+
+      - name: Probe likely general shapes
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          c="$GITHUB_WORKSPACE/build/core-m25b-probe/bin/minic"
+          w="$GITHUB_WORKSPACE/build/core-m25b-shapes"
+          mkdir -p "$w"
+
+          cat > "$w/deref_add_store.i" <<'EOF'
+          void probe(unsigned short *p, unsigned short v) {
+              *p = (unsigned short)(*p + v);
+          }
+          EOF
+
+          cat > "$w/nested_call_store.i" <<'EOF'
+          unsigned short conv(unsigned short v) { return v; }
+          void probe(unsigned short *p, unsigned short v) {
+              *p = conv((unsigned short)(conv(*p) + v));
+          }
+          EOF
+
+          cat > "$w/volatile_deref_add_store.i" <<'EOF'
+          void probe(volatile unsigned short *p, unsigned short v) {
+              *p = (unsigned short)(*p + v);
+          }
+          EOF
+
+          cat > "$w/discard_then_deref_add_store.i" <<'EOF'
+          void probe(unsigned short *p, unsigned short v) {
+              (void)(p);
+              *p = (unsigned short)(*p + v);
+          }
+          EOF
+
+          for n in deref_add_store nested_call_store volatile_deref_add_store discard_then_deref_add_store; do
+              set +e
+              MINIC_CORE_IR=strict "$c" -S "$w/$n.i" -o "$w/$n.s" 2>"$w/$n.err"
+              rc=$?
+              set -e
+              printf 'CORE_M25B_SHAPE name=%s rc=%d message=' "$n" "$rc"
+              tr '\n' ' ' < "$w/$n.err"
+              printf '\n'
+          done
