@@ -39,4 +39,25 @@ replace_once(
     "global array semantic query",
 )
 
+replace_once(
+    "src/core/core_lower.c",
+    '''        if (!core_scalar_expression_value_type(context->body, true_expression, &true_type) ||\n            !core_scalar_expression_value_type(context->body, false_expression, &false_type) ||\n            !minic_type_equal(true_type, expression->type) ||\n            !minic_type_equal(false_type, expression->type)) {\n            return MINIC_CORE_LOWER_UNSUPPORTED;\n        }\n''',
+    '''        if (!core_scalar_expression_value_type(context->body, true_expression, &true_type) ||\n            !core_scalar_expression_value_type(context->body, false_expression, &false_type) ||\n            !minic_type_is_integer(true_type) || !minic_type_is_integer(false_type)) {\n            return MINIC_CORE_LOWER_UNSUPPORTED;\n        }\n''',
+    "conditional integer arm types",
+)
+
+replace_once(
+    "src/core/core_lower.c",
+    '''        status = lower_expression(context, expression->value.conditional.when_true, &arm_value);\n        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n        status = store_scalar_value(\n            context, true_expression->span, expression->type, result_object, arm_value);\n''',
+    '''        status = lower_expression(context, expression->value.conditional.when_true, &arm_value);\n        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n        status = append_integer_conversion(\n            context, true_expression->span, expression->type, arm_value, &arm_value);\n        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n        status = store_scalar_value(\n            context, true_expression->span, expression->type, result_object, arm_value);\n''',
+    "conditional true arm normalization",
+)
+
+replace_once(
+    "src/core/core_lower.c",
+    '''        status = lower_expression(context, expression->value.conditional.when_false, &arm_value);\n        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n        status = store_scalar_value(\n            context, false_expression->span, expression->type, result_object, arm_value);\n''',
+    '''        status = lower_expression(context, expression->value.conditional.when_false, &arm_value);\n        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n        status = append_integer_conversion(\n            context, false_expression->span, expression->type, arm_value, &arm_value);\n        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n        status = store_scalar_value(\n            context, false_expression->span, expression->type, result_object, arm_value);\n''',
+    "conditional false arm normalization",
+)
+
 print("M31B_FIXUPS_APPLIED")
