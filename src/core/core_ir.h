@@ -25,11 +25,16 @@ typedef uint32_t MinicCoreCalleeId;
 
 typedef enum MinicCorePhase { MINIC_CORE_PHASE_EXECUTION_SHADOW = 0 } MinicCorePhase;
 
+typedef enum MinicCoreIntegerOverflowOperator {
+    MINIC_CORE_INTEGER_OVERFLOW_ADD = 0,
+    MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY
+} MinicCoreIntegerOverflowOperator;
+
 typedef enum MinicCoreInstructionKind {
     MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT = 0,
     MINIC_CORE_INSTRUCTION_INTEGER_ADD,
     MINIC_CORE_INSTRUCTION_INTEGER_EQUAL,
-    MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY_OVERFLOW,
+    MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW,
     MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION,
     MINIC_CORE_INSTRUCTION_SCALAR_BITCAST,
     MINIC_CORE_INSTRUCTION_INTEGER_NEGATE,
@@ -86,10 +91,11 @@ typedef struct MinicCoreInstruction {
             MinicCoreValueId right;
         } binary;
         struct {
+            MinicCoreIntegerOverflowOperator operator_kind;
             MinicCoreValueId left;
             MinicCoreValueId right;
             MinicCoreValueId result_address;
-        } multiply_overflow;
+        } integer_overflow;
         MinicCoreValueId operand;
         size_t parameter_index;
         MinicCoreObjectId object_id;

@@ -758,7 +758,8 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                    : MINIC_CORE_LOWER_ERROR;
     }
     if (expression->kind == MINIC_EXPRESSION_BUILTIN_OVERFLOW &&
-        expression->value.overflow.operator_kind == MINIC_OVERFLOW_MULTIPLY) {
+        (expression->value.overflow.operator_kind == MINIC_OVERFLOW_ADD ||
+         expression->value.overflow.operator_kind == MINIC_OVERFLOW_MULTIPLY)) {
         const MinicExpression *left_expression;
         const MinicExpression *result_pointer_expression;
         const MinicExpression *right_expression;
@@ -817,11 +818,15 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                               result_pointer_expression->type)) {
             return MINIC_CORE_LOWER_ERROR;
         }
-        instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY_OVERFLOW;
+        instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW;
         instruction.type = minic_type_bool();
-        instruction.value.multiply_overflow.left = left;
-        instruction.value.multiply_overflow.right = right;
-        instruction.value.multiply_overflow.result_address = result_address;
+        instruction.value.integer_overflow.operator_kind =
+            expression->value.overflow.operator_kind == MINIC_OVERFLOW_ADD
+                ? MINIC_CORE_INTEGER_OVERFLOW_ADD
+                : MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY;
+        instruction.value.integer_overflow.left = left;
+        instruction.value.integer_overflow.right = right;
+        instruction.value.integer_overflow.result_address = result_address;
         return minic_core_function_append_value_instruction(
                    context->function, context->block_id, &instruction, value_id)
                    ? MINIC_CORE_LOWER_OK
