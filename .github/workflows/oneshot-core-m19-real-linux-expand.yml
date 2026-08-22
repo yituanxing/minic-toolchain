@@ -83,3 +83,108 @@ jobs:
           grep -F 'CORE_M19_DIAG function=list_empty_careful' build/core-m19-real-diag/stderr.log || true
           grep -F "Core IR shadow" build/core-m19-real-diag/stderr.log | head -n 4 || true
           test "$rc" -ne 0
+
+      - name: Reduce exact macro shape
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/core-m19-real-diag/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-m19-real-reduce"
+          mkdir -p "$work"
+
+          cat >"$work/a-cfg-statement.i" <<'EOF'
+          struct node { struct node *next; struct node *prev; };
+          extern void bad(void);
+          int probe_a(const struct node *head) {
+              struct node *next = ({
+                  struct node *value = ({
+                      do { if (!(sizeof(head->next) == sizeof(long))) bad(); } while (0);
+                      (*(struct node * const volatile *)&(head->next));
+                  });
+                  value;
+              });
+              return next != (void *)0;
+          }
+          EOF
+
+          cat >"$work/b-generic-statement.i" <<'EOF'
+          struct node { struct node *next; struct node *prev; };
+          int probe_b(const struct node *head) {
+              struct node *next = ({
+                  struct node *value = ({
+                      (*(const volatile typeof(_Generic((head->next), char: (char)0, default: (head->next))) *)&(head->next));
+                  });
+                  value;
+              });
+              return next != (void *)0;
+          }
+          EOF
+
+          cat >"$work/c-cfg-generic-statement.i" <<'EOF'
+          struct node { struct node *next; struct node *prev; };
+          extern void bad(void);
+          int probe_c(const struct node *head) {
+              struct node *next = ({
+                  typeof(*&head->next) value = ({
+                      do { if (!(sizeof(*&head->next) == sizeof(long))) bad(); } while (0);
+                      (*(const volatile typeof(_Generic((*&head->next), char: (char)0, default: (*&head->next))) *)&(*&head->next));
+                  });
+                  value;
+              });
+              return next != (void *)0;
+          }
+          EOF
+
+          cat >"$work/d-rhs-equality.i" <<'EOF'
+          struct node { struct node *next; struct node *prev; };
+          extern void bad(void);
+          int probe_d(const struct node *head, struct node *next) {
+              return next == ({
+                  do { if (!(sizeof(head->prev) == sizeof(long))) bad(); } while (0);
+                  (*(const volatile typeof(_Generic((head->prev), char: (char)0, default: (head->prev))) *)&(head->prev));
+              });
+          }
+          EOF
+
+          cat >"$work/e-rhs-and.i" <<'EOF'
+          struct node { struct node *next; struct node *prev; };
+          extern void bad(void);
+          int probe_e(const struct node *head, struct node *next) {
+              return (next == head) && (next == ({
+                  do { if (!(sizeof(head->prev) == sizeof(long))) bad(); } while (0);
+                  (*(const volatile typeof(_Generic((head->prev), char: (char)0, default: (head->prev))) *)&(head->prev));
+              }));
+          }
+          EOF
+
+          cat >"$work/f-full.i" <<'EOF'
+          struct node { struct node *next; struct node *prev; };
+          extern void bad(void);
+          int is_head(const struct node *list, const struct node *head) { return list == head; }
+          int probe_f(const struct node *head) {
+              struct node *next = ({
+                  typeof(*&head->next) p = ({
+                      do { if (!(sizeof(*&head->next) == sizeof(long))) bad(); } while (0);
+                      (*(const volatile typeof(_Generic((*&head->next), char: (char)0, default: (*&head->next))) *)&(*&head->next));
+                  });
+                  do { if (!(sizeof(*&head->next) == sizeof(long))) bad(); } while (0);
+                  __asm__ __volatile__("fence r,rw" : : : "memory");
+                  p;
+              });
+              return is_head(next, head) && (next == ({
+                  do { if (!(sizeof(head->prev) == sizeof(long))) bad(); } while (0);
+                  (*(const volatile typeof(_Generic((head->prev), char: (char)0, default: (head->prev))) *)&(head->prev));
+              }));
+          }
+          EOF
+
+          for input in "$work"/*.i; do
+            name=$(basename "$input" .i)
+            set +e
+            MINIC_CORE_IR=strict "$compiler" -S "$input" -o "$work/$name.s" \
+              >"$work/$name.out" 2>"$work/$name.err"
+            rc=$?
+            set -e
+            printf 'CORE_M19_REDUCE name=%s rc=%d\n' "$name" "$rc"
+            grep -E 'CORE_M19_DIAG function=probe_|Core IR shadow' "$work/$name.err" || true
+          done
