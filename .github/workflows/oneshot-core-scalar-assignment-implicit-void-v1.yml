@@ -1,0 +1,85 @@
+name: One-shot Core Scalar Assignment Implicit Void
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    if: github.actor != 'github-actions[bot]' && github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+          fetch-depth: 0
+
+      - name: Install RISC-V runtime tools
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mapfile -t packages < <(grep -Ev '^[[:space:]]*(#|$)' tools/ci/ubuntu-24.04-packages.txt)
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends "${packages[@]}"
+          sh tools/ci/verify-validation-tools.sh
+
+      - name: Apply Core M4 slice
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 -m py_compile tools/dev/patch-core-scalar-assignment-implicit-void-return-v1.py
+          python3 tools/dev/patch-core-scalar-assignment-implicit-void-return-v1.py
+          clang-format-18 -i \
+            src/core/core_lower.c \
+            tests/compiler/c0/core_scalar_assignment_implicit_void.c \
+            tests/compiler/c0/core_scalar_assignment_implicit_void_runtime.c
+          sh -n tests/compiler/c0/run-core-scalar-assignment-implicit-void.sh
+          bash -n .github/scripts/compiler-c0-full-gate.sh
+          git diff --check
+
+      - name: Validate scalar assignments and implicit void return
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-m4-compiler
+          compiler="$GITHUB_WORKSPACE/build/core-m4-compiler/bin/minic"
+          MINIC="$compiler" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/core-m4-focused" \
+          RISCV_CC=riscv64-linux-gnu-gcc \
+          QEMU_RISCV64=qemu-riscv64 \
+            sh tests/compiler/c0/run-core-scalar-assignment-implicit-void.sh
+
+          MINIC="$compiler" BUILD_DIR="$GITHUB_WORKSPACE/build/core-shadow-m4" \
+            bash tests/core/run-core-ir-shadow.sh
+
+          MINIC_CORE_CODEGEN=basic-v0 "$compiler" -S \
+            tests/target/riscv64/core_hybrid_differential.i \
+            -o build/core-m4-focused/hybrid.s
+          grep -q '^\.Lcore_hybrid_fallback_load_core_bb0:' build/core-m4-focused/hybrid.s
+          grep -q '^\.Lcore_hybrid_fallback_indirect_return:' build/core-m4-focused/hybrid.s
+          if grep -q '^\.Lcore_hybrid_fallback_indirect_core_bb' build/core-m4-focused/hybrid.s; then
+            printf '%s\n' 'indirect-call sentinel unexpectedly became Core-owned' >&2
+            exit 1
+          fi
+          printf '%s\n' 'PASS core/m4-scalar-assignment-implicit-void'
+
+      - name: Publish Core M4 slice
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm tools/dev/patch-core-scalar-assignment-implicit-void-return-v1.py
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            src/core/core_lower.c \
+            tests/compiler/c0/core_scalar_assignment_implicit_void.c \
+            tests/compiler/c0/core_scalar_assignment_implicit_void_runtime.c \
+            tests/compiler/c0/run-core-scalar-assignment-implicit-void.sh \
+            .github/scripts/compiler-c0-full-gate.sh \
+            tools/dev/patch-core-scalar-assignment-implicit-void-return-v1.py
+          git diff --cached --check
+          git commit -m 'core: lower scalar assignments and implicit void returns'
+          git push origin HEAD:refactor/declaration-sema-v1
