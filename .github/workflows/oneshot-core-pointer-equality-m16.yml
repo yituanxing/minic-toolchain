@@ -1,0 +1,195 @@
+name: One-shot Core Pointer Equality M16
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    if: github.actor != 'github-actions[bot]' && github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+          fetch-depth: 0
+
+      - name: Install RISC-V runtime tools
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mapfile -t packages < <(grep -Ev '^[[:space:]]*(#|$)' tools/ci/ubuntu-24.04-packages.txt)
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends "${packages[@]}"
+          sh tools/ci/verify-validation-tools.sh
+
+      - name: Restore frozen Linux corpus
+        id: linux-corpus-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+
+      - name: Prove M16 qualifier comparison and bitcast gaps
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
+          test -s build/linux-focus-corpus/selected-tus.txt
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-m16-before-compiler
+          compiler="$GITHUB_WORKSPACE/build/core-m16-before-compiler/bin/minic"
+          cat > build/core-m16-before-equality.i <<'EOF'
+          struct node { struct node *next; struct node *prev; };
+          int core_m16_before_equal(const struct node *list, const struct node *head) {
+              return list->prev == head;
+          }
+          EOF
+          if MINIC_CORE_IR=strict "$compiler" -S build/core-m16-before-equality.i \
+              -o build/core-m16-before-equality.s 2>build/core-m16-before-equality.err; then
+            echo 'M16 qualifier pointer equality gap unexpectedly absent before patch' >&2
+            exit 1
+          fi
+          grep -F "Core IR shadow does not yet support function 'core_m16_before_equal'" \
+            build/core-m16-before-equality.err >/dev/null
+
+          cat > build/core-m16-before-cast.i <<'EOF'
+          struct node { struct node *next; struct node *prev; };
+          int core_m16_before_cast(const struct node *list, const struct node *head) {
+              return (const struct node *)list->prev == head;
+          }
+          EOF
+          if MINIC_CORE_IR=strict "$compiler" -S build/core-m16-before-cast.i \
+              -o build/core-m16-before-cast.s 2>build/core-m16-before-cast.err; then
+            echo 'M16 lvalue bitcast contract gap unexpectedly absent before patch' >&2
+            exit 1
+          fi
+          grep -F "Core IR shadow lowering failed for function 'core_m16_before_cast'" \
+            build/core-m16-before-cast.err >/dev/null
+          printf '%s\n' 'PROVED core/m16 qualifier-equality=unsupported lvalue-bitcast=error'
+
+      - name: Apply M16
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 -m py_compile tools/dev/patch-core-pointer-equality-m16.py
+          python3 tools/dev/patch-core-pointer-equality-m16.py
+          clang-format-18 -i \
+            src/core/core_ir.h \
+            src/core/core_ir.c \
+            src/core/core_lower.c \
+            src/target/riscv64/core_codegen.c \
+            tests/compiler/c0/core_pointer_equality_qualifiers.c \
+            tests/compiler/c0/core_pointer_equality_qualifiers_runtime.c
+          sh -n tests/compiler/c0/run-core-pointer-equality-qualifiers.sh
+          bash -n .github/scripts/compiler-c0-full-gate.sh
+          git diff --check
+          grep -F 'minic_core_scalar_bitcast_types_valid' src/core/core_ir.h >/dev/null
+          grep -F 'minic_core_scalar_bitcast_types_valid' src/core/core_lower.c >/dev/null
+          grep -F 'minic_core_scalar_bitcast_types_valid' src/target/riscv64/core_codegen.c >/dev/null
+          grep -F 'core_scalar_expression_value_type' src/core/core_lower.c >/dev/null
+          grep -F 'minic_type_pointer_equality_compatible' src/core/core_lower.c >/dev/null
+          grep -F 'minic_type_conditional_pointer_common' src/core/core_lower.c >/dev/null
+          if grep -F 'static bool core_scalar_bitcast_types' src/core/core_lower.c >/dev/null; then
+            echo 'duplicate Core lowering bitcast structural owner survived M16' >&2
+            exit 1
+          fi
+          if grep -F 'bool type_pair_valid;' src/target/riscv64/core_codegen.c >/dev/null; then
+            echo 'duplicate RV64 bitcast structural owner survived M16' >&2
+            exit 1
+          fi
+
+      - name: Build and validate M16
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-m16-compiler
+          compiler="$GITHUB_WORKSPACE/build/core-m16-compiler/bin/minic"
+          MINIC="$compiler" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/core-m16-focused" \
+          RISCV_CC=riscv64-linux-gnu-gcc \
+          QEMU_RISCV64=qemu-riscv64 \
+            sh tests/compiler/c0/run-core-pointer-equality-qualifiers.sh
+          MINIC="$compiler" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/core-m16-bitcast-regression" \
+          RISCV_CC=riscv64-linux-gnu-gcc \
+          QEMU_RISCV64=qemu-riscv64 \
+            sh tests/compiler/c0/run-core-scalar-lvalue-bitcast.sh
+          MINIC="$compiler" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/core-m16-equality-regression" \
+          RISCV_CC=riscv64-linux-gnu-gcc \
+          QEMU_RISCV64=qemu-riscv64 \
+            sh tests/compiler/c0/run-core-integer-equality.sh
+          MINIC="$compiler" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/core-m16-not-equal-regression" \
+          RISCV_CC=riscv64-linux-gnu-gcc \
+          QEMU_RISCV64=qemu-riscv64 \
+            sh tests/compiler/c0/run-core-scalar-not-equal.sh
+          MINIC="$compiler" bash tests/core/run-core-ir-shadow.sh
+
+      - name: Replay frozen strict frontier
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/core-m16-compiler/bin/minic"
+          set +e
+          MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
+            --minic "$compiler" \
+            --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
+            --work "$GITHUB_WORKSPACE/build/core-m16-strict" \
+            --jobs 4 --offset 0 --limit 500 --sample-count 64 --indices ''
+          replay_status=$?
+          set -e
+          printf 'CORE_M16_REPLAY_STATUS=%d\n' "$replay_status"
+          python3 - <<'PY'
+          from collections import Counter
+          import json, re
+          from pathlib import Path
+          rows = json.loads(Path('build/core-m16-strict/batch-results.json').read_text())
+          unsupported_re = re.compile(r"^Core IR shadow does not yet support function '([^']+)'$")
+          unsupported = Counter()
+          errors = []
+          passes = 0
+          for row in rows:
+              if row['status'] == 'PASS':
+                  passes += 1
+                  continue
+              message = str(row['message'])
+              match = unsupported_re.match(message)
+              if match:
+                  unsupported[match.group(1)] += 1
+              else:
+                  errors.append((row['index'], message))
+          print(f'CORE_M16_FRONTIER selected={len(rows)} pass={passes} unsupported={sum(unsupported.values())} error={len(errors)}')
+          for function, count in unsupported.most_common():
+              print(f'CORE_M16_BLOCKER count={count} function={function}')
+          for index, message in errors:
+              print(f'CORE_M16_ERROR index={index} message={message}')
+          if errors:
+              raise SystemExit('M16 introduced non-UNSUPPORTED strict failures')
+          if unsupported.get('list_is_first', 0) != 0:
+              raise SystemExit('M16 did not pierce the proven list_is_first qualifier comparison blocker')
+          PY
+
+      - name: Publish M16 product
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm tools/dev/patch-core-pointer-equality-m16.py
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            src/core/core_ir.h \
+            src/core/core_ir.c \
+            src/core/core_lower.c \
+            src/target/riscv64/core_codegen.c \
+            tests/compiler/c0/core_pointer_equality_qualifiers.c \
+            tests/compiler/c0/core_pointer_equality_qualifiers_runtime.c \
+            tests/compiler/c0/run-core-pointer-equality-qualifiers.sh \
+            .github/scripts/compiler-c0-full-gate.sh \
+            tools/dev/patch-core-pointer-equality-m16.py
+          git diff --cached --check
+          git commit -m 'core: normalize compatible pointer equality'
+          git push origin HEAD:refactor/declaration-sema-v1
