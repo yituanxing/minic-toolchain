@@ -1,0 +1,106 @@
+name: One-shot Core Aggregate Boundary M30 Shapes
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    if: github.actor != 'github-actions[bot]' && github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+      - name: Restore frozen Linux corpus
+        id: linux-corpus-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+      - name: Apply and probe aggregate function boundary
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
+          python3 tools/dev/patch-core-aggregate-boundary-m30.py
+          clang-format-18 -i src/core/core_ir.h src/core/core_ir.c src/core/core_lower.c src/target/riscv64/core_codegen.c
+          git diff --check
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m30-boundary-probe
+          c="$GITHUB_WORKSPACE/build/m30-boundary-probe/bin/minic"
+          w="$GITHUB_WORKSPACE/build/m30-boundary-shapes"
+          mkdir -p "$w"
+
+          cat > "$w/record_param_read.i" <<'EOF'
+          struct M30P { long a; long b; };
+          long m30_record_param_read(struct M30P p) { return p.a + p.b; }
+          EOF
+
+          cat > "$w/record_return_local.i" <<'EOF'
+          struct M30R { long a; long b; };
+          struct M30R m30_record_return_local(long a, long b) { struct M30R r; r.a = a; r.b = b; return r; }
+          EOF
+
+          cat > "$w/record_param_return.i" <<'EOF'
+          struct M30I { long a; long b; };
+          struct M30I m30_record_param_return(struct M30I p) { return p; }
+          EOF
+
+          cat > "$w/record_pointer_helper.i" <<'EOF'
+          struct M30H { long a; long b; };
+          static void m30_norm(struct M30H *p, long a, long b) { p->a = a; p->b = b; }
+          long m30_record_pointer_helper(long a, long b) { struct M30H r; m30_norm(&r, a, b); return r.a + r.b; }
+          EOF
+
+          cat > "$w/timespec_style.i" <<'EOF'
+          struct M30T { long tv_sec; long tv_nsec; };
+          extern void m30_set(struct M30T *ts, long sec, long nsec);
+          struct M30T m30_timespec_style(struct M30T lhs, struct M30T rhs) {
+              struct M30T delta;
+              m30_set(&delta, lhs.tv_sec + rhs.tv_sec, lhs.tv_nsec + rhs.tv_nsec);
+              return delta;
+          }
+          EOF
+
+          cat > "$w/record_call_result.i" <<'EOF'
+          struct M30C { long a; long b; };
+          static struct M30C m30_make(long a, long b) { struct M30C r; r.a = a; r.b = b; return r; }
+          long m30_record_call_result(long a, long b) { return m30_make(a, b).a; }
+          EOF
+
+          cat > "$w/record_then_scalar.i" <<'EOF'
+          struct M30Mix { long a; long b; };
+          long m30_record_then_scalar(struct M30Mix p, long tail) { return p.a + p.b + tail; }
+          EOF
+
+          cat > "$w/scalar_record_scalar.i" <<'EOF'
+          struct M30Mix2 { long a; long b; };
+          long m30_scalar_record_scalar(long head, struct M30Mix2 p, long tail) {
+              return head + p.a + p.b + tail;
+          }
+          EOF
+
+          cat > "$w/one_chunk_record.i" <<'EOF'
+          struct M30One { long a; };
+          long m30_one_chunk_record(struct M30One p, long tail) { return p.a + tail; }
+          EOF
+
+          for n in record_param_read record_return_local record_param_return record_pointer_helper timespec_style record_call_result record_then_scalar scalar_record_scalar one_chunk_record; do
+              set +e
+              MINIC_CORE_IR=strict "$c" -S "$w/$n.i" -o "$w/$n.s" 2>"$w/$n.err"
+              rc=$?
+              set -e
+              printf 'M30_BOUNDARY_SHAPE name=%s rc=%d message=' "$n" "$rc"
+              tr '\n' ' ' < "$w/$n.err"
+              printf '\n'
+          done
+
+          set +e
+          MINIC_CORE_IR=strict "$c" -S build/linux-focus-corpus/kbuild/init/do_mounts.i -o "$w/do_mounts.s" 2>"$w/do_mounts.err"
+          rc=$?
+          set -e
+          printf 'M30_BOUNDARY_FROZEN rc=%d message=' "$rc"
+          tr '\n' ' ' < "$w/do_mounts.err"
+          printf '\n'
