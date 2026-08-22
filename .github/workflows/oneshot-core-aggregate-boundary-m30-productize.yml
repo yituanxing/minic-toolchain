@@ -1,0 +1,261 @@
+name: One-shot Core Aggregate Boundary M30 Productize
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: core-aggregate-boundary-m30-productize
+  cancel-in-progress: true
+
+jobs:
+  qualify-and-productize:
+    if: github.actor != 'github-actions[bot]' && github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+          fetch-depth: 0
+
+      - name: Capture exact qualification head
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          printf 'QUALIFICATION_HEAD=%s\n' "$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          git status --short
+
+      - name: Install canonical validation tools
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mapfile -t packages < <(grep -Ev '^[[:space:]]*(#|$)' tools/ci/ubuntu-24.04-packages.txt)
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends "${packages[@]}"
+          sh tools/ci/verify-validation-tools.sh
+
+      - name: Restore frozen Linux corpus
+        id: linux-corpus-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+
+      - name: Require frozen corpus
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
+          test -s build/linux-focus-corpus/selected-tus.txt
+          test -s build/linux-focus-corpus/kbuild/init/do_mounts.i
+
+      - name: Prove pre-M30 strict gaps
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m30-pre
+          c="$GITHUB_WORKSPACE/build/m30-pre/bin/minic"
+          w="$GITHUB_WORKSPACE/build/m30-pre-proof"
+          mkdir -p "$w"
+
+          cat > "$w/record_param.i" <<'EOF'
+          struct M30PreP { long a; long b; };
+          long m30_pre_record_param(struct M30PreP p) { return p.a + p.b; }
+          EOF
+          cat > "$w/record_return.i" <<'EOF'
+          struct M30PreR { long a; long b; };
+          struct M30PreR m30_pre_record_return(long a, long b) { struct M30PreR r; r.a = a; r.b = b; return r; }
+          EOF
+          cat > "$w/add_assign.i" <<'EOF'
+          struct M30PreA { long a; long b; };
+          void m30_pre_add_assign(struct M30PreA *p, long x) { p->b += x; }
+          EOF
+          for n in record_param record_return add_assign; do
+            set +e
+            MINIC_CORE_IR=strict "$c" -S "$w/$n.i" -o "$w/$n.s" 2>"$w/$n.err"
+            rc=$?
+            set -e
+            test "$rc" -ne 0
+            grep -F "Core IR shadow does not yet support function" "$w/$n.err"
+          done
+
+          set +e
+          MINIC_CORE_IR=strict "$c" -S build/linux-focus-corpus/kbuild/init/do_mounts.i -o "$w/do_mounts.s" 2>"$w/do_mounts.err"
+          rc=$?
+          set -e
+          test "$rc" -ne 0
+          grep -F "Core IR shadow does not yet support function 'timespec64_add'" "$w/do_mounts.err"
+          printf '%s\n' 'M30_PRE_GAPS_CONFIRMED'
+
+      - name: Apply M30 candidate and permanent gate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/patch-core-aggregate-boundary-m30.py
+          python3 tools/dev/patch-core-integer-add-assignment-m30b.py
+          python3 tools/dev/patch-core-aggregate-boundary-m30-gate.py
+          clang-format-18 -i src/core/core_ir.h src/core/core_ir.c src/core/core_lower.c src/target/riscv64/core_codegen.c
+          git diff --check
+          python3 - <<'PY'
+          import subprocess
+          expected = {
+              'src/core/core_ir.h',
+              'src/core/core_ir.c',
+              'src/core/core_lower.c',
+              'src/target/riscv64/core_codegen.c',
+              '.github/scripts/compiler-c0-full-gate.sh',
+          }
+          actual = set(subprocess.check_output(['git', 'diff', '--name-only'], text=True).splitlines())
+          if actual != expected:
+              raise SystemExit(f'unexpected M30 candidate diff: {sorted(actual)} expected={sorted(expected)}')
+          PY
+
+      - name: Build M30 exact candidate with Werror
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m30-candidate
+
+      - name: Run M30 QEMU ABI differential and focused regressions
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          c="$GITHUB_WORKSPACE/build/m30-candidate/bin/minic"
+          MINIC="$c" BUILD_DIR="$GITHUB_WORKSPACE/build/m30-focused" RISCV_CC=riscv64-linux-gnu-gcc QEMU_RISCV64=qemu-riscv64 \
+            sh tests/compiler/c0/run-core-aggregate-boundary-m30.sh
+          for script in \
+            run-core-record-local-m29.sh \
+            run-core-inline-asm-identity-m28.sh \
+            run-core-switch-m27.sh \
+            run-core-integer-foundation-m26b.sh \
+            run-core-integer-binary-preservation-m25b.sh \
+            run-core-fixed-call-scalar-conversions.sh; do
+            name=${script#run-}
+            name=${name%.sh}
+            MINIC="$c" BUILD_DIR="$GITHUB_WORKSPACE/build/m30-regress-$name" RISCV_CC=riscv64-linux-gnu-gcc QEMU_RISCV64=qemu-riscv64 \
+              sh "tests/compiler/c0/$script"
+          done
+          printf '%s\n' 'M30_FOCUSED_AND_REGRESSIONS_PASS'
+
+      - name: Prove frozen representative moved beyond timespec boundaries
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          c="$GITHUB_WORKSPACE/build/m30-candidate/bin/minic"
+          w="$GITHUB_WORKSPACE/build/m30-exact-proof"
+          mkdir -p "$w"
+          set +e
+          MINIC_CORE_IR=strict "$c" -S build/linux-focus-corpus/kbuild/init/do_mounts.i -o "$w/do_mounts.s" 2>"$w/do_mounts.err"
+          rc=$?
+          set -e
+          cat "$w/do_mounts.err"
+          if grep -Fq "Core IR shadow does not yet support function 'timespec64_add'" "$w/do_mounts.err"; then
+            echo 'M30 exact representative did not move beyond timespec64_add' >&2
+            exit 1
+          fi
+          if grep -Fq "Core IR shadow does not yet support function 'timespec64_add_ns'" "$w/do_mounts.err"; then
+            echo 'M30 exact representative did not move beyond timespec64_add_ns' >&2
+            exit 1
+          fi
+          if [ "$rc" -ne 0 ] && ! grep -Fq "Core IR shadow does not yet support function" "$w/do_mounts.err"; then
+            echo 'M30 exact representative changed into a non-capability error' >&2
+            exit 1
+          fi
+          printf 'M30_EXACT_REPRESENTATIVE_MOVED rc=%d\n' "$rc"
+
+      - name: Replay frozen strict first500 and classify
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/m30-candidate/bin/minic"
+          work="$GITHUB_WORKSPACE/build/m30-strict500"
+          set +e
+          MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
+            --minic "$compiler" \
+            --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
+            --work "$work" \
+            --jobs 5 \
+            --offset 0 \
+            --limit 500 \
+            --sample-count 0 \
+            --indices ''
+          replay_status=$?
+          set -e
+          printf 'M30_STRICT500_REPLAY_STATUS=%d\n' "$replay_status"
+          python3 tools/ci/classify-core-strict-frontier.py \
+            "$work/batch-results.json" \
+            --examples 4 \
+            --json-out "$work/frontier-summary.json" \
+            --require-no-errors
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          p = Path('build/m30-strict500/frontier-summary.json')
+          s = json.loads(p.read_text())
+          if s['selected'] != 500:
+              raise SystemExit(f"expected selected=500, got {s['selected']}")
+          if s['error'] != 0 or s['preprocess_missing'] != 0:
+              raise SystemExit(f"M30 strict500 requires ERROR=0/missing=0: {s}")
+          if s['pass'] + s['unsupported'] != 500:
+              raise SystemExit(f"M30 strict500 accounting mismatch: {s}")
+          blockers = {row['function']: row['count'] for row in s['blockers']}
+          for removed in ('timespec64_add', 'timespec64_add_ns'):
+              if blockers.get(removed, 0) != 0:
+                  raise SystemExit(f"{removed} remains in M30 frontier: {blockers[removed]}")
+          print('M30_STRICT500_QUALIFIED')
+          for row in s['blockers'][:20]:
+              print(f"M30_NEXT_BLOCKER count={row['count']} function={row['function']}")
+          PY
+
+      - name: Productize exact qualified M30 head
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          branch=refactor/declaration-sema-v1
+          tested="$QUALIFICATION_HEAD"
+          test "$(git rev-parse HEAD)" = "$tested"
+          git fetch origin "$branch"
+          origin_head=$(git rev-parse "origin/$branch")
+          if [ "$origin_head" != "$tested" ]; then
+            printf 'Refusing non-linear M30 productization: tested=%s origin=%s\n' "$tested" "$origin_head" >&2
+            exit 1
+          fi
+          git rm -f --ignore-unmatch \
+            tools/dev/patch-core-aggregate-boundary-m30.py \
+            tools/dev/patch-core-integer-add-assignment-m30b.py \
+            tools/dev/patch-core-aggregate-boundary-m30-gate.py \
+            .github/workflows/oneshot-core-next-frontier-m30.yml \
+            .github/workflows/oneshot-core-aggregate-boundary-m30-shapes.yml \
+            .github/workflows/oneshot-core-timespec-add-ns-m30b.yml \
+            .github/workflows/oneshot-core-aggregate-boundary-m30-productize.yml
+          git add \
+            src/core/core_ir.h \
+            src/core/core_ir.c \
+            src/core/core_lower.c \
+            src/target/riscv64/core_codegen.c \
+            .github/scripts/compiler-c0-full-gate.sh
+          git diff --cached --check
+          git status --short
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git commit -m 'core: lower aggregate function boundaries'
+          git push origin "HEAD:$branch"
+          printf 'M30_PRODUCT_HEAD=%s\n' "$(git rev-parse HEAD)"
+
+      - name: Upload M30 qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-aggregate-boundary-m30-qualification
+          path: |
+            build/m30-pre-proof/*.err
+            build/m30-exact-proof/*.err
+            build/m30-focused/*.out
+            build/m30-strict500/batch-results.json
+            build/m30-strict500/batch-results.tsv
+            build/m30-strict500/batch-summary.txt
+            build/m30-strict500/failure-contexts.txt
+            build/m30-strict500/frontier-summary.json
+          if-no-files-found: warn
