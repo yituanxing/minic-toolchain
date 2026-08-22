@@ -871,6 +871,51 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                    : MINIC_CORE_LOWER_ERROR;
     }
     if (expression->kind == MINIC_EXPRESSION_BINARY &&
+        expression->value.binary.operator_kind == MINIC_BINARY_NOT_EQUAL) {
+        MinicCoreInstruction zero_test_instruction;
+        MinicCoreValueId equal_value;
+        MinicCoreValueId left;
+        MinicCoreValueId right;
+        MinicCoreLowerStatus status;
+
+        if (!minic_type_equal(expression->type, minic_type_int())) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        status = lower_expression(context, expression->value.binary.left, &left);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        status = lower_expression(context, expression->value.binary.right, &right);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        if (left >= context->function->value_count || right >= context->function->value_count ||
+            (!minic_type_is_integer(context->function->values[left].type) &&
+             !minic_type_is_pointer(context->function->values[left].type)) ||
+            !minic_type_equal(context->function->values[left].type,
+                              context->function->values[right].type)) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        instruction.kind = MINIC_CORE_INSTRUCTION_SCALAR_EQUAL;
+        instruction.type = minic_type_int();
+        instruction.value.binary.left = left;
+        instruction.value.binary.right = right;
+        if (!minic_core_function_append_value_instruction(
+                context->function, context->block_id, &instruction, &equal_value)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        (void)memset(&zero_test_instruction, 0, sizeof(zero_test_instruction));
+        zero_test_instruction.kind = MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO;
+        zero_test_instruction.span = expression->span;
+        zero_test_instruction.type = minic_type_int();
+        zero_test_instruction.result = MINIC_CORE_VALUE_INVALID;
+        zero_test_instruction.value.operand = equal_value;
+        return minic_core_function_append_value_instruction(
+                   context->function, context->block_id, &zero_test_instruction, value_id)
+                   ? MINIC_CORE_LOWER_OK
+                   : MINIC_CORE_LOWER_ERROR;
+    }
+    if (expression->kind == MINIC_EXPRESSION_BINARY &&
         expression->value.binary.operator_kind == MINIC_BINARY_ADD) {
         const MinicExpression *left_expression;
         const MinicExpression *right_expression;
