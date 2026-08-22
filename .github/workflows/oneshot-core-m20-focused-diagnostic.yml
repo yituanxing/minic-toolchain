@@ -1,0 +1,62 @@
+name: One-shot Core M20 Focused Diagnostic
+
+on:
+  pull_request:
+
+jobs:
+  diagnose:
+    if: github.actor != 'github-actions[bot]' && github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+      - name: Apply M20 candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/patch-core-for-postincrement-m20.py
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-m20-diag
+      - name: Compile focused shapes independently
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/core-m20-diag/bin/minic"
+          mkdir -p build/core-m20-diag-shapes
+          cat > build/core-m20-diag-shapes/for_assign.i <<'EOF'
+          struct node { struct node *next; };
+          unsigned long probe(struct node *head) {
+              struct node *pos;
+              unsigned long count = 0;
+              for (pos = head->next; pos != head; pos = pos->next)
+                  count = count + 1;
+              return count;
+          }
+          EOF
+          cat > build/core-m20-diag-shapes/postinc.i <<'EOF'
+          unsigned long probe(unsigned long value) {
+              value++;
+              return value;
+          }
+          EOF
+          cat > build/core-m20-diag-shapes/for_inc.i <<'EOF'
+          struct node { struct node *next; };
+          unsigned long probe(struct node *head) {
+              struct node *pos;
+              unsigned long count = 0;
+              for (pos = head->next; pos != head; pos = pos->next)
+                  count++;
+              return count;
+          }
+          EOF
+          for shape in for_assign postinc for_inc; do
+            set +e
+            MINIC_CORE_IR=strict "$compiler" -S "build/core-m20-diag-shapes/$shape.i" \
+              -o "build/core-m20-diag-shapes/$shape.s" \
+              2>"build/core-m20-diag-shapes/$shape.err"
+            rc=$?
+            set -e
+            printf 'CORE_M20_DIAG shape=%s rc=%d message=' "$shape" "$rc"
+            tr '\n' ' ' < "build/core-m20-diag-shapes/$shape.err"
+            printf '\n'
+          done
