@@ -37,14 +37,12 @@ old_match = '''        if (!minic_type_equal(parameter->type,
             return MINIC_CORE_LOWER_ERROR;
         }
 '''
-new_match = '''        if (!minic_type_equal(parameter->type,
-                              context->source_function->parameter_types[parameter_index])) {
-            return MINIC_CORE_LOWER_ERROR;
-        }
-        if (!minic_type_unqualified(parameter->type, &parameter_value_type) ||
+new_match = '''        if (!minic_type_unqualified(parameter->type, &parameter_value_type) ||
             !core_memory_scalar_type(parameter_value_type) ||
             minic_type_is_const(parameter_value_type) ||
-            minic_type_is_volatile(parameter_value_type)) {
+            minic_type_is_volatile(parameter_value_type) ||
+            !minic_type_equal(parameter_value_type,
+                              context->source_function->parameter_types[parameter_index])) {
             return MINIC_CORE_LOWER_ERROR;
         }
 '''
@@ -59,29 +57,6 @@ if body.count(old_type) != 1:
 body = body.replace(old_type, new_type, 1)
 text = text[:begin] + body + text[end:]
 lower_path.write_text(text)
-
-ir_path = Path('src/core/core_ir.c')
-ir = ir_path.read_text()
-old_verify = '''    case MINIC_CORE_INSTRUCTION_PARAMETER:
-        return instruction_result_is_valid(function, instruction) &&
-               instruction->value.parameter_index < function->parameter_count &&
-               minic_type_equal(function->parameter_types[instruction->value.parameter_index],
-                                instruction->type);
-'''
-new_verify = '''    case MINIC_CORE_INSTRUCTION_PARAMETER: {
-        MinicType parameter_value_type;
-
-        return instruction_result_is_valid(function, instruction) &&
-               instruction->value.parameter_index < function->parameter_count &&
-               minic_type_unqualified(function->parameter_types[instruction->value.parameter_index],
-                                      &parameter_value_type) &&
-               minic_type_equal(parameter_value_type, instruction->type);
-    }
-'''
-if ir.count(old_verify) != 1:
-    raise SystemExit(f'M23b Core PARAMETER verifier anchor count={ir.count(old_verify)}')
-ir = ir.replace(old_verify, new_verify, 1)
-ir_path.write_text(ir)
 
 Path('tests/compiler/c0/core_const_parameter_m23b.c').write_text(r'''unsigned long core_m23b_const_parameter(const unsigned long value) {
     return value + 1UL;
