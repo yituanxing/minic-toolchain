@@ -26,51 +26,13 @@ jobs:
           set -Eeuo pipefail
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           python3 tools/dev/patch-core-aggregate-boundary-m30.py
+          python3 tools/dev/patch-core-integer-add-assignment-m30b.py
           clang-format-18 -i src/core/core_ir.h src/core/core_ir.c src/core/core_lower.c src/target/riscv64/core_codegen.c
           git diff --check
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m30b-probe
           c="$GITHUB_WORKSPACE/build/m30b-probe/bin/minic"
           w="$GITHUB_WORKSPACE/build/m30b-shapes"
           mkdir -p "$w"
-
-          python3 - <<'PY'
-          import re
-          from pathlib import Path
-          p = Path('build/linux-focus-corpus/kbuild/init/do_mounts.i')
-          text = p.read_text(errors='replace')
-          name = 'timespec64_add_ns'
-          for m in re.finditer(r'\b' + name + r'\s*\(', text):
-              paren = text.find('(', m.start())
-              depth = 0
-              end_paren = None
-              for i in range(paren, len(text)):
-                  if text[i] == '(':
-                      depth += 1
-                  elif text[i] == ')':
-                      depth -= 1
-                      if depth == 0:
-                          end_paren = i + 1
-                          break
-              if end_paren is None:
-                  continue
-              semi = text.find(';', end_paren)
-              brace = text.find('{', end_paren)
-              if brace < 0 or (semi >= 0 and semi < brace):
-                  continue
-              start = text.rfind('\n', 0, max(0, m.start() - 700)) + 1
-              depth = 0
-              for i in range(brace, len(text)):
-                  if text[i] == '{':
-                      depth += 1
-                  elif text[i] == '}':
-                      depth -= 1
-                      if depth == 0:
-                          print(f'M30B_EXACT_BEGIN name={name} file={p}')
-                          print(text[start:i+1])
-                          print(f'M30B_EXACT_END name={name}')
-                          raise SystemExit(0)
-          raise SystemExit('M30B exact timespec64_add_ns missing')
-          PY
 
           cat > "$w/pointer_record_member_update.i" <<'EOF'
           struct M30N { long sec; long nsec; };
@@ -93,7 +55,26 @@ jobs:
           }
           EOF
 
-          for n in pointer_record_member_update record_pointer_member_update record_pointer_if_update; do
+          cat > "$w/exact_style.i" <<'EOF'
+          typedef unsigned long u64; typedef long s64;
+          struct M30N4 { long tv_sec; long tv_nsec; };
+          static unsigned int m30_iter(u64 dividend, unsigned int divisor, u64 *remainder) {
+              unsigned int ret = 0;
+              while (dividend >= divisor) {
+                  __asm__("" : "+rm"(dividend));
+                  dividend -= divisor;
+                  ret++;
+              }
+              *remainder = dividend;
+              return ret;
+          }
+          void m30_exact_style(struct M30N4 *a, u64 ns) {
+              a->tv_sec += m30_iter(a->tv_nsec + ns, 1000000000L, &ns);
+              a->tv_nsec = ns;
+          }
+          EOF
+
+          for n in pointer_record_member_update record_pointer_member_update record_pointer_if_update exact_style; do
               set +e
               MINIC_CORE_IR=strict "$c" -S "$w/$n.i" -o "$w/$n.s" 2>"$w/$n.err"
               rc=$?
