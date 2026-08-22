@@ -58,7 +58,8 @@ statement_old = '''        status = lower_block(context, statement_block, &termi
 '''
 statement_new = '''        status = lower_block(context, statement_block, &terminated);
         if (context->source_function != NULL && context->source_function->name != NULL &&
-            strcmp(context->source_function->name, "list_empty_careful") == 0) {
+            strcmp(context->source_function->name, "list_empty_careful") == 0 &&
+            (status != MINIC_CORE_LOWER_OK || terminated)) {
             (void)fprintf(stderr,
                           "Core IR shadow M19_STMT expression=%zu block=%zu stage=block status=%d terminated=%d continuation=%u\\n",
                           expression_id,
@@ -76,7 +77,8 @@ statement_new = '''        status = lower_block(context, statement_block, &termi
         status =
             lower_expression(context, expression->value.statement_expression.result, &result_value);
         if (context->source_function != NULL && context->source_function->name != NULL &&
-            strcmp(context->source_function->name, "list_empty_careful") == 0) {
+            strcmp(context->source_function->name, "list_empty_careful") == 0 &&
+            status != MINIC_CORE_LOWER_OK) {
             (void)fprintf(stderr,
                           "Core IR shadow M19_STMT expression=%zu stage=result status=%d result=%u continuation=%u values=%zu\\n",
                           expression_id,
@@ -89,7 +91,9 @@ statement_new = '''        status = lower_block(context, statement_block, &termi
             return status;
         }
         if (context->source_function != NULL && context->source_function->name != NULL &&
-            strcmp(context->source_function->name, "list_empty_careful") == 0) {
+            strcmp(context->source_function->name, "list_empty_careful") == 0 &&
+            (result_value >= context->function->value_count ||
+             !minic_type_equal(context->function->values[result_value].type, result_type))) {
             (void)fprintf(stderr,
                           "Core IR shadow M19_STMT expression=%zu stage=type result_in_range=%d type_equal=%d\\n",
                           expression_id,
@@ -108,4 +112,4 @@ statement_new = '''        status = lower_block(context, statement_block, &termi
 if lower_text.count(statement_old) != 1:
     raise SystemExit("Core statement-expression diagnostic anchor changed")
 lower_path.write_text(lower_text.replace(statement_old, statement_new, 1))
-print("instrumented Core M19 lowering/verifier and statement-expression stages")
+print("instrumented Core M19 failing statement-expression stage")
