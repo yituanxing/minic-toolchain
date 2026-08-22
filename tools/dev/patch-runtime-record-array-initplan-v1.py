@@ -3,7 +3,7 @@ from pathlib import Path
 
 path = Path("src/frontend/parser_statement.c")
 text = path.read_text()
-start_marker = "static bool parse_fixed_runtime_record_array_initializer_legacy("
+start_marker = "static bool runtime_array_multi_range_value_is_repeatable("
 end_marker = "static bool grow_runtime_array_action_values("
 start = text.find(start_marker)
 end = text.find(end_marker, start)
