@@ -23,19 +23,27 @@ static bool normalized_do_while_zero_body(const MinicCoreLowerContext *context,
     const MinicExpression *loop_condition;
     const MinicExpression *negated_condition;
     const MinicExpression *source_condition;
+    const MinicStatement *continue_label;
     const MinicStatement *condition_check;
     const MinicStatement *break_statement;
     const MinicBlock *break_block;
 
     if (context == NULL || context->body == NULL || context->body->program == NULL || loop == NULL ||
-        body == NULL || single_iteration_body == NULL || body->statement_count == 0U) {
+        body == NULL || single_iteration_body == NULL || body->statement_count < 2U) {
         return false;
     }
     loop_condition = minic_c0_program_expression(context->body->program, loop->expression);
+    continue_label = minic_c0_program_statement(
+        context->body->program, body->statements[body->statement_count - 2U]);
     condition_check = minic_c0_program_statement(
         context->body->program, body->statements[body->statement_count - 1U]);
     if (loop_condition == NULL || loop_condition->kind != MINIC_EXPRESSION_INTEGER ||
         !minic_type_is_integer(loop_condition->type) || loop_condition->value.integer_value != 1 ||
+        continue_label == NULL || continue_label->kind != MINIC_STATEMENT_LABEL ||
+        continue_label->target_expression != MINIC_EXPRESSION_INVALID ||
+        continue_label->expression != MINIC_EXPRESSION_INVALID ||
+        continue_label->target_statement != MINIC_STATEMENT_INVALID ||
+        !source_position_equal(continue_label->span.begin, loop->span.begin) ||
         condition_check == NULL || condition_check->kind != MINIC_STATEMENT_IF ||
         condition_check->expression == MINIC_EXPRESSION_INVALID ||
         condition_check->then_block == MINIC_BLOCK_INVALID ||
@@ -69,7 +77,7 @@ static bool normalized_do_while_zero_body(const MinicCoreLowerContext *context,
     }
 
     *single_iteration_body = *body;
-    single_iteration_body->statement_count -= 1U;
+    single_iteration_body->statement_count -= 2U;
     return true;
 }
 
