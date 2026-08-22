@@ -170,4 +170,64 @@ for arm in ('true', 'false'):
 '''
     replace_once('src/core/core_lower.c', old, new, f'conditional {arm} arm')
 
+replace_once(
+    'src/core/core_lower.c',
+    '''    if (minic_type_is_integer(expression->type) && context->target != NULL) {
+        MinicConstValue constant;
+''',
+    '''    if (expression->kind == MINIC_EXPRESSION_ASSIGNMENT) {
+        const MinicExpression *target;
+        MinicCoreInstruction store;
+        MinicCoreObjectId stored_object;
+        MinicCoreValueId address;
+        MinicCoreValueId stored_value;
+        MinicCoreLowerStatus status;
+        MinicType stored_type;
+
+        target = minic_c0_program_expression(context->body->program, expression->value.binary.left);
+        if (target == NULL || target->value_category != MINIC_VALUE_LVALUE ||
+            minic_type_is_const(target->type) || !minic_type_unqualified(target->type, &stored_type) ||
+            !core_memory_scalar_type(stored_type) || !minic_type_equal(expression->type, stored_type)) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        status = lower_scalar_assignment_value(
+            context, stored_type, expression->value.binary.right, &stored_value);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        status = spill_scalar_value(
+            context, expression->span, stored_type, stored_value, &stored_object);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        status = lower_address(context, expression->value.binary.left, &address);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        status = reload_scalar_value(
+            context, expression->span, stored_type, stored_object, &stored_value);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        (void)memset(&store, 0, sizeof(store));
+        store.kind = MINIC_CORE_INSTRUCTION_STORE;
+        store.span = expression->span;
+        store.type = minic_type_void();
+        store.result = MINIC_CORE_VALUE_INVALID;
+        store.value.store.address = address;
+        store.value.store.stored_value = stored_value;
+        store.value.store.is_volatile = minic_type_is_volatile(target->type);
+        if (!minic_core_function_append_effect_instruction(
+                context->function, context->block_id, &store)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        *value_id = stored_value;
+        return MINIC_CORE_LOWER_OK;
+    }
+    if (minic_type_is_integer(expression->type) && context->target != NULL) {
+        MinicConstValue constant;
+''',
+    'scalar assignment expression',
+)
+
 print('M32_PATCH_APPLIED')
