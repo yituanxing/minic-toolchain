@@ -296,6 +296,38 @@ static MinicCoreLowerStatus append_integer_conversion(MinicCoreLowerContext *con
                : MINIC_CORE_LOWER_ERROR;
 }
 
+static MinicCoreLowerStatus append_scalar_bitcast(MinicCoreLowerContext *context,
+                                                  MinicSourceSpan span,
+                                                  MinicType target_type,
+                                                  MinicCoreValueId source_value,
+                                                  MinicCoreValueId *value_id) {
+    MinicCoreInstruction instruction;
+    const MinicCoreValue *source;
+
+    if (context == NULL || context->function == NULL || value_id == NULL ||
+        source_value >= context->function->value_count) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    source = &context->function->values[source_value];
+    if (minic_type_equal(source->type, target_type)) {
+        *value_id = source_value;
+        return MINIC_CORE_LOWER_OK;
+    }
+    if (!core_scalar_bitcast_types(target_type, source->type)) {
+        return MINIC_CORE_LOWER_UNSUPPORTED;
+    }
+    (void)memset(&instruction, 0, sizeof(instruction));
+    instruction.kind = MINIC_CORE_INSTRUCTION_SCALAR_BITCAST;
+    instruction.span = span;
+    instruction.type = target_type;
+    instruction.result = MINIC_CORE_VALUE_INVALID;
+    instruction.value.operand = source_value;
+    return minic_core_function_append_value_instruction(
+               context->function, context->block_id, &instruction, value_id)
+               ? MINIC_CORE_LOWER_OK
+               : MINIC_CORE_LOWER_ERROR;
+}
+
 static MinicCoreLowerStatus lower_integer_assignment_value(MinicCoreLowerContext *context,
                                                            MinicType target_type,
                                                            MinicExpressionId expression_id,
@@ -323,6 +355,68 @@ static MinicCoreLowerStatus lower_integer_assignment_value(MinicCoreLowerContext
     }
     return append_integer_conversion(
         context, expression->span, result_type, source_value, value_id);
+}
+
+static MinicCoreLowerStatus lower_scalar_assignment_value(MinicCoreLowerContext *context,
+                                                          MinicType target_type,
+                                                          MinicExpressionId expression_id,
+                                                          MinicCoreValueId *value_id) {
+    const MinicExpression *expression;
+    MinicCoreInstruction instruction;
+    MinicCoreLowerStatus status;
+    MinicCoreValueId source_value;
+    MinicCoreValueId zero_test;
+    MinicCoreValueId truth_value;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        context->function == NULL || value_id == NULL || !core_memory_scalar_type(target_type)) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    expression = minic_c0_program_expression(context->body->program, expression_id);
+    if (expression == NULL ||
+        !minic_c0_assignment_compatible(context->body->program, target_type, expression_id)) {
+        return MINIC_CORE_LOWER_UNSUPPORTED;
+    }
+    if (minic_type_is_integer(target_type) && minic_type_is_integer(expression->type)) {
+        return lower_integer_assignment_value(context, target_type, expression_id, value_id);
+    }
+
+    status = lower_expression(context, expression_id, &source_value);
+    if (status != MINIC_CORE_LOWER_OK) {
+        return status;
+    }
+    if (source_value >= context->function->value_count) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    if (minic_type_is_pointer(target_type)) {
+        if (!minic_type_is_pointer(expression->type) &&
+            !minic_c0_expression_is_null_pointer_constant_v0(context->body->program,
+                                                             expression_id)) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        return append_scalar_bitcast(
+            context, expression->span, target_type, source_value, value_id);
+    }
+    if (!minic_type_is_bool_integer(target_type) || !minic_type_is_pointer(expression->type)) {
+        return MINIC_CORE_LOWER_UNSUPPORTED;
+    }
+
+    (void)memset(&instruction, 0, sizeof(instruction));
+    instruction.kind = MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO;
+    instruction.span = expression->span;
+    instruction.type = minic_type_int();
+    instruction.result = MINIC_CORE_VALUE_INVALID;
+    instruction.value.operand = source_value;
+    if (!minic_core_function_append_value_instruction(
+            context->function, context->block_id, &instruction, &zero_test)) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    instruction.value.operand = zero_test;
+    if (!minic_core_function_append_value_instruction(
+            context->function, context->block_id, &instruction, &truth_value)) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    return append_integer_conversion(context, expression->span, target_type, truth_value, value_id);
 }
 
 static MinicCoreLowerStatus lower_direct_call(MinicCoreLowerContext *context,
@@ -374,8 +468,10 @@ static MinicCoreLowerStatus lower_direct_call(MinicCoreLowerContext *context,
         return MINIC_CORE_LOWER_ERROR;
     }
     for (argument_index = 0U; argument_index < callee->parameter_count; ++argument_index) {
-        status = lower_expression(
-            context, expression->value.call.arguments[argument_index], &arguments[argument_index]);
+        status = lower_scalar_assignment_value(context,
+                                               callee->parameter_types[argument_index],
+                                               expression->value.call.arguments[argument_index],
+                                               &arguments[argument_index]);
         if (status != MINIC_CORE_LOWER_OK) {
             free(arguments);
             return status;
@@ -384,7 +480,7 @@ static MinicCoreLowerStatus lower_direct_call(MinicCoreLowerContext *context,
             !minic_type_equal(context->function->values[arguments[argument_index]].type,
                               callee->parameter_types[argument_index])) {
             free(arguments);
-            return MINIC_CORE_LOWER_UNSUPPORTED;
+            return MINIC_CORE_LOWER_ERROR;
         }
     }
     if (!minic_core_function_add_callee(context->function,

@@ -221,6 +221,14 @@ core_scalar_lvalue_bitcast_focused() {
         sh tests/compiler/c0/run-core-scalar-lvalue-bitcast.sh
 }
 
+core_fixed_call_scalar_conversions_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" \
+    BUILD_DIR="$root/build/ci-core-fixed-call-scalar-conversions" \
+    RISCV_CC=riscv64-linux-gnu-gcc \
+    QEMU_RISCV64=qemu-riscv64 \
+        sh tests/compiler/c0/run-core-fixed-call-scalar-conversions.sh
+}
+
 runtime_record_fam_prefix_focused() {
     MINIC="$root/build/ci-debug/bin/minic" \
     HOST_CC=cc \
@@ -374,6 +382,7 @@ start_gate wide-string-focused wide_string_focused
 start_gate record-array-init-focused runtime_record_array_initializer_focused
 start_gate core-required-no-fallback-focused core_required_no_fallback_focused
 start_gate core-scalar-lvalue-bitcast-focused core_scalar_lvalue_bitcast_focused
+start_gate core-fixed-call-scalar-conversions-focused core_fixed_call_scalar_conversions_focused
 start_gate record-fam-prefix-focused runtime_record_fam_prefix_focused
 start_gate linenoise-driven-focused linenoise_driven_focused
 start_gate sds-driven-focused sds_driven_focused
