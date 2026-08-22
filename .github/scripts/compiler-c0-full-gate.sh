@@ -332,10 +332,15 @@ external_cjson_frontier() {
 }
 
 printf 'Runner CPUs=%s\n' "$cpu_count"
-printf '%s\n' 'Phase 1: source inventory, format policy, tool preparation, and three host configurations'
+printf '%s\n' 'Phase 1: source inventory, format policy, and RISC-V tool preparation'
 start_gate source-inventory source_inventory
 start_gate format-check format_check
 start_gate rv64-tools install_rv64_tools
+if ! wait_phase; then
+    exit 1
+fi
+
+printf '%s\n' 'Phase 1b: three host configurations after target tools are ready'
 start_gate host-debug host_debug
 start_gate host-release-werror host_release
 start_gate host-sanitize host_sanitize
