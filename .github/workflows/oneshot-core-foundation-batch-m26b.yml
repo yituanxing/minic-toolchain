@@ -38,9 +38,13 @@ jobs:
           set -Eeuo pipefail
           test "${{ steps.corpus.outputs.cache-hit }}" = true
           printf 'M26B_STAGING_BASE=%s\n' "$(git rev-parse HEAD)" >> "$GITHUB_ENV"
-          python3 -m py_compile tools/dev/patch-core-foundation-ops-m26b.py tools/dev/patch-core-cfg-preservation-m26b.py
+          python3 -m py_compile \
+            tools/dev/patch-core-foundation-ops-m26b.py \
+            tools/dev/patch-core-cfg-preservation-m26b.py \
+            tools/dev/patch-core-shadow-negative-m26b.py
           python3 tools/dev/patch-core-foundation-ops-m26b.py
           python3 tools/dev/patch-core-cfg-preservation-m26b.py
+          python3 tools/dev/patch-core-shadow-negative-m26b.py
           chmod +x tests/compiler/c0/run-core-integer-foundation-m26b.sh
           clang-format-18 -i \
             src/core/core_ir.h \
@@ -50,6 +54,7 @@ jobs:
             tests/compiler/c0/core_integer_foundation_m26b.c \
             tests/compiler/c0/core_integer_foundation_m26b_runtime.c
           sh -n tests/compiler/c0/run-core-integer-foundation-m26b.sh
+          bash -n tests/core/run-core-ir-shadow.sh
           bash -n .github/scripts/compiler-c0-full-gate.sh
           git diff --check
 
@@ -130,6 +135,7 @@ jobs:
           fi
           rm tools/dev/patch-core-foundation-ops-m26b.py \
              tools/dev/patch-core-cfg-preservation-m26b.py \
+             tools/dev/patch-core-shadow-negative-m26b.py \
              .github/workflows/oneshot-core-foundation-batch-m26b.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
@@ -138,11 +144,13 @@ jobs:
                   src/core/core_lower.c \
                   src/target/riscv64/core_codegen.c \
                   .github/scripts/compiler-c0-full-gate.sh \
+                  tests/core/run-core-ir-shadow.sh \
                   tests/compiler/c0/core_integer_foundation_m26b.c \
                   tests/compiler/c0/core_integer_foundation_m26b_runtime.c \
                   tests/compiler/c0/run-core-integer-foundation-m26b.sh \
                   tools/dev/patch-core-foundation-ops-m26b.py \
                   tools/dev/patch-core-cfg-preservation-m26b.py \
+                  tools/dev/patch-core-shadow-negative-m26b.py \
                   .github/workflows/oneshot-core-foundation-batch-m26b.yml
           git diff --cached --check
           git commit -m 'core: batch integer foundation and CFG preservation'
