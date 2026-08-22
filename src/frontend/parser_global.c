@@ -3528,20 +3528,6 @@ static bool parse_extern_object_declarator(MinicParser *parser,
     return minic_parser_advance(parser);
 }
 
-bool minic_parser_external_object_types_compatible(const MinicC0Program *program,
-                                                   MinicType existing_type,
-                                                   MinicType declared_type) {
-    return minic_declaration_external_object_types_compatible(
-        program, existing_type, declared_type);
-}
-
-bool minic_parser_merge_external_array_composite_type(MinicC0Program *program,
-                                                      MinicType existing_type,
-                                                      MinicType declared_type) {
-    return minic_declaration_merge_external_array_composite_type(
-        program, existing_type, declared_type);
-}
-
 static bool merge_extern_object_declaration(MinicParser *parser,
                                             MinicGlobalObjectId object_id,
                                             MinicType declared_type,
