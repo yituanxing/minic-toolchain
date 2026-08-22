@@ -7,7 +7,7 @@ permissions:
   contents: read
 
 jobs:
-  measure:
+  inspect:
     if: github.actor != 'github-actions[bot]' && github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     steps:
@@ -30,62 +30,57 @@ jobs:
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
 
-      - name: Build exact MiniC candidate
-        shell: bash
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-m4-probe-compiler
-
-      - name: Replay deterministic 64-TU strict sample
+      - name: Show representative real blocker bodies
         shell: bash
         run: |
           set -Eeuo pipefail
-          set +e
-          MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
-            --minic "$GITHUB_WORKSPACE/build/core-m4-probe-compiler/bin/minic" \
-            --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
-            --work "$GITHUB_WORKSPACE/build/core-m4-strict-probe" \
-            --jobs 4 \
-            --offset 0 \
-            --limit 500 \
-            --sample-count 64 \
-            --indices ''
-          replay_status=$?
-          set -e
-          printf 'CORE_STRICT_REPLAY_STATUS=%d\n' "$replay_status"
-          grep -q '^selected_c_tus=64$' build/core-m4-strict-probe/batch-summary.txt
-
           python3 - <<'PY'
-          from collections import Counter
-          import json
-          import re
           from pathlib import Path
+          import re
 
-          rows = json.loads(Path('build/core-m4-strict-probe/batch-results.json').read_text())
-          unsupported_re = re.compile(r"^Core IR shadow does not yet support function '([^']+)'$")
-          unsupported = Counter()
-          errors = []
-          passes = 0
-          for row in rows:
-              if row['status'] == 'PASS':
-                  passes += 1
-                  continue
-              message = str(row['message'])
-              match = unsupported_re.match(message)
-              if match:
-                  unsupported[match.group(1)] += 1
-              else:
-                  errors.append((row['index'], message))
+          root = Path('build/linux-focus-corpus/kbuild')
+          targets = [
+              ('arch/riscv/kernel/patch.i', 'INIT_LIST_HEAD'),
+              ('arch/riscv/mm/pgtable.i', 'set_arch_panic_timeout'),
+              ('arch/riscv/kernel/cpu.i', 'size_mul'),
+              ('arch/riscv/kernel/signal.i', 'dma_get_cache_alignment'),
+          ]
 
-          print(f'CORE_STRICT_FRONTIER selected={len(rows)} pass={passes} unsupported={sum(unsupported.values())} error={len(errors)}')
-          for function, count in unsupported.most_common():
-              print(f'CORE_STRICT_BLOCKER count={count} function={function}')
-          for index, message in errors:
-              print(f'CORE_STRICT_ERROR index={index} message={message}')
-          if errors:
-              raise SystemExit(1)
+          def extract_function(text: str, name: str) -> str:
+              pattern = re.compile(r'\b' + re.escape(name) + r'\s*\(')
+              for match in pattern.finditer(text):
+                  brace = text.find('{', match.end())
+                  semi = text.find(';', match.end())
+                  if brace < 0 or (semi >= 0 and semi < brace) or brace - match.end() > 4000:
+                      continue
+                  depth = 0
+                  end = None
+                  for index in range(brace, len(text)):
+                      char = text[index]
+                      if char == '{':
+                          depth += 1
+                      elif char == '}':
+                          depth -= 1
+                          if depth == 0:
+                              end = index + 1
+                              break
+                  if end is None:
+                      continue
+                  start = text.rfind('\n', 0, max(0, match.start() - 800))
+                  if start < 0:
+                      start = max(0, match.start() - 800)
+                  else:
+                      start += 1
+                  return text[start:end]
+              raise SystemExit(f'cannot find definition for {name}')
+
+          for rel, name in targets:
+              path = root / rel
+              text = path.read_text(errors='replace')
+              body = extract_function(text, name)
+              print(f'=== CORE_REAL_BLOCKER function={name} input={rel} chars={len(body)} ===')
+              print(body[:20000])
+              if len(body) > 20000:
+                  print('... <truncated> ...')
+              print(f'=== CORE_REAL_BLOCKER_END function={name} ===')
           PY
-
-      - name: Show strict summary
-        if: always()
-        shell: bash
-        run: |
-          test -s build/core-m4-strict-probe/batch-summary.txt && cat build/core-m4-strict-probe/batch-summary.txt || true
