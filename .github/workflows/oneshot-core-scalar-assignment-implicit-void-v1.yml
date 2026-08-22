@@ -30,8 +30,11 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          python3 -m py_compile tools/dev/patch-core-scalar-assignment-implicit-void-return-v1.py
+          python3 -m py_compile \
+            tools/dev/patch-core-scalar-assignment-implicit-void-return-v1.py \
+            tools/dev/patch-core-do-while-zero-v1.py
           python3 tools/dev/patch-core-scalar-assignment-implicit-void-return-v1.py
+          python3 tools/dev/patch-core-do-while-zero-v1.py
           clang-format-18 -i \
             src/core/core_lower.c \
             tests/compiler/c0/core_scalar_assignment_implicit_void.c \
@@ -73,13 +76,8 @@ jobs:
 
           for name in pointer-store empty-void do-while-zero cast-deref-store; do
             cc -E -P -std=gnu11 "$work/$name.c" -o "$work/$name.i"
-            if MINIC_CORE_IR=strict "$compiler" -S "$work/$name.i" -o "$work/$name.s" \
-                >"$work/$name.stdout" 2>"$work/$name.stderr"; then
-              printf 'M4_DIAG %s PASS\n' "$name"
-            else
-              printf 'M4_DIAG %s FAIL\n' "$name"
-              cat "$work/$name.stderr"
-            fi
+            MINIC_CORE_IR=strict "$compiler" -S "$work/$name.i" -o "$work/$name.s"
+            printf 'M4_DIAG %s PASS\n' "$name"
           done
 
       - name: Validate scalar assignments and implicit void return
@@ -111,7 +109,9 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          rm tools/dev/patch-core-scalar-assignment-implicit-void-return-v1.py
+          rm \
+            tools/dev/patch-core-scalar-assignment-implicit-void-return-v1.py \
+            tools/dev/patch-core-do-while-zero-v1.py
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add \
@@ -120,7 +120,8 @@ jobs:
             tests/compiler/c0/core_scalar_assignment_implicit_void_runtime.c \
             tests/compiler/c0/run-core-scalar-assignment-implicit-void.sh \
             .github/scripts/compiler-c0-full-gate.sh \
-            tools/dev/patch-core-scalar-assignment-implicit-void-return-v1.py
+            tools/dev/patch-core-scalar-assignment-implicit-void-return-v1.py \
+            tools/dev/patch-core-do-while-zero-v1.py
           git diff --cached --check
-          git commit -m 'core: lower scalar assignments and implicit void returns'
+          git commit -m 'core: lower scalar assignments and single-run do-while'
           git push origin HEAD:refactor/declaration-sema-v1
