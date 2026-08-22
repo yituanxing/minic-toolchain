@@ -275,6 +275,7 @@ static bool core_instruction_supported(const MinicC0Program *program,
     switch (instruction->kind) {
     case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT:
     case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND:
     case MINIC_CORE_INSTRUCTION_SCALAR_EQUAL:
     case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION:
     case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE:
@@ -483,6 +484,15 @@ static bool emit_instruction(FILE *file,
         if (!load_core_value(file, frame, instruction->value.binary.left, "t0") ||
             !load_core_value(file, frame, instruction->value.binary.right, "t1") ||
             fprintf(file, "  add t0, t0, t1\n") < 0 ||
+            !minic_riscv64_emit_integer_conversion_for_program(
+                file, program, instruction->type, "t0")) {
+            return false;
+        }
+        return store_core_value(file, frame, instruction->result, "t0");
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND:
+        if (!load_core_value(file, frame, instruction->value.binary.left, "t0") ||
+            !load_core_value(file, frame, instruction->value.binary.right, "t1") ||
+            fprintf(file, "  and t0, t0, t1\n") < 0 ||
             !minic_riscv64_emit_integer_conversion_for_program(
                 file, program, instruction->type, "t0")) {
             return false;

@@ -961,6 +961,140 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                    ? MINIC_CORE_LOWER_OK
                    : MINIC_CORE_LOWER_ERROR;
     }
+    if (expression->kind == MINIC_EXPRESSION_BINARY &&
+        expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_AND) {
+        const MinicExpression *left_expression;
+        const MinicExpression *right_expression;
+        MinicCoreValueId left;
+        MinicCoreValueId left_source;
+        MinicCoreValueId right;
+        MinicCoreValueId right_source;
+        MinicCoreLowerStatus status;
+
+        if (!minic_type_is_integer(expression->type)) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        left_expression =
+            minic_c0_program_expression(context->body->program, expression->value.binary.left);
+        right_expression =
+            minic_c0_program_expression(context->body->program, expression->value.binary.right);
+        if (left_expression == NULL || right_expression == NULL) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        status = lower_expression(context, expression->value.binary.left, &left_source);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        status = append_integer_conversion(
+            context, left_expression->span, expression->type, left_source, &left);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        status = lower_expression(context, expression->value.binary.right, &right_source);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        status = append_integer_conversion(
+            context, right_expression->span, expression->type, right_source, &right);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND;
+        instruction.value.binary.left = left;
+        instruction.value.binary.right = right;
+        return minic_core_function_append_value_instruction(
+                   context->function, context->block_id, &instruction, value_id)
+                   ? MINIC_CORE_LOWER_OK
+                   : MINIC_CORE_LOWER_ERROR;
+    }
+    if (expression->kind == MINIC_EXPRESSION_COMPOUND_ASSIGNMENT &&
+        expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_AND) {
+        const MinicExpression *source;
+        const MinicExpression *target;
+        MinicCoreValueId address;
+        MinicCoreValueId current;
+        MinicCoreValueId current_common;
+        MinicCoreValueId right;
+        MinicCoreValueId right_common;
+        MinicCoreValueId result;
+        MinicCoreValueId stored_value;
+        MinicCoreLowerStatus status;
+        MinicType common_type;
+        MinicType stored_type;
+
+        target = minic_c0_program_expression(context->body->program, expression->value.binary.left);
+        source =
+            minic_c0_program_expression(context->body->program, expression->value.binary.right);
+        if (target == NULL || source == NULL || target->value_category != MINIC_VALUE_LVALUE ||
+            !minic_type_equal(expression->type, target->type) ||
+            minic_type_is_const(target->type) ||
+            !minic_type_unqualified(target->type, &stored_type) ||
+            !minic_type_is_integer(stored_type) || !minic_type_is_integer(source->type) ||
+            context->target == NULL ||
+            !minic_target_info_integer_common_for_program(
+                context->target, context->body->program, stored_type, source->type, &common_type)) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        status = lower_address(context, expression->value.binary.left, &address);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        (void)memset(&instruction, 0, sizeof(instruction));
+        instruction.kind = MINIC_CORE_INSTRUCTION_LOAD;
+        instruction.span = target->span;
+        instruction.type = stored_type;
+        instruction.result = MINIC_CORE_VALUE_INVALID;
+        instruction.value.load.address = address;
+        instruction.value.load.is_volatile = minic_type_is_volatile(target->type);
+        if (!minic_core_function_append_value_instruction(
+                context->function, context->block_id, &instruction, &current)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        status =
+            append_integer_conversion(context, target->span, common_type, current, &current_common);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        status = lower_expression(context, expression->value.binary.right, &right);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        status =
+            append_integer_conversion(context, source->span, common_type, right, &right_common);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        (void)memset(&instruction, 0, sizeof(instruction));
+        instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND;
+        instruction.span = expression->span;
+        instruction.type = common_type;
+        instruction.result = MINIC_CORE_VALUE_INVALID;
+        instruction.value.binary.left = current_common;
+        instruction.value.binary.right = right_common;
+        if (!minic_core_function_append_value_instruction(
+                context->function, context->block_id, &instruction, &result)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        status = append_integer_conversion(
+            context, expression->span, stored_type, result, &stored_value);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        (void)memset(&instruction, 0, sizeof(instruction));
+        instruction.kind = MINIC_CORE_INSTRUCTION_STORE;
+        instruction.span = expression->span;
+        instruction.type = minic_type_void();
+        instruction.result = MINIC_CORE_VALUE_INVALID;
+        instruction.value.store.address = address;
+        instruction.value.store.stored_value = stored_value;
+        instruction.value.store.is_volatile = minic_type_is_volatile(target->type);
+        if (!minic_core_function_append_effect_instruction(
+                context->function, context->block_id, &instruction)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        *value_id = stored_value;
+        return MINIC_CORE_LOWER_OK;
+    }
     if (minic_type_is_integer(expression->type) && context->target != NULL) {
         MinicConstValue constant;
         uint64_t constant_bits;
@@ -1064,6 +1198,11 @@ static MinicCoreLowerStatus lower_expression_statement(MinicCoreLowerContext *co
         MinicCoreValueId discarded_value;
 
         return lower_direct_call(context, expression, &discarded_value);
+    }
+    if (expression->kind == MINIC_EXPRESSION_COMPOUND_ASSIGNMENT) {
+        MinicCoreValueId discarded_value;
+
+        return lower_expression(context, statement->expression, &discarded_value);
     }
     if (expression->kind != MINIC_EXPRESSION_ASSIGNMENT) {
         return MINIC_CORE_LOWER_UNSUPPORTED;

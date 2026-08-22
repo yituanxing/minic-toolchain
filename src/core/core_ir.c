@@ -458,6 +458,7 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
         return instruction_result_is_valid(function, instruction) &&
                minic_type_is_integer(instruction->type);
     case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND:
         if (!instruction_result_is_valid(function, instruction) ||
             !minic_type_is_integer(instruction->type) ||
             instruction->value.binary.left >= function->value_count ||
@@ -831,6 +832,12 @@ static bool dump_instruction(FILE *output,
     case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
         return fprintf(output,
                        "  %%%" PRIu32 " = add.int %%%" PRIu32 ", %%%" PRIu32 "\n",
+                       instruction->result,
+                       instruction->value.binary.left,
+                       instruction->value.binary.right) >= 0;
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND:
+        return fprintf(output,
+                       "  %%%" PRIu32 " = and.int %%%" PRIu32 ", %%%" PRIu32 "\n",
                        instruction->result,
                        instruction->value.binary.left,
                        instruction->value.binary.right) >= 0;
