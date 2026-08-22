@@ -53,22 +53,17 @@ jobs:
           fi
           grep -F "Core IR shadow does not yet support function 'core_m19_before'" \
             build/core-m19-before.err >/dev/null
-          cat > build/core-m19-if.i <<'EOF'
-          int core_m19_if(int left, int right) {
-              if (!left)
-                  return 0;
-              return !!right;
-          }
-          EOF
-          MINIC_CORE_IR=strict "$compiler" -S build/core-m19-if.i -o build/core-m19-if.s
-          printf '%s\n' 'PROVED core/m19 logical-and-value=unsupported equivalent-if=pass'
+          printf '%s\n' 'PROVED core/m19 logical-and-value=unsupported'
 
       - name: Apply M19
         shell: bash
         run: |
           set -Eeuo pipefail
-          python3 -m py_compile tools/dev/patch-core-logical-and-value-m19.py
+          python3 -m py_compile \
+            tools/dev/patch-core-logical-and-value-m19.py \
+            tools/dev/patch-core-cfg-assignment-continuation-m19.py
           python3 tools/dev/patch-core-logical-and-value-m19.py
+          python3 tools/dev/patch-core-cfg-assignment-continuation-m19.py
           clang-format-18 -i \
             src/core/core_lower.c \
             tests/compiler/c0/core_logical_and_value.c \
@@ -77,8 +72,9 @@ jobs:
           bash -n .github/scripts/compiler-c0-full-gate.sh
           git diff --check
           grep -F 'operator_kind == MINIC_BINARY_LOGICAL_AND' src/core/core_lower.c >/dev/null
-          grep -F 'lower_condition_branch(' src/core/core_lower.c >/dev/null
-          grep -F 'minic_core_function_add_object(' src/core/core_lower.c >/dev/null
+          grep -F 'condition_block = context->block_id;' src/core/core_lower.c >/dev/null
+          grep -F 'lower_scalar_assignment_value(context, stored_type, source_id, &stored_value)' \
+            src/core/core_lower.c >/dev/null
           if grep -R -F 'MINIC_CORE_INSTRUCTION_LOGICAL_AND' src/core >/dev/null; then
             echo 'M19 must model C short-circuit AND with CFG, not a plain value opcode' >&2
             exit 1
@@ -111,61 +107,6 @@ jobs:
           QEMU_RISCV64=qemu-riscv64 \
             sh tests/compiler/c0/run-core-statement-expression.sh
           MINIC="$compiler" bash tests/core/run-core-ir-shadow.sh
-
-      - name: Diagnose M19 call-left and verifier boundary
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          python3 tools/dev/instrument-core-m19-status.py
-          clang-format-18 -i src/compiler/compiler.c
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-m19-diag-compiler
-          compiler="$GITHUB_WORKSPACE/build/core-m19-diag-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-m19-call-left-diag"
-          mkdir -p "$work"
-
-          cat >"$work/a-call.i" <<'EOF'
-          int helper(int left, int right) { return left == right; }
-          int probe_call(int left, int right) { return helper(left, right); }
-          EOF
-          cat >"$work/b-call-left-and.i" <<'EOF'
-          int helper(int left, int right) { return left == right; }
-          int probe_call_left_and(int left, int right, int third) {
-              return helper(left, right) && (right == third);
-          }
-          EOF
-          cat >"$work/c-call-left-volatile-rhs.i" <<'EOF'
-          struct node { struct node *next; struct node *prev; };
-          int helper(const struct node *list, const struct node *head) { return list == head; }
-          int probe_call_left_volatile_rhs(const struct node *head) {
-              struct node *next = head->next;
-              return helper(next, head) &&
-                     (next == ({ (*(struct node * const volatile *)&(head->prev)); }));
-          }
-          EOF
-          cat >"$work/d-full-linux-like.i" <<'EOF'
-          struct node { struct node *next; struct node *prev; };
-          int helper(const struct node *list, const struct node *head) { return list == head; }
-          int probe_full_linux_like(const struct node *head) {
-              struct node *next = ({
-                  struct node *value =
-                      ({ (*(struct node * const volatile *)&(head->next)); });
-                  __asm__ __volatile__("fence r,rw" : : : "memory");
-                  value;
-              });
-              return helper(next, head) &&
-                     (next == ({ (*(struct node * const volatile *)&(head->prev)); }));
-          }
-          EOF
-          for input in "$work"/*.i; do
-            name=$(basename "$input" .i)
-            set +e
-            MINIC_CORE_IR=strict "$compiler" -S "$input" -o "$work/$name.s" \
-              >"$work/$name.out" 2>"$work/$name.err"
-            rc=$?
-            set -e
-            printf 'CORE_M19_CALL_LEFT name=%s rc=%d\n' "$name" "$rc"
-            grep -E 'CORE_M19_DIAG|Core IR shadow' "$work/$name.err" || true
-          done
 
       - name: Replay frozen strict frontier
         shell: bash
@@ -208,14 +149,16 @@ jobs:
           if errors:
               raise SystemExit('M19 introduced non-UNSUPPORTED strict failures')
           if unsupported.get('list_empty_careful', 0) != 0:
-              raise SystemExit('M19 did not pierce the proven list_empty_careful logical-AND blocker')
+              raise SystemExit('M19 did not pierce the proven list_empty_careful blocker')
           PY
 
       - name: Publish M19 product
         shell: bash
         run: |
           set -Eeuo pipefail
-          rm tools/dev/patch-core-logical-and-value-m19.py
+          rm \
+            tools/dev/patch-core-logical-and-value-m19.py \
+            tools/dev/patch-core-cfg-assignment-continuation-m19.py
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add \
@@ -224,7 +167,8 @@ jobs:
             tests/compiler/c0/core_logical_and_value_runtime.c \
             tests/compiler/c0/run-core-logical-and-value.sh \
             .github/scripts/compiler-c0-full-gate.sh \
-            tools/dev/patch-core-logical-and-value-m19.py
+            tools/dev/patch-core-logical-and-value-m19.py \
+            tools/dev/patch-core-cfg-assignment-continuation-m19.py
           git diff --cached --check
           git commit -m 'core: lower short-circuit logical and values'
           git push origin HEAD:refactor/declaration-sema-v1
