@@ -287,6 +287,35 @@ static void test_external_multidimensional_array_composition(void) {
     minic_c0_program_destroy(&program);
 }
 
+static void test_external_nested_conflict_does_not_partially_complete(void) {
+    MinicC0Program program;
+    const MinicArrayType *existing_outer;
+    const MinicArrayType *existing_inner;
+    MinicType existing_inner_type;
+    MinicType existing_outer_type;
+    MinicType declared_inner_type;
+    MinicType declared_outer_type;
+
+    minic_c0_program_initialize(&program);
+    existing_inner_type = add_incomplete_array(&program, minic_type_int());
+    existing_outer_type = add_fixed_array(&program, existing_inner_type, 2U);
+    declared_inner_type = add_fixed_array(&program, minic_type_int(), 4U);
+    declared_outer_type = add_fixed_array(&program, declared_inner_type, 3U);
+
+    assert(!minic_declaration_external_object_types_compatible(
+        &program, existing_outer_type, declared_outer_type));
+    assert(!minic_declaration_merge_external_array_composite_type(
+        &program, existing_outer_type, declared_outer_type));
+    existing_outer = &program.array_types[existing_outer_type.array_type_id];
+    existing_inner = &program.array_types[existing_inner_type.array_type_id];
+    assert(existing_outer->element_count == 2U);
+    assert(!existing_outer->is_zero_length);
+    assert(existing_inner->element_count == 0U);
+    assert(!existing_inner->is_zero_length);
+
+    minic_c0_program_destroy(&program);
+}
+
 int main(void) {
     test_fixed_multidimensional_array();
     test_incomplete_and_zero_length_arrays();
@@ -297,5 +326,6 @@ int main(void) {
     test_external_incomplete_array_accepts_zero_length();
     test_external_fixed_array_conflict_is_non_mutating();
     test_external_multidimensional_array_composition();
+    test_external_nested_conflict_does_not_partially_complete();
     return 0;
 }
