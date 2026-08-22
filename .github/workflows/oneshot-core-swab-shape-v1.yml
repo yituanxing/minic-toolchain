@@ -1,0 +1,78 @@
+name: One-shot Core Swab Shape
+
+on:
+  pull_request:
+
+jobs:
+  probe:
+    if: github.actor != 'github-actions[bot]' && github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+      - name: Restore frozen Linux corpus
+        id: linux-corpus-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+      - name: Build compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-swab-probe
+      - name: Inspect frozen swab and probe shapes
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
+          compiler="$GITHUB_WORKSPACE/build/core-swab-probe/bin/minic"
+          corpus="$GITHUB_WORKSPACE/build/linux-focus-corpus"
+          work="$GITHUB_WORKSPACE/build/core-swab-shapes"
+          mkdir -p "$work"
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          root = Path('build/linux-focus-corpus')
+          candidates = [root/'arch/riscv/kernel/patch.i', root/'kernel/sched/core.i']
+          for path in candidates:
+              if not path.exists():
+                  continue
+              text = path.read_text(errors='replace')
+              matches = list(re.finditer(r'\b__swab\s*\(', text))
+              print(f'CORE_SWAB_SOURCE file={path} matches={len(matches)}')
+              for m in matches[:4]:
+                  start = max(0, m.start() - 500)
+                  end = min(len(text), m.start() + 1800)
+                  print('--- SWAB CONTEXT BEGIN ---')
+                  print(text[start:end])
+                  print('--- SWAB CONTEXT END ---')
+          PY
+
+          cat > "$work/builtin.i" <<'EOF'
+          unsigned long probe(unsigned long x) { return __builtin_bswap64(x); }
+          EOF
+          cat > "$work/swab64_expr.i" <<'EOF'
+          unsigned long probe(unsigned long x) {
+              return ((x & 0x00000000000000ffUL) << 56) |
+                     ((x & 0x000000000000ff00UL) << 40) |
+                     ((x & 0x0000000000ff0000UL) << 24) |
+                     ((x & 0x00000000ff000000UL) << 8)  |
+                     ((x & 0x000000ff00000000UL) >> 8)  |
+                     ((x & 0x0000ff0000000000UL) >> 24) |
+                     ((x & 0x00ff000000000000UL) >> 40) |
+                     ((x & 0xff00000000000000UL) >> 56);
+          }
+          EOF
+          cat > "$work/direct_call.i" <<'EOF'
+          unsigned long helper(unsigned long x) { return x; }
+          unsigned long probe(unsigned long x) { return helper(x); }
+          EOF
+          for shape in builtin swab64_expr direct_call; do
+            set +e
+            MINIC_CORE_IR=strict "$compiler" -S "$work/$shape.i" -o "$work/$shape.s" 2>"$work/$shape.err"
+            rc=$?
+            set -e
+            printf 'CORE_SWAB_SHAPE name=%s rc=%d message=' "$shape" "$rc"
+            tr '\n' ' ' < "$work/$shape.err"
+            printf '\n'
+          done
