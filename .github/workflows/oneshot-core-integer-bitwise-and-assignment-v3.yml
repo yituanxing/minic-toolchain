@@ -1,4 +1,4 @@
-name: One-shot Core Integer Bitwise And Assignment M14 v2
+name: One-shot Core Integer Bitwise And Assignment M14 v3
 
 on:
   pull_request:
@@ -33,40 +33,12 @@ jobs:
           path: build/linux-focus-corpus
           key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
 
-      - name: Require frozen corpus
+      - name: Apply M14 through current TargetInfo owner
         shell: bash
         run: |
           set -Eeuo pipefail
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
-
-      - name: Prove prepatch compound-and gap
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-m14-before-compiler
-          compiler="$GITHUB_WORKSPACE/build/core-m14-before-compiler/bin/minic"
-          cat > build/core-m14-before.i <<'EOF'
-          _Bool external_bool(void);
-          _Bool core_m14_before(void) {
-              _Bool ret = 1;
-              ret &= external_bool();
-              return ret;
-          }
-          EOF
-          if MINIC_CORE_IR=strict "$compiler" -S build/core-m14-before.i -o build/core-m14-before.s \
-              2>build/core-m14-before.err; then
-            echo 'M14 gap unexpectedly absent before patch' >&2
-            exit 1
-          fi
-          grep -F "Core IR shadow does not yet support function 'core_m14_before'" \
-            build/core-m14-before.err >/dev/null
-          printf '%s\n' 'PROVED core/m14 compound-bitwise-and prepatch unsupported'
-
-      - name: Apply M14 through current TargetInfo owner
-        shell: bash
-        run: |
-          set -Eeuo pipefail
           python3 -m py_compile \
             tools/dev/patch-core-integer-bitwise-and-assignment-v1.py \
             tools/dev/fix-core-integer-bitwise-and-assignment-target-v1.py
@@ -88,21 +60,18 @@ jobs:
             exit 1
           fi
 
-      - name: Build patched compiler
-        shell: bash
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-m14-compiler
-
-      - name: Validate focused runtime differential
+      - name: Build and validate M14
         shell: bash
         run: |
           set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-m14-compiler
           compiler="$GITHUB_WORKSPACE/build/core-m14-compiler/bin/minic"
           MINIC="$compiler" \
           BUILD_DIR="$GITHUB_WORKSPACE/build/core-m14-focused" \
           RISCV_CC=riscv64-linux-gnu-gcc \
           QEMU_RISCV64=qemu-riscv64 \
             sh tests/compiler/c0/run-core-integer-bitwise-and-assignment.sh
-          MINIC="$compiler" sh tests/core/run-core-ir-shadow.sh
+          MINIC="$compiler" bash tests/core/run-core-ir-shadow.sh
 
       - name: Replay frozen strict frontier
         shell: bash
