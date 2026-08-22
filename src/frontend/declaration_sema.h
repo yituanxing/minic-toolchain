@@ -86,6 +86,8 @@ minic_declaration_materialize_array_suffix(MinicC0Program *program,
     return MINIC_DECLARATION_ARRAY_MATERIALIZE_OK;
 }
 
+/* Declaration Sema owns external object type compatibility and composite-array
+ * mutation. Parser-facing helpers may forward here, but must not duplicate these rules. */
 static inline bool minic_declaration_external_object_types_compatible(
     const MinicC0Program *program,
     MinicType existing_type,
