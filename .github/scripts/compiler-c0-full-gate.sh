@@ -317,6 +317,14 @@ core_pointer_equality_qualifiers_focused() {
         sh tests/compiler/c0/run-core-pointer-equality-qualifiers.sh
 }
 
+core_statement_expression_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" \
+    BUILD_DIR="$root/build/ci-core-statement-expression" \
+    RISCV_CC=riscv64-linux-gnu-gcc \
+    QEMU_RISCV64=qemu-riscv64 \
+        sh tests/compiler/c0/run-core-statement-expression.sh
+}
+
 core_scalar_not_equal_focused() {
     MINIC="$root/build/ci-debug/bin/minic" \
     BUILD_DIR="$root/build/ci-core-scalar-not-equal" \
@@ -515,6 +523,7 @@ start_gate core-scalar-not-equal-focused core_scalar_not_equal_focused
 start_gate core-integer-bitwise-and-assignment-focused core_integer_bitwise_and_assignment_focused
 start_gate core-pointer-offset-focused core_pointer_offset_focused
 start_gate core-pointer-equality-qualifiers-focused core_pointer_equality_qualifiers_focused
+start_gate core-statement-expression-focused core_statement_expression_focused
 start_gate core-integer-subtract-overflow-focused core_integer_subtract_overflow_focused
 start_gate core-target-constant-fallback-focused core_target_constant_fallback_focused
 start_gate core-integer-bitwise-not-focused core_integer_bitwise_not_focused

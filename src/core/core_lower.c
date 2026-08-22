@@ -24,10 +24,23 @@ static bool core_memory_scalar_type(MinicType type) {
     return minic_type_is_integer(type) || minic_type_is_pointer(type);
 }
 
-static bool core_scalar_expression_value_type(const MinicExpression *expression,
+static bool core_scalar_expression_value_type(const MinicFunctionBodyView *body,
+                                              const MinicExpression *expression,
                                               MinicType *value_type) {
-    if (expression == NULL || value_type == NULL || !core_memory_scalar_type(expression->type)) {
+    const MinicExpression *statement_result;
+
+    if (body == NULL || body->program == NULL || expression == NULL || value_type == NULL ||
+        !core_memory_scalar_type(expression->type)) {
         return false;
+    }
+    if (expression->kind == MINIC_EXPRESSION_STATEMENT) {
+        if (expression->value.statement_expression.result == MINIC_EXPRESSION_INVALID) {
+            return false;
+        }
+        statement_result = minic_c0_program_expression(
+            body->program, expression->value.statement_expression.result);
+        return statement_result != NULL &&
+               core_scalar_expression_value_type(body, statement_result, value_type);
     }
     if (expression->value_category == MINIC_VALUE_LVALUE) {
         return minic_type_unqualified(expression->type, value_type);
@@ -393,8 +406,8 @@ static MinicCoreLowerStatus lower_scalar_equality_operands(MinicCoreLowerContext
     left_expression = minic_c0_program_expression(context->body->program, left_id);
     right_expression = minic_c0_program_expression(context->body->program, right_id);
     if (left_expression == NULL || right_expression == NULL ||
-        !core_scalar_expression_value_type(left_expression, &left_type) ||
-        !core_scalar_expression_value_type(right_expression, &right_type)) {
+        !core_scalar_expression_value_type(context->body, left_expression, &left_type) ||
+        !core_scalar_expression_value_type(context->body, right_expression, &right_type)) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
 
@@ -679,6 +692,44 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
     if (expression->value_category != MINIC_VALUE_RVALUE) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
+    if (expression->kind == MINIC_EXPRESSION_STATEMENT) {
+        const MinicBlock *statement_block;
+        const MinicExpression *statement_result;
+        MinicCoreValueId result_value;
+        MinicCoreLowerStatus status;
+        MinicType result_type;
+        bool terminated;
+
+        if (expression->value.statement_expression.result == MINIC_EXPRESSION_INVALID ||
+            !core_scalar_expression_value_type(context->body, expression, &result_type)) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        statement_block = minic_c0_program_block(context->body->program,
+                                                 expression->value.statement_expression.block);
+        statement_result = minic_c0_program_expression(
+            context->body->program, expression->value.statement_expression.result);
+        if (statement_block == NULL || statement_result == NULL) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        status = lower_block(context, statement_block, &terminated);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        if (terminated) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        status =
+            lower_expression(context, expression->value.statement_expression.result, &result_value);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        if (result_value >= context->function->value_count ||
+            !minic_type_equal(context->function->values[result_value].type, result_type)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        *value_id = result_value;
+        return MINIC_CORE_LOWER_OK;
+    }
     if (expression->kind == MINIC_EXPRESSION_ADDRESS_OF) {
         MinicCoreLowerStatus status;
 
@@ -826,7 +877,7 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         if (operand == NULL) {
             return MINIC_CORE_LOWER_ERROR;
         }
-        if (!core_scalar_expression_value_type(operand, &operand_value_type) ||
+        if (!core_scalar_expression_value_type(context->body, operand, &operand_value_type) ||
             !minic_core_scalar_bitcast_types_valid(expression->type, operand_value_type)) {
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
