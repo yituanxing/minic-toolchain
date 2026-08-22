@@ -263,4 +263,27 @@ MINIC_CORE_IR=strict "$MINIC" -S tests/compiler/c0/core_postfix_update_m24.c -o 
 "$QEMU_RISCV64" "$BUILD_DIR/gcc.elf"
 printf '%s\n' 'PASS compiler/c0/core-postfix-update-m24'
 ''')
+
+gate_path = Path('.github/scripts/compiler-c0-full-gate.sh')
+gate = gate_path.read_text()
+function_anchor = 'runtime_record_fam_prefix_focused() {\n'
+function_text = '''core_postfix_update_m24_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" \\
+    BUILD_DIR="$root/build/ci-core-postfix-update-m24" \\
+    RISCV_CC=riscv64-linux-gnu-gcc \\
+    QEMU_RISCV64=qemu-riscv64 \\
+        sh tests/compiler/c0/run-core-postfix-update-m24.sh
+}
+
+''' + function_anchor
+if gate.count(function_anchor) != 1:
+    raise SystemExit(f'M24 compiler gate function anchor count={gate.count(function_anchor)}')
+gate = gate.replace(function_anchor, function_text, 1)
+start_anchor = 'start_gate core-integer-bitwise-not-focused core_integer_bitwise_not_focused\n'
+start_text = start_anchor + 'start_gate core-postfix-update-m24-focused core_postfix_update_m24_focused\n'
+if gate.count(start_anchor) != 1:
+    raise SystemExit(f'M24 compiler gate start anchor count={gate.count(start_anchor)}')
+gate = gate.replace(start_anchor, start_text, 1)
+gate_path.write_text(gate)
+
 print('staged M24 scalar postfix update lowering')
