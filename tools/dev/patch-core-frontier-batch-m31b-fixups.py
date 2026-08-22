@@ -1,12 +1,35 @@
 #!/usr/bin/env python3
 from pathlib import Path
 
-p = Path("src/core/core_lower.c")
-text = p.read_text()
-old = '''static MinicCoreLowerStatus reload_scalar_value(MinicCoreLowerContext *context,\n                                                MinicSourceSpan span,\n                                                MinicType type,\n                                                MinicCoreObjectId object_id,\n                                                MinicCoreValueId *value_id);\n'''
-new = old + '''static MinicCoreLowerStatus append_scalar_bitcast(MinicCoreLowerContext *context,\n                                                  MinicSourceSpan span,\n                                                  MinicType target_type,\n                                                  MinicCoreValueId source_value,\n                                                  MinicCoreValueId *value_id);\n'''
-count = text.count(old)
-if count != 1:
-    raise SystemExit(f"M31b fixup declaration anchor count={count}, expected 1")
-p.write_text(text.replace(old, new, 1))
+
+def replace_once(path: str, old: str, new: str, label: str) -> None:
+    p = Path(path)
+    text = p.read_text()
+    count = text.count(old)
+    if count != 1:
+        raise SystemExit(f"M31b fixup {label} anchor count={count}, expected 1")
+    p.write_text(text.replace(old, new, 1))
+
+
+replace_once(
+    "src/core/core_lower.c",
+    '''static MinicCoreLowerStatus reload_scalar_value(MinicCoreLowerContext *context,\n                                                MinicSourceSpan span,\n                                                MinicType type,\n                                                MinicCoreObjectId object_id,\n                                                MinicCoreValueId *value_id);\n''',
+    '''static MinicCoreLowerStatus reload_scalar_value(MinicCoreLowerContext *context,\n                                                MinicSourceSpan span,\n                                                MinicType type,\n                                                MinicCoreObjectId object_id,\n                                                MinicCoreValueId *value_id);\nstatic MinicCoreLowerStatus append_scalar_bitcast(MinicCoreLowerContext *context,\n                                                  MinicSourceSpan span,\n                                                  MinicType target_type,\n                                                  MinicCoreValueId source_value,\n                                                  MinicCoreValueId *value_id);\n''',
+    "declaration",
+)
+
+replace_once(
+    "src/core/core_ir.c",
+    '''        if (global->name == NULL || global->name_length == 0U ||\n            (!minic_type_is_integer(global->type) && !minic_type_is_pointer(global->type))) {\n            return false;\n        }\n''',
+    '''        if (global->name == NULL || global->name_length == 0U ||\n            (!minic_type_is_integer(global->type) && !minic_type_is_pointer(global->type) &&\n             !minic_type_is_array(global->type))) {\n            return false;\n        }\n''',
+    "global verifier",
+)
+
+replace_once(
+    "src/core/core_ir.c",
+    '''        for (parameter_index = 0U; parameter_index < callee->parameter_count; ++parameter_index) {\n            if (!core_call_scalar_type(callee->parameter_types[parameter_index])) {\n                return false;\n            }\n        }\n''',
+    '''        for (parameter_index = 0U; parameter_index < callee->parameter_count; ++parameter_index) {\n            if (!core_call_parameter_type(callee->parameter_types[parameter_index])) {\n                return false;\n            }\n        }\n''',
+    "callee verifier",
+)
+
 print("M31B_FIXUPS_APPLIED")
