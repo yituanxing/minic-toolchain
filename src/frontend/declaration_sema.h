@@ -86,10 +86,10 @@ minic_declaration_materialize_array_suffix(MinicC0Program *program,
     return MINIC_DECLARATION_ARRAY_MATERIALIZE_OK;
 }
 
-static inline bool
-minic_declaration_external_object_types_compatible(const MinicC0Program *program,
-                                                   MinicType existing_type,
-                                                   MinicType declared_type) {
+static inline bool minic_declaration_external_object_types_compatible(
+    const MinicC0Program *program,
+    MinicType existing_type,
+    MinicType declared_type) {
     const MinicArrayType *existing_array;
     const MinicArrayType *declared_array;
 
@@ -115,10 +115,10 @@ minic_declaration_external_object_types_compatible(const MinicC0Program *program
            existing_array->element_count == declared_array->element_count;
 }
 
-static inline bool
-minic_declaration_merge_external_array_composite_type(MinicC0Program *program,
-                                                       MinicType existing_type,
-                                                       MinicType declared_type) {
+static inline bool minic_declaration_merge_external_array_composite_type(
+    MinicC0Program *program,
+    MinicType existing_type,
+    MinicType declared_type) {
     const MinicArrayType *existing_array;
     const MinicArrayType *declared_array;
     MinicType existing_element;
