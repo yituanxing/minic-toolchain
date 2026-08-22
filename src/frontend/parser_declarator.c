@@ -199,9 +199,8 @@ static bool parse_array_suffix_syntax(MinicParser *parser,
     return true;
 }
 
-static bool report_array_materialization_failure(
-    MinicParser *parser,
-    MinicDeclarationArrayMaterializeStatus status) {
+static bool report_array_materialization_failure(MinicParser *parser,
+                                                 MinicDeclarationArrayMaterializeStatus status) {
     switch (status) {
     case MINIC_DECLARATION_ARRAY_MATERIALIZE_INCOMPLETE_FAILED:
         minic_parser_error(parser, "cannot build incomplete array declarator type");
