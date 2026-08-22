@@ -1,0 +1,77 @@
+name: One-shot Declaration Sema Wiring
+
+on:
+  push:
+    branches:
+      - refactor/declaration-sema-v1
+
+permissions:
+  contents: write
+
+jobs:
+  wire:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+          fetch-depth: 0
+
+      - name: Replace parser-owned external type semantics with Sema facade
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("src/frontend/parser_global.c")
+          text = path.read_text()
+
+          include_anchor = '#include "frontend/parser_internal.h"\n'
+          include_line = '#include "frontend/declaration_sema.h"\n'
+          if include_line not in text:
+              if text.count(include_anchor) != 1:
+                  raise SystemExit("parser_global include anchor is not unique")
+              text = text.replace(include_anchor, include_anchor + include_line, 1)
+
+          start_marker = "bool minic_parser_external_object_types_compatible("
+          end_marker = "static bool merge_extern_object_declaration("
+          if text.count(start_marker) != 1 or text.count(end_marker) != 1:
+              raise SystemExit("external declaration semantic anchors are not unique")
+          start = text.index(start_marker)
+          end = text.index(end_marker, start)
+
+          facade = '''bool minic_parser_external_object_types_compatible(const MinicC0Program *program,
+                                                         MinicType existing_type,
+                                                         MinicType declared_type) {
+              return minic_declaration_external_object_types_compatible(
+                  program, existing_type, declared_type);
+          }
+
+          bool minic_parser_merge_external_array_composite_type(MinicC0Program *program,
+                                                                MinicType existing_type,
+                                                                MinicType declared_type) {
+              return minic_declaration_merge_external_array_composite_type(
+                  program, existing_type, declared_type);
+          }
+
+          '''
+          text = text[:start] + facade + text[end:]
+          path.write_text(text)
+
+          workflow = Path(".github/workflows/one-shot-declaration-sema-wiring.yml")
+          workflow.unlink()
+          PY
+
+      - name: Verify and publish the source-only migration
+        shell: bash
+        run: |
+          git diff --check
+          git diff -- src/frontend/parser_global.c
+          git status --short
+          test ! -e .github/workflows/one-shot-declaration-sema-wiring.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "frontend: route external type composition through declaration sema"
+          git push origin HEAD:refactor/declaration-sema-v1
