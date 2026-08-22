@@ -86,6 +86,82 @@ minic_declaration_materialize_array_suffix(MinicC0Program *program,
     return MINIC_DECLARATION_ARRAY_MATERIALIZE_OK;
 }
 
+static inline bool minic_declaration_external_object_types_compatible(
+    const MinicC0Program *program, MinicType existing_type, MinicType declared_type) {
+    const MinicArrayType *existing_array;
+    const MinicArrayType *declared_array;
+
+    if (minic_type_equal(existing_type, declared_type)) {
+        return true;
+    }
+    if (program == NULL || !minic_type_is_array(existing_type) ||
+        !minic_type_is_array(declared_type)) {
+        return false;
+    }
+    existing_array = minic_c0_program_array_type(program, existing_type.array_type_id);
+    declared_array = minic_c0_program_array_type(program, declared_type.array_type_id);
+    if (existing_array == NULL || declared_array == NULL ||
+        !minic_declaration_external_object_types_compatible(
+            program, existing_array->element_type, declared_array->element_type)) {
+        return false;
+    }
+    if ((existing_array->element_count == 0U && !existing_array->is_zero_length) ||
+        (declared_array->element_count == 0U && !declared_array->is_zero_length)) {
+        return true;
+    }
+    return existing_array->is_zero_length == declared_array->is_zero_length &&
+           existing_array->element_count == declared_array->element_count;
+}
+
+static inline bool minic_declaration_merge_external_array_composite_type(
+    MinicC0Program *program, MinicType existing_type, MinicType declared_type) {
+    const MinicArrayType *existing_array;
+    const MinicArrayType *declared_array;
+    MinicType existing_element;
+    MinicType declared_element;
+    size_t declared_count;
+
+    if (minic_type_equal(existing_type, declared_type)) {
+        return true;
+    }
+    if (program == NULL || !minic_type_is_array(existing_type) ||
+        !minic_type_is_array(declared_type)) {
+        return minic_type_equal(existing_type, declared_type);
+    }
+    existing_array = minic_c0_program_array_type(program, existing_type.array_type_id);
+    declared_array = minic_c0_program_array_type(program, declared_type.array_type_id);
+    if (existing_array == NULL || declared_array == NULL) {
+        return false;
+    }
+    existing_element = existing_array->element_type;
+    declared_element = declared_array->element_type;
+    declared_count = declared_array->element_count;
+    if (!minic_declaration_external_object_types_compatible(
+            program, existing_element, declared_element) ||
+        !minic_declaration_merge_external_array_composite_type(
+            program, existing_element, declared_element)) {
+        return false;
+    }
+    existing_array = minic_c0_program_array_type(program, existing_type.array_type_id);
+    if (existing_array == NULL) {
+        return false;
+    }
+    if (existing_array->element_count == 0U && !existing_array->is_zero_length) {
+        if (declared_array->is_zero_length) {
+            return minic_c0_program_complete_zero_length_array_type(program, existing_type);
+        }
+        if (declared_count != 0U) {
+            return minic_c0_program_complete_array_type(program, existing_type, declared_count);
+        }
+        return true;
+    }
+    if (declared_count == 0U && !declared_array->is_zero_length) {
+        return true;
+    }
+    return existing_array->is_zero_length == declared_array->is_zero_length &&
+           existing_array->element_count == declared_count;
+}
+
 static inline bool
 minic_declaration_build_function_type(MinicC0Program *program,
                                       MinicType return_type,
