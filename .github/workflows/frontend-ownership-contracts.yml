@@ -32,6 +32,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Preview declaration semantic clang-format
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          formatter=$(command -v clang-format-18 || command -v clang-format)
+          "$formatter" src/frontend/declaration_sema.h > /tmp/declaration_sema.formatted.h
+          diff -u src/frontend/declaration_sema.h /tmp/declaration_sema.formatted.h || true
+
       - name: Build semantic snapshot contract
         shell: bash
         run: |
