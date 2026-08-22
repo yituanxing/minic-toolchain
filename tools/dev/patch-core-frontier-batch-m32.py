@@ -31,6 +31,51 @@ replace_once(
 
 replace_once(
     'src/core/core_lower.c',
+    '''        if (expression->value.statement_expression.result == MINIC_EXPRESSION_INVALID ||
+            !core_scalar_expression_value_type(context->body, expression, &result_type)) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        statement_block = minic_c0_program_block(context->body->program,
+                                                 expression->value.statement_expression.block);
+        statement_result = minic_c0_program_expression(
+            context->body->program, expression->value.statement_expression.result);
+        if (statement_block == NULL || statement_result == NULL) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+''',
+    '''        statement_block = minic_c0_program_block(context->body->program,
+                                                 expression->value.statement_expression.block);
+        if (statement_block == NULL) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        if (expression->value.statement_expression.result == MINIC_EXPRESSION_INVALID) {
+            if (!minic_type_is_void(expression->type)) {
+                return MINIC_CORE_LOWER_UNSUPPORTED;
+            }
+            status = lower_block(context, statement_block, &terminated);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
+            if (terminated) {
+                return MINIC_CORE_LOWER_UNSUPPORTED;
+            }
+            *value_id = MINIC_CORE_VALUE_INVALID;
+            return MINIC_CORE_LOWER_OK;
+        }
+        if (!core_scalar_expression_value_type(context->body, expression, &result_type)) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        statement_result = minic_c0_program_expression(
+            context->body->program, expression->value.statement_expression.result);
+        if (statement_result == NULL) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+''',
+    'void statement expression',
+)
+
+replace_once(
+    'src/core/core_lower.c',
     '''        if (expression->value.conditional.uses_condition_value ||
             expression->value.conditional.when_true == MINIC_EXPRESSION_INVALID ||
             expression->value.conditional.when_false == MINIC_EXPRESSION_INVALID ||
