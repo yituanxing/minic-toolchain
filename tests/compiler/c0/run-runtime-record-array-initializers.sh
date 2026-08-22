@@ -16,8 +16,9 @@ mkdir -p "$work"
 grep -F 'linux_guid_compound_literal:' "$work/runtime_record_array_initializer.s" >/dev/null
 grep -F 'runtime_record_array_local:' "$work/runtime_record_array_initializer.s" >/dev/null
 grep -F 'runtime_record_array_designated:' "$work/runtime_record_array_initializer.s" >/dev/null
+grep -F 'runtime_inferred_record_array:' "$work/runtime_record_array_initializer.s" >/dev/null
 grep -F '  sb ' "$work/runtime_record_array_initializer.s" >/dev/null
-printf '%s\n' 'PASS compiler/c0/runtime_record_array_initializer compound-literal=1 fixed-array-field=16 scalar-elements=1 designated=1 holes=1'
+printf '%s\n' 'PASS compiler/c0/runtime_record_array_initializer compound-literal=1 fixed-array-field=16 scalar-elements=1 designated=1 holes=1 inferred-record=1'
 
 "$host_cc" -E -P -std=gnu11 -x c \
     "$root/tests/compiler/c0/invalid_record_array_brace_elision.c" \
