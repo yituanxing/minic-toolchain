@@ -64,6 +64,18 @@ static void test_expression_probe_rollback(void) {
     assert(minic_semantic_snapshot_matches(&snapshot, &program));
 }
 
+static void test_zero_growth_expression_probe_rollback(void) {
+    MinicC0Program program = {0};
+    MinicSemanticSnapshot snapshot;
+
+    seed_program_counts(&program);
+    snapshot = minic_semantic_snapshot_capture(&program);
+
+    assert(minic_semantic_snapshot_only_probe_expressions_changed(&snapshot, &program));
+    assert(minic_semantic_snapshot_rollback_probe_expressions(&snapshot, &program));
+    assert(minic_semantic_snapshot_matches(&snapshot, &program));
+}
+
 static void test_non_type_mutation_rejected(void) {
     MinicC0Program program = {0};
     MinicSemanticSnapshot snapshot;
@@ -123,6 +135,7 @@ int main(void) {
     test_exact_match();
     test_declarator_type_rollback();
     test_expression_probe_rollback();
+    test_zero_growth_expression_probe_rollback();
     test_non_type_mutation_rejected();
     test_counts_cannot_move_backwards();
     return 0;
