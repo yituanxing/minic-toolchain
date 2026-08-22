@@ -1,15 +1,16 @@
-name: One-shot Core printk_get_level Shape M27
+name: One-shot Core Switch M27 Productizer
 
 on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  probe:
+  productize:
     if: github.actor != 'github-actions[bot]' && github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -23,83 +24,162 @@ jobs:
           path: build/linux-focus-corpus
           key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
 
-      - name: Build exact-head compiler
+      - name: Require frozen corpus
         shell: bash
         run: |
           set -Eeuo pipefail
           test "${{ steps.corpus.outputs.cache-hit }}" = true
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-m27-probe
-          version_i=$(find build/linux-focus-corpus -type f -path '*/init/version.i' -print -quit)
-          test -n "$version_i"
-          printf '%s\n' "$version_i" > build/core-m27-version-path.txt
-          printf 'M27_VERSION_PATH=%s\n' "$version_i"
+          test -s build/linux-focus-corpus/selected-tus.txt
 
-      - name: Prove narrow integer equality gap
+      - name: Prove pre-M27 narrow equality gap
         shell: bash
         run: |
           set -Eeuo pipefail
-          c="$GITHUB_WORKSPACE/build/core-m27-probe/bin/minic"
-          mkdir -p build/core-m27-shapes
-          cat > build/core-m27-shapes/equality.i <<'EOF'
-          int probe_equality(const char *p) { return p[0] == '\001'; }
+          python3 -m py_compile tools/dev/patch-core-integer-equality-common-m27a.py tools/dev/patch-core-switch-m27b.py
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-m27-before
+          c="$GITHUB_WORKSPACE/build/core-m27-before/bin/minic"
+          cat > /tmp/m27-equality.i <<'EOF'
+          int probe_m27_equality(const char *p) { return p[0] == '\001'; }
           EOF
-          if MINIC_CORE_IR=strict "$c" -S build/core-m27-shapes/equality.i -o /tmp/m27-eq-before.s 2>/tmp/m27-eq-before.err; then
-              echo 'M27a equality gap unexpectedly absent' >&2
+          if MINIC_CORE_IR=strict "$c" -S /tmp/m27-equality.i -o /tmp/m27-equality.s 2>/tmp/m27-equality.err; then
+              echo 'M27 pre-gap unexpectedly absent' >&2
               exit 1
           fi
-          grep -F "Core IR shadow does not yet support function 'probe_equality'" /tmp/m27-eq-before.err >/dev/null
+          grep -F "Core IR shadow does not yet support function 'probe_m27_equality'" /tmp/m27-equality.err >/dev/null
+          printf '%s\n' 'M27_PRE_EQUALITY_GAP=proved'
 
-      - name: Apply M27a equality candidate
+      - name: Apply M27a and prove switch remains the next seam
         shell: bash
         run: |
           set -Eeuo pipefail
-          python3 -m py_compile tools/dev/patch-core-integer-equality-common-m27a.py
           python3 tools/dev/patch-core-integer-equality-common-m27a.py
           clang-format-18 -i src/core/core_lower.c
-          git diff --check
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-m27a-compiler
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-m27a
+          c="$GITHUB_WORKSPACE/build/core-m27a/bin/minic"
+          MINIC_CORE_IR=strict "$c" -S /tmp/m27-equality.i -o /tmp/m27-equality-after.s
+          cat > /tmp/m27-switch.i <<'EOF'
+          int probe_m27_switch(const char *p) {
+              switch (p[1]) {
+              case '0' ... '7': return p[1];
+              case 'c': return p[1];
+              default: return 0;
+              }
+          }
+          EOF
+          if MINIC_CORE_IR=strict "$c" -S /tmp/m27-switch.i -o /tmp/m27-switch.s 2>/tmp/m27-switch.err; then
+              echo 'M27a-only switch gap unexpectedly absent' >&2
+              exit 1
+          fi
+          grep -F "Core IR shadow does not yet support function 'probe_m27_switch'" /tmp/m27-switch.err >/dev/null
+          printf '%s\n' 'M27A_SWITCH_GAP=proved'
 
-      - name: Prove M27a and expose switch seam
+      - name: Apply M27b switch CFG candidate
         shell: bash
         run: |
           set -Eeuo pipefail
-          c="$GITHUB_WORKSPACE/build/core-m27a-compiler/bin/minic"
-          cat > build/core-m27-shapes/equality_unsigned.i <<'EOF'
-          int probe_equality_unsigned(const unsigned char *p) { return p[0] != 255; }
-          EOF
-          cat > build/core-m27-shapes/nested_if_equivalent.i <<'EOF'
-          int probe_nested_if_equivalent(const char *p) { if (p[0] == '\001') { if (p[1]) return p[1]; } return 0; }
-          EOF
-          cat > build/core-m27-shapes/exact_if_condition.i <<'EOF'
-          int probe_exact_if_condition(const char *p) { if (p[0] == '\001' && p[1]) return p[1]; return 0; }
-          EOF
-          cat > build/core-m27-shapes/switch_simple.i <<'EOF'
-          int probe_switch_simple(const char *p) { switch (p[1]) { case '0': return p[1]; case 'c': return p[1]; default: return 0; } }
-          EOF
-          cat > build/core-m27-shapes/switch_range.i <<'EOF'
-          int probe_switch_range(const char *p) { switch (p[1]) { case '0' ... '7': return p[1]; case 'c': return p[1]; default: return 0; } }
-          EOF
+          python3 tools/dev/patch-core-switch-m27b.py
+          clang-format-18 -i src/core/core_lower.c tests/compiler/c0/core_switch_m27.c tests/compiler/c0/core_switch_m27_runtime.c
+          git diff --check
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-m27-product
 
-          for name in equality equality_unsigned nested_if_equivalent exact_if_condition; do
-              MINIC_CORE_IR=strict "$c" -S "build/core-m27-shapes/$name.i" -o "build/core-m27-shapes/$name.after.s"
-              printf 'M27A_PASS name=%s\n' "$name"
-          done
-          for name in switch_simple switch_range; do
-              set +e
-              MINIC_CORE_IR=strict "$c" -S "build/core-m27-shapes/$name.i" -o "build/core-m27-shapes/$name.after.s" 2>"build/core-m27-shapes/$name.after.err"
-              rc=$?
-              set -e
-              printf 'M27A_SWITCH_GAP name=%s rc=%d\n' "$name" "$rc"
-              test "$rc" -ne 0
-              grep -F "Core IR shadow does not yet support function 'probe_" "build/core-m27-shapes/$name.after.err" >/dev/null
-          done
+      - name: Install focused RISC-V runtime tools
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if ! command -v riscv64-linux-gnu-gcc >/dev/null 2>&1 || ! command -v qemu-riscv64 >/dev/null 2>&1; then
+              sudo apt-get update
+              sudo apt-get install -y --no-install-recommends gcc-riscv64-linux-gnu qemu-user
+          fi
+          riscv64-linux-gnu-gcc --version | head -n 1
+          qemu-riscv64 --version | head -n 1
 
-          version_i=$(cat build/core-m27-version-path.txt)
+      - name: Run M27 focused QEMU differential
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/core-m27-product/bin/minic" \
+          RISCV_CC=riscv64-linux-gnu-gcc \
+          QEMU_RISCV64=qemu-riscv64 \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/core-switch-m27" \
+              sh tests/compiler/c0/run-core-switch-m27.sh
+
+      - name: Prove exact frozen representative moved beyond printk_get_level
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          c="$GITHUB_WORKSPACE/build/core-m27-product/bin/minic"
+          version_i=$(find build/linux-focus-corpus -type f -path '*/init/version.i' -print -quit)
+          test -n "$version_i"
           set +e
-          MINIC_CORE_IR=strict "$c" -S "$version_i" -o /tmp/m27a-version.s 2>/tmp/m27a-version.err
+          MINIC_CORE_IR=strict "$c" -S "$version_i" -o /tmp/m27-version.s 2>/tmp/m27-version.err
           rc=$?
           set -e
-          printf 'M27A_EXACT_VERSION_RC=%d\n' "$rc"
-          sed -n '1,20p' /tmp/m27a-version.err
-          test "$rc" -ne 0
-          grep -F "Core IR shadow does not yet support function 'printk_get_level'" /tmp/m27a-version.err >/dev/null
+          printf 'M27_EXACT_VERSION_RC=%d\n' "$rc"
+          sed -n '1,20p' /tmp/m27-version.err
+          if grep -F "Core IR shadow does not yet support function 'printk_get_level'" /tmp/m27-version.err >/dev/null; then
+              echo 'printk_get_level remains the frozen representative blocker' >&2
+              exit 1
+          fi
+          printf '%s\n' 'M27_EXACT_PRINTK_BLOCKER=cleared'
+
+      - name: Replay full frozen strict first500
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/core-m27-product/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-m27-strict500"
+          set +e
+          MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
+            --minic "$compiler" \
+            --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
+            --work "$work" \
+            --jobs 5 \
+            --offset 0 \
+            --limit 500 \
+            --sample-count 0 \
+            --indices ''
+          replay_status=$?
+          set -e
+          printf 'M27_STRICT500_REPLAY_STATUS=%d\n' "$replay_status"
+          python3 tools/ci/classify-core-strict-frontier.py \
+            "$work/batch-results.json" \
+            --examples 4 \
+            --json-out "$work/frontier-summary.json" \
+            --require-no-errors
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          p = Path('build/core-m27-strict500/frontier-summary.json')
+          summary = json.loads(p.read_text())
+          if summary.get('selected') != 500:
+              raise SystemExit(f"expected frozen selected=500, got {summary.get('selected')}")
+          text = p.read_text()
+          if 'printk_get_level' in text:
+              raise SystemExit('printk_get_level remains in strict500 frontier summary')
+          print('M27_STRICT500_SELECTED=500')
+          print('M27_STRICT500_PRINTK_BLOCKER=0')
+          print('M27_STRICT500_SUMMARY_BEGIN')
+          print(json.dumps(summary, indent=2, sort_keys=True))
+          print('M27_STRICT500_SUMMARY_END')
+          PY
+
+      - name: Productize M27
+        shell: bash
+        env:
+          BRANCH: refactor/declaration-sema-v1
+        run: |
+          set -Eeuo pipefail
+          rm -f tools/dev/patch-core-integer-equality-common-m27a.py
+          rm -f tools/dev/patch-core-switch-m27b.py
+          rm -f .github/workflows/oneshot-core-printk-get-level-shape-m27.yml
+          git add -A
+          git diff --cached --check
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git commit -m 'core: lower switch control flow'
+          git fetch origin "$BRANCH"
+          test "$(git rev-parse HEAD^)" = "$(git rev-parse origin/$BRANCH)" || {
+              echo 'branch advanced during M27 productization; refusing non-linear publish' >&2
+              exit 1
+          }
+          git push origin "HEAD:$BRANCH"
