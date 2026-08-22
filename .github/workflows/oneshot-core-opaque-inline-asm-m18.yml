@@ -74,7 +74,13 @@ jobs:
           new = '''    if count != 1:\n        duplicate_first_labels = {\n            "Core verifier opaque inline-asm instruction",\n            "Core verifier inline-asm arena entries",\n        }\n        duplicate_last_labels = {\n            "Core dump opaque inline-asm instruction",\n        }\n        if label in duplicate_first_labels and count == 2:\n            target.write_text(text.replace(old, new, 1))\n            return\n        if label in duplicate_last_labels and count == 2:\n            prefix, separator, suffix = text.rpartition(old)\n            if not separator:\n                raise SystemExit(f"{label}: final match disappeared")\n            target.write_text(prefix + new + suffix)\n            return\n        raise SystemExit(f"{label}: expected 1 match, found {count}")\n    target.write_text(text.replace(old, new, 1))\n'''
           if text.count(old) != 1:
               raise SystemExit('M18 patcher helper shape changed unexpectedly')
-          path.write_text(text.replace(old, new, 1))
+          text = text.replace(old, new, 1)
+          dump_old = '                       "  asm.opaque id=%" PRIu32 "%s%s\\n",'
+          dump_new = '                       "  asm.opaque id=%" PRIu32 "%s%s\\\\n",'
+          if text.count(dump_old) != 1:
+              raise SystemExit('M18 dump newline patcher shape changed unexpectedly')
+          text = text.replace(dump_old, dump_new, 1)
+          path.write_text(text)
           PY
           python3 -m py_compile tools/dev/patch-core-opaque-inline-asm-m18.py
           python3 tools/dev/patch-core-opaque-inline-asm-m18.py
