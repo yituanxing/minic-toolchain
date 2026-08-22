@@ -43,11 +43,10 @@ static inline bool minic_declaration_array_suffix_valid(const MinicDeclarationAr
 }
 
 static inline MinicDeclarationArrayMaterializeStatus
-minic_declaration_materialize_array_suffix(
-    MinicC0Program *program,
-    MinicType element_type,
-    const MinicDeclarationArraySuffix *suffix,
-    MinicType *type) {
+minic_declaration_materialize_array_suffix(MinicC0Program *program,
+                                           MinicType element_type,
+                                           const MinicDeclarationArraySuffix *suffix,
+                                           MinicType *type) {
     MinicSemanticSnapshot snapshot;
     size_t dimension;
     MinicType result;
@@ -123,12 +122,7 @@ minic_declaration_build_function_type(MinicC0Program *program,
 
     snapshot = minic_semantic_snapshot_capture(program);
     if (!minic_c0_program_add_variadic_function_type(
-            program,
-            return_type,
-            parameter_types,
-            parameter_count,
-            is_variadic,
-            &result)) {
+            program, return_type, parameter_types, parameter_count, is_variadic, &result)) {
         (void)minic_semantic_snapshot_rollback_declarator_types(&snapshot, program);
         return false;
     }
