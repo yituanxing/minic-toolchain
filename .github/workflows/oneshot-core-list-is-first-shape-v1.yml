@@ -1,0 +1,79 @@
+name: One-shot Core list_is_first Shape Probe
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    if: github.actor != 'github-actions[bot]' && github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+
+      - name: Build exact compiler
+        shell: bash
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-list-is-first-probe-compiler
+
+      - name: Probe list_is_first comparison layers
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/core-list-is-first-probe-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-list-is-first-probe"
+          mkdir -p "$work"
+
+          cat >"$work/a-nonconst.i" <<'EOF'
+          struct node { struct node *next; struct node *prev; };
+          int probe_nonconst(struct node *list, struct node *head) {
+              return list->prev == head;
+          }
+          EOF
+
+          cat >"$work/b-const-params.i" <<'EOF'
+          struct node { struct node *next; struct node *prev; };
+          int probe_const_params(const struct node *list, const struct node *head) {
+              return list->prev == head;
+          }
+          EOF
+
+          cat >"$work/c-explicit-const-cast.i" <<'EOF'
+          struct node { struct node *next; struct node *prev; };
+          int probe_explicit_const_cast(const struct node *list, const struct node *head) {
+              return (const struct node *)list->prev == head;
+          }
+          EOF
+
+          cat >"$work/d-local-qualified.i" <<'EOF'
+          struct node { struct node *next; struct node *prev; };
+          int probe_local_qualified(struct node *list, const struct node *head) {
+              struct node *prev = list->prev;
+              return prev == head;
+          }
+          EOF
+
+          cat >"$work/e-list-is-first.i" <<'EOF'
+          struct list_head { struct list_head *next; struct list_head *prev; };
+          int probe_list_is_first(const struct list_head *list, const struct list_head *head) {
+              return list->prev == head;
+          }
+          EOF
+
+          for input in "$work"/*.i; do
+            name=$(basename "$input" .i)
+            set +e
+            MINIC_CORE_IR=strict "$compiler" -S "$input" -o "$work/$name.s" \
+              >"$work/$name.out" 2>"$work/$name.err"
+            rc=$?
+            set -e
+            printf 'CORE_LIST_IS_FIRST_SHAPE name=%s rc=%d\n' "$name" "$rc"
+            sed 's/^/CORE_LIST_IS_FIRST_DIAG /' "$work/$name.err"
+          done
+
+          test -s "$work/a-nonconst.s"
+          printf '%s\n' 'PASS core/list-is-first-shape probe-complete'
