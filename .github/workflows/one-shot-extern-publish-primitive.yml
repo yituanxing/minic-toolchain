@@ -42,9 +42,14 @@ jobs:
             tests/frontend/global_object_publish_test.c \
             -o /tmp/global-object-publish-test
           /tmp/global-object-publish-test
-          rm \
-            .github/workflows/one-shot-extern-publish-primitive.yml \
-            tools/dev/one-shot-extern-publish-primitive.py
+
+          # GitHub Actions tokens may update source files but cannot create/update
+          # workflow files. Keep workflow changes out of the bot commit; the
+          # connected GitHub API will install the permanent gate and remove this
+          # one-shot workflow after the source commit lands.
+          git checkout -- .github/workflows/frontend-ownership-contracts.yml
+          rm tools/dev/one-shot-extern-publish-primitive.py
+
           git diff --check
           git status --short
           git config user.name "github-actions[bot]"
