@@ -75,8 +75,116 @@ static void test_identical_section_can_commit_array_completion(void) {
     minic_c0_program_destroy(&program);
 }
 
+static void test_external_object_creation_commits_complete_entity(void) {
+    MinicC0Program program;
+    MinicDeclarationExternalObjectAttributes attributes;
+    MinicDeclarationExternalObjectCreateStatus status;
+    const MinicGlobalObject *object;
+    MinicGlobalObjectId object_id;
+
+    minic_c0_program_initialize(&program);
+    (void)memset(&attributes, 0, sizeof(attributes));
+    attributes.section_name = ".sema";
+    attributes.section_name_length = strlen(".sema");
+    attributes.explicit_alignment = 16U;
+    attributes.visibility = MINIC_SYMBOL_VISIBILITY_HIDDEN;
+    attributes.has_section = true;
+    attributes.has_visibility = true;
+
+    status = minic_declaration_create_external_object(&program,
+                                                      "fresh",
+                                                      strlen("fresh"),
+                                                      minic_type_int(),
+                                                      true,
+                                                      true,
+                                                      false,
+                                                      &attributes,
+                                                      &object_id);
+    assert(status == MINIC_DECLARATION_EXTERNAL_OBJECT_CREATE_OK);
+    assert(program.global_object_count == 1U);
+    object = minic_c0_program_global_object(&program, object_id);
+    assert(object != NULL);
+    assert(object->is_extern);
+    assert(object->is_read_only);
+    assert(object->is_weak);
+    assert(!object->is_block_scope_extern_only);
+    assert(object->explicit_alignment == 16U);
+    assert(object->visibility == MINIC_SYMBOL_VISIBILITY_HIDDEN);
+    assert(object->section_name_length == strlen(".sema"));
+    assert(memcmp(object->section_name, ".sema", strlen(".sema")) == 0);
+
+    minic_c0_program_destroy(&program);
+}
+
+static void test_external_object_creation_rejects_invalid_facts_without_publish(void) {
+    MinicC0Program program;
+    MinicDeclarationExternalObjectAttributes attributes;
+    MinicDeclarationExternalObjectCreateStatus status;
+    MinicGlobalObjectId object_id;
+
+    minic_c0_program_initialize(&program);
+    (void)memset(&attributes, 0, sizeof(attributes));
+    attributes.section_name = NULL;
+    attributes.section_name_length = 4U;
+    attributes.has_section = true;
+    attributes.visibility = MINIC_SYMBOL_VISIBILITY_DEFAULT;
+
+    status = minic_declaration_create_external_object(&program,
+                                                      "invalid",
+                                                      strlen("invalid"),
+                                                      minic_type_int(),
+                                                      false,
+                                                      false,
+                                                      false,
+                                                      &attributes,
+                                                      &object_id);
+    assert(status == MINIC_DECLARATION_EXTERNAL_OBJECT_CREATE_INVALID);
+    assert(program.global_object_count == 0U);
+
+    minic_c0_program_destroy(&program);
+}
+
+static void test_external_object_creation_conflict_does_not_publish_second_entity(void) {
+    MinicC0Program program;
+    MinicDeclarationExternalObjectAttributes attributes;
+    MinicDeclarationExternalObjectCreateStatus status;
+    MinicGlobalObjectId first_id;
+    MinicGlobalObjectId second_id;
+
+    minic_c0_program_initialize(&program);
+    (void)memset(&attributes, 0, sizeof(attributes));
+    attributes.visibility = MINIC_SYMBOL_VISIBILITY_DEFAULT;
+    status = minic_declaration_create_external_object(&program,
+                                                      "duplicate",
+                                                      strlen("duplicate"),
+                                                      minic_type_int(),
+                                                      false,
+                                                      false,
+                                                      true,
+                                                      &attributes,
+                                                      &first_id);
+    assert(status == MINIC_DECLARATION_EXTERNAL_OBJECT_CREATE_OK);
+    status = minic_declaration_create_external_object(&program,
+                                                      "duplicate",
+                                                      strlen("duplicate"),
+                                                      minic_type_long(),
+                                                      false,
+                                                      false,
+                                                      false,
+                                                      &attributes,
+                                                      &second_id);
+    assert(status == MINIC_DECLARATION_EXTERNAL_OBJECT_CREATE_COMMIT_FAILED);
+    assert(program.global_object_count == 1U);
+    assert(program.global_objects[first_id].is_block_scope_extern_only);
+
+    minic_c0_program_destroy(&program);
+}
+
 int main(void) {
     test_type_conflict_does_not_commit_section();
     test_identical_section_can_commit_array_completion();
+    test_external_object_creation_commits_complete_entity();
+    test_external_object_creation_rejects_invalid_facts_without_publish();
+    test_external_object_creation_conflict_does_not_publish_second_entity();
     return 0;
 }
