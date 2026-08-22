@@ -49,12 +49,32 @@ jobs:
           cat /tmp/m26-before.err
           grep -F "Core IR shadow does not yet support function 'probe'" /tmp/m26-before.err >/dev/null
 
-      - name: Apply M26 candidate
+      - name: Prove M26b subscript gap after less-than
         shell: bash
         run: |
           set -Eeuo pipefail
           python3 -m py_compile tools/dev/patch-core-integer-less-m26.py
           python3 tools/dev/patch-core-integer-less-m26.py
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-m26-less-only
+          c="$GITHUB_WORKSPACE/build/core-m26-less-only/bin/minic"
+          cat > build/core-m26-subscript-before.i <<'EOF'
+          unsigned int probe(unsigned int *base, unsigned long index) { return base[index]; }
+          EOF
+          if MINIC_CORE_IR=strict "$c" -S build/core-m26-subscript-before.i -o /tmp/m26b-before.s 2>/tmp/m26b-before.err; then
+              echo 'M26b subscript-address gap unexpectedly absent' >&2
+              exit 1
+          fi
+          cat /tmp/m26b-before.err
+          grep -F "Core IR shadow does not yet support function 'probe'" /tmp/m26b-before.err >/dev/null
+          git reset --hard HEAD
+
+      - name: Apply M26 candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 -m py_compile tools/dev/patch-core-integer-less-m26.py tools/dev/patch-core-subscript-address-m26b.py
+          python3 tools/dev/patch-core-integer-less-m26.py
+          python3 tools/dev/patch-core-subscript-address-m26b.py
           clang-format-18 -i \
             src/core/core_ir.h \
             src/core/core_ir.c \
@@ -128,6 +148,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           git rm tools/dev/patch-core-integer-less-m26.py \
+                 tools/dev/patch-core-subscript-address-m26b.py \
                  .github/workflows/oneshot-core-integer-less-m26.yml \
                  .github/workflows/oneshot-core-frontier-batch-m26.yml
           git config user.name 'github-actions[bot]'
@@ -141,5 +162,5 @@ jobs:
                   tests/compiler/c0/core_integer_less_m26_runtime.c \
                   tests/compiler/c0/run-core-integer-less-m26.sh
           git diff --cached --check
-          git commit -m 'core: lower integer less-than comparisons'
+          git commit -m 'core: lower integer less and subscript addresses'
           git push origin HEAD:refactor/declaration-sema-v1
