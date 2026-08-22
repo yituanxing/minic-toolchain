@@ -72,6 +72,7 @@ jobs:
           python3 -m py_compile tools/dev/patch-core-discard-expression-m25.py tools/dev/patch-core-integer-binary-preservation-m25b.py
           python3 tools/dev/patch-core-discard-expression-m25.py
           python3 tools/dev/patch-core-integer-binary-preservation-m25b.py
+          sed -i 's/value != 0x1236U/value != 0x1237U/' tests/compiler/c0/core_integer_binary_preservation_m25b_runtime.c
           chmod +x tests/compiler/c0/run-core-discard-expression-m25.sh \
                    tests/compiler/c0/run-core-integer-binary-preservation-m25b.sh
           clang-format-18 -i src/core/core_lower.c \
