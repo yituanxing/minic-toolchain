@@ -181,6 +181,7 @@ typedef struct MinicCoreFunction {
     MinicCoreBlockId entry_block;
 } MinicCoreFunction;
 
+bool minic_core_scalar_bitcast_types_valid(MinicType target_type, MinicType source_type);
 void minic_core_function_initialize(MinicCoreFunction *function);
 void minic_core_function_destroy(MinicCoreFunction *function);
 bool minic_core_function_set_signature(MinicCoreFunction *function,

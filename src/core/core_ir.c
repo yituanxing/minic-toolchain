@@ -438,7 +438,7 @@ static bool available_pointer_pointee(const MinicCoreFunction *function,
     return minic_type_pointee(function->values[address].type, pointee);
 }
 
-static bool core_scalar_bitcast_types_valid(MinicType target_type, MinicType source_type) {
+bool minic_core_scalar_bitcast_types_valid(MinicType target_type, MinicType source_type) {
     return (minic_type_is_pointer(target_type) &&
             (minic_type_is_pointer(source_type) || minic_type_is_integer(source_type))) ||
            (minic_type_is_integer(target_type) && minic_type_is_pointer(source_type));
@@ -522,8 +522,8 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
         return instruction_result_is_valid(function, instruction) &&
                instruction->value.operand < function->value_count &&
                available_values[instruction->value.operand] &&
-               core_scalar_bitcast_types_valid(instruction->type,
-                                               function->values[instruction->value.operand].type);
+               minic_core_scalar_bitcast_types_valid(
+                   instruction->type, function->values[instruction->value.operand].type);
     case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE:
     case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT:
         return instruction_result_is_valid(function, instruction) &&

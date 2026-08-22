@@ -192,19 +192,13 @@ static bool core_scalar_bitcast_supported(const MinicC0Program *program,
     size_t source_alignment;
     size_t target_size;
     size_t target_alignment;
-    bool type_pair_valid;
-
     if (program == NULL || function == NULL || instruction == NULL ||
         instruction->kind != MINIC_CORE_INSTRUCTION_SCALAR_BITCAST ||
         instruction->value.operand >= function->value_count) {
         return false;
     }
     source = &function->values[instruction->value.operand];
-    type_pair_valid =
-        (minic_type_is_pointer(instruction->type) &&
-         (minic_type_is_pointer(source->type) || minic_type_is_integer(source->type))) ||
-        (minic_type_is_integer(instruction->type) && minic_type_is_pointer(source->type));
-    if (!type_pair_valid ||
+    if (!minic_core_scalar_bitcast_types_valid(instruction->type, source->type) ||
         !minic_data_layout_type(
             minic_default_data_layout(), program, source->type, &source_size, &source_alignment) ||
         !minic_data_layout_type(minic_default_data_layout(),
