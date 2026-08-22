@@ -40,6 +40,20 @@ jobs:
           cat > "$w/statement_expr.i" <<'EOF'
           unsigned long probe_m29_statement_expr(unsigned long a, unsigned int d) { return ({ unsigned int r; r = ((unsigned long)a) % d; a = ((unsigned long)a) / d; r; }); }
           EOF
+          cat > "$w/helper_store.i" <<'EOF'
+          typedef unsigned long u64; typedef unsigned int u32;
+          static u64 helper29a(u32 a, u32 b) { return (u64)a * b; }
+          u64 probe_m29_helper_store(u64 a, u32 mul) { union { u64 ll; struct { u32 low, high; } l; } u, rl; u.ll = a; rl.ll = helper29a(u.l.low, mul); return rl.ll; }
+          EOF
+          cat > "$w/call_member_add.i" <<'EOF'
+          typedef unsigned long u64; typedef unsigned int u32;
+          static u64 helper29b(u32 a, u32 b) { return (u64)a * b; }
+          u64 probe_m29_call_member_add(u64 a, u32 mul) { union { u64 ll; struct { u32 low, high; } l; } u, rl, rh; u.ll = a; rl.ll = helper29b(u.l.low, mul); rh.ll = helper29b(u.l.high, mul) + rl.l.high; return rh.ll; }
+          EOF
+          cat > "$w/member_statement_target.i" <<'EOF'
+          typedef unsigned long u64; typedef unsigned int u32;
+          u64 probe_m29_member_statement_target(u64 a, u32 divisor) { union { u64 ll; struct { u32 low, high; } l; } u; u.ll = a; u.l.high = ({ u32 base = divisor; u32 rem; rem = ((u64)u.ll) % base; u.ll = ((u64)u.ll) / base; rem; }); return u.ll; }
+          EOF
           cat > "$w/full_style.i" <<'EOF'
           typedef unsigned long u64; typedef unsigned int u32;
           static u64 mul_u32_u32_m29(u32 a, u32 b) { return (u64)a * b; }
@@ -54,7 +68,7 @@ jobs:
             return rl.ll;
           }
           EOF
-          for n in union_scalar union_nested record_24 statement_expr full_style; do
+          for n in union_scalar union_nested record_24 statement_expr helper_store call_member_add member_statement_target full_style; do
               set +e
               MINIC_CORE_IR=strict "$c" -S "$w/$n.i" -o "$w/$n.s" 2>"$w/$n.err"
               rc=$?
