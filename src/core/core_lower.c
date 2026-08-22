@@ -97,7 +97,8 @@ static MinicCoreLowerStatus lower_local_object(MinicCoreLowerContext *context,
     if (local == NULL) {
         return MINIC_CORE_LOWER_ERROR;
     }
-    if (local->is_array || local->is_register_storage || !core_memory_scalar_type(local->type)) {
+    if (local->is_array || local->is_register_storage ||
+        (!core_memory_scalar_type(local->type) && !minic_type_is_record(local->type))) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
     if (!minic_core_function_add_object(
@@ -2423,7 +2424,14 @@ static MinicCoreLowerStatus lower_expression_statement(MinicCoreLowerContext *co
         return lower_postfix_scalar_update(context, expression, &discarded_value);
     }
     if (expression->kind != MINIC_EXPRESSION_ASSIGNMENT) {
-        return MINIC_CORE_LOWER_UNSUPPORTED;
+        MinicCoreValueId discarded_value;
+        MinicType discarded_type;
+
+        if (!core_scalar_expression_value_type(context->body, expression, &discarded_type)) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        (void)discarded_type;
+        return lower_expression(context, statement->expression, &discarded_value);
     }
     target_id = expression->value.binary.left;
     source_id = expression->value.binary.right;

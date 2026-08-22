@@ -422,6 +422,14 @@ core_inline_asm_identity_m28_focused() {
         sh tests/compiler/c0/run-core-inline-asm-identity-m28.sh
 }
 
+core_record_local_m29_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" \
+    BUILD_DIR="$root/build/ci-core-record-local-m29" \
+    RISCV_CC=riscv64-linux-gnu-gcc \
+    QEMU_RISCV64=qemu-riscv64 \
+        sh tests/compiler/c0/run-core-record-local-m29.sh
+}
+
 runtime_record_fam_prefix_focused() {
     MINIC="$root/build/ci-debug/bin/minic" \
     HOST_CC=cc \
@@ -600,6 +608,7 @@ start_gate core-integer-binary-preservation-m25b-focused core_integer_binary_pre
 start_gate core-integer-less-m26-focused core_integer_less_m26_focused
 start_gate core-switch-m27-focused core_switch_m27_focused
 start_gate core-inline-asm-identity-m28-focused core_inline_asm_identity_m28_focused
+start_gate core-record-local-m29-focused core_record_local_m29_focused
 start_gate core-integer-foundation-m26b-focused core_integer_foundation_m26b_focused
 start_gate record-fam-prefix-focused runtime_record_fam_prefix_focused
 start_gate linenoise-driven-focused linenoise_driven_focused
