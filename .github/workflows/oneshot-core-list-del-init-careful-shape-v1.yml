@@ -1,0 +1,76 @@
+name: One-shot Core list_del_init_careful Shape Probe
+
+on:
+  pull_request:
+
+jobs:
+  probe:
+    if: github.actor != 'github-actions[bot]' && github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+      - name: Build exact compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-list-del-init-careful-probe-compiler
+      - name: Probe list_del_init_careful layers
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/core-list-del-init-careful-probe-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-list-del-init-careful-probe"
+          mkdir -p "$work"
+
+          cat >"$work/a-direct-stores.i" <<'EOF'
+          struct node { struct node *next; struct node *prev; };
+          void probe_direct_stores(struct node *entry) {
+              entry->prev = entry;
+              entry->next = entry;
+          }
+          EOF
+
+          cat >"$work/b-volatile-store.i" <<'EOF'
+          struct node { struct node *next; struct node *prev; };
+          void probe_volatile_store(struct node *entry) {
+              (*(struct node * volatile *)&(entry->prev)) = entry;
+          }
+          EOF
+
+          cat >"$work/c-fence-only.i" <<'EOF'
+          void probe_fence_only(void) {
+              __asm__ __volatile__("fence rw,w" : : : "memory");
+          }
+          EOF
+
+          cat >"$work/d-release-shape.i" <<'EOF'
+          struct node { struct node *next; struct node *prev; };
+          void probe_release_shape(struct node *entry) {
+              __asm__ __volatile__("fence rw,w" : : : "memory");
+              (*(struct node * volatile *)&(entry->next)) = entry;
+          }
+          EOF
+
+          cat >"$work/e-list-del-init-careful.i" <<'EOF'
+          struct node { struct node *next; struct node *prev; };
+          extern void helper(struct node *entry);
+          void probe_list_del_init_careful(struct node *entry) {
+              helper(entry);
+              (*(struct node * volatile *)&(entry->prev)) = entry;
+              __asm__ __volatile__("fence rw,w" : : : "memory");
+              (*(struct node * volatile *)&(entry->next)) = entry;
+          }
+          EOF
+
+          for input in "$work"/*.i; do
+            name=$(basename "$input" .i)
+            set +e
+            MINIC_CORE_IR=strict "$compiler" -S "$input" -o "$work/$name.s" \
+              >"$work/$name.out" 2>"$work/$name.err"
+            rc=$?
+            set -e
+            printf 'CORE_LIST_DEL_INIT_CAREFUL_SHAPE name=%s rc=%d\n' "$name" "$rc"
+            sed 's/^/CORE_LIST_DEL_INIT_CAREFUL_DIAG /' "$work/$name.err"
+          done
+          test -s "$work/a-direct-stores.s"
+          printf '%s\n' 'PASS core/list-del-init-careful-shape probe-complete'
