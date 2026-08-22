@@ -19,6 +19,8 @@ MINIC_CORE_CODEGEN=basic-v0 "$MINIC" -S "$work/core_integer_equality.i" \
 
 grep -q '^core_m5b_equal:' "$work/core_integer_equality-core.s"
 grep -q '^core_m5b_set_if_equal:' "$work/core_integer_equality-core.s"
+grep -q '^core_m11_pointer_equal:' "$work/core_integer_equality-core.s"
+grep -q '^core_m11_member_pointer_equal:' "$work/core_integer_equality-core.s"
 grep -q 'xor t0, t0, t1' "$work/core_integer_equality-core.s"
 grep -q 'seqz t0, t0' "$work/core_integer_equality-core.s"
 grep -q 'la t0, core_m5b_global' "$work/core_integer_equality-core.s"

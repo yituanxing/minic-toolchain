@@ -855,12 +855,13 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
             return status;
         }
         if (left >= context->function->value_count || right >= context->function->value_count ||
-            !minic_type_is_integer(context->function->values[left].type) ||
+            (!minic_type_is_integer(context->function->values[left].type) &&
+             !minic_type_is_pointer(context->function->values[left].type)) ||
             !minic_type_equal(context->function->values[left].type,
                               context->function->values[right].type)) {
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
-        instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_EQUAL;
+        instruction.kind = MINIC_CORE_INSTRUCTION_SCALAR_EQUAL;
         instruction.type = minic_type_int();
         instruction.value.binary.left = left;
         instruction.value.binary.right = right;
