@@ -1,0 +1,55 @@
+name: One-shot Core Fswab16 Shape
+
+on:
+  pull_request:
+
+jobs:
+  probe:
+    if: github.actor != 'github-actions[bot]' && github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+      - name: Build compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-fswab16-probe
+      - name: Probe fswab16 shapes
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/core-fswab16-probe/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-fswab16-shapes"
+          mkdir -p "$work"
+
+          cat > "$work/bitwise_or.i" <<'EOF'
+          unsigned int probe(unsigned int x, unsigned int y) { return x | y; }
+          EOF
+          cat > "$work/shift_left.i" <<'EOF'
+          unsigned int probe(unsigned int x) { return x << 8; }
+          EOF
+          cat > "$work/shift_right_unsigned.i" <<'EOF'
+          unsigned int probe(unsigned int x) { return x >> 8; }
+          EOF
+          cat > "$work/shift_right_signed.i" <<'EOF'
+          int probe(int x) { return x >> 8; }
+          EOF
+          cat > "$work/and_shift.i" <<'EOF'
+          unsigned int probe(unsigned int x) { return (x & 0xffU) << 8; }
+          EOF
+          cat > "$work/exact_u16.i" <<'EOF'
+          typedef unsigned short __u16;
+          __u16 probe(__u16 val) {
+              return (__u16)((((__u16)(val) & (__u16)0x00ffU) << 8) |
+                             (((__u16)(val) & (__u16)0xff00U) >> 8));
+          }
+          EOF
+
+          for shape in bitwise_or shift_left shift_right_unsigned shift_right_signed and_shift exact_u16; do
+            set +e
+            MINIC_CORE_IR=strict "$compiler" -S "$work/$shape.i" -o "$work/$shape.s" 2>"$work/$shape.err"
+            rc=$?
+            set -e
+            printf 'CORE_FSWAB16_SHAPE name=%s rc=%d message=' "$shape" "$rc"
+            tr '\n' ' ' < "$work/$shape.err"
+            printf '\n'
+          done
