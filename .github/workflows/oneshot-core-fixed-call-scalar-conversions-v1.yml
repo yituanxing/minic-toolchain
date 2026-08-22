@@ -17,6 +17,15 @@ jobs:
           ref: refactor/declaration-sema-v1
           fetch-depth: 0
 
+      - name: Install RISC-V runtime tools
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mapfile -t packages < <(grep -Ev '^[[:space:]]*(#|$)' tools/ci/ubuntu-24.04-packages.txt)
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends "${packages[@]}"
+          sh tools/ci/verify-validation-tools.sh
+
       - name: Apply Core M3 slice
         shell: bash
         run: |
