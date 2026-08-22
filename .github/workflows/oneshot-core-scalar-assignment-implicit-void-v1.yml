@@ -40,11 +40,52 @@ jobs:
           bash -n .github/scripts/compiler-c0-full-gate.sh
           git diff --check
 
-      - name: Validate scalar assignments and implicit void return
+      - name: Diagnose exact M4 subshapes
         shell: bash
         run: |
           set -Eeuo pipefail
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-m4-compiler
+          compiler="$GITHUB_WORKSPACE/build/core-m4-compiler/bin/minic"
+          work=build/core-m4-diagnostic
+          mkdir -p "$work"
+
+          cat >"$work/pointer-store.c" <<'EOF'
+          void core_m4_pointer_store(const void **slot, const void *value) {
+              *slot = value;
+          }
+          EOF
+          cat >"$work/empty-void.c" <<'EOF'
+          void core_m4_empty_void(void) {}
+          EOF
+          cat >"$work/do-while-zero.c" <<'EOF'
+          void core_m4_do_while_zero(int *slot) {
+              do {
+                  *slot = 7;
+              } while (0);
+          }
+          EOF
+          cat >"$work/cast-deref-store.c" <<'EOF'
+          struct core_m4_node { struct core_m4_node *next; };
+          void core_m4_cast_deref_store(struct core_m4_node *list) {
+              *(volatile __typeof__(list->next) *)&(list->next) = list;
+          }
+          EOF
+
+          for name in pointer-store empty-void do-while-zero cast-deref-store; do
+            cc -E -P -std=gnu11 "$work/$name.c" -o "$work/$name.i"
+            if MINIC_CORE_IR=strict "$compiler" -S "$work/$name.i" -o "$work/$name.s" \
+                >"$work/$name.stdout" 2>"$work/$name.stderr"; then
+              printf 'M4_DIAG %s PASS\n' "$name"
+            else
+              printf 'M4_DIAG %s FAIL\n' "$name"
+              cat "$work/$name.stderr"
+            fi
+          done
+
+      - name: Validate scalar assignments and implicit void return
+        shell: bash
+        run: |
+          set -Eeuo pipefail
           compiler="$GITHUB_WORKSPACE/build/core-m4-compiler/bin/minic"
           MINIC="$compiler" \
           BUILD_DIR="$GITHUB_WORKSPACE/build/core-m4-focused" \
