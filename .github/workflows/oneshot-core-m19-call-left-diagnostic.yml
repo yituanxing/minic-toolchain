@@ -1,0 +1,109 @@
+name: One-shot Core M19 Call-left Diagnostic
+
+on:
+  pull_request:
+
+jobs:
+  diagnose:
+    if: github.actor != 'github-actions[bot]' && github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+      - name: Apply M19 and add generic status diagnostics
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/patch-core-logical-and-value-m19.py
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('src/compiler/compiler.c')
+          text = path.read_text()
+          old = '''        status = candidates->statuses[function_index];
+        if (status == MINIC_CORE_LOWER_OK &&
+            !minic_core_function_verify(&candidates->functions[function_index])) {
+            status = MINIC_CORE_LOWER_ERROR;
+        }
+'''
+          new = '''        status = candidates->statuses[function_index];
+        if (status == MINIC_CORE_LOWER_OK) {
+            bool verified = minic_core_function_verify(&candidates->functions[function_index]);
+            (void)fprintf(stderr,
+                          "CORE_M19_DIAG function=%s lower_status=%d verify=%d\\n",
+                          function->name,
+                          (int)status,
+                          verified ? 1 : 0);
+            if (!verified) {
+                status = MINIC_CORE_LOWER_ERROR;
+            }
+        } else {
+            (void)fprintf(stderr,
+                          "CORE_M19_DIAG function=%s lower_status=%d verify=na\\n",
+                          function->name,
+                          (int)status);
+        }
+'''
+          if text.count(old) != 1:
+              raise SystemExit('Core validation diagnostic anchor changed')
+          path.write_text(text.replace(old, new, 1))
+          PY
+          clang-format-18 -i src/core/core_lower.c src/compiler/compiler.c
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-m19-diag-compiler
+      - name: Probe call-left and Linux-like layers
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/core-m19-diag-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-m19-call-left-diag"
+          mkdir -p "$work"
+
+          cat >"$work/a-call.i" <<'EOF'
+          int helper(int left, int right) { return left == right; }
+          int probe_call(int left, int right) { return helper(left, right); }
+          EOF
+
+          cat >"$work/b-call-left-and.i" <<'EOF'
+          int helper(int left, int right) { return left == right; }
+          int probe_call_left_and(int left, int right, int third) {
+              return helper(left, right) && (right == third);
+          }
+          EOF
+
+          cat >"$work/c-call-left-volatile-rhs.i" <<'EOF'
+          struct node { struct node *next; struct node *prev; };
+          int helper(const struct node *list, const struct node *head) { return list == head; }
+          int probe_call_left_volatile_rhs(const struct node *head) {
+              struct node *next = head->next;
+              return helper(next, head) &&
+                     (next == ({ (*(struct node * const volatile *)&(head->prev)); }));
+          }
+          EOF
+
+          cat >"$work/d-full-linux-like.i" <<'EOF'
+          struct node { struct node *next; struct node *prev; };
+          int helper(const struct node *list, const struct node *head) { return list == head; }
+          int probe_full_linux_like(const struct node *head) {
+              struct node *next = ({
+                  struct node *value =
+                      ({ (*(struct node * const volatile *)&(head->next)); });
+                  __asm__ __volatile__("fence r,rw" : : : "memory");
+                  value;
+              });
+              return helper(next, head) &&
+                     (next == ({ (*(struct node * const volatile *)&(head->prev)); }));
+          }
+          EOF
+
+          for input in "$work"/*.i; do
+            name=$(basename "$input" .i)
+            set +e
+            MINIC_CORE_IR=strict "$compiler" -S "$input" -o "$work/$name.s" \
+              >"$work/$name.out" 2>"$work/$name.err"
+            rc=$?
+            set -e
+            printf 'CORE_M19_CALL_LEFT name=%s rc=%d\n' "$name" "$rc"
+            grep -E 'CORE_M19_DIAG|Core IR shadow' "$work/$name.err" || true
+          done
+          printf '%s\n' 'PASS core/m19 call-left diagnostic complete'
