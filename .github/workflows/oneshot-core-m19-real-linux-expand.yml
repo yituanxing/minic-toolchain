@@ -53,3 +53,33 @@ jobs:
               print(text[start:end])
               print(f'CORE_M19_REAL_END match={n}')
           PY
+
+      - name: Diagnose exact frozen function status
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/patch-core-logical-and-value-m19.py
+          python3 tools/dev/instrument-core-m19-status.py
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-m19-real-diag
+          compiler="$GITHUB_WORKSPACE/build/core-m19-real-diag/bin/minic"
+          input=$(python3 - <<'PY'
+          from pathlib import Path
+          root = Path('build/linux-focus-corpus')
+          for line in (root / 'selected-tus.txt').read_text().splitlines():
+              fields = line.split('\t', 3)
+              if int(fields[0]) == 31:
+                  print(root / 'kbuild' / fields[2])
+                  break
+          else:
+              raise SystemExit('frozen corpus index 31 missing')
+          PY
+          )
+          set +e
+          MINIC_CORE_IR=strict "$compiler" -S "$input" -o build/core-m19-real-diag/out.s \
+            >build/core-m19-real-diag/stdout.log 2>build/core-m19-real-diag/stderr.log
+          rc=$?
+          set -e
+          printf 'CORE_M19_REAL_RC=%d\n' "$rc"
+          grep -F 'CORE_M19_DIAG function=list_empty_careful' build/core-m19-real-diag/stderr.log || true
+          grep -F "Core IR shadow" build/core-m19-real-diag/stderr.log | head -n 4 || true
+          test "$rc" -ne 0
