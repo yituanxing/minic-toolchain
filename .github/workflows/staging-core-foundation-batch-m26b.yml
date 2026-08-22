@@ -1,15 +1,17 @@
 name: Staging Core Foundation Batch M26b
 
 on:
-  push:
+  pull_request:
     branches:
-      - staging/core-foundation-batch-m26b-work
+      - refactor/declaration-sema-v1
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: write
 
 jobs:
   validate-and-productize:
+    if: github.head_ref == 'staging/core-foundation-batch-m26b-work'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
