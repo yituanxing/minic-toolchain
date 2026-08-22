@@ -71,7 +71,7 @@ jobs:
           path = Path('tools/dev/patch-core-opaque-inline-asm-m18.py')
           text = path.read_text()
           old = '''    if count != 1:\n        raise SystemExit(f"{label}: expected 1 match, found {count}")\n    target.write_text(text.replace(old, new, 1))\n'''
-          new = '''    if count != 1:\n        if label == "Core verifier opaque inline-asm instruction" and count == 2:\n            target.write_text(text.replace(old, new, 1))\n            return\n        raise SystemExit(f"{label}: expected 1 match, found {count}")\n    target.write_text(text.replace(old, new, 1))\n'''
+          new = '''    if count != 1:\n        duplicate_first_labels = {\n            "Core verifier opaque inline-asm instruction",\n            "Core verifier inline-asm arena entries",\n        }\n        if label in duplicate_first_labels and count == 2:\n            target.write_text(text.replace(old, new, 1))\n            return\n        raise SystemExit(f"{label}: expected 1 match, found {count}")\n    target.write_text(text.replace(old, new, 1))\n'''
           if text.count(old) != 1:
               raise SystemExit('M18 patcher helper shape changed unexpectedly')
           path.write_text(text.replace(old, new, 1))
