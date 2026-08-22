@@ -19,9 +19,15 @@ replacement = r'''static bool parse_fixed_runtime_record_array_initializer(Minic
     MinicSourceSpan initializer_span;
     bool success;
 
+    if (parser == NULL || element_count == 0U || parser->current.kind != MINIC_TOKEN_LBRACE) {
+        if (parser != NULL) {
+            minic_parser_error(parser,
+                               "fixed runtime record array initializer requires a nonempty record array");
+        }
+        return false;
+    }
     base = minic_c0_program_expression(parser->program, base_id);
-    if (parser == NULL || base == NULL || element_count == 0U ||
-        parser->current.kind != MINIC_TOKEN_LBRACE ||
+    if (base == NULL ||
         !minic_c0_expression_array_object_info(parser->program, base, &array_info) ||
         !minic_type_is_record(array_info.element_type)) {
         minic_parser_error(parser,
@@ -106,13 +112,13 @@ replacement = r'''static bool parse_fixed_runtime_record_array_initializer(Minic
     }
 
     initializer_span.end = parser->current.span.end;
-    while (plan.next_index < element_count) {
+    {
         size_t index;
 
-        index = plan.next_index;
-        if (!add_array_object_zero_element(parser, base_id, index, initializer_span) ||
-            !minic_array_initializer_plan_add_positional(&plan, &action_id)) {
-            goto done;
+        for (index = plan.next_index; index < element_count; ++index) {
+            if (!add_array_object_zero_element(parser, base_id, index, initializer_span)) {
+                goto done;
+            }
         }
     }
     success = minic_parser_advance(parser);
@@ -123,12 +129,6 @@ done:
 }
 
 '''
-
-# The trailing-zero loop above must not publish synthetic initializer actions; the plan tracks
-# source actions only. Replace it with a cursor-only loop after source parsing.
-replacement = replacement.replace(
-    '''    while (plan.next_index < element_count) {\n        size_t index;\n\n        index = plan.next_index;\n        if (!add_array_object_zero_element(parser, base_id, index, initializer_span) ||\n            !minic_array_initializer_plan_add_positional(&plan, &action_id)) {\n            goto done;\n        }\n    }\n''',
-    '''    {\n        size_t index;\n\n        for (index = plan.next_index; index < element_count; ++index) {\n            if (!add_array_object_zero_element(parser, base_id, index, initializer_span)) {\n                goto done;\n            }\n        }\n    }\n''')
 
 text = text[:start] + replacement + text[end:]
 old_call = "return parse_fixed_runtime_record_array_initializer_legacy(parser, base_id, element_count);"
