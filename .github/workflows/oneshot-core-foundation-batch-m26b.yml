@@ -1,0 +1,149 @@
+name: One-shot Core Foundation Batch M26b
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    if: github.actor != 'github-actions[bot]' && github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+          fetch-depth: 0
+
+      - name: Install validation tools
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mapfile -t packages < <(grep -Ev '^[[:space:]]*(#|$)' tools/ci/ubuntu-24.04-packages.txt)
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends "${packages[@]}"
+          sh tools/ci/verify-validation-tools.sh
+
+      - name: Restore frozen Linux corpus
+        id: corpus
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+
+      - name: Apply M26b batch
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.corpus.outputs.cache-hit }}" = true
+          printf 'M26B_STAGING_BASE=%s\n' "$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          python3 -m py_compile tools/dev/patch-core-foundation-ops-m26b.py tools/dev/patch-core-cfg-preservation-m26b.py
+          python3 tools/dev/patch-core-foundation-ops-m26b.py
+          python3 tools/dev/patch-core-cfg-preservation-m26b.py
+          chmod +x tests/compiler/c0/run-core-integer-foundation-m26b.sh
+          clang-format-18 -i \
+            src/core/core_ir.h \
+            src/core/core_ir.c \
+            src/core/core_lower.c \
+            src/target/riscv64/core_codegen.c \
+            tests/compiler/c0/core_integer_foundation_m26b.c \
+            tests/compiler/c0/core_integer_foundation_m26b_runtime.c
+          sh -n tests/compiler/c0/run-core-integer-foundation-m26b.sh
+          bash -n .github/scripts/compiler-c0-full-gate.sh
+          git diff --check
+
+      - name: Build exact candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-m26b-compiler
+
+      - name: Focused differential and regressions
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          c="$GITHUB_WORKSPACE/build/core-m26b-compiler/bin/minic"
+          MINIC="$c" BUILD_DIR="$GITHUB_WORKSPACE/build/core-m26b-focused" RISCV_CC=riscv64-linux-gnu-gcc QEMU_RISCV64=qemu-riscv64 sh tests/compiler/c0/run-core-integer-foundation-m26b.sh
+          MINIC="$c" BUILD_DIR="$GITHUB_WORKSPACE/build/core-m26-regression" RISCV_CC=riscv64-linux-gnu-gcc QEMU_RISCV64=qemu-riscv64 sh tests/compiler/c0/run-core-integer-less-m26.sh
+          MINIC="$c" BUILD_DIR="$GITHUB_WORKSPACE/build/core-m25b-regression" RISCV_CC=riscv64-linux-gnu-gcc QEMU_RISCV64=qemu-riscv64 sh tests/compiler/c0/run-core-integer-binary-preservation-m25b.sh
+          MINIC="$c" BUILD_DIR="$GITHUB_WORKSPACE/build/core-pointer-offset-regression" RISCV_CC=riscv64-linux-gnu-gcc QEMU_RISCV64=qemu-riscv64 sh tests/compiler/c0/run-core-pointer-offset.sh
+          MINIC="$c" BUILD_DIR="$GITHUB_WORKSPACE/build/core-and-assignment-regression" RISCV_CC=riscv64-linux-gnu-gcc QEMU_RISCV64=qemu-riscv64 sh tests/compiler/c0/run-core-integer-bitwise-and-assignment.sh
+          MINIC="$c" BUILD_DIR="$GITHUB_WORKSPACE/build/core-overflow-add-regression" RISCV_CC=riscv64-linux-gnu-gcc QEMU_RISCV64=qemu-riscv64 sh tests/compiler/c0/run-core-integer-add-overflow.sh
+          MINIC="$c" BUILD_DIR="$GITHUB_WORKSPACE/build/core-overflow-sub-regression" RISCV_CC=riscv64-linux-gnu-gcc QEMU_RISCV64=qemu-riscv64 sh tests/compiler/c0/run-core-integer-subtract-overflow.sh
+          MINIC="$c" BUILD_DIR="$GITHUB_WORKSPACE/build/core-overflow-mul-regression" RISCV_CC=riscv64-linux-gnu-gcc QEMU_RISCV64=qemu-riscv64 sh tests/compiler/c0/run-core-integer-multiply-overflow.sh
+          MINIC="$c" bash tests/core/run-core-ir-shadow.sh
+
+      - name: Replay frozen strict first500 once
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          c="$GITHUB_WORKSPACE/build/core-m26b-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-m26b-strict500"
+          set +e
+          MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
+            --minic "$c" \
+            --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
+            --work "$work" \
+            --jobs 5 \
+            --offset 0 \
+            --limit 500 \
+            --sample-count 0 \
+            --indices ''
+          replay_status=$?
+          set -e
+          printf 'CORE_M26B_REPLAY_STATUS=%d\n' "$replay_status"
+          python3 tools/ci/classify-core-strict-frontier.py \
+            "$work/batch-results.json" \
+            --examples 4 \
+            --json-out "$work/frontier-summary.json" \
+            --require-no-errors
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          s = json.loads(Path('build/core-m26b-strict500/frontier-summary.json').read_text())
+          blockers = {row['function']: row['count'] for row in s['blockers']}
+          print('CORE_M26B_PASS', s['pass'])
+          print('CORE_M26B_UNSUPPORTED', s['unsupported'])
+          print('CORE_M26B_ERROR', s['error'])
+          print('CORE_M26B_BLOCKERS', s['blockers'][:15])
+          if s['selected'] != 500:
+              raise SystemExit(f"M26b expected 500 TUs, got {s['selected']}")
+          if s['error'] != 0 or s['preprocess_missing'] != 0:
+              raise SystemExit('M26b introduced non-UNSUPPORTED strict failures')
+          for name in ('reciprocal_scale', 'generic___set_bit', 'IS_ERR', 'in_range64'):
+              if blockers.get(name, 0) != 0:
+                  raise SystemExit(f"M26b did not clear {name}: {blockers.get(name)}")
+          if s['pass'] + s['unsupported'] != 500:
+              raise SystemExit('M26b strict500 accounting mismatch')
+          PY
+
+      - name: Productize proven M26b
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git fetch origin refactor/declaration-sema-v1
+          current=$(git rev-parse origin/refactor/declaration-sema-v1)
+          if [ "$current" != "$M26B_STAGING_BASE" ]; then
+              echo "M26b staging base moved: tested=$M26B_STAGING_BASE current=$current" >&2
+              exit 75
+          fi
+          rm tools/dev/patch-core-foundation-ops-m26b.py \
+             tools/dev/patch-core-cfg-preservation-m26b.py \
+             .github/workflows/oneshot-core-foundation-batch-m26b.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/core/core_ir.h \
+                  src/core/core_ir.c \
+                  src/core/core_lower.c \
+                  src/target/riscv64/core_codegen.c \
+                  .github/scripts/compiler-c0-full-gate.sh \
+                  tests/compiler/c0/core_integer_foundation_m26b.c \
+                  tests/compiler/c0/core_integer_foundation_m26b_runtime.c \
+                  tests/compiler/c0/run-core-integer-foundation-m26b.sh \
+                  tools/dev/patch-core-foundation-ops-m26b.py \
+                  tools/dev/patch-core-cfg-preservation-m26b.py \
+                  .github/workflows/oneshot-core-foundation-batch-m26b.yml
+          git diff --cached --check
+          git commit -m 'core: batch integer foundation and CFG preservation'
+          git push origin HEAD:refactor/declaration-sema-v1
