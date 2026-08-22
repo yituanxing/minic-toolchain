@@ -24,6 +24,24 @@ static MinicType add_zero_length_array(MinicC0Program *program, MinicType elemen
     return type;
 }
 
+static MinicGlobalObjectId add_extern_object(MinicC0Program *program,
+                                             const char *name,
+                                             MinicType type) {
+    MinicGlobalObjectId object_id;
+
+    assert(minic_c0_program_add_extern_global_object(
+        program, name, strlen(name), type, false, &object_id));
+    return object_id;
+}
+
+static MinicDeclarationExternalObjectAttributes empty_external_attributes(void) {
+    MinicDeclarationExternalObjectAttributes attributes;
+
+    (void)memset(&attributes, 0, sizeof(attributes));
+    attributes.visibility = MINIC_SYMBOL_VISIBILITY_DEFAULT;
+    return attributes;
+}
+
 static void test_fixed_multidimensional_array(void) {
     MinicC0Program program;
     MinicDeclarationArraySuffix suffix;
@@ -316,6 +334,140 @@ static void test_external_nested_conflict_does_not_partially_complete(void) {
     minic_c0_program_destroy(&program);
 }
 
+static void test_external_object_attribute_conflict_is_non_mutating(void) {
+    MinicC0Program program;
+    MinicDeclarationExternalObjectAttributes attributes;
+    MinicDeclarationExternalObjectMergeStatus status;
+    const MinicArrayType *existing_array;
+    const MinicGlobalObject *object;
+    MinicGlobalObjectId object_id;
+    MinicType existing_type;
+    MinicType declared_type;
+
+    minic_c0_program_initialize(&program);
+    existing_type = add_incomplete_array(&program, minic_type_int());
+    declared_type = add_fixed_array(&program, minic_type_int(), 4U);
+    object_id = add_extern_object(&program, "array", existing_type);
+    assert(minic_c0_global_object_set_section(&program, object_id, ".old", 4U));
+
+    attributes = empty_external_attributes();
+    attributes.section_name = ".new";
+    attributes.section_name_length = 4U;
+    attributes.has_section = true;
+    status = minic_declaration_merge_external_object(
+        &program, object_id, declared_type, &attributes);
+    assert(status == MINIC_DECLARATION_EXTERNAL_OBJECT_MERGE_ATTRIBUTE_CONFLICT);
+
+    existing_array = &program.array_types[existing_type.array_type_id];
+    object = minic_c0_program_global_object(&program, object_id);
+    assert(existing_array->element_count == 0U);
+    assert(!existing_array->is_zero_length);
+    assert(object != NULL);
+    assert(object->section_name_length == 4U);
+    assert(memcmp(object->section_name, ".old", 4U) == 0);
+
+    minic_c0_program_destroy(&program);
+}
+
+static void test_external_object_visibility_conflict_is_non_mutating(void) {
+    MinicC0Program program;
+    MinicDeclarationExternalObjectAttributes attributes;
+    MinicDeclarationExternalObjectMergeStatus status;
+    const MinicArrayType *existing_array;
+    const MinicGlobalObject *object;
+    MinicGlobalObjectId object_id;
+    MinicType existing_type;
+    MinicType declared_type;
+
+    minic_c0_program_initialize(&program);
+    existing_type = add_incomplete_array(&program, minic_type_int());
+    declared_type = add_fixed_array(&program, minic_type_int(), 4U);
+    object_id = add_extern_object(&program, "visible", existing_type);
+    assert(minic_c0_global_object_set_visibility(
+        &program, object_id, MINIC_SYMBOL_VISIBILITY_HIDDEN));
+
+    attributes = empty_external_attributes();
+    attributes.visibility = MINIC_SYMBOL_VISIBILITY_PROTECTED;
+    attributes.has_visibility = true;
+    status = minic_declaration_merge_external_object(
+        &program, object_id, declared_type, &attributes);
+    assert(status == MINIC_DECLARATION_EXTERNAL_OBJECT_MERGE_ATTRIBUTE_CONFLICT);
+
+    existing_array = &program.array_types[existing_type.array_type_id];
+    object = minic_c0_program_global_object(&program, object_id);
+    assert(existing_array->element_count == 0U);
+    assert(!existing_array->is_zero_length);
+    assert(object != NULL);
+    assert(object->visibility == MINIC_SYMBOL_VISIBILITY_HIDDEN);
+
+    minic_c0_program_destroy(&program);
+}
+
+static void test_external_object_commit_type_and_metadata(void) {
+    MinicC0Program program;
+    MinicDeclarationExternalObjectAttributes attributes;
+    MinicDeclarationExternalObjectMergeStatus status;
+    const MinicArrayType *existing_array;
+    const MinicGlobalObject *object;
+    MinicGlobalObjectId object_id;
+    MinicType existing_type;
+    MinicType declared_type;
+
+    minic_c0_program_initialize(&program);
+    existing_type = add_incomplete_array(&program, minic_type_int());
+    declared_type = add_fixed_array(&program, minic_type_int(), 4U);
+    object_id = add_extern_object(&program, "committed", existing_type);
+
+    attributes = empty_external_attributes();
+    attributes.section_name = ".probe";
+    attributes.section_name_length = 6U;
+    attributes.explicit_alignment = 16U;
+    attributes.visibility = MINIC_SYMBOL_VISIBILITY_HIDDEN;
+    attributes.has_section = true;
+    attributes.has_visibility = true;
+    status = minic_declaration_merge_external_object(
+        &program, object_id, declared_type, &attributes);
+    assert(status == MINIC_DECLARATION_EXTERNAL_OBJECT_MERGE_OK);
+
+    existing_array = &program.array_types[existing_type.array_type_id];
+    object = minic_c0_program_global_object(&program, object_id);
+    assert(existing_array->element_count == 4U);
+    assert(!existing_array->is_zero_length);
+    assert(object != NULL);
+    assert(object->section_name_length == 6U);
+    assert(memcmp(object->section_name, ".probe", 6U) == 0);
+    assert(object->explicit_alignment == 16U);
+    assert(object->visibility == MINIC_SYMBOL_VISIBILITY_HIDDEN);
+
+    minic_c0_program_destroy(&program);
+}
+
+static void test_external_object_invalid_attributes_do_not_commit(void) {
+    MinicC0Program program;
+    MinicDeclarationExternalObjectAttributes attributes;
+    MinicDeclarationExternalObjectMergeStatus status;
+    const MinicArrayType *existing_array;
+    MinicGlobalObjectId object_id;
+    MinicType existing_type;
+    MinicType declared_type;
+
+    minic_c0_program_initialize(&program);
+    existing_type = add_incomplete_array(&program, minic_type_int());
+    declared_type = add_fixed_array(&program, minic_type_int(), 4U);
+    object_id = add_extern_object(&program, "invalid", existing_type);
+
+    attributes = empty_external_attributes();
+    attributes.explicit_alignment = 3U;
+    status = minic_declaration_merge_external_object(
+        &program, object_id, declared_type, &attributes);
+    assert(status == MINIC_DECLARATION_EXTERNAL_OBJECT_MERGE_INVALID);
+    existing_array = &program.array_types[existing_type.array_type_id];
+    assert(existing_array->element_count == 0U);
+    assert(!existing_array->is_zero_length);
+
+    minic_c0_program_destroy(&program);
+}
+
 int main(void) {
     test_fixed_multidimensional_array();
     test_incomplete_and_zero_length_arrays();
@@ -327,5 +479,9 @@ int main(void) {
     test_external_fixed_array_conflict_is_non_mutating();
     test_external_multidimensional_array_composition();
     test_external_nested_conflict_does_not_partially_complete();
+    test_external_object_attribute_conflict_is_non_mutating();
+    test_external_object_visibility_conflict_is_non_mutating();
+    test_external_object_commit_type_and_metadata();
+    test_external_object_invalid_attributes_do_not_commit();
     return 0;
 }
