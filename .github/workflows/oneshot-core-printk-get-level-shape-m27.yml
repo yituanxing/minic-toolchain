@@ -1,0 +1,135 @@
+name: One-shot Core printk_get_level Shape M27
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    if: github.actor != 'github-actions[bot]' && github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+          fetch-depth: 0
+
+      - name: Restore frozen Linux corpus
+        id: corpus
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+
+      - name: Build exact-head compiler
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.corpus.outputs.cache-hit }}" = true
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-m27-probe
+
+      - name: Extract exact frozen printk_get_level body
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('build/linux-focus-corpus/init/version.i')
+          text = path.read_text(errors='replace')
+          needle = 'printk_get_level'
+          pos = 0
+          found = False
+          while True:
+              hit = text.find(needle, pos)
+              if hit < 0:
+                  break
+              brace = text.find('{', hit)
+              semi = text.find(';', hit)
+              if brace >= 0 and (semi < 0 or brace < semi):
+                  depth = 0
+                  end = brace
+                  in_string = False
+                  in_char = False
+                  escape = False
+                  i = brace
+                  while i < len(text):
+                      ch = text[i]
+                      if escape:
+                          escape = False
+                      elif ch == '\\' and (in_string or in_char):
+                          escape = True
+                      elif ch == '"' and not in_char:
+                          in_string = not in_string
+                      elif ch == "'" and not in_string:
+                          in_char = not in_char
+                      elif not in_string and not in_char:
+                          if ch == '{':
+                              depth += 1
+                          elif ch == '}':
+                              depth -= 1
+                              if depth == 0:
+                                  end = i + 1
+                                  break
+                      i += 1
+                  start = text.rfind('\n', 0, max(0, hit - 500)) + 1
+                  snippet = text[start:end]
+                  print('PRINTK_GET_LEVEL_EXACT_BEGIN')
+                  print(snippet[-8000:])
+                  print('PRINTK_GET_LEVEL_EXACT_END')
+                  found = True
+                  break
+              pos = hit + len(needle)
+          if not found:
+              raise SystemExit('printk_get_level definition not found in frozen init/version.i')
+          PY
+
+      - name: Classify minimal strict shapes
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          c="$GITHUB_WORKSPACE/build/core-m27-probe/bin/minic"
+          mkdir -p build/core-m27-shapes
+
+          cat > build/core-m27-shapes/subscript.i <<'EOF'
+          int probe_subscript(const char *p) { return p[0]; }
+          EOF
+          cat > build/core-m27-shapes/eq_and.i <<'EOF'
+          int probe_eq_and(const char *p) { if (p[0] == '\001' && p[1]) return p[1]; return 0; }
+          EOF
+          cat > build/core-m27-shapes/switch_simple.i <<'EOF'
+          int probe_switch_simple(const char *p) { switch (p[1]) { case '0': return p[1]; case 'c': return p[1]; default: return 0; } }
+          EOF
+          cat > build/core-m27-shapes/switch_range.i <<'EOF'
+          int probe_switch_range(const char *p) { switch (p[1]) { case '0' ... '7': return p[1]; case 'c': return p[1]; default: return 0; } }
+          EOF
+          cat > build/core-m27-shapes/if_chain.i <<'EOF'
+          int probe_if_chain(const char *p) { if (p[1] == '0' || p[1] == '1' || p[1] == 'c') return p[1]; return 0; }
+          EOF
+
+          for f in build/core-m27-shapes/*.i; do
+              name=$(basename "$f" .i)
+              set +e
+              MINIC_CORE_IR=strict "$c" -S "$f" -o "build/core-m27-shapes/$name.s" 2>"build/core-m27-shapes/$name.err"
+              rc=$?
+              set -e
+              printf 'M27_SHAPE name=%s rc=%d\n' "$name" "$rc"
+              if [ -s "build/core-m27-shapes/$name.err" ]; then
+                  sed -n '1,12p' "build/core-m27-shapes/$name.err"
+              fi
+          done
+
+      - name: Compile exact representative and report blocker
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          c="$GITHUB_WORKSPACE/build/core-m27-probe/bin/minic"
+          set +e
+          MINIC_CORE_IR=strict "$c" -S build/linux-focus-corpus/init/version.i -o /tmp/m27-version.s 2>/tmp/m27-version.err
+          rc=$?
+          set -e
+          printf 'M27_EXACT_VERSION_RC=%d\n' "$rc"
+          sed -n '1,30p' /tmp/m27-version.err
+          grep -F "Core IR shadow does not yet support function 'printk_get_level'" /tmp/m27-version.err >/dev/null
