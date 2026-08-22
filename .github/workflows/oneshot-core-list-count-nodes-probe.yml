@@ -1,0 +1,70 @@
+name: One-shot Core List Count Nodes Probe
+
+on:
+  pull_request:
+
+jobs:
+  probe:
+    if: github.actor != 'github-actions[bot]' && github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+      - name: Build compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-list-count-probe
+      - name: Probe shapes
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/core-list-count-probe/bin/minic"
+          mkdir -p build/core-list-count-shapes
+          cat > build/core-list-count-shapes/while.i <<'EOF'
+          struct node { struct node *next; };
+          int probe_while(struct node *head) {
+              struct node *pos = head->next;
+              int count = 0;
+              while (pos != head) {
+                  count = count + 1;
+                  pos = pos->next;
+              }
+              return count;
+          }
+          EOF
+          cat > build/core-list-count-shapes/for_assign.i <<'EOF'
+          struct node { struct node *next; };
+          int probe_for_assign(struct node *head) {
+              struct node *pos;
+              int count = 0;
+              for (pos = head->next; pos != head; pos = pos->next)
+                  count = count + 1;
+              return count;
+          }
+          EOF
+          cat > build/core-list-count-shapes/postinc.i <<'EOF'
+          int probe_postinc(int value) {
+              value++;
+              return value;
+          }
+          EOF
+          cat > build/core-list-count-shapes/for_inc.i <<'EOF'
+          struct node { struct node *next; };
+          int probe_for_inc(struct node *head) {
+              struct node *pos;
+              int count = 0;
+              for (pos = head->next; pos != head; pos = pos->next)
+                  count++;
+              return count;
+          }
+          EOF
+          for shape in while for_assign postinc for_inc; do
+            set +e
+            MINIC_CORE_IR=strict "$compiler" -S "build/core-list-count-shapes/$shape.i" \
+              -o "build/core-list-count-shapes/$shape.s" \
+              2>"build/core-list-count-shapes/$shape.err"
+            rc=$?
+            set -e
+            printf 'CORE_LIST_COUNT_SHAPE name=%s rc=%d message=' "$shape" "$rc"
+            tr '\n' ' ' < "build/core-list-count-shapes/$shape.err"
+            printf '\n'
+          done
