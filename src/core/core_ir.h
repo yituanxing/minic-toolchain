@@ -15,6 +15,7 @@ typedef uint32_t MinicCoreBlockId;
 typedef uint32_t MinicCoreObjectId;
 typedef uint32_t MinicCoreGlobalId;
 typedef uint32_t MinicCoreCalleeId;
+typedef uint32_t MinicCoreInlineAsmId;
 
 #define MINIC_CORE_VALUE_INVALID UINT32_MAX
 #define MINIC_CORE_INSTRUCTION_INVALID UINT32_MAX
@@ -22,6 +23,7 @@ typedef uint32_t MinicCoreCalleeId;
 #define MINIC_CORE_OBJECT_INVALID UINT32_MAX
 #define MINIC_CORE_GLOBAL_INVALID UINT32_MAX
 #define MINIC_CORE_CALLEE_INVALID UINT32_MAX
+#define MINIC_CORE_INLINE_ASM_INVALID UINT32_MAX
 
 typedef enum MinicCorePhase { MINIC_CORE_PHASE_EXECUTION_SHADOW = 0 } MinicCorePhase;
 
@@ -49,6 +51,7 @@ typedef enum MinicCoreInstructionKind {
     MINIC_CORE_INSTRUCTION_POINTER_OFFSET,
     MINIC_CORE_INSTRUCTION_LOAD,
     MINIC_CORE_INSTRUCTION_STORE,
+    MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM,
     MINIC_CORE_INSTRUCTION_CALL
 } MinicCoreInstructionKind;
 
@@ -81,6 +84,13 @@ typedef struct MinicCoreCallee {
     MinicType *parameter_types;
     size_t parameter_count;
 } MinicCoreCallee;
+
+typedef struct MinicCoreInlineAsm {
+    char *template_text;
+    size_t template_length;
+    bool is_volatile;
+    bool has_memory_clobber;
+} MinicCoreInlineAsm;
 
 typedef struct MinicCoreInstruction {
     MinicCoreInstructionKind kind;
@@ -122,6 +132,7 @@ typedef struct MinicCoreInstruction {
             MinicCoreValueId stored_value;
             bool is_volatile;
         } store;
+        MinicCoreInlineAsmId inline_asm_id;
         struct {
             MinicCoreCalleeId callee_id;
             size_t argument_begin;
@@ -163,6 +174,9 @@ typedef struct MinicCoreFunction {
     MinicCoreCallee *callees;
     size_t callee_count;
     size_t callee_capacity;
+    MinicCoreInlineAsm *inline_asms;
+    size_t inline_asm_count;
+    size_t inline_asm_capacity;
     MinicCoreValueId *call_arguments;
     size_t call_argument_count;
     size_t call_argument_capacity;
@@ -207,6 +221,12 @@ bool minic_core_function_add_callee(MinicCoreFunction *function,
                                     const MinicType *parameter_types,
                                     size_t parameter_count,
                                     MinicCoreCalleeId *callee_id);
+bool minic_core_function_add_opaque_inline_asm(MinicCoreFunction *function,
+                                               const char *template_text,
+                                               size_t template_length,
+                                               bool is_volatile,
+                                               bool has_memory_clobber,
+                                               MinicCoreInlineAsmId *inline_asm_id);
 bool minic_core_function_append_call_arguments(MinicCoreFunction *function,
                                                const MinicCoreValueId *arguments,
                                                size_t argument_count,

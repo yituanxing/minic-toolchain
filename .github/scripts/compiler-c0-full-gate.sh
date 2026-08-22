@@ -325,6 +325,14 @@ core_statement_expression_focused() {
         sh tests/compiler/c0/run-core-statement-expression.sh
 }
 
+core_opaque_inline_asm_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" \
+    BUILD_DIR="$root/build/ci-core-opaque-inline-asm" \
+    RISCV_CC=riscv64-linux-gnu-gcc \
+    QEMU_RISCV64=qemu-riscv64 \
+        sh tests/compiler/c0/run-core-opaque-inline-asm.sh
+}
+
 core_scalar_not_equal_focused() {
     MINIC="$root/build/ci-debug/bin/minic" \
     BUILD_DIR="$root/build/ci-core-scalar-not-equal" \
@@ -524,6 +532,7 @@ start_gate core-integer-bitwise-and-assignment-focused core_integer_bitwise_and_
 start_gate core-pointer-offset-focused core_pointer_offset_focused
 start_gate core-pointer-equality-qualifiers-focused core_pointer_equality_qualifiers_focused
 start_gate core-statement-expression-focused core_statement_expression_focused
+start_gate core-opaque-inline-asm-focused core_opaque_inline_asm_focused
 start_gate core-integer-subtract-overflow-focused core_integer_subtract_overflow_focused
 start_gate core-target-constant-fallback-focused core_target_constant_fallback_focused
 start_gate core-integer-bitwise-not-focused core_integer_bitwise_not_focused

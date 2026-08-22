@@ -258,6 +258,20 @@ static bool core_integer_overflow_supported(const MinicC0Program *program,
     return true;
 }
 
+static bool core_opaque_inline_asm_supported(const MinicCoreFunction *function,
+                                             const MinicCoreInstruction *instruction) {
+    const MinicCoreInlineAsm *inline_asm;
+
+    if (function == NULL || instruction == NULL ||
+        instruction->kind != MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM ||
+        instruction->value.inline_asm_id >= function->inline_asm_count) {
+        return false;
+    }
+    inline_asm = &function->inline_asms[instruction->value.inline_asm_id];
+    return inline_asm->template_text != NULL && inline_asm->template_length != 0U &&
+           inline_asm->is_volatile;
+}
+
 static bool core_instruction_supported(const MinicC0Program *program,
                                        const MinicCoreFunction *function,
                                        const MinicCoreInstruction *instruction) {
@@ -293,6 +307,8 @@ static bool core_instruction_supported(const MinicC0Program *program,
         return core_integer_overflow_supported(
             program, function, instruction, &result_type, &result_size, &is_unsigned);
     }
+    case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM:
+        return core_opaque_inline_asm_supported(function, instruction);
     case MINIC_CORE_INSTRUCTION_CALL:
         if (instruction->value.call.callee_id >= function->callee_count ||
             instruction->value.call.argument_count > 8U) {
@@ -454,6 +470,38 @@ static bool emit_field_address(FILE *file,
         }
     }
     return store_core_value(file, frame, instruction->result, "t0");
+}
+
+static bool emit_opaque_inline_asm(FILE *file,
+                                   const MinicCoreFunction *function,
+                                   const MinicCoreInstruction *instruction) {
+    const MinicCoreInlineAsm *inline_asm;
+    size_t index;
+
+    if (file == NULL || !core_opaque_inline_asm_supported(function, instruction)) {
+        return false;
+    }
+    inline_asm = &function->inline_asms[instruction->value.inline_asm_id];
+    if (fprintf(file, "  ") < 0) {
+        return false;
+    }
+    for (index = 0U; index < inline_asm->template_length; ++index) {
+        if (inline_asm->template_text[index] != '%') {
+            if (fputc((unsigned char)inline_asm->template_text[index], file) == EOF) {
+                return false;
+            }
+            continue;
+        }
+        if (index + 1U >= inline_asm->template_length ||
+            inline_asm->template_text[index + 1U] != '%') {
+            return false;
+        }
+        if (fputc('%', file) == EOF) {
+            return false;
+        }
+        index += 1U;
+    }
+    return fputc('\n', file) != EOF;
 }
 
 static bool emit_instruction(FILE *file,
@@ -676,6 +724,8 @@ static bool emit_instruction(FILE *file,
                load_core_value(file, frame, stored_value, "t1") &&
                minic_riscv64_emit_scalar_store_for_program(file, program, stored_type, "t1", "t0");
     }
+    case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM:
+        return emit_opaque_inline_asm(file, function, instruction);
     case MINIC_CORE_INSTRUCTION_CALL:
         return emit_call(file, program, function, frame, instruction);
     case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:

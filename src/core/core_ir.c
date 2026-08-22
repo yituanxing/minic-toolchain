@@ -56,6 +56,7 @@ void minic_core_function_destroy(MinicCoreFunction *function) {
     size_t block_index;
     size_t callee_index;
     size_t global_index;
+    size_t inline_asm_index;
 
     if (function == NULL) {
         return;
@@ -70,10 +71,14 @@ void minic_core_function_destroy(MinicCoreFunction *function) {
     for (global_index = 0U; global_index < function->global_count; ++global_index) {
         free(function->globals[global_index].name);
     }
+    for (inline_asm_index = 0U; inline_asm_index < function->inline_asm_count; ++inline_asm_index) {
+        free(function->inline_asms[inline_asm_index].template_text);
+    }
     free(function->name);
     free(function->parameter_types);
     free(function->globals);
     free(function->callees);
+    free(function->inline_asms);
     free(function->call_arguments);
     free(function->objects);
     free(function->values);
@@ -250,6 +255,15 @@ bool minic_core_function_add_callee(MinicCoreFunction *function,
             return false;
         }
     }
+    for (index = 0U; index < function->inline_asm_count; ++index) {
+        const MinicCoreInlineAsm *inline_asm;
+
+        inline_asm = &function->inline_asms[index];
+        if (inline_asm->template_text == NULL || inline_asm->template_length == 0U ||
+            !inline_asm->is_volatile) {
+            return false;
+        }
+    }
     for (index = 0U; index < function->callee_count; ++index) {
         const MinicCoreCallee *existing;
 
@@ -294,6 +308,37 @@ bool minic_core_function_add_callee(MinicCoreFunction *function,
     function->callees[function->callee_count] = stored;
     *callee_id = (MinicCoreCalleeId)function->callee_count;
     function->callee_count += 1U;
+    return true;
+}
+
+bool minic_core_function_add_opaque_inline_asm(MinicCoreFunction *function,
+                                               const char *template_text,
+                                               size_t template_length,
+                                               bool is_volatile,
+                                               bool has_memory_clobber,
+                                               MinicCoreInlineAsmId *inline_asm_id) {
+    MinicCoreInlineAsm stored;
+
+    if (function == NULL || template_text == NULL || template_length == 0U ||
+        template_length == SIZE_MAX || inline_asm_id == NULL || !is_volatile ||
+        function->inline_asm_count >= (size_t)UINT32_MAX) {
+        return false;
+    }
+    (void)memset(&stored, 0, sizeof(stored));
+    stored.template_text = copy_name(template_text, template_length);
+    if (stored.template_text == NULL || !grow_array((void **)&function->inline_asms,
+                                                    &function->inline_asm_capacity,
+                                                    function->inline_asm_count,
+                                                    sizeof(*function->inline_asms))) {
+        free(stored.template_text);
+        return false;
+    }
+    stored.template_length = template_length;
+    stored.is_volatile = is_volatile;
+    stored.has_memory_clobber = has_memory_clobber;
+    function->inline_asms[function->inline_asm_count] = stored;
+    *inline_asm_id = (MinicCoreInlineAsmId)function->inline_asm_count;
+    function->inline_asm_count += 1U;
     return true;
 }
 
@@ -627,6 +672,18 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
         return minic_type_equal(value_type, function->values[stored_value].type) &&
                instruction->value.store.is_volatile == minic_type_is_volatile(pointee);
     }
+    case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM: {
+        const MinicCoreInlineAsm *inline_asm;
+
+        if (instruction->result != MINIC_CORE_VALUE_INVALID ||
+            !minic_type_is_void(instruction->type) ||
+            instruction->value.inline_asm_id >= function->inline_asm_count) {
+            return false;
+        }
+        inline_asm = &function->inline_asms[instruction->value.inline_asm_id];
+        return inline_asm->template_text != NULL && inline_asm->template_length != 0U &&
+               inline_asm->is_volatile;
+    }
     case MINIC_CORE_INSTRUCTION_CALL: {
         const MinicCoreCallee *callee;
         size_t argument_index;
@@ -756,6 +813,8 @@ bool minic_core_function_verify(const MinicCoreFunction *function) {
             function->globals, function->global_count, function->global_capacity) ||
         !storage_shape_is_valid(
             function->callees, function->callee_count, function->callee_capacity) ||
+        !storage_shape_is_valid(
+            function->inline_asms, function->inline_asm_count, function->inline_asm_capacity) ||
         !storage_shape_is_valid(function->call_arguments,
                                 function->call_argument_count,
                                 function->call_argument_capacity) ||
@@ -947,6 +1006,19 @@ static bool dump_instruction(FILE *output,
                        instruction->value.store.is_volatile ? ".volatile" : "",
                        instruction->value.store.stored_value,
                        instruction->value.store.address) >= 0;
+    case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM: {
+        const MinicCoreInlineAsm *inline_asm;
+
+        if (function == NULL || instruction->value.inline_asm_id >= function->inline_asm_count) {
+            return false;
+        }
+        inline_asm = &function->inline_asms[instruction->value.inline_asm_id];
+        return fprintf(output,
+                       "  asm.opaque id=%" PRIu32 "%s%s\n",
+                       instruction->value.inline_asm_id,
+                       inline_asm->is_volatile ? " volatile" : "",
+                       inline_asm->has_memory_clobber ? " memory" : "") >= 0;
+    }
     case MINIC_CORE_INSTRUCTION_CALL: {
         const MinicCoreCallee *callee;
         size_t argument_index;

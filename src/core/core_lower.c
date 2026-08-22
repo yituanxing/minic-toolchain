@@ -1843,6 +1843,46 @@ lower_while(MinicCoreLowerContext *context, const MinicStatement *statement, boo
     return MINIC_CORE_LOWER_OK;
 }
 
+static MinicCoreLowerStatus lower_opaque_inline_asm(MinicCoreLowerContext *context,
+                                                    const MinicStatement *statement) {
+    const MinicInlineAsm *source;
+    MinicCoreInlineAsmId inline_asm_id;
+    MinicCoreInstruction instruction;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        context->function == NULL || statement == NULL ||
+        statement->inline_asm_id == MINIC_INLINE_ASM_INVALID) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    source = minic_c0_program_inline_asm(context->body->program, statement->inline_asm_id);
+    if (source == NULL) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    if (!source->is_volatile || source->is_goto || source->template_text == NULL ||
+        source->template_length == 0U || source->output_count != 0U || source->input_count != 0U ||
+        source->label_count != 0U || source->register_clobber_count != 0U) {
+        return MINIC_CORE_LOWER_UNSUPPORTED;
+    }
+    if (!minic_core_function_add_opaque_inline_asm(context->function,
+                                                   source->template_text,
+                                                   source->template_length,
+                                                   source->is_volatile,
+                                                   source->has_memory_clobber,
+                                                   &inline_asm_id)) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    (void)memset(&instruction, 0, sizeof(instruction));
+    instruction.kind = MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM;
+    instruction.span = statement->span;
+    instruction.type = minic_type_void();
+    instruction.result = MINIC_CORE_VALUE_INVALID;
+    instruction.value.inline_asm_id = inline_asm_id;
+    return minic_core_function_append_effect_instruction(
+               context->function, context->block_id, &instruction)
+               ? MINIC_CORE_LOWER_OK
+               : MINIC_CORE_LOWER_ERROR;
+}
+
 static MinicCoreLowerStatus
 lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool *terminated) {
     size_t statement_index;
@@ -1897,6 +1937,9 @@ lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool
                 break;
             case MINIC_STATEMENT_EXPRESSION:
                 status = lower_expression_statement(context, statement);
+                break;
+            case MINIC_STATEMENT_INLINE_ASM:
+                status = lower_opaque_inline_asm(context, statement);
                 break;
             case MINIC_STATEMENT_RETURN:
                 status = lower_return(context, statement);
