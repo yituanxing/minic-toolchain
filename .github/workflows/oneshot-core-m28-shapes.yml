@@ -1,0 +1,60 @@
+name: One-shot Core M28 Shape Split
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    if: github.actor != 'github-actions[bot]' && github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+      - name: Apply M28 and split iter-div shapes
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/patch-core-inline-asm-identity-m28.py
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m28-shapes
+          c="$GITHUB_WORKSPACE/build/m28-shapes/bin/minic"
+          w="$GITHUB_WORKSPACE/build/m28-shape-inputs"
+          mkdir -p "$w"
+
+          cat > "$w/identity.i" <<'EOF'
+          unsigned long probe_m28_identity(unsigned long d) { __asm__("" : "+rm"(d)); return d; }
+          EOF
+          cat > "$w/ge.i" <<'EOF'
+          int probe_m28_ge(unsigned long d, unsigned int v) { return d >= v; }
+          EOF
+          cat > "$w/sub_assign.i" <<'EOF'
+          unsigned long probe_m28_sub_assign(unsigned long d, unsigned int v) { d -= v; return d; }
+          EOF
+          cat > "$w/postfix.i" <<'EOF'
+          unsigned int probe_m28_postfix(unsigned int r) { r++; return r; }
+          EOF
+          cat > "$w/indirect_store.i" <<'EOF'
+          void probe_m28_indirect_store(unsigned long *p, unsigned long d) { *p = d; }
+          EOF
+          cat > "$w/while_identity.i" <<'EOF'
+          int probe_m28_while_identity(unsigned long d, unsigned int v) { while (d >= v) { __asm__("" : "+rm"(d)); return 1; } return 0; }
+          EOF
+          cat > "$w/while_sub.i" <<'EOF'
+          unsigned int probe_m28_while_sub(unsigned long d, unsigned int v) { unsigned int r = 0; while (d >= v) { __asm__("" : "+rm"(d)); d -= v; r++; } return r; }
+          EOF
+          cat > "$w/full.i" <<'EOF'
+          unsigned int probe_m28_full(unsigned long d, unsigned int v, unsigned long *p) { unsigned int r = 0; while (d >= v) { __asm__("" : "+rm"(d)); d -= v; r++; } *p = d; return r; }
+          EOF
+
+          for n in identity ge sub_assign postfix indirect_store while_identity while_sub full; do
+              set +e
+              MINIC_CORE_IR=strict "$c" -S "$w/$n.i" -o "$w/$n.s" 2>"$w/$n.err"
+              rc=$?
+              set -e
+              printf 'M28_SHAPE name=%s rc=%d message=' "$n" "$rc"
+              tr '\n' ' ' < "$w/$n.err"
+              printf '\n'
+          done
