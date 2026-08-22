@@ -46,6 +46,7 @@ typedef enum MinicCoreInstructionKind {
     MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS,
     MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS,
     MINIC_CORE_INSTRUCTION_FIELD_ADDRESS,
+    MINIC_CORE_INSTRUCTION_POINTER_OFFSET,
     MINIC_CORE_INSTRUCTION_LOAD,
     MINIC_CORE_INSTRUCTION_STORE,
     MINIC_CORE_INSTRUCTION_CALL
@@ -107,6 +108,11 @@ typedef struct MinicCoreInstruction {
             MinicRecordId record_id;
             size_t field_index;
         } field_address;
+        struct {
+            MinicCoreValueId base;
+            MinicCoreValueId index;
+            size_t element_size;
+        } pointer_offset;
         struct {
             MinicCoreValueId address;
             bool is_volatile;

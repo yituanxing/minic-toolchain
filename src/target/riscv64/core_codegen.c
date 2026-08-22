@@ -283,6 +283,7 @@ static bool core_instruction_supported(const MinicC0Program *program,
     case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:
     case MINIC_CORE_INSTRUCTION_PARAMETER:
     case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS:
+    case MINIC_CORE_INSTRUCTION_POINTER_OFFSET:
     case MINIC_CORE_INSTRUCTION_LOAD:
     case MINIC_CORE_INSTRUCTION_STORE:
         return true;
@@ -627,6 +628,22 @@ static bool emit_instruction(FILE *file,
     case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:
         if (!load_core_value(file, frame, instruction->value.operand, "t0") ||
             fprintf(file, "  seqz t0, t0\n") < 0) {
+            return false;
+        }
+        return store_core_value(file, frame, instruction->result, "t0");
+    case MINIC_CORE_INSTRUCTION_POINTER_OFFSET:
+        if (!load_core_value(file, frame, instruction->value.pointer_offset.base, "t0") ||
+            !load_core_value(file, frame, instruction->value.pointer_offset.index, "t1")) {
+            return false;
+        }
+        if (instruction->value.pointer_offset.element_size != 1U &&
+            fprintf(file,
+                    "  li t2, %zu\n"
+                    "  mul t1, t1, t2\n",
+                    instruction->value.pointer_offset.element_size) < 0) {
+            return false;
+        }
+        if (fprintf(file, "  add t0, t0, t1\n") < 0) {
             return false;
         }
         return store_core_value(file, frame, instruction->result, "t0");

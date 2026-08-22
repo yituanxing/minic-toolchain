@@ -916,6 +916,74 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                    : MINIC_CORE_LOWER_ERROR;
     }
     if (expression->kind == MINIC_EXPRESSION_BINARY &&
+        expression->value.binary.operator_kind == MINIC_BINARY_ADD &&
+        minic_type_is_pointer(expression->type)) {
+        const MinicExpression *left_expression;
+        const MinicExpression *pointer_expression;
+        const MinicExpression *right_expression;
+        const MinicExpression *index_expression;
+        MinicExpressionId pointer_id;
+        MinicExpressionId index_id;
+        MinicCoreValueId pointer_value;
+        MinicCoreValueId index_value;
+        MinicCoreLowerStatus status;
+        size_t element_size;
+
+        left_expression =
+            minic_c0_program_expression(context->body->program, expression->value.binary.left);
+        right_expression =
+            minic_c0_program_expression(context->body->program, expression->value.binary.right);
+        if (left_expression == NULL || right_expression == NULL) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        if (minic_type_is_pointer(left_expression->type) &&
+            minic_type_is_integer(right_expression->type)) {
+            pointer_expression = left_expression;
+            index_expression = right_expression;
+            pointer_id = expression->value.binary.left;
+            index_id = expression->value.binary.right;
+        } else if (minic_type_is_integer(left_expression->type) &&
+                   minic_type_is_pointer(right_expression->type)) {
+            pointer_expression = right_expression;
+            index_expression = left_expression;
+            pointer_id = expression->value.binary.right;
+            index_id = expression->value.binary.left;
+        } else {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        if (!minic_type_equal(pointer_expression->type, expression->type) ||
+            !minic_c0_pointer_arithmetic_element_size(context->body->program,
+                                                      minic_default_data_layout(),
+                                                      expression->type,
+                                                      &element_size)) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        status = lower_expression(context, pointer_id, &pointer_value);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        status = lower_expression(context, index_id, &index_value);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        if (pointer_value >= context->function->value_count ||
+            index_value >= context->function->value_count ||
+            !minic_type_equal(context->function->values[pointer_value].type,
+                              pointer_expression->type) ||
+            !minic_type_equal(context->function->values[index_value].type,
+                              index_expression->type)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        instruction.kind = MINIC_CORE_INSTRUCTION_POINTER_OFFSET;
+        instruction.value.pointer_offset.base = pointer_value;
+        instruction.value.pointer_offset.index = index_value;
+        instruction.value.pointer_offset.element_size = element_size;
+        return minic_core_function_append_value_instruction(
+                   context->function, context->block_id, &instruction, value_id)
+                   ? MINIC_CORE_LOWER_OK
+                   : MINIC_CORE_LOWER_ERROR;
+    }
+    if (expression->kind == MINIC_EXPRESSION_BINARY &&
         expression->value.binary.operator_kind == MINIC_BINARY_ADD) {
         const MinicExpression *left_expression;
         const MinicExpression *right_expression;
