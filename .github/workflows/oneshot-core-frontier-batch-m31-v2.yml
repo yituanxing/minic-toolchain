@@ -1,0 +1,182 @@
+name: One-shot Core Frontier Batch M31 v2
+
+on:
+  pull_request:
+    branches: [frontend/linux-first500-final-v1]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  batch-m31-v2:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+          fetch-depth: 0
+
+      - name: Install validation tools
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mapfile -t packages < <(grep -Ev '^[[:space:]]*(#|$)' tools/ci/ubuntu-24.04-packages.txt)
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends "${packages[@]}"
+          sh tools/ci/verify-validation-tools.sh
+
+      - name: Restore frozen Linux corpus
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-5df6e0e2761359d30a8275058e299fcc0381534545f55cf43e41983f5d4c9456
+
+      - name: Apply and build M31 candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -s build/linux-focus-corpus/selected-tus.txt
+          python3 tools/dev/run-core-frontier-batch-m31.py
+          clang-format-18 -i src/core/core_ir.h src/core/core_ir.c src/core/core_lower.c src/target/riscv64/core_codegen.c
+          git diff --check
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m31-candidate
+
+      - name: QEMU differential for new M31 capabilities
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          c="$GITHUB_WORKSPACE/build/m31-candidate/bin/minic"
+          w="$GITHUB_WORKSPACE/build/m31-focused"
+          mkdir -p "$w"
+          cat > "$w/core_m31.c" <<'EOF'
+          struct core_m31_counter { int counter; };
+          unsigned long core_m31_output7(void) {
+              register unsigned long x;
+              __asm__ __volatile__("addi %0, zero, 7" : "=r"(x) : : "memory");
+              return x;
+          }
+          void core_m31_atomic_add(int i, struct core_m31_counter *v) {
+              __asm__ __volatile__("amoadd.w zero, %1, %0" : "+A"(v->counter) : "r"(i) : "memory");
+          }
+          void core_m31_relax(void) {
+              int dummy;
+              __asm__ __volatile__("div %0, %0, zero" : "=r"(dummy));
+              __asm__ __volatile__(".4byte 0x100000F");
+              __asm__ __volatile__("" : : : "memory");
+          }
+          int core_m31_err(const void *ptr) {
+              return __builtin_expect(!ptr, 0) ||
+                     __builtin_expect((unsigned long)(void *)ptr >= (unsigned long)-4095, 0);
+          }
+          EOF
+          cat > "$w/runtime.c" <<'EOF'
+          #include <stdio.h>
+          struct core_m31_counter { int counter; };
+          unsigned long core_m31_output7(void);
+          void core_m31_atomic_add(int, struct core_m31_counter *);
+          void core_m31_relax(void);
+          int core_m31_err(const void *);
+          int main(void) {
+              struct core_m31_counter c = {5}; int local = 1;
+              core_m31_atomic_add(3, &c); core_m31_relax();
+              printf("out=%lu counter=%d null=%d normal=%d err=%d\n",
+                     core_m31_output7(), c.counter, core_m31_err(0), core_m31_err(&local),
+                     core_m31_err((void *)(unsigned long)-1));
+              return 0;
+          }
+          EOF
+          MINIC_CORE_IR=strict "$c" -S "$w/core_m31.c" -o "$w/minic.s"
+          riscv64-linux-gnu-gcc -O0 -static "$w/runtime.c" "$w/minic.s" -o "$w/minic.elf"
+          qemu-riscv64 "$w/minic.elf" > "$w/minic.out"
+          riscv64-linux-gnu-gcc -O0 -static "$w/runtime.c" "$w/core_m31.c" -o "$w/gcc.elf"
+          qemu-riscv64 "$w/gcc.elf" > "$w/gcc.out"
+          diff -u "$w/gcc.out" "$w/minic.out"
+          grep -Fx 'out=7 counter=8 null=1 normal=0 err=1' "$w/minic.out"
+          printf '%s\n' M31_NEW_CAPABILITIES_QEMU_PASS
+
+      - name: Run M25b-M30 regressions
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          c="$GITHUB_WORKSPACE/build/m31-candidate/bin/minic"
+          for script in \
+            run-core-aggregate-boundary-m30.sh \
+            run-core-record-local-m29.sh \
+            run-core-inline-asm-identity-m28.sh \
+            run-core-switch-m27.sh \
+            run-core-integer-foundation-m26b.sh \
+            run-core-integer-binary-preservation-m25b.sh \
+            run-core-fixed-call-scalar-conversions.sh; do
+            name=${script#run-}; name=${name%.sh}
+            MINIC="$c" BUILD_DIR="$GITHUB_WORKSPACE/build/m31-regress-$name" \
+              RISCV_CC=riscv64-linux-gnu-gcc QEMU_RISCV64=qemu-riscv64 \
+              sh "tests/compiler/c0/$script"
+          done
+          printf '%s\n' M31_REGRESSIONS_PASS
+
+      - name: Prove five real frozen blockers moved
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          c="$GITHUB_WORKSPACE/build/m31-candidate/bin/minic"
+          w="$GITHUB_WORKSPACE/build/m31-frozen-proof"; mkdir -p "$w"
+          declare -A cases=(
+            [init/version.i]=get_current
+            [init/do_mounts.i]=get_cycles
+            [init/do_mounts_initrd.i]=cpu_relax
+            [init/init_task.i]=arch_atomic_add
+            [arch/riscv/kernel/pi/cmdline_early.i]=IS_ERR_OR_NULL
+          )
+          for f in "${!cases[@]}"; do
+            tag=${f//\//_}
+            set +e
+            MINIC_CORE_IR=strict "$c" -S "build/linux-focus-corpus/kbuild/$f" -o "$w/$tag.s" 2>"$w/$tag.err"
+            rc=$?
+            set -e
+            cat "$w/$tag.err"
+            ! grep -Fq "Core IR shadow does not yet support function '${cases[$f]}'" "$w/$tag.err"
+            if [ "$rc" -ne 0 ]; then grep -Fq 'Core IR shadow does not yet support function' "$w/$tag.err"; fi
+            printf 'M31_FROZEN_MOVED file=%s old=%s rc=%d\n' "$f" "${cases[$f]}" "$rc"
+          done
+
+      - name: Replay frozen strict first500 once
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          c="$GITHUB_WORKSPACE/build/m31-candidate/bin/minic"
+          w="$GITHUB_WORKSPACE/build/m31-strict500"
+          set +e
+          MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
+            --minic "$c" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" --work "$w" \
+            --jobs 5 --offset 0 --limit 500 --sample-count 0 --indices ''
+          rc=$?
+          set -e
+          printf 'M31_STRICT500_REPLAY_STATUS=%d\n' "$rc"
+          python3 tools/ci/classify-core-strict-frontier.py "$w/batch-results.json" \
+            --examples 4 --json-out "$w/frontier-summary.json" --require-no-errors
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          s=json.loads(Path('build/m31-strict500/frontier-summary.json').read_text())
+          assert s['selected']==500 and s['error']==0 and s['preprocess_missing']==0, s
+          assert s['pass']+s['unsupported']==500, s
+          b={r['function']:r['count'] for r in s['blockers']}
+          for x in ('get_current','get_cycles','cpu_relax','arch_atomic_add','IS_ERR_OR_NULL'):
+              if b.get(x,0): raise SystemExit(f'M31 blocker remains: {x}={b[x]}')
+          print(f"M31_STRICT500 selected=500 pass={s['pass']} unsupported={s['unsupported']} error=0 distinct={len(s['blockers'])}")
+          for r in s['blockers'][:30]: print(f"M31_NEXT_BLOCKER count={r['count']} function={r['function']}")
+          PY
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-frontier-batch-m31-v2-evidence
+          path: |
+            build/m31-focused/*.out
+            build/m31-frozen-proof/*.err
+            build/m31-strict500/batch-summary.txt
+            build/m31-strict500/frontier-summary.json
+          if-no-files-found: warn
