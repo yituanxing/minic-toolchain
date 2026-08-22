@@ -12,7 +12,8 @@ if start < 0 or end < 0:
 
 replacement = r'''static bool parse_inferred_runtime_array_initializer(MinicParser *parser,
                                                       MinicLocalId local_id,
-                                                      MinicType element_type) {
+                                                      MinicType element_type,
+                                                      MinicSourceSpan name_span) {
     MinicArrayInitializerPlan plan;
     bool success;
 
@@ -43,8 +44,7 @@ replacement = r'''static bool parse_inferred_runtime_array_initializer(MinicPars
             MinicExpressionId base_id;
             MinicExpressionId element_id;
 
-            if (!add_local_lvalue_expression(
-                    parser, local_id, parser->program->locals[local_id].name_span, &base_id) ||
+            if (!add_local_lvalue_expression(parser, local_id, name_span, &base_id) ||
                 !add_array_object_element_lvalue(
                     parser, base_id, index, parser->current.span, &element_id) ||
                 !parse_runtime_record_array_element_initializer(parser, element_id, element_type)) {
@@ -115,7 +115,7 @@ parse_local_array_initializer(MinicParser *parser, MinicLocalId local_id, bool i
         }
         return parse_fixed_runtime_array_initializer(parser, base_id, declared_count);
     }
-    return parse_inferred_runtime_array_initializer(parser, local_id, element_type);
+    return parse_inferred_runtime_array_initializer(parser, local_id, element_type, name_span);
 }
 
 '''
