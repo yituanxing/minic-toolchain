@@ -9,6 +9,7 @@ on:
       - 'src/target/target_info.c'
       - 'src/target/target_info.h'
       - 'tests/frontend/ast_traversal_test.c'
+      - 'tests/frontend/declaration_sema_atomic_test.c'
       - 'tests/frontend/declaration_sema_test.c'
       - 'tests/frontend/function_body_view_test.c'
       - 'tests/frontend/semantic_snapshot_test.c'
@@ -63,6 +64,23 @@ jobs:
 
       - name: Run declaration semantic contract
         run: build/frontend-ownership/declaration-sema-test
+
+      - name: Build atomic declaration semantic contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cc -std=c11 \
+            -Wall -Wextra -Wpedantic -Wconversion -Wshadow \
+            -Wstrict-prototypes -Wmissing-prototypes -Werror \
+            -Iinclude -Isrc \
+            src/frontend/ast.c \
+            src/frontend/ast_global.c \
+            src/frontend/type.c \
+            tests/frontend/declaration_sema_atomic_test.c \
+            -o build/frontend-ownership/declaration-sema-atomic-test
+
+      - name: Run atomic declaration semantic contract
+        run: build/frontend-ownership/declaration-sema-atomic-test
 
       - name: Build AST traversal ownership contract
         shell: bash
