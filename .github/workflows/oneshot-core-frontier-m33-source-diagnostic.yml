@@ -1,0 +1,37 @@
+name: One-shot Core Frontier M33 Source Diagnostic
+
+on:
+  pull_request:
+    branches: [frontend/linux-first500-final-v1]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+      - name: Apply candidate patches and print lowering context
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/run-core-frontier-batch-m31b.py
+          python3 tools/dev/patch-core-frontier-batch-m32.py
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('src/core/core_lower.c')
+          lines=p.read_text().splitlines()
+          needles=['case MINIC_EXPRESSION_STATEMENT:', 'case MINIC_STATEMENT_EXPRESSION:', 'static MinicCoreLowerStatus lower_scalar_expression', 'static MinicCoreLowerStatus lower_expression_statement']
+          for needle in needles:
+              print('===',needle,'===')
+              for i,l in enumerate(lines):
+                  if needle in l:
+                      lo=max(0,i-35); hi=min(len(lines),i+120)
+                      for n in range(lo,hi): print(f'{n+1:05d}: {lines[n]}')
+                      break
+          PY

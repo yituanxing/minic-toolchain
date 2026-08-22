@@ -23,3 +23,11 @@ int core_hybrid_field(struct CoreHybridLayout *item) {
 int core_hybrid_fallback_load(int *value) {
     return *value;
 }
+
+int core_hybrid_indirect_target(int value) {
+    return value + 4;
+}
+
+int core_hybrid_fallback_indirect(int (*callee)(int), int value) {
+    return callee(value);
+}

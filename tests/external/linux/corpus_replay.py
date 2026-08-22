@@ -21,7 +21,68 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--corpus", required=True, type=Path)
     parser.add_argument("--work", required=True, type=Path)
     parser.add_argument("--jobs", required=True, type=int)
+    parser.add_argument("--offset", type=int, default=0)
+    parser.add_argument("--limit", type=int, default=0)
+    parser.add_argument("--sample-count", type=int, default=0)
+    parser.add_argument("--indices", default="")
     return parser.parse_args()
+
+
+def parse_indices(raw: str) -> list[int]:
+    if not raw.strip():
+        return []
+    values: list[int] = []
+    seen: set[int] = set()
+    for token in raw.split(","):
+        token = token.strip()
+        if not token:
+            raise ValueError("indices contains an empty entry")
+        value = int(token)
+        if value < 0:
+            raise ValueError("indices must be non-negative")
+        if value in seen:
+            raise ValueError(f"duplicate configured TU index: {value}")
+        seen.add(value)
+        values.append(value)
+    return values
+
+
+def select_entries(
+    entries: list[tuple[int, str, str, str]],
+    *,
+    offset: int,
+    limit: int,
+    sample_count: int,
+    indices: str,
+) -> list[tuple[int, str, str, str]]:
+    if offset < 0 or limit < 0 or sample_count < 0:
+        raise ValueError("offset, limit, and sample-count must be non-negative")
+
+    requested = parse_indices(indices)
+    if requested:
+        by_index = {entry[0]: entry for entry in entries}
+        missing = [index for index in requested if index not in by_index]
+        if missing:
+            raise ValueError(
+                "requested configured TU indices are absent from frozen corpus: "
+                + ",".join(str(index) for index in missing)
+            )
+        selected = [by_index[index] for index in requested]
+    else:
+        if offset >= len(entries):
+            selected = []
+        else:
+            stop = len(entries) if limit == 0 else min(len(entries), offset + limit)
+            selected = entries[offset:stop]
+
+    if sample_count == 0 or sample_count >= len(selected):
+        return selected
+    if sample_count == 1:
+        return selected[:1]
+
+    last = len(selected) - 1
+    positions = [sample * last // (sample_count - 1) for sample in range(sample_count)]
+    return [selected[position] for position in positions]
 
 
 def file_sha256(path: Path) -> str:
@@ -52,6 +113,22 @@ def main() -> int:
         entries.append((int(index), obj, preprocessed, source))
     if not entries:
         raise SystemExit("frozen corpus manifest is empty")
+    try:
+        entries = select_entries(
+            entries,
+            offset=args.offset,
+            limit=args.limit,
+            sample_count=args.sample_count,
+            indices=args.indices,
+        )
+    except (TypeError, ValueError) as error:
+        raise SystemExit(f"invalid frozen corpus selection: {error}") from error
+    if not entries:
+        raise SystemExit("frozen corpus selection is empty")
+    selected_manifest = "".join(
+        f"{index}\t{obj}\t{preprocessed}\t{source}\n"
+        for index, obj, preprocessed, source in entries
+    )
 
     args.work.mkdir(parents=True, exist_ok=True)
     asm_root = args.work / "minic-out"
@@ -156,7 +233,7 @@ def main() -> int:
                 f'{line}\t{column}\t{returncode}\t{float(row["seconds"]):.3f}\t{message}\n'
             )
     (args.work / "batch-results.json").write_text(json.dumps(results, indent=2, sort_keys=True))
-    (args.work / "selected-tus.txt").write_text(manifest.read_text())
+    (args.work / "selected-tus.txt").write_text(selected_manifest)
     corpus_manifest = args.corpus / "tu-manifest.txt"
     if corpus_manifest.is_file():
         shutil.copy2(corpus_manifest, args.work / "tu-manifest.txt")
@@ -184,12 +261,14 @@ def main() -> int:
     (args.work / "failure-contexts.txt").write_text("\n".join(context_lines))
 
     corpus_bytes = sum(path.stat().st_size for path in input_root.rglob("*.i"))
+    selected_corpus_bytes = sum((input_root / entry[2]).stat().st_size for entry in entries)
     replay_seconds = time.monotonic() - started
     summary_lines = [
         "LINUX_BATCH_SUMMARY",
         "corpus=frozen",
         f"minic_sha256={minic_sha256}",
         f"corpus_bytes={corpus_bytes}",
+        f"selected_corpus_bytes={selected_corpus_bytes}",
         f"replay_seconds={replay_seconds:.3f}",
         f"selected_c_tus={len(results)}",
         f"pass={counts['PASS']}",
@@ -220,7 +299,8 @@ def main() -> int:
     summary = "\n".join(summary_lines) + "\n"
     (args.work / "batch-summary.txt").write_text(summary)
     print(
-        f"LINUX_BATCH_CORPUS_REPLAY selected={len(results)} bytes={corpus_bytes} "
+        f"LINUX_BATCH_CORPUS_REPLAY selected={len(results)} "
+        f"selected_bytes={selected_corpus_bytes} corpus_bytes={corpus_bytes} "
         f"seconds={replay_seconds:.3f} minic_sha256={minic_sha256}"
     )
     print(summary, end="")

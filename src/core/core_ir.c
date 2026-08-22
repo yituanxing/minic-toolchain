@@ -55,6 +55,8 @@ void minic_core_function_initialize(MinicCoreFunction *function) {
 void minic_core_function_destroy(MinicCoreFunction *function) {
     size_t block_index;
     size_t callee_index;
+    size_t global_index;
+    size_t inline_asm_index;
 
     if (function == NULL) {
         return;
@@ -66,9 +68,17 @@ void minic_core_function_destroy(MinicCoreFunction *function) {
         free(function->callees[callee_index].name);
         free(function->callees[callee_index].parameter_types);
     }
+    for (global_index = 0U; global_index < function->global_count; ++global_index) {
+        free(function->globals[global_index].name);
+    }
+    for (inline_asm_index = 0U; inline_asm_index < function->inline_asm_count; ++inline_asm_index) {
+        free(function->inline_asms[inline_asm_index].template_text);
+    }
     free(function->name);
     free(function->parameter_types);
+    free(function->globals);
     free(function->callees);
+    free(function->inline_asms);
     free(function->call_arguments);
     free(function->objects);
     free(function->values);
@@ -155,6 +165,48 @@ bool minic_core_function_add_object(MinicCoreFunction *function,
     return true;
 }
 
+bool minic_core_function_add_global(MinicCoreFunction *function,
+                                    const char *name,
+                                    size_t name_length,
+                                    MinicType type,
+                                    MinicCoreGlobalId *global_id) {
+    char *name_copy;
+    size_t index;
+
+    if (function == NULL || name == NULL || name_length == 0U || global_id == NULL ||
+        function->global_count >= (size_t)UINT32_MAX ||
+        (!minic_type_is_integer(type) && !minic_type_is_pointer(type))) {
+        return false;
+    }
+    for (index = 0U; index < function->global_count; ++index) {
+        const MinicCoreGlobal *existing;
+
+        existing = &function->globals[index];
+        if (existing->name_length == name_length &&
+            memcmp(existing->name, name, name_length) == 0) {
+            if (!minic_type_equal(existing->type, type)) {
+                return false;
+            }
+            *global_id = (MinicCoreGlobalId)index;
+            return true;
+        }
+    }
+    name_copy = copy_name(name, name_length);
+    if (name_copy == NULL || !grow_array((void **)&function->globals,
+                                         &function->global_capacity,
+                                         function->global_count,
+                                         sizeof(*function->globals))) {
+        free(name_copy);
+        return false;
+    }
+    function->globals[function->global_count].name = name_copy;
+    function->globals[function->global_count].name_length = name_length;
+    function->globals[function->global_count].type = type;
+    *global_id = (MinicCoreGlobalId)function->global_count;
+    function->global_count += 1U;
+    return true;
+}
+
 static bool core_call_scalar_type(MinicType type) {
     return minic_type_is_integer(type) || minic_type_is_pointer(type);
 }
@@ -203,6 +255,15 @@ bool minic_core_function_add_callee(MinicCoreFunction *function,
             return false;
         }
     }
+    for (index = 0U; index < function->inline_asm_count; ++index) {
+        const MinicCoreInlineAsm *inline_asm;
+
+        inline_asm = &function->inline_asms[index];
+        if (inline_asm->template_text == NULL || inline_asm->template_length == 0U ||
+            !inline_asm->is_volatile) {
+            return false;
+        }
+    }
     for (index = 0U; index < function->callee_count; ++index) {
         const MinicCoreCallee *existing;
 
@@ -247,6 +308,37 @@ bool minic_core_function_add_callee(MinicCoreFunction *function,
     function->callees[function->callee_count] = stored;
     *callee_id = (MinicCoreCalleeId)function->callee_count;
     function->callee_count += 1U;
+    return true;
+}
+
+bool minic_core_function_add_opaque_inline_asm(MinicCoreFunction *function,
+                                               const char *template_text,
+                                               size_t template_length,
+                                               bool is_volatile,
+                                               bool has_memory_clobber,
+                                               MinicCoreInlineAsmId *inline_asm_id) {
+    MinicCoreInlineAsm stored;
+
+    if (function == NULL || template_text == NULL || template_length == 0U ||
+        template_length == SIZE_MAX || inline_asm_id == NULL || !is_volatile ||
+        function->inline_asm_count >= (size_t)UINT32_MAX) {
+        return false;
+    }
+    (void)memset(&stored, 0, sizeof(stored));
+    stored.template_text = copy_name(template_text, template_length);
+    if (stored.template_text == NULL || !grow_array((void **)&function->inline_asms,
+                                                    &function->inline_asm_capacity,
+                                                    function->inline_asm_count,
+                                                    sizeof(*function->inline_asms))) {
+        free(stored.template_text);
+        return false;
+    }
+    stored.template_length = template_length;
+    stored.is_volatile = is_volatile;
+    stored.has_memory_clobber = has_memory_clobber;
+    function->inline_asms[function->inline_asm_count] = stored;
+    *inline_asm_id = (MinicCoreInlineAsmId)function->inline_asm_count;
+    function->inline_asm_count += 1U;
     return true;
 }
 
@@ -391,6 +483,12 @@ static bool available_pointer_pointee(const MinicCoreFunction *function,
     return minic_type_pointee(function->values[address].type, pointee);
 }
 
+bool minic_core_scalar_bitcast_types_valid(MinicType target_type, MinicType source_type) {
+    return (minic_type_is_pointer(target_type) &&
+            (minic_type_is_pointer(source_type) || minic_type_is_integer(source_type))) ||
+           (minic_type_is_integer(target_type) && minic_type_is_pointer(source_type));
+}
+
 static bool instruction_is_valid(const MinicCoreFunction *function,
                                  const MinicCoreInstruction *instruction,
                                  const bool *available_values) {
@@ -405,6 +503,13 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
         return instruction_result_is_valid(function, instruction) &&
                minic_type_is_integer(instruction->type);
     case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
+    case MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT:
+    case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY:
+    case MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE:
+    case MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER:
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND:
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR:
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR:
         if (!instruction_result_is_valid(function, instruction) ||
             !minic_type_is_integer(instruction->type) ||
             instruction->value.binary.left >= function->value_count ||
@@ -417,13 +522,87 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
         right = &function->values[instruction->value.binary.right];
         return minic_type_equal(left->type, instruction->type) &&
                minic_type_equal(right->type, instruction->type);
+    case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT:
+    case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT:
+        if (!instruction_result_is_valid(function, instruction) ||
+            !minic_type_is_integer(instruction->type) ||
+            instruction->value.binary.left >= function->value_count ||
+            instruction->value.binary.right >= function->value_count ||
+            !available_values[instruction->value.binary.left] ||
+            !available_values[instruction->value.binary.right]) {
+            return false;
+        }
+        left = &function->values[instruction->value.binary.left];
+        right = &function->values[instruction->value.binary.right];
+        return minic_type_equal(left->type, instruction->type) &&
+               minic_type_is_integer(right->type);
+    case MINIC_CORE_INSTRUCTION_INTEGER_LESS:
+        if (!instruction_result_is_valid(function, instruction) ||
+            !minic_type_equal(instruction->type, minic_type_int()) ||
+            instruction->value.binary.left >= function->value_count ||
+            instruction->value.binary.right >= function->value_count ||
+            !available_values[instruction->value.binary.left] ||
+            !available_values[instruction->value.binary.right]) {
+            return false;
+        }
+        left = &function->values[instruction->value.binary.left];
+        right = &function->values[instruction->value.binary.right];
+        return minic_type_is_integer(left->type) && minic_type_equal(left->type, right->type);
+    case MINIC_CORE_INSTRUCTION_SCALAR_EQUAL:
+        if (!instruction_result_is_valid(function, instruction) ||
+            !minic_type_equal(instruction->type, minic_type_int()) ||
+            instruction->value.binary.left >= function->value_count ||
+            instruction->value.binary.right >= function->value_count ||
+            !available_values[instruction->value.binary.left] ||
+            !available_values[instruction->value.binary.right]) {
+            return false;
+        }
+        left = &function->values[instruction->value.binary.left];
+        right = &function->values[instruction->value.binary.right];
+        return (minic_type_is_integer(left->type) || minic_type_is_pointer(left->type)) &&
+               minic_type_equal(left->type, right->type);
+    case MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW: {
+        MinicType result_type;
+
+        if (!instruction_result_is_valid(function, instruction) ||
+            !minic_type_equal(instruction->type, minic_type_bool()) ||
+            (instruction->value.integer_overflow.operator_kind != MINIC_CORE_INTEGER_OVERFLOW_ADD &&
+             instruction->value.integer_overflow.operator_kind !=
+                 MINIC_CORE_INTEGER_OVERFLOW_SUBTRACT &&
+             instruction->value.integer_overflow.operator_kind !=
+                 MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY) ||
+            instruction->value.integer_overflow.left >= function->value_count ||
+            instruction->value.integer_overflow.right >= function->value_count ||
+            instruction->value.integer_overflow.result_address >= function->value_count ||
+            !available_values[instruction->value.integer_overflow.left] ||
+            !available_values[instruction->value.integer_overflow.right] ||
+            !available_values[instruction->value.integer_overflow.result_address] ||
+            !minic_type_pointee(
+                function->values[instruction->value.integer_overflow.result_address].type,
+                &result_type) ||
+            !minic_type_is_integer(result_type) || minic_type_is_bool_integer(result_type) ||
+            minic_type_is_const(result_type) || minic_type_is_volatile(result_type)) {
+            return false;
+        }
+        left = &function->values[instruction->value.integer_overflow.left];
+        right = &function->values[instruction->value.integer_overflow.right];
+        return minic_type_equal(left->type, result_type) &&
+               minic_type_equal(right->type, result_type);
+    }
     case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION:
         return instruction_result_is_valid(function, instruction) &&
                minic_type_is_integer(instruction->type) &&
                instruction->value.operand < function->value_count &&
                available_values[instruction->value.operand] &&
                minic_type_is_integer(function->values[instruction->value.operand].type);
+    case MINIC_CORE_INSTRUCTION_SCALAR_BITCAST:
+        return instruction_result_is_valid(function, instruction) &&
+               instruction->value.operand < function->value_count &&
+               available_values[instruction->value.operand] &&
+               minic_core_scalar_bitcast_types_valid(
+                   instruction->type, function->values[instruction->value.operand].type);
     case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE:
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT:
         return instruction_result_is_valid(function, instruction) &&
                minic_type_is_integer(instruction->type) &&
                instruction->value.operand < function->value_count &&
@@ -442,12 +621,34 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
                instruction->value.parameter_index < function->parameter_count &&
                minic_type_equal(function->parameter_types[instruction->value.parameter_index],
                                 instruction->type);
+    case MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT:
+        return instruction->result == MINIC_CORE_VALUE_INVALID &&
+               minic_type_is_void(instruction->type) &&
+               instruction->value.parameter_object.parameter_index < function->parameter_count &&
+               instruction->value.parameter_object.object_id < function->object_count &&
+               minic_type_is_record(
+                   function
+                       ->parameter_types[instruction->value.parameter_object.parameter_index]) &&
+               minic_type_equal(
+                   function->parameter_types[instruction->value.parameter_object.parameter_index],
+                   function->objects[instruction->value.parameter_object.object_id].type);
     case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS: {
         MinicType pointer_type;
 
         if (!instruction_result_is_valid(function, instruction) ||
             instruction->value.object_id >= function->object_count ||
             !minic_type_pointer_to(function->objects[instruction->value.object_id].type,
+                                   &pointer_type)) {
+            return false;
+        }
+        return minic_type_equal(pointer_type, instruction->type);
+    }
+    case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS: {
+        MinicType pointer_type;
+
+        if (!instruction_result_is_valid(function, instruction) ||
+            instruction->value.global_id >= function->global_count ||
+            !minic_type_pointer_to(function->globals[instruction->value.global_id].type,
                                    &pointer_type)) {
             return false;
         }
@@ -470,6 +671,19 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
             return false;
         }
         return true;
+    }
+    case MINIC_CORE_INSTRUCTION_POINTER_OFFSET: {
+        MinicCoreValueId base;
+        MinicCoreValueId index;
+
+        base = instruction->value.pointer_offset.base;
+        index = instruction->value.pointer_offset.index;
+        return instruction_result_is_valid(function, instruction) &&
+               minic_type_is_pointer(instruction->type) && base < function->value_count &&
+               index < function->value_count && available_values[base] && available_values[index] &&
+               minic_type_equal(function->values[base].type, instruction->type) &&
+               minic_type_is_integer(function->values[index].type) &&
+               instruction->value.pointer_offset.element_size != 0U;
     }
     case MINIC_CORE_INSTRUCTION_LOAD: {
         MinicType pointee;
@@ -500,6 +714,18 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
         }
         return minic_type_equal(value_type, function->values[stored_value].type) &&
                instruction->value.store.is_volatile == minic_type_is_volatile(pointee);
+    }
+    case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM: {
+        const MinicCoreInlineAsm *inline_asm;
+
+        if (instruction->result != MINIC_CORE_VALUE_INVALID ||
+            !minic_type_is_void(instruction->type) ||
+            instruction->value.inline_asm_id >= function->inline_asm_count) {
+            return false;
+        }
+        inline_asm = &function->inline_asms[instruction->value.inline_asm_id];
+        return inline_asm->template_text != NULL && inline_asm->template_length != 0U &&
+               inline_asm->is_volatile;
     }
     case MINIC_CORE_INSTRUCTION_CALL: {
         const MinicCoreCallee *callee;
@@ -554,6 +780,12 @@ static bool terminator_is_valid(const MinicCoreFunction *function,
     case MINIC_CORE_TERMINATOR_RETURN:
         if (minic_type_is_void(function->return_type)) {
             return terminator->return_value == MINIC_CORE_VALUE_INVALID;
+        }
+        if (minic_type_is_record(function->return_type)) {
+            return terminator->return_value == MINIC_CORE_VALUE_INVALID &&
+                   terminator->return_object < function->object_count &&
+                   minic_type_equal(function->objects[terminator->return_object].type,
+                                    function->return_type);
         }
         return terminator->return_value < function->value_count &&
                available_values[terminator->return_value] &&
@@ -627,7 +859,11 @@ bool minic_core_function_verify(const MinicCoreFunction *function) {
         function->name == NULL || function->name_length == 0U ||
         (function->parameter_count != 0U && function->parameter_types == NULL) ||
         !storage_shape_is_valid(
+            function->globals, function->global_count, function->global_capacity) ||
+        !storage_shape_is_valid(
             function->callees, function->callee_count, function->callee_capacity) ||
+        !storage_shape_is_valid(
+            function->inline_asms, function->inline_asm_count, function->inline_asm_capacity) ||
         !storage_shape_is_valid(function->call_arguments,
                                 function->call_argument_count,
                                 function->call_argument_capacity) ||
@@ -642,6 +878,15 @@ bool minic_core_function_verify(const MinicCoreFunction *function) {
         function->block_count == 0U || function->entry_block != 0U ||
         function->value_count > function->instruction_count) {
         return false;
+    }
+    for (index = 0U; index < function->global_count; ++index) {
+        const MinicCoreGlobal *global;
+
+        global = &function->globals[index];
+        if (global->name == NULL || global->name_length == 0U ||
+            (!minic_type_is_integer(global->type) && !minic_type_is_pointer(global->type))) {
+            return false;
+        }
     }
     for (index = 0U; index < function->callee_count; ++index) {
         const MinicCoreCallee *callee;
@@ -711,14 +956,107 @@ static bool dump_instruction(FILE *output,
                        instruction->result,
                        instruction->value.binary.left,
                        instruction->value.binary.right) >= 0;
+    case MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT:
+        return fprintf(output,
+                       "  %%%" PRIu32 " = sub.int %%%" PRIu32 ", %%%" PRIu32 "\n",
+                       instruction->result,
+                       instruction->value.binary.left,
+                       instruction->value.binary.right) >= 0;
+    case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY:
+        return fprintf(output,
+                       "  %%%" PRIu32 " = mul.int %%%" PRIu32 ", %%%" PRIu32 "\n",
+                       instruction->result,
+                       instruction->value.binary.left,
+                       instruction->value.binary.right) >= 0;
+    case MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE:
+        return fprintf(output,
+                       "  %%%" PRIu32 " = div.int %%%" PRIu32 ", %%%" PRIu32 "\n",
+                       instruction->result,
+                       instruction->value.binary.left,
+                       instruction->value.binary.right) >= 0;
+    case MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER:
+        return fprintf(output,
+                       "  %%%" PRIu32 " = rem.int %%%" PRIu32 ", %%%" PRIu32 "\n",
+                       instruction->result,
+                       instruction->value.binary.left,
+                       instruction->value.binary.right) >= 0;
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND:
+        return fprintf(output,
+                       "  %%%" PRIu32 " = and.int %%%" PRIu32 ", %%%" PRIu32 "\n",
+                       instruction->result,
+                       instruction->value.binary.left,
+                       instruction->value.binary.right) >= 0;
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR:
+        return fprintf(output,
+                       "  %%%" PRIu32 " = xor.int %%%" PRIu32 ", %%%" PRIu32 "\n",
+                       instruction->result,
+                       instruction->value.binary.left,
+                       instruction->value.binary.right) >= 0;
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR:
+        return fprintf(output,
+                       "  %%%" PRIu32 " = or.int %%%" PRIu32 ", %%%" PRIu32 "\n",
+                       instruction->result,
+                       instruction->value.binary.left,
+                       instruction->value.binary.right) >= 0;
+    case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT:
+        return fprintf(output,
+                       "  %%%" PRIu32 " = shl.int %%%" PRIu32 ", %%%" PRIu32 "\n",
+                       instruction->result,
+                       instruction->value.binary.left,
+                       instruction->value.binary.right) >= 0;
+    case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT:
+        return fprintf(output,
+                       "  %%%" PRIu32 " = shr.int %%%" PRIu32 ", %%%" PRIu32 "\n",
+                       instruction->result,
+                       instruction->value.binary.left,
+                       instruction->value.binary.right) >= 0;
+    case MINIC_CORE_INSTRUCTION_INTEGER_LESS:
+        return fprintf(output,
+                       "  %%%" PRIu32 " = lt.int %%%" PRIu32 ", %%%" PRIu32 "\n",
+                       instruction->result,
+                       instruction->value.binary.left,
+                       instruction->value.binary.right) >= 0;
+    case MINIC_CORE_INSTRUCTION_SCALAR_EQUAL:
+        return fprintf(output,
+                       "  %%%" PRIu32 " = eq.scalar %%%" PRIu32 ", %%%" PRIu32 "\n",
+                       instruction->result,
+                       instruction->value.binary.left,
+                       instruction->value.binary.right) >= 0;
+    case MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW: {
+        const char *operator_name =
+            instruction->value.integer_overflow.operator_kind == MINIC_CORE_INTEGER_OVERFLOW_ADD
+                ? "add"
+            : instruction->value.integer_overflow.operator_kind ==
+                    MINIC_CORE_INTEGER_OVERFLOW_SUBTRACT
+                ? "sub"
+                : "mul";
+        return fprintf(output,
+                       "  %%%" PRIu32 " = %s.overflow.int %%%" PRIu32 ", %%%" PRIu32 ", %%%" PRIu32
+                       "\n",
+                       instruction->result,
+                       operator_name,
+                       instruction->value.integer_overflow.left,
+                       instruction->value.integer_overflow.right,
+                       instruction->value.integer_overflow.result_address) >= 0;
+    }
     case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION:
         return fprintf(output,
                        "  %%%" PRIu32 " = convert.int %%%" PRIu32 "\n",
                        instruction->result,
                        instruction->value.operand) >= 0;
+    case MINIC_CORE_INSTRUCTION_SCALAR_BITCAST:
+        return fprintf(output,
+                       "  %%%" PRIu32 " = bitcast.scalar %%%" PRIu32 "\n",
+                       instruction->result,
+                       instruction->value.operand) >= 0;
     case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE:
         return fprintf(output,
                        "  %%%" PRIu32 " = ineg %%%" PRIu32 "\n",
+                       instruction->result,
+                       instruction->value.operand) >= 0;
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT:
+        return fprintf(output,
+                       "  %%%" PRIu32 " = inot %%%" PRIu32 "\n",
                        instruction->result,
                        instruction->value.operand) >= 0;
     case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:
@@ -731,11 +1069,24 @@ static bool dump_instruction(FILE *output,
                        "  %%%" PRIu32 " = parameter %zu\n",
                        instruction->result,
                        instruction->value.parameter_index) >= 0;
+    case MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT:
+        return fprintf(output,
+                       "  parameter.object %zu, %%o%" PRIu32 "\n",
+                       instruction->value.parameter_object.parameter_index,
+                       instruction->value.parameter_object.object_id) >= 0;
     case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS:
         return fprintf(output,
                        "  %%%" PRIu32 " = object.addr %%o%" PRIu32 "\n",
                        instruction->result,
                        instruction->value.object_id) >= 0;
+    case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS:
+        if (function == NULL || instruction->value.global_id >= function->global_count) {
+            return false;
+        }
+        return fprintf(output,
+                       "  %%%" PRIu32 " = global.addr @%s\n",
+                       instruction->result,
+                       function->globals[instruction->value.global_id].name) >= 0;
     case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:
         return fprintf(output,
                        "  %%%" PRIu32 " = field.addr %%%" PRIu32 ", record=%zu, field=%zu\n",
@@ -743,6 +1094,14 @@ static bool dump_instruction(FILE *output,
                        instruction->value.field_address.base,
                        instruction->value.field_address.record_id,
                        instruction->value.field_address.field_index) >= 0;
+    case MINIC_CORE_INSTRUCTION_POINTER_OFFSET:
+        return fprintf(output,
+                       "  %%%" PRIu32 " = pointer.offset %%%" PRIu32 ", %%%" PRIu32
+                       ", stride=%zu\n",
+                       instruction->result,
+                       instruction->value.pointer_offset.base,
+                       instruction->value.pointer_offset.index,
+                       instruction->value.pointer_offset.element_size) >= 0;
     case MINIC_CORE_INSTRUCTION_LOAD:
         return fprintf(output,
                        "  %%%" PRIu32 " = load%s %%%" PRIu32 "\n",
@@ -755,6 +1114,19 @@ static bool dump_instruction(FILE *output,
                        instruction->value.store.is_volatile ? ".volatile" : "",
                        instruction->value.store.stored_value,
                        instruction->value.store.address) >= 0;
+    case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM: {
+        const MinicCoreInlineAsm *inline_asm;
+
+        if (function == NULL || instruction->value.inline_asm_id >= function->inline_asm_count) {
+            return false;
+        }
+        inline_asm = &function->inline_asms[instruction->value.inline_asm_id];
+        return fprintf(output,
+                       "  asm.opaque id=%" PRIu32 "%s%s\n",
+                       instruction->value.inline_asm_id,
+                       inline_asm->is_volatile ? " volatile" : "",
+                       inline_asm->has_memory_clobber ? " memory" : "") >= 0;
+    }
     case MINIC_CORE_INSTRUCTION_CALL: {
         const MinicCoreCallee *callee;
         size_t argument_index;
@@ -791,9 +1163,15 @@ static bool dump_instruction(FILE *output,
     return false;
 }
 
-static bool dump_terminator(FILE *output, const MinicCoreTerminator *terminator) {
+static bool dump_terminator(FILE *output,
+                            const MinicCoreFunction *function,
+                            const MinicCoreTerminator *terminator) {
     switch (terminator->kind) {
     case MINIC_CORE_TERMINATOR_RETURN:
+        if (function != NULL && minic_type_is_record(function->return_type)) {
+            return fprintf(output, "  return.object %%o%" PRIu32 "\n", terminator->return_object) >=
+                   0;
+        }
         if (terminator->return_value == MINIC_CORE_VALUE_INVALID) {
             return fprintf(output, "  return\n") >= 0;
         }
@@ -843,7 +1221,7 @@ bool minic_core_function_dump(FILE *output, const MinicCoreFunction *function) {
                 return false;
             }
         }
-        if (!dump_terminator(output, &block->terminator)) {
+        if (!dump_terminator(output, function, &block->terminator)) {
             return false;
         }
     }

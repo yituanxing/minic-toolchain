@@ -1,4 +1,5 @@
 #include "frontend/attribute.h"
+#include "frontend/declaration_sema.h"
 #include "frontend/parser.h"
 #include "frontend/parser_internal.h"
 
@@ -1199,10 +1200,10 @@ static bool record_external_tentative_object(MinicParser *parser,
             existing->type.array_type_id != object_type.array_type_id &&
             object_type.array_type_id + 1U == parser->program->array_type_count;
         if (existing == NULL ||
-            !minic_parser_external_object_types_compatible(
+            !minic_declaration_external_object_types_compatible(
                 parser->program, existing->type, object_type) ||
             (minic_type_is_array(existing->type) &&
-             !minic_parser_merge_external_array_composite_type(
+             !minic_declaration_merge_external_array_composite_type(
                  parser->program, existing->type, object_type)) ||
             !minic_c0_global_object_merge_tentative(parser->program, object_id)) {
             minic_parser_error(parser, "conflicting external tentative definition");
@@ -1408,10 +1409,10 @@ static bool parse_external_object_definition(MinicParser *parser,
             existing->type.array_type_id != object_type.array_type_id &&
             object_type.array_type_id + 1U == parser->program->array_type_count;
         if (existing == NULL ||
-            !minic_parser_external_object_types_compatible(
+            !minic_declaration_external_object_types_compatible(
                 parser->program, existing->type, object_type) ||
             (minic_type_is_array(existing->type) &&
-             !minic_parser_merge_external_array_composite_type(
+             !minic_declaration_merge_external_array_composite_type(
                  parser->program, existing->type, object_type)) ||
             !minic_c0_global_object_begin_definition(parser->program, object_id)) {
             minic_parser_error(parser, "conflicting external object definition");
@@ -1603,7 +1604,7 @@ static bool parse_visible_external_array(MinicParser *parser,
                 ? minic_c0_program_array_type(parser->program, existing->type.array_type_id)
                 : NULL;
         if (existing_array != NULL &&
-            minic_parser_external_object_types_compatible(
+            minic_declaration_external_object_types_compatible(
                 parser->program, existing_array->element_type, element_type)) {
             if (!minic_parser_expect(parser, MINIC_TOKEN_LBRACKET, "expected '['") ||
                 !minic_parser_expect(parser, MINIC_TOKEN_RBRACKET, "expected ']'")) {

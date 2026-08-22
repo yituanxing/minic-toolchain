@@ -2,6 +2,7 @@
 #include "core/core_lower.h"
 #include "frontend/ast.h"
 #include "frontend/function_body.h"
+#include "target/target_info.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -179,7 +180,8 @@ static int test_scalar_shadow_lowering(void) {
         return 1;
     }
     minic_core_function_initialize(&core);
-    if (minic_core_lower_function(&view, &core) != MINIC_CORE_LOWER_OK ||
+    if (minic_core_lower_function(&view, minic_default_target_info(), &core) !=
+            MINIC_CORE_LOWER_OK ||
         !minic_core_function_verify(&core) || core.block_count != 1U ||
         core.instruction_count != 3U || core.value_count != 3U) {
         minic_core_function_destroy(&core);
@@ -213,7 +215,8 @@ static int test_parameter_ingress_and_conversion_lowering(void) {
         return 6;
     }
     minic_core_function_initialize(&core);
-    if (minic_core_lower_function(&view, &core) != MINIC_CORE_LOWER_OK ||
+    if (minic_core_lower_function(&view, minic_default_target_info(), &core) !=
+            MINIC_CORE_LOWER_OK ||
         !minic_core_function_verify(&core) || core.object_count != 1U ||
         core.instruction_count != 6U || core.value_count != 5U) {
         minic_core_function_destroy(&core);
@@ -236,7 +239,8 @@ static int test_unsupported_expression_is_distinct(void) {
         return 11;
     }
     minic_core_function_initialize(&core);
-    if (minic_core_lower_function(&view, &core) != MINIC_CORE_LOWER_UNSUPPORTED ||
+    if (minic_core_lower_function(&view, minic_default_target_info(), &core) !=
+            MINIC_CORE_LOWER_UNSUPPORTED ||
         core.name != NULL || core.block_count != 0U || core.instruction_count != 0U ||
         core.value_count != 0U) {
         minic_core_function_destroy(&core);

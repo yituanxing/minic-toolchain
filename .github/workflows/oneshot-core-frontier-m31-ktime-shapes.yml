@@ -1,0 +1,93 @@
+name: One-shot Core Frontier M31 Ktime Shapes
+
+on:
+  pull_request:
+    branches: [frontend/linux-first500-final-v1]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ktime-shapes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+          fetch-depth: 0
+      - name: Install validation tools
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mapfile -t packages < <(grep -Ev '^[[:space:]]*(#|$)' tools/ci/ubuntu-24.04-packages.txt)
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends "${packages[@]}"
+          sh tools/ci/verify-validation-tools.sh
+      - name: Apply proven M31 and build
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/run-core-frontier-batch-m31.py
+          clang-format-18 -i src/core/core_ir.h src/core/core_ir.c src/core/core_lower.c src/target/riscv64/core_codegen.c
+          git diff --check
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m31-ktime
+      - name: Probe ktime semantic shapes
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          c="$GITHUB_WORKSPACE/build/m31-ktime/bin/minic"
+          w="$GITHUB_WORKSPACE/build/m31-ktime-work"
+          mkdir -p "$w"
+
+          cat > "$w/unreachable_only.c" <<'EOF'
+          void f(void) { __builtin_unreachable(); }
+          EOF
+          cat > "$w/asm_then_unreachable.c" <<'EOF'
+          void f(void) { __asm__ __volatile__(""); __builtin_unreachable(); }
+          EOF
+          cat > "$w/asm_i_string.c" <<'EOF'
+          void f(void) { __asm__ __volatile__("# string-immediate %0" : : "i"("abc")); }
+          EOF
+          cat > "$w/asm_i_int_size.c" <<'EOF'
+          struct X { unsigned long a, b; };
+          void f(void) { __asm__ __volatile__("# int-size %0 %1" : : "i"(7), "i"(sizeof(struct X))); }
+          EOF
+          cat > "$w/asm_i_mixed_string.c" <<'EOF'
+          struct X { unsigned long a, b; };
+          void f(void) { __asm__ __volatile__("# mixed %0 %1 %2" : : "i"("abc"), "i"(7), "i"(sizeof(struct X))); }
+          EOF
+          cat > "$w/division_only.c" <<'EOF'
+          long f(long x, long d) { return x / d; }
+          EOF
+          cat > "$w/ktime_control_shape.c" <<'EOF'
+          long f(long kt, long div) {
+              if (__builtin_expect(div < 0, 0)) {
+                  __asm__ __volatile__("# warn %0 %1" : : "i"(7), "i"(16));
+                  __builtin_unreachable();
+              }
+              return kt / div;
+          }
+          EOF
+
+          for src in "$w"/*.c; do
+            name=$(basename "$src" .c)
+            set +e
+            MINIC_CORE_IR=strict "$c" -S "$src" -o "$w/$name.s" 2>"$w/$name.err"
+            rc=$?
+            set -e
+            if [ "$rc" -eq 0 ]; then
+              printf 'M31_KTIME_SHAPE name=%s status=PASS\n' "$name"
+            else
+              printf 'M31_KTIME_SHAPE name=%s status=UNSUPPORTED rc=%d\n' "$name" "$rc"
+              cat "$w/$name.err"
+            fi
+          done
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-frontier-m31-ktime-shapes
+          path: build/m31-ktime-work/
+          if-no-files-found: error

@@ -1,0 +1,79 @@
+name: Core Strict First500 Frontier
+
+on:
+  pull_request:
+
+concurrency:
+  group: core-strict-first500-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  frontier:
+    if: github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+
+      - name: Restore frozen Linux corpus
+        id: linux-corpus-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+
+      - name: Require frozen corpus
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
+          test -s build/linux-focus-corpus/selected-tus.txt
+
+      - name: Build exact compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-strict500-compiler
+
+      - name: Replay full frozen first500 and classify
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/core-strict500-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-strict500-frontier"
+          set +e
+          MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
+            --minic "$compiler" \
+            --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
+            --work "$work" \
+            --jobs 5 \
+            --offset 0 \
+            --limit 500 \
+            --sample-count 0 \
+            --indices ''
+          replay_status=$?
+          set -e
+          printf 'CORE_STRICT500_REPLAY_STATUS=%d\n' "$replay_status"
+          python3 tools/ci/classify-core-strict-frontier.py \
+            "$work/batch-results.json" \
+            --examples 4 \
+            --json-out "$work/frontier-summary.json" \
+            --require-no-errors
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          summary = json.loads(Path('build/core-strict500-frontier/frontier-summary.json').read_text())
+          if summary['selected'] != 500:
+              raise SystemExit(f"expected 500 frozen TUs, got {summary['selected']}")
+          PY
+
+      - name: Upload frontier evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-strict-first500-frontier
+          path: |
+            build/core-strict500-frontier/batch-results.json
+            build/core-strict500-frontier/batch-results.tsv
+            build/core-strict500-frontier/batch-summary.txt
+            build/core-strict500-frontier/failure-contexts.txt
+            build/core-strict500-frontier/frontier-summary.json
+          if-no-files-found: warn

@@ -173,24 +173,44 @@ bool minic_c0_program_add_local_fixed_register_binding(MinicC0Program *program,
                                       binding_id);
 }
 
-static bool add_global_object_entity(MinicC0Program *program,
-                                     const char *name,
-                                     size_t name_length,
-                                     MinicType type,
-                                     bool is_internal,
-                                     bool is_read_only,
-                                     bool is_extern,
-                                     MinicGlobalObjectId *global_object_id) {
+typedef struct MinicGlobalObjectInitialState {
+    const char *section_name;
+    size_t section_name_length;
+    size_t explicit_alignment;
+    MinicSymbolVisibility visibility;
+    bool is_internal;
+    bool is_read_only;
+    bool is_extern;
+    bool is_weak;
+    bool is_block_scope_extern_only;
+} MinicGlobalObjectInitialState;
+
+static bool global_object_initial_state_valid(const MinicGlobalObjectInitialState *state) {
+    size_t alignment;
+
+    if (state == NULL || ((state->section_name == NULL) != (state->section_name_length == 0U)) ||
+        state->section_name_length == SIZE_MAX ||
+        state->visibility < MINIC_SYMBOL_VISIBILITY_DEFAULT ||
+        state->visibility > MINIC_SYMBOL_VISIBILITY_PROTECTED ||
+        (state->is_weak && state->is_internal)) {
+        return false;
+    }
+    alignment = state->explicit_alignment;
+    return alignment == 0U || (alignment & (alignment - 1U)) == 0U;
+}
+
+static bool add_global_object_entity_with_state(MinicC0Program *program,
+                                                const char *name,
+                                                size_t name_length,
+                                                MinicType type,
+                                                const MinicGlobalObjectInitialState *state,
+                                                MinicGlobalObjectId *global_object_id) {
     MinicGlobalObject object;
 
     if (program == NULL || name == NULL || global_object_id == NULL ||
-        (minic_type_is_void(type) && !is_extern) || name_conflicts(program, name, name_length)) {
-        return false;
-    }
-    if (!grow_array((void **)&program->global_objects,
-                    &program->global_object_capacity,
-                    program->global_object_count,
-                    sizeof(*program->global_objects))) {
+        !global_object_initial_state_valid(state) ||
+        (minic_type_is_void(type) && !state->is_extern) ||
+        name_conflicts(program, name, name_length)) {
         return false;
     }
 
@@ -199,15 +219,55 @@ static bool add_global_object_entity(MinicC0Program *program,
     if (object.name == NULL) {
         return false;
     }
+    if (state->section_name != NULL) {
+        object.section_name = copy_name(state->section_name, state->section_name_length);
+        if (object.section_name == NULL) {
+            free(object.name);
+            return false;
+        }
+    }
+    if (!grow_array((void **)&program->global_objects,
+                    &program->global_object_capacity,
+                    program->global_object_count,
+                    sizeof(*program->global_objects))) {
+        free(object.section_name);
+        free(object.name);
+        return false;
+    }
+
     object.name_length = name_length;
+    object.section_name_length = state->section_name_length;
     object.type = type;
-    object.is_internal = is_internal;
-    object.is_read_only = is_read_only;
-    object.is_extern = is_extern;
+    object.explicit_alignment = state->explicit_alignment;
+    object.visibility = state->visibility;
+    object.is_internal = state->is_internal;
+    object.is_weak = state->is_weak;
+    object.is_read_only = state->is_read_only;
+    object.is_extern = state->is_extern;
+    object.is_block_scope_extern_only = state->is_block_scope_extern_only;
     *global_object_id = program->global_object_count;
     program->global_objects[program->global_object_count] = object;
     program->global_object_count += 1U;
     return true;
+}
+
+static bool add_global_object_entity(MinicC0Program *program,
+                                     const char *name,
+                                     size_t name_length,
+                                     MinicType type,
+                                     bool is_internal,
+                                     bool is_read_only,
+                                     bool is_extern,
+                                     MinicGlobalObjectId *global_object_id) {
+    MinicGlobalObjectInitialState state;
+
+    (void)memset(&state, 0, sizeof(state));
+    state.visibility = MINIC_SYMBOL_VISIBILITY_DEFAULT;
+    state.is_internal = is_internal;
+    state.is_read_only = is_read_only;
+    state.is_extern = is_extern;
+    return add_global_object_entity_with_state(
+        program, name, name_length, type, &state, global_object_id);
 }
 
 bool minic_c0_program_add_global_object(MinicC0Program *program,
@@ -229,6 +289,34 @@ bool minic_c0_program_add_extern_global_object(MinicC0Program *program,
                                                MinicGlobalObjectId *global_object_id) {
     return add_global_object_entity(
         program, name, name_length, type, false, is_read_only, true, global_object_id);
+}
+
+bool minic_c0_program_add_extern_global_object_with_metadata(
+    MinicC0Program *program,
+    const char *name,
+    size_t name_length,
+    MinicType type,
+    bool is_read_only,
+    const char *section_name,
+    size_t section_name_length,
+    size_t explicit_alignment,
+    MinicSymbolVisibility visibility,
+    bool is_weak,
+    bool is_block_scope_extern_only,
+    MinicGlobalObjectId *global_object_id) {
+    MinicGlobalObjectInitialState state;
+
+    (void)memset(&state, 0, sizeof(state));
+    state.section_name = section_name;
+    state.section_name_length = section_name_length;
+    state.explicit_alignment = explicit_alignment;
+    state.visibility = visibility;
+    state.is_read_only = is_read_only;
+    state.is_extern = true;
+    state.is_weak = is_weak;
+    state.is_block_scope_extern_only = is_block_scope_extern_only;
+    return add_global_object_entity_with_state(
+        program, name, name_length, type, &state, global_object_id);
 }
 
 bool minic_c0_program_add_tentative_global_object(MinicC0Program *program,

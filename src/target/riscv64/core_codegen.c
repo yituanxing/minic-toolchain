@@ -1,6 +1,7 @@
 #include "target/riscv64/core_codegen.h"
 
 #include "target/riscv64/codegen_internal.h"
+#include "target/riscv64/abi.h"
 #include "target/data_layout.h"
 
 #include <inttypes.h>
@@ -23,6 +24,7 @@ typedef struct MinicRiscv64CoreFrame {
     size_t frame_size;
     size_t object_count;
     size_t value_count;
+    size_t value_base_offset;
     size_t return_address_offset;
     bool saves_return_address;
 } MinicRiscv64CoreFrame;
@@ -64,31 +66,46 @@ static bool core_function_has_call(const MinicCoreFunction *function) {
     return false;
 }
 
-static bool core_frame_initialize(const MinicCoreFunction *function, MinicRiscv64CoreFrame *frame) {
-    size_t slot_count;
+static bool core_frame_initialize(const MinicC0Program *program,
+                                  const MinicCoreFunction *function,
+                                  MinicRiscv64CoreFrame *frame) {
+    size_t object_index;
     size_t storage_size;
 
-    if (function == NULL || frame == NULL ||
-        function->object_count > SIZE_MAX - function->value_count) {
+    if (function == NULL || frame == NULL) {
         return false;
     }
-    slot_count = function->object_count + function->value_count;
+    storage_size = 0U;
+    for (object_index = 0U; object_index < function->object_count; ++object_index) {
+        size_t object_size;
+        size_t object_alignment;
+
+        if (!minic_data_layout_type(minic_default_data_layout(),
+                                    program,
+                                    function->objects[object_index].type,
+                                    &object_size,
+                                    &object_alignment) ||
+            object_size == 0U || object_alignment == 0U || object_alignment > 16U ||
+            !align_up(storage_size, object_alignment, &storage_size) ||
+            storage_size > SIZE_MAX - object_size) {
+            return false;
+        }
+        storage_size += object_size;
+    }
+    if (!align_up(storage_size, 8U, &frame->value_base_offset) ||
+        function->value_count > (SIZE_MAX - frame->value_base_offset) / 8U) {
+        return false;
+    }
+    storage_size = frame->value_base_offset + function->value_count * 8U;
     frame->saves_return_address = core_function_has_call(function);
     frame->return_address_offset = 0U;
     if (frame->saves_return_address) {
-        if (slot_count > SIZE_MAX / 8U) {
+        if (!align_up(storage_size, 8U, &frame->return_address_offset) ||
+            frame->return_address_offset > SIZE_MAX - 8U) {
             return false;
         }
-        frame->return_address_offset = slot_count * 8U;
-        if (slot_count == SIZE_MAX) {
-            return false;
-        }
-        slot_count += 1U;
+        storage_size = frame->return_address_offset + 8U;
     }
-    if (slot_count > SIZE_MAX / 8U) {
-        return false;
-    }
-    storage_size = slot_count * 8U;
     if (!align_up(storage_size, 16U, &frame->frame_size)) {
         return false;
     }
@@ -97,29 +114,49 @@ static bool core_frame_initialize(const MinicCoreFunction *function, MinicRiscv6
     return true;
 }
 
-static bool core_object_offset(const MinicRiscv64CoreFrame *frame,
+static bool core_object_offset(const MinicC0Program *program,
+                               const MinicCoreFunction *function,
                                MinicCoreObjectId object_id,
                                size_t *offset) {
-    if (frame == NULL || offset == NULL || object_id >= frame->object_count) {
+    size_t current_offset;
+    size_t object_index;
+
+    if (function == NULL || offset == NULL || object_id >= function->object_count) {
         return false;
     }
-    *offset = (size_t)object_id * 8U;
-    return true;
+    current_offset = 0U;
+    for (object_index = 0U; object_index <= (size_t)object_id; ++object_index) {
+        size_t object_size;
+        size_t object_alignment;
+
+        if (!minic_data_layout_type(minic_default_data_layout(),
+                                    program,
+                                    function->objects[object_index].type,
+                                    &object_size,
+                                    &object_alignment) ||
+            object_size == 0U || object_alignment == 0U || object_alignment > 16U ||
+            !align_up(current_offset, object_alignment, &current_offset)) {
+            return false;
+        }
+        if (object_index == (size_t)object_id) {
+            *offset = current_offset;
+            return true;
+        }
+        if (current_offset > SIZE_MAX - object_size) {
+            return false;
+        }
+        current_offset += object_size;
+    }
+    return false;
 }
 
 static bool
 core_value_offset(const MinicRiscv64CoreFrame *frame, MinicCoreValueId value_id, size_t *offset) {
-    size_t slot_index;
-
     if (frame == NULL || offset == NULL || value_id >= frame->value_count ||
-        frame->object_count > SIZE_MAX - (size_t)value_id) {
+        (size_t)value_id > (SIZE_MAX - frame->value_base_offset) / 8U) {
         return false;
     }
-    slot_index = frame->object_count + (size_t)value_id;
-    if (slot_index > SIZE_MAX / 8U) {
-        return false;
-    }
-    *offset = slot_index * 8U;
+    *offset = frame->value_base_offset + (size_t)value_id * 8U;
     return true;
 }
 
@@ -184,6 +221,94 @@ static bool core_field_address_supported(const MinicC0Program *program,
     return true;
 }
 
+static bool core_scalar_bitcast_supported(const MinicC0Program *program,
+                                          const MinicCoreFunction *function,
+                                          const MinicCoreInstruction *instruction) {
+    const MinicCoreValue *source;
+    size_t source_size;
+    size_t source_alignment;
+    size_t target_size;
+    size_t target_alignment;
+    if (program == NULL || function == NULL || instruction == NULL ||
+        instruction->kind != MINIC_CORE_INSTRUCTION_SCALAR_BITCAST ||
+        instruction->value.operand >= function->value_count) {
+        return false;
+    }
+    source = &function->values[instruction->value.operand];
+    if (!minic_core_scalar_bitcast_types_valid(instruction->type, source->type) ||
+        !minic_data_layout_type(
+            minic_default_data_layout(), program, source->type, &source_size, &source_alignment) ||
+        !minic_data_layout_type(minic_default_data_layout(),
+                                program,
+                                instruction->type,
+                                &target_size,
+                                &target_alignment)) {
+        return false;
+    }
+    (void)source_alignment;
+    (void)target_alignment;
+    return source_size != 0U && source_size <= 8U && target_size != 0U && target_size <= 8U;
+}
+
+static bool core_integer_overflow_supported(const MinicC0Program *program,
+                                            const MinicCoreFunction *function,
+                                            const MinicCoreInstruction *instruction,
+                                            MinicType *result_type,
+                                            size_t *result_size,
+                                            bool *is_unsigned) {
+    MinicType effective_result_type;
+    MinicType pointee;
+    size_t alignment;
+
+    if (program == NULL || function == NULL || instruction == NULL ||
+        instruction->kind != MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW ||
+        !minic_type_equal(instruction->type, minic_type_bool()) ||
+        (instruction->value.integer_overflow.operator_kind != MINIC_CORE_INTEGER_OVERFLOW_ADD &&
+         instruction->value.integer_overflow.operator_kind !=
+             MINIC_CORE_INTEGER_OVERFLOW_SUBTRACT &&
+         instruction->value.integer_overflow.operator_kind !=
+             MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY) ||
+        instruction->value.integer_overflow.left >= function->value_count ||
+        instruction->value.integer_overflow.right >= function->value_count ||
+        instruction->value.integer_overflow.result_address >= function->value_count ||
+        !minic_type_pointee(
+            function->values[instruction->value.integer_overflow.result_address].type, &pointee) ||
+        !minic_type_is_integer(pointee) || minic_type_is_bool_integer(pointee) ||
+        minic_type_is_const(pointee) || minic_type_is_volatile(pointee) ||
+        !minic_type_equal(function->values[instruction->value.integer_overflow.left].type,
+                          pointee) ||
+        !minic_type_equal(function->values[instruction->value.integer_overflow.right].type,
+                          pointee) ||
+        !minic_data_layout_type(
+            minic_default_data_layout(), program, pointee, result_size, &alignment) ||
+        *result_size == 0U || *result_size > 8U ||
+        !minic_c0_type_effective_integer_type(program, pointee, &effective_result_type)) {
+        return false;
+    }
+    (void)alignment;
+    if (result_type != NULL) {
+        *result_type = pointee;
+    }
+    if (is_unsigned != NULL) {
+        *is_unsigned = minic_type_is_unsigned_integer(effective_result_type);
+    }
+    return true;
+}
+
+static bool core_opaque_inline_asm_supported(const MinicCoreFunction *function,
+                                             const MinicCoreInstruction *instruction) {
+    const MinicCoreInlineAsm *inline_asm;
+
+    if (function == NULL || instruction == NULL ||
+        instruction->kind != MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM ||
+        instruction->value.inline_asm_id >= function->inline_asm_count) {
+        return false;
+    }
+    inline_asm = &function->inline_asms[instruction->value.inline_asm_id];
+    return inline_asm->template_text != NULL && inline_asm->template_length != 0U &&
+           inline_asm->is_volatile;
+}
+
 static bool core_instruction_supported(const MinicC0Program *program,
                                        const MinicCoreFunction *function,
                                        const MinicCoreInstruction *instruction) {
@@ -195,14 +320,42 @@ static bool core_instruction_supported(const MinicC0Program *program,
     switch (instruction->kind) {
     case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT:
     case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
+    case MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT:
+    case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY:
+    case MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE:
+    case MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER:
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND:
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR:
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR:
+    case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT:
+    case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT:
+    case MINIC_CORE_INSTRUCTION_INTEGER_LESS:
+    case MINIC_CORE_INSTRUCTION_SCALAR_EQUAL:
     case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION:
     case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE:
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT:
     case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:
     case MINIC_CORE_INSTRUCTION_PARAMETER:
+    case MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT:
     case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS:
+    case MINIC_CORE_INSTRUCTION_POINTER_OFFSET:
     case MINIC_CORE_INSTRUCTION_LOAD:
     case MINIC_CORE_INSTRUCTION_STORE:
         return true;
+    case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS:
+        return instruction->value.global_id < function->global_count &&
+               function->globals[instruction->value.global_id].name != NULL &&
+               function->globals[instruction->value.global_id].name_length != 0U;
+    case MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW: {
+        MinicType result_type;
+        size_t result_size;
+        bool is_unsigned;
+
+        return core_integer_overflow_supported(
+            program, function, instruction, &result_type, &result_size, &is_unsigned);
+    }
+    case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM:
+        return core_opaque_inline_asm_supported(function, instruction);
     case MINIC_CORE_INSTRUCTION_CALL:
         if (instruction->value.call.callee_id >= function->callee_count ||
             instruction->value.call.argument_count > 8U) {
@@ -212,6 +365,8 @@ static bool core_instruction_supported(const MinicC0Program *program,
         return callee->name != NULL && callee->name_length != 0U && callee->parameter_count <= 8U;
     case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:
         return core_field_address_supported(program, instruction, NULL);
+    case MINIC_CORE_INSTRUCTION_SCALAR_BITCAST:
+        return core_scalar_bitcast_supported(program, function, instruction);
     }
     return false;
 }
@@ -220,17 +375,62 @@ static bool core_function_can_emit_basic_v0(const MinicC0Program *program,
                                             const MinicCoreFunction *function) {
     size_t index;
 
-    if (function == NULL || !minic_core_function_verify(function) ||
-        (!minic_type_is_void(function->return_type) && !core_scalar_type(function->return_type))) {
+    if (function == NULL || !minic_core_function_verify(function)) {
         return false;
     }
-    for (index = 0U; index < function->parameter_count; ++index) {
-        if (!core_scalar_type(function->parameter_types[index])) {
+    if (program == NULL) {
+        if (!minic_type_is_void(function->return_type) &&
+            !core_scalar_type(function->return_type)) {
             return false;
+        }
+        for (index = 0U; index < function->parameter_count; ++index) {
+            if (!core_scalar_type(function->parameter_types[index])) {
+                return false;
+            }
+        }
+    } else {
+        MinicRiscv64AbiCursor cursor;
+        MinicRiscv64AbiValue return_value;
+
+        if (!minic_riscv64_abi_cursor_initialize_for_return(
+                program, function->return_type, &cursor, &return_value) ||
+            (return_value.kind != MINIC_RISCV64_ABI_VALUE_VOID &&
+             return_value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER &&
+             (return_value.kind != MINIC_RISCV64_ABI_VALUE_AGGREGATE ||
+              return_value.slot_count == 0U || return_value.slot_count > 2U))) {
+            return false;
+        }
+        for (index = 0U; index < function->parameter_count; ++index) {
+            MinicRiscv64AbiArgumentLocation location;
+
+            if (!minic_riscv64_abi_place_argument(
+                    program, function->parameter_types[index], true, &cursor, &location) ||
+                (location.value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER &&
+                 (location.value.kind != MINIC_RISCV64_ABI_VALUE_AGGREGATE ||
+                  location.value.slot_count == 0U || location.value.slot_count > 2U))) {
+                return false;
+            }
         }
     }
     for (index = 0U; index < function->object_count; ++index) {
-        if (!core_scalar_type(function->objects[index].type)) {
+        size_t object_size;
+        size_t object_alignment;
+        MinicType object_type;
+
+        object_type = function->objects[index].type;
+        if ((!core_scalar_type(object_type) && !minic_type_is_record(object_type)) ||
+            !minic_data_layout_type(minic_default_data_layout(),
+                                    program,
+                                    object_type,
+                                    &object_size,
+                                    &object_alignment) ||
+            object_size == 0U || object_alignment == 0U || object_alignment > 16U) {
+            return false;
+        }
+    }
+    for (index = 0U; index < function->global_count; ++index) {
+        if (function->globals[index].name == NULL || function->globals[index].name_length == 0U ||
+            !core_scalar_type(function->globals[index].type)) {
             return false;
         }
     }
@@ -256,6 +456,35 @@ bool minic_riscv64_core_function_can_emit_basic_v0_for_program(const MinicC0Prog
     return program != NULL && core_function_can_emit_basic_v0(program, function);
 }
 
+static bool core_parameter_location(const MinicC0Program *program,
+                                    const MinicCoreFunction *function,
+                                    size_t parameter_index,
+                                    MinicRiscv64AbiArgumentLocation *location) {
+    MinicRiscv64AbiCursor cursor;
+    MinicRiscv64AbiValue return_value;
+    size_t index;
+
+    if (program == NULL || function == NULL || location == NULL ||
+        parameter_index >= function->parameter_count ||
+        !minic_riscv64_abi_cursor_initialize_for_return(
+            program, function->return_type, &cursor, &return_value)) {
+        return false;
+    }
+    (void)return_value;
+    for (index = 0U; index <= parameter_index; ++index) {
+        MinicRiscv64AbiArgumentLocation current;
+
+        if (!minic_riscv64_abi_place_argument(
+                program, function->parameter_types[index], true, &cursor, &current)) {
+            return false;
+        }
+        if (index == parameter_index) {
+            *location = current;
+        }
+    }
+    return true;
+}
+
 static bool emit_parameter(FILE *file,
                            const MinicC0Program *program,
                            const MinicCoreFunction *function,
@@ -268,7 +497,33 @@ static bool emit_parameter(FILE *file,
     if (parameter_index >= function->parameter_count) {
         return false;
     }
-    if (parameter_index < 8U) {
+    if (program != NULL) {
+        MinicRiscv64AbiArgumentLocation location;
+
+        if (!core_parameter_location(program, function, parameter_index, &location) ||
+            location.value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER ||
+            location.floating_register_count != 0U) {
+            return false;
+        }
+        if (location.integer_register_count == 1U && location.stack_slot_count == 0U &&
+            location.integer_register_begin < 8U) {
+            if (fprintf(file,
+                        "  mv t0, %s\n",
+                        minic_core_rv64_argument_registers[location.integer_register_begin]) < 0) {
+                return false;
+            }
+        } else if (location.integer_register_count == 0U && location.stack_slot_count == 1U) {
+            if (location.stack_slot_begin > (SIZE_MAX - frame->frame_size) / 8U) {
+                return false;
+            }
+            incoming_offset = frame->frame_size + location.stack_slot_begin * 8U;
+            if (!minic_riscv64_emit_sp_load64(file, "t0", incoming_offset)) {
+                return false;
+            }
+        } else {
+            return false;
+        }
+    } else if (parameter_index < 8U) {
         if (fprintf(file, "  mv t0, %s\n", minic_core_rv64_argument_registers[parameter_index]) <
             0) {
             return false;
@@ -291,6 +546,121 @@ static bool emit_parameter(FILE *file,
         return false;
     }
     return store_core_value(file, frame, instruction->result, "t0");
+}
+
+static bool
+emit_sp_store_chunk(FILE *file, const char *source_register, size_t offset, size_t size) {
+    const char *opcode;
+    size_t byte_index;
+
+    if (file == NULL || source_register == NULL || size == 0U || size > 8U) {
+        return false;
+    }
+    if (size == 8U) {
+        return minic_riscv64_emit_sp_store64(file, source_register, offset);
+    }
+    opcode = size == 4U ? "sw" : size == 2U ? "sh" : size == 1U ? "sb" : NULL;
+    if (opcode != NULL) {
+        if (offset <= 2047U) {
+            return fprintf(file, "  %s %s, %zu(sp)\n", opcode, source_register, offset) >= 0;
+        }
+        return emit_sp_address(file, "t3", offset) &&
+               fprintf(file, "  %s %s, 0(t3)\n", opcode, source_register) >= 0;
+    }
+    if (fprintf(file, "  mv t1, %s\n", source_register) < 0) {
+        return false;
+    }
+    for (byte_index = 0U; byte_index < size; ++byte_index) {
+        size_t byte_offset;
+
+        if (offset > SIZE_MAX - byte_index) {
+            return false;
+        }
+        byte_offset = offset + byte_index;
+        if (byte_offset <= 2047U) {
+            if (fprintf(file, "  sb t1, %zu(sp)\n", byte_offset) < 0) {
+                return false;
+            }
+        } else if (!emit_sp_address(file, "t3", byte_offset) ||
+                   fprintf(file, "  sb t1, 0(t3)\n") < 0) {
+            return false;
+        }
+        if (byte_index + 1U < size && fprintf(file, "  srli t1, t1, 8\n") < 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool emit_parameter_object(FILE *file,
+                                  const MinicC0Program *program,
+                                  const MinicCoreFunction *function,
+                                  const MinicRiscv64CoreFrame *frame,
+                                  const MinicCoreInstruction *instruction) {
+    MinicRiscv64AbiArgumentLocation location;
+    MinicCoreObjectId object_id;
+    size_t object_offset;
+    size_t chunk_index;
+
+    if (file == NULL || program == NULL || function == NULL || frame == NULL ||
+        instruction == NULL || instruction->kind != MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT) {
+        return false;
+    }
+    object_id = instruction->value.parameter_object.object_id;
+    if (!core_parameter_location(
+            program, function, instruction->value.parameter_object.parameter_index, &location) ||
+        location.value.kind != MINIC_RISCV64_ABI_VALUE_AGGREGATE ||
+        location.value.slot_count == 0U || location.value.slot_count > 2U ||
+        location.value.slot_count != location.integer_register_count + location.stack_slot_count ||
+        object_id >= function->object_count ||
+        !minic_type_equal(
+            function->objects[object_id].type,
+            function->parameter_types[instruction->value.parameter_object.parameter_index]) ||
+        !core_object_offset(program, function, object_id, &object_offset)) {
+        return false;
+    }
+    for (chunk_index = 0U; chunk_index < location.value.slot_count; ++chunk_index) {
+        const char *source_register;
+        size_t chunk_offset;
+        size_t chunk_size;
+
+        source_register = "t0";
+        if (chunk_index < location.integer_register_count) {
+            size_t register_index;
+
+            register_index = location.integer_register_begin + chunk_index;
+            if (register_index >= 8U) {
+                return false;
+            }
+            source_register = minic_core_rv64_argument_registers[register_index];
+        } else {
+            size_t stack_slot;
+            size_t incoming_offset;
+
+            stack_slot =
+                location.stack_slot_begin + (chunk_index - location.integer_register_count);
+            if (stack_slot > (SIZE_MAX - frame->frame_size) / 8U) {
+                return false;
+            }
+            incoming_offset = frame->frame_size + stack_slot * 8U;
+            if (!minic_riscv64_emit_sp_load64(file, "t0", incoming_offset)) {
+                return false;
+            }
+        }
+        chunk_offset = chunk_index * 8U;
+        if (chunk_offset >= location.value.storage_size ||
+            object_offset > SIZE_MAX - chunk_offset) {
+            return false;
+        }
+        chunk_size = location.value.storage_size - chunk_offset;
+        if (chunk_size > 8U) {
+            chunk_size = 8U;
+        }
+        if (!emit_sp_store_chunk(file, source_register, object_offset + chunk_offset, chunk_size)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 static bool emit_call(FILE *file,
@@ -358,6 +728,38 @@ static bool emit_field_address(FILE *file,
     return store_core_value(file, frame, instruction->result, "t0");
 }
 
+static bool emit_opaque_inline_asm(FILE *file,
+                                   const MinicCoreFunction *function,
+                                   const MinicCoreInstruction *instruction) {
+    const MinicCoreInlineAsm *inline_asm;
+    size_t index;
+
+    if (file == NULL || !core_opaque_inline_asm_supported(function, instruction)) {
+        return false;
+    }
+    inline_asm = &function->inline_asms[instruction->value.inline_asm_id];
+    if (fprintf(file, "  ") < 0) {
+        return false;
+    }
+    for (index = 0U; index < inline_asm->template_length; ++index) {
+        if (inline_asm->template_text[index] != '%') {
+            if (fputc((unsigned char)inline_asm->template_text[index], file) == EOF) {
+                return false;
+            }
+            continue;
+        }
+        if (index + 1U >= inline_asm->template_length ||
+            inline_asm->template_text[index + 1U] != '%') {
+            return false;
+        }
+        if (fputc('%', file) == EOF) {
+            return false;
+        }
+        index += 1U;
+    }
+    return fputc('\n', file) != EOF;
+}
+
 static bool emit_instruction(FILE *file,
                              const MinicC0Program *program,
                              const MinicCoreFunction *function,
@@ -386,8 +788,228 @@ static bool emit_instruction(FILE *file,
             return false;
         }
         return store_core_value(file, frame, instruction->result, "t0");
+    case MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT:
+        if (!load_core_value(file, frame, instruction->value.binary.left, "t0") ||
+            !load_core_value(file, frame, instruction->value.binary.right, "t1") ||
+            fprintf(file, "  sub t0, t0, t1\n") < 0 ||
+            !minic_riscv64_emit_integer_conversion_for_program(
+                file, program, instruction->type, "t0")) {
+            return false;
+        }
+        return store_core_value(file, frame, instruction->result, "t0");
+    case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY:
+        if (!load_core_value(file, frame, instruction->value.binary.left, "t0") ||
+            !load_core_value(file, frame, instruction->value.binary.right, "t1") ||
+            fprintf(file, "  mul t0, t0, t1\n") < 0 ||
+            !minic_riscv64_emit_integer_conversion_for_program(
+                file, program, instruction->type, "t0")) {
+            return false;
+        }
+        return store_core_value(file, frame, instruction->result, "t0");
+    case MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE:
+    case MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER: {
+        MinicType effective_type;
+        const char *opcode;
+
+        if (!minic_c0_type_effective_integer_type(program, instruction->type, &effective_type)) {
+            return false;
+        }
+        if (instruction->kind == MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE) {
+            opcode = minic_type_is_unsigned_integer(effective_type) ? "divu" : "div";
+        } else {
+            opcode = minic_type_is_unsigned_integer(effective_type) ? "remu" : "rem";
+        }
+        if (!load_core_value(file, frame, instruction->value.binary.left, "t0") ||
+            !load_core_value(file, frame, instruction->value.binary.right, "t1") ||
+            fprintf(file, "  %s t0, t0, t1\n", opcode) < 0 ||
+            !minic_riscv64_emit_integer_conversion_for_program(
+                file, program, instruction->type, "t0")) {
+            return false;
+        }
+        return store_core_value(file, frame, instruction->result, "t0");
+    }
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND:
+        if (!load_core_value(file, frame, instruction->value.binary.left, "t0") ||
+            !load_core_value(file, frame, instruction->value.binary.right, "t1") ||
+            fprintf(file, "  and t0, t0, t1\n") < 0 ||
+            !minic_riscv64_emit_integer_conversion_for_program(
+                file, program, instruction->type, "t0")) {
+            return false;
+        }
+        return store_core_value(file, frame, instruction->result, "t0");
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR:
+        if (!load_core_value(file, frame, instruction->value.binary.left, "t0") ||
+            !load_core_value(file, frame, instruction->value.binary.right, "t1") ||
+            fprintf(file, "  xor t0, t0, t1\n") < 0 ||
+            !minic_riscv64_emit_integer_conversion_for_program(
+                file, program, instruction->type, "t0")) {
+            return false;
+        }
+        return store_core_value(file, frame, instruction->result, "t0");
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR:
+        if (!load_core_value(file, frame, instruction->value.binary.left, "t0") ||
+            !load_core_value(file, frame, instruction->value.binary.right, "t1") ||
+            fprintf(file, "  or t0, t0, t1\n") < 0 ||
+            !minic_riscv64_emit_integer_conversion_for_program(
+                file, program, instruction->type, "t0")) {
+            return false;
+        }
+        return store_core_value(file, frame, instruction->result, "t0");
+    case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT:
+        if (!load_core_value(file, frame, instruction->value.binary.left, "t0") ||
+            !load_core_value(file, frame, instruction->value.binary.right, "t1") ||
+            fprintf(file, "  sll t0, t0, t1\n") < 0 ||
+            !minic_riscv64_emit_integer_conversion_for_program(
+                file, program, instruction->type, "t0")) {
+            return false;
+        }
+        return store_core_value(file, frame, instruction->result, "t0");
+    case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT: {
+        MinicType effective_type;
+        const char *opcode;
+
+        if (!minic_c0_type_effective_integer_type(program, instruction->type, &effective_type)) {
+            return false;
+        }
+        opcode = minic_type_is_unsigned_integer(effective_type) ? "srl" : "sra";
+        if (!load_core_value(file, frame, instruction->value.binary.left, "t0") ||
+            !load_core_value(file, frame, instruction->value.binary.right, "t1") ||
+            fprintf(file, "  %s t0, t0, t1\n", opcode) < 0 ||
+            !minic_riscv64_emit_integer_conversion_for_program(
+                file, program, instruction->type, "t0")) {
+            return false;
+        }
+        return store_core_value(file, frame, instruction->result, "t0");
+    }
+    case MINIC_CORE_INSTRUCTION_INTEGER_LESS: {
+        MinicType effective_type;
+        MinicType operand_type;
+        const char *opcode;
+
+        if (instruction->value.binary.left >= function->value_count ||
+            instruction->value.binary.right >= function->value_count) {
+            return false;
+        }
+        operand_type = function->values[instruction->value.binary.left].type;
+        if (!minic_type_is_integer(operand_type) ||
+            !minic_type_equal(operand_type,
+                              function->values[instruction->value.binary.right].type) ||
+            !minic_c0_type_effective_integer_type(program, operand_type, &effective_type)) {
+            return false;
+        }
+        opcode = minic_type_is_unsigned_integer(effective_type) ? "sltu" : "slt";
+        if (!load_core_value(file, frame, instruction->value.binary.left, "t0") ||
+            !load_core_value(file, frame, instruction->value.binary.right, "t1") ||
+            fprintf(file, "  %s t0, t0, t1\n", opcode) < 0) {
+            return false;
+        }
+        return store_core_value(file, frame, instruction->result, "t0");
+    }
+    case MINIC_CORE_INSTRUCTION_SCALAR_EQUAL:
+        if (!load_core_value(file, frame, instruction->value.binary.left, "t0") ||
+            !load_core_value(file, frame, instruction->value.binary.right, "t1") ||
+            fprintf(file, "  xor t0, t0, t1\n  seqz t0, t0\n") < 0) {
+            return false;
+        }
+        return store_core_value(file, frame, instruction->result, "t0");
+    case MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW: {
+        MinicType result_type;
+        size_t result_size;
+        bool is_unsigned;
+
+        if (!core_integer_overflow_supported(
+                program, function, instruction, &result_type, &result_size, &is_unsigned) ||
+            !load_core_value(file, frame, instruction->value.integer_overflow.left, "t0") ||
+            !load_core_value(file, frame, instruction->value.integer_overflow.right, "t1") ||
+            !load_core_value(
+                file, frame, instruction->value.integer_overflow.result_address, "t3")) {
+            return false;
+        }
+        if (instruction->value.integer_overflow.operator_kind == MINIC_CORE_INTEGER_OVERFLOW_ADD) {
+            if (result_size < 8U) {
+                if (fprintf(file, "  add t2, t0, t1\n  mv t4, t2\n") < 0 ||
+                    !minic_riscv64_emit_integer_conversion_for_program(
+                        file, program, result_type, "t2") ||
+                    fprintf(file, "  xor t4, t4, t2\n  snez t4, t4\n") < 0) {
+                    return false;
+                }
+            } else if (is_unsigned) {
+                if (fprintf(file,
+                            "  add t2, t0, t1\n"
+                            "  sltu t4, t2, t0\n") < 0) {
+                    return false;
+                }
+            } else if (fprintf(file,
+                               "  add t2, t0, t1\n"
+                               "  xor t4, t0, t1\n"
+                               "  xori t4, t4, -1\n"
+                               "  xor t5, t0, t2\n"
+                               "  and t4, t4, t5\n"
+                               "  srli t4, t4, 63\n") < 0) {
+                return false;
+            }
+        } else if (instruction->value.integer_overflow.operator_kind ==
+                   MINIC_CORE_INTEGER_OVERFLOW_SUBTRACT) {
+            if (result_size < 8U) {
+                if (fprintf(file, "  sub t2, t0, t1\n  mv t4, t2\n") < 0 ||
+                    !minic_riscv64_emit_integer_conversion_for_program(
+                        file, program, result_type, "t2") ||
+                    fprintf(file, "  xor t4, t4, t2\n  snez t4, t4\n") < 0) {
+                    return false;
+                }
+            } else if (is_unsigned) {
+                if (fprintf(file,
+                            "  sub t2, t0, t1\n"
+                            "  sltu t4, t0, t1\n") < 0) {
+                    return false;
+                }
+            } else if (fprintf(file,
+                               "  sub t2, t0, t1\n"
+                               "  xor t4, t0, t1\n"
+                               "  xor t5, t0, t2\n"
+                               "  and t4, t4, t5\n"
+                               "  srli t4, t4, 63\n") < 0) {
+                return false;
+            }
+        } else if (result_size < 8U) {
+            if (fprintf(file, "  mul t2, t0, t1\n  mv t4, t2\n") < 0 ||
+                !minic_riscv64_emit_integer_conversion_for_program(
+                    file, program, result_type, "t2") ||
+                fprintf(file, "  xor t4, t4, t2\n  snez t4, t4\n") < 0) {
+                return false;
+            }
+        } else if (is_unsigned) {
+            if (fprintf(file,
+                        "  mul t2, t0, t1\n"
+                        "  mulhu t4, t0, t1\n"
+                        "  snez t4, t4\n") < 0) {
+                return false;
+            }
+        } else if (fprintf(file,
+                           "  mul t2, t0, t1\n"
+                           "  mulh t4, t0, t1\n"
+                           "  srai t5, t2, 63\n"
+                           "  xor t4, t4, t5\n"
+                           "  snez t4, t4\n") < 0) {
+            return false;
+        }
+        if (!minic_riscv64_emit_scalar_store_for_program(file, program, result_type, "t2", "t3")) {
+            return false;
+        }
+        return store_core_value(file, frame, instruction->result, "t4");
+    }
     case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION:
         if (!load_core_value(file, frame, instruction->value.operand, "t0") ||
+            !minic_riscv64_emit_integer_conversion_for_program(
+                file, program, instruction->type, "t0")) {
+            return false;
+        }
+        return store_core_value(file, frame, instruction->result, "t0");
+    case MINIC_CORE_INSTRUCTION_SCALAR_BITCAST:
+        if (!load_core_value(file, frame, instruction->value.operand, "t0")) {
+            return false;
+        }
+        if (minic_type_is_integer(instruction->type) &&
             !minic_riscv64_emit_integer_conversion_for_program(
                 file, program, instruction->type, "t0")) {
             return false;
@@ -401,17 +1023,50 @@ static bool emit_instruction(FILE *file,
             return false;
         }
         return store_core_value(file, frame, instruction->result, "t0");
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT:
+        if (!load_core_value(file, frame, instruction->value.operand, "t0") ||
+            fprintf(file, "  xori t0, t0, -1\n") < 0 ||
+            !minic_riscv64_emit_integer_conversion_for_program(
+                file, program, instruction->type, "t0")) {
+            return false;
+        }
+        return store_core_value(file, frame, instruction->result, "t0");
     case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:
         if (!load_core_value(file, frame, instruction->value.operand, "t0") ||
             fprintf(file, "  seqz t0, t0\n") < 0) {
             return false;
         }
         return store_core_value(file, frame, instruction->result, "t0");
+    case MINIC_CORE_INSTRUCTION_POINTER_OFFSET:
+        if (!load_core_value(file, frame, instruction->value.pointer_offset.base, "t0") ||
+            !load_core_value(file, frame, instruction->value.pointer_offset.index, "t1")) {
+            return false;
+        }
+        if (instruction->value.pointer_offset.element_size != 1U &&
+            fprintf(file,
+                    "  li t2, %zu\n"
+                    "  mul t1, t1, t2\n",
+                    instruction->value.pointer_offset.element_size) < 0) {
+            return false;
+        }
+        if (fprintf(file, "  add t0, t0, t1\n") < 0) {
+            return false;
+        }
+        return store_core_value(file, frame, instruction->result, "t0");
     case MINIC_CORE_INSTRUCTION_PARAMETER:
         return emit_parameter(file, program, function, frame, instruction);
+    case MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT:
+        return emit_parameter_object(file, program, function, frame, instruction);
     case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS:
-        if (!core_object_offset(frame, instruction->value.object_id, &object_offset) ||
+        if (!core_object_offset(program, function, instruction->value.object_id, &object_offset) ||
             !emit_sp_address(file, "t0", object_offset)) {
+            return false;
+        }
+        return store_core_value(file, frame, instruction->result, "t0");
+    case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS:
+        if (instruction->value.global_id >= function->global_count ||
+            fprintf(file, "  la t0, %s\n", function->globals[instruction->value.global_id].name) <
+                0) {
             return false;
         }
         return store_core_value(file, frame, instruction->result, "t0");
@@ -435,6 +1090,8 @@ static bool emit_instruction(FILE *file,
                load_core_value(file, frame, stored_value, "t1") &&
                minic_riscv64_emit_scalar_store_for_program(file, program, stored_type, "t1", "t0");
     }
+    case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM:
+        return emit_opaque_inline_asm(file, function, instruction);
     case MINIC_CORE_INSTRUCTION_CALL:
         return emit_call(file, program, function, frame, instruction);
     case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:
@@ -448,6 +1105,7 @@ static bool emit_block_label(FILE *file, const char *symbol_name, MinicCoreBlock
 }
 
 static bool emit_terminator(FILE *file,
+                            const MinicC0Program *program,
                             const MinicCoreFunction *function,
                             const MinicRiscv64CoreFrame *frame,
                             const char *symbol_name,
@@ -458,8 +1116,27 @@ static bool emit_terminator(FILE *file,
     }
     switch (terminator->kind) {
     case MINIC_CORE_TERMINATOR_RETURN:
-        if (terminator->return_value != MINIC_CORE_VALUE_INVALID &&
-            !load_core_value(file, frame, terminator->return_value, "a0")) {
+        if (minic_type_is_record(function->return_type)) {
+            MinicRiscv64AbiValue return_value;
+            size_t object_offset;
+
+            if (program == NULL || terminator->return_object >= function->object_count ||
+                !minic_type_equal(function->objects[terminator->return_object].type,
+                                  function->return_type) ||
+                !minic_riscv64_abi_classify_value(program, function->return_type, &return_value) ||
+                return_value.kind != MINIC_RISCV64_ABI_VALUE_AGGREGATE ||
+                return_value.slot_count == 0U || return_value.slot_count > 2U ||
+                !core_object_offset(program, function, terminator->return_object, &object_offset) ||
+                !emit_sp_address(file, "t0", object_offset) ||
+                !minic_riscv64_emit_integer_aggregate_load_chunk(
+                    file, program, function->return_type, 0U, "a0", "t0") ||
+                (return_value.slot_count == 2U &&
+                 !minic_riscv64_emit_integer_aggregate_load_chunk(
+                     file, program, function->return_type, 1U, "a1", "t0"))) {
+                return false;
+            }
+        } else if (terminator->return_value != MINIC_CORE_VALUE_INVALID &&
+                   !load_core_value(file, frame, terminator->return_value, "a0")) {
             return false;
         }
         return fprintf(file, "  j .L%s_core_return\n", symbol_name) >= 0;
@@ -493,7 +1170,7 @@ static bool emit_core_function_basic_v0_with_symbol(FILE *file,
 
     if (file == NULL || symbol == NULL || symbol->symbol_name == NULL ||
         symbol->symbol_name[0] == '\0' || !core_function_can_emit_basic_v0(program, function) ||
-        !core_frame_initialize(function, &frame)) {
+        !core_frame_initialize(program, function, &frame)) {
         return false;
     }
     symbol_name = symbol->symbol_name;
@@ -528,7 +1205,7 @@ static bool emit_core_function_basic_v0_with_symbol(FILE *file,
             }
         }
         if (!block->has_terminator ||
-            !emit_terminator(file, function, &frame, symbol_name, &block->terminator)) {
+            !emit_terminator(file, program, function, &frame, symbol_name, &block->terminator)) {
             return false;
         }
     }

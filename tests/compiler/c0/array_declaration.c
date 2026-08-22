@@ -1,3 +1,5 @@
+extern unsigned char literal_bound[sizeof("abc")];
+
 int main(void)
 {
     int values[4];

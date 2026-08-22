@@ -15,22 +15,6 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
                                                MinicExpressionId expression_id,
                                                size_t record_result_temporary_size);
 
-static bool minic_riscv64_pointer_element_size(const MinicC0Program *program,
-                                               MinicType pointer_type,
-                                               size_t *element_size) {
-    MinicType pointee;
-    size_t element_alignment;
-
-    if (element_size == NULL || !minic_type_pointee(pointer_type, &pointee)) {
-        return false;
-    }
-    if (minic_type_is_void(pointee) || minic_type_is_function(pointee)) {
-        *element_size = 1U;
-        return true;
-    }
-    return minic_riscv64_type_layout(program, pointee, element_size, &element_alignment);
-}
-
 static bool minic_riscv64_emit_normalize_integer(FILE *file,
                                                  const MinicC0Program *program,
                                                  MinicType type,
@@ -562,7 +546,8 @@ static bool minic_riscv64_emit_update(FILE *file,
              expression->value.unary.operator_kind == MINIC_UNARY_PRE_DECREMENT;
     element_size = 1U;
     if (minic_type_is_pointer(operand->type) &&
-        !minic_riscv64_pointer_element_size(program, operand->type, &element_size)) {
+        !minic_c0_pointer_arithmetic_element_size(
+            program, minic_default_data_layout(), operand->type, &element_size)) {
         return false;
     }
 
@@ -1950,7 +1935,8 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
 
             if ((operator_kind != MINIC_BINARY_ADD && operator_kind != MINIC_BINARY_SUBTRACT) ||
                 !minic_type_is_integer(value->type) ||
-                !minic_riscv64_pointer_element_size(program, target->type, &element_size) ||
+                !minic_c0_pointer_arithmetic_element_size(
+                    program, minic_default_data_layout(), target->type, &element_size) ||
                 fprintf(file, "  sd a0, 8(sp)\n") < 0 ||
                 !minic_riscv64_emit_expression(
                     file, program, function, function_layout, expression->value.binary.right) ||
@@ -2250,12 +2236,14 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
                            file, program, common_integer_type, expression->type, "a0");
             }
             if (minic_type_is_pointer(left->type) && minic_type_is_integer(right->type) &&
-                minic_riscv64_pointer_element_size(program, left->type, &element_size)) {
+                minic_c0_pointer_arithmetic_element_size(
+                    program, minic_default_data_layout(), left->type, &element_size)) {
                 return minic_riscv64_emit_scale_register(file, "a0", "t1", element_size) &&
                        fprintf(file, "  add a0, t0, a0\n") >= 0;
             }
             if (minic_type_is_integer(left->type) && minic_type_is_pointer(right->type) &&
-                minic_riscv64_pointer_element_size(program, right->type, &element_size)) {
+                minic_c0_pointer_arithmetic_element_size(
+                    program, minic_default_data_layout(), right->type, &element_size)) {
                 return minic_riscv64_emit_scale_register(file, "t0", "t1", element_size) &&
                        fprintf(file, "  add a0, a0, t0\n") >= 0;
             }
@@ -2271,7 +2259,8 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
             }
             if (minic_type_is_pointer(left->type) && minic_type_is_pointer(right->type) &&
                 minic_type_equal(expression->type, minic_type_long()) &&
-                minic_riscv64_pointer_element_size(program, left->type, &element_size)) {
+                minic_c0_pointer_arithmetic_element_size(
+                    program, minic_default_data_layout(), left->type, &element_size)) {
                 if (element_size == 1U) {
                     return fprintf(file, "  sub a0, t0, a0\n") >= 0;
                 }
@@ -2282,7 +2271,8 @@ static bool minic_riscv64_emit_expression_impl(FILE *file,
                                element_size) >= 0;
             }
             if (minic_type_is_pointer(left->type) && minic_type_is_integer(right->type) &&
-                minic_riscv64_pointer_element_size(program, left->type, &element_size)) {
+                minic_c0_pointer_arithmetic_element_size(
+                    program, minic_default_data_layout(), left->type, &element_size)) {
                 return minic_riscv64_emit_scale_register(file, "a0", "t1", element_size) &&
                        fprintf(file, "  sub a0, t0, a0\n") >= 0;
             }
