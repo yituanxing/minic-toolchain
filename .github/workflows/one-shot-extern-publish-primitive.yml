@@ -1,3 +1,4 @@
+# Trigger after workflow exists on the branch.
 name: One-shot Atomic Extern Publish Primitive
 
 on:
