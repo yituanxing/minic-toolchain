@@ -32,4 +32,11 @@ replace_once(
     "callee verifier",
 )
 
+replace_once(
+    "src/frontend/ast.c",
+    '''    (void)memset(&resolved, 0, sizeof(resolved));\n    if (expression->kind == MINIC_EXPRESSION_LOCAL) {\n''',
+    '''    (void)memset(&resolved, 0, sizeof(resolved));\n    if (expression->kind == MINIC_EXPRESSION_GLOBAL_OBJECT) {\n        const MinicGlobalObject *object;\n        const MinicArrayType *array_type;\n\n        object = minic_c0_program_global_object(program, expression->value.global_object_id);\n        if (object == NULL || !minic_type_is_array(object->type)) {\n            return false;\n        }\n        array_type = minic_c0_program_array_type(program, object->type.array_type_id);\n        if (array_type == NULL) {\n            return false;\n        }\n        resolved.element_type = array_type->element_type;\n        resolved.element_count = array_type->element_count;\n        resolved.is_zero_length = array_type->is_zero_length;\n        resolved.is_incomplete =\n            array_type->element_count == 0U && !array_type->is_zero_length;\n        resolved.has_materialized_type = true;\n    } else if (expression->kind == MINIC_EXPRESSION_LOCAL) {\n''',
+    "global array semantic query",
+)
+
 print("M31B_FIXUPS_APPLIED")
