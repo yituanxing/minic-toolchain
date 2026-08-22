@@ -76,6 +76,42 @@ replace_once(
 
 replace_once(
     'src/core/core_lower.c',
+    '''    if (expression->kind != MINIC_EXPRESSION_ASSIGNMENT) {
+        MinicCoreValueId discarded_value;
+        MinicType discarded_type;
+
+        if (!core_scalar_expression_value_type(context->body, expression, &discarded_type)) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        (void)discarded_type;
+        return lower_expression(context, statement->expression, &discarded_value);
+    }
+''',
+    '''    if (expression->kind != MINIC_EXPRESSION_ASSIGNMENT) {
+        MinicCoreValueId discarded_value;
+        MinicCoreLowerStatus status;
+        MinicType discarded_type;
+
+        if (minic_type_is_void(expression->type)) {
+            status = lower_expression(context, statement->expression, &discarded_value);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
+            return discarded_value == MINIC_CORE_VALUE_INVALID ? MINIC_CORE_LOWER_OK
+                                                               : MINIC_CORE_LOWER_ERROR;
+        }
+        if (!core_scalar_expression_value_type(context->body, expression, &discarded_type)) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        (void)discarded_type;
+        return lower_expression(context, statement->expression, &discarded_value);
+    }
+''',
+    'void expression statement',
+)
+
+replace_once(
+    'src/core/core_lower.c',
     '''        if (expression->value.conditional.uses_condition_value ||
             expression->value.conditional.when_true == MINIC_EXPRESSION_INVALID ||
             expression->value.conditional.when_false == MINIC_EXPRESSION_INVALID ||
