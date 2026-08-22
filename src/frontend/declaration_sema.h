@@ -26,8 +26,8 @@ typedef enum MinicDeclarationArrayMaterializeStatus {
     MINIC_DECLARATION_ARRAY_MATERIALIZE_TRANSACTION_ESCAPED
 } MinicDeclarationArrayMaterializeStatus;
 
-static inline bool
-minic_declaration_array_suffix_valid(const MinicDeclarationArraySuffix *suffix) {
+static inline bool minic_declaration_array_suffix_valid(
+    const MinicDeclarationArraySuffix *suffix) {
     unsigned int valid_zero_length_bits;
 
     if (suffix == NULL || suffix->dimension_count > MINIC_DECLARATION_MAX_ARRAY_DIMENSIONS) {
@@ -43,11 +43,11 @@ minic_declaration_array_suffix_valid(const MinicDeclarationArraySuffix *suffix) 
     return !suffix->outermost_incomplete || (suffix->zero_length_mask & 1U) == 0U;
 }
 
-static inline MinicDeclarationArrayMaterializeStatus minic_declaration_materialize_array_suffix(
-    MinicC0Program *program,
-    MinicType element_type,
-    const MinicDeclarationArraySuffix *suffix,
-    MinicType *type) {
+static inline MinicDeclarationArrayMaterializeStatus
+minic_declaration_materialize_array_suffix(MinicC0Program *program,
+                                            MinicType element_type,
+                                            const MinicDeclarationArraySuffix *suffix,
+                                            MinicType *type) {
     MinicSemanticSnapshot snapshot;
     size_t dimension;
     MinicType result;
@@ -87,17 +87,17 @@ static inline MinicDeclarationArrayMaterializeStatus minic_declaration_materiali
     return MINIC_DECLARATION_ARRAY_MATERIALIZE_OK;
 }
 
-static inline bool minic_declaration_build_function_type(
-    MinicC0Program *program,
-    MinicType return_type,
-    const MinicType *parameter_types,
-    size_t parameter_count,
-    bool is_variadic,
-    size_t pointer_depth,
-    unsigned int pointer_const_qualifiers,
-    unsigned int pointer_volatile_qualifiers,
-    const MinicDeclarationArraySuffix *array_suffix,
-    MinicType *type) {
+static inline bool
+minic_declaration_build_function_type(MinicC0Program *program,
+                                      MinicType return_type,
+                                      const MinicType *parameter_types,
+                                      size_t parameter_count,
+                                      bool is_variadic,
+                                      size_t pointer_depth,
+                                      unsigned int pointer_const_qualifiers,
+                                      unsigned int pointer_volatile_qualifiers,
+                                      const MinicDeclarationArraySuffix *array_suffix,
+                                      MinicType *type) {
     MinicSemanticSnapshot snapshot;
     MinicDeclarationArrayMaterializeStatus array_status;
     unsigned int valid_pointer_bits;
@@ -143,13 +143,15 @@ static inline bool minic_declaration_build_function_type(
             (void)minic_semantic_snapshot_rollback_declarator_types(&snapshot, program);
             return false;
         }
-        if ((pointer_volatile_qualifiers & bit) != 0U && !minic_type_add_volatile(result, &result)) {
+        if ((pointer_volatile_qualifiers & bit) != 0U &&
+            !minic_type_add_volatile(result, &result)) {
             (void)minic_semantic_snapshot_rollback_declarator_types(&snapshot, program);
             return false;
         }
     }
 
-    array_status = minic_declaration_materialize_array_suffix(program, result, array_suffix, &result);
+    array_status =
+        minic_declaration_materialize_array_suffix(program, result, array_suffix, &result);
     if (array_status != MINIC_DECLARATION_ARRAY_MATERIALIZE_OK) {
         (void)minic_semantic_snapshot_rollback_declarator_types(&snapshot, program);
         return false;
