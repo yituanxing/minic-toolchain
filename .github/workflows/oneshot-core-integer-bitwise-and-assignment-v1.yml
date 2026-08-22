@@ -1,0 +1,160 @@
+name: One-shot Core Integer Bitwise And Assignment M14
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    if: github.actor != 'github-actions[bot]' && github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+          fetch-depth: 0
+
+      - name: Install RISC-V runtime tools
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mapfile -t packages < <(grep -Ev '^[[:space:]]*(#|$)' tools/ci/ubuntu-24.04-packages.txt)
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends "${packages[@]}"
+          sh tools/ci/verify-validation-tools.sh
+
+      - name: Restore frozen Linux corpus
+        id: linux-corpus-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+
+      - name: Require frozen corpus
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
+          test -s build/linux-focus-corpus/selected-tus.txt
+
+      - name: Prove prepatch compound-and gap
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-m14-before-compiler
+          compiler="$GITHUB_WORKSPACE/build/core-m14-before-compiler/bin/minic"
+          cat > build/core-m14-before.i <<'EOF'
+          _Bool external_bool(void);
+          _Bool core_m14_before(void) {
+              _Bool ret = 1;
+              ret &= external_bool();
+              return ret;
+          }
+          EOF
+          if MINIC_CORE_IR=strict "$compiler" -S build/core-m14-before.i -o build/core-m14-before.s \
+              2>build/core-m14-before.err; then
+            echo 'M14 gap unexpectedly absent before patch' >&2
+            exit 1
+          fi
+          grep -F "Core IR shadow does not yet support function 'core_m14_before'" \
+            build/core-m14-before.err >/dev/null
+          printf '%s\n' 'PROVED core/m14 compound-bitwise-and prepatch unsupported'
+
+      - name: Apply M14
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 -m py_compile tools/dev/patch-core-integer-bitwise-and-assignment-v1.py
+          python3 tools/dev/patch-core-integer-bitwise-and-assignment-v1.py
+          clang-format-18 -i \
+            src/core/core_ir.h \
+            src/core/core_ir.c \
+            src/core/core_lower.c \
+            src/target/riscv64/core_codegen.c \
+            tests/compiler/c0/core_integer_bitwise_and_assignment.c \
+            tests/compiler/c0/core_integer_bitwise_and_assignment_runtime.c
+          sh -n tests/compiler/c0/run-core-integer-bitwise-and-assignment.sh
+          bash -n .github/scripts/compiler-c0-full-gate.sh
+          git diff --check
+
+      - name: Build patched compiler
+        shell: bash
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-m14-compiler
+
+      - name: Validate focused runtime differential
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/core-m14-compiler/bin/minic"
+          MINIC="$compiler" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/core-m14-focused" \
+          RISCV_CC=riscv64-linux-gnu-gcc \
+          QEMU_RISCV64=qemu-riscv64 \
+            sh tests/compiler/c0/run-core-integer-bitwise-and-assignment.sh
+          MINIC="$compiler" sh tests/core/run-core-ir-shadow.sh
+
+      - name: Replay frozen strict frontier
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/core-m14-compiler/bin/minic"
+          set +e
+          MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
+            --minic "$compiler" \
+            --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
+            --work "$GITHUB_WORKSPACE/build/core-m14-strict" \
+            --jobs 4 --offset 0 --limit 500 --sample-count 64 --indices ''
+          replay_status=$?
+          set -e
+          printf 'CORE_M14_REPLAY_STATUS=%d\n' "$replay_status"
+          python3 - <<'PY'
+          from collections import Counter
+          import json, re
+          from pathlib import Path
+          rows = json.loads(Path('build/core-m14-strict/batch-results.json').read_text())
+          unsupported_re = re.compile(r"^Core IR shadow does not yet support function '([^']+)'$")
+          unsupported = Counter()
+          errors = []
+          passes = 0
+          for row in rows:
+              if row['status'] == 'PASS':
+                  passes += 1
+                  continue
+              message = str(row['message'])
+              match = unsupported_re.match(message)
+              if match:
+                  unsupported[match.group(1)] += 1
+              else:
+                  errors.append((row['index'], message))
+          print(f'CORE_M14_FRONTIER selected={len(rows)} pass={passes} unsupported={sum(unsupported.values())} error={len(errors)}')
+          for function, count in unsupported.most_common():
+              print(f'CORE_M14_BLOCKER count={count} function={function}')
+          for index, message in errors:
+              print(f'CORE_M14_ERROR index={index} message={message}')
+          if errors:
+              raise SystemExit('M14 introduced non-UNSUPPORTED strict failures')
+          PY
+
+      - name: Publish M14 product
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm tools/dev/patch-core-integer-bitwise-and-assignment-v1.py
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            src/core/core_ir.h \
+            src/core/core_ir.c \
+            src/core/core_lower.c \
+            src/target/riscv64/core_codegen.c \
+            tests/compiler/c0/core_integer_bitwise_and_assignment.c \
+            tests/compiler/c0/core_integer_bitwise_and_assignment_runtime.c \
+            tests/compiler/c0/run-core-integer-bitwise-and-assignment.sh \
+            .github/scripts/compiler-c0-full-gate.sh \
+            tools/dev/patch-core-integer-bitwise-and-assignment-v1.py
+          git diff --cached --check
+          git commit -m 'core: compose integer bitwise and assignment'
+          git push origin HEAD:refactor/declaration-sema-v1
