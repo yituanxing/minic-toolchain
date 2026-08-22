@@ -71,6 +71,7 @@ jobs:
             tests/compiler/c0/core_const_parameter_m23b_runtime.c
           sh -n tests/compiler/c0/run-core-integer-conditional-m23.sh
           sh -n tests/compiler/c0/run-core-const-parameter-m23b.sh
+          bash -n tests/core/run-core-ir-shadow.sh
           git diff --check
           git diff --exit-code -- src/core/core_ir.h src/target/riscv64/core_codegen.c
 
@@ -140,6 +141,7 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add src/core/core_ir.c src/core/core_lower.c \
+                  tests/core/run-core-ir-shadow.sh \
                   tests/compiler/c0/core_integer_conditional_m23.c \
                   tests/compiler/c0/core_integer_conditional_m23_runtime.c \
                   tests/compiler/c0/run-core-integer-conditional-m23.sh \
