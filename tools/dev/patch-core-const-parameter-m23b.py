@@ -58,6 +58,62 @@ body = body.replace(old_type, new_type, 1)
 text = text[:begin] + body + text[end:]
 lower_path.write_text(text)
 
+shadow_path = Path('tests/core/run-core-ir-shadow.sh')
+shadow = shadow_path.read_text()
+old_shadow = '''cat >"$work_dir/qualified-parameter.i" <<'EOF'
+unsigned long qualified_parameter(const unsigned long value) {
+    return value;
+}
+EOF
+
+"$MINIC" -S "$work_dir/qualified-parameter.i" -o "$work_dir/qualified-parameter-normal.s"
+MINIC_CORE_IR=shadow "$MINIC" -S "$work_dir/qualified-parameter.i"     -o "$work_dir/qualified-parameter-shadow.s"
+cmp "$work_dir/qualified-parameter-normal.s" "$work_dir/qualified-parameter-shadow.s"
+if MINIC_CORE_IR=strict "$MINIC" -S "$work_dir/qualified-parameter.i"     -o "$work_dir/qualified-parameter-strict.s" 2>"$work_dir/qualified-parameter-strict.err"; then
+    echo "strict Core IR shadow unexpectedly accepted a qualified parameter" >&2
+    exit 1
+fi
+grep -F "Core IR shadow does not yet support function 'qualified_parameter'"     "$work_dir/qualified-parameter-strict.err" >/dev/null
+'''
+new_shadow = '''cat >"$work_dir/qualified-parameter.i" <<'EOF'
+unsigned long qualified_parameter(const unsigned long value) {
+    return value;
+}
+EOF
+check_strict_case qualified-parameter
+
+cat >"$work_dir/pointee-const-parameter.i" <<'EOF'
+int pointee_const_parameter(const int *value) {
+    return *value;
+}
+EOF
+check_strict_case pointee-const-parameter
+
+cat >"$work_dir/volatile-parameter-unsupported.i" <<'EOF'
+unsigned long volatile_parameter(volatile unsigned long value) {
+    return value;
+}
+EOF
+"$MINIC" -S "$work_dir/volatile-parameter-unsupported.i" \\
+    -o "$work_dir/volatile-parameter-unsupported-normal.s"
+MINIC_CORE_IR=shadow "$MINIC" -S "$work_dir/volatile-parameter-unsupported.i" \\
+    -o "$work_dir/volatile-parameter-unsupported-shadow.s"
+cmp "$work_dir/volatile-parameter-unsupported-normal.s" \\
+    "$work_dir/volatile-parameter-unsupported-shadow.s"
+if MINIC_CORE_IR=strict "$MINIC" -S "$work_dir/volatile-parameter-unsupported.i" \\
+    -o "$work_dir/volatile-parameter-unsupported-strict.s" \\
+    2>"$work_dir/volatile-parameter-unsupported-strict.err"; then
+    echo "strict Core IR shadow unexpectedly accepted a volatile parameter" >&2
+    exit 1
+fi
+grep -F "Core IR shadow does not yet support function 'volatile_parameter'" \\
+    "$work_dir/volatile-parameter-unsupported-strict.err" >/dev/null
+'''
+if shadow.count(old_shadow) != 1:
+    raise SystemExit(f'M23b qualified-parameter shadow anchor count={shadow.count(old_shadow)}')
+shadow = shadow.replace(old_shadow, new_shadow, 1)
+shadow_path.write_text(shadow)
+
 Path('tests/compiler/c0/core_const_parameter_m23b.c').write_text(r'''unsigned long core_m23b_const_parameter(const unsigned long value) {
     return value + 1UL;
 }
