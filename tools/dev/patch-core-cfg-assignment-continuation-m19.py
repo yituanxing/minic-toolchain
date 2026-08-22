@@ -68,8 +68,8 @@ replace_once(
     '''int core_m19_cfg_statement_rhs(int left, int right) {
     return left && ({
         do {
-            if (right < 0)
-                right = 0;
+            if (right == 0)
+                right = 1;
         } while (0);
         right;
     });
@@ -78,8 +78,8 @@ replace_once(
 int core_m19_cfg_initializer(int value) {
     int result = ({
         do {
-            if (value < 0)
-                value = 0;
+            if (value == 0)
+                value = 1;
         } while (0);
         value;
     });
@@ -111,10 +111,10 @@ replace_once(
     printf("list=%d,%d\\n",
 ''',
     '''    printf("cfg=%d,%d,%d\\n",
-           core_m19_cfg_statement_rhs(0, -1),
+           core_m19_cfg_statement_rhs(0, 0),
            core_m19_cfg_statement_rhs(1, 0),
            core_m19_cfg_statement_rhs(1, 7));
-    printf("init=%d,%d\\n", core_m19_cfg_initializer(-3), core_m19_cfg_initializer(7));
+    printf("init=%d,%d\\n", core_m19_cfg_initializer(0), core_m19_cfg_initializer(7));
     printf("list=%d,%d\\n",
 ''',
     "Core M19 CFG runtime output",
@@ -135,8 +135,8 @@ replace_once(
     '''grep -F 'cfg=0,0,1' "$work/minic.out" >/dev/null
 grep -F 'list=1,0' "$work/minic.out" >/dev/null
 ''',
-    '''grep -F 'cfg=0,0,1' "$work/minic.out" >/dev/null
-grep -F 'init=0,7' "$work/minic.out" >/dev/null
+    '''grep -F 'cfg=0,1,1' "$work/minic.out" >/dev/null
+grep -F 'init=1,7' "$work/minic.out" >/dev/null
 grep -F 'list=1,0' "$work/minic.out" >/dev/null
 ''',
     "Core M19 CFG runtime contract",
