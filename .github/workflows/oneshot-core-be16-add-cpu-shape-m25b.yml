@@ -73,7 +73,7 @@ jobs:
               raise SystemExit('be16_add_cpu not found in frozen corpus')
           PY
 
-      - name: Probe likely general shapes
+      - name: Probe general and constant-p shapes
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -94,20 +94,62 @@ jobs:
           }
           EOF
 
-          cat > "$w/volatile_deref_add_store.i" <<'EOF'
-          void probe(volatile unsigned short *p, unsigned short v) {
-              *p = (unsigned short)(*p + v);
+          cat > "$w/constant_p_deref.i" <<'EOF'
+          unsigned short slow(unsigned short v) { return v; }
+          unsigned short probe(unsigned short *p) {
+              return __builtin_constant_p(*p) ? (unsigned short)(*p + 1U) : slow(*p);
           }
           EOF
 
-          cat > "$w/discard_then_deref_add_store.i" <<'EOF'
-          void probe(unsigned short *p, unsigned short v) {
-              (void)(p);
-              *p = (unsigned short)(*p + v);
+          cat > "$w/inner_swab_cond.i" <<'EOF'
+          unsigned short slow(unsigned short v) { return v; }
+          unsigned short probe(unsigned short *p) {
+              return __builtin_constant_p(*p)
+                  ? (unsigned short)(((*p & 0x00ffU) << 8) | ((*p & 0xff00U) >> 8))
+                  : slow(*p);
           }
           EOF
 
-          for n in deref_add_store nested_call_store volatile_deref_add_store discard_then_deref_add_store; do
+          cat > "$w/inner_cond_add_store.i" <<'EOF'
+          unsigned short slow(unsigned short v) { return v; }
+          void probe(unsigned short *p, unsigned short val) {
+              *p = (unsigned short)((__builtin_constant_p(*p)
+                  ? (unsigned short)(((*p & 0x00ffU) << 8) | ((*p & 0xff00U) >> 8))
+                  : slow(*p)) + val);
+          }
+          EOF
+
+          cat > "$w/outer_constant_p.i" <<'EOF'
+          unsigned short slow(unsigned short v) { return v; }
+          void probe(unsigned short *p, unsigned short val) {
+              unsigned short x = (unsigned short)((__builtin_constant_p(*p)
+                  ? (unsigned short)(((*p & 0x00ffU) << 8) | ((*p & 0xff00U) >> 8))
+                  : slow(*p)) + val);
+              *p = __builtin_constant_p(x)
+                  ? (unsigned short)(((x & 0x00ffU) << 8) | ((x & 0xff00U) >> 8))
+                  : slow(x);
+          }
+          EOF
+
+          cat > "$w/nested_constant_p_no_local.i" <<'EOF'
+          unsigned short slow(unsigned short v) { return v; }
+          void probe(unsigned short *p, unsigned short val) {
+              *p = __builtin_constant_p((unsigned short)((__builtin_constant_p(*p)
+                  ? (unsigned short)(((*p & 0x00ffU) << 8) | ((*p & 0xff00U) >> 8))
+                  : slow(*p)) + val))
+                  ? (unsigned short)(((((unsigned short)((__builtin_constant_p(*p)
+                      ? (unsigned short)(((*p & 0x00ffU) << 8) | ((*p & 0xff00U) >> 8))
+                      : slow(*p)) + val)) & 0x00ffU) << 8)
+                    | ((((unsigned short)((__builtin_constant_p(*p)
+                      ? (unsigned short)(((*p & 0x00ffU) << 8) | ((*p & 0xff00U) >> 8))
+                      : slow(*p)) + val)) & 0xff00U) >> 8))
+                  : slow((unsigned short)((__builtin_constant_p(*p)
+                      ? (unsigned short)(((*p & 0x00ffU) << 8) | ((*p & 0xff00U) >> 8))
+                      : slow(*p)) + val));
+          }
+          EOF
+
+          for n in deref_add_store nested_call_store constant_p_deref inner_swab_cond inner_cond_add_store outer_constant_p nested_constant_p_no_local; do
               set +e
               MINIC_CORE_IR=strict "$c" -S "$w/$n.i" -o "$w/$n.s" 2>"$w/$n.err"
               rc=$?
