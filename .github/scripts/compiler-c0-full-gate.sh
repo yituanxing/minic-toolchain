@@ -253,6 +253,14 @@ core_integer_equality_focused() {
         sh tests/compiler/c0/run-core-integer-equality.sh
 }
 
+core_integer_multiply_overflow_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" \
+    BUILD_DIR="$root/build/ci-core-integer-multiply-overflow" \
+    RISCV_CC=riscv64-linux-gnu-gcc \
+    QEMU_RISCV64=qemu-riscv64 \
+        sh tests/compiler/c0/run-core-integer-multiply-overflow.sh
+}
+
 runtime_record_fam_prefix_focused() {
     MINIC="$root/build/ci-debug/bin/minic" \
     HOST_CC=cc \
@@ -410,6 +418,7 @@ start_gate core-fixed-call-scalar-conversions-focused core_fixed_call_scalar_con
 start_gate core-scalar-assignment-implicit-void-focused core_scalar_assignment_implicit_void_focused
 start_gate core-global-scalar-memory-focused core_global_scalar_memory_focused
 start_gate core-integer-equality-focused core_integer_equality_focused
+start_gate core-integer-multiply-overflow-focused core_integer_multiply_overflow_focused
 start_gate record-fam-prefix-focused runtime_record_fam_prefix_focused
 start_gate linenoise-driven-focused linenoise_driven_focused
 start_gate sds-driven-focused sds_driven_focused

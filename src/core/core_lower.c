@@ -730,6 +730,76 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                    ? MINIC_CORE_LOWER_OK
                    : MINIC_CORE_LOWER_ERROR;
     }
+    if (expression->kind == MINIC_EXPRESSION_BUILTIN_OVERFLOW &&
+        expression->value.overflow.operator_kind == MINIC_OVERFLOW_MULTIPLY) {
+        const MinicExpression *left_expression;
+        const MinicExpression *result_pointer_expression;
+        const MinicExpression *right_expression;
+        MinicCoreValueId left;
+        MinicCoreValueId left_source;
+        MinicCoreValueId result_address;
+        MinicCoreValueId right;
+        MinicCoreValueId right_source;
+        MinicCoreLowerStatus status;
+        MinicType result_type;
+
+        if (!minic_type_equal(expression->type, minic_type_bool())) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        left_expression =
+            minic_c0_program_expression(context->body->program, expression->value.overflow.left);
+        right_expression =
+            minic_c0_program_expression(context->body->program, expression->value.overflow.right);
+        result_pointer_expression = minic_c0_program_expression(
+            context->body->program, expression->value.overflow.result_pointer);
+        if (left_expression == NULL || right_expression == NULL ||
+            result_pointer_expression == NULL ||
+            !minic_type_pointee(result_pointer_expression->type, &result_type) ||
+            !minic_type_is_integer(result_type) || minic_type_is_bool_integer(result_type) ||
+            minic_type_is_const(result_type) || minic_type_is_volatile(result_type)) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        status = lower_expression(context, expression->value.overflow.left, &left_source);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        status = append_integer_conversion(
+            context, left_expression->span, result_type, left_source, &left);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        status = lower_expression(context, expression->value.overflow.right, &right_source);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        status = append_integer_conversion(
+            context, right_expression->span, result_type, right_source, &right);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        status =
+            lower_expression(context, expression->value.overflow.result_pointer, &result_address);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        if (left >= context->function->value_count || right >= context->function->value_count ||
+            result_address >= context->function->value_count ||
+            !minic_type_equal(context->function->values[left].type, result_type) ||
+            !minic_type_equal(context->function->values[right].type, result_type) ||
+            !minic_type_equal(context->function->values[result_address].type,
+                              result_pointer_expression->type)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY_OVERFLOW;
+        instruction.type = minic_type_bool();
+        instruction.value.multiply_overflow.left = left;
+        instruction.value.multiply_overflow.right = right;
+        instruction.value.multiply_overflow.result_address = result_address;
+        return minic_core_function_append_value_instruction(
+                   context->function, context->block_id, &instruction, value_id)
+                   ? MINIC_CORE_LOWER_OK
+                   : MINIC_CORE_LOWER_ERROR;
+    }
     if (expression->kind == MINIC_EXPRESSION_BINARY &&
         expression->value.binary.operator_kind == MINIC_BINARY_EQUAL) {
         MinicCoreValueId left;

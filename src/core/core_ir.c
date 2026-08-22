@@ -482,6 +482,29 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
         left = &function->values[instruction->value.binary.left];
         right = &function->values[instruction->value.binary.right];
         return minic_type_is_integer(left->type) && minic_type_equal(left->type, right->type);
+    case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY_OVERFLOW: {
+        MinicType result_type;
+
+        if (!instruction_result_is_valid(function, instruction) ||
+            !minic_type_equal(instruction->type, minic_type_bool()) ||
+            instruction->value.multiply_overflow.left >= function->value_count ||
+            instruction->value.multiply_overflow.right >= function->value_count ||
+            instruction->value.multiply_overflow.result_address >= function->value_count ||
+            !available_values[instruction->value.multiply_overflow.left] ||
+            !available_values[instruction->value.multiply_overflow.right] ||
+            !available_values[instruction->value.multiply_overflow.result_address] ||
+            !minic_type_pointee(
+                function->values[instruction->value.multiply_overflow.result_address].type,
+                &result_type) ||
+            !minic_type_is_integer(result_type) || minic_type_is_bool_integer(result_type) ||
+            minic_type_is_const(result_type) || minic_type_is_volatile(result_type)) {
+            return false;
+        }
+        left = &function->values[instruction->value.multiply_overflow.left];
+        right = &function->values[instruction->value.multiply_overflow.right];
+        return minic_type_equal(left->type, result_type) &&
+               minic_type_equal(right->type, result_type);
+    }
     case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION:
         return instruction_result_is_valid(function, instruction) &&
                minic_type_is_integer(instruction->type) &&
@@ -810,6 +833,14 @@ static bool dump_instruction(FILE *output,
                        instruction->result,
                        instruction->value.binary.left,
                        instruction->value.binary.right) >= 0;
+    case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY_OVERFLOW:
+        return fprintf(output,
+                       "  %%%" PRIu32 " = mul.overflow.int %%%" PRIu32 ", %%%" PRIu32 ", %%%" PRIu32
+                       "\n",
+                       instruction->result,
+                       instruction->value.multiply_overflow.left,
+                       instruction->value.multiply_overflow.right,
+                       instruction->value.multiply_overflow.result_address) >= 0;
     case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION:
         return fprintf(output,
                        "  %%%" PRIu32 " = convert.int %%%" PRIu32 "\n",

@@ -219,6 +219,46 @@ static bool core_scalar_bitcast_supported(const MinicC0Program *program,
     return source_size != 0U && source_size <= 8U && target_size != 0U && target_size <= 8U;
 }
 
+static bool core_integer_multiply_overflow_supported(const MinicC0Program *program,
+                                                     const MinicCoreFunction *function,
+                                                     const MinicCoreInstruction *instruction,
+                                                     MinicType *result_type,
+                                                     size_t *result_size,
+                                                     bool *is_unsigned) {
+    MinicType effective_result_type;
+    MinicType pointee;
+    size_t alignment;
+
+    if (program == NULL || function == NULL || instruction == NULL ||
+        instruction->kind != MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY_OVERFLOW ||
+        !minic_type_equal(instruction->type, minic_type_bool()) ||
+        instruction->value.multiply_overflow.left >= function->value_count ||
+        instruction->value.multiply_overflow.right >= function->value_count ||
+        instruction->value.multiply_overflow.result_address >= function->value_count ||
+        !minic_type_pointee(
+            function->values[instruction->value.multiply_overflow.result_address].type, &pointee) ||
+        !minic_type_is_integer(pointee) || minic_type_is_bool_integer(pointee) ||
+        minic_type_is_const(pointee) || minic_type_is_volatile(pointee) ||
+        !minic_type_equal(function->values[instruction->value.multiply_overflow.left].type,
+                          pointee) ||
+        !minic_type_equal(function->values[instruction->value.multiply_overflow.right].type,
+                          pointee) ||
+        !minic_data_layout_type(
+            minic_default_data_layout(), program, pointee, result_size, &alignment) ||
+        *result_size == 0U || *result_size > 8U ||
+        !minic_c0_type_effective_integer_type(program, pointee, &effective_result_type)) {
+        return false;
+    }
+    (void)alignment;
+    if (result_type != NULL) {
+        *result_type = pointee;
+    }
+    if (is_unsigned != NULL) {
+        *is_unsigned = minic_type_is_unsigned_integer(effective_result_type);
+    }
+    return true;
+}
+
 static bool core_instruction_supported(const MinicC0Program *program,
                                        const MinicCoreFunction *function,
                                        const MinicCoreInstruction *instruction) {
@@ -243,6 +283,14 @@ static bool core_instruction_supported(const MinicC0Program *program,
         return instruction->value.global_id < function->global_count &&
                function->globals[instruction->value.global_id].name != NULL &&
                function->globals[instruction->value.global_id].name_length != 0U;
+    case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY_OVERFLOW: {
+        MinicType result_type;
+        size_t result_size;
+        bool is_unsigned;
+
+        return core_integer_multiply_overflow_supported(
+            program, function, instruction, &result_type, &result_size, &is_unsigned);
+    }
     case MINIC_CORE_INSTRUCTION_CALL:
         if (instruction->value.call.callee_id >= function->callee_count ||
             instruction->value.call.argument_count > 8U) {
@@ -441,6 +489,46 @@ static bool emit_instruction(FILE *file,
             return false;
         }
         return store_core_value(file, frame, instruction->result, "t0");
+    case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY_OVERFLOW: {
+        MinicType result_type;
+        size_t result_size;
+        bool is_unsigned;
+
+        if (!core_integer_multiply_overflow_supported(
+                program, function, instruction, &result_type, &result_size, &is_unsigned) ||
+            !load_core_value(file, frame, instruction->value.multiply_overflow.left, "t0") ||
+            !load_core_value(file, frame, instruction->value.multiply_overflow.right, "t1") ||
+            !load_core_value(
+                file, frame, instruction->value.multiply_overflow.result_address, "t3")) {
+            return false;
+        }
+        if (result_size < 8U) {
+            if (fprintf(file, "  mul t2, t0, t1\n  mv t4, t2\n") < 0 ||
+                !minic_riscv64_emit_integer_conversion_for_program(
+                    file, program, result_type, "t2") ||
+                fprintf(file, "  xor t4, t4, t2\n  snez t4, t4\n") < 0) {
+                return false;
+            }
+        } else if (is_unsigned) {
+            if (fprintf(file,
+                        "  mul t2, t0, t1\n"
+                        "  mulhu t4, t0, t1\n"
+                        "  snez t4, t4\n") < 0) {
+                return false;
+            }
+        } else if (fprintf(file,
+                           "  mul t2, t0, t1\n"
+                           "  mulh t4, t0, t1\n"
+                           "  srai t5, t2, 63\n"
+                           "  xor t4, t4, t5\n"
+                           "  snez t4, t4\n") < 0) {
+            return false;
+        }
+        if (!minic_riscv64_emit_scalar_store_for_program(file, program, result_type, "t2", "t3")) {
+            return false;
+        }
+        return store_core_value(file, frame, instruction->result, "t4");
+    }
     case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION:
         if (!load_core_value(file, frame, instruction->value.operand, "t0") ||
             !minic_riscv64_emit_integer_conversion_for_program(

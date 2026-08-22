@@ -29,6 +29,7 @@ typedef enum MinicCoreInstructionKind {
     MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT = 0,
     MINIC_CORE_INSTRUCTION_INTEGER_ADD,
     MINIC_CORE_INSTRUCTION_INTEGER_EQUAL,
+    MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY_OVERFLOW,
     MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION,
     MINIC_CORE_INSTRUCTION_SCALAR_BITCAST,
     MINIC_CORE_INSTRUCTION_INTEGER_NEGATE,
@@ -83,6 +84,11 @@ typedef struct MinicCoreInstruction {
             MinicCoreValueId left;
             MinicCoreValueId right;
         } binary;
+        struct {
+            MinicCoreValueId left;
+            MinicCoreValueId right;
+            MinicCoreValueId result_address;
+        } multiply_overflow;
         MinicCoreValueId operand;
         size_t parameter_index;
         MinicCoreObjectId object_id;
