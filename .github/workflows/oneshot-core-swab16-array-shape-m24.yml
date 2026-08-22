@@ -33,24 +33,19 @@ jobs:
           pos = s.find(needle)
           if pos < 0:
               raise SystemExit('swab16_array not found in init/version.i')
-          # Walk back to a plausible function header boundary and then brace-match.
           start = s.rfind('\n', 0, max(0, pos - 1200)) + 1
           brace = s.find('{', pos)
           if brace < 0:
               raise SystemExit('opening brace not found')
           depth = 0
           end = None
-          i = brace
-          while i < len(s):
-              c = s[i]
-              if c == '{':
-                  depth += 1
-              elif c == '}':
+          for i in range(brace, len(s)):
+              if s[i] == '{': depth += 1
+              elif s[i] == '}':
                   depth -= 1
                   if depth == 0:
                       end = i + 1
                       break
-              i += 1
           if end is None:
               raise SystemExit('closing brace not found')
           print('CORE_SWAB16_ARRAY_FILE', p)
@@ -58,3 +53,39 @@ jobs:
           print(s[start:end])
           print('CORE_SWAB16_ARRAY_END')
           PY
+      - name: Split exact body mechanisms
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-swab16-shape
+          c="$GITHUB_WORKSPACE/build/core-swab16-shape/bin/minic"
+          w="$GITHUB_WORKSPACE/build/core-swab16-shapes"
+          mkdir -p "$w"
+          cat > "$w/while_postdec.i" <<'EOF'
+          void probe(unsigned int words) { while (words--) { } }
+          EOF
+          cat > "$w/call_in_loop.i" <<'EOF'
+          void helper(unsigned short *p) { *p = *p; }
+          void probe(unsigned short *buf, unsigned int words) { while (words--) { helper(buf); } }
+          EOF
+          cat > "$w/pointer_postinc.i" <<'EOF'
+          void probe(unsigned short *buf) { buf++; }
+          EOF
+          cat > "$w/full_shape.i" <<'EOF'
+          void helper(unsigned short *p) { *p = *p; }
+          void probe(unsigned short *buf, unsigned int words) {
+              while (words--) {
+                  helper(buf);
+                  buf++;
+              }
+          }
+          EOF
+          for n in while_postdec call_in_loop pointer_postinc full_shape; do
+            set +e
+            MINIC_CORE_IR=strict "$c" -S "$w/$n.i" -o "$w/$n.s" 2>"$w/$n.err"
+            rc=$?
+            set -e
+            printf 'CORE_SWAB16_SHAPE name=%s rc=%d message=' "$n" "$rc"
+            tr '\n' ' ' < "$w/$n.err"
+            printf '\n'
+          done
