@@ -391,6 +391,12 @@ static bool available_pointer_pointee(const MinicCoreFunction *function,
     return minic_type_pointee(function->values[address].type, pointee);
 }
 
+static bool core_scalar_bitcast_types_valid(MinicType target_type, MinicType source_type) {
+    return (minic_type_is_pointer(target_type) &&
+            (minic_type_is_pointer(source_type) || minic_type_is_integer(source_type))) ||
+           (minic_type_is_integer(target_type) && minic_type_is_pointer(source_type));
+}
+
 static bool instruction_is_valid(const MinicCoreFunction *function,
                                  const MinicCoreInstruction *instruction,
                                  const bool *available_values) {
@@ -423,6 +429,12 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
                instruction->value.operand < function->value_count &&
                available_values[instruction->value.operand] &&
                minic_type_is_integer(function->values[instruction->value.operand].type);
+    case MINIC_CORE_INSTRUCTION_SCALAR_BITCAST:
+        return instruction_result_is_valid(function, instruction) &&
+               instruction->value.operand < function->value_count &&
+               available_values[instruction->value.operand] &&
+               core_scalar_bitcast_types_valid(instruction->type,
+                                               function->values[instruction->value.operand].type);
     case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE:
         return instruction_result_is_valid(function, instruction) &&
                minic_type_is_integer(instruction->type) &&
@@ -714,6 +726,11 @@ static bool dump_instruction(FILE *output,
     case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION:
         return fprintf(output,
                        "  %%%" PRIu32 " = convert.int %%%" PRIu32 "\n",
+                       instruction->result,
+                       instruction->value.operand) >= 0;
+    case MINIC_CORE_INSTRUCTION_SCALAR_BITCAST:
+        return fprintf(output,
+                       "  %%%" PRIu32 " = bitcast.scalar %%%" PRIu32 "\n",
                        instruction->result,
                        instruction->value.operand) >= 0;
     case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE:

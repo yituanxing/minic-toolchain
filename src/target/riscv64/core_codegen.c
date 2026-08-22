@@ -184,6 +184,41 @@ static bool core_field_address_supported(const MinicC0Program *program,
     return true;
 }
 
+static bool core_scalar_bitcast_supported(const MinicC0Program *program,
+                                          const MinicCoreFunction *function,
+                                          const MinicCoreInstruction *instruction) {
+    const MinicCoreValue *source;
+    size_t source_size;
+    size_t source_alignment;
+    size_t target_size;
+    size_t target_alignment;
+    bool type_pair_valid;
+
+    if (program == NULL || function == NULL || instruction == NULL ||
+        instruction->kind != MINIC_CORE_INSTRUCTION_SCALAR_BITCAST ||
+        instruction->value.operand >= function->value_count) {
+        return false;
+    }
+    source = &function->values[instruction->value.operand];
+    type_pair_valid =
+        (minic_type_is_pointer(instruction->type) &&
+         (minic_type_is_pointer(source->type) || minic_type_is_integer(source->type))) ||
+        (minic_type_is_integer(instruction->type) && minic_type_is_pointer(source->type));
+    if (!type_pair_valid ||
+        !minic_data_layout_type(
+            minic_default_data_layout(), program, source->type, &source_size, &source_alignment) ||
+        !minic_data_layout_type(minic_default_data_layout(),
+                                program,
+                                instruction->type,
+                                &target_size,
+                                &target_alignment)) {
+        return false;
+    }
+    (void)source_alignment;
+    (void)target_alignment;
+    return source_size != 0U && source_size <= 8U && target_size != 0U && target_size <= 8U;
+}
+
 static bool core_instruction_supported(const MinicC0Program *program,
                                        const MinicCoreFunction *function,
                                        const MinicCoreInstruction *instruction) {
@@ -212,6 +247,8 @@ static bool core_instruction_supported(const MinicC0Program *program,
         return callee->name != NULL && callee->name_length != 0U && callee->parameter_count <= 8U;
     case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:
         return core_field_address_supported(program, instruction, NULL);
+    case MINIC_CORE_INSTRUCTION_SCALAR_BITCAST:
+        return core_scalar_bitcast_supported(program, function, instruction);
     }
     return false;
 }
@@ -388,6 +425,16 @@ static bool emit_instruction(FILE *file,
         return store_core_value(file, frame, instruction->result, "t0");
     case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION:
         if (!load_core_value(file, frame, instruction->value.operand, "t0") ||
+            !minic_riscv64_emit_integer_conversion_for_program(
+                file, program, instruction->type, "t0")) {
+            return false;
+        }
+        return store_core_value(file, frame, instruction->result, "t0");
+    case MINIC_CORE_INSTRUCTION_SCALAR_BITCAST:
+        if (!load_core_value(file, frame, instruction->value.operand, "t0")) {
+            return false;
+        }
+        if (minic_type_is_integer(instruction->type) &&
             !minic_riscv64_emit_integer_conversion_for_program(
                 file, program, instruction->type, "t0")) {
             return false;

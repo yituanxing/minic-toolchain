@@ -22,6 +22,12 @@ static bool core_memory_scalar_type(MinicType type) {
     return minic_type_is_integer(type) || minic_type_is_pointer(type);
 }
 
+static bool core_scalar_bitcast_types(MinicType target_type, MinicType source_type) {
+    return (minic_type_is_pointer(target_type) &&
+            (minic_type_is_pointer(source_type) || minic_type_is_integer(source_type))) ||
+           (minic_type_is_integer(target_type) && minic_type_is_pointer(source_type));
+}
+
 static MinicCoreLowerStatus lower_local_object(MinicCoreLowerContext *context,
                                                MinicLocalId local_id,
                                                MinicCoreObjectId *object_id) {
@@ -429,8 +435,8 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
     if (expression == NULL) {
         return MINIC_CORE_LOWER_ERROR;
     }
-    if (expression->kind == MINIC_EXPRESSION_LOCAL &&
-        expression->value_category == MINIC_VALUE_LVALUE) {
+    if (expression->value_category == MINIC_VALUE_LVALUE &&
+        core_memory_scalar_type(expression->type)) {
         MinicCoreValueId address_id;
         MinicCoreLowerStatus status;
 
@@ -563,6 +569,38 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         }
         return append_integer_conversion(
             context, expression->span, target_type, operand_value, value_id);
+    }
+    if (expression->kind == MINIC_EXPRESSION_BITCAST) {
+        const MinicExpression *operand;
+        MinicCoreValueId operand_value;
+        MinicCoreLowerStatus status;
+
+        operand =
+            minic_c0_program_expression(context->body->program, expression->value.unary.operand);
+        if (operand == NULL) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        if (!core_scalar_bitcast_types(expression->type, operand->type)) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        status = lower_expression(context, expression->value.unary.operand, &operand_value);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        if (operand_value >= context->function->value_count ||
+            !minic_type_equal(context->function->values[operand_value].type, operand->type)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        (void)memset(&instruction, 0, sizeof(instruction));
+        instruction.kind = MINIC_CORE_INSTRUCTION_SCALAR_BITCAST;
+        instruction.span = expression->span;
+        instruction.type = expression->type;
+        instruction.result = MINIC_CORE_VALUE_INVALID;
+        instruction.value.operand = operand_value;
+        return minic_core_function_append_value_instruction(
+                   context->function, context->block_id, &instruction, value_id)
+                   ? MINIC_CORE_LOWER_OK
+                   : MINIC_CORE_LOWER_ERROR;
     }
     if (expression->kind == MINIC_EXPRESSION_BINARY &&
         expression->value.binary.operator_kind == MINIC_BINARY_ADD) {
@@ -712,13 +750,22 @@ static MinicCoreLowerStatus lower_return(MinicCoreLowerContext *context,
         if (statement->expression == MINIC_EXPRESSION_INVALID) {
             return MINIC_CORE_LOWER_ERROR;
         }
-        if (!minic_type_is_integer(context->source_function->return_type)) {
+        if (minic_type_is_integer(context->source_function->return_type)) {
+            status = lower_integer_assignment_value(context,
+                                                    context->source_function->return_type,
+                                                    statement->expression,
+                                                    &terminator.return_value);
+        } else if (minic_type_is_pointer(context->source_function->return_type)) {
+            status = lower_expression(context, statement->expression, &terminator.return_value);
+            if (status == MINIC_CORE_LOWER_OK &&
+                (terminator.return_value >= context->function->value_count ||
+                 !minic_type_equal(context->function->values[terminator.return_value].type,
+                                   context->source_function->return_type))) {
+                return MINIC_CORE_LOWER_UNSUPPORTED;
+            }
+        } else {
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
-        status = lower_integer_assignment_value(context,
-                                                context->source_function->return_type,
-                                                statement->expression,
-                                                &terminator.return_value);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
