@@ -1,6 +1,7 @@
 #include "frontend/parser_internal.h"
 #include "frontend/declaration_sema.h"
 #include "frontend/initializer.h"
+#include "frontend/semantic_snapshot.h"
 
 #include <limits.h>
 #include <stdint.h>
@@ -3143,38 +3144,23 @@ parse_static_nested_record_object(MinicParser *parser, MinicType type, MinicSour
 }
 
 static bool probe_static_array_designator_extent(MinicParser *probe, size_t *first, size_t *last) {
-    MinicC0Program before;
+    MinicSemanticSnapshot snapshot;
     MinicC0Program *program;
 
     if (probe == NULL || first == NULL || last == NULL || probe->program == NULL) {
         return false;
     }
     program = probe->program;
-    before = *program;
+    snapshot = minic_semantic_snapshot_capture(program);
     if (!minic_parser_parse_array_designator(probe, 0U, true, first, last)) {
         return false;
     }
-    if (program->local_count != before.local_count ||
-        program->cleanup_context_count != before.cleanup_context_count ||
-        program->statement_count != before.statement_count ||
-        program->inline_asm_count != before.inline_asm_count ||
-        program->file_asm_count != before.file_asm_count ||
-        program->block_count != before.block_count ||
-        program->function_count != before.function_count ||
-        program->record_count != before.record_count ||
-        program->array_type_count != before.array_type_count ||
-        program->function_type_count != before.function_type_count ||
-        program->type_alias_count != before.type_alias_count ||
-        program->enum_count != before.enum_count ||
-        program->enumerator_count != before.enumerator_count ||
-        program->global_object_count != before.global_object_count ||
-        program->fixed_register_binding_count != before.fixed_register_binding_count) {
+    if (!minic_semantic_snapshot_rollback_probe_expressions(&snapshot, program)) {
         minic_parser_error(probe,
-                           "inferred aggregate array designator probe requires a side-effect-free "
-                           "integer constant expression");
+                           "inferred aggregate array designator probe requires a "
+                           "side-effect-free integer constant expression");
         return false;
     }
-    program->expression_count = before.expression_count;
     return true;
 }
 
