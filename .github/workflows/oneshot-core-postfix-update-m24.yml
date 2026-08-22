@@ -1,0 +1,143 @@
+name: One-shot Core Postfix Update M24
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    if: github.actor != 'github-actions[bot]' && github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+          fetch-depth: 0
+
+      - name: Install RISC-V runtime tools
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mapfile -t packages < <(grep -Ev '^[[:space:]]*(#|$)' tools/ci/ubuntu-24.04-packages.txt)
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends "${packages[@]}"
+          sh tools/ci/verify-validation-tools.sh
+
+      - name: Restore frozen Linux corpus
+        id: corpus
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+
+      - name: Prove M24 gaps
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.corpus.outputs.cache-hit }}" = true
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-m24-before
+          compiler="$GITHUB_WORKSPACE/build/core-m24-before/bin/minic"
+          cat > build/core-m24-before-postdec.i <<'EOF'
+          void probe(unsigned int words) { while (words--) { } }
+          EOF
+          if MINIC_CORE_IR=strict "$compiler" -S build/core-m24-before-postdec.i -o /tmp/m24-postdec.s 2>/tmp/m24-postdec.err; then
+            echo 'M24 value postfix decrement gap unexpectedly absent' >&2
+            exit 1
+          fi
+          grep -F "Core IR shadow does not yet support function 'probe'" /tmp/m24-postdec.err >/dev/null
+          cat > build/core-m24-before-pointer.i <<'EOF'
+          void probe(unsigned short *buf) { buf++; }
+          EOF
+          if MINIC_CORE_IR=strict "$compiler" -S build/core-m24-before-pointer.i -o /tmp/m24-pointer.s 2>/tmp/m24-pointer.err; then
+            echo 'M24 pointer postfix gap unexpectedly absent' >&2
+            exit 1
+          fi
+          grep -F "Core IR shadow does not yet support function 'probe'" /tmp/m24-pointer.err >/dev/null
+
+      - name: Apply M24
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 -m py_compile tools/dev/patch-core-postfix-update-m24.py
+          python3 tools/dev/patch-core-postfix-update-m24.py
+          clang-format-18 -i src/core/core_lower.c \
+            tests/compiler/c0/core_postfix_update_m24.c \
+            tests/compiler/c0/core_postfix_update_m24_runtime.c
+          sh -n tests/compiler/c0/run-core-postfix-update-m24.sh
+          bash -n .github/scripts/compiler-c0-full-gate.sh
+          git diff --check
+          git diff --exit-code -- src/core/core_ir.h src/core/core_ir.c src/target/riscv64/core_codegen.c
+
+      - name: Build and validate M24
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-m24-compiler
+          compiler="$GITHUB_WORKSPACE/build/core-m24-compiler/bin/minic"
+          MINIC="$compiler" BUILD_DIR="$GITHUB_WORKSPACE/build/core-m24-focused" RISCV_CC=riscv64-linux-gnu-gcc QEMU_RISCV64=qemu-riscv64 sh tests/compiler/c0/run-core-postfix-update-m24.sh
+          MINIC="$compiler" BUILD_DIR="$GITHUB_WORKSPACE/build/core-m24-m23" RISCV_CC=riscv64-linux-gnu-gcc QEMU_RISCV64=qemu-riscv64 sh tests/compiler/c0/run-core-integer-conditional-m23.sh
+          MINIC="$compiler" BUILD_DIR="$GITHUB_WORKSPACE/build/core-m24-m23b" RISCV_CC=riscv64-linux-gnu-gcc QEMU_RISCV64=qemu-riscv64 sh tests/compiler/c0/run-core-const-parameter-m23b.sh
+          MINIC="$compiler" BUILD_DIR="$GITHUB_WORKSPACE/build/core-m24-m20" RISCV_CC=riscv64-linux-gnu-gcc QEMU_RISCV64=qemu-riscv64 sh tests/compiler/c0/run-core-for-postincrement-m20.sh
+          MINIC="$compiler" bash tests/core/run-core-ir-shadow.sh
+
+      - name: Replay full frozen strict first500
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/core-m24-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-m24-strict500"
+          set +e
+          MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
+            --minic "$compiler" \
+            --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
+            --work "$work" \
+            --jobs 5 \
+            --offset 0 \
+            --limit 500 \
+            --sample-count 0 \
+            --indices ''
+          replay_status=$?
+          set -e
+          printf 'CORE_M24_REPLAY_STATUS=%d\n' "$replay_status"
+          python3 tools/ci/classify-core-strict-frontier.py \
+            "$work/batch-results.json" \
+            --examples 4 \
+            --json-out "$work/frontier-summary.json" \
+            --require-no-errors
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          s = json.loads(Path('build/core-m24-strict500/frontier-summary.json').read_text())
+          blockers = {row['function']: row['count'] for row in s['blockers']}
+          if s['selected'] != 500:
+              raise SystemExit(f"M24 expected 500 TUs, got {s['selected']}")
+          if s['error'] != 0 or s['preprocess_missing'] != 0:
+              raise SystemExit('M24 introduced non-UNSUPPORTED strict failures')
+          if blockers.get('swab16_array', 0) != 0:
+              raise SystemExit(f"M24 did not pierce swab16_array: {blockers.get('swab16_array')}")
+          if s['pass'] + s['unsupported'] != 500:
+              raise SystemExit('M24 strict500 accounting mismatch')
+          PY
+
+      - name: Publish M24 product
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm tools/dev/patch-core-postfix-update-m24.py \
+             .github/workflows/oneshot-core-postfix-update-m24.yml \
+             .github/workflows/oneshot-core-swab16-array-shape-m24.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/core/core_lower.c \
+                  .github/scripts/compiler-c0-full-gate.sh \
+                  tests/compiler/c0/core_postfix_update_m24.c \
+                  tests/compiler/c0/core_postfix_update_m24_runtime.c \
+                  tests/compiler/c0/run-core-postfix-update-m24.sh \
+                  tools/dev/patch-core-postfix-update-m24.py \
+                  .github/workflows/oneshot-core-postfix-update-m24.yml \
+                  .github/workflows/oneshot-core-swab16-array-shape-m24.yml
+          git diff --cached --check
+          git commit -m 'core: lower scalar postfix updates'
+          git push origin HEAD:refactor/declaration-sema-v1
