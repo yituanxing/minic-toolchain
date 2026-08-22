@@ -214,16 +214,16 @@ static inline bool minic_declaration_external_object_attributes_valid(
             attributes->visibility <= MINIC_SYMBOL_VISIBILITY_PROTECTED);
 }
 
-static inline MinicDeclarationExternalObjectCreateStatus minic_declaration_create_external_object(
-    MinicC0Program *program,
-    const char *name,
-    size_t name_length,
-    MinicType declared_type,
-    bool is_read_only,
-    bool is_weak,
-    bool is_block_scope_extern_only,
-    const MinicDeclarationExternalObjectAttributes *attributes,
-    MinicGlobalObjectId *object_id) {
+static inline MinicDeclarationExternalObjectCreateStatus
+minic_declaration_create_external_object(MinicC0Program *program,
+                                         const char *name,
+                                         size_t name_length,
+                                         MinicType declared_type,
+                                         bool is_read_only,
+                                         bool is_weak,
+                                         bool is_block_scope_extern_only,
+                                         const MinicDeclarationExternalObjectAttributes *attributes,
+                                         MinicGlobalObjectId *object_id) {
     const char *section_name;
     size_t section_name_length;
     MinicSymbolVisibility visibility;
@@ -235,7 +235,8 @@ static inline MinicDeclarationExternalObjectCreateStatus minic_declaration_creat
     }
     section_name = attributes->has_section ? attributes->section_name : NULL;
     section_name_length = attributes->has_section ? attributes->section_name_length : 0U;
-    visibility = attributes->has_visibility ? attributes->visibility : MINIC_SYMBOL_VISIBILITY_DEFAULT;
+    visibility =
+        attributes->has_visibility ? attributes->visibility : MINIC_SYMBOL_VISIBILITY_DEFAULT;
     if (!minic_c0_program_add_extern_global_object_with_metadata(program,
                                                                  name,
                                                                  name_length,
