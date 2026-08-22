@@ -279,8 +279,7 @@ static bool parse_parenthesized_function_array_suffix(MinicParser *parser,
                                                       MinicParsedFunctionDeclarator *declarator) {
     MinicParsedArraySuffix suffix;
 
-    if (parser == NULL || declarator == NULL ||
-        !parse_array_suffix_syntax(parser, true, &suffix)) {
+    if (parser == NULL || declarator == NULL || !parse_array_suffix_syntax(parser, true, &suffix)) {
         return false;
     }
     (void)memcpy(declarator->array_bounds, suffix.bounds, sizeof(declarator->array_bounds));
