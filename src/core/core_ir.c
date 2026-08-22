@@ -470,6 +470,18 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
         right = &function->values[instruction->value.binary.right];
         return minic_type_equal(left->type, instruction->type) &&
                minic_type_equal(right->type, instruction->type);
+    case MINIC_CORE_INSTRUCTION_INTEGER_EQUAL:
+        if (!instruction_result_is_valid(function, instruction) ||
+            !minic_type_equal(instruction->type, minic_type_int()) ||
+            instruction->value.binary.left >= function->value_count ||
+            instruction->value.binary.right >= function->value_count ||
+            !available_values[instruction->value.binary.left] ||
+            !available_values[instruction->value.binary.right]) {
+            return false;
+        }
+        left = &function->values[instruction->value.binary.left];
+        right = &function->values[instruction->value.binary.right];
+        return minic_type_is_integer(left->type) && minic_type_equal(left->type, right->type);
     case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION:
         return instruction_result_is_valid(function, instruction) &&
                minic_type_is_integer(instruction->type) &&
@@ -789,6 +801,12 @@ static bool dump_instruction(FILE *output,
     case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
         return fprintf(output,
                        "  %%%" PRIu32 " = add.int %%%" PRIu32 ", %%%" PRIu32 "\n",
+                       instruction->result,
+                       instruction->value.binary.left,
+                       instruction->value.binary.right) >= 0;
+    case MINIC_CORE_INSTRUCTION_INTEGER_EQUAL:
+        return fprintf(output,
+                       "  %%%" PRIu32 " = eq.int %%%" PRIu32 ", %%%" PRIu32 "\n",
                        instruction->result,
                        instruction->value.binary.left,
                        instruction->value.binary.right) >= 0;
