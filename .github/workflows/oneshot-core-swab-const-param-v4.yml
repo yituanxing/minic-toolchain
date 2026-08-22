@@ -1,0 +1,75 @@
+name: One-shot Core Swab Const Param V4
+
+on:
+  pull_request:
+
+jobs:
+  probe:
+    if: github.actor != 'github-actions[bot]' && github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+      - name: Apply current M23 candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/patch-core-integer-conditional-m23.py
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-swab-v4
+      - name: Probe const parameter ingress
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          c="$GITHUB_WORKSPACE/build/core-swab-v4/bin/minic"
+          w="$GITHUB_WORKSPACE/build/core-swab-v4-shapes"
+          mkdir -p "$w"
+          cat > "$w/plain_const_param.i" <<'EOF'
+          unsigned long probe(const unsigned long y) { return y; }
+          EOF
+          cat > "$w/const_param_call.i" <<'EOF'
+          typedef unsigned long long u64;
+          u64 helper(u64 x) { return x; }
+          unsigned long probe(const unsigned long y) { return helper(y); }
+          EOF
+          cat > "$w/const_param_conditional.i" <<'EOF'
+          typedef unsigned long long u64;
+          u64 helper(u64 x) { return x; }
+          unsigned long probe(const unsigned long y) {
+              return (u64)(__builtin_constant_p(y) ? (u64)y : helper(y));
+          }
+          EOF
+          cat > "$w/exact_const_swab.i" <<'EOF'
+          typedef unsigned long long u64;
+          static u64 helper(u64 x) {
+              return ((x & 0x00000000000000ffULL) << 56) |
+                     ((x & 0x000000000000ff00ULL) << 40) |
+                     ((x & 0x0000000000ff0000ULL) << 24) |
+                     ((x & 0x00000000ff000000ULL) << 8) |
+                     ((x & 0x000000ff00000000ULL) >> 8) |
+                     ((x & 0x0000ff0000000000ULL) >> 24) |
+                     ((x & 0x00ff000000000000ULL) >> 40) |
+                     ((x & 0xff00000000000000ULL) >> 56);
+          }
+          unsigned long probe(const unsigned long y) {
+              return (u64)(__builtin_constant_p(y) ?
+                  (u64)((((u64)y & 0x00000000000000ffULL) << 56) |
+                        (((u64)y & 0x000000000000ff00ULL) << 40) |
+                        (((u64)y & 0x0000000000ff0000ULL) << 24) |
+                        (((u64)y & 0x00000000ff000000ULL) << 8) |
+                        (((u64)y & 0x000000ff00000000ULL) >> 8) |
+                        (((u64)y & 0x0000ff0000000000ULL) >> 24) |
+                        (((u64)y & 0x00ff000000000000ULL) >> 40) |
+                        (((u64)y & 0xff00000000000000ULL) >> 56)) :
+                  helper(y));
+          }
+          EOF
+          for n in plain_const_param const_param_call const_param_conditional exact_const_swab; do
+            set +e
+            MINIC_CORE_IR=strict "$c" -S "$w/$n.i" -o "$w/$n.s" 2>"$w/$n.err"
+            rc=$?
+            set -e
+            printf 'CORE_SWAB_V4 name=%s rc=%d message=' "$n" "$rc"
+            tr '\n' ' ' < "$w/$n.err"
+            printf '\n'
+          done
