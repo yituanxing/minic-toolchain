@@ -117,4 +117,24 @@ new_validation = r'''    if (condition_expression == NULL || body_source == NULL
     preheader_block = context->block_id;
 '''
 core = replace_once(core, old_validation, new_validation, "route do-while-zero")
+
+old_statement_dispatch = r'''            case MINIC_STATEMENT_IF:
+                status = lower_if(context, statement, &statement_terminated);
+                break;
+            default:
+'''
+new_statement_dispatch = r'''            case MINIC_STATEMENT_IF:
+                status = lower_if(context, statement, &statement_terminated);
+                break;
+            case MINIC_STATEMENT_WHILE:
+                status = lower_while(context, statement, &statement_terminated);
+                break;
+            default:
+'''
+core = replace_once(
+    core,
+    old_statement_dispatch,
+    new_statement_dispatch,
+    "route direct while statement",
+)
 core_path.write_text(core)
