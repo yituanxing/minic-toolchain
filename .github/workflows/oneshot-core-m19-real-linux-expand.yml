@@ -1,0 +1,55 @@
+name: One-shot Core M19 Real Linux Expansion
+
+on:
+  pull_request:
+
+jobs:
+  inspect:
+    if: github.actor != 'github-actions[bot]' && github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+
+      - name: Restore frozen Linux corpus
+        id: linux-corpus-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+
+      - name: Dump exact list_empty_careful expansion
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          root = Path('build/linux-focus-corpus')
+          manifest = root / 'selected-tus.txt'
+          row = None
+          for line in manifest.read_text().splitlines():
+              fields = line.split('\t', 3)
+              if int(fields[0]) == 31:
+                  row = fields
+                  break
+          if row is None:
+              raise SystemExit('frozen corpus index 31 missing')
+          path = root / 'kbuild' / row[2]
+          text = path.read_text(errors='replace')
+          print(f'CORE_M19_REAL_INPUT index=31 path={row[2]} bytes={len(text)}')
+          matches = list(re.finditer(r'\blist_empty_careful\s*\(', text))
+          print(f'CORE_M19_REAL_MATCHES count={len(matches)}')
+          if not matches:
+              raise SystemExit('list_empty_careful absent from frozen index 31')
+          for n, match in enumerate(matches[:8]):
+              start = max(0, match.start() - 1800)
+              end = min(len(text), match.start() + 7000)
+              print(f'CORE_M19_REAL_BEGIN match={n} offset={match.start()}')
+              print(text[start:end])
+              print(f'CORE_M19_REAL_END match={n}')
+          PY
