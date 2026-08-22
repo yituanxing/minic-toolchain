@@ -57,7 +57,7 @@ text = text.replace(helper_anchor, helper + helper_anchor, 1)
 conditional_anchor = '''    if (expression->kind == MINIC_EXPRESSION_BINARY &&
         expression->value.binary.operator_kind == MINIC_BINARY_LOGICAL_AND) {
 '''
-if text.count(conditional_anchor) != 1:
+if text.count(conditional_anchor) != 2:
     raise SystemExit(f'M23 conditional anchor count={text.count(conditional_anchor)}')
 conditional = r'''    if (expression->kind == MINIC_EXPRESSION_CONDITIONAL) {
         const MinicExpression *false_expression;
@@ -143,7 +143,10 @@ conditional = r'''    if (expression->kind == MINIC_EXPRESSION_CONDITIONAL) {
             context, expression->span, expression->type, result_object, value_id);
     }
 '''
-text = text.replace(conditional_anchor, conditional + conditional_anchor, 1)
+conditional_position = text.rfind(conditional_anchor)
+if conditional_position < 0:
+    raise SystemExit('M23 value conditional anchor disappeared')
+text = text[:conditional_position] + conditional + text[conditional_position:]
 path.write_text(text)
 
 source = Path('tests/compiler/c0/core_integer_conditional_m23.c')
