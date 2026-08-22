@@ -35,3 +35,17 @@ long runtime_record_array_local(long mtime) {
     struct timespec64_probe t[2] = {{.tv_sec = mtime}, {.tv_sec = mtime}};
     return t[0].tv_sec + t[1].tv_sec;
 }
+
+struct runtime_record_array_probe {
+    long first;
+    long second;
+};
+
+long runtime_record_array_designated(long value) {
+    struct runtime_record_array_probe items[4] = {
+        [1] = {.first = value},
+        {.second = value},
+    };
+    return items[0].first + items[0].second + items[1].first + items[1].second +
+           items[2].first + items[2].second + items[3].first + items[3].second;
+}
