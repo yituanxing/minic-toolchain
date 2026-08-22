@@ -26,8 +26,7 @@ typedef enum MinicDeclarationArrayMaterializeStatus {
     MINIC_DECLARATION_ARRAY_MATERIALIZE_TRANSACTION_ESCAPED
 } MinicDeclarationArrayMaterializeStatus;
 
-static inline bool minic_declaration_array_suffix_valid(
-    const MinicDeclarationArraySuffix *suffix) {
+static inline bool minic_declaration_array_suffix_valid(const MinicDeclarationArraySuffix *suffix) {
     unsigned int valid_zero_length_bits;
 
     if (suffix == NULL || suffix->dimension_count > MINIC_DECLARATION_MAX_ARRAY_DIMENSIONS) {
@@ -44,10 +43,11 @@ static inline bool minic_declaration_array_suffix_valid(
 }
 
 static inline MinicDeclarationArrayMaterializeStatus
-minic_declaration_materialize_array_suffix(MinicC0Program *program,
-                                            MinicType element_type,
-                                            const MinicDeclarationArraySuffix *suffix,
-                                            MinicType *type) {
+minic_declaration_materialize_array_suffix(
+    MinicC0Program *program,
+    MinicType element_type,
+    const MinicDeclarationArraySuffix *suffix,
+    MinicType *type) {
     MinicSemanticSnapshot snapshot;
     size_t dimension;
     MinicType result;
@@ -122,12 +122,13 @@ minic_declaration_build_function_type(MinicC0Program *program,
     }
 
     snapshot = minic_semantic_snapshot_capture(program);
-    if (!minic_c0_program_add_variadic_function_type(program,
-                                                     return_type,
-                                                     parameter_types,
-                                                     parameter_count,
-                                                     is_variadic,
-                                                     &result)) {
+    if (!minic_c0_program_add_variadic_function_type(
+            program,
+            return_type,
+            parameter_types,
+            parameter_count,
+            is_variadic,
+            &result)) {
         (void)minic_semantic_snapshot_rollback_declarator_types(&snapshot, program);
         return false;
     }
