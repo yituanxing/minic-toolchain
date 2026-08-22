@@ -24,9 +24,8 @@ static MinicType add_zero_length_array(MinicC0Program *program, MinicType elemen
     return type;
 }
 
-static MinicGlobalObjectId add_extern_object(MinicC0Program *program,
-                                             const char *name,
-                                             MinicType type) {
+static MinicGlobalObjectId
+add_extern_object(MinicC0Program *program, const char *name, MinicType type) {
     MinicGlobalObjectId object_id;
 
     assert(minic_c0_program_add_extern_global_object(
@@ -56,8 +55,7 @@ static void test_fixed_multidimensional_array(void) {
     suffix.bounds[1] = 4U;
     suffix.dimension_count = 2U;
 
-    status = minic_declaration_materialize_array_suffix(
-        &program, minic_type_int(), &suffix, &type);
+    status = minic_declaration_materialize_array_suffix(&program, minic_type_int(), &suffix, &type);
     assert(status == MINIC_DECLARATION_ARRAY_MATERIALIZE_OK);
     assert(minic_type_is_array(type));
     assert(program.array_type_count == 2U);
@@ -95,8 +93,7 @@ static void test_incomplete_and_zero_length_arrays(void) {
     (void)memset(&suffix, 0, sizeof(suffix));
     suffix.dimension_count = 1U;
     suffix.zero_length_mask = 1U;
-    status = minic_declaration_materialize_array_suffix(
-        &program, minic_type_int(), &suffix, &type);
+    status = minic_declaration_materialize_array_suffix(&program, minic_type_int(), &suffix, &type);
     assert(status == MINIC_DECLARATION_ARRAY_MATERIALIZE_OK);
     array_type = &program.array_types[type.array_type_id];
     assert(array_type->element_count == 0U);
@@ -120,16 +117,8 @@ static void test_array_of_function_pointer(void) {
     suffix.dimension_count = 1U;
     parameter_types[0] = minic_type_long();
 
-    assert(minic_declaration_build_function_type(&program,
-                                                 minic_type_int(),
-                                                 parameter_types,
-                                                 1U,
-                                                 false,
-                                                 1U,
-                                                 1U,
-                                                 0U,
-                                                 &suffix,
-                                                 &type));
+    assert(minic_declaration_build_function_type(
+        &program, minic_type_int(), parameter_types, 1U, false, 1U, 1U, 0U, &suffix, &type));
     assert(program.function_type_count == 1U);
     assert(program.array_type_count == 1U);
     assert(minic_type_is_array(type));
@@ -159,8 +148,7 @@ static void test_invalid_transient_facts_do_not_commit(void) {
     minic_c0_program_initialize(&program);
     (void)memset(&suffix, 0, sizeof(suffix));
     suffix.dimension_count = MINIC_DECLARATION_MAX_ARRAY_DIMENSIONS + 1U;
-    status = minic_declaration_materialize_array_suffix(
-        &program, minic_type_int(), &suffix, &type);
+    status = minic_declaration_materialize_array_suffix(&program, minic_type_int(), &suffix, &type);
     assert(status == MINIC_DECLARATION_ARRAY_MATERIALIZE_INVALID);
     assert(program.array_type_count == 0U);
     assert(program.function_type_count == 0U);
@@ -168,16 +156,8 @@ static void test_invalid_transient_facts_do_not_commit(void) {
     (void)memset(&suffix, 0, sizeof(suffix));
     suffix.dimension_count = 1U;
     suffix.bounds[0] = 2U;
-    assert(!minic_declaration_build_function_type(&program,
-                                                  minic_type_int(),
-                                                  NULL,
-                                                  0U,
-                                                  false,
-                                                  1U,
-                                                  2U,
-                                                  0U,
-                                                  &suffix,
-                                                  &type));
+    assert(!minic_declaration_build_function_type(
+        &program, minic_type_int(), NULL, 0U, false, 1U, 2U, 0U, &suffix, &type));
     assert(program.array_type_count == 0U);
     assert(program.function_type_count == 0U);
 
@@ -209,8 +189,8 @@ static void test_external_incomplete_array_completes(void) {
     existing_type = add_incomplete_array(&program, minic_type_int());
     declared_type = add_fixed_array(&program, minic_type_int(), 3U);
 
-    assert(minic_declaration_external_object_types_compatible(
-        &program, existing_type, declared_type));
+    assert(
+        minic_declaration_external_object_types_compatible(&program, existing_type, declared_type));
     assert(minic_declaration_merge_external_array_composite_type(
         &program, existing_type, declared_type));
     assert(program.array_type_count == 2U);
@@ -233,8 +213,8 @@ static void test_external_incomplete_array_accepts_zero_length(void) {
     existing_type = add_incomplete_array(&program, minic_type_int());
     declared_type = add_zero_length_array(&program, minic_type_int());
 
-    assert(minic_declaration_external_object_types_compatible(
-        &program, existing_type, declared_type));
+    assert(
+        minic_declaration_external_object_types_compatible(&program, existing_type, declared_type));
     assert(minic_declaration_merge_external_array_composite_type(
         &program, existing_type, declared_type));
     existing_array = &program.array_types[existing_type.array_type_id];
@@ -242,8 +222,8 @@ static void test_external_incomplete_array_accepts_zero_length(void) {
     assert(existing_array->is_zero_length);
 
     fixed_type = add_fixed_array(&program, minic_type_int(), 1U);
-    assert(!minic_declaration_external_object_types_compatible(
-        &program, existing_type, fixed_type));
+    assert(
+        !minic_declaration_external_object_types_compatible(&program, existing_type, fixed_type));
     assert(!minic_declaration_merge_external_array_composite_type(
         &program, existing_type, fixed_type));
     existing_array = &program.array_types[existing_type.array_type_id];
@@ -354,8 +334,8 @@ static void test_external_object_attribute_conflict_is_non_mutating(void) {
     attributes.section_name = ".new";
     attributes.section_name_length = 4U;
     attributes.has_section = true;
-    status = minic_declaration_merge_external_object(
-        &program, object_id, declared_type, &attributes);
+    status =
+        minic_declaration_merge_external_object(&program, object_id, declared_type, &attributes);
     assert(status == MINIC_DECLARATION_EXTERNAL_OBJECT_MERGE_ATTRIBUTE_CONFLICT);
 
     existing_array = &program.array_types[existing_type.array_type_id];
@@ -383,14 +363,14 @@ static void test_external_object_visibility_conflict_is_non_mutating(void) {
     existing_type = add_incomplete_array(&program, minic_type_int());
     declared_type = add_fixed_array(&program, minic_type_int(), 4U);
     object_id = add_extern_object(&program, "visible", existing_type);
-    assert(minic_c0_global_object_set_visibility(
-        &program, object_id, MINIC_SYMBOL_VISIBILITY_HIDDEN));
+    assert(
+        minic_c0_global_object_set_visibility(&program, object_id, MINIC_SYMBOL_VISIBILITY_HIDDEN));
 
     attributes = empty_external_attributes();
     attributes.visibility = MINIC_SYMBOL_VISIBILITY_PROTECTED;
     attributes.has_visibility = true;
-    status = minic_declaration_merge_external_object(
-        &program, object_id, declared_type, &attributes);
+    status =
+        minic_declaration_merge_external_object(&program, object_id, declared_type, &attributes);
     assert(status == MINIC_DECLARATION_EXTERNAL_OBJECT_MERGE_ATTRIBUTE_CONFLICT);
 
     existing_array = &program.array_types[existing_type.array_type_id];
@@ -425,8 +405,8 @@ static void test_external_object_commit_type_and_metadata(void) {
     attributes.visibility = MINIC_SYMBOL_VISIBILITY_HIDDEN;
     attributes.has_section = true;
     attributes.has_visibility = true;
-    status = minic_declaration_merge_external_object(
-        &program, object_id, declared_type, &attributes);
+    status =
+        minic_declaration_merge_external_object(&program, object_id, declared_type, &attributes);
     assert(status == MINIC_DECLARATION_EXTERNAL_OBJECT_MERGE_OK);
 
     existing_array = &program.array_types[existing_type.array_type_id];
@@ -458,8 +438,8 @@ static void test_external_object_invalid_attributes_do_not_commit(void) {
 
     attributes = empty_external_attributes();
     attributes.explicit_alignment = 3U;
-    status = minic_declaration_merge_external_object(
-        &program, object_id, declared_type, &attributes);
+    status =
+        minic_declaration_merge_external_object(&program, object_id, declared_type, &attributes);
     assert(status == MINIC_DECLARATION_EXTERNAL_OBJECT_MERGE_INVALID);
     existing_array = &program.array_types[existing_type.array_type_id];
     assert(existing_array->element_count == 0U);

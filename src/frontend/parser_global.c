@@ -3551,33 +3551,37 @@ static bool merge_extern_object_declaration(MinicParser *parser,
                                             size_t explicit_alignment,
                                             MinicSymbolVisibility visibility,
                                             bool has_visibility) {
-    MinicGlobalObject *object;
+    MinicDeclarationExternalObjectAttributes attributes;
+    MinicDeclarationExternalObjectMergeStatus status;
 
-    if (parser == NULL || parser->program == NULL ||
-        object_id >= parser->program->global_object_count) {
+    if (parser == NULL || parser->program == NULL) {
         return false;
     }
-    object = &parser->program->global_objects[object_id];
-    if (!minic_parser_external_object_types_compatible(
-            parser->program, object->type, declared_type)) {
+    attributes.section_name = section_name;
+    attributes.section_name_length = section_name_length;
+    attributes.explicit_alignment = explicit_alignment;
+    attributes.visibility = visibility;
+    attributes.has_section = has_section;
+    attributes.has_visibility = has_visibility;
+    status = minic_declaration_merge_external_object(
+        parser->program, object_id, declared_type, &attributes);
+    switch (status) {
+    case MINIC_DECLARATION_EXTERNAL_OBJECT_MERGE_OK:
+        return true;
+    case MINIC_DECLARATION_EXTERNAL_OBJECT_MERGE_TYPE_CONFLICT:
         minic_parser_error(parser, "conflicting extern object redeclaration");
         return false;
-    }
-    if (minic_type_is_array(object->type) && !minic_parser_merge_external_array_composite_type(
-                                                 parser->program, object->type, declared_type)) {
-        minic_parser_error(parser, "conflicting extern object array redeclaration");
-        return false;
-    }
-    if ((has_section && !minic_c0_global_object_set_section(
-                            parser->program, object_id, section_name, section_name_length)) ||
-        (explicit_alignment != 0U && !minic_c0_global_object_set_explicit_alignment(
-                                         parser->program, object_id, explicit_alignment)) ||
-        (has_visibility &&
-         !minic_c0_global_object_set_visibility(parser->program, object_id, visibility))) {
+    case MINIC_DECLARATION_EXTERNAL_OBJECT_MERGE_ATTRIBUTE_CONFLICT:
         minic_parser_error(parser, "conflicting extern object redeclaration attributes");
         return false;
+    case MINIC_DECLARATION_EXTERNAL_OBJECT_MERGE_INVALID:
+        minic_parser_error(parser, "invalid extern object redeclaration");
+        return false;
+    case MINIC_DECLARATION_EXTERNAL_OBJECT_MERGE_COMMIT_FAILED:
+    default:
+        minic_parser_error(parser, "cannot commit extern object redeclaration");
+        return false;
     }
-    return true;
 }
 
 bool minic_parser_declare_block_scope_extern_object(MinicParser *parser,

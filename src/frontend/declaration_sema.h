@@ -220,8 +220,8 @@ static inline MinicDeclarationExternalObjectMergeStatus minic_declaration_merge_
         return MINIC_DECLARATION_EXTERNAL_OBJECT_MERGE_INVALID;
     }
     object = minic_c0_program_global_object(program, object_id);
-    if (object == NULL || !minic_declaration_external_object_types_compatible(
-                              program, object->type, declared_type)) {
+    if (object == NULL ||
+        !minic_declaration_external_object_types_compatible(program, object->type, declared_type)) {
         return MINIC_DECLARATION_EXTERNAL_OBJECT_MERGE_TYPE_CONFLICT;
     }
     if (attributes->has_section && object->section_name != NULL &&
@@ -240,10 +240,8 @@ static inline MinicDeclarationExternalObjectMergeStatus minic_declaration_merge_
      * Array completion and the remaining metadata setters are allocation-free after
      * this preflight and therefore cannot introduce a semantic half-commit. */
     if ((attributes->has_section &&
-         !minic_c0_global_object_set_section(program,
-                                             object_id,
-                                             attributes->section_name,
-                                             attributes->section_name_length)) ||
+         !minic_c0_global_object_set_section(
+             program, object_id, attributes->section_name, attributes->section_name_length)) ||
         (minic_type_is_array(object->type) &&
          !minic_declaration_merge_external_array_composite_type(
              program, object->type, declared_type)) ||
