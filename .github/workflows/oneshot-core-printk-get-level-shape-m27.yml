@@ -34,83 +34,45 @@ jobs:
           printf '%s\n' "$version_i" > build/core-m27-version-path.txt
           printf 'M27_VERSION_PATH=%s\n' "$version_i"
 
-      - name: Extract exact frozen printk_get_level body
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path(Path('build/core-m27-version-path.txt').read_text().strip())
-          text = path.read_text(errors='replace')
-          needle = 'printk_get_level'
-          pos = 0
-          found = False
-          while True:
-              hit = text.find(needle, pos)
-              if hit < 0:
-                  break
-              brace = text.find('{', hit)
-              semi = text.find(';', hit)
-              if brace >= 0 and (semi < 0 or brace < semi):
-                  depth = 0
-                  end = brace
-                  in_string = False
-                  in_char = False
-                  escape = False
-                  i = brace
-                  while i < len(text):
-                      ch = text[i]
-                      if escape:
-                          escape = False
-                      elif ch == '\\' and (in_string or in_char):
-                          escape = True
-                      elif ch == '"' and not in_char:
-                          in_string = not in_string
-                      elif ch == "'" and not in_string:
-                          in_char = not in_char
-                      elif not in_string and not in_char:
-                          if ch == '{':
-                              depth += 1
-                          elif ch == '}':
-                              depth -= 1
-                              if depth == 0:
-                                  end = i + 1
-                                  break
-                      i += 1
-                  start = text.rfind('\n', 0, max(0, hit - 800)) + 1
-                  snippet = text[start:end]
-                  print('PRINTK_GET_LEVEL_EXACT_BEGIN')
-                  print(snippet[-12000:])
-                  print('PRINTK_GET_LEVEL_EXACT_END')
-                  found = True
-                  break
-              pos = hit + len(needle)
-          if not found:
-              raise SystemExit(f'printk_get_level definition not found in {path}')
-          PY
-
-      - name: Classify minimal strict shapes
+      - name: Classify short-circuit and switch shapes
         shell: bash
         run: |
           set -Eeuo pipefail
           c="$GITHUB_WORKSPACE/build/core-m27-probe/bin/minic"
           mkdir -p build/core-m27-shapes
 
-          cat > build/core-m27-shapes/subscript.i <<'EOF'
-          int probe_subscript(const char *p) { return p[0]; }
+          cat > build/core-m27-shapes/equality.i <<'EOF'
+          int probe_equality(const char *p) { return p[0] == '\001'; }
           EOF
-          cat > build/core-m27-shapes/eq_and.i <<'EOF'
-          int probe_eq_and(const char *p) { if (p[0] == '\001' && p[1]) return p[1]; return 0; }
+          cat > build/core-m27-shapes/if_equality.i <<'EOF'
+          int probe_if_equality(const char *p) { if (p[0] == '\001') return p[1]; return 0; }
+          EOF
+          cat > build/core-m27-shapes/scalar_truth.i <<'EOF'
+          int probe_scalar_truth(const char *p) { if (p[1]) return p[1]; return 0; }
+          EOF
+          cat > build/core-m27-shapes/logical_and_value.i <<'EOF'
+          int probe_logical_and_value(int a, int b) { return a && b; }
+          EOF
+          cat > build/core-m27-shapes/logical_or_value.i <<'EOF'
+          int probe_logical_or_value(int a, int b) { return a || b; }
+          EOF
+          cat > build/core-m27-shapes/if_logical_and.i <<'EOF'
+          int probe_if_logical_and(int a, int b) { if (a && b) return 7; return 0; }
+          EOF
+          cat > build/core-m27-shapes/if_logical_or.i <<'EOF'
+          int probe_if_logical_or(int a, int b) { if (a || b) return 7; return 0; }
+          EOF
+          cat > build/core-m27-shapes/nested_if_equivalent.i <<'EOF'
+          int probe_nested_if_equivalent(const char *p) { if (p[0] == '\001') { if (p[1]) return p[1]; } return 0; }
+          EOF
+          cat > build/core-m27-shapes/exact_if_condition.i <<'EOF'
+          int probe_exact_if_condition(const char *p) { if (p[0] == '\001' && p[1]) return p[1]; return 0; }
           EOF
           cat > build/core-m27-shapes/switch_simple.i <<'EOF'
           int probe_switch_simple(const char *p) { switch (p[1]) { case '0': return p[1]; case 'c': return p[1]; default: return 0; } }
           EOF
           cat > build/core-m27-shapes/switch_range.i <<'EOF'
           int probe_switch_range(const char *p) { switch (p[1]) { case '0' ... '7': return p[1]; case 'c': return p[1]; default: return 0; } }
-          EOF
-          cat > build/core-m27-shapes/if_chain.i <<'EOF'
-          int probe_if_chain(const char *p) { if (p[1] == '0' || p[1] == '1' || p[1] == 'c') return p[1]; return 0; }
           EOF
 
           for f in build/core-m27-shapes/*.i; do
