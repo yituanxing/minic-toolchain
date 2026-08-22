@@ -49,3 +49,11 @@ long runtime_record_array_designated(long value) {
     return items[0].first + items[0].second + items[1].first + items[1].second +
            items[2].first + items[2].second + items[3].first + items[3].second;
 }
+
+long runtime_inferred_record_array(long value) {
+    struct runtime_record_array_probe items[] = {
+        {.first = value},
+        {.second = value},
+    };
+    return (long)(sizeof(items) / sizeof(items[0])) + items[0].first + items[1].second;
+}
