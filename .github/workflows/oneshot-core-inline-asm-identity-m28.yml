@@ -55,14 +55,14 @@ jobs:
               exit 1
           fi
           grep -F "Core IR shadow does not yet support function 'probe_m28_gap'" /tmp/m28-gap.err >/dev/null
-          initramfs_i=$(find build/linux-focus-corpus -type f -path '*/init/initramfs.i' -print -quit)
-          test -n "$initramfs_i"
+          do_mounts_i=$(find build/linux-focus-corpus -type f -path '*/init/do_mounts.i' -print -quit)
+          test -n "$do_mounts_i"
           set +e
-          MINIC_CORE_IR=strict "$c" -S "$initramfs_i" -o /tmp/m28-before-initramfs.s 2>/tmp/m28-before-initramfs.err
+          MINIC_CORE_IR=strict "$c" -S "$do_mounts_i" -o /tmp/m28-before-do-mounts.s 2>/tmp/m28-before-do-mounts.err
           before_rc=$?
           set -e
           printf 'M28_PRE_EXACT_RC=%d\n' "$before_rc"
-          grep -F "Core IR shadow does not yet support function '__iter_div_u64_rem'" /tmp/m28-before-initramfs.err >/dev/null
+          grep -F "Core IR shadow does not yet support function '__iter_div_u64_rem'" /tmp/m28-before-do-mounts.err >/dev/null
           printf '%s\n' 'M28_PRE_IDENTITY_GAP=proved' 'M28_PRE_ITER_DIV_BLOCKER=proved'
 
       - name: Apply M28 candidate
@@ -103,15 +103,15 @@ jobs:
         run: |
           set -Eeuo pipefail
           c="$GITHUB_WORKSPACE/build/core-m28-product/bin/minic"
-          initramfs_i=$(find build/linux-focus-corpus -type f -path '*/init/initramfs.i' -print -quit)
-          test -n "$initramfs_i"
+          do_mounts_i=$(find build/linux-focus-corpus -type f -path '*/init/do_mounts.i' -print -quit)
+          test -n "$do_mounts_i"
           set +e
-          MINIC_CORE_IR=strict "$c" -S "$initramfs_i" -o /tmp/m28-initramfs.s 2>/tmp/m28-initramfs.err
+          MINIC_CORE_IR=strict "$c" -S "$do_mounts_i" -o /tmp/m28-do-mounts.s 2>/tmp/m28-do-mounts.err
           rc=$?
           set -e
-          printf 'M28_EXACT_INITRAMFS_RC=%d\n' "$rc"
-          sed -n '1,20p' /tmp/m28-initramfs.err
-          if grep -F "Core IR shadow does not yet support function '__iter_div_u64_rem'" /tmp/m28-initramfs.err >/dev/null; then
+          printf 'M28_EXACT_DO_MOUNTS_RC=%d\n' "$rc"
+          sed -n '1,20p' /tmp/m28-do-mounts.err
+          if grep -F "Core IR shadow does not yet support function '__iter_div_u64_rem'" /tmp/m28-do-mounts.err >/dev/null; then
               echo '__iter_div_u64_rem remains the frozen representative blocker' >&2
               exit 1
           fi
