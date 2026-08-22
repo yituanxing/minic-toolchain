@@ -768,7 +768,15 @@ static MinicCoreLowerStatus lower_assignment_pair(MinicCoreLowerContext *context
     if (status != MINIC_CORE_LOWER_OK) {
         return status;
     }
-    status = lower_integer_assignment_value(context, target->type, source_id, &stored_value);
+    {
+        MinicType stored_type;
+
+        if (!minic_type_unqualified(target->type, &stored_type) ||
+            !core_memory_scalar_type(stored_type)) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        status = lower_scalar_assignment_value(context, stored_type, source_id, &stored_value);
+    }
     if (status != MINIC_CORE_LOWER_OK) {
         return status;
     }
@@ -1008,6 +1016,77 @@ static bool internal_while_label_pair(const MinicStatement *label, const MinicSt
            label->target_statement == MINIC_STATEMENT_INVALID;
 }
 
+static bool source_position_equal(MinicSourcePosition left, MinicSourcePosition right) {
+    return left.offset == right.offset && left.line == right.line && left.column == right.column;
+}
+
+static bool normalized_do_while_zero_body(const MinicCoreLowerContext *context,
+                                          const MinicStatement *loop,
+                                          const MinicBlock *body,
+                                          MinicBlock *single_iteration_body) {
+    const MinicExpression *loop_condition;
+    const MinicExpression *negated_condition;
+    const MinicExpression *source_condition;
+    const MinicStatement *continue_label;
+    const MinicStatement *condition_check;
+    const MinicStatement *break_statement;
+    const MinicBlock *break_block;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        loop == NULL || body == NULL || single_iteration_body == NULL ||
+        body->statement_count < 2U) {
+        return false;
+    }
+    loop_condition = minic_c0_program_expression(context->body->program, loop->expression);
+    continue_label = minic_c0_program_statement(context->body->program,
+                                                body->statements[body->statement_count - 2U]);
+    condition_check = minic_c0_program_statement(context->body->program,
+                                                 body->statements[body->statement_count - 1U]);
+    if (loop_condition == NULL || loop_condition->kind != MINIC_EXPRESSION_INTEGER ||
+        !minic_type_is_integer(loop_condition->type) || loop_condition->value.integer_value != 1 ||
+        continue_label == NULL || continue_label->kind != MINIC_STATEMENT_LABEL ||
+        continue_label->target_expression != MINIC_EXPRESSION_INVALID ||
+        continue_label->expression != MINIC_EXPRESSION_INVALID ||
+        continue_label->target_statement != MINIC_STATEMENT_INVALID ||
+        !source_position_equal(continue_label->span.begin, loop->span.begin) ||
+        condition_check == NULL || condition_check->kind != MINIC_STATEMENT_IF ||
+        condition_check->expression == MINIC_EXPRESSION_INVALID ||
+        condition_check->then_block == MINIC_BLOCK_INVALID ||
+        condition_check->else_block != MINIC_BLOCK_INVALID ||
+        !source_position_equal(condition_check->span.begin, loop->span.begin)) {
+        return false;
+    }
+    negated_condition =
+        minic_c0_program_expression(context->body->program, condition_check->expression);
+    if (negated_condition == NULL || negated_condition->kind != MINIC_EXPRESSION_UNARY ||
+        negated_condition->value.unary.operator_kind != MINIC_UNARY_LOGICAL_NOT) {
+        return false;
+    }
+    source_condition =
+        minic_c0_program_expression(context->body->program, negated_condition->value.unary.operand);
+    if (source_condition == NULL || source_condition->kind != MINIC_EXPRESSION_INTEGER ||
+        !minic_type_is_integer(source_condition->type) ||
+        source_condition->value.integer_value != 0) {
+        return false;
+    }
+    break_block = minic_c0_program_block(context->body->program, condition_check->then_block);
+    if (break_block == NULL || break_block->statement_count != 1U) {
+        return false;
+    }
+    break_statement =
+        minic_c0_program_statement(context->body->program, break_block->statements[0]);
+    if (break_statement == NULL || break_statement->kind != MINIC_STATEMENT_BREAK ||
+        break_statement->cleanup_context != MINIC_CLEANUP_CONTEXT_ROOT ||
+        break_statement->cleanup_stop_context != MINIC_CLEANUP_CONTEXT_ROOT ||
+        !source_position_equal(break_statement->span.begin, loop->span.begin)) {
+        return false;
+    }
+
+    *single_iteration_body = *body;
+    single_iteration_body->statement_count -= 2U;
+    return true;
+}
+
 static MinicCoreLowerStatus
 lower_while(MinicCoreLowerContext *context, const MinicStatement *statement, bool *terminated) {
     const MinicBlock *body_source;
@@ -1037,6 +1116,19 @@ lower_while(MinicCoreLowerContext *context, const MinicStatement *statement, boo
     if (condition_expression == NULL || body_source == NULL ||
         !minic_type_is_integer(condition_expression->type)) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
+    }
+    {
+        MinicBlock single_iteration_body;
+
+        if (normalized_do_while_zero_body(
+                context, statement, body_source, &single_iteration_body)) {
+            status = lower_block(context, &single_iteration_body, &body_terminated);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
+            *terminated = body_terminated;
+            return MINIC_CORE_LOWER_OK;
+        }
     }
 
     preheader_block = context->block_id;
@@ -1147,6 +1239,9 @@ lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool
             case MINIC_STATEMENT_IF:
                 status = lower_if(context, statement, &statement_terminated);
                 break;
+            case MINIC_STATEMENT_WHILE:
+                status = lower_while(context, statement, &statement_terminated);
+                break;
             default:
                 return MINIC_CORE_LOWER_UNSUPPORTED;
             }
@@ -1181,7 +1276,7 @@ MinicCoreLowerStatus minic_core_lower_function(const MinicFunctionBodyView *body
         source_function->name_length == 0U) {
         return MINIC_CORE_LOWER_ERROR;
     }
-    if (source_block->statement_count == 0U) {
+    if (source_block->statement_count == 0U && !minic_type_is_void(source_function->return_type)) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
     if (source_function->local_count > SIZE_MAX / sizeof(*local_objects)) {
@@ -1225,6 +1320,18 @@ MinicCoreLowerStatus minic_core_lower_function(const MinicFunctionBodyView *body
     if (status != MINIC_CORE_LOWER_OK) {
         minic_core_function_destroy(&lowered);
         return status;
+    }
+    if (!terminated && minic_type_is_void(source_function->return_type)) {
+        MinicCoreTerminator terminator;
+
+        (void)memset(&terminator, 0, sizeof(terminator));
+        terminator.kind = MINIC_CORE_TERMINATOR_RETURN;
+        terminator.return_value = MINIC_CORE_VALUE_INVALID;
+        if (!minic_core_function_set_terminator(&lowered, context.block_id, &terminator)) {
+            minic_core_function_destroy(&lowered);
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        terminated = true;
     }
     if (!terminated) {
         minic_core_function_destroy(&lowered);
