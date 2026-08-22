@@ -40,21 +40,33 @@ jobs:
           test "${{ steps.corpus.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
 
-      - name: Prove pre-M28 identity gap
+      - name: Prove pre-M28 gaps
         shell: bash
         run: |
           set -Eeuo pipefail
           python3 -m py_compile tools/dev/patch-core-inline-asm-identity-m28.py
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-m28-before
           c="$GITHUB_WORKSPACE/build/core-m28-before/bin/minic"
-          cat > /tmp/m28-gap.i <<'EOF'
-          unsigned long probe_m28_gap(unsigned long value) { __asm__("" : "+rm"(value)); return value; }
+
+          cat > /tmp/m28-asm-gap.i <<'EOF'
+          unsigned long probe_m28_asm_gap(unsigned long value) { __asm__("" : "+rm"(value)); return value; }
           EOF
-          if MINIC_CORE_IR=strict "$c" -S /tmp/m28-gap.i -o /tmp/m28-gap.s 2>/tmp/m28-gap.err; then
-              echo 'M28 pre-gap unexpectedly absent' >&2
-              exit 1
-          fi
-          grep -F "Core IR shadow does not yet support function 'probe_m28_gap'" /tmp/m28-gap.err >/dev/null
+          cat > /tmp/m28-sub-gap.i <<'EOF'
+          unsigned long probe_m28_sub_gap(unsigned long value, unsigned int delta) { value -= delta; return value; }
+          EOF
+          cat > /tmp/m28-xor-gap.i <<'EOF'
+          unsigned long probe_m28_xor_gap(unsigned long *value, unsigned long mask) { *value ^= mask; return *value; }
+          EOF
+
+          for n in asm sub xor; do
+              if MINIC_CORE_IR=strict "$c" -S "/tmp/m28-${n}-gap.i" -o "/tmp/m28-${n}-gap.s" 2>"/tmp/m28-${n}-gap.err"; then
+                  echo "M28 pre-gap unexpectedly absent: $n" >&2
+                  exit 1
+              fi
+              grep -F "Core IR shadow does not yet support function 'probe_m28_${n}_gap'" "/tmp/m28-${n}-gap.err" >/dev/null
+              printf 'M28_PRE_GAP_%s=proved\n' "$n"
+          done
+
           do_mounts_i=$(find build/linux-focus-corpus -type f -path '*/init/do_mounts.i' -print -quit)
           test -n "$do_mounts_i"
           set +e
@@ -63,7 +75,7 @@ jobs:
           set -e
           printf 'M28_PRE_EXACT_RC=%d\n' "$before_rc"
           grep -F "Core IR shadow does not yet support function '__iter_div_u64_rem'" /tmp/m28-before-do-mounts.err >/dev/null
-          printf '%s\n' 'M28_PRE_IDENTITY_GAP=proved' 'M28_PRE_ITER_DIV_BLOCKER=proved'
+          printf '%s\n' 'M28_PRE_ITER_DIV_BLOCKER=proved'
 
       - name: Apply M28 candidate
         shell: bash
@@ -149,8 +161,9 @@ jobs:
           if summary.get('selected') != 500:
               raise SystemExit(f"expected frozen selected=500, got {summary.get('selected')}")
           text = p.read_text()
-          if '__iter_div_u64_rem' in text:
-              raise SystemExit('__iter_div_u64_rem remains in strict500 frontier summary')
+          for blocker in ('__iter_div_u64_rem', 'generic___change_bit'):
+              if blocker in text:
+                  raise SystemExit(f'{blocker} remains in strict500 frontier summary')
           if summary.get('error') != 0 or summary.get('preprocess_missing') != 0:
               raise SystemExit('M28 introduced non-UNSUPPORTED strict failures')
           if summary.get('pass', 0) + summary.get('unsupported', 0) != 500:
@@ -160,6 +173,7 @@ jobs:
           print('M28_STRICT500_ERROR', summary.get('error'))
           print('M28_STRICT500_BLOCKERS', summary.get('blockers', [])[:15])
           print('M28_STRICT500_ITER_DIV_BLOCKER=0')
+          print('M28_STRICT500_CHANGE_BIT_BLOCKER=0')
           PY
 
       - name: Productize M28
@@ -176,9 +190,10 @@ jobs:
           rm -f tools/dev/patch-core-inline-asm-identity-m28.py
           rm -f .github/workflows/oneshot-core-inline-asm-identity-m28.yml
           rm -f .github/workflows/oneshot-core-next-frontier-batch-m26c.yml
+          rm -f .github/workflows/oneshot-core-m28-shapes.yml
           git add -A
           git diff --cached --check
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git commit -m 'core: lower empty readwrite asm identity'
+          git commit -m 'core: lower scalar compound updates and asm identity'
           git push origin "HEAD:$BRANCH"
