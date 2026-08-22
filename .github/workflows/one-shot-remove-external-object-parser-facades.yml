@@ -1,0 +1,44 @@
+name: One-shot Remove External Object Parser Facades
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  wire:
+    if: >-
+      github.actor != 'github-actions[bot]' &&
+      github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+          fetch-depth: 0
+
+      - name: Remove external object parser facades
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/one-shot-remove-external-object-parser-facades.py
+          clang-format -i \
+            src/frontend/parser_function.c \
+            src/frontend/parser_global.c \
+            src/frontend/parser_internal.h
+
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/external-object-facade-removal
+
+          rm tools/dev/one-shot-remove-external-object-parser-facades.py
+          git diff --check
+          git status --short
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            src/frontend/parser_function.c \
+            src/frontend/parser_global.c \
+            src/frontend/parser_internal.h \
+            tools/dev/one-shot-remove-external-object-parser-facades.py
+          git commit -m "frontend: remove external object parser facades"
+          git push origin HEAD:refactor/declaration-sema-v1
