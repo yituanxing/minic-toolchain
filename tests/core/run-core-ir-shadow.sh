@@ -314,24 +314,6 @@ fi
 grep -F "Core IR shadow does not yet support function 'variadic_caller'" \
     "$work_dir/variadic-call-unsupported-strict.err" >/dev/null
 
-cat >"$work_dir/unsupported.i" <<'EOF'
-int runtime_subtract(int value) {
-    return value - 2;
-}
-EOF
-
-"$MINIC" -S "$work_dir/unsupported.i" -o "$work_dir/unsupported-normal.s"
-MINIC_CORE_IR=shadow "$MINIC" -S "$work_dir/unsupported.i" -o "$work_dir/unsupported-shadow.s"
-cmp "$work_dir/unsupported-normal.s" "$work_dir/unsupported-shadow.s"
-
-if MINIC_CORE_IR=strict "$MINIC" -S "$work_dir/unsupported.i" \
-    -o "$work_dir/unsupported-strict.s" 2>"$work_dir/unsupported-strict.err"; then
-    echo "strict Core IR shadow unexpectedly accepted an unsupported function" >&2
-    exit 1
-fi
-grep -F "Core IR shadow does not yet support function 'runtime_subtract'" \
-    "$work_dir/unsupported-strict.err" >/dev/null
-
 if MINIC_CORE_IR=invalid "$MINIC" -S "$work_dir/supported.i" \
     -o "$work_dir/invalid-mode.s" 2>"$work_dir/invalid-mode.err"; then
     echo "invalid Core IR shadow mode unexpectedly succeeded" >&2

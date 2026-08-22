@@ -37,8 +37,7 @@ void m26b_compound_cfg(unsigned long *p, unsigned long *q) {
 }
 
 void m26b_assignment_cfg(unsigned long *p, unsigned long *q, int choose) {
-    p[choose ? 1UL : 2UL] =
-        __builtin_constant_p(*q) ? *q : m26b_slow(*q);
+    p[choose ? 1UL : 2UL] = __builtin_constant_p(*q) ? *q : m26b_slow(*q);
 }
 
 int m26b_overflow_cfg(unsigned long *out, unsigned long *p, unsigned long *q) {
@@ -48,8 +47,8 @@ int m26b_overflow_cfg(unsigned long *out, unsigned long *p, unsigned long *q) {
 }
 
 unsigned int m26b_fswab32(unsigned int v) {
-    return ((v & 0x000000ffU) << 24) | ((v & 0x0000ff00U) << 8) |
-           ((v & 0x00ff0000U) >> 8) | ((v & 0xff000000U) >> 24);
+    return ((v & 0x000000ffU) << 24) | ((v & 0x0000ff00U) << 8) | ((v & 0x00ff0000U) >> 8) |
+           ((v & 0xff000000U) >> 24);
 }
 
 void m26b_cpu_to_be32_array(unsigned int *dst, const unsigned int *src, unsigned long len) {
@@ -57,10 +56,8 @@ void m26b_cpu_to_be32_array(unsigned int *dst, const unsigned int *src, unsigned
 
     for (i = 0; i < len; i++) {
         dst[i] = __builtin_constant_p(src[i])
-                     ? (((src[i] & 0x000000ffU) << 24) |
-                        ((src[i] & 0x0000ff00U) << 8) |
-                        ((src[i] & 0x00ff0000U) >> 8) |
-                        ((src[i] & 0xff000000U) >> 24))
+                     ? (((src[i] & 0x000000ffU) << 24) | ((src[i] & 0x0000ff00U) << 8) |
+                        ((src[i] & 0x00ff0000U) >> 8) | ((src[i] & 0xff000000U) >> 24))
                      : m26b_fswab32(src[i]);
     }
 }

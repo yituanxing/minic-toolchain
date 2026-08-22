@@ -503,7 +503,12 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
         return instruction_result_is_valid(function, instruction) &&
                minic_type_is_integer(instruction->type);
     case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
+    case MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT:
+    case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY:
+    case MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE:
+    case MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER:
     case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND:
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR:
     case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR:
         if (!instruction_result_is_valid(function, instruction) ||
             !minic_type_is_integer(instruction->type) ||
@@ -934,9 +939,39 @@ static bool dump_instruction(FILE *output,
                        instruction->result,
                        instruction->value.binary.left,
                        instruction->value.binary.right) >= 0;
+    case MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT:
+        return fprintf(output,
+                       "  %%%" PRIu32 " = sub.int %%%" PRIu32 ", %%%" PRIu32 "\n",
+                       instruction->result,
+                       instruction->value.binary.left,
+                       instruction->value.binary.right) >= 0;
+    case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY:
+        return fprintf(output,
+                       "  %%%" PRIu32 " = mul.int %%%" PRIu32 ", %%%" PRIu32 "\n",
+                       instruction->result,
+                       instruction->value.binary.left,
+                       instruction->value.binary.right) >= 0;
+    case MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE:
+        return fprintf(output,
+                       "  %%%" PRIu32 " = div.int %%%" PRIu32 ", %%%" PRIu32 "\n",
+                       instruction->result,
+                       instruction->value.binary.left,
+                       instruction->value.binary.right) >= 0;
+    case MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER:
+        return fprintf(output,
+                       "  %%%" PRIu32 " = rem.int %%%" PRIu32 ", %%%" PRIu32 "\n",
+                       instruction->result,
+                       instruction->value.binary.left,
+                       instruction->value.binary.right) >= 0;
     case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND:
         return fprintf(output,
                        "  %%%" PRIu32 " = and.int %%%" PRIu32 ", %%%" PRIu32 "\n",
+                       instruction->result,
+                       instruction->value.binary.left,
+                       instruction->value.binary.right) >= 0;
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR:
+        return fprintf(output,
+                       "  %%%" PRIu32 " = xor.int %%%" PRIu32 ", %%%" PRIu32 "\n",
                        instruction->result,
                        instruction->value.binary.left,
                        instruction->value.binary.right) >= 0;
