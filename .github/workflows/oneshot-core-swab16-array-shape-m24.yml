@@ -1,0 +1,60 @@
+name: One-shot Core swab16_array Shape M24
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    if: github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+      - name: Restore frozen Linux corpus
+        id: corpus
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+      - name: Extract exact swab16_array
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.corpus.outputs.cache-hit }}" = true
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('build/linux-focus-corpus/kbuild/init/version.i')
+          s = p.read_text(errors='replace')
+          needle = 'swab16_array'
+          pos = s.find(needle)
+          if pos < 0:
+              raise SystemExit('swab16_array not found in init/version.i')
+          # Walk back to a plausible function header boundary and then brace-match.
+          start = s.rfind('\n', 0, max(0, pos - 1200)) + 1
+          brace = s.find('{', pos)
+          if brace < 0:
+              raise SystemExit('opening brace not found')
+          depth = 0
+          end = None
+          i = brace
+          while i < len(s):
+              c = s[i]
+              if c == '{':
+                  depth += 1
+              elif c == '}':
+                  depth -= 1
+                  if depth == 0:
+                      end = i + 1
+                      break
+              i += 1
+          if end is None:
+              raise SystemExit('closing brace not found')
+          print('CORE_SWAB16_ARRAY_FILE', p)
+          print('CORE_SWAB16_ARRAY_BEGIN')
+          print(s[start:end])
+          print('CORE_SWAB16_ARRAY_END')
+          PY
