@@ -31,6 +31,16 @@ static MinicCoreLowerStatus lower_condition_branch(MinicCoreLowerContext *contex
 static MinicCoreLowerStatus lower_postfix_scalar_update(MinicCoreLowerContext *context,
                                                         const MinicExpression *expression,
                                                         MinicCoreValueId *value_id);
+static MinicCoreLowerStatus spill_scalar_value(MinicCoreLowerContext *context,
+                                               MinicSourceSpan span,
+                                               MinicType type,
+                                               MinicCoreValueId value_id,
+                                               MinicCoreObjectId *object_id);
+static MinicCoreLowerStatus reload_scalar_value(MinicCoreLowerContext *context,
+                                                MinicSourceSpan span,
+                                                MinicType type,
+                                                MinicCoreObjectId object_id,
+                                                MinicCoreValueId *value_id);
 
 static bool core_memory_scalar_type(MinicType type) {
     return minic_type_is_integer(type) || minic_type_is_pointer(type);
@@ -300,6 +310,69 @@ static MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
         }
         *address_id = pointer_id;
         return MINIC_CORE_LOWER_OK;
+    }
+    if (expression->kind == MINIC_EXPRESSION_SUBSCRIPT) {
+        const MinicExpression *base;
+        const MinicExpression *index;
+        MinicCoreInstruction offset_instruction;
+        MinicCoreObjectId base_object;
+        MinicCoreValueId base_value;
+        MinicCoreValueId index_value;
+        MinicCoreLowerStatus subscript_status;
+        MinicType element_type;
+        size_t element_size;
+
+        base =
+            minic_c0_program_expression(context->body->program, expression->value.subscript.base);
+        index =
+            minic_c0_program_expression(context->body->program, expression->value.subscript.index);
+        if (base == NULL || index == NULL || !minic_type_is_pointer(base->type) ||
+            !minic_type_is_integer(index->type) || !minic_type_pointee(base->type, &element_type) ||
+            !minic_type_equal(element_type, expression->type) ||
+            !minic_c0_pointer_arithmetic_element_size(
+                context->body->program, minic_default_data_layout(), base->type, &element_size)) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        subscript_status = lower_expression(context, expression->value.subscript.base, &base_value);
+        if (subscript_status != MINIC_CORE_LOWER_OK) {
+            return subscript_status;
+        }
+        if (base_value >= context->function->value_count ||
+            !minic_type_equal(context->function->values[base_value].type, base->type)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        subscript_status =
+            spill_scalar_value(context, base->span, base->type, base_value, &base_object);
+        if (subscript_status != MINIC_CORE_LOWER_OK) {
+            return subscript_status;
+        }
+        subscript_status =
+            lower_expression(context, expression->value.subscript.index, &index_value);
+        if (subscript_status != MINIC_CORE_LOWER_OK) {
+            return subscript_status;
+        }
+        if (index_value >= context->function->value_count ||
+            !minic_type_equal(context->function->values[index_value].type, index->type)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        subscript_status =
+            reload_scalar_value(context, base->span, base->type, base_object, &base_value);
+        if (subscript_status != MINIC_CORE_LOWER_OK) {
+            return subscript_status;
+        }
+
+        (void)memset(&offset_instruction, 0, sizeof(offset_instruction));
+        offset_instruction.kind = MINIC_CORE_INSTRUCTION_POINTER_OFFSET;
+        offset_instruction.span = expression->span;
+        offset_instruction.type = base->type;
+        offset_instruction.result = MINIC_CORE_VALUE_INVALID;
+        offset_instruction.value.pointer_offset.base = base_value;
+        offset_instruction.value.pointer_offset.index = index_value;
+        offset_instruction.value.pointer_offset.element_size = element_size;
+        return minic_core_function_append_value_instruction(
+                   context->function, context->block_id, &offset_instruction, address_id)
+                   ? MINIC_CORE_LOWER_OK
+                   : MINIC_CORE_LOWER_ERROR;
     }
     if (expression->kind == MINIC_EXPRESSION_MEMBER) {
         const MinicExpression *base;
@@ -1506,6 +1579,53 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         zero_test_instruction.value.operand = equal_value;
         return minic_core_function_append_value_instruction(
                    context->function, context->block_id, &zero_test_instruction, value_id)
+                   ? MINIC_CORE_LOWER_OK
+                   : MINIC_CORE_LOWER_ERROR;
+    }
+    if (expression->kind == MINIC_EXPRESSION_BINARY &&
+        expression->value.binary.operator_kind == MINIC_BINARY_LESS) {
+        const MinicExpression *left_expression;
+        const MinicExpression *right_expression;
+        MinicCoreValueId left;
+        MinicCoreValueId right;
+        MinicCoreLowerStatus status;
+        MinicType common_type;
+
+        if (!minic_type_equal(expression->type, minic_type_int()) || context->target == NULL) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        left_expression =
+            minic_c0_program_expression(context->body->program, expression->value.binary.left);
+        right_expression =
+            minic_c0_program_expression(context->body->program, expression->value.binary.right);
+        if (left_expression == NULL || right_expression == NULL ||
+            !minic_type_is_integer(left_expression->type) ||
+            !minic_type_is_integer(right_expression->type) ||
+            !minic_target_info_integer_common_for_program(context->target,
+                                                          context->body->program,
+                                                          left_expression->type,
+                                                          right_expression->type,
+                                                          &common_type)) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        status = lower_integer_binary_operands(context,
+                                               expression->value.binary.left,
+                                               expression->value.binary.right,
+                                               common_type,
+                                               &left,
+                                               &right);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        (void)memset(&instruction, 0, sizeof(instruction));
+        instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_LESS;
+        instruction.span = expression->span;
+        instruction.type = minic_type_int();
+        instruction.result = MINIC_CORE_VALUE_INVALID;
+        instruction.value.binary.left = left;
+        instruction.value.binary.right = right;
+        return minic_core_function_append_value_instruction(
+                   context->function, context->block_id, &instruction, value_id)
                    ? MINIC_CORE_LOWER_OK
                    : MINIC_CORE_LOWER_ERROR;
     }
