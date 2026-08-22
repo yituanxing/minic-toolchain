@@ -1,5 +1,5 @@
+#include "frontend/declaration_sema.h"
 #include "frontend/parser_internal.h"
-#include "frontend/semantic_snapshot.h"
 
 #include <limits.h>
 #include <string.h>
@@ -13,18 +13,6 @@ static bool declarator_identifier_is(const MinicParser *parser, const char *text
     length = minic_parser_span_length(parser->current.span);
     return strlen(text) == length &&
            memcmp(parser->source + parser->current.span.begin.offset, text, length) == 0;
-}
-
-static bool rollback_declarator_type_transaction(MinicParser *parser,
-                                                 const MinicSemanticSnapshot *snapshot) {
-    if (parser != NULL && parser->program != NULL && snapshot != NULL &&
-        minic_semantic_snapshot_rollback_declarator_types(snapshot, parser->program)) {
-        return true;
-    }
-    if (parser != NULL) {
-        minic_parser_error(parser, "internal error: declarator type transaction escaped");
-    }
-    return false;
 }
 
 bool minic_parser_parse_pointer_qualifier_sequence(MinicParser *parser,
@@ -170,16 +158,9 @@ bool minic_parser_parse_parenthesized_pointer_to_array_declarator(MinicParser *p
 
 static bool parse_array_bound_allow_zero(MinicParser *parser, size_t *element_count);
 
-typedef struct MinicParsedArraySuffix {
-    size_t bounds[8];
-    size_t dimension_count;
-    unsigned int zero_length_mask;
-    bool outermost_incomplete;
-} MinicParsedArraySuffix;
-
 static bool parse_array_suffix_syntax(MinicParser *parser,
                                       bool allow_incomplete_outermost,
-                                      MinicParsedArraySuffix *suffix) {
+                                      MinicDeclarationArraySuffix *suffix) {
     size_t dimension;
 
     if (parser == NULL || suffix == NULL) {
@@ -187,7 +168,7 @@ static bool parse_array_suffix_syntax(MinicParser *parser,
     }
     (void)memset(suffix, 0, sizeof(*suffix));
     while (parser->current.kind == MINIC_TOKEN_LBRACKET) {
-        if (suffix->dimension_count >= sizeof(suffix->bounds) / sizeof(suffix->bounds[0])) {
+        if (suffix->dimension_count >= MINIC_DECLARATION_MAX_ARRAY_DIMENSIONS) {
             minic_parser_error(parser, "array declarator supports at most eight dimensions");
             return false;
         }
@@ -218,66 +199,34 @@ static bool parse_array_suffix_syntax(MinicParser *parser,
     return true;
 }
 
-static bool materialize_array_suffix_type(MinicParser *parser,
-                                          MinicType element_type,
-                                          const MinicParsedArraySuffix *suffix,
-                                          const char *incomplete_error,
-                                          const char *zero_length_error,
-                                          const char *array_error,
-                                          MinicType *type) {
-    MinicSemanticSnapshot snapshot;
-    size_t dimension;
-    MinicType result;
-
-    if (parser == NULL || suffix == NULL || type == NULL) {
-        return false;
+static bool report_array_materialization_failure(
+    MinicParser *parser,
+    MinicDeclarationArrayMaterializeStatus status) {
+    switch (status) {
+    case MINIC_DECLARATION_ARRAY_MATERIALIZE_INCOMPLETE_FAILED:
+        minic_parser_error(parser, "cannot build incomplete array declarator type");
+        break;
+    case MINIC_DECLARATION_ARRAY_MATERIALIZE_ZERO_LENGTH_FAILED:
+        minic_parser_error(parser, "cannot build GNU zero-length array declarator type");
+        break;
+    case MINIC_DECLARATION_ARRAY_MATERIALIZE_FIXED_FAILED:
+        minic_parser_error(parser, "cannot build array declarator type");
+        break;
+    case MINIC_DECLARATION_ARRAY_MATERIALIZE_INVALID:
+        minic_parser_error(parser, "internal error: invalid parsed array declarator");
+        break;
+    case MINIC_DECLARATION_ARRAY_MATERIALIZE_TRANSACTION_ESCAPED:
+        minic_parser_error(parser, "internal error: declarator type transaction escaped");
+        break;
+    case MINIC_DECLARATION_ARRAY_MATERIALIZE_OK:
+        return true;
     }
-    snapshot = minic_semantic_snapshot_capture(parser->program);
-    result = element_type;
-    dimension = suffix->dimension_count;
-    while (dimension > 0U) {
-        unsigned int bit;
-
-        dimension -= 1U;
-        bit = 1U << dimension;
-        if (dimension == 0U && suffix->outermost_incomplete) {
-            if (!minic_c0_program_add_incomplete_array_type(parser->program, result, &result)) {
-                if (!rollback_declarator_type_transaction(parser, &snapshot)) {
-                    return false;
-                }
-                if (incomplete_error != NULL) {
-                    minic_parser_error(parser, "%s", incomplete_error);
-                }
-                return false;
-            }
-        } else if ((suffix->zero_length_mask & bit) != 0U) {
-            if (!minic_c0_program_add_zero_length_array_type(parser->program, result, &result)) {
-                if (!rollback_declarator_type_transaction(parser, &snapshot)) {
-                    return false;
-                }
-                if (zero_length_error != NULL) {
-                    minic_parser_error(parser, "%s", zero_length_error);
-                }
-                return false;
-            }
-        } else if (!minic_c0_program_add_array_type(
-                       parser->program, result, suffix->bounds[dimension], &result)) {
-            if (!rollback_declarator_type_transaction(parser, &snapshot)) {
-                return false;
-            }
-            if (array_error != NULL) {
-                minic_parser_error(parser, "%s", array_error);
-            }
-            return false;
-        }
-    }
-    *type = result;
-    return true;
+    return false;
 }
 
 static bool parse_parenthesized_function_array_suffix(MinicParser *parser,
                                                       MinicParsedFunctionDeclarator *declarator) {
-    MinicParsedArraySuffix suffix;
+    MinicDeclarationArraySuffix suffix;
 
     if (parser == NULL || declarator == NULL || !parse_array_suffix_syntax(parser, true, &suffix)) {
         return false;
@@ -365,7 +314,8 @@ bool minic_parser_parse_array_declarator_suffix(MinicParser *parser,
                                                 bool allow_incomplete_outermost,
                                                 MinicType *declarator_type,
                                                 bool *is_array) {
-    MinicParsedArraySuffix suffix;
+    MinicDeclarationArrayMaterializeStatus status;
+    MinicDeclarationArraySuffix suffix;
 
     if (parser == NULL || declarator_type == NULL || is_array == NULL) {
         return false;
@@ -378,13 +328,9 @@ bool minic_parser_parse_array_declarator_suffix(MinicParser *parser,
     if (suffix.dimension_count == 0U) {
         return true;
     }
-    if (!materialize_array_suffix_type(parser,
-                                       element_type,
-                                       &suffix,
-                                       "cannot build incomplete array declarator type",
-                                       "cannot build GNU zero-length array declarator type",
-                                       "cannot build array declarator type",
-                                       declarator_type)) {
+    status = minic_declaration_materialize_array_suffix(
+        parser->program, element_type, &suffix, declarator_type);
+    if (!report_array_materialization_failure(parser, status)) {
         return false;
     }
     *is_array = true;
@@ -395,58 +341,25 @@ bool minic_parser_build_function_declarator_type(MinicParser *parser,
                                                  MinicType return_type,
                                                  const MinicParsedFunctionDeclarator *declarator,
                                                  MinicType *declarator_type) {
-    MinicParsedArraySuffix array_suffix;
-    MinicSemanticSnapshot snapshot;
-    MinicType function_type;
-    size_t pointer_depth;
+    MinicDeclarationArraySuffix array_suffix;
 
     if (parser == NULL || declarator == NULL || declarator_type == NULL ||
         declarator->parameter_count > MINIC_MAX_FUNCTION_PARAMETERS) {
         return false;
     }
-    snapshot = minic_semantic_snapshot_capture(parser->program);
-    if (!minic_c0_program_add_variadic_function_type(parser->program,
-                                                     return_type,
-                                                     declarator->parameter_types,
-                                                     declarator->parameter_count,
-                                                     declarator->is_variadic,
-                                                     &function_type)) {
-        (void)rollback_declarator_type_transaction(parser, &snapshot);
-        return false;
-    }
-
-    pointer_depth = 0U;
-    while (pointer_depth < declarator->pointer_depth) {
-        unsigned int bit;
-
-        if (!minic_type_pointer_to(function_type, &function_type)) {
-            (void)rollback_declarator_type_transaction(parser, &snapshot);
-            return false;
-        }
-        bit = 1U << pointer_depth;
-        if ((declarator->pointer_const_qualifiers & bit) != 0U &&
-            !minic_type_add_const(function_type, &function_type)) {
-            (void)rollback_declarator_type_transaction(parser, &snapshot);
-            return false;
-        }
-        if ((declarator->pointer_volatile_qualifiers & bit) != 0U &&
-            !minic_type_add_volatile(function_type, &function_type)) {
-            (void)rollback_declarator_type_transaction(parser, &snapshot);
-            return false;
-        }
-        pointer_depth += 1U;
-    }
-
     (void)memset(&array_suffix, 0, sizeof(array_suffix));
     (void)memcpy(array_suffix.bounds, declarator->array_bounds, sizeof(array_suffix.bounds));
     array_suffix.dimension_count = declarator->array_dimension_count;
     array_suffix.zero_length_mask = declarator->array_zero_length_mask;
     array_suffix.outermost_incomplete = declarator->array_outermost_incomplete;
-    if (!materialize_array_suffix_type(
-            parser, function_type, &array_suffix, NULL, NULL, NULL, &function_type)) {
-        (void)rollback_declarator_type_transaction(parser, &snapshot);
-        return false;
-    }
-    *declarator_type = function_type;
-    return true;
+    return minic_declaration_build_function_type(parser->program,
+                                                 return_type,
+                                                 declarator->parameter_types,
+                                                 declarator->parameter_count,
+                                                 declarator->is_variadic,
+                                                 declarator->pointer_depth,
+                                                 declarator->pointer_const_qualifiers,
+                                                 declarator->pointer_volatile_qualifiers,
+                                                 &array_suffix,
+                                                 declarator_type);
 }
