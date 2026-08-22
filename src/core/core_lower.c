@@ -1112,6 +1112,52 @@ static MinicCoreLowerStatus lower_condition_branch(MinicCoreLowerContext *contex
     if (expression == NULL || !minic_type_is_integer(expression->type)) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
+    if (expression->kind == MINIC_EXPRESSION_UNARY &&
+        expression->value.unary.operator_kind == MINIC_UNARY_LOGICAL_NOT) {
+        const MinicExpression *operand;
+
+        operand =
+            minic_c0_program_expression(context->body->program, expression->value.unary.operand);
+        if (operand != NULL && minic_type_is_integer(operand->type)) {
+            return lower_condition_branch(
+                context, expression->value.unary.operand, span, when_false, when_true);
+        }
+    }
+    if (expression->kind == MINIC_EXPRESSION_CONVERSION && context->target != NULL) {
+        const MinicExpression *operand;
+        unsigned int source_width;
+        unsigned int destination_width;
+
+        operand =
+            minic_c0_program_expression(context->body->program, expression->value.unary.operand);
+        if (operand != NULL && minic_type_is_integer(operand->type) &&
+            minic_type_is_integer(expression->type) &&
+            minic_target_info_integer_width(
+                context->target, context->body->program, operand->type, &source_width) &&
+            minic_target_info_integer_width(
+                context->target, context->body->program, expression->type, &destination_width) &&
+            (minic_type_equal(operand->type, expression->type) ||
+             destination_width > source_width)) {
+            return lower_condition_branch(
+                context, expression->value.unary.operand, span, when_true, when_false);
+        }
+    }
+    if (expression->kind == MINIC_EXPRESSION_BINARY &&
+        expression->value.binary.operator_kind == MINIC_BINARY_LOGICAL_AND) {
+        MinicCoreBlockId right_block;
+
+        if (!minic_core_function_add_block(context->function, &right_block)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        status = lower_condition_branch(
+            context, expression->value.binary.left, span, right_block, when_false);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        context->block_id = right_block;
+        return lower_condition_branch(
+            context, expression->value.binary.right, span, when_true, when_false);
+    }
     if (expression->kind == MINIC_EXPRESSION_BINARY &&
         expression->value.binary.operator_kind == MINIC_BINARY_LOGICAL_OR) {
         MinicCoreBlockId right_block;
