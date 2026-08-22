@@ -66,6 +66,16 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('tools/dev/patch-core-opaque-inline-asm-m18.py')
+          text = path.read_text()
+          old = '''    if count != 1:\n        raise SystemExit(f"{label}: expected 1 match, found {count}")\n    target.write_text(text.replace(old, new, 1))\n'''
+          new = '''    if count != 1:\n        if label == "Core verifier opaque inline-asm instruction" and count == 2:\n            target.write_text(text.replace(old, new, 1))\n            return\n        raise SystemExit(f"{label}: expected 1 match, found {count}")\n    target.write_text(text.replace(old, new, 1))\n'''
+          if text.count(old) != 1:
+              raise SystemExit('M18 patcher helper shape changed unexpectedly')
+          path.write_text(text.replace(old, new, 1))
+          PY
           python3 -m py_compile tools/dev/patch-core-opaque-inline-asm-m18.py
           python3 tools/dev/patch-core-opaque-inline-asm-m18.py
           clang-format-18 -i \
