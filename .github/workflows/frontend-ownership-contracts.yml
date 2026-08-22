@@ -13,6 +13,7 @@ on:
       - 'tests/frontend/declaration_sema_test.c'
       - 'tests/frontend/function_body_view_test.c'
       - 'tests/frontend/global_object_publish_test.c'
+      - 'tests/frontend/initializer_plan_test.c'
       - 'tests/frontend/semantic_snapshot_test.c'
       - '.github/workflows/frontend-ownership-contracts.yml'
   push:
@@ -99,6 +100,21 @@ jobs:
 
       - name: Run atomic declaration semantic contract
         run: build/frontend-ownership/declaration-sema-atomic-test
+
+      - name: Build initializer plan ownership contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cc -std=c11 \
+            -Wall -Wextra -Wpedantic -Wconversion -Wshadow \
+            -Wstrict-prototypes -Wmissing-prototypes -Werror \
+            -Iinclude -Isrc \
+            src/frontend/initializer.c \
+            tests/frontend/initializer_plan_test.c \
+            -o build/frontend-ownership/initializer-plan-test
+
+      - name: Run initializer plan ownership contract
+        run: build/frontend-ownership/initializer-plan-test
 
       - name: Build AST traversal ownership contract
         shell: bash
