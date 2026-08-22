@@ -64,15 +64,34 @@ unsigned long qualified_parameter(const unsigned long value) {
     return value;
 }
 EOF
+check_strict_case qualified-parameter
 
-"$MINIC" -S "$work_dir/qualified-parameter.i" -o "$work_dir/qualified-parameter-normal.s"
-MINIC_CORE_IR=shadow "$MINIC" -S "$work_dir/qualified-parameter.i"     -o "$work_dir/qualified-parameter-shadow.s"
-cmp "$work_dir/qualified-parameter-normal.s" "$work_dir/qualified-parameter-shadow.s"
-if MINIC_CORE_IR=strict "$MINIC" -S "$work_dir/qualified-parameter.i"     -o "$work_dir/qualified-parameter-strict.s" 2>"$work_dir/qualified-parameter-strict.err"; then
-    echo "strict Core IR shadow unexpectedly accepted a qualified parameter" >&2
+cat >"$work_dir/pointee-const-parameter.i" <<'EOF'
+int pointee_const_parameter(const int *value) {
+    return *value;
+}
+EOF
+check_strict_case pointee-const-parameter
+
+cat >"$work_dir/volatile-parameter-unsupported.i" <<'EOF'
+unsigned long volatile_parameter(volatile unsigned long value) {
+    return value;
+}
+EOF
+"$MINIC" -S "$work_dir/volatile-parameter-unsupported.i" \
+    -o "$work_dir/volatile-parameter-unsupported-normal.s"
+MINIC_CORE_IR=shadow "$MINIC" -S "$work_dir/volatile-parameter-unsupported.i" \
+    -o "$work_dir/volatile-parameter-unsupported-shadow.s"
+cmp "$work_dir/volatile-parameter-unsupported-normal.s" \
+    "$work_dir/volatile-parameter-unsupported-shadow.s"
+if MINIC_CORE_IR=strict "$MINIC" -S "$work_dir/volatile-parameter-unsupported.i" \
+    -o "$work_dir/volatile-parameter-unsupported-strict.s" \
+    2>"$work_dir/volatile-parameter-unsupported-strict.err"; then
+    echo "strict Core IR shadow unexpectedly accepted a volatile parameter" >&2
     exit 1
 fi
-grep -F "Core IR shadow does not yet support function 'qualified_parameter'"     "$work_dir/qualified-parameter-strict.err" >/dev/null
+grep -F "Core IR shadow does not yet support function 'volatile_parameter'" \
+    "$work_dir/volatile-parameter-unsupported-strict.err" >/dev/null
 
 cat >"$work_dir/mixed-add.i" <<'EOF'
 int add_mixed(signed char value) {
