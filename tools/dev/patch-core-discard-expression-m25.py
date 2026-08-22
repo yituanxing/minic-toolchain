@@ -135,26 +135,19 @@ printf '%s\n' 'PASS compiler/c0/core-discard-expression-m25'
 """)
 
 gate_text = gate.read_text()
-anchor = """core_postfix_update_m24_focused() {
-    MINIC="$root/build/ci-debug/bin/minic" \
-    BUILD_DIR="$root/build/ci-core-postfix-update-m24" \
-    RISCV_CC=riscv64-linux-gnu-gcc \
-    QEMU_RISCV64=qemu-riscv64 \
-        sh tests/compiler/c0/run-core-postfix-update-m24.sh
+function_marker = "runtime_record_fam_prefix_focused() {\n"
+focused_function = """core_discard_expression_m25_focused() {
+    MINIC="$root/build/ci-debug/bin/minic" BUILD_DIR="$root/build/ci-core-discard-expression-m25" RISCV_CC=riscv64-linux-gnu-gcc QEMU_RISCV64=qemu-riscv64 sh tests/compiler/c0/run-core-discard-expression-m25.sh
 }
 
 """
-addition = anchor + """core_discard_expression_m25_focused() {
-    MINIC="$root/build/ci-debug/bin/minic" \
-    BUILD_DIR="$root/build/ci-core-discard-expression-m25" \
-    RISCV_CC=riscv64-linux-gnu-gcc \
-    QEMU_RISCV64=qemu-riscv64 \
-        sh tests/compiler/c0/run-core-discard-expression-m25.sh
-}
-
-"""
-gate_text = replace_once(gate_text, anchor, addition, "C0 focused function")
-anchor = "start_gate core-postfix-update-m24-focused core_postfix_update_m24_focused\n"
-addition = anchor + "start_gate core-discard-expression-m25-focused core_discard_expression_m25_focused\n"
-gate_text = replace_once(gate_text, anchor, addition, "C0 start_gate")
+gate_text = replace_once(
+    gate_text,
+    function_marker,
+    focused_function + function_marker,
+    "C0 focused function marker",
+)
+start_anchor = "start_gate core-postfix-update-m24-focused core_postfix_update_m24_focused\n"
+start_addition = start_anchor + "start_gate core-discard-expression-m25-focused core_discard_expression_m25_focused\n"
+gate_text = replace_once(gate_text, start_anchor, start_addition, "C0 start_gate")
 gate.write_text(gate_text)
