@@ -273,6 +273,7 @@ static bool core_instruction_supported(const MinicC0Program *program,
     case MINIC_CORE_INSTRUCTION_INTEGER_EQUAL:
     case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION:
     case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE:
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT:
     case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:
     case MINIC_CORE_INSTRUCTION_PARAMETER:
     case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS:
@@ -549,6 +550,14 @@ static bool emit_instruction(FILE *file,
     case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE:
         if (!load_core_value(file, frame, instruction->value.operand, "t0") ||
             fprintf(file, "  neg t0, t0\n") < 0 ||
+            !minic_riscv64_emit_integer_conversion_for_program(
+                file, program, instruction->type, "t0")) {
+            return false;
+        }
+        return store_core_value(file, frame, instruction->result, "t0");
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT:
+        if (!load_core_value(file, frame, instruction->value.operand, "t0") ||
+            fprintf(file, "  xori t0, t0, -1\n") < 0 ||
             !minic_riscv64_emit_integer_conversion_for_program(
                 file, program, instruction->type, "t0")) {
             return false;
