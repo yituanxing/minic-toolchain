@@ -1,4 +1,4 @@
-name: One-shot Core Discard Expression M25
+name: One-shot Core Discard + Binary Preservation M25
 
 on:
   pull_request:
@@ -32,7 +32,7 @@ jobs:
           path: build/linux-focus-corpus
           key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
 
-      - name: Prove M25 gap
+      - name: Prove M25 gaps
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -48,28 +48,51 @@ jobs:
           fi
           grep -F "Core IR shadow does not yet support function 'probe'" /tmp/m25-discard.err >/dev/null
 
-      - name: Apply M25
+          python3 tools/dev/patch-core-discard-expression-m25.py
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-m25-discard-only
+          c="$GITHUB_WORKSPACE/build/core-m25-discard-only/bin/minic"
+          cat > build/core-m25-before-binary.i <<'EOF'
+          unsigned short slow(unsigned short v) { return v; }
+          unsigned short probe(unsigned short *a, unsigned short *b) {
+              return (unsigned short)((__builtin_constant_p(*a) ? *a : slow(*a)) |
+                                      (__builtin_constant_p(*b) ? *b : slow(*b)));
+          }
+          EOF
+          if MINIC_CORE_IR=strict "$c" -S build/core-m25-before-binary.i -o /tmp/m25-binary.s 2>/tmp/m25-binary.err; then
+              echo 'M25b binary CFG preservation gap unexpectedly absent' >&2
+              exit 1
+          fi
+          grep -F "Core IR shadow lowering failed for function 'probe'" /tmp/m25-binary.err >/dev/null
+          git reset --hard HEAD
+
+      - name: Apply M25 plus M25b
         shell: bash
         run: |
           set -Eeuo pipefail
-          python3 -m py_compile tools/dev/patch-core-discard-expression-m25.py
+          python3 -m py_compile tools/dev/patch-core-discard-expression-m25.py tools/dev/patch-core-integer-binary-preservation-m25b.py
           python3 tools/dev/patch-core-discard-expression-m25.py
-          chmod +x tests/compiler/c0/run-core-discard-expression-m25.sh
+          python3 tools/dev/patch-core-integer-binary-preservation-m25b.py
+          chmod +x tests/compiler/c0/run-core-discard-expression-m25.sh \
+                   tests/compiler/c0/run-core-integer-binary-preservation-m25b.sh
           clang-format-18 -i src/core/core_lower.c \
             tests/compiler/c0/core_discard_expression_m25.c \
-            tests/compiler/c0/core_discard_expression_m25_runtime.c
+            tests/compiler/c0/core_discard_expression_m25_runtime.c \
+            tests/compiler/c0/core_integer_binary_preservation_m25b.c \
+            tests/compiler/c0/core_integer_binary_preservation_m25b_runtime.c
           sh -n tests/compiler/c0/run-core-discard-expression-m25.sh
+          sh -n tests/compiler/c0/run-core-integer-binary-preservation-m25b.sh
           bash -n .github/scripts/compiler-c0-full-gate.sh
           git diff --check
           git diff --exit-code -- src/core/core_ir.h src/core/core_ir.c src/target/riscv64/core_codegen.c
 
-      - name: Build and validate M25
+      - name: Build and validate M25 plus M25b
         shell: bash
         run: |
           set -Eeuo pipefail
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-m25-compiler
           c="$GITHUB_WORKSPACE/build/core-m25-compiler/bin/minic"
           MINIC="$c" BUILD_DIR="$GITHUB_WORKSPACE/build/core-m25-focused" RISCV_CC=riscv64-linux-gnu-gcc QEMU_RISCV64=qemu-riscv64 sh tests/compiler/c0/run-core-discard-expression-m25.sh
+          MINIC="$c" BUILD_DIR="$GITHUB_WORKSPACE/build/core-m25b-focused" RISCV_CC=riscv64-linux-gnu-gcc QEMU_RISCV64=qemu-riscv64 sh tests/compiler/c0/run-core-integer-binary-preservation-m25b.sh
           MINIC="$c" BUILD_DIR="$GITHUB_WORKSPACE/build/core-m25-m24" RISCV_CC=riscv64-linux-gnu-gcc QEMU_RISCV64=qemu-riscv64 sh tests/compiler/c0/run-core-postfix-update-m24.sh
           MINIC="$c" BUILD_DIR="$GITHUB_WORKSPACE/build/core-m25-m23" RISCV_CC=riscv64-linux-gnu-gcc QEMU_RISCV64=qemu-riscv64 sh tests/compiler/c0/run-core-integer-conditional-m23.sh
           MINIC="$c" bash tests/core/run-core-ir-shadow.sh
@@ -111,8 +134,9 @@ jobs:
               raise SystemExit(f"M25 expected 500 TUs, got {s['selected']}")
           if s['error'] != 0 or s['preprocess_missing'] != 0:
               raise SystemExit('M25 introduced non-UNSUPPORTED strict failures')
-          if blockers.get('le32_to_cpu_array', 0) != 0:
-              raise SystemExit(f"M25 did not pierce le32_to_cpu_array: {blockers.get('le32_to_cpu_array')}")
+          for name in ('le32_to_cpu_array', 'be16_add_cpu'):
+              if blockers.get(name, 0) != 0:
+                  raise SystemExit(f"M25 did not pierce {name}: {blockers.get(name)}")
           if s['pass'] + s['unsupported'] != 500:
               raise SystemExit('M25 strict500 accounting mismatch')
           PY
@@ -122,8 +146,10 @@ jobs:
         run: |
           set -Eeuo pipefail
           rm tools/dev/patch-core-discard-expression-m25.py \
+             tools/dev/patch-core-integer-binary-preservation-m25b.py \
              .github/workflows/oneshot-core-discard-expression-m25.yml \
-             .github/workflows/oneshot-core-le32-to-cpu-array-shape-m25.yml
+             .github/workflows/oneshot-core-le32-to-cpu-array-shape-m25.yml \
+             .github/workflows/oneshot-core-be16-add-cpu-shape-m25b.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add src/core/core_lower.c \
@@ -131,9 +157,14 @@ jobs:
                   tests/compiler/c0/core_discard_expression_m25.c \
                   tests/compiler/c0/core_discard_expression_m25_runtime.c \
                   tests/compiler/c0/run-core-discard-expression-m25.sh \
+                  tests/compiler/c0/core_integer_binary_preservation_m25b.c \
+                  tests/compiler/c0/core_integer_binary_preservation_m25b_runtime.c \
+                  tests/compiler/c0/run-core-integer-binary-preservation-m25b.sh \
                   tools/dev/patch-core-discard-expression-m25.py \
+                  tools/dev/patch-core-integer-binary-preservation-m25b.py \
                   .github/workflows/oneshot-core-discard-expression-m25.yml \
-                  .github/workflows/oneshot-core-le32-to-cpu-array-shape-m25.yml
+                  .github/workflows/oneshot-core-le32-to-cpu-array-shape-m25.yml \
+                  .github/workflows/oneshot-core-be16-add-cpu-shape-m25b.yml
           git diff --cached --check
-          git commit -m 'core: lower discarded expressions'
+          git commit -m 'core: preserve integer binary operands across CFG'
           git push origin HEAD:refactor/declaration-sema-v1
