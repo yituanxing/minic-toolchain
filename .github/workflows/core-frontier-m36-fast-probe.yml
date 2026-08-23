@@ -1,4 +1,4 @@
-name: Core M36 Fast Frontier Probe
+name: Core M36 Order Base2 Shapes
 
 on:
   pull_request:
@@ -18,7 +18,7 @@ jobs:
         with:
           path: build/linux-focus-corpus
           key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
-      - name: Build M35 candidate and probe init/version
+      - name: Build M35 candidate and isolate shapes
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -29,7 +29,44 @@ jobs:
           python3 tools/dev/patch-core-frontier-batch-m34.py
           python3 tools/dev/patch-core-frontier-batch-m35.py
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m36-probe
-          c="$GITHUB_WORKSPACE/build/m36-probe/bin/minic"
+          c="$GITHUB_WORKSPACE/build/m36-probe/bin/minic"; w=build/m36-shapes; mkdir -p "$w"
+          cat > "$w/simple_ternary.c" <<'EOF'
+          int f(unsigned long n) { return n > 1 ? (int)(n - 1) + 1 : 0; }
+          EOF
+          cat > "$w/helper_ternary.c" <<'EOF'
+          static int helper(unsigned long n) { return (int)n; }
+          int f(unsigned long n) { return n > 1 ? helper(n - 1) + 1 : 0; }
+          EOF
+          cat > "$w/constant_p.c" <<'EOF'
+          int f(unsigned long n) { return __builtin_constant_p(n) ? 1 : 2; }
+          EOF
+          cat > "$w/clzll.c" <<'EOF'
+          int f(unsigned long n) { return 63 - __builtin_clzll(n); }
+          EOF
+          cat > "$w/sizeof_cond.c" <<'EOF'
+          static int a(unsigned int n) { return (int)n; }
+          static int b(unsigned long n) { return (int)n; }
+          int f(unsigned long n) { return sizeof(n) <= 4 ? a((unsigned int)n) : b(n); }
+          EOF
+          cat > "$w/ilog2_like.c" <<'EOF'
+          static int a(unsigned int n) { return (int)n; }
+          static int b(unsigned long n) { return (int)n; }
+          static int ilog(unsigned long n) {
+              return __builtin_constant_p(n) ?
+                  (n < 2 ? 0 : 63 - __builtin_clzll(n)) :
+                  (sizeof(n) <= 4 ? a((unsigned int)n) : b(n));
+          }
+          int f(unsigned long n) { return n > 1 ? ilog(n - 1) + 1 : 0; }
+          EOF
+          for src in "$w"/*.c; do
+            name=$(basename "$src" .c)
+            set +e
+            MINIC_CORE_IR=strict "$c" -S "$src" -o "$w/$name.s" 2>"$w/$name.err"
+            rc=$?
+            set -e
+            printf 'M36_SHAPE name=%s rc=%d\n' "$name" "$rc"
+            cat "$w/$name.err"
+          done
           mkdir -p build/m36-frontier
           set +e
           MINIC_CORE_IR=strict "$c" -S build/linux-focus-corpus/kbuild/init/version.i -o build/m36-frontier/version.s 2>build/m36-frontier/version.err
