@@ -1185,6 +1185,51 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         *value_id = result_value;
         return MINIC_CORE_LOWER_OK;
     }
+    /* M57_CONSTANT_CONDITIONAL_PRUNING: if the frontend can prove
+       the condition, lower only the selected arm. Besides being smaller CFG,
+       this is semantically important for GNU compile-time choice idioms: the
+       dead arm may contain target builtins that are never evaluated. */
+    if (expression->kind == MINIC_EXPRESSION_CONDITIONAL &&
+        !expression->value.conditional.uses_condition_value &&
+        expression->value.conditional.when_true != MINIC_EXPRESSION_INVALID &&
+        expression->value.conditional.when_false != MINIC_EXPRESSION_INVALID &&
+        context->target != NULL) {
+        MinicConstValue condition_value;
+        MinicExpressionId selected_expression;
+        bool condition_is_zero;
+
+        if (minic_const_eval_integer(context->body->program,
+                                     context->target,
+                                     expression->value.conditional.condition,
+                                     &condition_value) &&
+            minic_const_value_is_zero(context->body->program,
+                                      context->target,
+                                      &condition_value,
+                                      &condition_is_zero)) {
+            selected_expression = condition_is_zero
+                                      ? expression->value.conditional.when_false
+                                      : expression->value.conditional.when_true;
+            if (minic_type_is_void(expression->type)) {
+                MinicCoreLowerStatus status;
+                MinicCoreValueId discarded_value;
+
+                status = lower_expression(context, selected_expression, &discarded_value);
+                if (status != MINIC_CORE_LOWER_OK) {
+                    return status;
+                }
+                if (discarded_value != MINIC_CORE_VALUE_INVALID) {
+                    return MINIC_CORE_LOWER_ERROR;
+                }
+                *value_id = MINIC_CORE_VALUE_INVALID;
+                return MINIC_CORE_LOWER_OK;
+            }
+            if (!core_memory_scalar_type(expression->type)) {
+                return MINIC_CORE_LOWER_UNSUPPORTED;
+            }
+            return lower_scalar_assignment_value(
+                context, expression->type, selected_expression, value_id);
+        }
+    }
     /* M53_VOID_CONDITIONAL_EXPRESSION: C permits an effect-only
        conditional when both arms have void type. Model it as CFG only; there is
        deliberately no synthetic scalar result or spill object. */
