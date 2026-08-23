@@ -1284,10 +1284,13 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         if (true_expression == NULL || false_expression == NULL) {
             return MINIC_CORE_LOWER_ERROR;
         }
-        if (!core_scalar_expression_value_type(context->body, true_expression, &true_type) ||
-            !core_scalar_expression_value_type(context->body, false_expression, &false_type) ||
-            !minic_type_equal(true_type, expression->type) ||
-            !minic_type_equal(false_type, expression->type)) {
+        /* M55_SCALAR_CONDITIONAL_ARM_CONVERSION: the frontend owns the
+           conditional result type. The selected arm undergoes the same scalar
+           conversion as assignment to that type; its source type need not
+           already be identical. */
+        if (!core_memory_scalar_type(expression->type) ||
+            !core_scalar_expression_value_type(context->body, true_expression, &true_type) ||
+            !core_scalar_expression_value_type(context->body, false_expression, &false_type)) {
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
         if (!minic_core_function_add_object(
@@ -1308,7 +1311,10 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         }
 
         context->block_id = true_block;
-        status = lower_expression(context, expression->value.conditional.when_true, &arm_value);
+        status = lower_scalar_assignment_value(context,
+                                               expression->type,
+                                               expression->value.conditional.when_true,
+                                               &arm_value);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
@@ -1323,7 +1329,10 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         }
 
         context->block_id = false_block;
-        status = lower_expression(context, expression->value.conditional.when_false, &arm_value);
+        status = lower_scalar_assignment_value(context,
+                                               expression->type,
+                                               expression->value.conditional.when_false,
+                                               &arm_value);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
