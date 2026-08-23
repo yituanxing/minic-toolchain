@@ -25,10 +25,10 @@ replace_once(
             !minic_type_is_integer(operand->type) || minic_type_is_bool_integer(operand->type) ||
             minic_type_is_const(operand->type) ||
             !minic_type_unqualified(operand->type, &value_type) ||
-            !minic_type_equal(expression->type, value_type) ||
+            !minic_type_equal(expression->type, operand->type) ||
             !minic_type_pointer_to(operand->type, &pointer_type)) {
 ''',
-    "preserve qualified volatile address type",
+    "preserve qualified prefix AST and address type",
 )
 
 replace_once(
