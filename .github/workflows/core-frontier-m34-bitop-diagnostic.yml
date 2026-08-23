@@ -1,0 +1,38 @@
+name: Core M34 bitop diagnostic
+
+on:
+  pull_request:
+
+jobs:
+  diagnose:
+    if: github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+      - name: Restore frozen Linux corpus
+        id: corpus
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+      - name: Inspect bitop expansion
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.corpus.outputs.cache-hit }}" = true
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          text=Path('build/linux-focus-corpus/kbuild/init/version.i').read_text(errors='replace')
+          pats=(r'\b__set_bit_le\s*\(', r'\bgeneric___set_bit\s*\(', r'\barch___set_bit\s*\(', r'\bconst___set_bit\s*\(', r'__builtin_constant_p\s*\(')
+          for pat in pats:
+              ms=list(re.finditer(pat,text))
+              print(f'M34_PATTERN {pat} count={len(ms)}')
+              for m in ms[:8]:
+                  a=max(0,m.start()-1800); b=min(len(text),m.start()+5200)
+                  print('M34_CONTEXT_BEGIN')
+                  print(text[a:b])
+                  print('M34_CONTEXT_END')
+          PY
