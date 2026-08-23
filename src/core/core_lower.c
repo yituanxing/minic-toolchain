@@ -3887,9 +3887,13 @@ static MinicCoreLowerStatus lower_opaque_inline_asm(MinicCoreLowerContext *conte
         return MINIC_CORE_LOWER_ERROR;
     }
 
+    /* M68_STRUCTURED_INLINE_ASM_OPTIONAL_INPUTS: M67's structured
+       operand model is variable-sized. Admit the same proven output/memory
+       shape with 0..2 scalar register inputs instead of hard-coding two. */
     if (source->is_volatile && !source->is_goto && source->template_text != NULL &&
-        source->template_length != 0U && source->outputs != NULL && source->inputs != NULL &&
-        source->output_count == 3U && source->input_count == 2U && source->has_memory_clobber &&
+        source->template_length != 0U && source->outputs != NULL &&
+        (source->input_count == 0U || source->inputs != NULL) &&
+        source->output_count == 3U && source->input_count <= 2U && source->has_memory_clobber &&
         source->label_count == 0U && source->register_clobber_count == 0U &&
         source->clobber_count == 1U) {
         MinicCoreInstruction structured;

@@ -500,9 +500,9 @@ static bool core_scalar_input_inline_asm_supported(
     return true;
 }
 
-/* M67_STRUCTURED_MULTI_OPERAND_INLINE_ASM: the Core model is generic;
-   this RV64 emission tier currently accepts the proven 2 register outputs +
-   1 read/write memory + 2 scalar inputs shape. */
+/* M67_STRUCTURED_MULTI_OPERAND_INLINE_ASM: the Core model is generic.
+   M68_STRUCTURED_INLINE_ASM_OPTIONAL_INPUTS: this RV64 tier accepts the
+   proven 2 register outputs + 1 read/write memory + 0..2 scalar inputs family. */
 static bool core_structured_inline_asm_supported(const MinicCoreFunction *function,
                                                  const MinicCoreInstruction *instruction) {
     const MinicCoreInlineAsm *inline_asm;
@@ -517,7 +517,8 @@ static bool core_structured_inline_asm_supported(const MinicCoreFunction *functi
         instruction->kind != MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM ||
         instruction->result != MINIC_CORE_VALUE_INVALID || !minic_type_is_void(instruction->type) ||
         instruction->value.structured_inline_asm.inline_asm_id >= function->inline_asm_count ||
-        instruction->value.structured_inline_asm.operand_count != 5U) {
+        instruction->value.structured_inline_asm.operand_count < 3U ||
+        instruction->value.structured_inline_asm.operand_count > 5U) {
         return false;
     }
     inline_asm = &function->inline_asms[instruction->value.structured_inline_asm.inline_asm_id];
@@ -563,7 +564,8 @@ static bool core_structured_inline_asm_supported(const MinicCoreFunction *functi
             return false;
         }
     }
-    if (register_outputs != 2U || memory_readwrites != 1U || scalar_inputs != 2U) {
+    if (register_outputs != 2U || memory_readwrites != 1U || scalar_inputs > 2U ||
+        scalar_inputs + 3U != instruction->value.structured_inline_asm.operand_count) {
         return false;
     }
     for (template_index = 0U; template_index < inline_asm->template_length; ++template_index) {
