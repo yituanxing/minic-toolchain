@@ -33,7 +33,7 @@ jobs:
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
 
-      - name: Apply M53 void conditional expression
+      - name: Apply current Linux frontier patches
         run: |
           python3 tools/dev/patch-core-frontier-m50-scalar-input-asm.py
           python3 tools/dev/patch-core-frontier-m50b-void-statement-expression.py
@@ -41,9 +41,46 @@ jobs:
           python3 tools/dev/patch-core-frontier-m51-compound-shift.py
           python3 tools/dev/patch-core-frontier-m52-memory-rw-input-asm.py
           python3 tools/dev/patch-core-frontier-m53-void-conditional.py
+          python3 tools/dev/patch-core-frontier-m54-void-conditional-statement.py
 
       - name: Build exact compiler
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-strict500-compiler
+
+      - name: Fast Linux frontier probe
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/core-strict500-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-strict500-probe"
+          set +e
+          MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
+            --minic "$compiler" \
+            --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
+            --work "$work" \
+            --jobs 1 \
+            --offset 0 \
+            --limit 500 \
+            --sample-count 0 \
+            --indices '3'
+          probe_status=$?
+          set -e
+          printf 'CORE_STRICT_PROBE_STATUS=%d\n' "$probe_status"
+          python3 tools/ci/classify-core-strict-frontier.py \
+            "$work/batch-results.json" \
+            --examples 4 \
+            --json-out "$work/frontier-summary.json" \
+            --require-no-errors
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          summary = json.loads(Path('build/core-strict500-probe/frontier-summary.json').read_text())
+          if summary['selected'] != 1:
+              raise SystemExit(f"expected one Linux probe TU, got {summary['selected']}")
+          remaining = [b for b in summary['blockers'] if b['function'] == '__set_bit_le']
+          if remaining:
+              raise SystemExit(f"Linux probe still blocked at __set_bit_le: {remaining}")
+          print('LINUX_FRONTIER_PROBE_PASSED_OLD_BLOCKER')
+          PY
 
       - name: Replay full frozen first500 and classify
         shell: bash
@@ -90,7 +127,7 @@ jobs:
           }
           remaining = [b for b in summary['blockers'] if b['function'] in forbidden]
           if remaining:
-              raise SystemExit(f"M53/earlier blocker remains: {remaining}")
+              raise SystemExit(f"M54/earlier blocker remains: {remaining}")
           PY
 
       - name: Upload frontier evidence
@@ -99,6 +136,11 @@ jobs:
         with:
           name: core-strict-first500-frontier
           path: |
+            build/core-strict500-probe/batch-results.json
+            build/core-strict500-probe/batch-results.tsv
+            build/core-strict500-probe/batch-summary.txt
+            build/core-strict500-probe/failure-contexts.txt
+            build/core-strict500-probe/frontier-summary.json
             build/core-strict500-frontier/batch-results.json
             build/core-strict500-frontier/batch-results.tsv
             build/core-strict500-frontier/batch-summary.txt
@@ -106,7 +148,7 @@ jobs:
             build/core-strict500-frontier/frontier-summary.json
           if-no-files-found: warn
 
-      - name: Persist M53 source changes
+      - name: Persist M53/M54 source changes
         if: success()
         shell: bash
         run: |
@@ -120,5 +162,5 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -- "${files[@]}"
-          git commit -m 'core: lower void conditional expressions'
+          git commit -m 'core: lower void conditional expression statements'
           git push origin HEAD:refactor/declaration-sema-v1
