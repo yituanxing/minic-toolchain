@@ -160,9 +160,17 @@ static bool core_memory_scalar_type(MinicType type) {
         }
         if (arguments[argument_index] >= context->function->value_count ||
 '''
-    if text.count(argument_anchor) != 1:
-        raise SystemExit(f'M70 argument anchor count={text.count(argument_anchor)}')
-    text = text.replace(argument_anchor, argument_replacement, 1)
+    direct_begin = text.find('static MinicCoreLowerStatus lower_direct_call(')
+    if direct_begin < 0:
+        raise SystemExit('M70 direct-call helper not found')
+    direct_end = text.find('\nstatic MinicCoreLowerStatus ', direct_begin + 1)
+    if direct_end < 0:
+        raise SystemExit('M70 direct-call helper end not found')
+    direct_text = text[direct_begin:direct_end]
+    if direct_text.count(argument_anchor) != 1:
+        raise SystemExit(f'M70 direct-call argument anchor count={direct_text.count(argument_anchor)}')
+    direct_text = direct_text.replace(argument_anchor, argument_replacement, 1)
+    text = text[:direct_begin] + direct_text + text[direct_end:]
 
     return_anchor = '''        if (status != MINIC_CORE_LOWER_OK) {
             return status;
