@@ -3395,6 +3395,34 @@ static bool normalized_do_while_zero_body(const MinicCoreLowerContext *context,
     return true;
 }
 
+/* M78_OMITTED_FOR_CONDITION: parse_for represents a missing source
+   condition as MINIC_EXPRESSION_INVALID and appends its synthetic continue
+   label to the loop body. Recognize the no-update variant explicitly so Core
+   can distinguish `for (;;)` from an invalid source while statement. */
+static bool normalized_for_continue_tail(const MinicCoreLowerContext *context,
+                                         const MinicStatement *loop,
+                                         const MinicBlock *body,
+                                         MinicBlock *iteration_body) {
+    const MinicStatement *continue_label;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        loop == NULL || body == NULL || iteration_body == NULL || body->statement_count < 1U) {
+        return false;
+    }
+    continue_label = minic_c0_program_statement(
+        context->body->program, body->statements[body->statement_count - 1U]);
+    if (continue_label == NULL || continue_label->kind != MINIC_STATEMENT_LABEL ||
+        continue_label->target_expression != MINIC_EXPRESSION_INVALID ||
+        continue_label->expression != MINIC_EXPRESSION_INVALID ||
+        continue_label->target_statement != MINIC_STATEMENT_INVALID ||
+        !source_position_equal(continue_label->span.begin, loop->span.begin)) {
+        return false;
+    }
+    *iteration_body = *body;
+    iteration_body->statement_count -= 1U;
+    return true;
+}
+
 static bool normalized_for_update_tail(const MinicCoreLowerContext *context,
                                        const MinicStatement *loop,
                                        const MinicBlock *body,
@@ -3445,23 +3473,28 @@ lower_while(MinicCoreLowerContext *context, const MinicStatement *statement, boo
     MinicCoreValueId condition;
     MinicCoreLowerStatus status;
     bool body_terminated;
+    bool normalized_for;
 
     if (context == NULL || context->body == NULL || context->body->program == NULL ||
         context->function == NULL || statement == NULL || terminated == NULL ||
         statement->kind != MINIC_STATEMENT_WHILE ||
         statement->cleanup_context != MINIC_CLEANUP_CONTEXT_ROOT ||
         statement->cleanup_stop_context != MINIC_CLEANUP_CONTEXT_ROOT ||
-        statement->expression == MINIC_EXPRESSION_INVALID ||
         statement->then_block == MINIC_BLOCK_INVALID ||
         statement->else_block != MINIC_BLOCK_INVALID) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
-    condition_expression =
-        minic_c0_program_expression(context->body->program, statement->expression);
     body_source = minic_c0_program_block(context->body->program, statement->then_block);
-    if (condition_expression == NULL || body_source == NULL ||
-        !minic_type_is_integer(condition_expression->type)) {
+    if (body_source == NULL) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
+    }
+    condition_expression = NULL;
+    if (statement->expression != MINIC_EXPRESSION_INVALID) {
+        condition_expression =
+            minic_c0_program_expression(context->body->program, statement->expression);
+        if (condition_expression == NULL || !minic_type_is_integer(condition_expression->type)) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
     }
     {
         MinicBlock single_iteration_body;
@@ -3479,9 +3512,18 @@ lower_while(MinicCoreLowerContext *context, const MinicStatement *statement, boo
 
     iteration_source = body_source;
     for_update = NULL;
+    normalized_for = false;
     if (normalized_for_update_tail(
             context, statement, body_source, &normalized_for_body, &for_update)) {
         iteration_source = &normalized_for_body;
+        normalized_for = true;
+    } else if (normalized_for_continue_tail(
+                   context, statement, body_source, &normalized_for_body)) {
+        iteration_source = &normalized_for_body;
+        normalized_for = true;
+    }
+    if (statement->expression == MINIC_EXPRESSION_INVALID && !normalized_for) {
+        return MINIC_CORE_LOWER_UNSUPPORTED;
     }
 
     preheader_block = context->block_id;
@@ -3496,22 +3538,33 @@ lower_while(MinicCoreLowerContext *context, const MinicStatement *statement, boo
     }
 
     context->block_id = condition_block;
-    status = lower_expression(context, statement->expression, &condition);
-    if (status != MINIC_CORE_LOWER_OK) {
-        return status;
-    }
-    if (!minic_type_is_integer(context->function->values[condition].type)) {
-        return MINIC_CORE_LOWER_ERROR;
-    }
-    (void)memset(&terminator, 0, sizeof(terminator));
-    terminator.kind = MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH;
-    terminator.span = statement->span;
-    terminator.return_value = MINIC_CORE_VALUE_INVALID;
-    terminator.conditional.condition = condition;
-    terminator.conditional.when_true = body_block;
-    terminator.conditional.when_false = exit_block;
-    if (!minic_core_function_set_terminator(context->function, condition_block, &terminator)) {
-        return MINIC_CORE_LOWER_ERROR;
+    if (statement->expression == MINIC_EXPRESSION_INVALID) {
+        /* C defines an omitted for-condition as true. Keep an explicit Core
+           condition block so break/backedge ownership remains identical to
+           the conditional-loop path. */
+        status = set_branch(context, condition_block, statement->span, body_block);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+    } else {
+        status = lower_expression(context, statement->expression, &condition);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        if (!minic_type_is_integer(context->function->values[condition].type)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        (void)memset(&terminator, 0, sizeof(terminator));
+        terminator.kind = MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH;
+        terminator.span = statement->span;
+        terminator.return_value = MINIC_CORE_VALUE_INVALID;
+        terminator.conditional.condition = condition;
+        terminator.conditional.when_true = body_block;
+        terminator.conditional.when_false = exit_block;
+        if (!minic_core_function_set_terminator(
+                context->function, condition_block, &terminator)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
     }
 
     context->block_id = body_block;
