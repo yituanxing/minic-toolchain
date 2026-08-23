@@ -162,6 +162,9 @@ typedef struct MinicCoreInstruction {
             MinicCoreValueId base;
             MinicCoreValueId index;
             size_t element_size;
+            /* M75_POINTER_COMPOUND_ASSIGNMENT_VALUE: preserve pointer -=
+               as subtraction instead of negating a potentially unsigned index. */
+            bool subtract;
         } pointer_offset;
         struct {
             MinicCoreValueId address;

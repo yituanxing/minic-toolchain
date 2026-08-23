@@ -1716,7 +1716,11 @@ static bool emit_instruction(FILE *file,
                     instruction->value.pointer_offset.element_size) < 0) {
             return false;
         }
-        if (fprintf(file, "  add t0, t0, t1\n") < 0) {
+        /* M75_POINTER_COMPOUND_ASSIGNMENT_VALUE: retain subtraction through
+           the Core boundary so an unsigned index is scaled before `sub`. */
+        if (fprintf(file,
+                    "  %s t0, t0, t1\n",
+                    instruction->value.pointer_offset.subtract ? "sub" : "add") < 0) {
             return false;
         }
         return store_core_value(file, frame, instruction->result, "t0");
