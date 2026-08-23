@@ -2549,6 +2549,7 @@ static MinicCoreLowerStatus lower_scalar_update(MinicCoreLowerContext *context,
     MinicCoreValueId one;
     MinicCoreValueId updated;
     MinicCoreLowerStatus status;
+    MinicType expression_value_type;
     MinicType stored_type;
     bool increment;
     bool prefix;
@@ -2570,10 +2571,16 @@ static MinicCoreLowerStatus lower_scalar_update(MinicCoreLowerContext *context,
     prefix = expression->value.unary.operator_kind == MINIC_UNARY_PRE_INCREMENT ||
              expression->value.unary.operator_kind == MINIC_UNARY_PRE_DECREMENT;
     operand = minic_c0_program_expression(context->body->program, expression->value.unary.operand);
+    /* M63_QUALIFIED_SCALAR_UPDATE_VALUE: the memory operand may be qualified
+       (notably volatile), while the computed prefix/postfix value transported
+       by Core is an ordinary unqualified scalar. Preserve qualifiers solely on
+       the load/store effects and compare the expression's value type after
+       unqualification. */
     if (operand == NULL || operand->value_category != MINIC_VALUE_LVALUE ||
         !core_memory_scalar_type(operand->type) || minic_type_is_const(operand->type) ||
         !minic_type_unqualified(operand->type, &stored_type) ||
-        !minic_type_equal(expression->type, stored_type)) {
+        !minic_type_unqualified(expression->type, &expression_value_type) ||
+        !minic_type_equal(expression_value_type, stored_type)) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
     if (minic_type_is_integer(stored_type) && minic_type_is_bool_integer(stored_type)) {
