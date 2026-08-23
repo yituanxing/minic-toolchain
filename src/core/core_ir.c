@@ -621,6 +621,11 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
                instruction->value.parameter_index < function->parameter_count &&
                minic_type_equal(function->parameter_types[instruction->value.parameter_index],
                                 instruction->type);
+    case MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ:
+        return instruction_result_is_valid(function, instruction) &&
+               instruction->value.fixed_register_binding_id != SIZE_MAX &&
+               (minic_type_is_integer(instruction->type) ||
+                minic_type_is_pointer(instruction->type));
     case MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT:
         return instruction->result == MINIC_CORE_VALUE_INVALID &&
                minic_type_is_void(instruction->type) &&
@@ -1069,6 +1074,11 @@ static bool dump_instruction(FILE *output,
                        "  %%%" PRIu32 " = parameter %zu\n",
                        instruction->result,
                        instruction->value.parameter_index) >= 0;
+    case MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ:
+        return fprintf(output,
+                       "  %%%" PRIu32 " = fixed.register.read binding=%zu\n",
+                       instruction->result,
+                       instruction->value.fixed_register_binding_id) >= 0;
     case MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT:
         return fprintf(output,
                        "  parameter.object %zu, %%o%" PRIu32 "\n",

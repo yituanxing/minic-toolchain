@@ -342,6 +342,18 @@ static bool core_instruction_supported(const MinicC0Program *program,
     case MINIC_CORE_INSTRUCTION_LOAD:
     case MINIC_CORE_INSTRUCTION_STORE:
         return true;
+    case MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ: {
+        const MinicFixedRegisterBinding *binding;
+
+        if (program == NULL) {
+            return false;
+        }
+        binding = minic_c0_program_fixed_register_binding(
+            program, instruction->value.fixed_register_binding_id);
+        return binding != NULL && binding->register_name != NULL &&
+               binding->register_name_length != 0U && core_scalar_type(binding->type) &&
+               minic_type_equal(binding->type, instruction->type);
+    }
     case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS:
         return instruction->value.global_id < function->global_count &&
                function->globals[instruction->value.global_id].name != NULL &&
@@ -1053,6 +1065,27 @@ static bool emit_instruction(FILE *file,
             return false;
         }
         return store_core_value(file, frame, instruction->result, "t0");
+    case MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ: {
+        const MinicFixedRegisterBinding *binding;
+
+        if (program == NULL) {
+            return false;
+        }
+        binding = minic_c0_program_fixed_register_binding(
+            program, instruction->value.fixed_register_binding_id);
+        if (binding == NULL || binding->register_name == NULL ||
+            binding->register_name_length == 0U || !core_scalar_type(binding->type) ||
+            !minic_type_equal(binding->type, instruction->type) ||
+            fprintf(file, "  mv t0, %s\n", binding->register_name) < 0) {
+            return false;
+        }
+        if (minic_type_is_integer(instruction->type) &&
+            !minic_riscv64_emit_integer_conversion_for_program(
+                file, program, instruction->type, "t0")) {
+            return false;
+        }
+        return store_core_value(file, frame, instruction->result, "t0");
+    }
     case MINIC_CORE_INSTRUCTION_PARAMETER:
         return emit_parameter(file, program, function, frame, instruction);
     case MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT:

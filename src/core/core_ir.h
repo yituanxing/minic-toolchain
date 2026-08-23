@@ -54,6 +54,7 @@ typedef enum MinicCoreInstructionKind {
     MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT,
     MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO,
     MINIC_CORE_INSTRUCTION_PARAMETER,
+    MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ,
     MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT,
     MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS,
     MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS,
@@ -121,6 +122,7 @@ typedef struct MinicCoreInstruction {
         } integer_overflow;
         MinicCoreValueId operand;
         size_t parameter_index;
+        size_t fixed_register_binding_id;
         struct {
             size_t parameter_index;
             MinicCoreObjectId object_id;
