@@ -106,7 +106,7 @@ static bool core_inline_asm_single_label_goto_numeric_template(
         }
         normalized[output_length++] = source->template_text[cursor++];
     }
-    normalized[output_length] = '\0';
+    normalized[output_length] = '\\0';
     *template_out = normalized;
     *template_length_out = output_length;
     return true;
