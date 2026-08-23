@@ -13,11 +13,11 @@ def main() -> int:
         print("M58 logical OR value already applied")
         return 0
 
-    old = '''    if (expression->kind == MINIC_EXPRESSION_BINARY &&\n        expression->value.binary.operator_kind == MINIC_BINARY_LOGICAL_AND) {\n'''
-    new = '''    /* M58_LOGICAL_OR_VALUE: lower_condition_branch already owns the\n       short-circuit semantics for both && and ||. Their value materialization\n       is identical: branch to true/false, store 1/0, then reload. */\n    if (expression->kind == MINIC_EXPRESSION_BINARY &&\n        (expression->value.binary.operator_kind == MINIC_BINARY_LOGICAL_AND ||\n         expression->value.binary.operator_kind == MINIC_BINARY_LOGICAL_OR)) {\n'''
+    old = '''    if (expression->kind == MINIC_EXPRESSION_BINARY &&\n        expression->value.binary.operator_kind == MINIC_BINARY_LOGICAL_AND) {\n        MinicCoreBlockId false_block;\n'''
+    new = '''    /* M58_LOGICAL_OR_VALUE: lower_condition_branch already owns the\n       short-circuit semantics for both && and ||. Their value materialization\n       is identical: branch to true/false, store 1/0, then reload. */\n    if (expression->kind == MINIC_EXPRESSION_BINARY &&\n        (expression->value.binary.operator_kind == MINIC_BINARY_LOGICAL_AND ||\n         expression->value.binary.operator_kind == MINIC_BINARY_LOGICAL_OR)) {\n        MinicCoreBlockId false_block;\n'''
     count = text.count(old)
     if count != 1:
-        raise SystemExit(f"M58 anchor count={count}")
+        raise SystemExit(f"M58 value anchor count={count}")
     PATH.write_text(text.replace(old, new, 1))
     print("M58 logical OR value applied")
     return 0
