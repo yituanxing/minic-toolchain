@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Keep M82 productized and advance the hot frontier through M83/M83b/M84.
+# Keep M82 productized and advance the hot frontier through M83/M83b/M84/M85.
 
 from pathlib import Path
 from runpy import run_path
@@ -9,6 +9,7 @@ MARKER = "M82_BINARY_POINTER_SUBTRACTION"
 M83_DRIVER = Path("tools/dev/patch-core-frontier-m83-indirect-call.py")
 M83B_DRIVER = Path("tools/dev/patch-core-frontier-m83b-call-statement-dispatch.py")
 M84_DRIVER = Path("tools/dev/patch-core-frontier-m84-pointer-loop-condition.py")
+M85_DRIVER = Path("tools/dev/patch-core-frontier-m85-record-call-argument.py")
 M83_IR = Path("src/core/core_ir.h")
 M83_IR_IMPL = Path("src/core/core_ir.c")
 M83_LOWER = Path("src/core/core_lower.c")
@@ -101,7 +102,10 @@ def main() -> int:
     status = run_driver(M83B_DRIVER, "M83b")
     if status != 0:
         return status
-    return run_driver(M84_DRIVER, "M84")
+    status = run_driver(M84_DRIVER, "M84")
+    if status != 0:
+        return status
+    return run_driver(M85_DRIVER, "M85")
 
 
 if __name__ == "__main__":
