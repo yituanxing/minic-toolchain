@@ -1,24 +1,17 @@
-name: Core M45 Break CFG Qualification
+name: Core M45b Cpumask Diagnose
 
 on:
   pull_request:
 
 jobs:
-  qualify:
+  diagnose:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
           ref: refactor/declaration-sema-v1
-      - name: Install validation tools
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          mapfile -t packages < <(grep -Ev '^[[:space:]]*(#|$)' tools/ci/ubuntu-24.04-packages.txt)
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends "${packages[@]}"
       - name: Restore frozen Linux corpus
         id: corpus
         uses: actions/cache/restore@v4
@@ -44,28 +37,17 @@ jobs:
           python3 tools/dev/patch-core-frontier-batch-m45.py
           clang-format-18 -i src/core/core_ir.h src/core/core_ir.c src/core/core_lower.c src/target/riscv64/core_codegen.c
           git diff --check
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m45
-      - name: Focused break CFG matrix
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m45b
+      - name: Cpumask shape matrix
         shell: bash
         run: |
           set -Eeuo pipefail
-          c="$GITHUB_WORKSPACE/build/m45/bin/minic"
-          w=build/m45-shapes
+          c="$GITHUB_WORKSPACE/build/m45b/bin/minic"
+          w=build/m45b-shapes
           mkdir -p "$w"
 
-          cat > "$w/01_conditional_while_break.c" <<'EOF'
-          unsigned int f(unsigned int n) {
-              while (n != 0U) {
-                  if (n == 3U)
-                      break;
-                  --n;
-              }
-              return n;
-          }
-          EOF
-
-          cat > "$w/02_for_break.c" <<'EOF'
-          unsigned int f(unsigned int cpu) {
+          cat > "$w/01_signed_break.c" <<'EOF'
+          unsigned int f(int cpu) {
               unsigned int i;
               for (i = 0U; i < 8U; ++i)
                   if (i != cpu)
@@ -74,39 +56,49 @@ jobs:
           }
           EOF
 
-          cat > "$w/03_nested_loop_break.c" <<'EOF'
-          unsigned int f(unsigned int n) {
-              unsigned int outer = 0U;
-              while (outer < n) {
-                  unsigned int inner = 0U;
-                  while (inner < 5U) {
-                      if (inner == 2U)
-                          break;
-                      ++inner;
-                  }
-                  outer += inner != 0U;
-              }
-              return outer;
+          cat > "$w/02_check_call.c" <<'EOF'
+          extern unsigned int check(unsigned int);
+          unsigned int f(int cpu) {
+              if (cpu != -1)
+                  check(cpu);
+              return 0U;
           }
           EOF
 
-          cat > "$w/04_switch_nested_break.c" <<'EOF'
-          unsigned int f(unsigned int x) {
-              switch (x) {
-              case 1U:
-                  if (x != 0U)
+          cat > "$w/03_call_init_update.c" <<'EOF'
+          extern unsigned long first(const unsigned long *, unsigned int);
+          extern unsigned long next(const unsigned long *, unsigned int, unsigned long);
+          unsigned int f(const unsigned long *bits, int cpu) {
+              unsigned int i;
+              for (i = first(bits, 64U); i < 64U; i = next(bits, 64U, (unsigned long)i + 1UL))
+                  if (i != cpu)
                       break;
-                  x = 9U;
-                  break;
-              default:
-                  x = 7U;
-                  break;
-              }
-              return x;
+              return i;
           }
           EOF
 
-          failures=0
+          cat > "$w/04_member_array_decay.c" <<'EOF'
+          struct mask { unsigned long bits[1]; };
+          extern unsigned long first(const unsigned long *, unsigned int);
+          unsigned int f(const struct mask *mask) {
+              return (unsigned int)first(mask->bits, 64U);
+          }
+          EOF
+
+          cat > "$w/05_member_array_loop.c" <<'EOF'
+          struct mask { unsigned long bits[1]; };
+          extern unsigned long first(const unsigned long *, unsigned int);
+          extern unsigned long next(const unsigned long *, unsigned int, unsigned long);
+          unsigned int f(const struct mask *mask, int cpu) {
+              unsigned int i;
+              for (i = first(mask->bits, 64U); i < 64U;
+                   i = next(mask->bits, 64U, (unsigned long)i + 1UL))
+                  if (i != cpu)
+                      break;
+              return i;
+          }
+          EOF
+
           for src in "$w"/*.c; do
             n=$(basename "$src" .c)
             set +e
@@ -114,103 +106,27 @@ jobs:
             rc=$?
             set -e
             if [ "$rc" -eq 0 ]; then
-              printf 'M45_SHAPE_PASS name=%s\n' "$n"
+              printf 'M45B_SHAPE_PASS name=%s\n' "$n"
             else
-              failures=$((failures + 1))
-              printf 'M45_SHAPE_FAIL name=%s rc=%d\n' "$n" "$rc"
-              sed -n '1,12p' "$w/$n.err"
+              printf 'M45B_SHAPE_FAIL name=%s rc=%d\n' "$n" "$rc"
+              sed -n '1,8p' "$w/$n.err"
             fi
           done
-          printf 'M45_SHAPE_MATRIX failures=%d\n' "$failures"
-          test "$failures" -eq 0
-      - name: RISC-V break differential
+
+      - name: Frozen representative must still expose cpumask
         shell: bash
         run: |
           set -Eeuo pipefail
-          c="$GITHUB_WORKSPACE/build/m45/bin/minic"
-          w=build/m45-qemu
-          mkdir -p "$w"
-          cat > "$w/f.c" <<'EOF'
-          unsigned int while_break(unsigned int n) {
-              while (n != 0U) {
-                  if (n == 3U)
-                      break;
-                  --n;
-              }
-              return n;
-          }
-          unsigned int for_break(unsigned int cpu) {
-              unsigned int i;
-              for (i = 0U; i < 8U; ++i)
-                  if (i != cpu)
-                      break;
-              return i;
-          }
-          unsigned int nested_break(unsigned int n) {
-              unsigned int outer = 0U;
-              while (outer < n) {
-                  unsigned int inner = 0U;
-                  while (inner < 5U) {
-                      if (inner == 2U)
-                          break;
-                      ++inner;
-                  }
-                  outer += inner != 0U;
-              }
-              return outer;
-          }
-          EOF
-          cat > "$w/main.c" <<'EOF'
-          #include <stdio.h>
-          unsigned int while_break(unsigned int);
-          unsigned int for_break(unsigned int);
-          unsigned int nested_break(unsigned int);
-          int main(void) {
-              printf("%u %u %u\n", while_break(7U), for_break(0U), nested_break(4U));
-              return 0;
-          }
-          EOF
-          MINIC_CORE_IR=strict "$c" -S "$w/f.c" -o "$w/minic.s"
-          riscv64-linux-gnu-gcc -O0 -static "$w/main.c" "$w/minic.s" -o "$w/minic.elf"
-          qemu-riscv64 "$w/minic.elf" > "$w/minic.out"
-          riscv64-linux-gnu-gcc -O0 -static "$w/main.c" "$w/f.c" -o "$w/gcc.elf"
-          qemu-riscv64 "$w/gcc.elf" > "$w/gcc.out"
-          diff -u "$w/gcc.out" "$w/minic.out"
-          grep -Fx '3 1 4' "$w/minic.out"
-          echo M45_QEMU_DIFF_PASS
-      - name: Frozen cpumask representative moves
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          c="$GITHUB_WORKSPACE/build/m45/bin/minic"
-          w=build/m45-rep
+          c="$GITHUB_WORKSPACE/build/m45b/bin/minic"
+          w=build/m45b-rep
           mkdir -p "$w"
           set +e
           MINIC_CORE_IR=strict "$c" -S build/linux-focus-corpus/kbuild/init/version.i -o "$w/version.s" 2>"$w/version.err"
           rc=$?
           set -e
-          head -12 "$w/version.err" || true
-          ! grep -Fq "Core IR shadow does not yet support function 'cpumask_any_but'" "$w/version.err"
-          ! grep -Fq "Core IR shadow lowering failed for function 'cpumask_any_but'" "$w/version.err"
-          printf 'M45_CPUMASK_MOVED rc=%d\n' "$rc"
-      - name: Frozen strict first500
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          c="$GITHUB_WORKSPACE/build/m45/bin/minic"
-          w="$GITHUB_WORKSPACE/build/m45-strict500"
-          set +e
-          MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py --minic "$c" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" --work "$w" --jobs 5 --offset 0 --limit 500 --sample-count 0 --indices ''
-          rc=$?
-          set -e
-          printf 'M45_REPLAY_RC=%d\n' "$rc"
-          python3 tools/ci/classify-core-strict-frontier.py "$w/batch-results.json" --examples 5 --json-out "$w/frontier-summary.json" --require-no-errors
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-          s=json.loads(Path('build/m45-strict500/frontier-summary.json').read_text())
-          assert s['selected']==500 and s['error']==0 and s['preprocess_missing']==0, s
-          print(f"M45_SUMMARY selected=500 pass={s['pass']} unsupported={s['unsupported']} error=0 distinct={len(s['blockers'])}")
-          for r in s['blockers'][:25]:
-              print(f"M45_BLOCKER count={r['count']} function={r['function']}")
-          PY
+          head -4 "$w/version.err" || true
+          if ! grep -Fq "Core IR shadow does not yet support function 'cpumask_any_but'" "$w/version.err"; then
+            echo 'M45B_UNEXPECTED_REPRESENTATIVE_CHANGE'
+            exit 1
+          fi
+          printf 'M45B_CPUMASK_CONFIRMED rc=%d\n' "$rc"
