@@ -4001,6 +4001,106 @@ static bool core_inline_asm_numeric_template(const MinicInlineAsm *source,
     return true;
 }
 
+/* M76_SINGLE_LABEL_ASM_GOTO: admit the common GNU asm-goto seam without
+   teaching Core any Linux/static-key meaning. Keep the initial contract narrow:
+   one label, one read-only "i" operand whose value requires the existing
+   deferred-immediate mechanism, no outputs/clobbers, and only %0/%l[label]/%%
+   template references. */
+static bool core_inline_asm_single_label_goto_supported(
+    const MinicCoreLowerContext *context, const MinicInlineAsm *source) {
+    const MinicExpression *input_expression;
+    const MinicInlineAsmLabel *label;
+    const MinicStatement *target_statement;
+    char immediate_text[MINIC_CORE_IMMEDIATE_TEXT_LIMIT];
+    const char *resolved_text;
+    size_t resolved_length;
+    size_t cursor;
+    bool saw_input;
+    bool saw_label;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        source == NULL || !source->is_goto || source->template_text == NULL ||
+        source->template_length == 0U || source->output_count != 0U ||
+        source->input_count != 1U || source->inputs == NULL || source->label_count != 1U ||
+        source->labels == NULL || source->register_clobber_count != 0U ||
+        source->clobber_count != 0U || source->has_memory_clobber) {
+        return false;
+    }
+    if (source->inputs[0].access != MINIC_INLINE_ASM_OPERAND_READ_ONLY ||
+        !core_inline_asm_constraint_is(&source->inputs[0], "i")) {
+        return false;
+    }
+    input_expression =
+        minic_c0_program_expression(context->body->program, source->inputs[0].expression);
+    if (input_expression == NULL ||
+        (!minic_type_is_integer(input_expression->type) &&
+         !minic_type_is_pointer(input_expression->type))) {
+        return false;
+    }
+    /* Resolved immediates already have the M61 path. M76 is deliberately the
+       deferred-immediate asm-goto seam exposed by always-inline helpers. */
+    if (core_inline_asm_immediate_text(context,
+                                      &source->inputs[0],
+                                      immediate_text,
+                                      sizeof(immediate_text),
+                                      &resolved_text,
+                                      &resolved_length)) {
+        return false;
+    }
+    label = &source->labels[0];
+    if (label->name == NULL || label->name_length == 0U ||
+        label->target_statement == MINIC_STATEMENT_INVALID) {
+        return false;
+    }
+    target_statement =
+        minic_c0_program_statement(context->body->program, label->target_statement);
+    if (target_statement == NULL || target_statement->kind != MINIC_STATEMENT_LABEL) {
+        return false;
+    }
+
+    cursor = 0U;
+    saw_input = false;
+    saw_label = false;
+    while (cursor < source->template_length) {
+        if (source->template_text[cursor] != '%') {
+            cursor += 1U;
+            continue;
+        }
+        if (cursor + 1U >= source->template_length) {
+            return false;
+        }
+        if (source->template_text[cursor + 1U] == '%') {
+            cursor += 2U;
+            continue;
+        }
+        if (source->template_text[cursor + 1U] == '0') {
+            saw_input = true;
+            cursor += 2U;
+            continue;
+        }
+        if (cursor + 3U < source->template_length &&
+            source->template_text[cursor + 1U] == 'l' &&
+            source->template_text[cursor + 2U] == '[') {
+            size_t name_begin = cursor + 3U;
+            size_t name_end = name_begin;
+            while (name_end < source->template_length &&
+                   source->template_text[name_end] != ']') {
+                name_end += 1U;
+            }
+            if (name_end >= source->template_length || name_end == name_begin ||
+                name_end - name_begin != label->name_length ||
+                memcmp(source->template_text + name_begin, label->name, label->name_length) != 0) {
+                return false;
+            }
+            saw_label = true;
+            cursor = name_end + 1U;
+            continue;
+        }
+        return false;
+    }
+    return saw_input && saw_label;
+}
+
 static MinicCoreLowerStatus lower_opaque_inline_asm(MinicCoreLowerContext *context,
                                                     const MinicStatement *statement) {
     const MinicInlineAsm *source;
@@ -4015,6 +4115,40 @@ static MinicCoreLowerStatus lower_opaque_inline_asm(MinicCoreLowerContext *conte
     source = minic_c0_program_inline_asm(context->body->program, statement->inline_asm_id);
     if (source == NULL) {
         return MINIC_CORE_LOWER_ERROR;
+    }
+
+    if (core_inline_asm_single_label_goto_supported(context, source)) {
+        MinicCoreBlockId target_block;
+        MinicCoreInlineAsm *stored;
+        MinicCoreLowerStatus status;
+
+        status = ensure_statement_block(context, source->labels[0].target_statement, &target_block);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        if (!minic_core_function_add_opaque_inline_asm(context->function,
+                                                       source->template_text,
+                                                       source->template_length,
+                                                       true,
+                                                       false,
+                                                       &inline_asm_id)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        stored = &context->function->inline_asms[inline_asm_id];
+        stored->is_goto = true;
+        stored->source_inline_asm_id = (size_t)statement->inline_asm_id;
+        stored->goto_target = target_block;
+
+        (void)memset(&instruction, 0, sizeof(instruction));
+        instruction.kind = MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM;
+        instruction.span = statement->span;
+        instruction.type = minic_type_void();
+        instruction.result = MINIC_CORE_VALUE_INVALID;
+        instruction.value.inline_asm_id = inline_asm_id;
+        return minic_core_function_append_effect_instruction(
+                   context->function, context->block_id, &instruction)
+                   ? MINIC_CORE_LOWER_OK
+                   : MINIC_CORE_LOWER_ERROR;
     }
 
     /* M68_STRUCTURED_INLINE_ASM_OPTIONAL_INPUTS: M67's structured
@@ -5168,10 +5302,12 @@ lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool
             return MINIC_CORE_LOWER_ERROR;
         }
         if (block_terminated) {
-            if (statement->kind != MINIC_STATEMENT_RETURN) {
+            if (statement->kind == MINIC_STATEMENT_RETURN) {
+                continue;
+            }
+            if (statement->kind != MINIC_STATEMENT_LABEL) {
                 return MINIC_CORE_LOWER_UNSUPPORTED;
             }
-            continue;
         }
         if (statement->cleanup_context != MINIC_CLEANUP_CONTEXT_ROOT ||
             statement->cleanup_stop_context != MINIC_CLEANUP_CONTEXT_ROOT) {
@@ -5196,7 +5332,7 @@ lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool
                 if (statement->target_expression != MINIC_EXPRESSION_INVALID || statement->expression != MINIC_EXPRESSION_INVALID || statement->target_statement != MINIC_STATEMENT_INVALID) return MINIC_CORE_LOWER_UNSUPPORTED;
                 status = ensure_statement_block(context, label_statement_id, &label_block);
                 if (status != MINIC_CORE_LOWER_OK) return status;
-                if (context->block_id != label_block) {
+                if (!block_terminated && context->block_id != label_block) {
                     status = set_branch(context, context->block_id, statement->span, label_block);
                     if (status != MINIC_CORE_LOWER_OK) return status;
                 }

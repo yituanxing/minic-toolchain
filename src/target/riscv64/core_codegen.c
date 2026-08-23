@@ -312,8 +312,13 @@ static bool core_opaque_inline_asm_supported(const MinicCoreFunction *function,
         return false;
     }
     inline_asm = &function->inline_asms[instruction->value.inline_asm_id];
-    return inline_asm->template_text != NULL && inline_asm->template_length != 0U &&
-           inline_asm->is_volatile;
+    if (inline_asm->template_text == NULL || inline_asm->template_length == 0U ||
+        !inline_asm->is_volatile) {
+        return false;
+    }
+    /* M76_SINGLE_LABEL_ASM_GOTO: the target is explicit Core metadata even
+       though the target-specific template remains opaque. */
+    return !inline_asm->is_goto || inline_asm->goto_target < function->block_count;
 }
 
 static bool core_register_output_inline_asm_supported(
@@ -1045,6 +1050,7 @@ static bool emit_field_address(FILE *file,
 
 static bool emit_opaque_inline_asm(FILE *file,
                                    const MinicCoreFunction *function,
+                                   const char *symbol_name,
                                    const MinicCoreInstruction *instruction) {
     const MinicCoreInlineAsm *inline_asm;
     size_t index;
@@ -1053,6 +1059,64 @@ static bool emit_opaque_inline_asm(FILE *file,
         return false;
     }
     inline_asm = &function->inline_asms[instruction->value.inline_asm_id];
+    if (inline_asm->is_goto) {
+        if (symbol_name == NULL || symbol_name[0] == '\0' ||
+            inline_asm->goto_target >= function->block_count ||
+            fprintf(file,
+                    "  # MINIC_DEFERRED_ASM_IMMEDIATE requires inline specialization\n"
+                    "  .extern __minic_deferred_asm_immediate_%zu_0\n"
+                    "  ",
+                    inline_asm->source_inline_asm_id) < 0) {
+            return false;
+        }
+        for (index = 0U; index < inline_asm->template_length; ++index) {
+            if (inline_asm->template_text[index] != '%') {
+                if (fputc((unsigned char)inline_asm->template_text[index], file) == EOF) {
+                    return false;
+                }
+                continue;
+            }
+            if (index + 1U >= inline_asm->template_length) {
+                return false;
+            }
+            if (inline_asm->template_text[index + 1U] == '%') {
+                if (fputc('%', file) == EOF) {
+                    return false;
+                }
+                index += 1U;
+                continue;
+            }
+            if (inline_asm->template_text[index + 1U] == '0') {
+                if (fprintf(file,
+                            "__minic_deferred_asm_immediate_%zu_0",
+                            inline_asm->source_inline_asm_id) < 0) {
+                    return false;
+                }
+                index += 1U;
+                continue;
+            }
+            if (index + 2U < inline_asm->template_length &&
+                inline_asm->template_text[index + 1U] == 'l' &&
+                inline_asm->template_text[index + 2U] == '[') {
+                size_t name_end = index + 3U;
+                while (name_end < inline_asm->template_length &&
+                       inline_asm->template_text[name_end] != ']') {
+                    name_end += 1U;
+                }
+                if (name_end >= inline_asm->template_length || name_end == index + 3U ||
+                    fprintf(file,
+                            ".L%s_core_bb%" PRIu32,
+                            symbol_name,
+                            inline_asm->goto_target) < 0) {
+                    return false;
+                }
+                index = name_end;
+                continue;
+            }
+            return false;
+        }
+        return fputc('\n', file) != EOF;
+    }
     if (fprintf(file, "  ") < 0) {
         return false;
     }
@@ -1787,7 +1851,7 @@ static bool emit_instruction(FILE *file,
                minic_riscv64_emit_scalar_store_for_program(file, program, stored_type, "t1", "t0");
     }
     case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM:
-        return emit_opaque_inline_asm(file, function, instruction);
+        return emit_opaque_inline_asm(file, function, symbol_name, instruction);
     case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INLINE_ASM:
         return emit_register_output_inline_asm(file, program, function, frame, instruction);
     case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INPUT_INLINE_ASM:

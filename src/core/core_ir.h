@@ -110,6 +110,12 @@ typedef struct MinicCoreInlineAsm {
     size_t template_length;
     bool is_volatile;
     bool has_memory_clobber;
+    /* M76_SINGLE_LABEL_ASM_GOTO: preserve the control-flow target in Core
+       instead of hiding it inside target assembly text. The first supported
+       seam is one label plus one deferred immediate input. */
+    bool is_goto;
+    size_t source_inline_asm_id;
+    MinicCoreBlockId goto_target;
 } MinicCoreInlineAsm;
 
 #define MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT 8U
