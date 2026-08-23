@@ -1,12 +1,11 @@
 name: Core M33 __ffs Diagnostic
 
 on:
-  push:
-    branches:
-      - refactor/declaration-sema-v1
+  pull_request:
 
 jobs:
   diagnose:
+    if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -27,8 +26,7 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           import re
-          p=Path('build/linux-focus-corpus/kbuild/init/version.i')
-          text=p.read_text(errors='replace')
+          text=Path('build/linux-focus-corpus/kbuild/init/version.i').read_text(errors='replace')
           for pat in (r'\b__ffs\s*\(', r'\bgeneric___ffs\s*\(', r'\bvariable__ffs\s*\(', r'__builtin_ctzl\s*\('):
               ms=list(re.finditer(pat,text))
               print(f'M33_PATTERN {pat} count={len(ms)}')
