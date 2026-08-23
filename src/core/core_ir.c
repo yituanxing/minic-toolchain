@@ -290,13 +290,14 @@ static bool callee_signature_equal(const MinicCoreCallee *callee,
                                    size_t name_length,
                                    MinicType return_type,
                                    const MinicType *parameter_types,
-                                   size_t parameter_count) {
+                                   size_t parameter_count,
+                                   bool is_variadic) {
     size_t index;
 
     if (callee == NULL || name == NULL || callee->name == NULL ||
         callee->name_length != name_length || memcmp(callee->name, name, name_length) != 0 ||
         !minic_type_equal(callee->return_type, return_type) ||
-        callee->parameter_count != parameter_count) {
+        callee->parameter_count != parameter_count || callee->is_variadic != is_variadic) {
         return false;
     }
     for (index = 0U; index < parameter_count; ++index) {
@@ -313,6 +314,7 @@ bool minic_core_function_add_callee(MinicCoreFunction *function,
                                     MinicType return_type,
                                     const MinicType *parameter_types,
                                     size_t parameter_count,
+                                    bool is_variadic,
                                     MinicCoreCalleeId *callee_id) {
     MinicCoreCallee stored;
     size_t index;
@@ -343,8 +345,13 @@ bool minic_core_function_add_callee(MinicCoreFunction *function,
         existing = &function->callees[index];
         if (existing->name_length == name_length &&
             memcmp(existing->name, name, name_length) == 0) {
-            if (!callee_signature_equal(
-                    existing, name, name_length, return_type, parameter_types, parameter_count)) {
+            if (!callee_signature_equal(existing,
+                                        name,
+                                        name_length,
+                                        return_type,
+                                        parameter_types,
+                                        parameter_count,
+                                        is_variadic)) {
                 return false;
             }
             *callee_id = (MinicCoreCalleeId)index;
@@ -370,6 +377,7 @@ bool minic_core_function_add_callee(MinicCoreFunction *function,
     stored.name_length = name_length;
     stored.return_type = return_type;
     stored.parameter_count = parameter_count;
+    stored.is_variadic = is_variadic;
     if (!grow_array((void **)&function->callees,
                     &function->callee_capacity,
                     function->callee_count,
@@ -1130,7 +1138,10 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
             return false;
         }
         callee = &function->callees[instruction->value.call.callee_id];
-        if (instruction->value.call.argument_count != callee->parameter_count ||
+        if ((!callee->is_variadic &&
+             instruction->value.call.argument_count != callee->parameter_count) ||
+            (callee->is_variadic &&
+             instruction->value.call.argument_count < callee->parameter_count) ||
             !minic_type_equal(instruction->type, callee->return_type)) {
             return false;
         }
@@ -1158,36 +1169,51 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
         for (argument_index = instruction->value.call.argument_begin; argument_index < argument_end;
              ++argument_index) {
             const MinicCoreCallArgument *argument;
-            MinicType parameter_type;
             size_t parameter_index;
 
             argument = &function->call_arguments[argument_index];
             parameter_index = argument_index - instruction->value.call.argument_begin;
-            parameter_type = callee->parameter_types[parameter_index];
-            if (core_call_scalar_type(parameter_type)) {
+            if (parameter_index >= callee->parameter_count) {
                 MinicCoreValueId value_id;
 
-                if (argument->kind != MINIC_CORE_CALL_ARGUMENT_VALUE) {
+                if (!callee->is_variadic || argument->kind != MINIC_CORE_CALL_ARGUMENT_VALUE) {
                     return false;
                 }
                 value_id = argument->value.value_id;
                 if (value_id >= function->value_count || !available_values[value_id] ||
-                    !minic_type_equal(function->values[value_id].type, parameter_type)) {
+                    !core_call_scalar_type(function->values[value_id].type)) {
                     return false;
                 }
-            } else if (minic_type_is_record(parameter_type)) {
-                MinicCoreObjectId object_id;
+                continue;
+            }
+            {
+                MinicType parameter_type = callee->parameter_types[parameter_index];
 
-                if (argument->kind != MINIC_CORE_CALL_ARGUMENT_OBJECT) {
+                if (core_call_scalar_type(parameter_type)) {
+                    MinicCoreValueId value_id;
+
+                    if (argument->kind != MINIC_CORE_CALL_ARGUMENT_VALUE) {
+                        return false;
+                    }
+                    value_id = argument->value.value_id;
+                    if (value_id >= function->value_count || !available_values[value_id] ||
+                        !minic_type_equal(function->values[value_id].type, parameter_type)) {
+                        return false;
+                    }
+                } else if (minic_type_is_record(parameter_type)) {
+                    MinicCoreObjectId object_id;
+
+                    if (argument->kind != MINIC_CORE_CALL_ARGUMENT_OBJECT) {
+                        return false;
+                    }
+                    object_id = argument->value.object_id;
+                    if (object_id >= function->object_count ||
+                        !minic_type_equal(function->objects[object_id].type, parameter_type)) {
+                        return false;
+                    }
+                } else {
                     return false;
                 }
-                object_id = argument->value.object_id;
-                if (object_id >= function->object_count ||
-                    !minic_type_equal(function->objects[object_id].type, parameter_type)) {
-                    return false;
-                }
-            } else {
-                return false;
             }
         }
         return true;

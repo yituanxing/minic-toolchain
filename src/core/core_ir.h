@@ -130,6 +130,9 @@ typedef struct MinicCoreCallee {
     MinicType return_type;
     MinicType *parameter_types;
     size_t parameter_count;
+    /* BATCH_D_VARIADIC_DIRECT_CALL: parameter_types is the fixed prefix;
+       variadic tail types are the semantic types of VALUE arguments. */
+    bool is_variadic;
 } MinicCoreCallee;
 
 /* M83_FIRST_CLASS_INDIRECT_CALL: Core owns enough static signature data to
@@ -372,6 +375,7 @@ bool minic_core_function_add_callee(MinicCoreFunction *function,
                                     MinicType return_type,
                                     const MinicType *parameter_types,
                                     size_t parameter_count,
+                                    bool is_variadic,
                                     MinicCoreCalleeId *callee_id);
 bool minic_core_function_add_call_signature(MinicCoreFunction *function,
                                             MinicFunctionTypeId function_type_id,

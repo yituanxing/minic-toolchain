@@ -1299,8 +1299,10 @@ static MinicCoreLowerStatus lower_direct_call(MinicCoreLowerContext *context,
     MinicCoreInstruction instruction;
     MinicCoreCallArgument *arguments;
     MinicCoreObjectId argument_objects[MINIC_MAX_FUNCTION_PARAMETERS];
+    MinicType argument_types[MINIC_MAX_FUNCTION_PARAMETERS];
     MinicCoreLowerStatus status;
     size_t argument_begin;
+    size_t argument_count;
     size_t argument_index;
     bool returns_void;
 
@@ -1322,31 +1324,47 @@ static MinicCoreLowerStatus lower_direct_call(MinicCoreLowerContext *context,
     if (callee_name == NULL || callee_name_length == 0U) {
         return MINIC_CORE_LOWER_ERROR;
     }
+    argument_count = expression->value.call.argument_count;
     returns_void = minic_type_is_void(callee->return_type);
-    if (callee->is_variadic || expression->value.call.argument_count != callee->parameter_count ||
+    if (argument_count > MINIC_MAX_FUNCTION_PARAMETERS ||
+        (!callee->is_variadic && argument_count != callee->parameter_count) ||
+        (callee->is_variadic && argument_count < callee->parameter_count) ||
         (!returns_void && !core_memory_scalar_type(callee->return_type))) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
-    for (argument_index = 0U; argument_index < callee->parameter_count; ++argument_index) {
-        if (!core_memory_scalar_type(callee->parameter_types[argument_index]) &&
-            !minic_type_is_record(callee->parameter_types[argument_index])) {
-            return MINIC_CORE_LOWER_UNSUPPORTED;
+    for (argument_index = 0U; argument_index < argument_count; ++argument_index) {
+        if (argument_index < callee->parameter_count) {
+            argument_types[argument_index] = callee->parameter_types[argument_index];
+            if (!core_memory_scalar_type(argument_types[argument_index]) &&
+                !minic_type_is_record(argument_types[argument_index])) {
+                return MINIC_CORE_LOWER_UNSUPPORTED;
+            }
+        } else {
+            const MinicExpression *argument_expression = minic_c0_program_expression(
+                context->body->program, expression->value.call.arguments[argument_index]);
+            if (argument_expression == NULL ||
+                !core_scalar_expression_value_type(
+                    context->body, argument_expression, &argument_types[argument_index]) ||
+                !core_memory_scalar_type(argument_types[argument_index])) {
+                return MINIC_CORE_LOWER_UNSUPPORTED;
+            }
         }
     }
-    arguments = callee->parameter_count == 0U
+    arguments = argument_count == 0U
                     ? NULL
-                    : (MinicCoreCallArgument *)calloc(callee->parameter_count, sizeof(*arguments));
-    if (callee->parameter_count != 0U && arguments == NULL) {
+                    : (MinicCoreCallArgument *)calloc(argument_count, sizeof(*arguments));
+    if (argument_count != 0U && arguments == NULL) {
         return MINIC_CORE_LOWER_ERROR;
     }
-    for (argument_index = 0U; argument_index < callee->parameter_count; ++argument_index) {
-        if (minic_type_is_record(callee->parameter_types[argument_index])) {
+    for (argument_index = 0U; argument_index < argument_count; ++argument_index) {
+        if (argument_index < callee->parameter_count &&
+            minic_type_is_record(argument_types[argument_index])) {
             MinicCoreObjectId object_id;
 
             status = lower_record_call_argument_object(
                 context,
                 expression->value.call.arguments[argument_index],
-                callee->parameter_types[argument_index],
+                argument_types[argument_index],
                 &object_id);
             if (status != MINIC_CORE_LOWER_OK) {
                 free(arguments);
@@ -1357,45 +1375,53 @@ static MinicCoreLowerStatus lower_direct_call(MinicCoreLowerContext *context,
             continue;
         }
         arguments[argument_index].kind = MINIC_CORE_CALL_ARGUMENT_VALUE;
-        status = lower_scalar_assignment_value(
-            context,
-            callee->parameter_types[argument_index],
-            expression->value.call.arguments[argument_index],
-            &arguments[argument_index].value.value_id);
+        if (argument_index < callee->parameter_count) {
+            status = lower_scalar_assignment_value(
+                context,
+                argument_types[argument_index],
+                expression->value.call.arguments[argument_index],
+                &arguments[argument_index].value.value_id);
+        } else {
+            status = lower_expression(context,
+                                      expression->value.call.arguments[argument_index],
+                                      &arguments[argument_index].value.value_id);
+        }
         if (status != MINIC_CORE_LOWER_OK) {
-            (void)fprintf(stderr, "CORE_LOWER_DETAIL marker=M90_HOT_ERROR_DETAIL function=%s stage=direct-call callee=%s arg=%zu reason=argument-lower status=%d\n",
+            (void)fprintf(stderr,
+                          "CORE_LOWER_DETAIL marker=BATCH_D_VARIADIC_DIRECT_CALL function=%s "
+                          "stage=direct-call callee=%s arg=%zu fixed=%d reason=argument-lower status=%d\n",
                           context->source_function != NULL ? context->source_function->name : "?",
-                          callee_name, argument_index, (int)status);
+                          callee_name,
+                          argument_index,
+                          argument_index < callee->parameter_count ? 1 : 0,
+                          (int)status);
             free(arguments);
             return status;
         }
         if (arguments[argument_index].value.value_id >= context->function->value_count ||
             !minic_type_equal(
                 context->function->values[arguments[argument_index].value.value_id].type,
-                callee->parameter_types[argument_index])) {
+                argument_types[argument_index])) {
             free(arguments);
             return MINIC_CORE_LOWER_ERROR;
         }
         status = spill_scalar_value(context,
                                     expression->span,
-                                    callee->parameter_types[argument_index],
+                                    argument_types[argument_index],
                                     arguments[argument_index].value.value_id,
                                     &argument_objects[argument_index]);
         if (status != MINIC_CORE_LOWER_OK) {
-            (void)fprintf(stderr, "CORE_LOWER_DETAIL marker=M90_HOT_ERROR_DETAIL function=%s stage=direct-call callee=%s arg=%zu reason=argument-spill status=%d\n",
-                          context->source_function != NULL ? context->source_function->name : "?",
-                          callee_name, argument_index, (int)status);
             free(arguments);
             return status;
         }
     }
-    for (argument_index = 0U; argument_index < callee->parameter_count; ++argument_index) {
+    for (argument_index = 0U; argument_index < argument_count; ++argument_index) {
         if (arguments[argument_index].kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
             continue;
         }
         status = reload_scalar_value(context,
                                      expression->span,
-                                     callee->parameter_types[argument_index],
+                                     argument_types[argument_index],
                                      argument_objects[argument_index],
                                      &arguments[argument_index].value.value_id);
         if (status != MINIC_CORE_LOWER_OK) {
@@ -1409,9 +1435,10 @@ static MinicCoreLowerStatus lower_direct_call(MinicCoreLowerContext *context,
                                         callee->return_type,
                                         callee->parameter_types,
                                         callee->parameter_count,
+                                        callee->is_variadic,
                                         &callee_id) ||
         !minic_core_function_append_call_arguments(
-            context->function, arguments, callee->parameter_count, &argument_begin)) {
+            context->function, arguments, argument_count, &argument_begin)) {
         free(arguments);
         return MINIC_CORE_LOWER_ERROR;
     }
@@ -1423,7 +1450,7 @@ static MinicCoreLowerStatus lower_direct_call(MinicCoreLowerContext *context,
     instruction.result = MINIC_CORE_VALUE_INVALID;
     instruction.value.call.callee_id = callee_id;
     instruction.value.call.argument_begin = argument_begin;
-    instruction.value.call.argument_count = callee->parameter_count;
+    instruction.value.call.argument_count = argument_count;
     instruction.value.call.result_object = MINIC_CORE_OBJECT_INVALID;
     if (returns_void) {
         *value_id = MINIC_CORE_VALUE_INVALID;
@@ -1554,6 +1581,7 @@ static MinicCoreLowerStatus lower_direct_record_call_object(
                                         callee->return_type,
                                         callee->parameter_types,
                                         callee->parameter_count,
+                                        callee->is_variadic,
                                         &callee_id) ||
         !minic_core_function_append_call_arguments(
             context->function, arguments, callee->parameter_count, &argument_begin)) {

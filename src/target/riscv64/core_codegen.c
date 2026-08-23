@@ -674,7 +674,10 @@ static bool core_direct_call_supported(const MinicC0Program *program,
     }
     callee = &function->callees[instruction->value.call.callee_id];
     if (callee->name == NULL || callee->name_length == 0U ||
-        instruction->value.call.argument_count != callee->parameter_count ||
+        (!callee->is_variadic &&
+         instruction->value.call.argument_count != callee->parameter_count) ||
+        (callee->is_variadic &&
+         instruction->value.call.argument_count < callee->parameter_count) ||
         instruction->value.call.argument_begin > function->call_argument_count ||
         instruction->value.call.argument_count >
             function->call_argument_count - instruction->value.call.argument_begin) {
@@ -683,14 +686,22 @@ static bool core_direct_call_supported(const MinicC0Program *program,
     if (program == NULL) {
         if ((!minic_type_is_void(callee->return_type) &&
              !core_scalar_type(callee->return_type)) ||
-            callee->parameter_count > 8U) {
+            instruction->value.call.argument_count > 8U) {
             return false;
         }
-        for (argument_index = 0U; argument_index < callee->parameter_count; ++argument_index) {
+        for (argument_index = 0U; argument_index < instruction->value.call.argument_count;
+             ++argument_index) {
             const MinicCoreCallArgument *argument = &function->call_arguments[
                 instruction->value.call.argument_begin + argument_index];
-            if (!core_scalar_type(callee->parameter_types[argument_index]) ||
-                argument->kind != MINIC_CORE_CALL_ARGUMENT_VALUE) {
+            if (argument->kind != MINIC_CORE_CALL_ARGUMENT_VALUE) {
+                return false;
+            }
+            if (argument_index < callee->parameter_count) {
+                if (!core_scalar_type(callee->parameter_types[argument_index])) {
+                    return false;
+                }
+            } else if (argument->value.value_id >= function->value_count ||
+                       !core_scalar_type(function->values[argument->value.value_id].type)) {
                 return false;
             }
         }
@@ -712,24 +723,39 @@ static bool core_direct_call_supported(const MinicC0Program *program,
               callee->return_type)))) {
         return false;
     }
-    for (argument_index = 0U; argument_index < callee->parameter_count; ++argument_index) {
+    for (argument_index = 0U; argument_index < instruction->value.call.argument_count;
+         ++argument_index) {
         const MinicCoreCallArgument *argument = &function->call_arguments[
             instruction->value.call.argument_begin + argument_index];
         MinicRiscv64AbiArgumentLocation location;
-        MinicType parameter_type = callee->parameter_types[argument_index];
+        MinicType argument_type;
+        bool is_fixed_parameter;
 
+        is_fixed_parameter = argument_index < callee->parameter_count;
+        if (is_fixed_parameter) {
+            argument_type = callee->parameter_types[argument_index];
+        } else {
+            if (!callee->is_variadic || argument->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
+                argument->value.value_id >= function->value_count) {
+                return false;
+            }
+            argument_type = function->values[argument->value.value_id].type;
+            if (!core_scalar_type(argument_type)) {
+                return false;
+            }
+        }
         if (!minic_riscv64_abi_place_argument(
-                program, parameter_type, true, &cursor, &location) ||
+                program, argument_type, is_fixed_parameter, &cursor, &location) ||
             location.floating_register_count != 0U || location.stack_slot_count != 0U) {
             return false;
         }
-        if (core_scalar_type(parameter_type)) {
+        if (core_scalar_type(argument_type)) {
             if (argument->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
                 location.value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER ||
                 location.integer_register_count != 1U || location.integer_register_begin >= 8U) {
                 return false;
             }
-        } else if (minic_type_is_record(parameter_type)) {
+        } else if (is_fixed_parameter && minic_type_is_record(argument_type)) {
             MinicCoreObjectId object_id;
 
             if (argument->kind != MINIC_CORE_CALL_ARGUMENT_OBJECT ||
@@ -741,7 +767,7 @@ static bool core_direct_call_supported(const MinicC0Program *program,
             }
             object_id = argument->value.object_id;
             if (object_id >= function->object_count ||
-                !minic_type_equal(function->objects[object_id].type, parameter_type)) {
+                !minic_type_equal(function->objects[object_id].type, argument_type)) {
                 return false;
             }
         } else {
@@ -1233,10 +1259,21 @@ static bool emit_call(FILE *file,
         const MinicCoreCallArgument *argument = &function->call_arguments[
             instruction->value.call.argument_begin + argument_index];
         MinicRiscv64AbiArgumentLocation location;
-        MinicType parameter_type = callee->parameter_types[argument_index];
+        MinicType argument_type;
+        bool is_fixed_parameter;
 
+        is_fixed_parameter = argument_index < callee->parameter_count;
+        if (is_fixed_parameter) {
+            argument_type = callee->parameter_types[argument_index];
+        } else {
+            if (!callee->is_variadic || argument->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
+                argument->value.value_id >= function->value_count) {
+                return false;
+            }
+            argument_type = function->values[argument->value.value_id].type;
+        }
         if (!minic_riscv64_abi_place_argument(
-                program, parameter_type, true, &cursor, &location)) {
+                program, argument_type, is_fixed_parameter, &cursor, &location)) {
             return false;
         }
         if (argument->kind == MINIC_CORE_CALL_ARGUMENT_VALUE) {
@@ -1253,7 +1290,8 @@ static bool emit_call(FILE *file,
             size_t chunk_index;
             size_t object_offset;
 
-            if (!core_object_offset(program, function, argument->value.object_id, &object_offset)) {
+            if (!is_fixed_parameter ||
+                !core_object_offset(program, function, argument->value.object_id, &object_offset)) {
                 return false;
             }
             for (chunk_index = 0U; chunk_index < location.value.slot_count; ++chunk_index) {
