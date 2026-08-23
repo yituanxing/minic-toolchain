@@ -1,0 +1,186 @@
+name: Core Fast Batch C
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  batch-c:
+    if: github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: core-fast-batch-c-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+
+      - name: Restore frozen Linux corpus
+        id: linux-corpus-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+
+      - name: Require frozen corpus
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
+          test -s build/linux-focus-corpus/selected-tus.txt
+
+      - name: Apply Batch C production changes
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/patch-linux-replay-live-progress.py
+          python3 tools/dev/patch-core-frontier-batch-c.py
+
+      - name: Build exact patched compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-c-compiler
+
+      - name: Focused cleanup and record-forward regressions
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/core-batch-c-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-batch-c-focused"
+          mkdir -p "$work"
+
+          cat >"$work/cleanup-zero-distance.i" <<'EOF'
+          static int cleanup_count;
+          static void cleanup_record(int *value) {
+              cleanup_count += *value;
+          }
+
+          int linux_guard_shape(void) {
+              cleanup_count = 0;
+              for (int guard __attribute__((__cleanup__(cleanup_record))) = 5;
+                   1;
+                   ({ goto cleanup_break; }))
+                  if (0) {
+                  cleanup_break:
+                      break;
+                  } else {
+                      (void)guard;
+                  }
+              return cleanup_count;
+          }
+          EOF
+          "$compiler" -S "$work/cleanup-zero-distance.i" -o "$work/cleanup-normal.s"
+          MINIC_CORE_IR=strict "$compiler" -S "$work/cleanup-zero-distance.i" \
+            -o "$work/cleanup-strict.s"
+          cmp "$work/cleanup-normal.s" "$work/cleanup-strict.s"
+          MINIC_CORE_IR=strict MINIC_CORE_CODEGEN=basic-v0 "$compiler" \
+            -S "$work/cleanup-zero-distance.i" -o "$work/cleanup-core.s"
+
+          cat >"$work/direct-record-return.i" <<'EOF'
+          struct fd_like {
+              void *file;
+              unsigned int flags;
+          };
+
+          static struct fd_like make_fd(unsigned long value) {
+              return (struct fd_like){
+                  (void *)(value & ~3UL),
+                  (unsigned int)(value & 3UL)
+              };
+          }
+
+          struct fd_like forward_fd(unsigned long value) {
+              return make_fd(value);
+          }
+          EOF
+          "$compiler" -S "$work/direct-record-return.i" -o "$work/record-normal.s"
+          MINIC_CORE_IR=strict "$compiler" -S "$work/direct-record-return.i" \
+            -o "$work/record-strict.s"
+          cmp "$work/record-normal.s" "$work/record-strict.s"
+          MINIC_CORE_IR=strict MINIC_CORE_CODEGEN=basic-v0 "$compiler" \
+            -S "$work/direct-record-return.i" -o "$work/record-core.s"
+
+          echo CORE_BATCH_C_FOCUSED_PASS
+
+      - name: Strict sixteen frontier
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/core-batch-c-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-batch-c-frontier"
+          set +e
+          MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
+            --minic "$compiler" \
+            --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
+            --work "$work" \
+            --jobs 16 \
+            --offset 0 \
+            --limit 500 \
+            --sample-count 0 \
+            --indices '0,1,2,3,4,7,9,20,42,66,95,155,165,280,288,299'
+          probe_status=$?
+          set -e
+          printf 'CORE_BATCH_C_STRICT16_STATUS=%d\n' "$probe_status"
+          python3 tools/ci/classify-core-strict-frontier.py \
+            "$work/batch-results.json" \
+            --examples 16 \
+            --json-out "$work/frontier-summary.json"
+          python3 tools/ci/summarize-core-frontier-progress.py \
+            "$work/batch-results.json" \
+            --expect-selected 16 \
+            --json-out "$work/progress-summary.json" \
+            --text-out "$work/progress-summary.txt"
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          f = json.loads(Path('build/core-batch-c-frontier/frontier-summary.json').read_text())
+          p = json.loads(Path('build/core-batch-c-frontier/progress-summary.json').read_text())
+          blockers = {b.get('function') for b in f.get('blockers', [])}
+          print(
+              'CORE_BATCH_C_RESULT '
+              f"selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} "
+              f"error={f['error']} distinct_blockers={len(f.get('blockers', []))} "
+              f"tu_mean={p['tu_mean_progress'] * 100.0:.2f}% "
+              f"tu_median={p['tu_median_progress'] * 100.0:.2f}% "
+              f"line_weighted={p['line_weighted_progress'] * 100.0:.2f}%"
+          )
+          if f['selected'] != 16:
+              raise SystemExit(f"expected 16 probes, got {f['selected']}")
+          if f['error'] != 0:
+              raise SystemExit(f"Batch C introduced Core lowering ERRORs: {f.get('errors', [])}")
+          stale = blockers.intersection({'rseq_signal_deliver', 'fdget', 'cap_drop_fs_set'})
+          if stale:
+              raise SystemExit(f"Batch C target blockers did not clear: {sorted(stale)}")
+          PY
+
+      - name: Upload Batch C evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-fast-batch-c-${{ github.run_id }}
+          path: |
+            build/core-batch-c-frontier/batch-results.json
+            build/core-batch-c-frontier/batch-results.tsv
+            build/core-batch-c-frontier/batch-summary.txt
+            build/core-batch-c-frontier/failure-contexts.txt
+            build/core-batch-c-frontier/frontier-summary.json
+            build/core-batch-c-frontier/progress-summary.json
+            build/core-batch-c-frontier/progress-summary.txt
+            build/core-batch-c-frontier/minic-stderr
+          if-no-files-found: warn
+
+      - name: Persist qualified Batch C production tree
+        if: success()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git add src/core/core_lower.c
+          if git diff --cached --quiet; then
+            echo CORE_BATCH_C_ALREADY_PERSISTED
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'core: accept zero-distance cleanup edges and record return forwarding'
+          git push origin HEAD:refactor/declaration-sema-v1
