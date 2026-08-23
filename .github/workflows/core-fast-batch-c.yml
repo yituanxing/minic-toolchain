@@ -1,4 +1,4 @@
-name: Core Fast Batch D
+name: Core Fast Batch E
 
 on:
   pull_request:
@@ -7,11 +7,11 @@ permissions:
   contents: write
 
 jobs:
-  batch-d:
+  batch-e:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     concurrency:
-      group: core-fast-batch-d-${{ github.event.pull_request.number }}
+      group: core-fast-batch-e-${{ github.event.pull_request.number }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
@@ -32,46 +32,57 @@ jobs:
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
 
-      - name: Apply Batch D production changes
+      - name: Apply Batch E production changes
         shell: bash
         run: |
           set -Eeuo pipefail
           python3 tools/dev/patch-linux-replay-live-progress.py
-          python3 tools/dev/patch-core-frontier-batch-d.py
+          python3 tools/dev/patch-core-frontier-batch-e.py
 
       - name: Build exact patched compiler
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-d-compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-e-compiler
 
-      - name: Focused variadic direct-call regression
+      - name: Focused named-input asm-goto regression
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-batch-d-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-batch-d-focused"
+          compiler="$GITHUB_WORKSPACE/build/core-batch-e-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-batch-e-focused"
           mkdir -p "$work"
 
-          cat >"$work/variadic-direct.i" <<'EOF'
-          extern int sink(int tag, ...);
+          cat >"$work/named-asm-goto.i" <<'EOF'
+          static inline int extension_probe(unsigned long ext) {
+              asm goto(
+                  "nop # %[ext]\n\t"
+                  "j %l[l_no]"
+                  :
+                  : [ext] "i" (ext)
+                  :
+                  : l_no);
+              return 1;
+          l_no:
+              return 0;
+          }
 
-          int variadic_mix(int x, void *pointer) {
-              return sink(7, x, pointer);
+          int probe(unsigned long ext) {
+              return extension_probe(ext);
           }
           EOF
-          "$compiler" -S "$work/variadic-direct.i" -o "$work/normal.s"
-          MINIC_CORE_IR=strict "$compiler" -S "$work/variadic-direct.i" -o "$work/strict.s"
+          "$compiler" -S "$work/named-asm-goto.i" -o "$work/normal.s"
+          MINIC_CORE_IR=strict "$compiler" -S "$work/named-asm-goto.i" -o "$work/strict.s"
           cmp "$work/normal.s" "$work/strict.s"
           MINIC_CORE_IR=strict MINIC_CORE_CODEGEN=basic-v0 "$compiler" \
-            -S "$work/variadic-direct.i" -o "$work/core.s"
-          grep -q 'call sink' "$work/core.s"
+            -S "$work/named-asm-goto.i" -o "$work/core.s"
+          grep -q '__minic_deferred_asm_immediate_' "$work/core.s"
 
-          echo CORE_BATCH_D_FOCUSED_PASS
+          echo CORE_BATCH_E_FOCUSED_PASS
 
       - name: Strict sixteen frontier
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-batch-d-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-batch-d-frontier"
+          compiler="$GITHUB_WORKSPACE/build/core-batch-e-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-batch-e-frontier"
           set +e
           MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" \
@@ -84,7 +95,7 @@ jobs:
             --indices '0,1,2,3,4,7,9,20,42,66,95,155,165,280,288,299'
           probe_status=$?
           set -e
-          printf 'CORE_BATCH_D_STRICT16_STATUS=%d\n' "$probe_status"
+          printf 'CORE_BATCH_E_STRICT16_STATUS=%d\n' "$probe_status"
           python3 tools/ci/classify-core-strict-frontier.py \
             "$work/batch-results.json" \
             --examples 16 \
@@ -97,49 +108,48 @@ jobs:
           python3 - <<'PY'
           import json
           from pathlib import Path
-          f = json.loads(Path('build/core-batch-d-frontier/frontier-summary.json').read_text())
-          p = json.loads(Path('build/core-batch-d-frontier/progress-summary.json').read_text())
+          f = json.loads(Path('build/core-batch-e-frontier/frontier-summary.json').read_text())
+          blockers = {b.get('function') for b in f.get('blockers', [])}
           print(
-              'CORE_BATCH_D_RESULT '
+              'CORE_BATCH_E_RESULT '
               f"selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} "
-              f"error={f['error']} distinct_blockers={len(f.get('blockers', []))} "
-              f"tu_mean={p['tu_mean_progress'] * 100.0:.2f}% "
-              f"tu_median={p['tu_median_progress'] * 100.0:.2f}% "
-              f"line_weighted={p['line_weighted_progress'] * 100.0:.2f}%"
+              f"error={f['error']} distinct_blockers={len(f.get('blockers', []))}"
           )
           if f['selected'] != 16:
               raise SystemExit(f"expected 16 probes, got {f['selected']}")
           if f['error'] != 0:
-              raise SystemExit(f"Batch D introduced Core lowering ERRORs: {f.get('errors', [])}")
+              raise SystemExit(f"Batch E introduced Core lowering ERRORs: {f.get('errors', [])}")
+          if 'riscv_has_extension_likely' in blockers:
+              raise SystemExit('named asm-goto blocker did not clear')
           PY
 
-      - name: Upload Batch D evidence
+      - name: Upload Batch E evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: core-fast-batch-d-${{ github.run_id }}
+          name: core-fast-batch-e-${{ github.run_id }}
           path: |
-            build/core-batch-d-frontier/batch-results.json
-            build/core-batch-d-frontier/batch-results.tsv
-            build/core-batch-d-frontier/batch-summary.txt
-            build/core-batch-d-frontier/failure-contexts.txt
-            build/core-batch-d-frontier/frontier-summary.json
-            build/core-batch-d-frontier/progress-summary.json
-            build/core-batch-d-frontier/progress-summary.txt
-            build/core-batch-d-frontier/minic-stderr
+            build/core-batch-e-frontier/batch-results.json
+            build/core-batch-e-frontier/batch-results.tsv
+            build/core-batch-e-frontier/batch-summary.txt
+            build/core-batch-e-frontier/failure-contexts.txt
+            build/core-batch-e-frontier/frontier-summary.json
+            build/core-batch-e-frontier/progress-summary.json
+            build/core-batch-e-frontier/progress-summary.txt
+            build/core-batch-e-frontier/minic-stderr
           if-no-files-found: warn
 
-      - name: Persist qualified Batch D production tree
+      - name: Persist qualified Batch E production tree
         if: success()
         shell: bash
         run: |
           set -Eeuo pipefail
-          git add src/core/core_ir.h src/core/core_ir.c src/core/core_lower.c src/target/riscv64/core_codegen.c
+          git add src/core/core_lower.c
           if git diff --cached --quiet; then
-            echo CORE_BATCH_D_ALREADY_PERSISTED
+            echo CORE_BATCH_E_ALREADY_PERSISTED
             exit 0
           fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m 'core: support scalar variadic direct calls'
+          git commit -m 'core: normalize named deferred asm-goto input'
           git push origin HEAD:refactor/declaration-sema-v1
