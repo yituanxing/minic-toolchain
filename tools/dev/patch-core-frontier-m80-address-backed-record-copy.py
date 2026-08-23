@@ -4,19 +4,21 @@
 from pathlib import Path
 from runpy import run_path
 
-M80_MARKER = "M80_ADDRESS_BACKED_RECORD_COPY"
 M81_DRIVER = Path("tools/dev/patch-core-frontier-m81-function-address.py")
+M80_PRODUCTS = {
+    Path("src/core/core_ir.h"): "M80_ADDRESS_BACKED_RECORD_COPY",
+    Path("src/core/core_ir.c"): "M80_ADDRESS_BACKED_RECORD_COPY",
+    Path("src/core/core_lower.c"): "M80_ADDRESS_BACKED_RECORD_COPY",
+    # The persisted RV64 implementation predates the shared comment marker;
+    # verify the actual product seam instead of requiring a cosmetic comment.
+    Path("src/target/riscv64/core_codegen.c"): "core_record_copy_supported",
+}
 
 
 def main() -> int:
-    required = (
-        Path("src/core/core_ir.h"),
-        Path("src/core/core_ir.c"),
-        Path("src/core/core_lower.c"),
-        Path("src/target/riscv64/core_codegen.c"),
-    )
-    if any(M80_MARKER not in path.read_text() for path in required):
-        raise SystemExit("M80 persisted product is incomplete")
+    for path, marker in M80_PRODUCTS.items():
+        if marker not in path.read_text():
+            raise SystemExit(f"M80 persisted product missing from {path}: {marker}")
     namespace = run_path(str(M81_DRIVER))
     m81_main = namespace.get("main")
     if not callable(m81_main):
