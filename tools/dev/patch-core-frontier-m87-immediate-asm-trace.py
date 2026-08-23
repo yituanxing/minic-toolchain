@@ -38,14 +38,13 @@ def main() -> int:
                 context->body->program, trace_operand->expression);
             (void)fprintf(stderr,
                           "CORE_FAST_TRACE stage=inline-asm-immediate-input function=%s "
-                          "index=%zu constraint=%.*s access=%d expr_kind=%d expr_type_base=%d\n",
+                          "index=%zu constraint=%.*s access=%d expr_kind=%d\n",
                           context->source_function != NULL ? context->source_function->name : "?",
                           trace_input_index,
                           (int)trace_operand->constraint_length,
                           trace_operand->constraint_text != NULL ? trace_operand->constraint_text : "",
                           (int)trace_operand->access,
-                          trace_expression != NULL ? (int)trace_expression->kind : -1,
-                          trace_expression != NULL ? (int)trace_expression->type.base : -1);
+                          trace_expression != NULL ? (int)trace_expression->kind : -1);
         }
     }
 
