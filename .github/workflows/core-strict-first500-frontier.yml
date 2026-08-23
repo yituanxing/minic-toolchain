@@ -53,6 +53,7 @@ jobs:
           python3 tools/dev/patch-core-frontier-m63-qualified-scalar-update.py
           python3 tools/dev/patch-core-frontier-m64-local-label-address.py
           python3 tools/dev/patch-core-frontier-m65-assignment-expression.py
+          python3 tools/dev/patch-core-frontier-m66-subscript-index-value-type.py
 
       - name: Build exact compiler
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-strict500-compiler
@@ -92,10 +93,13 @@ jobs:
           ]
           if unexpected_errors:
               raise SystemExit(f"unexpected Linux probe errors: {unexpected_errors}")
-          remaining = [b for b in s['blockers'] if b['function'] == 'bitmap_and']
-          if remaining:
-              raise SystemExit(f"Linux probe still blocked at bitmap_and: {remaining}")
-          print(f"LINUX_EIGHT_FRONTIER_PASSED_TARGET known_errors={len(s.get('errors', []))}")
+          old_family = [
+              b for b in s['blockers']
+              if b['function'] in {'bitmap_and', 'bitmap_get_value8'}
+          ]
+          if old_family:
+              raise SystemExit(f"Linux probe still in bitmap assignment/subscript family: {old_family}")
+          print(f"LINUX_EIGHT_FRONTIER_PASSED_M66 known_errors={len(s.get('errors', []))}")
           PY
 
       - name: Upload fast frontier evidence
@@ -111,7 +115,7 @@ jobs:
             build/core-strict500-probe/frontier-summary.json
           if-no-files-found: warn
 
-      - name: Persist M65 source changes
+      - name: Persist M65-M66 source changes
         if: success()
         shell: bash
         run: |
@@ -123,7 +127,7 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -- "${files[@]}"
-          git commit -m 'core: lower scalar assignment expression values'
+          git commit -m 'core: lower assignment values and qualified subscripts'
           git push origin HEAD:refactor/declaration-sema-v1
 
   full500-background:
@@ -172,6 +176,7 @@ jobs:
           python3 tools/dev/patch-core-frontier-m63-qualified-scalar-update.py
           python3 tools/dev/patch-core-frontier-m64-local-label-address.py
           python3 tools/dev/patch-core-frontier-m65-assignment-expression.py
+          python3 tools/dev/patch-core-frontier-m66-subscript-index-value-type.py
 
       - name: Build exact compiler
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-strict500-compiler
