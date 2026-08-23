@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Keep M82 productized and advance the hot frontier through M83/M83b/M84/M85/M86/M86b/M87.
+# Keep M82 productized and advance the hot frontier through M83/M83b/M84/M85/M86/M86b/M87/M88.
 
 from pathlib import Path
 from runpy import run_path
@@ -14,6 +14,7 @@ M85B_DRIVER = Path("tools/dev/patch-core-frontier-m85b-record-callee-verifier.py
 M86_DRIVER = Path("tools/dev/patch-core-frontier-m86-record-call-result.py")
 M86B_DRIVER = Path("tools/dev/patch-core-frontier-m86b-record-assignment-expression.py")
 M87_DRIVER = Path("tools/dev/patch-core-frontier-m87-immediate-asm-trace.py")
+M88_DRIVER = Path("tools/dev/patch-core-frontier-m88-record-compound-literal.py")
 M83_IR = Path("src/core/core_ir.h")
 M83_IR_IMPL = Path("src/core/core_ir.c")
 M83_LOWER = Path("src/core/core_lower.c")
@@ -96,8 +97,6 @@ def m83_productized() -> bool:
 
 
 def prepare_m86_driver() -> None:
-    # M86 is applied after M85b. Scope its one verifier edit to the verifier
-    # function rather than the earlier destroy-loop with the same callee text.
     text = M86_DRIVER.read_text()
     old = '''        "    for (index = 0U; index < function->callee_count; ++index) {",
         "    for (index = 0U; index < function->call_signature_count; ++index) {",
@@ -118,26 +117,26 @@ def main() -> int:
         status = run_driver(M83_DRIVER, "M83")
         if status != 0:
             return status
-    status = run_driver(M83B_DRIVER, "M83b")
-    if status != 0:
-        return status
-    status = run_driver(M84_DRIVER, "M84")
-    if status != 0:
-        return status
-    status = run_driver(M85_DRIVER, "M85")
-    if status != 0:
-        return status
-    status = run_driver(M85B_DRIVER, "M85b")
-    if status != 0:
-        return status
+    for path, name in (
+        (M83B_DRIVER, "M83b"),
+        (M84_DRIVER, "M84"),
+        (M85_DRIVER, "M85"),
+        (M85B_DRIVER, "M85b"),
+    ):
+        status = run_driver(path, name)
+        if status != 0:
+            return status
     prepare_m86_driver()
-    status = run_driver(M86_DRIVER, "M86")
-    if status != 0:
-        return status
-    status = run_driver(M86B_DRIVER, "M86b")
-    if status != 0:
-        return status
-    return run_driver(M87_DRIVER, "M87")
+    for path, name in (
+        (M86_DRIVER, "M86"),
+        (M86B_DRIVER, "M86b"),
+        (M87_DRIVER, "M87"),
+        (M88_DRIVER, "M88"),
+    ):
+        status = run_driver(path, name)
+        if status != 0:
+            return status
+    return 0
 
 
 if __name__ == "__main__":
