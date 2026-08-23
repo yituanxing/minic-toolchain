@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Keep M82 productized and advance the hot frontier through M83/M83b/M84/M85/M86/M86b/M87/M88.
+# Keep M82 productized and advance the hot frontier through M83..M90.
 
 from pathlib import Path
 from runpy import run_path
@@ -15,6 +15,8 @@ M86_DRIVER = Path("tools/dev/patch-core-frontier-m86-record-call-result.py")
 M86B_DRIVER = Path("tools/dev/patch-core-frontier-m86b-record-assignment-expression.py")
 M87_DRIVER = Path("tools/dev/patch-core-frontier-m87-immediate-asm-trace.py")
 M88_DRIVER = Path("tools/dev/patch-core-frontier-m88-record-compound-literal.py")
+M89_DRIVER = Path("tools/dev/patch-core-frontier-m89-empty-volatile-asm.py")
+M90_DRIVER = Path("tools/dev/patch-core-frontier-m90-hot-errors.py")
 M83_IR = Path("src/core/core_ir.h")
 M83_IR_IMPL = Path("src/core/core_ir.c")
 M83_LOWER = Path("src/core/core_lower.c")
@@ -132,6 +134,8 @@ def main() -> int:
         (M86B_DRIVER, "M86b"),
         (M87_DRIVER, "M87"),
         (M88_DRIVER, "M88"),
+        (M89_DRIVER, "M89"),
+        (M90_DRIVER, "M90"),
     ):
         status = run_driver(path, name)
         if status != 0:

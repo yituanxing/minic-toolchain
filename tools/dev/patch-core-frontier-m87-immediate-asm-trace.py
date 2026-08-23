@@ -11,36 +11,32 @@ def main() -> int:
         print("M87 immediate-asm frontier trace already applied")
         return 0
 
-    source_anchor = '''    source = minic_c0_program_inline_asm(context->body->program, statement->inline_asm_id);
-    if (source == NULL) {
-        return MINIC_CORE_LOWER_ERROR;
-    }
+    fallback_anchor = '''    if (!source->is_volatile || source->is_goto || source->template_text == NULL ||
+        source->template_length == 0U || source->output_count != 0U || source->input_count != 0U ||
+        source->label_count != 0U || source->register_clobber_count != 0U) {
 '''
-    if text.count(source_anchor) != 1:
-        raise SystemExit(f"M87 source anchor count={text.count(source_anchor)}")
-    source_trace = source_anchor + r'''
-    /* M87_IMMEDIATE_ASM_FRONTIER_TRACE: multi-input asm is a high-value
-       frontier family. Report its semantic shape and whether each input can be
-       specialized by the existing M61 immediate resolver. */
-    if (source->input_count >= 3U && source->inputs != NULL) {
+    if text.count(fallback_anchor) != 1:
+        raise SystemExit(f"M87 inline-asm fallback anchor count={text.count(fallback_anchor)}")
+
+    # Failure-only observability. Do not emit traces on successful M61 paths:
+    # corpus_replay intentionally uses CORE_FAST_TRACE spans as first-frontier
+    # locations, so success-path logging would corrupt the progress metric.
+    fallback_trace = r'''    /* M87_IMMEDIATE_ASM_FRONTIER_TRACE: report details only after every
+       supported inline-asm path above has declined the statement. This keeps
+       frontier observability from becoming a false first-error locator. */
+    if (source->is_volatile && !source->is_goto && source->output_count == 0U &&
+        source->input_count != 0U && source->inputs != NULL && source->label_count == 0U) {
         size_t trace_input_index;
 
         (void)fprintf(stderr,
-                      "CORE_FAST_TRACE stage=inline-asm-shape function=%s volatile=%d goto=%d "
-                      "outputs=%zu inputs=%zu labels=%zu reg_clobbers=%zu clobbers=%zu memory=%d "
-                      "template_length=%zu span=%zu:%zu\n",
+                      "CORE_ASM_DETAIL reason=unclaimed function=%s inputs=%zu "
+                      "reg_clobbers=%zu clobbers=%zu memory=%d template_length=%zu\n",
                       context->source_function != NULL ? context->source_function->name : "?",
-                      source->is_volatile ? 1 : 0,
-                      source->is_goto ? 1 : 0,
-                      source->output_count,
                       source->input_count,
-                      source->label_count,
                       source->register_clobber_count,
                       source->clobber_count,
                       source->has_memory_clobber ? 1 : 0,
-                      source->template_length,
-                      statement->span.begin.line,
-                      statement->span.begin.column);
+                      source->template_length);
         for (trace_input_index = 0U; trace_input_index < source->input_count; ++trace_input_index) {
             const MinicInlineAsmOperand *trace_operand = &source->inputs[trace_input_index];
             const MinicExpression *trace_expression = minic_c0_program_expression(
@@ -57,9 +53,8 @@ def main() -> int:
                 &trace_resolved_length);
             (void)trace_resolved_text;
             (void)fprintf(stderr,
-                          "CORE_FAST_TRACE stage=inline-asm-input function=%s index=%zu "
-                          "constraint=%.*s access=%d expr_kind=%d immediate_resolved=%d "
-                          "resolved_length=%zu\n",
+                          "CORE_ASM_DETAIL input function=%s index=%zu constraint=%.*s "
+                          "access=%d expr_kind=%d immediate_resolved=%d resolved_length=%zu\n",
                           context->source_function != NULL ? context->source_function->name : "?",
                           trace_input_index,
                           (int)trace_operand->constraint_length,
@@ -70,34 +65,10 @@ def main() -> int:
                           trace_resolved_length);
         }
     }
-'''
-    text = text.replace(source_anchor, source_trace, 1)
-
-    fallback_anchor = '''    if (!source->is_volatile || source->is_goto || source->template_text == NULL ||
-        source->template_length == 0U || source->output_count != 0U || source->input_count != 0U ||
-        source->label_count != 0U || source->register_clobber_count != 0U) {
-'''
-    if text.count(fallback_anchor) != 1:
-        raise SystemExit(f"M87 inline-asm fallback anchor count={text.count(fallback_anchor)}")
-
-    fallback_trace = r'''    if (source->is_volatile && !source->is_goto && source->output_count == 0U &&
-        source->input_count != 0U && source->inputs != NULL && source->label_count == 0U) {
-        (void)fprintf(stderr,
-                      "CORE_FAST_TRACE stage=inline-asm-immediate reason=unclaimed "
-                      "function=%s inputs=%zu reg_clobbers=%zu clobbers=%zu memory=%d span=%zu:%zu\n",
-                      context->source_function != NULL ? context->source_function->name : "?",
-                      source->input_count,
-                      source->register_clobber_count,
-                      source->clobber_count,
-                      source->has_memory_clobber ? 1 : 0,
-                      statement->span.begin.line,
-                      statement->span.begin.column);
-    }
 
 '''
-    text = text.replace(fallback_anchor, fallback_trace + fallback_anchor, 1)
-    PATH.write_text(text)
-    print("M87 immediate-asm frontier trace applied")
+    PATH.write_text(text.replace(fallback_anchor, fallback_trace + fallback_anchor, 1))
+    print("M87 failure-only immediate-asm frontier trace applied")
     return 0
 
 
