@@ -62,6 +62,7 @@ jobs:
           python3 tools/dev/patch-core-frontier-m72-nested-break-target.py
           python3 tools/dev/patch-core-frontier-m73-comma-expression.py
           python3 tools/dev/patch-core-frontier-m74-global-record-address.py
+          python3 tools/dev/patch-core-frontier-m75-pointer-compound-assignment.py
 
       - name: Build exact compiler
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-strict500-compiler
@@ -102,7 +103,22 @@ jobs:
           "$compiler" -S "$work/global-record-address.i" -o "$work/record-normal.s"
           MINIC_CORE_IR=strict "$compiler" -S "$work/global-record-address.i" -o "$work/record-strict.s"
           cmp "$work/record-normal.s" "$work/record-strict.s"
-          echo 'M73_M74_FOCUSED_PASS'
+
+          cat >"$work/pointer-compound.i" <<'EOF'
+          unsigned long *pointer_compound_sub(unsigned long *p, unsigned int n) {
+              p -= n;
+              return p;
+          }
+
+          unsigned long *pointer_compound_add(unsigned long *p, unsigned int n) {
+              p += n;
+              return p;
+          }
+          EOF
+          "$compiler" -S "$work/pointer-compound.i" -o "$work/pointer-compound-normal.s"
+          MINIC_CORE_IR=strict "$compiler" -S "$work/pointer-compound.i" -o "$work/pointer-compound-strict.s"
+          cmp "$work/pointer-compound-normal.s" "$work/pointer-compound-strict.s"
+          echo 'M73_M75_FOCUSED_PASS'
 
       - name: Fast Linux sixteen-frontier probe
         shell: bash
@@ -144,11 +160,16 @@ jobs:
           ]
           if unexpected_errors:
               raise SystemExit(f"unexpected Linux probe errors: {unexpected_errors}")
-          cleared = {'cpumask_first', 'cpumask_any_but', 'reset_cpu_possible_mask'}
+          cleared = {
+              'cpumask_first',
+              'cpumask_any_but',
+              'reset_cpu_possible_mask',
+              'get_cpu_mask',
+          }
           old_family = [b for b in s['blockers'] if b['function'] in cleared]
           if old_family:
               raise SystemExit(f"Linux probe still blocked in cleared frontier family: {old_family}")
-          print(f"LINUX_SIXTEEN_FRONTIER_PASSED_M74 known_errors={len(s.get('errors', []))}")
+          print(f"LINUX_SIXTEEN_FRONTIER_PASSED_M75 known_errors={len(s.get('errors', []))}")
           PY
 
       - name: Upload fast frontier evidence
@@ -167,23 +188,24 @@ jobs:
             build/core-strict500-probe/minic-stderr
           if-no-files-found: warn
 
-      - name: Persist M72-M74 source changes
+      - name: Persist M72-M75 source changes
         if: success()
         shell: bash
         run: |
           set -Eeuo pipefail
-          git checkout -- src/core/core_lower.c src/core/core_ir.c src/target/riscv64/core_codegen.c
+          git checkout -- src/core/core_lower.c src/core/core_ir.c src/core/core_ir.h src/target/riscv64/core_codegen.c
           python3 tools/dev/patch-core-frontier-m72-nested-break-target.py
           python3 tools/dev/patch-core-frontier-m73-comma-expression.py
           python3 tools/dev/patch-core-frontier-m74-global-record-address.py
-          files=(src/core/core_lower.c src/core/core_ir.c src/target/riscv64/core_codegen.c)
+          python3 tools/dev/patch-core-frontier-m75-pointer-compound-assignment.py
+          files=(src/core/core_lower.c src/core/core_ir.c src/core/core_ir.h src/target/riscv64/core_codegen.c)
           if git diff --quiet -- "${files[@]}"; then
             exit 0
           fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -- "${files[@]}"
-          git commit -m 'core: address global record objects'
+          git commit -m 'core: lower pointer compound assignments'
           git push origin HEAD:refactor/declaration-sema-v1
 
   full500-background:
@@ -241,6 +263,7 @@ jobs:
           python3 tools/dev/patch-core-frontier-m72-nested-break-target.py
           python3 tools/dev/patch-core-frontier-m73-comma-expression.py
           python3 tools/dev/patch-core-frontier-m74-global-record-address.py
+          python3 tools/dev/patch-core-frontier-m75-pointer-compound-assignment.py
 
       - name: Build exact compiler
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-strict500-compiler
