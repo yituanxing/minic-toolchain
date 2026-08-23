@@ -898,6 +898,125 @@ static MinicCoreLowerStatus lower_integer_binary_operands(MinicCoreLowerContext 
     return MINIC_CORE_LOWER_OK;
 }
 
+/* M80_ADDRESS_BACKED_RECORD_COPY: aggregate values stay address-backed in
+   Core. Resolve the subset whose storage already exists: record lvalues,
+   lvalue-read wrappers, and GNU statement expressions whose final record value
+   is itself address-backed. Calls/conditionals remain fail-closed. */
+static MinicCoreLowerStatus lower_record_value_address(MinicCoreLowerContext *context,
+                                                       MinicExpressionId expression_id,
+                                                       MinicCoreValueId *address_id) {
+    const MinicExpression *expression;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        address_id == NULL) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    expression = minic_c0_program_expression(context->body->program, expression_id);
+    if (expression == NULL || !minic_type_is_record(expression->type) ||
+        !minic_c0_record_value_is_address_backed(context->body->program, expression_id)) {
+        return MINIC_CORE_LOWER_UNSUPPORTED;
+    }
+    if (expression->value_category == MINIC_VALUE_LVALUE) {
+        return lower_address(context, expression_id, address_id);
+    }
+    if (expression->value_category != MINIC_VALUE_RVALUE) {
+        return MINIC_CORE_LOWER_UNSUPPORTED;
+    }
+    if (expression->kind == MINIC_EXPRESSION_LVALUE_READ) {
+        const MinicExpression *operand = minic_c0_program_expression(
+            context->body->program, expression->value.unary.operand);
+        if (operand == NULL || !minic_type_is_record(operand->type) ||
+            operand->type.record_id != expression->type.record_id) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        return lower_record_value_address(context, expression->value.unary.operand, address_id);
+    }
+    if (expression->kind == MINIC_EXPRESSION_STATEMENT) {
+        const MinicBlock *block;
+        const MinicExpression *result;
+        MinicCoreLowerStatus status;
+        bool terminated;
+
+        if (expression->value.statement_expression.result == MINIC_EXPRESSION_INVALID) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        block = minic_c0_program_block(
+            context->body->program, expression->value.statement_expression.block);
+        result = minic_c0_program_expression(
+            context->body->program, expression->value.statement_expression.result);
+        if (block == NULL || result == NULL || !minic_type_is_record(result->type) ||
+            result->type.record_id != expression->type.record_id) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        status = lower_block(context, block, &terminated);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        if (terminated) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        return lower_record_value_address(
+            context, expression->value.statement_expression.result, address_id);
+    }
+    return MINIC_CORE_LOWER_UNSUPPORTED;
+}
+
+static MinicCoreLowerStatus lower_record_copy_statement(MinicCoreLowerContext *context,
+                                                        const MinicStatement *statement) {
+    const MinicExpression *source;
+    const MinicExpression *target;
+    const MinicRecord *record;
+    MinicCoreInstruction instruction;
+    MinicCoreLowerStatus status;
+    MinicCoreValueId destination_address;
+    MinicCoreValueId source_address;
+    MinicType source_type;
+    MinicType target_type;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        context->function == NULL || statement == NULL ||
+        (statement->kind != MINIC_STATEMENT_RECORD_COPY &&
+         statement->kind != MINIC_STATEMENT_RECORD_INITIALIZE)) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    target = minic_c0_program_expression(context->body->program, statement->target_expression);
+    source = minic_c0_program_expression(context->body->program, statement->expression);
+    if (target == NULL || source == NULL || target->value_category != MINIC_VALUE_LVALUE ||
+        !minic_type_is_record(target->type) || !minic_type_is_record(source->type) ||
+        target->type.record_id != source->type.record_id ||
+        !minic_type_unqualified(target->type, &target_type) ||
+        !minic_type_unqualified(source->type, &source_type) ||
+        !minic_type_equal(target_type, source_type) || !minic_type_is_record(target_type) ||
+        (statement->kind == MINIC_STATEMENT_RECORD_COPY && minic_type_is_const(target->type)) ||
+        !minic_c0_record_value_is_copy_source(context->body->program, statement->expression) ||
+        !minic_c0_record_value_is_address_backed(context->body->program, statement->expression)) {
+        return MINIC_CORE_LOWER_UNSUPPORTED;
+    }
+    record = minic_c0_program_record(context->body->program, target_type.record_id);
+    if (record == NULL || !record->is_complete) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    status = lower_record_value_address(context, statement->expression, &source_address);
+    if (status != MINIC_CORE_LOWER_OK) {
+        return status;
+    }
+    status = lower_address(context, statement->target_expression, &destination_address);
+    if (status != MINIC_CORE_LOWER_OK) {
+        return status;
+    }
+    (void)memset(&instruction, 0, sizeof(instruction));
+    instruction.kind = MINIC_CORE_INSTRUCTION_RECORD_COPY;
+    instruction.span = statement->span;
+    instruction.type = target_type;
+    instruction.result = MINIC_CORE_VALUE_INVALID;
+    instruction.value.record_copy.destination_address = destination_address;
+    instruction.value.record_copy.source_address = source_address;
+    return minic_core_function_append_effect_instruction(
+               context->function, context->block_id, &instruction)
+               ? MINIC_CORE_LOWER_OK
+               : MINIC_CORE_LOWER_ERROR;
+}
+
 static MinicCoreLowerStatus lower_integer_assignment_value(MinicCoreLowerContext *context,
                                                            MinicType target_type,
                                                            MinicExpressionId expression_id,
@@ -5481,6 +5600,10 @@ lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool
             switch (statement->kind) {
             case MINIC_STATEMENT_ASSIGN:
                 status = lower_assignment(context, statement);
+                break;
+            case MINIC_STATEMENT_RECORD_COPY:
+            case MINIC_STATEMENT_RECORD_INITIALIZE:
+                status = lower_record_copy_statement(context, statement);
                 break;
             case MINIC_STATEMENT_EXPRESSION:
                 status = lower_expression_statement(context, statement);

@@ -745,6 +745,33 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
         return minic_type_equal(value_type, function->values[stored_value].type) &&
                instruction->value.store.is_volatile == minic_type_is_volatile(pointee);
     }
+    /* M80_ADDRESS_BACKED_RECORD_COPY: both SSA operands are addresses to the
+       same unqualified record type; legality of writing a const-qualified
+       destination is already established by the frontend initializer/copy node. */
+    case MINIC_CORE_INSTRUCTION_RECORD_COPY: {
+        MinicType destination_pointee;
+        MinicType destination_type;
+        MinicType source_pointee;
+        MinicType source_type;
+        MinicType record_type;
+
+        return instruction->result == MINIC_CORE_VALUE_INVALID &&
+               minic_type_is_record(instruction->type) &&
+               minic_type_unqualified(instruction->type, &record_type) &&
+               minic_type_equal(record_type, instruction->type) &&
+               available_pointer_pointee(function,
+                                         available_values,
+                                         instruction->value.record_copy.destination_address,
+                                         &destination_pointee) &&
+               available_pointer_pointee(function,
+                                         available_values,
+                                         instruction->value.record_copy.source_address,
+                                         &source_pointee) &&
+               minic_type_unqualified(destination_pointee, &destination_type) &&
+               minic_type_unqualified(source_pointee, &source_type) &&
+               minic_type_equal(destination_type, instruction->type) &&
+               minic_type_equal(source_type, instruction->type);
+    }
     case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM: {
         const MinicCoreInlineAsm *inline_asm;
 
@@ -1324,6 +1351,11 @@ static bool dump_instruction(FILE *output,
                        instruction->value.store.is_volatile ? ".volatile" : "",
                        instruction->value.store.stored_value,
                        instruction->value.store.address) >= 0;
+    case MINIC_CORE_INSTRUCTION_RECORD_COPY:
+        return fprintf(output,
+                       "  record.copy %%%" PRIu32 ", %%%" PRIu32 "\n",
+                       instruction->value.record_copy.source_address,
+                       instruction->value.record_copy.destination_address) >= 0;
     case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM: {
         const MinicCoreInlineAsm *inline_asm;
 

@@ -72,6 +72,8 @@ typedef enum MinicCoreInstructionKind {
     MINIC_CORE_INSTRUCTION_POINTER_OFFSET,
     MINIC_CORE_INSTRUCTION_LOAD,
     MINIC_CORE_INSTRUCTION_STORE,
+    /* M80_ADDRESS_BACKED_RECORD_COPY: byte-preserving aggregate memory copy. */
+    MINIC_CORE_INSTRUCTION_RECORD_COPY,
     MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM,
     MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INLINE_ASM,
     MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INPUT_INLINE_ASM,
@@ -194,6 +196,10 @@ typedef struct MinicCoreInstruction {
             MinicCoreValueId stored_value;
             bool is_volatile;
         } store;
+        struct {
+            MinicCoreValueId destination_address;
+            MinicCoreValueId source_address;
+        } record_copy;
         MinicCoreInlineAsmId inline_asm_id;
         struct {
             MinicCoreInlineAsmId inline_asm_id;

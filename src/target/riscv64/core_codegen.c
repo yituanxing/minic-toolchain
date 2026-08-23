@@ -234,6 +234,37 @@ static bool core_field_address_supported(const MinicC0Program *program,
     return true;
 }
 
+static bool core_record_copy_supported(const MinicC0Program *program,
+                                       const MinicCoreFunction *function,
+                                       const MinicCoreInstruction *instruction) {
+    MinicType destination_pointee;
+    MinicType destination_type;
+    MinicType source_pointee;
+    MinicType source_type;
+    size_t alignment;
+    size_t size;
+
+    if (program == NULL || function == NULL || instruction == NULL ||
+        instruction->kind != MINIC_CORE_INSTRUCTION_RECORD_COPY ||
+        instruction->result != MINIC_CORE_VALUE_INVALID || !minic_type_is_record(instruction->type) ||
+        instruction->value.record_copy.destination_address >= function->value_count ||
+        instruction->value.record_copy.source_address >= function->value_count ||
+        !minic_type_pointee(
+            function->values[instruction->value.record_copy.destination_address].type,
+            &destination_pointee) ||
+        !minic_type_pointee(function->values[instruction->value.record_copy.source_address].type,
+                            &source_pointee) ||
+        !minic_type_unqualified(destination_pointee, &destination_type) ||
+        !minic_type_unqualified(source_pointee, &source_type) ||
+        !minic_type_equal(destination_type, instruction->type) ||
+        !minic_type_equal(source_type, instruction->type) ||
+        !minic_data_layout_type(
+            minic_default_data_layout(), program, instruction->type, &size, &alignment)) {
+        return false;
+    }
+    return size != 0U && alignment != 0U;
+}
+
 static bool core_call_frame_address_supported(
     const MinicCoreInstruction *instruction) {
     MinicType pointee;
@@ -655,6 +686,8 @@ static bool core_instruction_supported(const MinicC0Program *program,
     case MINIC_CORE_INSTRUCTION_LOAD:
     case MINIC_CORE_INSTRUCTION_STORE:
         return true;
+    case MINIC_CORE_INSTRUCTION_RECORD_COPY:
+        return core_record_copy_supported(program, function, instruction);
     case MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ: {
         const MinicFixedRegisterBinding *binding;
 
@@ -1875,6 +1908,51 @@ static bool emit_instruction(FILE *file,
         return load_core_value(file, frame, instruction->value.store.address, "t0") &&
                load_core_value(file, frame, stored_value, "t1") &&
                minic_riscv64_emit_scalar_store_for_program(file, program, stored_type, "t1", "t0");
+    }
+    case MINIC_CORE_INSTRUCTION_RECORD_COPY: {
+        size_t alignment;
+        size_t copied;
+        size_t copy_size;
+
+        if (!core_record_copy_supported(program, function, instruction) ||
+            !minic_data_layout_type(minic_default_data_layout(),
+                                    program,
+                                    instruction->type,
+                                    &copy_size,
+                                    &alignment) ||
+            !load_core_value(
+                file, frame, instruction->value.record_copy.destination_address, "t0") ||
+            !load_core_value(file, frame, instruction->value.record_copy.source_address, "t1")) {
+            return false;
+        }
+        (void)alignment;
+        copied = 0U;
+        while (copied < copy_size) {
+            size_t chunk = copy_size - copied;
+            size_t offset;
+            if (chunk > 2048U) {
+                chunk = 2048U;
+            }
+            for (offset = 0U; offset < chunk; ++offset) {
+                if (fprintf(file,
+                            "  lbu t2, %zu(t1)\n"
+                            "  sb t2, %zu(t0)\n",
+                            offset,
+                            offset) < 0) {
+                    return false;
+                }
+            }
+            copied += chunk;
+            if (copied < copy_size &&
+                fprintf(file,
+                        "  li t3, %zu\n"
+                        "  add t0, t0, t3\n"
+                        "  add t1, t1, t3\n",
+                        chunk) < 0) {
+                return false;
+            }
+        }
+        return true;
     }
     case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM:
         return emit_opaque_inline_asm(file, function, symbol_name, instruction);
