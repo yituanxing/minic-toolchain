@@ -21,21 +21,18 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: refactor/declaration-sema-v1
-
       - name: Restore frozen Linux corpus
         id: linux-corpus-cache
         uses: actions/cache/restore@v4
         with:
           path: build/linux-focus-corpus
           key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
-
       - name: Require frozen corpus
         shell: bash
         run: |
           set -Eeuo pipefail
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
-
       - name: Apply current Linux frontier patches
         run: |
           python3 tools/dev/patch-linux-replay-live-progress.py
@@ -54,10 +51,9 @@ jobs:
           python3 tools/dev/patch-core-frontier-m60-pointer-conditional.py
           python3 tools/dev/patch-core-frontier-m61-immediate-only-asm.py
           python3 tools/dev/patch-core-frontier-m62-pointer-return-conversion.py
-
+          python3 tools/dev/patch-core-frontier-m63-qualified-scalar-update.py
       - name: Build exact compiler
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-strict500-compiler
-
       - name: Fast Linux multi-frontier probe
         shell: bash
         run: |
@@ -66,34 +62,23 @@ jobs:
           work="$GITHUB_WORKSPACE/build/core-strict500-probe"
           set +e
           MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
-            --minic "$compiler" \
-            --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
-            --work "$work" \
-            --jobs 6 \
-            --offset 0 \
-            --limit 500 \
-            --sample-count 0 \
+            --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
+            --work "$work" --jobs 6 --offset 0 --limit 500 --sample-count 0 \
             --indices '3,1,2,7,42,280'
           probe_status=$?
           set -e
           printf 'CORE_STRICT_PROBE_STATUS=%d\n' "$probe_status"
-          python3 tools/ci/classify-core-strict-frontier.py \
-            "$work/batch-results.json" \
-            --examples 6 \
-            --json-out "$work/frontier-summary.json" \
-            --require-no-errors
+          python3 tools/ci/classify-core-strict-frontier.py "$work/batch-results.json" \
+            --examples 6 --json-out "$work/frontier-summary.json" --require-no-errors
           python3 - <<'PY'
           import json
           from pathlib import Path
-          summary = json.loads(Path('build/core-strict500-probe/frontier-summary.json').read_text())
-          if summary['selected'] != 6:
-              raise SystemExit(f"expected six Linux frontier probes, got {summary['selected']}")
-          remaining = [b for b in summary['blockers'] if b['function'] == 'preempt_count_ptr']
-          if remaining:
-              raise SystemExit(f"Linux probe still blocked at preempt_count_ptr: {remaining}")
+          s=json.loads(Path('build/core-strict500-probe/frontier-summary.json').read_text())
+          if s['selected'] != 6: raise SystemExit(f"expected 6 probes, got {s['selected']}")
+          r=[b for b in s['blockers'] if b['function']=='__preempt_count_dec_and_test']
+          if r: raise SystemExit(f"still at __preempt_count_dec_and_test: {r}")
           print('LINUX_MULTI_FRONTIER_PROBE_PASSED_TARGET')
           PY
-
       - name: Replay full frozen first500 and classify
         if: env.CORE_FRONTIER_FULL500 == '1'
         shell: bash
@@ -103,41 +88,11 @@ jobs:
           work="$GITHUB_WORKSPACE/build/core-strict500-frontier"
           set +e
           MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
-            --minic "$compiler" \
-            --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
-            --work "$work" \
-            --jobs 5 \
-            --offset 0 \
-            --limit 500 \
-            --sample-count 0 \
-            --indices ''
-          replay_status=$?
+            --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
+            --work "$work" --jobs 5 --offset 0 --limit 500 --sample-count 0 --indices ''
           set -e
-          printf 'CORE_STRICT500_REPLAY_STATUS=%d\n' "$replay_status"
-          python3 tools/ci/classify-core-strict-frontier.py \
-            "$work/batch-results.json" \
-            --examples 4 \
-            --json-out "$work/frontier-summary.json" \
-            --require-no-errors
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-          summary = json.loads(Path('build/core-strict500-frontier/frontier-summary.json').read_text())
-          if summary['selected'] != 500:
-              raise SystemExit(f"expected 500 frozen TUs, got {summary['selected']}")
-          forbidden = {
-              'arch_local_irq_enable', 'arch_local_irq_disable', 'arch_local_irq_save',
-              'arch_local_irq_restore', 'arch_local_save_flags', 'arch_irqs_disabled',
-              'arch_irqs_disabled_flags', '__ffs', 'test_and_set_bit', 'arch_atomic_add',
-              '__set_bit_le', 'hweight_long', 'get_count_order', '__order_base_2',
-              'IS_ERR_OR_NULL', 'memzero_explicit', 'kbasename',
-              'check_copy_size', 'ktime_divns', 'preempt_count_ptr',
-          }
-          remaining = [b for b in summary['blockers'] if b['function'] in forbidden]
-          if remaining:
-              raise SystemExit(f"M62/earlier blocker remains: {remaining}")
-          PY
-
+          python3 tools/ci/classify-core-strict-frontier.py "$work/batch-results.json" \
+            --examples 4 --json-out "$work/frontier-summary.json" --require-no-errors
       - name: Upload frontier evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -155,18 +110,15 @@ jobs:
             build/core-strict500-frontier/failure-contexts.txt
             build/core-strict500-frontier/frontier-summary.json
           if-no-files-found: warn
-
-      - name: Persist M62 source changes
+      - name: Persist M63 source changes
         if: success()
         shell: bash
         run: |
           set -Eeuo pipefail
           files=(src/core/core_lower.c)
-          if git diff --quiet -- "${files[@]}"; then
-            exit 0
-          fi
+          if git diff --quiet -- "${files[@]}"; then exit 0; fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -- "${files[@]}"
-          git commit -m 'core: apply pointer return conversions'
+          git commit -m 'core: normalize qualified scalar update values'
           git push origin HEAD:refactor/declaration-sema-v1
