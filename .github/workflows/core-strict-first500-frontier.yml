@@ -33,12 +33,13 @@ jobs:
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
 
-      - name: Apply M51 compound shift assignment
+      - name: Apply M52 atomic memory inline asm family
         run: |
           python3 tools/dev/patch-core-frontier-m50-scalar-input-asm.py
           python3 tools/dev/patch-core-frontier-m50b-void-statement-expression.py
           python3 tools/dev/patch-core-frontier-m50c-output-input-asm.py
           python3 tools/dev/patch-core-frontier-m51-compound-shift.py
+          python3 tools/dev/patch-core-frontier-m52-memory-rw-input-asm.py
 
       - name: Build exact compiler
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-strict500-compiler
@@ -73,7 +74,7 @@ jobs:
           summary = json.loads(Path('build/core-strict500-frontier/frontier-summary.json').read_text())
           if summary['selected'] != 500:
               raise SystemExit(f"expected 500 frozen TUs, got {summary['selected']}")
-          irq_blockers = {
+          forbidden = {
               'arch_local_irq_enable',
               'arch_local_irq_disable',
               'arch_local_irq_save',
@@ -81,13 +82,13 @@ jobs:
               'arch_local_save_flags',
               'arch_irqs_disabled',
               'arch_irqs_disabled_flags',
+              '__ffs',
+              'test_and_set_bit',
+              'arch_atomic_add',
           }
-          remaining_irq = [b for b in summary['blockers'] if b['function'] in irq_blockers]
-          if remaining_irq:
-              raise SystemExit(f"M50 IRQ CSR family regressed: {remaining_irq}")
-          remaining_ffs = [b for b in summary['blockers'] if b['function'] == '__ffs']
-          if remaining_ffs:
-              raise SystemExit(f"M51 failed: __ffs remains a Core strict blocker: {remaining_ffs}")
+          remaining = [b for b in summary['blockers'] if b['function'] in forbidden]
+          if remaining:
+              raise SystemExit(f"M52 atomic/earlier blocker remains: {remaining}")
           PY
 
       - name: Upload frontier evidence
@@ -103,13 +104,16 @@ jobs:
             build/core-strict500-frontier/frontier-summary.json
           if-no-files-found: warn
 
-      - name: Persist M51 source changes
+      - name: Persist M52 source changes
         if: success()
         shell: bash
         run: |
           set -Eeuo pipefail
           files=(
+            src/core/core_ir.h
+            src/core/core_ir.c
             src/core/core_lower.c
+            src/target/riscv64/core_codegen.c
           )
           if git diff --quiet -- "${files[@]}"; then
             exit 0
@@ -117,5 +121,5 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -- "${files[@]}"
-          git commit -m 'core: lower compound shift assignments'
+          git commit -m 'core: lower atomic memory inline asm operands'
           git push origin HEAD:refactor/declaration-sema-v1
