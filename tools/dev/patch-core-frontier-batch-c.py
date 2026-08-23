@@ -113,6 +113,53 @@ new = '''        context->function == NULL || statement == NULL || terminated ==
 '''
 replace_once(path, old, new)
 
+# One-shot loop diagnostics: if the focused Linux guard shape still fails, say
+# whether the nested body or the synthetic for-update is the actual blocker.
+old = '''    status = lower_block(context, iteration_source, &body_terminated);
+    context->break_target = saved_break_target;
+    if (status != MINIC_CORE_LOWER_OK) {
+        return status;
+    }
+    if (!body_terminated && for_update != NULL) {
+        status = lower_expression_statement(context, for_update);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+    }
+'''
+new = '''    status = lower_block(context, iteration_source, &body_terminated);
+    context->break_target = saved_break_target;
+    if (status != MINIC_CORE_LOWER_OK) {
+        (void)fprintf(stderr,
+                      "CORE_FAST_TRACE stage=while reason=body function=%s status=%d "
+                      "normalized_for=%d has_update=%d span=%zu:%zu\\n",
+                      context->source_function->name,
+                      (int)status,
+                      normalized_for ? 1 : 0,
+                      for_update != NULL ? 1 : 0,
+                      statement->span.begin.line,
+                      statement->span.begin.column);
+        return status;
+    }
+    if (!body_terminated && for_update != NULL) {
+        status = lower_expression_statement(context, for_update);
+        if (status != MINIC_CORE_LOWER_OK) {
+            const MinicExpression *update_expression = minic_c0_program_expression(
+                context->body->program, for_update->expression);
+            (void)fprintf(stderr,
+                          "CORE_FAST_TRACE stage=while reason=update function=%s status=%d "
+                          "expr_kind=%d span=%zu:%zu\\n",
+                          context->source_function->name,
+                          (int)status,
+                          update_expression != NULL ? (int)update_expression->kind : -1,
+                          for_update->span.begin.line,
+                          for_update->span.begin.column);
+            return status;
+        }
+    }
+'''
+replace_once(path, old, new)
+
 # Batch C/2: record-return forwarding is already owned by M86's direct-record
 # call result object. Reuse that object as the return terminator payload instead
 # of requiring callers such as fdget() to materialize a redundant local copy.
@@ -140,4 +187,4 @@ new = '''            } else if (expression->kind == MINIC_EXPRESSION_COMPOUND_LI
 '''
 replace_once(path, old, new)
 
-print("CORE_BATCH_C_PATCHED zero-distance-cleanup normalized-cfg direct-record-return")
+print("CORE_BATCH_C_PATCHED zero-distance-cleanup normalized-cfg direct-record-return loop-trace")
