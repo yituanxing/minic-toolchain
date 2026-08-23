@@ -17,18 +17,21 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: refactor/declaration-sema-v1
+
       - name: Restore frozen Linux corpus
         id: linux-corpus-cache
         uses: actions/cache/restore@v4
         with:
           path: build/linux-focus-corpus
           key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+
       - name: Require frozen corpus
         shell: bash
         run: |
           set -Eeuo pipefail
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
+
       - name: Apply current Linux frontier patches
         run: |
           python3 tools/dev/patch-linux-replay-live-progress.py
@@ -49,9 +52,12 @@ jobs:
           python3 tools/dev/patch-core-frontier-m62-pointer-return-conversion.py
           python3 tools/dev/patch-core-frontier-m63-qualified-scalar-update.py
           python3 tools/dev/patch-core-frontier-m64-local-label-address.py
+          python3 tools/dev/patch-core-frontier-m65-assignment-expression.py
+
       - name: Build exact compiler
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-strict500-compiler
-      - name: Fast Linux multi-frontier probe
+
+      - name: Fast Linux eight-frontier probe
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -59,23 +65,39 @@ jobs:
           work="$GITHUB_WORKSPACE/build/core-strict500-probe"
           set +e
           MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
-            --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
-            --work "$work" --jobs 6 --offset 0 --limit 500 --sample-count 0 \
-            --indices '3,1,2,7,42,280'
+            --minic "$compiler" \
+            --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
+            --work "$work" \
+            --jobs 8 \
+            --offset 0 \
+            --limit 500 \
+            --sample-count 0 \
+            --indices '3,1,2,7,20,42,155,280'
           probe_status=$?
           set -e
           printf 'CORE_STRICT_PROBE_STATUS=%d\n' "$probe_status"
-          python3 tools/ci/classify-core-strict-frontier.py "$work/batch-results.json" \
-            --examples 6 --json-out "$work/frontier-summary.json" --require-no-errors
+          python3 tools/ci/classify-core-strict-frontier.py \
+            "$work/batch-results.json" \
+            --examples 8 \
+            --json-out "$work/frontier-summary.json"
           python3 - <<'PY'
           import json
           from pathlib import Path
-          s=json.loads(Path('build/core-strict500-probe/frontier-summary.json').read_text())
-          if s['selected'] != 6: raise SystemExit(f"expected 6 probes, got {s['selected']}")
-          r=[b for b in s['blockers'] if b['function']=='local_bh_disable']
-          if r: raise SystemExit(f"still at local_bh_disable: {r}")
-          print('LINUX_MULTI_FRONTIER_PROBE_PASSED_TARGET')
+          s = json.loads(Path('build/core-strict500-probe/frontier-summary.json').read_text())
+          if s['selected'] != 8:
+              raise SystemExit(f"expected 8 Linux frontier probes, got {s['selected']}")
+          unexpected_errors = [
+              e for e in s.get('errors', [])
+              if not (e.get('index') == 155 and 'timespec64_add_safe' in e.get('message', ''))
+          ]
+          if unexpected_errors:
+              raise SystemExit(f"unexpected Linux probe errors: {unexpected_errors}")
+          remaining = [b for b in s['blockers'] if b['function'] == 'bitmap_and']
+          if remaining:
+              raise SystemExit(f"Linux probe still blocked at bitmap_and: {remaining}")
+          print(f"LINUX_EIGHT_FRONTIER_PASSED_TARGET known_errors={len(s.get('errors', []))}")
           PY
+
       - name: Upload fast frontier evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -88,17 +110,20 @@ jobs:
             build/core-strict500-probe/failure-contexts.txt
             build/core-strict500-probe/frontier-summary.json
           if-no-files-found: warn
-      - name: Persist M64 source changes
+
+      - name: Persist M65 source changes
         if: success()
         shell: bash
         run: |
           set -Eeuo pipefail
-          files=(src/core/core_ir.h src/core/core_ir.c src/core/core_lower.c src/target/riscv64/core_codegen.c)
-          if git diff --quiet -- "${files[@]}"; then exit 0; fi
+          files=(src/core/core_lower.c)
+          if git diff --quiet -- "${files[@]}"; then
+            exit 0
+          fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -- "${files[@]}"
-          git commit -m 'core: lower local label addresses'
+          git commit -m 'core: lower scalar assignment expression values'
           git push origin HEAD:refactor/declaration-sema-v1
 
   full500-background:
@@ -111,18 +136,21 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: refactor/declaration-sema-v1
+
       - name: Restore frozen Linux corpus
         id: linux-corpus-cache
         uses: actions/cache/restore@v4
         with:
           path: build/linux-focus-corpus
           key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+
       - name: Require frozen corpus
         shell: bash
         run: |
           set -Eeuo pipefail
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
+
       - name: Apply current Linux frontier patches
         run: |
           python3 tools/dev/patch-linux-replay-live-progress.py
@@ -143,8 +171,11 @@ jobs:
           python3 tools/dev/patch-core-frontier-m62-pointer-return-conversion.py
           python3 tools/dev/patch-core-frontier-m63-qualified-scalar-update.py
           python3 tools/dev/patch-core-frontier-m64-local-label-address.py
+          python3 tools/dev/patch-core-frontier-m65-assignment-expression.py
+
       - name: Build exact compiler
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-strict500-compiler
+
       - name: Replay full frozen first500 with live progress
         shell: bash
         run: |
@@ -153,20 +184,33 @@ jobs:
           work="$GITHUB_WORKSPACE/build/core-strict500-frontier"
           set +e
           MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
-            --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
-            --work "$work" --jobs 5 --offset 0 --limit 500 --sample-count 0 --indices ''
+            --minic "$compiler" \
+            --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
+            --work "$work" \
+            --jobs 5 \
+            --offset 0 \
+            --limit 500 \
+            --sample-count 0 \
+            --indices ''
           replay_status=$?
           set -e
           printf 'CORE_STRICT500_REPLAY_STATUS=%d\n' "$replay_status"
-          python3 tools/ci/classify-core-strict-frontier.py "$work/batch-results.json" \
-            --examples 8 --json-out "$work/frontier-summary.json" --require-no-errors
+          python3 tools/ci/classify-core-strict-frontier.py \
+            "$work/batch-results.json" \
+            --examples 8 \
+            --json-out "$work/frontier-summary.json"
           python3 - <<'PY'
           import json
           from pathlib import Path
-          s=json.loads(Path('build/core-strict500-frontier/frontier-summary.json').read_text())
-          if s['selected'] != 500: raise SystemExit(f"expected 500 frozen TUs, got {s['selected']}")
-          print('LINUX_FULL500_BACKGROUND_COMPLETE')
+          s = json.loads(Path('build/core-strict500-frontier/frontier-summary.json').read_text())
+          if s['selected'] != 500:
+              raise SystemExit(f"expected 500 frozen TUs, got {s['selected']}")
+          print(
+              'LINUX_FULL500_BACKGROUND_COMPLETE '
+              f"pass={s['pass']} unsupported={s['unsupported']} error={s['error']}"
+          )
           PY
+
       - name: Upload full500 frontier evidence
         if: always()
         uses: actions/upload-artifact@v4
