@@ -1395,8 +1395,12 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         return reload_scalar_value(
             context, expression->span, expression->type, result_object, value_id);
     }
+    /* M58_LOGICAL_OR_VALUE: lower_condition_branch already owns the
+       short-circuit semantics for both && and ||. Their value materialization
+       is identical: branch to true/false, store 1/0, then reload. */
     if (expression->kind == MINIC_EXPRESSION_BINARY &&
-        expression->value.binary.operator_kind == MINIC_BINARY_LOGICAL_AND) {
+        (expression->value.binary.operator_kind == MINIC_BINARY_LOGICAL_AND ||
+         expression->value.binary.operator_kind == MINIC_BINARY_LOGICAL_OR)) {
         MinicCoreBlockId false_block;
         MinicCoreBlockId merge_block;
         MinicCoreBlockId true_block;
