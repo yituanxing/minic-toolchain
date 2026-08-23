@@ -580,6 +580,13 @@ static bool core_structured_inline_asm_supported(const MinicCoreFunction *functi
         if (ch == '%') {
             continue;
         }
+        /* M69_STRUCTURED_ASM_REGISTER_OR_ZERO: %z is owned by RV64. */
+        if (ch == 'z') {
+            if (template_index + 1U >= inline_asm->template_length) {
+                return false;
+            }
+            ch = (unsigned char)inline_asm->template_text[++template_index];
+        }
         if (ch < '0' || ch > '9' || !bound[(size_t)(ch - '0')]) {
             return false;
         }
@@ -1364,6 +1371,12 @@ static bool emit_structured_inline_asm(FILE *file,
                 return false;
             }
             continue;
+        }
+        if (ch == 'z') {
+            if (++index >= inline_asm->template_length) {
+                return false;
+            }
+            ch = (unsigned char)inline_asm->template_text[index];
         }
         if (ch < '0' || ch > '9') {
             return false;
