@@ -1,41 +1,145 @@
-name: Core M35 Fast Frontier Probe
+name: Core M35 Prefix Integer Qualification
 
 on:
   pull_request:
 
 jobs:
-  probe:
+  qualify:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
           ref: refactor/declaration-sema-v1
+          fetch-depth: 0
+      - name: Install validation tools
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mapfile -t packages < <(grep -Ev '^[[:space:]]*(#|$)' tools/ci/ubuntu-24.04-packages.txt)
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends "${packages[@]}"
+          sh tools/ci/verify-validation-tools.sh
       - name: Restore frozen Linux corpus
         id: corpus
         uses: actions/cache/restore@v4
         with:
           path: build/linux-focus-corpus
           key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
-      - name: Build M34 candidate and probe init/version
+      - name: Apply M31b through M35 and build release
         shell: bash
         run: |
           set -Eeuo pipefail
           test "${{ steps.corpus.outputs.cache-hit }}" = true
+          test -s build/linux-focus-corpus/selected-tus.txt
           python3 tools/dev/run-core-frontier-batch-m31b.py
           python3 tools/dev/patch-core-frontier-batch-m32.py
           python3 tools/dev/patch-core-frontier-batch-m33.py
           python3 tools/dev/patch-core-frontier-batch-m34.py
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m35-probe
-          c="$GITHUB_WORKSPACE/build/m35-probe/bin/minic"
-          mkdir -p build/m35-frontier
+          python3 tools/dev/patch-core-frontier-batch-m35.py
+          clang-format-18 -i src/core/core_ir.h src/core/core_ir.c src/core/core_lower.c src/target/riscv64/core_codegen.c
+          git diff --check
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m35-candidate
+      - name: Focused prefix update and get_count_order shapes
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          c="$GITHUB_WORKSPACE/build/m35-candidate/bin/minic"; w=build/m35-shapes; mkdir -p "$w"
+          cat > "$w/prefix.c" <<'EOF'
+          unsigned int pre_inc(unsigned int x) { return ++x; }
+          unsigned int pre_dec(unsigned int x) { return --x; }
+          long pre_long(long x) { return --x; }
+          EOF
+          cat > "$w/get_count_order.c" <<'EOF'
+          extern int fls(unsigned int);
+          int get_count_order_shape(unsigned int count) {
+              if (count == 0)
+                  return -1;
+              return fls(--count);
+          }
+          EOF
+          for src in "$w/prefix.c" "$w/get_count_order.c"; do
+            name=$(basename "$src" .c)
+            MINIC_CORE_IR=strict "$c" -S "$src" -o "$w/$name.s"
+            echo "M35_SHAPE_PASS name=$name"
+          done
+      - name: RISC-V QEMU differential
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          c="$GITHUB_WORKSPACE/build/m35-candidate/bin/minic"; w=build/m35-shapes
+          cat > "$w/runtime_source.c" <<'EOF'
+          static int fls_stub(unsigned int x) { return (int)x; }
+          int order(unsigned int count) {
+              if (count == 0)
+                  return -1;
+              return fls_stub(--count);
+          }
+          unsigned int inc(unsigned int x) { return ++x; }
+          long decl(long x) { return --x; }
+          EOF
+          cat > "$w/runtime.c" <<'EOF'
+          #include <stdio.h>
+          int order(unsigned int);
+          unsigned int inc(unsigned int);
+          long decl(long);
+          int main(void) {
+              printf("%d %d %d %u %ld\n", order(0), order(1), order(8), inc(9), decl(-3));
+              return 0;
+          }
+          EOF
+          MINIC_CORE_IR=strict "$c" -S "$w/runtime_source.c" -o "$w/minic.s"
+          riscv64-linux-gnu-gcc -O0 -static "$w/runtime.c" "$w/minic.s" -o "$w/minic.elf"
+          riscv64-linux-gnu-gcc -O0 -static "$w/runtime.c" "$w/runtime_source.c" -o "$w/gcc.elf"
+          qemu-riscv64 "$w/minic.elf" > "$w/minic.out"
+          qemu-riscv64 "$w/gcc.elf" > "$w/gcc.out"
+          diff -u "$w/gcc.out" "$w/minic.out"
+          grep -Fx -- '-1 0 7 10 -4' "$w/minic.out"
+          echo M35_QEMU_DIFF_PASS
+      - name: Frozen representative leaves get_count_order
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          c="$GITHUB_WORKSPACE/build/m35-candidate/bin/minic"; w=build/m35-rep; mkdir -p "$w"
           set +e
-          MINIC_CORE_IR=strict "$c" -S build/linux-focus-corpus/kbuild/init/version.i -o build/m35-frontier/version.s 2>build/m35-frontier/version.err
+          MINIC_CORE_IR=strict "$c" -S build/linux-focus-corpus/kbuild/init/version.i -o "$w/version.s" 2>"$w/version.err"
           rc=$?
           set -e
-          cat build/m35-frontier/version.err
-          printf 'M35_FAST_FRONTIER rc=%d\n' "$rc"
-          if [ "$rc" -ne 0 ]; then
-            grep -m1 -F 'Core IR shadow does not yet support function' build/m35-frontier/version.err
-          fi
+          cat "$w/version.err"
+          ! grep -Fq "Core IR shadow does not yet support function 'get_count_order'" "$w/version.err"
+          if [ "$rc" -ne 0 ]; then grep -Fq 'Core IR shadow does not yet support function' "$w/version.err"; fi
+          printf 'M35_REP_MOVED rc=%d\n' "$rc"
+      - name: Frozen strict first500 replay and classify
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          c="$GITHUB_WORKSPACE/build/m35-candidate/bin/minic"; w="$GITHUB_WORKSPACE/build/m35-strict500"
+          set +e
+          MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py --minic "$c" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" --work "$w" --jobs 5 --offset 0 --limit 500 --sample-count 0 --indices ''
+          rc=$?
+          set -e
+          printf 'M35_STRICT500_REPLAY_STATUS=%d\n' "$rc"
+          python3 tools/ci/classify-core-strict-frontier.py "$w/batch-results.json" --examples 5 --json-out "$w/frontier-summary.json" --require-no-errors
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          s=json.loads(Path('build/m35-strict500/frontier-summary.json').read_text())
+          assert s['selected']==500 and s['error']==0 and s['preprocess_missing']==0, s
+          assert s['pass']+s['unsupported']==500, s
+          b={r['function']:r['count'] for r in s['blockers']}
+          assert b.get('get_count_order',0)==0, b.get('get_count_order')
+          print(f"M35_STRICT500 selected=500 pass={s['pass']} unsupported={s['unsupported']} error=0 distinct={len(s['blockers'])}")
+          for r in s['blockers'][:40]: print(f"M35_NEXT_BLOCKER count={r['count']} function={r['function']}")
+          PY
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-frontier-m35-evidence
+          path: |
+            build/m35-shapes/
+            build/m35-rep/
+            build/m35-strict500/frontier-summary.json
+            build/m35-strict500/batch-results.json
+          if-no-files-found: warn
