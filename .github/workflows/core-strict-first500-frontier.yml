@@ -33,8 +33,8 @@ jobs:
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
 
-      - name: Apply M48 inline-asm output lowering
-        run: python3 tools/dev/patch-core-frontier-m48-inline-asm-output.py
+      - name: Apply M49 global-array address lowering
+        run: python3 tools/dev/patch-core-frontier-m49-global-array.py
 
       - name: Build exact compiler
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-strict500-compiler
@@ -69,10 +69,8 @@ jobs:
           summary = json.loads(Path('build/core-strict500-frontier/frontier-summary.json').read_text())
           if summary['selected'] != 500:
               raise SystemExit(f"expected 500 frozen TUs, got {summary['selected']}")
-          blockers = {blocker['function'] for blocker in summary['blockers']}
-          remaining = sorted({'cpu_relax', 'get_cycles'} & blockers)
-          if remaining:
-              raise SystemExit('M48 failed: blockers remain: ' + ', '.join(remaining))
+          if any(blocker['function'] == 'regs_get_kernel_argument' for blocker in summary['blockers']):
+              raise SystemExit('M49 failed: regs_get_kernel_argument remains a Core strict blocker')
           PY
 
       - name: Upload frontier evidence
@@ -88,13 +86,12 @@ jobs:
             build/core-strict500-frontier/frontier-summary.json
           if-no-files-found: warn
 
-      - name: Persist M48 source changes
+      - name: Persist M49 source changes
         if: success()
         shell: bash
         run: |
           set -Eeuo pipefail
           files=(
-            src/core/core_ir.h
             src/core/core_ir.c
             src/core/core_lower.c
             src/target/riscv64/core_codegen.c
@@ -105,5 +102,5 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -- "${files[@]}"
-          git commit -m 'core: lower register-output inline asm'
+          git commit -m 'core: address global arrays'
           git push origin HEAD:refactor/declaration-sema-v1
