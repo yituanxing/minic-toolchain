@@ -10,9 +10,6 @@ def replace_once(text: str, anchor: str, replacement: str, label: str) -> str:
     return text.replace(anchor, replacement, 1)
 
 
-# Core lowering: preserve one-character GNU operand modifiers while resolving
-# symbolic operands to Core's numeric binding indices. This is target-neutral:
-# the modifier remains opaque template text for the backend to interpret.
 path = Path('src/core/core_lower.c')
 text = path.read_text()
 if MARKER not in text:
@@ -128,13 +125,10 @@ else:
     print('M69 core_lower.c already applied')
 
 
-# RV64 owns the meaning of the RISC-V %z print modifier. Structured scalar
-# inputs are deliberately materialized in registers, so %zN and %N emit the
-# same selected register; the immediate-zero optimization is optional.
 path = Path('src/target/riscv64/core_codegen.c')
 text = path.read_text()
 if MARKER not in text:
-    anchor = '''        ch = (unsigned char)inline_asm->template_text[++template_index];
+    validation_anchor = '''        ch = (unsigned char)inline_asm->template_text[++template_index];
         if (ch == '%') {
             continue;
         }
@@ -142,13 +136,11 @@ if MARKER not in text:
             return false;
         }
 '''
-    repl = '''        ch = (unsigned char)inline_asm->template_text[++template_index];
+    validation_repl = '''        ch = (unsigned char)inline_asm->template_text[++template_index];
         if (ch == '%') {
             continue;
         }
-        /* M69_STRUCTURED_ASM_REGISTER_OR_ZERO: %z is a RISC-V operand
-           printer modifier. Inputs in this Core tier are always materialized
-           registers, so accepting it does not change the selected value. */
+        /* M69_STRUCTURED_ASM_REGISTER_OR_ZERO: %z is owned by RV64. */
         if (ch == 'z') {
             if (template_index + 1U >= inline_asm->template_length) {
                 return false;
@@ -159,9 +151,14 @@ if MARKER not in text:
             return false;
         }
 '''
-    text = replace_once(text, anchor, repl, 'backend-template-validation')
+    text = replace_once(text, validation_anchor, validation_repl, 'backend-template-validation')
 
-    anchor = '''        ch = (unsigned char)inline_asm->template_text[index];
+    function_begin = text.find('static bool emit_structured_inline_asm(')
+    function_end = text.find('\nstatic bool emit_instruction(', function_begin)
+    if function_begin < 0 or function_end < 0:
+        raise SystemExit('M69 structured emitter not found')
+    emitter = text[function_begin:function_end]
+    emission_anchor = '''        ch = (unsigned char)inline_asm->template_text[index];
         if (ch == '%') {
             if (fputc('%', file) == EOF) {
                 return false;
@@ -172,7 +169,7 @@ if MARKER not in text:
             return false;
         }
 '''
-    repl = '''        ch = (unsigned char)inline_asm->template_text[index];
+    emission_repl = '''        ch = (unsigned char)inline_asm->template_text[index];
         if (ch == '%') {
             if (fputc('%', file) == EOF) {
                 return false;
@@ -189,7 +186,8 @@ if MARKER not in text:
             return false;
         }
 '''
-    text = replace_once(text, anchor, repl, 'backend-template-emission')
+    emitter = replace_once(emitter, emission_anchor, emission_repl, 'backend-template-emission')
+    text = text[:function_begin] + emitter + text[function_end:]
     path.write_text(text)
 else:
     print('M69 core_codegen.c already applied')
