@@ -17,13 +17,18 @@ replace_once(
             !minic_type_is_integer(operand->type) || minic_type_is_bool_integer(operand->type) ||
             minic_type_is_const(operand->type) || minic_type_is_volatile(operand->type) ||
             !minic_type_unqualified(operand->type, &value_type) ||
+            !minic_type_equal(value_type, operand->type) ||
+            !minic_type_equal(expression->type, value_type) ||
+            !minic_type_pointer_to(value_type, &pointer_type)) {
 ''',
     '''        if (operand->value_category != MINIC_VALUE_LVALUE ||
             !minic_type_is_integer(operand->type) || minic_type_is_bool_integer(operand->type) ||
             minic_type_is_const(operand->type) ||
             !minic_type_unqualified(operand->type, &value_type) ||
+            !minic_type_equal(expression->type, value_type) ||
+            !minic_type_pointer_to(operand->type, &pointer_type)) {
 ''',
-    "allow volatile prefix integer lvalues",
+    "preserve qualified volatile address type",
 )
 
 replace_once(
