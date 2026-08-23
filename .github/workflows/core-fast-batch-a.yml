@@ -1,0 +1,180 @@
+name: Core Fast Batch A
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  batch-a:
+    if: github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: core-fast-batch-a-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+
+      - name: Restore frozen Linux corpus
+        id: linux-corpus-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+
+      - name: Require frozen corpus
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
+          test -s build/linux-focus-corpus/selected-tus.txt
+
+      - name: Apply Batch A production changes
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/patch-linux-replay-live-progress.py
+          python3 tools/dev/patch-core-frontier-batch-a.py
+
+      - name: Build exact patched compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-a-compiler
+
+      - name: Focused semantic regressions
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/core-batch-a-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-batch-a-focused"
+          mkdir -p "$work"
+
+          cat >"$work/unsigned-bitfield.i" <<'EOF'
+          struct timer_cpu_base {
+              unsigned int hres_active : 1;
+              unsigned int in_irq : 1;
+              unsigned int spare : 6;
+          };
+
+          struct timer_base {
+              struct timer_cpu_base *cpu_base;
+          };
+
+          int bitfield_direct(struct timer_cpu_base *base) {
+              return base->in_irq;
+          }
+
+          int bitfield_conditional(struct timer_base *base) {
+              return 1 ? base->cpu_base->hres_active : 0;
+          }
+          EOF
+          "$compiler" -S "$work/unsigned-bitfield.i" -o "$work/unsigned-bitfield-normal.s"
+          MINIC_CORE_IR=strict "$compiler" -S "$work/unsigned-bitfield.i" \
+            -o "$work/unsigned-bitfield-strict.s"
+          cmp "$work/unsigned-bitfield-normal.s" "$work/unsigned-bitfield-strict.s"
+          MINIC_CORE_IR=strict MINIC_CORE_CODEGEN=basic-v0 "$compiler" \
+            -S "$work/unsigned-bitfield.i" -o "$work/unsigned-bitfield-core.s"
+
+          cat >"$work/qualified-record-parameter.i" <<'EOF'
+          struct pair {
+              long first;
+              long second;
+          };
+
+          long qualified_record_parameter(const struct pair value) {
+              return value.first + value.second;
+          }
+          EOF
+          "$compiler" -S "$work/qualified-record-parameter.i" \
+            -o "$work/qualified-record-parameter-normal.s"
+          MINIC_CORE_IR=strict "$compiler" -S "$work/qualified-record-parameter.i" \
+            -o "$work/qualified-record-parameter-strict.s"
+          cmp "$work/qualified-record-parameter-normal.s" \
+            "$work/qualified-record-parameter-strict.s"
+          MINIC_CORE_IR=strict MINIC_CORE_CODEGEN=basic-v0 "$compiler" \
+            -S "$work/qualified-record-parameter.i" \
+            -o "$work/qualified-record-parameter-core.s"
+
+          echo CORE_BATCH_A_FOCUSED_PASS
+
+      - name: Strict sixteen frontier
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/core-batch-a-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-batch-a-frontier"
+          set +e
+          MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
+            --minic "$compiler" \
+            --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
+            --work "$work" \
+            --jobs 16 \
+            --offset 0 \
+            --limit 500 \
+            --sample-count 0 \
+            --indices '0,1,2,3,4,7,9,20,42,66,95,155,165,280,288,299'
+          probe_status=$?
+          set -e
+          printf 'CORE_BATCH_A_STRICT16_STATUS=%d\n' "$probe_status"
+          python3 tools/ci/classify-core-strict-frontier.py \
+            "$work/batch-results.json" \
+            --examples 16 \
+            --json-out "$work/frontier-summary.json"
+          python3 tools/ci/summarize-core-frontier-progress.py \
+            "$work/batch-results.json" \
+            --expect-selected 16 \
+            --json-out "$work/progress-summary.json" \
+            --text-out "$work/progress-summary.txt"
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          f = json.loads(Path('build/core-batch-a-frontier/frontier-summary.json').read_text())
+          p = json.loads(Path('build/core-batch-a-frontier/progress-summary.json').read_text())
+          print(
+              'CORE_BATCH_A_RESULT '
+              f"selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} "
+              f"error={f['error']} distinct_blockers={len(f.get('blockers', []))} "
+              f"tu_mean={p['tu_mean_progress'] * 100.0:.2f}% "
+              f"tu_median={p['tu_median_progress'] * 100.0:.2f}% "
+              f"line_weighted={p['line_weighted_progress'] * 100.0:.2f}%"
+          )
+          if f['selected'] != 16:
+              raise SystemExit(f"expected 16 probes, got {f['selected']}")
+          if f['error'] != 0:
+              raise SystemExit(f"Batch A must eliminate Core lowering ERRORs: {f.get('errors', [])}")
+          stale = [b for b in f.get('blockers', []) if b.get('function') == 'hrtimer_is_hres_active']
+          if stale:
+              raise SystemExit(f"unsigned bit-field family did not clear: {stale}")
+          PY
+
+      - name: Upload Batch A evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-fast-batch-a-${{ github.run_id }}
+          path: |
+            build/core-batch-a-frontier/batch-results.json
+            build/core-batch-a-frontier/batch-results.tsv
+            build/core-batch-a-frontier/batch-summary.txt
+            build/core-batch-a-frontier/failure-contexts.txt
+            build/core-batch-a-frontier/frontier-summary.json
+            build/core-batch-a-frontier/progress-summary.json
+            build/core-batch-a-frontier/progress-summary.txt
+            build/core-batch-a-frontier/minic-stderr
+          if-no-files-found: warn
+
+      - name: Persist qualified Batch A production tree
+        if: success()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git add src/core/core_lower.c src/core/core_ir.c src/target/riscv64/core_codegen.c
+          if git diff --cached --quiet; then
+            echo CORE_BATCH_A_ALREADY_PERSISTED
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'core: batch unsigned bit-field reads and qualified record parameters'
+          git push origin HEAD:refactor/declaration-sema-v1
