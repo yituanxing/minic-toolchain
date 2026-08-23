@@ -2142,9 +2142,14 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                    ? MINIC_CORE_LOWER_OK
                    : MINIC_CORE_LOWER_ERROR;
     }
+    /* M51_SHIFT_COMPOUND_ASSIGNMENT: shifts use integer promotions on each operand
+       independently; unlike arithmetic compound assignments they do not use the
+       usual arithmetic conversions to a shared operand type. */
     if (expression->kind == MINIC_EXPRESSION_COMPOUND_ASSIGNMENT &&
         (expression->value.binary.operator_kind == MINIC_BINARY_ADD ||
          expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT ||
+         expression->value.binary.operator_kind == MINIC_BINARY_SHIFT_LEFT ||
+         expression->value.binary.operator_kind == MINIC_BINARY_SHIFT_RIGHT ||
          expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_AND ||
          expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_XOR ||
          expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_OR)) {
@@ -2162,7 +2167,9 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         MinicCoreLowerStatus status;
         MinicType address_type;
         MinicType common_type;
+        MinicType right_type;
         MinicType stored_type;
+        bool shift_assignment;
 
         target = minic_c0_program_expression(context->body->program, expression->value.binary.left);
         source =
@@ -2172,10 +2179,28 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
             minic_type_is_const(target->type) ||
             !minic_type_unqualified(target->type, &stored_type) ||
             !minic_type_is_integer(stored_type) || !minic_type_is_integer(source->type) ||
-            context->target == NULL ||
-            !minic_target_info_integer_common_for_program(
-                context->target, context->body->program, stored_type, source->type, &common_type)) {
+            context->target == NULL) {
             return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        shift_assignment =
+            expression->value.binary.operator_kind == MINIC_BINARY_SHIFT_LEFT ||
+            expression->value.binary.operator_kind == MINIC_BINARY_SHIFT_RIGHT;
+        if (shift_assignment) {
+            if (!minic_target_info_integer_promotion_for_program(
+                    context->target, context->body->program, stored_type, &common_type) ||
+                !minic_target_info_integer_promotion_for_program(
+                    context->target, context->body->program, source->type, &right_type)) {
+                return MINIC_CORE_LOWER_UNSUPPORTED;
+            }
+        } else {
+            if (!minic_target_info_integer_common_for_program(context->target,
+                                                              context->body->program,
+                                                              stored_type,
+                                                              source->type,
+                                                              &common_type)) {
+                return MINIC_CORE_LOWER_UNSUPPORTED;
+            }
+            right_type = common_type;
         }
         status = lower_address(context, expression->value.binary.left, &address);
         if (status != MINIC_CORE_LOWER_OK) {
@@ -2215,7 +2240,7 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
             return status;
         }
         status =
-            append_integer_conversion(context, source->span, common_type, right, &right_common);
+            append_integer_conversion(context, source->span, right_type, right, &right_common);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
@@ -2235,6 +2260,12 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
             break;
         case MINIC_BINARY_SUBTRACT:
             instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT;
+            break;
+        case MINIC_BINARY_SHIFT_LEFT:
+            instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT;
+            break;
+        case MINIC_BINARY_SHIFT_RIGHT:
+            instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT;
             break;
         case MINIC_BINARY_BITWISE_AND:
             instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND;
