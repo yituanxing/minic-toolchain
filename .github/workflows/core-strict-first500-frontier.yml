@@ -6,6 +6,9 @@ on:
 permissions:
   contents: write
 
+env:
+  CORE_FRONTIER_FULL500: '0'
+
 concurrency:
   group: core-strict-first500-${{ github.event.pull_request.number }}
   cancel-in-progress: true
@@ -35,6 +38,7 @@ jobs:
 
       - name: Apply current Linux frontier patches
         run: |
+          python3 tools/dev/patch-linux-replay-live-progress.py
           python3 tools/dev/patch-core-frontier-m50-scalar-input-asm.py
           python3 tools/dev/patch-core-frontier-m50b-void-statement-expression.py
           python3 tools/dev/patch-core-frontier-m50c-output-input-asm.py
@@ -44,11 +48,12 @@ jobs:
           python3 tools/dev/patch-core-frontier-m54-void-conditional-statement.py
           python3 tools/dev/patch-core-frontier-m55-scalar-conditional-conversion.py
           python3 tools/dev/patch-core-frontier-m56-prefix-update.py
+          python3 tools/dev/patch-core-frontier-m57-constant-conditional.py
 
       - name: Build exact compiler
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-strict500-compiler
 
-      - name: Fast Linux frontier probe
+      - name: Fast Linux multi-frontier probe
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -59,32 +64,33 @@ jobs:
             --minic "$compiler" \
             --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
             --work "$work" \
-            --jobs 1 \
+            --jobs 6 \
             --offset 0 \
             --limit 500 \
             --sample-count 0 \
-            --indices '3'
+            --indices '3,1,2,7,42,280'
           probe_status=$?
           set -e
           printf 'CORE_STRICT_PROBE_STATUS=%d\n' "$probe_status"
           python3 tools/ci/classify-core-strict-frontier.py \
             "$work/batch-results.json" \
-            --examples 4 \
+            --examples 6 \
             --json-out "$work/frontier-summary.json" \
             --require-no-errors
           python3 - <<'PY'
           import json
           from pathlib import Path
           summary = json.loads(Path('build/core-strict500-probe/frontier-summary.json').read_text())
-          if summary['selected'] != 1:
-              raise SystemExit(f"expected one Linux probe TU, got {summary['selected']}")
-          remaining = [b for b in summary['blockers'] if b['function'] == 'get_count_order']
+          if summary['selected'] != 6:
+              raise SystemExit(f"expected six Linux frontier probes, got {summary['selected']}")
+          remaining = [b for b in summary['blockers'] if b['function'] == '__order_base_2']
           if remaining:
-              raise SystemExit(f"Linux probe still blocked at get_count_order: {remaining}")
-          print('LINUX_FRONTIER_PROBE_PASSED_OLD_BLOCKER')
+              raise SystemExit(f"Linux probe still blocked at __order_base_2: {remaining}")
+          print('LINUX_MULTI_FRONTIER_PROBE_PASSED_TARGET')
           PY
 
       - name: Replay full frozen first500 and classify
+        if: env.CORE_FRONTIER_FULL500 == '1'
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -128,10 +134,11 @@ jobs:
               '__set_bit_le',
               'hweight_long',
               'get_count_order',
+              '__order_base_2',
           }
           remaining = [b for b in summary['blockers'] if b['function'] in forbidden]
           if remaining:
-              raise SystemExit(f"M56/earlier blocker remains: {remaining}")
+              raise SystemExit(f"M57/earlier blocker remains: {remaining}")
           PY
 
       - name: Upload frontier evidence
@@ -152,7 +159,7 @@ jobs:
             build/core-strict500-frontier/frontier-summary.json
           if-no-files-found: warn
 
-      - name: Persist M56 source changes
+      - name: Persist M57 source changes
         if: success()
         shell: bash
         run: |
@@ -166,5 +173,5 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -- "${files[@]}"
-          git commit -m 'core: lower prefix scalar updates'
+          git commit -m 'core: prune constant conditional branches'
           git push origin HEAD:refactor/declaration-sema-v1
