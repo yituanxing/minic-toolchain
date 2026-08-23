@@ -57,11 +57,12 @@ jobs:
           python3 tools/dev/patch-core-frontier-m67-structured-inline-asm.py
           python3 tools/dev/patch-core-frontier-m68-structured-inline-asm-optional-inputs.py
           python3 tools/dev/patch-core-frontier-m69-structured-asm-register-or-zero.py
+          python3 tools/dev/patch-core-frontier-m70-array-lvalue-pointer-decay.py
 
       - name: Build exact compiler
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-strict500-compiler
 
-      - name: Fast Linux eight-frontier probe
+      - name: Fast Linux sixteen-frontier probe
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -72,37 +73,34 @@ jobs:
             --minic "$compiler" \
             --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
             --work "$work" \
-            --jobs 8 \
+            --jobs 16 \
             --offset 0 \
             --limit 500 \
             --sample-count 0 \
-            --indices '3,1,2,7,20,42,155,280'
+            --indices '0,1,2,3,4,7,9,20,42,66,95,155,165,280,288,299'
           probe_status=$?
           set -e
           printf 'CORE_STRICT_PROBE_STATUS=%d\n' "$probe_status"
           python3 tools/ci/classify-core-strict-frontier.py \
             "$work/batch-results.json" \
-            --examples 8 \
+            --examples 16 \
             --json-out "$work/frontier-summary.json"
           python3 - <<'PY'
           import json
           from pathlib import Path
           s = json.loads(Path('build/core-strict500-probe/frontier-summary.json').read_text())
-          if s['selected'] != 8:
-              raise SystemExit(f"expected 8 Linux frontier probes, got {s['selected']}")
+          if s['selected'] != 16:
+              raise SystemExit(f"expected 16 Linux frontier probes, got {s['selected']}")
           unexpected_errors = [
               e for e in s.get('errors', [])
               if not (e.get('index') == 155 and 'timespec64_add_safe' in e.get('message', ''))
           ]
           if unexpected_errors:
               raise SystemExit(f"unexpected Linux probe errors: {unexpected_errors}")
-          old_family = [
-              b for b in s['blockers']
-              if b['function'].startswith('raw_atomic') and 'cmpxchg' in b['function']
-          ]
+          old_family = [b for b in s['blockers'] if b['function'] == 'cpumask_first']
           if old_family:
-              raise SystemExit(f"Linux probe still in raw atomic cmpxchg family: {old_family}")
-          print(f"LINUX_EIGHT_FRONTIER_PASSED_M69 known_errors={len(s.get('errors', []))}")
+              raise SystemExit(f"Linux probe still blocked at cpumask_first: {old_family}")
+          print(f"LINUX_SIXTEEN_FRONTIER_PASSED_M70 known_errors={len(s.get('errors', []))}")
           PY
 
       - name: Upload fast frontier evidence
@@ -118,19 +116,19 @@ jobs:
             build/core-strict500-probe/frontier-summary.json
           if-no-files-found: warn
 
-      - name: Persist M69 source changes
+      - name: Persist M70 source changes
         if: success()
         shell: bash
         run: |
           set -Eeuo pipefail
-          files=(src/core/core_lower.c src/target/riscv64/core_codegen.c)
+          files=(src/core/core_lower.c)
           if git diff --quiet -- "${files[@]}"; then
             exit 0
           fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -- "${files[@]}"
-          git commit -m 'core: support structured asm register-or-zero operands'
+          git commit -m 'core: lower array lvalue pointer decay'
           git push origin HEAD:refactor/declaration-sema-v1
 
   full500-background:
@@ -183,6 +181,7 @@ jobs:
           python3 tools/dev/patch-core-frontier-m67-structured-inline-asm.py
           python3 tools/dev/patch-core-frontier-m68-structured-inline-asm-optional-inputs.py
           python3 tools/dev/patch-core-frontier-m69-structured-asm-register-or-zero.py
+          python3 tools/dev/patch-core-frontier-m70-array-lvalue-pointer-decay.py
 
       - name: Build exact compiler
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-strict500-compiler
