@@ -13,14 +13,20 @@ def replace_once(path: str, old: str, new: str, label: str) -> None:
 
 # The C comma operator is an explicit sequencing edge: evaluate the left operand
 # for its side effects, discard its value, then evaluate and return the right
-# operand.  Keep this first slice scalar-result only; aggregate/void results stay
+# operand. Keep this first slice scalar-result only; aggregate/void results stay
 # fail-closed until a concrete consumer requires them.
 replace_once(
     "src/core/core_lower.c",
-    """    if (expression->kind == MINIC_EXPRESSION_BINARY &&
+    """        return reload_scalar_value(
+            context, expression->span, expression->type, result_object, value_id);
+    }
+    if (expression->kind == MINIC_EXPRESSION_BINARY &&
         expression->value.binary.operator_kind == MINIC_BINARY_LOGICAL_AND) {
 """,
-    """    if (expression->kind == MINIC_EXPRESSION_BINARY &&
+    """        return reload_scalar_value(
+            context, expression->span, expression->type, result_object, value_id);
+    }
+    if (expression->kind == MINIC_EXPRESSION_BINARY &&
         expression->value.binary.operator_kind == MINIC_BINARY_COMMA) {
         const MinicExpression *left_expression;
         const MinicExpression *right_expression;
