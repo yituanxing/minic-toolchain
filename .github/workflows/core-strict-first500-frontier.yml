@@ -61,16 +61,17 @@ jobs:
           python3 tools/dev/patch-core-frontier-m71-legacy-array-object-subscript.py
           python3 tools/dev/patch-core-frontier-m72-nested-break-target.py
           python3 tools/dev/patch-core-frontier-m73-comma-expression.py
+          python3 tools/dev/patch-core-frontier-m74-global-record-address.py
 
       - name: Build exact compiler
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-strict500-compiler
 
-      - name: Focused comma-expression strict regression
+      - name: Focused Core frontier regressions
         shell: bash
         run: |
           set -Eeuo pipefail
           compiler="$GITHUB_WORKSPACE/build/core-strict500-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-m73-focused"
+          work="$GITHUB_WORKSPACE/build/core-frontier-focused"
           mkdir -p "$work"
           cat >"$work/comma-expression.i" <<'EOF'
           int comma_value(int value) {
@@ -84,10 +85,24 @@ jobs:
               return value;
           }
           EOF
-          "$compiler" -S "$work/comma-expression.i" -o "$work/normal.s"
-          MINIC_CORE_IR=strict "$compiler" -S "$work/comma-expression.i" -o "$work/strict.s"
-          cmp "$work/normal.s" "$work/strict.s"
-          echo 'M73_COMMA_FOCUSED_PASS'
+          "$compiler" -S "$work/comma-expression.i" -o "$work/comma-normal.s"
+          MINIC_CORE_IR=strict "$compiler" -S "$work/comma-expression.i" -o "$work/comma-strict.s"
+          cmp "$work/comma-normal.s" "$work/comma-strict.s"
+
+          cat >"$work/global-record-address.i" <<'EOF'
+          struct holder {
+              unsigned long bits[1];
+          };
+          extern struct holder global_holder;
+
+          unsigned long *global_record_array_address(void) {
+              return (&global_holder)->bits;
+          }
+          EOF
+          "$compiler" -S "$work/global-record-address.i" -o "$work/record-normal.s"
+          MINIC_CORE_IR=strict "$compiler" -S "$work/global-record-address.i" -o "$work/record-strict.s"
+          cmp "$work/record-normal.s" "$work/record-strict.s"
+          echo 'M73_M74_FOCUSED_PASS'
 
       - name: Fast Linux sixteen-frontier probe
         shell: bash
@@ -129,15 +144,11 @@ jobs:
           ]
           if unexpected_errors:
               raise SystemExit(f"unexpected Linux probe errors: {unexpected_errors}")
-          old_family = [
-              b for b in s['blockers']
-              if b['function'] in {'cpumask_first', 'cpumask_any_but'}
-          ]
+          cleared = {'cpumask_first', 'cpumask_any_but', 'reset_cpu_possible_mask'}
+          old_family = [b for b in s['blockers'] if b['function'] in cleared]
           if old_family:
-              raise SystemExit(
-                  f"Linux probe still blocked in cleared cpumask family: {old_family}"
-              )
-          print(f"LINUX_SIXTEEN_FRONTIER_PASSED_M73 known_errors={len(s.get('errors', []))}")
+              raise SystemExit(f"Linux probe still blocked in cleared frontier family: {old_family}")
+          print(f"LINUX_SIXTEEN_FRONTIER_PASSED_M74 known_errors={len(s.get('errors', []))}")
           PY
 
       - name: Upload fast frontier evidence
@@ -156,22 +167,23 @@ jobs:
             build/core-strict500-probe/minic-stderr
           if-no-files-found: warn
 
-      - name: Persist M72 and M73 source changes
+      - name: Persist M72-M74 source changes
         if: success()
         shell: bash
         run: |
           set -Eeuo pipefail
-          git checkout -- src/core/core_lower.c
+          git checkout -- src/core/core_lower.c src/core/core_ir.c src/target/riscv64/core_codegen.c
           python3 tools/dev/patch-core-frontier-m72-nested-break-target.py
           python3 tools/dev/patch-core-frontier-m73-comma-expression.py
-          files=(src/core/core_lower.c)
+          python3 tools/dev/patch-core-frontier-m74-global-record-address.py
+          files=(src/core/core_lower.c src/core/core_ir.c src/target/riscv64/core_codegen.c)
           if git diff --quiet -- "${files[@]}"; then
             exit 0
           fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -- "${files[@]}"
-          git commit -m 'core: lower nested breaks and comma expressions'
+          git commit -m 'core: address global record objects'
           git push origin HEAD:refactor/declaration-sema-v1
 
   full500-background:
@@ -228,6 +240,7 @@ jobs:
           python3 tools/dev/patch-core-frontier-m71-legacy-array-object-subscript.py
           python3 tools/dev/patch-core-frontier-m72-nested-break-target.py
           python3 tools/dev/patch-core-frontier-m73-comma-expression.py
+          python3 tools/dev/patch-core-frontier-m74-global-record-address.py
 
       - name: Build exact compiler
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-strict500-compiler
@@ -263,12 +276,8 @@ jobs:
           python3 - <<'PY'
           import json
           from pathlib import Path
-          frontier = json.loads(
-              Path('build/core-strict500-frontier/frontier-summary.json').read_text()
-          )
-          progress = json.loads(
-              Path('build/core-strict500-frontier/progress-summary.json').read_text()
-          )
+          frontier = json.loads(Path('build/core-strict500-frontier/frontier-summary.json').read_text())
+          progress = json.loads(Path('build/core-strict500-frontier/progress-summary.json').read_text())
           if frontier['selected'] != 500:
               raise SystemExit(f"expected 500 frozen TUs, got {frontier['selected']}")
           print(
