@@ -5243,6 +5243,25 @@ static bool core_inline_asm_single_label_goto_supported(
             cursor += 2U;
             continue;
         }
+        if (source->template_text[cursor + 1U] == '[') {
+            const MinicInlineAsmOperand *input = &source->inputs[0];
+            size_t name_begin = cursor + 2U;
+            size_t name_end = name_begin;
+
+            while (name_end < source->template_length &&
+                   source->template_text[name_end] != ']') {
+                name_end += 1U;
+            }
+            if (input->name == NULL || input->name_length == 0U ||
+                name_end >= source->template_length || name_end == name_begin ||
+                name_end - name_begin != input->name_length ||
+                memcmp(source->template_text + name_begin, input->name, input->name_length) != 0) {
+                return false;
+            }
+            saw_input = true;
+            cursor = name_end + 1U;
+            continue;
+        }
         if (cursor + 3U < source->template_length &&
             source->template_text[cursor + 1U] == 'l' &&
             source->template_text[cursor + 2U] == '[') {
@@ -5266,6 +5285,53 @@ static bool core_inline_asm_single_label_goto_supported(
     return saw_input && saw_label;
 }
 
+static bool core_inline_asm_single_label_goto_numeric_template(
+    const MinicInlineAsm *source, char **template_out, size_t *template_length_out) {
+    char *normalized;
+    size_t cursor;
+    size_t output_length;
+
+    if (source == NULL || template_out == NULL || template_length_out == NULL ||
+        source->template_text == NULL || source->inputs == NULL || source->input_count != 1U) {
+        return false;
+    }
+    normalized = (char *)malloc(source->template_length + 1U);
+    if (normalized == NULL) {
+        return false;
+    }
+    cursor = 0U;
+    output_length = 0U;
+    while (cursor < source->template_length) {
+        if (source->template_text[cursor] == '%' && cursor + 1U < source->template_length &&
+            source->template_text[cursor + 1U] == '[') {
+            const MinicInlineAsmOperand *input = &source->inputs[0];
+            size_t name_begin = cursor + 2U;
+            size_t name_end = name_begin;
+
+            while (name_end < source->template_length &&
+                   source->template_text[name_end] != ']') {
+                name_end += 1U;
+            }
+            if (input->name == NULL || input->name_length == 0U ||
+                name_end >= source->template_length || name_end == name_begin ||
+                name_end - name_begin != input->name_length ||
+                memcmp(source->template_text + name_begin, input->name, input->name_length) != 0) {
+                free(normalized);
+                return false;
+            }
+            normalized[output_length++] = '%';
+            normalized[output_length++] = '0';
+            cursor = name_end + 1U;
+            continue;
+        }
+        normalized[output_length++] = source->template_text[cursor++];
+    }
+    normalized[output_length] = '\0';
+    *template_out = normalized;
+    *template_length_out = output_length;
+    return true;
+}
+
 static MinicCoreLowerStatus lower_opaque_inline_asm(MinicCoreLowerContext *context,
                                                     const MinicStatement *statement) {
     const MinicInlineAsm *source;
@@ -5283,6 +5349,8 @@ static MinicCoreLowerStatus lower_opaque_inline_asm(MinicCoreLowerContext *conte
     }
 
     if (core_inline_asm_single_label_goto_supported(context, source)) {
+        char *numeric_template;
+        size_t numeric_template_length;
         MinicCoreBlockId target_block;
         MinicCoreInlineAsm *stored;
         MinicCoreLowerStatus status;
@@ -5291,14 +5359,22 @@ static MinicCoreLowerStatus lower_opaque_inline_asm(MinicCoreLowerContext *conte
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
+        numeric_template = NULL;
+        numeric_template_length = 0U;
+        if (!core_inline_asm_single_label_goto_numeric_template(
+                source, &numeric_template, &numeric_template_length)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
         if (!minic_core_function_add_opaque_inline_asm(context->function,
-                                                       source->template_text,
-                                                       source->template_length,
+                                                       numeric_template,
+                                                       numeric_template_length,
                                                        true,
                                                        false,
                                                        &inline_asm_id)) {
+            free(numeric_template);
             return MINIC_CORE_LOWER_ERROR;
         }
+        free(numeric_template);
         stored = &context->function->inline_asms[inline_asm_id];
         stored->is_goto = true;
         stored->source_inline_asm_id = (size_t)statement->inline_asm_id;
