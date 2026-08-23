@@ -33,10 +33,11 @@ jobs:
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
 
-      - name: Apply M50 scalar-input inline asm
+      - name: Apply M50 IRQ CSR inline asm family
         run: |
           python3 tools/dev/patch-core-frontier-m50-scalar-input-asm.py
           python3 tools/dev/patch-core-frontier-m50b-void-statement-expression.py
+          python3 tools/dev/patch-core-frontier-m50c-output-input-asm.py
 
       - name: Build exact compiler
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-strict500-compiler
@@ -71,8 +72,18 @@ jobs:
           summary = json.loads(Path('build/core-strict500-frontier/frontier-summary.json').read_text())
           if summary['selected'] != 500:
               raise SystemExit(f"expected 500 frozen TUs, got {summary['selected']}")
-          if any(blocker['function'] == 'arch_local_irq_enable' for blocker in summary['blockers']):
-              raise SystemExit('M50 failed: arch_local_irq_enable remains a Core strict blocker')
+          irq_blockers = {
+              'arch_local_irq_enable',
+              'arch_local_irq_disable',
+              'arch_local_irq_save',
+              'arch_local_irq_restore',
+              'arch_local_save_flags',
+              'arch_irqs_disabled',
+              'arch_irqs_disabled_flags',
+          }
+          remaining = [b for b in summary['blockers'] if b['function'] in irq_blockers]
+          if remaining:
+              raise SystemExit(f"M50 IRQ CSR family remains blocked: {remaining}")
           PY
 
       - name: Upload frontier evidence
@@ -88,7 +99,7 @@ jobs:
             build/core-strict500-frontier/frontier-summary.json
           if-no-files-found: warn
 
-      - name: Persist M50 source changes
+      - name: Persist M50 IRQ CSR source changes
         if: success()
         shell: bash
         run: |
@@ -105,5 +116,5 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -- "${files[@]}"
-          git commit -m 'core: lower scalar-input inline asm'
+          git commit -m 'core: lower register-output/input inline asm'
           git push origin HEAD:refactor/declaration-sema-v1
