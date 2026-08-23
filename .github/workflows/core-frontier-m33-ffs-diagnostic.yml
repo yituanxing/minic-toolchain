@@ -1,0 +1,40 @@
+name: Core M33 __ffs Diagnostic
+
+on:
+  push:
+    branches:
+      - refactor/declaration-sema-v1
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+      - name: Restore frozen Linux corpus
+        id: linux-corpus-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+      - name: Inspect frozen __ffs body
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
+          test -s build/linux-focus-corpus/kbuild/init/version.i
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          p=Path('build/linux-focus-corpus/kbuild/init/version.i')
+          text=p.read_text(errors='replace')
+          for pat in (r'\b__ffs\s*\(', r'\bgeneric___ffs\s*\(', r'\bvariable__ffs\s*\(', r'__builtin_ctzl\s*\('):
+              ms=list(re.finditer(pat,text))
+              print(f'M33_PATTERN {pat} count={len(ms)}')
+              for m in ms[:4]:
+                  a=max(0,m.start()-1200); b=min(len(text),m.start()+3500)
+                  print('M33_CONTEXT_BEGIN')
+                  print(text[a:b])
+                  print('M33_CONTEXT_END')
+          PY
