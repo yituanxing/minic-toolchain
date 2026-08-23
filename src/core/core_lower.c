@@ -60,8 +60,12 @@ static bool core_memory_scalar_type(MinicType type) {
     return minic_type_is_integer(type) || minic_type_is_pointer(type);
 }
 
+/* M74_GLOBAL_RECORD_ADDRESS: an object need not be scalar to have an
+   address. Core field-address lowering already consumes pointers to records;
+   permit global record objects to enter that path just like arrays. */
 static bool core_global_addressable_type(MinicType type) {
-    return core_memory_scalar_type(type) || minic_type_is_array(type);
+    return core_memory_scalar_type(type) || minic_type_is_array(type) ||
+           minic_type_is_record(type);
 }
 
 static bool core_scalar_expression_value_type(const MinicFunctionBodyView *body,

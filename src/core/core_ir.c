@@ -165,9 +165,12 @@ bool minic_core_function_add_object(MinicCoreFunction *function,
     return true;
 }
 
+/* M74_GLOBAL_RECORD_ADDRESS: global.addr is an address-forming Core
+   primitive. Record globals are addressable even though record values are not
+   scalar SSA values. */
 static bool core_global_addressable_type(MinicType type) {
     return minic_type_is_integer(type) || minic_type_is_pointer(type) ||
-           minic_type_is_array(type);
+           minic_type_is_array(type) || minic_type_is_record(type);
 }
 
 bool minic_core_function_add_global(MinicCoreFunction *function,

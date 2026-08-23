@@ -33,8 +33,11 @@ static bool core_scalar_type(MinicType type) {
     return minic_type_is_integer(type) || minic_type_is_pointer(type);
 }
 
+/* M74_GLOBAL_RECORD_ADDRESS: RV64 global.addr lowers to `la symbol`;
+   the pointee's aggregate shape is irrelevant until field/element addressing. */
 static bool core_global_addressable_type(MinicType type) {
-    return core_scalar_type(type) || minic_type_is_array(type);
+    return core_scalar_type(type) || minic_type_is_array(type) ||
+           minic_type_is_record(type);
 }
 
 static bool align_up(size_t value, size_t alignment, size_t *result) {
