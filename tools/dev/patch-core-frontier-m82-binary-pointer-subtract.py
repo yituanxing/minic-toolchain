@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Keep M82 productized and advance the hot frontier through M83.
+# Keep M82 productized and advance the hot frontier through M83/M83b.
 
 from pathlib import Path
 from runpy import run_path
@@ -7,6 +7,7 @@ from runpy import run_path
 PATH = Path("src/core/core_lower.c")
 MARKER = "M82_BINARY_POINTER_SUBTRACTION"
 M83_DRIVER = Path("tools/dev/patch-core-frontier-m83-indirect-call.py")
+M83B_DRIVER = Path("tools/dev/patch-core-frontier-m83b-call-statement-dispatch.py")
 
 
 def replace_once(text: str, old: str, new: str, name: str) -> str:
@@ -67,13 +68,20 @@ def apply_m82_if_needed() -> None:
     print("M82 binary pointer subtraction applied")
 
 
+def run_driver(path: Path, name: str) -> int:
+    namespace = run_path(str(path))
+    driver_main = namespace.get("main")
+    if not callable(driver_main):
+        raise SystemExit(f"{name} frontier driver does not expose main()")
+    return int(driver_main())
+
+
 def main() -> int:
     apply_m82_if_needed()
-    namespace = run_path(str(M83_DRIVER))
-    m83_main = namespace.get("main")
-    if not callable(m83_main):
-        raise SystemExit("M83 frontier driver does not expose main()")
-    return int(m83_main())
+    status = run_driver(M83_DRIVER, "M83")
+    if status != 0:
+        return status
+    return run_driver(M83B_DRIVER, "M83b")
 
 
 if __name__ == "__main__":
