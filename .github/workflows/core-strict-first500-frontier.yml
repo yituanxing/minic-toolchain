@@ -34,7 +34,9 @@ jobs:
           test -s build/linux-focus-corpus/selected-tus.txt
 
       - name: Apply M49 global-array address lowering
-        run: python3 tools/dev/patch-core-frontier-m49-global-array.py
+        run: |
+          python3 tools/dev/patch-core-frontier-m49-forward.py
+          python3 tools/dev/patch-core-frontier-m49-global-array.py
 
       - name: Build exact compiler
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-strict500-compiler
