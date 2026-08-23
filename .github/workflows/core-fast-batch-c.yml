@@ -1,4 +1,4 @@
-name: Core Fast Batch C
+name: Core Fast Batch D
 
 on:
   pull_request:
@@ -7,11 +7,11 @@ permissions:
   contents: write
 
 jobs:
-  batch-c:
+  batch-d:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     concurrency:
-      group: core-fast-batch-c-${{ github.event.pull_request.number }}
+      group: core-fast-batch-d-${{ github.event.pull_request.number }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
@@ -32,83 +32,46 @@ jobs:
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
 
-      - name: Apply Batch C production changes
+      - name: Apply Batch D production changes
         shell: bash
         run: |
           set -Eeuo pipefail
           python3 tools/dev/patch-linux-replay-live-progress.py
-          python3 tools/dev/patch-core-frontier-batch-c.py
+          python3 tools/dev/patch-core-frontier-batch-d.py
 
       - name: Build exact patched compiler
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-c-compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-d-compiler
 
-      - name: Focused cleanup and record-forward regressions
+      - name: Focused variadic direct-call regression
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-batch-c-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-batch-c-focused"
+          compiler="$GITHUB_WORKSPACE/build/core-batch-d-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-batch-d-focused"
           mkdir -p "$work"
 
-          cat >"$work/cleanup-zero-distance.i" <<'EOF'
-          static int cleanup_count;
-          static void cleanup_record(int *value) {
-              cleanup_count += *value;
-          }
+          cat >"$work/variadic-direct.i" <<'EOF'
+          extern int sink(int tag, ...);
 
-          int linux_guard_shape(void) {
-              cleanup_count = 0;
-              for (int guard __attribute__((__cleanup__(cleanup_record))) = 5;
-                   1;
-                   ({ goto cleanup_break; }))
-                  if (0) {
-                  cleanup_break:
-                      break;
-                  } else {
-                      (void)guard;
-                  }
-              return cleanup_count;
+          int variadic_mix(int x, void *pointer) {
+              return sink(7, x, pointer);
           }
           EOF
-          "$compiler" -S "$work/cleanup-zero-distance.i" -o "$work/cleanup-normal.s"
-          MINIC_CORE_IR=strict "$compiler" -S "$work/cleanup-zero-distance.i" \
-            -o "$work/cleanup-strict.s"
-          cmp "$work/cleanup-normal.s" "$work/cleanup-strict.s"
+          "$compiler" -S "$work/variadic-direct.i" -o "$work/normal.s"
+          MINIC_CORE_IR=strict "$compiler" -S "$work/variadic-direct.i" -o "$work/strict.s"
+          cmp "$work/normal.s" "$work/strict.s"
           MINIC_CORE_IR=strict MINIC_CORE_CODEGEN=basic-v0 "$compiler" \
-            -S "$work/cleanup-zero-distance.i" -o "$work/cleanup-core.s"
+            -S "$work/variadic-direct.i" -o "$work/core.s"
+          grep -q 'call sink' "$work/core.s"
 
-          cat >"$work/direct-record-return.i" <<'EOF'
-          struct fd_like {
-              void *file;
-              unsigned int flags;
-          };
-
-          static struct fd_like make_fd(unsigned long value) {
-              return (struct fd_like){
-                  (void *)(value & ~3UL),
-                  (unsigned int)(value & 3UL)
-              };
-          }
-
-          struct fd_like forward_fd(unsigned long value) {
-              return make_fd(value);
-          }
-          EOF
-          "$compiler" -S "$work/direct-record-return.i" -o "$work/record-normal.s"
-          MINIC_CORE_IR=strict "$compiler" -S "$work/direct-record-return.i" \
-            -o "$work/record-strict.s"
-          cmp "$work/record-normal.s" "$work/record-strict.s"
-          MINIC_CORE_IR=strict MINIC_CORE_CODEGEN=basic-v0 "$compiler" \
-            -S "$work/direct-record-return.i" -o "$work/record-core.s"
-
-          echo CORE_BATCH_C_FOCUSED_PASS
+          echo CORE_BATCH_D_FOCUSED_PASS
 
       - name: Strict sixteen frontier
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-batch-c-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-batch-c-frontier"
+          compiler="$GITHUB_WORKSPACE/build/core-batch-d-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-batch-d-frontier"
           set +e
           MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" \
@@ -121,7 +84,7 @@ jobs:
             --indices '0,1,2,3,4,7,9,20,42,66,95,155,165,280,288,299'
           probe_status=$?
           set -e
-          printf 'CORE_BATCH_C_STRICT16_STATUS=%d\n' "$probe_status"
+          printf 'CORE_BATCH_D_STRICT16_STATUS=%d\n' "$probe_status"
           python3 tools/ci/classify-core-strict-frontier.py \
             "$work/batch-results.json" \
             --examples 16 \
@@ -134,11 +97,10 @@ jobs:
           python3 - <<'PY'
           import json
           from pathlib import Path
-          f = json.loads(Path('build/core-batch-c-frontier/frontier-summary.json').read_text())
-          p = json.loads(Path('build/core-batch-c-frontier/progress-summary.json').read_text())
-          blockers = {b.get('function') for b in f.get('blockers', [])}
+          f = json.loads(Path('build/core-batch-d-frontier/frontier-summary.json').read_text())
+          p = json.loads(Path('build/core-batch-d-frontier/progress-summary.json').read_text())
           print(
-              'CORE_BATCH_C_RESULT '
+              'CORE_BATCH_D_RESULT '
               f"selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} "
               f"error={f['error']} distinct_blockers={len(f.get('blockers', []))} "
               f"tu_mean={p['tu_mean_progress'] * 100.0:.2f}% "
@@ -148,39 +110,36 @@ jobs:
           if f['selected'] != 16:
               raise SystemExit(f"expected 16 probes, got {f['selected']}")
           if f['error'] != 0:
-              raise SystemExit(f"Batch C introduced Core lowering ERRORs: {f.get('errors', [])}")
-          stale = blockers.intersection({'rseq_signal_deliver', 'fdget', 'cap_drop_fs_set'})
-          if stale:
-              raise SystemExit(f"Batch C target blockers did not clear: {sorted(stale)}")
+              raise SystemExit(f"Batch D introduced Core lowering ERRORs: {f.get('errors', [])}")
           PY
 
-      - name: Upload Batch C evidence
+      - name: Upload Batch D evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: core-fast-batch-c-${{ github.run_id }}
+          name: core-fast-batch-d-${{ github.run_id }}
           path: |
-            build/core-batch-c-frontier/batch-results.json
-            build/core-batch-c-frontier/batch-results.tsv
-            build/core-batch-c-frontier/batch-summary.txt
-            build/core-batch-c-frontier/failure-contexts.txt
-            build/core-batch-c-frontier/frontier-summary.json
-            build/core-batch-c-frontier/progress-summary.json
-            build/core-batch-c-frontier/progress-summary.txt
-            build/core-batch-c-frontier/minic-stderr
+            build/core-batch-d-frontier/batch-results.json
+            build/core-batch-d-frontier/batch-results.tsv
+            build/core-batch-d-frontier/batch-summary.txt
+            build/core-batch-d-frontier/failure-contexts.txt
+            build/core-batch-d-frontier/frontier-summary.json
+            build/core-batch-d-frontier/progress-summary.json
+            build/core-batch-d-frontier/progress-summary.txt
+            build/core-batch-d-frontier/minic-stderr
           if-no-files-found: warn
 
-      - name: Persist qualified Batch C production tree
+      - name: Persist qualified Batch D production tree
         if: success()
         shell: bash
         run: |
           set -Eeuo pipefail
-          git add src/core/core_lower.c
+          git add src/core/core_ir.h src/core/core_ir.c src/core/core_lower.c src/target/riscv64/core_codegen.c
           if git diff --cached --quiet; then
-            echo CORE_BATCH_C_ALREADY_PERSISTED
+            echo CORE_BATCH_D_ALREADY_PERSISTED
             exit 0
           fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m 'core: accept zero-distance cleanup edges and record return forwarding'
+          git commit -m 'core: support scalar variadic direct calls'
           git push origin HEAD:refactor/declaration-sema-v1
