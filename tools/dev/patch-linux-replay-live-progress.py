@@ -26,14 +26,14 @@ def main() -> int:
 
     if MARKER not in text:
         old = '''    results: list[dict[str, object]] = []\n    with ThreadPoolExecutor(max_workers=args.jobs) as pool:\n        futures = [pool.submit(compile_one, entry) for entry in entries]\n        for future in as_completed(futures):\n            results.append(future.result())\n    results.sort(key=lambda row: int(row["index"]))\n'''
-        new = '''    results: list[dict[str, object]] = []\n    with ThreadPoolExecutor(max_workers=args.jobs) as pool:\n        futures = [pool.submit(compile_one, entry) for entry in entries]\n        for future in as_completed(futures):\n            row = future.result()\n            results.append(row)\n            message = str(row["message"]).replace("\\t", " ").replace("\\n", " ")\n            print(\n                "LINUX_BATCH_PROGRESS "\n                f'index={row["index"]} status={row["status"]} '\n                f'input={row["input"]} seconds={float(row["seconds"]):.3f} '\n                f"message={message}",\n                flush=True,\n            )\n    results.sort(key=lambda row: int(row["index"]))\n'''
+        new = '''    results: list[dict[str, object]] = []\n    with ThreadPoolExecutor(max_workers=args.jobs) as pool:\n        futures = [pool.submit(compile_one, entry) for entry in entries]\n        for future in as_completed(futures):\n            row = future.result()\n            results.append(row)\n            message = str(row["message"]).replace("\\t", " ").replace("\\n", " ")\n            total_lines = "-" if row["total_lines"] is None else str(row["total_lines"])\n            first_error_line = "-" if row["first_error_line"] is None else str(row["first_error_line"])\n            locator = "-" if row["first_error_source"] is None else str(row["first_error_source"])\n            progress = "-" if row["progress_ratio"] is None else f'{float(row["progress_ratio"]) * 100.0:.2f}%'\n            print(\n                "LINUX_BATCH_PROGRESS "\n                f'index={row["index"]} status={row["status"]} '\n                f'input={row["input"]} total_lines={total_lines} '\n                f'first_error_line={first_error_line} progress={progress} locator={locator} '\n                f'seconds={float(row["seconds"]):.3f} message={message}',\n                flush=True,\n            )\n    results.sort(key=lambda row: int(row["index"]))\n'''
         count = text.count(old)
         if count != 1:
             raise SystemExit(f"live-progress anchor count={count}")
         text = text.replace(old, new, 1)
 
     PATH.write_text(text)
-    print("Linux replay live progress + fast stderr applied")
+    print("Linux replay live progress + first-error metrics + fast stderr applied")
     return 0
 
 
