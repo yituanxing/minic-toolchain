@@ -8,6 +8,10 @@ PATH = Path("src/core/core_lower.c")
 MARKER = "M82_BINARY_POINTER_SUBTRACTION"
 M83_DRIVER = Path("tools/dev/patch-core-frontier-m83-indirect-call.py")
 M83B_DRIVER = Path("tools/dev/patch-core-frontier-m83b-call-statement-dispatch.py")
+M83_IR = Path("src/core/core_ir.h")
+M83_IR_IMPL = Path("src/core/core_ir.c")
+M83_LOWER = Path("src/core/core_lower.c")
+M83_CODEGEN = Path("src/target/riscv64/core_codegen.c")
 
 
 def replace_once(text: str, old: str, new: str, name: str) -> str:
@@ -76,11 +80,23 @@ def run_driver(path: Path, name: str) -> int:
     return int(driver_main())
 
 
+def m83_productized() -> bool:
+    return (
+        "MINIC_CORE_INSTRUCTION_INDIRECT_CALL" in M83_IR.read_text()
+        and "minic_core_function_add_call_signature" in M83_IR_IMPL.read_text()
+        and "lower_indirect_call(" in M83_LOWER.read_text()
+        and "emit_indirect_call(" in M83_CODEGEN.read_text()
+    )
+
+
 def main() -> int:
     apply_m82_if_needed()
-    status = run_driver(M83_DRIVER, "M83")
-    if status != 0:
-        return status
+    if m83_productized():
+        print("M83 first-class indirect call already productized")
+    else:
+        status = run_driver(M83_DRIVER, "M83")
+        if status != 0:
+            return status
     return run_driver(M83B_DRIVER, "M83b")
 
 
