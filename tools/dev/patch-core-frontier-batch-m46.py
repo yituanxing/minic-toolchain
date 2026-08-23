@@ -1,32 +1,33 @@
 #!/usr/bin/env python3
 from pathlib import Path
 
-
-def replace_once(path: str, old: str, new: str, label: str) -> None:
-    p = Path(path)
-    text = p.read_text()
-    count = text.count(old)
-    if count != 1:
-        raise SystemExit(f"M46 {label}: expected one anchor, found {count}")
-    p.write_text(text.replace(old, new, 1))
-
+path = Path("src/core/core_lower.c")
+text = path.read_text()
 
 # The C comma operator is an explicit sequencing edge: evaluate the left operand
 # for its side effects, discard its value, then evaluate and return the right
 # operand. Keep this first slice scalar-result only; aggregate/void results stay
 # fail-closed until a concrete consumer requires them.
-replace_once(
-    "src/core/core_lower.c",
-    """        return reload_scalar_value(
-            context, expression->span, expression->type, result_object, value_id);
-    }
-    if (expression->kind == MINIC_EXPRESSION_BINARY &&
+function_anchor = """static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
+                                             MinicExpressionId expression_id,
+                                             MinicCoreValueId *value_id) {
+"""
+start = text.find(function_anchor)
+if start < 0:
+    raise SystemExit("M46 lower_expression definition anchor missing")
+end = text.find("\nstatic MinicCoreLowerStatus\nlower_condition_branch", start + len(function_anchor))
+if end < 0:
+    raise SystemExit("M46 lower_expression end boundary missing")
+anchor = """    if (expression->kind == MINIC_EXPRESSION_BINARY &&
         expression->value.binary.operator_kind == MINIC_BINARY_LOGICAL_AND) {
-""",
-    """        return reload_scalar_value(
-            context, expression->span, expression->type, result_object, value_id);
-    }
-    if (expression->kind == MINIC_EXPRESSION_BINARY &&
+"""
+pos = text.find(anchor, start, end)
+if pos < 0:
+    raise SystemExit("M46 logical-and anchor missing inside lower_expression")
+if text.find(anchor, pos + 1, end) >= 0:
+    raise SystemExit("M46 logical-and anchor is ambiguous inside lower_expression")
+
+insert = """    if (expression->kind == MINIC_EXPRESSION_BINARY &&
         expression->value.binary.operator_kind == MINIC_BINARY_COMMA) {
         const MinicExpression *left_expression;
         const MinicExpression *right_expression;
@@ -63,10 +64,7 @@ replace_once(
         }
         return MINIC_CORE_LOWER_OK;
     }
-    if (expression->kind == MINIC_EXPRESSION_BINARY &&
-        expression->value.binary.operator_kind == MINIC_BINARY_LOGICAL_AND) {
-""",
-    "scalar comma expression lowering",
-)
-
+"""
+text = text[:pos] + insert + text[pos:]
+path.write_text(text)
 print("M46_PATCH_APPLIED")
