@@ -43,23 +43,49 @@ jobs:
           clang-format-18 -i src/core/core_ir.c src/core/core_lower.c
           git diff --check
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m43
-      - name: Exact preempt decrement shapes
+      - name: Diagnose preempt decrement shapes
         shell: bash
         run: |
           set -Eeuo pipefail
           c="$GITHUB_WORKSPACE/build/m43/bin/minic"; w=build/m43-shapes; mkdir -p "$w"
-          cat > "$w/prefix_volatile.c" <<'EOF'
+          cat > "$w/01_prefix_raw.c" <<'EOF'
+          int f(volatile int *p) { return --*p; }
+          EOF
+          cat > "$w/02_prefix_not.c" <<'EOF'
           int f(volatile int *p) { return !--*p; }
           EOF
-          cat > "$w/preempt_like.c" <<'EOF'
+          cat > "$w/03_nonvolatile_and_call.c" <<'EOF'
+          int tif_need_resched(void);
+          _Bool f(int *p) { return !--*p && tif_need_resched(); }
+          EOF
+          cat > "$w/04_volatile_and_constant.c" <<'EOF'
+          _Bool f(volatile int *p) { return !--*p && 1; }
+          EOF
+          cat > "$w/05_volatile_call_sequence.c" <<'EOF'
+          int tif_need_resched(void);
+          _Bool f(volatile int *p) { --*p; return tif_need_resched(); }
+          EOF
+          cat > "$w/06_preempt_like.c" <<'EOF'
           int tif_need_resched(void);
           _Bool f(volatile int *p) { return !--*p && tif_need_resched(); }
           EOF
+          failures=0
           for src in "$w"/*.c; do
             n=$(basename "$src" .c)
-            MINIC_CORE_IR=strict "$c" -S "$src" -o "$w/$n.s"
-            printf 'M43_SHAPE_PASS name=%s\n' "$n"
+            set +e
+            MINIC_CORE_IR=strict "$c" -S "$src" -o "$w/$n.s" 2>"$w/$n.err"
+            rc=$?
+            set -e
+            if [ "$rc" -eq 0 ]; then
+              printf 'M43_SHAPE_PASS name=%s\n' "$n"
+            else
+              failures=$((failures + 1))
+              printf 'M43_SHAPE_FAIL name=%s rc=%d\n' "$n" "$rc"
+              sed -n '1,12p' "$w/$n.err"
+            fi
           done
+          printf 'M43_SHAPE_MATRIX failures=%d\n' "$failures"
+          test "$failures" -eq 0
       - name: RISC-V volatile prefix differential
         shell: bash
         run: |
