@@ -14,6 +14,7 @@ typedef uint32_t MinicCoreInstructionId;
 typedef uint32_t MinicCoreBlockId;
 typedef uint32_t MinicCoreObjectId;
 typedef uint32_t MinicCoreGlobalId;
+typedef uint32_t MinicCoreFunctionSymbolId;
 typedef uint32_t MinicCoreCalleeId;
 typedef uint32_t MinicCoreInlineAsmId;
 
@@ -22,6 +23,7 @@ typedef uint32_t MinicCoreInlineAsmId;
 #define MINIC_CORE_BLOCK_INVALID UINT32_MAX
 #define MINIC_CORE_OBJECT_INVALID UINT32_MAX
 #define MINIC_CORE_GLOBAL_INVALID UINT32_MAX
+#define MINIC_CORE_FUNCTION_SYMBOL_INVALID UINT32_MAX
 #define MINIC_CORE_CALLEE_INVALID UINT32_MAX
 #define MINIC_CORE_INLINE_ASM_INVALID UINT32_MAX
 
@@ -66,6 +68,8 @@ typedef enum MinicCoreInstructionKind {
     MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT,
     MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS,
     MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS,
+    /* M81_FUNCTION_ADDRESS_VALUE: first-class address of a function symbol. */
+    MINIC_CORE_INSTRUCTION_FUNCTION_ADDRESS,
     /* M64_LOCAL_LABEL_BLOCK_ADDRESS: target-neutral address of a Core basic block. */
     MINIC_CORE_INSTRUCTION_BLOCK_ADDRESS,
     MINIC_CORE_INSTRUCTION_FIELD_ADDRESS,
@@ -107,6 +111,11 @@ typedef struct MinicCoreGlobal {
     size_t name_length;
     MinicType type;
 } MinicCoreGlobal;
+
+typedef struct MinicCoreFunctionSymbol {
+    char *name;
+    size_t name_length;
+} MinicCoreFunctionSymbol;
 
 typedef struct MinicCoreCallee {
     char *name;
@@ -173,6 +182,7 @@ typedef struct MinicCoreInstruction {
         } parameter_object;
         MinicCoreObjectId object_id;
         MinicCoreGlobalId global_id;
+        MinicCoreFunctionSymbolId function_symbol_id;
         MinicCoreBlockId block_id;
         struct {
             MinicCoreValueId base;
@@ -261,6 +271,9 @@ typedef struct MinicCoreFunction {
     MinicCoreGlobal *globals;
     size_t global_count;
     size_t global_capacity;
+    MinicCoreFunctionSymbol *function_symbols;
+    size_t function_symbol_count;
+    size_t function_symbol_capacity;
     MinicCoreCallee *callees;
     size_t callee_count;
     size_t callee_capacity;
@@ -295,6 +308,10 @@ bool minic_core_function_set_signature(MinicCoreFunction *function,
                                        const MinicType *parameter_types,
                                        size_t parameter_count);
 bool minic_core_function_add_block(MinicCoreFunction *function, MinicCoreBlockId *block_id);
+bool minic_core_function_add_function_symbol(MinicCoreFunction *function,
+                                             const char *name,
+                                             size_t name_length,
+                                             MinicCoreFunctionSymbolId *symbol_id);
 bool minic_core_function_add_object(MinicCoreFunction *function,
                                     MinicSourceSpan span,
                                     MinicType type,

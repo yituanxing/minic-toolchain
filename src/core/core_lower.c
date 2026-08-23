@@ -1887,6 +1887,44 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                    ? MINIC_CORE_LOWER_OK
                    : MINIC_CORE_LOWER_ERROR;
     }
+    /* M81_FUNCTION_ADDRESS_VALUE: a function designator is already a
+       pointer-to-function semantic value in the normalized AST. Core records
+       only the symbol identity; calling through that pointer is a later seam. */
+    if (expression->kind == MINIC_EXPRESSION_FUNCTION) {
+        const MinicFunction *designator;
+        const char *symbol_name;
+        size_t symbol_name_length;
+        MinicCoreFunctionSymbolId symbol_id;
+        MinicType function_type;
+
+        designator = minic_c0_program_function(
+            context->body->program, expression->value.function_id);
+        if (designator == NULL ||
+            !minic_type_pointee(expression->type, &function_type) ||
+            !minic_type_is_function(function_type)) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        symbol_name = designator->assembler_name != NULL ? designator->assembler_name
+                                                          : designator->name;
+        symbol_name_length = designator->assembler_name != NULL
+                                 ? designator->assembler_name_length
+                                 : designator->name_length;
+        if (symbol_name == NULL || symbol_name_length == 0U ||
+            !minic_core_function_add_function_symbol(
+                context->function, symbol_name, symbol_name_length, &symbol_id)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        (void)memset(&instruction, 0, sizeof(instruction));
+        instruction.kind = MINIC_CORE_INSTRUCTION_FUNCTION_ADDRESS;
+        instruction.span = expression->span;
+        instruction.type = expression->type;
+        instruction.result = MINIC_CORE_VALUE_INVALID;
+        instruction.value.function_symbol_id = symbol_id;
+        return minic_core_function_append_value_instruction(
+                   context->function, context->block_id, &instruction, value_id)
+                   ? MINIC_CORE_LOWER_OK
+                   : MINIC_CORE_LOWER_ERROR;
+    }
     if (expression->kind == MINIC_EXPRESSION_ADDRESS_OF) {
         MinicCoreLowerStatus status;
 

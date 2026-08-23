@@ -707,6 +707,15 @@ static bool core_instruction_supported(const MinicC0Program *program,
         return instruction->value.global_id < function->global_count &&
                function->globals[instruction->value.global_id].name != NULL &&
                function->globals[instruction->value.global_id].name_length != 0U;
+    case MINIC_CORE_INSTRUCTION_FUNCTION_ADDRESS: {
+        MinicType function_type;
+        MinicCoreFunctionSymbolId symbol_id = instruction->value.function_symbol_id;
+        return symbol_id < function->function_symbol_count &&
+               function->function_symbols[symbol_id].name != NULL &&
+               function->function_symbols[symbol_id].name_length != 0U &&
+               minic_type_pointee(instruction->type, &function_type) &&
+               minic_type_is_function(function_type);
+    }
     case MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW: {
         MinicType result_type;
         size_t result_size;
@@ -1886,6 +1895,14 @@ static bool emit_instruction(FILE *file,
         if (instruction->value.global_id >= function->global_count ||
             fprintf(file, "  la t0, %s\n", function->globals[instruction->value.global_id].name) <
                 0) {
+            return false;
+        }
+        return store_core_value(file, frame, instruction->result, "t0");
+    case MINIC_CORE_INSTRUCTION_FUNCTION_ADDRESS:
+        if (instruction->value.function_symbol_id >= function->function_symbol_count ||
+            fprintf(file,
+                    "  la t0, %s\n",
+                    function->function_symbols[instruction->value.function_symbol_id].name) < 0) {
             return false;
         }
         return store_core_value(file, frame, instruction->result, "t0");

@@ -56,6 +56,7 @@ void minic_core_function_destroy(MinicCoreFunction *function) {
     size_t block_index;
     size_t callee_index;
     size_t global_index;
+    size_t function_symbol_index;
     size_t inline_asm_index;
 
     if (function == NULL) {
@@ -71,12 +72,18 @@ void minic_core_function_destroy(MinicCoreFunction *function) {
     for (global_index = 0U; global_index < function->global_count; ++global_index) {
         free(function->globals[global_index].name);
     }
+    for (function_symbol_index = 0U;
+         function_symbol_index < function->function_symbol_count;
+         ++function_symbol_index) {
+        free(function->function_symbols[function_symbol_index].name);
+    }
     for (inline_asm_index = 0U; inline_asm_index < function->inline_asm_count; ++inline_asm_index) {
         free(function->inline_asms[inline_asm_index].template_text);
     }
     free(function->name);
     free(function->parameter_types);
     free(function->globals);
+    free(function->function_symbols);
     free(function->callees);
     free(function->inline_asms);
     free(function->call_arguments);
@@ -212,6 +219,44 @@ bool minic_core_function_add_global(MinicCoreFunction *function,
     function->globals[function->global_count].type = type;
     *global_id = (MinicCoreGlobalId)function->global_count;
     function->global_count += 1U;
+    return true;
+}
+
+/* M81_FUNCTION_ADDRESS_VALUE: function symbols are names, not call sites.
+   Keep them independent from MinicCoreCallee so merely taking a function
+   address never inherits scalar-call ABI restrictions. */
+bool minic_core_function_add_function_symbol(MinicCoreFunction *function,
+                                             const char *name,
+                                             size_t name_length,
+                                             MinicCoreFunctionSymbolId *symbol_id) {
+    char *name_copy;
+    size_t index;
+
+    if (function == NULL || name == NULL || name_length == 0U || symbol_id == NULL ||
+        function->function_symbol_count >= (size_t)UINT32_MAX) {
+        return false;
+    }
+    for (index = 0U; index < function->function_symbol_count; ++index) {
+        const MinicCoreFunctionSymbol *existing = &function->function_symbols[index];
+        if (existing->name_length == name_length &&
+            memcmp(existing->name, name, name_length) == 0) {
+            *symbol_id = (MinicCoreFunctionSymbolId)index;
+            return true;
+        }
+    }
+    name_copy = copy_name(name, name_length);
+    if (name_copy == NULL ||
+        !grow_array((void **)&function->function_symbols,
+                    &function->function_symbol_capacity,
+                    function->function_symbol_count,
+                    sizeof(*function->function_symbols))) {
+        free(name_copy);
+        return false;
+    }
+    function->function_symbols[function->function_symbol_count].name = name_copy;
+    function->function_symbols[function->function_symbol_count].name_length = name_length;
+    *symbol_id = (MinicCoreFunctionSymbolId)function->function_symbol_count;
+    function->function_symbol_count += 1U;
     return true;
 }
 
@@ -683,6 +728,18 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
             return false;
         }
         return minic_type_equal(pointer_type, instruction->type);
+    }
+    case MINIC_CORE_INSTRUCTION_FUNCTION_ADDRESS: {
+        MinicType function_type;
+        MinicCoreFunctionSymbolId symbol_id;
+
+        symbol_id = instruction->value.function_symbol_id;
+        return instruction_result_is_valid(function, instruction) &&
+               symbol_id < function->function_symbol_count &&
+               function->function_symbols[symbol_id].name != NULL &&
+               function->function_symbols[symbol_id].name_length != 0U &&
+               minic_type_pointee(instruction->type, &function_type) &&
+               minic_type_is_function(function_type);
     }
     case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS: {
         MinicCoreValueId base;
@@ -1324,6 +1381,15 @@ static bool dump_instruction(FILE *output,
                        "  %%%" PRIu32 " = global.addr @%s\n",
                        instruction->result,
                        function->globals[instruction->value.global_id].name) >= 0;
+    case MINIC_CORE_INSTRUCTION_FUNCTION_ADDRESS:
+        if (function == NULL ||
+            instruction->value.function_symbol_id >= function->function_symbol_count) {
+            return false;
+        }
+        return fprintf(output,
+                       "  %%%" PRIu32 " = function.addr @%s\n",
+                       instruction->result,
+                       function->function_symbols[instruction->value.function_symbol_id].name) >= 0;
     case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:
         return fprintf(output,
                        "  %%%" PRIu32 " = field.addr %%%" PRIu32 ", record=%zu, field=%zu\n",
