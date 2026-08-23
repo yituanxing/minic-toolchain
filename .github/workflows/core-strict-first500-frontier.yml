@@ -55,6 +55,7 @@ jobs:
           python3 tools/dev/patch-core-frontier-m65-assignment-expression.py
           python3 tools/dev/patch-core-frontier-m66-subscript-index-value-type.py
           python3 tools/dev/patch-core-frontier-m67-structured-inline-asm.py
+          python3 tools/dev/patch-core-frontier-m68-structured-inline-asm-optional-inputs.py
 
       - name: Build exact compiler
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-strict500-compiler
@@ -94,13 +95,21 @@ jobs:
           ]
           if unexpected_errors:
               raise SystemExit(f"unexpected Linux probe errors: {unexpected_errors}")
+          atomic_optional_input_family = {
+              'arch_atomic_inc_unless_negative',
+              'arch_atomic_dec_unless_positive',
+              'arch_atomic_dec_if_positive',
+              'arch_atomic64_inc_unless_negative',
+              'arch_atomic64_dec_unless_positive',
+              'arch_atomic64_dec_if_positive',
+          }
           old_family = [
               b for b in s['blockers']
-              if b['function'] == 'arch_atomic_fetch_add_unless'
+              if b['function'] in atomic_optional_input_family
           ]
           if old_family:
-              raise SystemExit(f"Linux probe still in atomic multi-operand asm family: {old_family}")
-          print(f"LINUX_EIGHT_FRONTIER_PASSED_M67 known_errors={len(s.get('errors', []))}")
+              raise SystemExit(f"Linux probe still in atomic optional-input asm family: {old_family}")
+          print(f"LINUX_EIGHT_FRONTIER_PASSED_M68 known_errors={len(s.get('errors', []))}")
           PY
 
       - name: Upload fast frontier evidence
@@ -116,19 +125,19 @@ jobs:
             build/core-strict500-probe/frontier-summary.json
           if-no-files-found: warn
 
-      - name: Persist M67 source changes
+      - name: Persist M68 source changes
         if: success()
         shell: bash
         run: |
           set -Eeuo pipefail
-          files=(src/core/core_ir.h src/core/core_ir.c src/core/core_lower.c src/target/riscv64/core_codegen.c)
+          files=(src/core/core_lower.c src/target/riscv64/core_codegen.c)
           if git diff --quiet -- "${files[@]}"; then
             exit 0
           fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -- "${files[@]}"
-          git commit -m 'core: add structured multi-operand inline asm'
+          git commit -m 'core: allow optional inputs in structured inline asm'
           git push origin HEAD:refactor/declaration-sema-v1
 
   full500-background:
@@ -179,6 +188,7 @@ jobs:
           python3 tools/dev/patch-core-frontier-m65-assignment-expression.py
           python3 tools/dev/patch-core-frontier-m66-subscript-index-value-type.py
           python3 tools/dev/patch-core-frontier-m67-structured-inline-asm.py
+          python3 tools/dev/patch-core-frontier-m68-structured-inline-asm-optional-inputs.py
 
       - name: Build exact compiler
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-strict500-compiler
