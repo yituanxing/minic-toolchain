@@ -4013,7 +4013,16 @@ static MinicCoreLowerStatus lower_expression_statement(MinicCoreLowerContext *co
         if (expression->kind == MINIC_EXPRESSION_STATEMENT &&
             expression->value.statement_expression.result == MINIC_EXPRESSION_INVALID &&
             minic_type_is_void(expression->type)) {
-            return lower_expression(context, statement->expression, &discarded_value);
+            const MinicBlock *statement_block;
+            bool statement_expression_terminated;
+
+            statement_block = minic_c0_program_block(
+                context->body->program, expression->value.statement_expression.block);
+            if (statement_block == NULL) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            statement_expression_terminated = false;
+            return lower_block(context, statement_block, &statement_expression_terminated);
         }
         if (!core_scalar_expression_value_type(context->body, expression, &discarded_type)) {
             return MINIC_CORE_LOWER_UNSUPPORTED;
@@ -4086,6 +4095,10 @@ static MinicCoreLowerStatus lower_return(MinicCoreLowerContext *context,
                        minic_c0_record_value_is_address_backed(
                            context->body->program, statement->expression)) {
                 status = lower_record_compound_literal_object(
+                    context, expression, &terminator.return_object);
+            } else if (expression->kind == MINIC_EXPRESSION_CALL &&
+                       expression->value.call.function_id != MINIC_FUNCTION_INVALID) {
+                status = lower_direct_record_call_object(
                     context, expression, &terminator.return_object);
             } else {
                 return MINIC_CORE_LOWER_UNSUPPORTED;
@@ -4393,6 +4406,11 @@ static bool source_position_equal(MinicSourcePosition left, MinicSourcePosition 
     return left.offset == right.offset && left.line == right.line && left.column == right.column;
 }
 
+static bool core_cleanup_edge_is_empty(const MinicStatement *statement) {
+    return statement != NULL &&
+           statement->cleanup_context == statement->cleanup_stop_context;
+}
+
 static bool normalized_do_while_zero_body(const MinicCoreLowerContext *context,
                                           const MinicStatement *loop,
                                           const MinicBlock *body,
@@ -4449,8 +4467,7 @@ static bool normalized_do_while_zero_body(const MinicCoreLowerContext *context,
     break_statement =
         minic_c0_program_statement(context->body->program, break_block->statements[0]);
     if (break_statement == NULL || break_statement->kind != MINIC_STATEMENT_BREAK ||
-        break_statement->cleanup_context != MINIC_CLEANUP_CONTEXT_ROOT ||
-        break_statement->cleanup_stop_context != MINIC_CLEANUP_CONTEXT_ROOT ||
+        !core_cleanup_edge_is_empty(break_statement) ||
         !source_position_equal(break_statement->span.begin, loop->span.begin)) {
         return false;
     }
@@ -4510,9 +4527,7 @@ static bool normalized_for_update_tail(const MinicCoreLowerContext *context,
         continue_label->expression != MINIC_EXPRESSION_INVALID ||
         continue_label->target_statement != MINIC_STATEMENT_INVALID ||
         !source_position_equal(continue_label->span.begin, loop->span.begin) || update == NULL ||
-        update->kind != MINIC_STATEMENT_EXPRESSION ||
-        update->cleanup_context != MINIC_CLEANUP_CONTEXT_ROOT ||
-        update->cleanup_stop_context != MINIC_CLEANUP_CONTEXT_ROOT ||
+        update->kind != MINIC_STATEMENT_EXPRESSION || !core_cleanup_edge_is_empty(update) ||
         update->expression == MINIC_EXPRESSION_INVALID) {
         return false;
     }
@@ -4540,9 +4555,7 @@ lower_while(MinicCoreLowerContext *context, const MinicStatement *statement, boo
 
     if (context == NULL || context->body == NULL || context->body->program == NULL ||
         context->function == NULL || statement == NULL || terminated == NULL ||
-        statement->kind != MINIC_STATEMENT_WHILE ||
-        statement->cleanup_context != MINIC_CLEANUP_CONTEXT_ROOT ||
-        statement->cleanup_stop_context != MINIC_CLEANUP_CONTEXT_ROOT ||
+        statement->kind != MINIC_STATEMENT_WHILE || !core_cleanup_edge_is_empty(statement) ||
         statement->then_block == MINIC_BLOCK_INVALID ||
         statement->else_block != MINIC_BLOCK_INVALID) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
@@ -4631,12 +4644,25 @@ lower_while(MinicCoreLowerContext *context, const MinicStatement *statement, boo
     status = lower_block(context, iteration_source, &body_terminated);
     context->break_target = saved_break_target;
     if (status != MINIC_CORE_LOWER_OK) {
+        (void)fprintf(stderr,
+                      "CORE_FAST_TRACE stage=while reason=body function=%s status=%d "
+                      "normalized_for=%d has_update=%d span=%zu:%zu\n",
+                      context->source_function->name,
+                      (int)status,
+                      normalized_for ? 1 : 0,
+                      for_update != NULL ? 1 : 0,
+                      statement->span.begin.line,
+                      statement->span.begin.column);
         return status;
     }
     if (!body_terminated && for_update != NULL) {
         status = lower_expression_statement(context, for_update);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
+        }
+        if (context->block_id < context->function->block_count &&
+            context->function->blocks[context->block_id].has_terminator) {
+            body_terminated = true;
         }
     }
     if (!body_terminated) {
@@ -6555,8 +6581,11 @@ lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool
                 return MINIC_CORE_LOWER_UNSUPPORTED;
             }
         }
-        if (statement->cleanup_context != MINIC_CLEANUP_CONTEXT_ROOT ||
-            statement->cleanup_stop_context != MINIC_CLEANUP_CONTEXT_ROOT) {
+        /* BATCH_C_ZERO_DISTANCE_CLEANUP_EDGE: cleanup ids are semantic edge
+           metadata. Equal ids mean the edge crosses no cleanup lifetime, even
+           when both ids are non-root. Only an actual context transition needs
+           cleanup-expression lowering, which remains fail-closed here. */
+        if (statement->cleanup_context != statement->cleanup_stop_context) {
             (void)fprintf(stderr,
                           "CORE_FAST_TRACE stage=statement reason=cleanup-context "
                           "function=%s kind=%d span=%zu:%zu cleanup=%llu stop=%llu\n",
