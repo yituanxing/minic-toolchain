@@ -2780,13 +2780,15 @@ static MinicCoreLowerStatus lower_return(MinicCoreLowerContext *context,
                                                     statement->expression,
                                                     &terminator.return_value);
         } else if (minic_type_is_pointer(context->source_function->return_type)) {
-            status = lower_expression(context, statement->expression, &terminator.return_value);
-            if (status == MINIC_CORE_LOWER_OK &&
-                (terminator.return_value >= context->function->value_count ||
-                 !minic_type_equal(context->function->values[terminator.return_value].type,
-                                   context->source_function->return_type))) {
-                return MINIC_CORE_LOWER_UNSUPPORTED;
-            }
+            /* M62_POINTER_RETURN_CONVERSION: return uses assignment conversion.
+               In particular, T * may return as volatile T * / const T * without
+               requiring the source expression to already carry the exact pointer
+               qualifiers. Reuse the scalar assignment seam rather than imposing
+               an exact-type Core artifact at the return boundary. */
+            status = lower_scalar_assignment_value(context,
+                                                   context->source_function->return_type,
+                                                   statement->expression,
+                                                   &terminator.return_value);
         } else if (minic_type_is_record(context->source_function->return_type)) {
             const MinicExpression *expression;
             const MinicLocal *local;
