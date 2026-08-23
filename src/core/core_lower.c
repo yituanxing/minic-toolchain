@@ -1185,6 +1185,79 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         *value_id = result_value;
         return MINIC_CORE_LOWER_OK;
     }
+    /* M53_VOID_CONDITIONAL_EXPRESSION: C permits an effect-only
+       conditional when both arms have void type. Model it as CFG only; there is
+       deliberately no synthetic scalar result or spill object. */
+    if (expression->kind == MINIC_EXPRESSION_CONDITIONAL &&
+        !expression->value.conditional.uses_condition_value &&
+        expression->value.conditional.when_true != MINIC_EXPRESSION_INVALID &&
+        expression->value.conditional.when_false != MINIC_EXPRESSION_INVALID &&
+        minic_type_is_void(expression->type)) {
+        const MinicExpression *false_expression;
+        const MinicExpression *true_expression;
+        MinicCoreBlockId false_block;
+        MinicCoreBlockId merge_block;
+        MinicCoreBlockId true_block;
+        MinicCoreValueId discarded_value;
+        MinicCoreLowerStatus status;
+
+        true_expression = minic_c0_program_expression(
+            context->body->program, expression->value.conditional.when_true);
+        false_expression = minic_c0_program_expression(
+            context->body->program, expression->value.conditional.when_false);
+        if (true_expression == NULL || false_expression == NULL) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        if (!minic_type_is_void(true_expression->type) ||
+            !minic_type_is_void(false_expression->type)) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        if (!minic_core_function_add_block(context->function, &true_block) ||
+            !minic_core_function_add_block(context->function, &false_block) ||
+            !minic_core_function_add_block(context->function, &merge_block)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        status = lower_condition_branch(context,
+                                        expression->value.conditional.condition,
+                                        expression->span,
+                                        true_block,
+                                        false_block);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+
+        context->block_id = true_block;
+        status = lower_expression(
+            context, expression->value.conditional.when_true, &discarded_value);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        if (discarded_value != MINIC_CORE_VALUE_INVALID) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        status = set_branch(context, context->block_id, expression->span, merge_block);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+
+        context->block_id = false_block;
+        status = lower_expression(
+            context, expression->value.conditional.when_false, &discarded_value);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        if (discarded_value != MINIC_CORE_VALUE_INVALID) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        status = set_branch(context, context->block_id, expression->span, merge_block);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+
+        context->block_id = merge_block;
+        *value_id = MINIC_CORE_VALUE_INVALID;
+        return MINIC_CORE_LOWER_OK;
+    }
     if (expression->kind == MINIC_EXPRESSION_CONDITIONAL) {
         const MinicExpression *false_expression;
         const MinicExpression *true_expression;
@@ -2550,6 +2623,21 @@ static MinicCoreLowerStatus lower_expression_statement(MinicCoreLowerContext *co
         MinicCoreValueId discarded_value;
 
         return lower_direct_call(context, expression, &discarded_value);
+    }
+    /* M54_VOID_CONDITIONAL_STATEMENT: expression statements are only an
+       effect boundary. Once M53 can lower a void conditional expression, the
+       statement layer must delegate rather than reject the expression kind. */
+    if (expression->kind == MINIC_EXPRESSION_CONDITIONAL &&
+        minic_type_is_void(expression->type)) {
+        MinicCoreValueId discarded_value;
+        MinicCoreLowerStatus status;
+
+        status = lower_expression(context, statement->expression, &discarded_value);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        return discarded_value == MINIC_CORE_VALUE_INVALID ? MINIC_CORE_LOWER_OK
+                                                            : MINIC_CORE_LOWER_ERROR;
     }
     if (expression->kind == MINIC_EXPRESSION_COMPOUND_ASSIGNMENT) {
         MinicCoreValueId discarded_value;
