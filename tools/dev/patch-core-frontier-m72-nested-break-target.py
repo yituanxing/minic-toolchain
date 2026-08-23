@@ -115,6 +115,41 @@ if text.count(break_anchor) != 1:
     raise SystemExit(f'M72 break anchor count={text.count(break_anchor)}')
 text = text.replace(break_anchor, break_replacement, 1)
 
+trace_anchor = '''            default:
+                return MINIC_CORE_LOWER_UNSUPPORTED;
+            }
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
+'''
+trace_replacement = '''            default:
+                (void)fprintf(stderr,
+                              "CORE_FAST_TRACE stage=statement reason=unsupported-kind "
+                              "function=%s kind=%d span=%zu:%zu break_target=%llu\\n",
+                              context->source_function->name,
+                              (int)statement->kind,
+                              statement->span.begin.line,
+                              statement->span.begin.column,
+                              (unsigned long long)context->break_target);
+                return MINIC_CORE_LOWER_UNSUPPORTED;
+            }
+            if (status != MINIC_CORE_LOWER_OK) {
+                (void)fprintf(stderr,
+                              "CORE_FAST_TRACE stage=statement reason=lower-status "
+                              "function=%s kind=%d status=%d span=%zu:%zu break_target=%llu\\n",
+                              context->source_function->name,
+                              (int)statement->kind,
+                              (int)status,
+                              statement->span.begin.line,
+                              statement->span.begin.column,
+                              (unsigned long long)context->break_target);
+                return status;
+            }
+'''
+if text.count(trace_anchor) != 1:
+    raise SystemExit(f'M72 trace anchor count={text.count(trace_anchor)}')
+text = text.replace(trace_anchor, trace_replacement, 1)
+
 init_anchor = '''    context.function = &lowered;
     context.block_id = block_id;
     context.local_objects = local_objects;
@@ -129,4 +164,4 @@ if text.count(init_anchor) != 1:
 text = text.replace(init_anchor, init_replacement, 1)
 
 path.write_text(text)
-print('M72 nested break target applied')
+print('M72 nested break target + statement trace applied')
