@@ -770,6 +770,52 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
         return inline_asm->template_text != NULL && inline_asm->template_length != 0U &&
                inline_asm->is_volatile;
     }
+    case MINIC_CORE_INSTRUCTION_MEMORY_READWRITE_SCALAR_INPUT_INLINE_ASM: {
+        const MinicCoreInlineAsm *inline_asm;
+        MinicCoreValueId memory_address;
+        MinicCoreValueId operand;
+        MinicType pointee;
+        size_t memory_index;
+        size_t register_index;
+        size_t scalar_index;
+        bool has_register_output;
+
+        memory_address = instruction->value.memory_readwrite_scalar_input_inline_asm.memory_address;
+        operand = instruction->value.memory_readwrite_scalar_input_inline_asm.operand;
+        memory_index = instruction->value.memory_readwrite_scalar_input_inline_asm.memory_operand_index;
+        register_index =
+            instruction->value.memory_readwrite_scalar_input_inline_asm.register_output_operand_index;
+        scalar_index =
+            instruction->value.memory_readwrite_scalar_input_inline_asm.scalar_input_operand_index;
+        has_register_output = register_index != SIZE_MAX;
+        if (memory_address >= function->value_count || operand >= function->value_count ||
+            !available_values[memory_address] || !available_values[operand] ||
+            !minic_type_pointee(function->values[memory_address].type, &pointee) ||
+            (!minic_type_is_integer(pointee) && !minic_type_is_pointer(pointee)) ||
+            (!minic_type_is_integer(function->values[operand].type) &&
+             !minic_type_is_pointer(function->values[operand].type)) ||
+            memory_index > 9U || scalar_index > 9U || memory_index == scalar_index ||
+            (has_register_output &&
+             (register_index > 9U || register_index == memory_index || register_index == scalar_index)) ||
+            instruction->value.memory_readwrite_scalar_input_inline_asm.inline_asm_id >=
+                function->inline_asm_count) {
+            return false;
+        }
+        if (has_register_output) {
+            if (!instruction_result_is_valid(function, instruction) ||
+                (!minic_type_is_integer(instruction->type) &&
+                 !minic_type_is_pointer(instruction->type))) {
+                return false;
+            }
+        } else if (instruction->result != MINIC_CORE_VALUE_INVALID ||
+                   !minic_type_is_void(instruction->type)) {
+            return false;
+        }
+        inline_asm = &function->inline_asms[
+            instruction->value.memory_readwrite_scalar_input_inline_asm.inline_asm_id];
+        return inline_asm->template_text != NULL && inline_asm->template_length != 0U &&
+               inline_asm->is_volatile && inline_asm->has_memory_clobber;
+    }
     case MINIC_CORE_INSTRUCTION_SCALAR_INPUT_INLINE_ASM: {
         const MinicCoreInlineAsm *inline_asm;
         MinicCoreValueId operand;
@@ -1226,6 +1272,43 @@ static bool dump_instruction(FILE *output,
                        instruction->result,
                        inline_asm_id,
                        instruction->value.register_output_input_inline_asm.operand,
+                       inline_asm->is_volatile ? " volatile" : "",
+                       inline_asm->has_memory_clobber ? " memory" : "") >= 0;
+    }
+    case MINIC_CORE_INSTRUCTION_MEMORY_READWRITE_SCALAR_INPUT_INLINE_ASM: {
+        const MinicCoreInlineAsm *inline_asm;
+        MinicCoreInlineAsmId inline_asm_id;
+        size_t register_index;
+
+        inline_asm_id = instruction->value.memory_readwrite_scalar_input_inline_asm.inline_asm_id;
+        register_index =
+            instruction->value.memory_readwrite_scalar_input_inline_asm.register_output_operand_index;
+        if (function == NULL || inline_asm_id >= function->inline_asm_count) {
+            return false;
+        }
+        inline_asm = &function->inline_asms[inline_asm_id];
+        if (register_index == SIZE_MAX) {
+            return fprintf(output,
+                           "  asm.memory_rw_input id=%" PRIu32 " mem=%%%" PRIu32
+                           " input=%%%" PRIu32 " operands=%zu,-,%zu%s%s\n",
+                           inline_asm_id,
+                           instruction->value.memory_readwrite_scalar_input_inline_asm.memory_address,
+                           instruction->value.memory_readwrite_scalar_input_inline_asm.operand,
+                           instruction->value.memory_readwrite_scalar_input_inline_asm.memory_operand_index,
+                           instruction->value.memory_readwrite_scalar_input_inline_asm.scalar_input_operand_index,
+                           inline_asm->is_volatile ? " volatile" : "",
+                           inline_asm->has_memory_clobber ? " memory" : "") >= 0;
+        }
+        return fprintf(output,
+                       "  %%%" PRIu32 " = asm.memory_rw_input id=%" PRIu32
+                       " mem=%%%" PRIu32 " input=%%%" PRIu32 " operands=%zu,%zu,%zu%s%s\n",
+                       instruction->result,
+                       inline_asm_id,
+                       instruction->value.memory_readwrite_scalar_input_inline_asm.memory_address,
+                       instruction->value.memory_readwrite_scalar_input_inline_asm.operand,
+                       instruction->value.memory_readwrite_scalar_input_inline_asm.memory_operand_index,
+                       register_index,
+                       instruction->value.memory_readwrite_scalar_input_inline_asm.scalar_input_operand_index,
                        inline_asm->is_volatile ? " volatile" : "",
                        inline_asm->has_memory_clobber ? " memory" : "") >= 0;
     }

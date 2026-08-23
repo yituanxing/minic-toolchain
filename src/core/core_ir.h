@@ -65,6 +65,7 @@ typedef enum MinicCoreInstructionKind {
     MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM,
     MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INLINE_ASM,
     MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INPUT_INLINE_ASM,
+    MINIC_CORE_INSTRUCTION_MEMORY_READWRITE_SCALAR_INPUT_INLINE_ASM,
     MINIC_CORE_INSTRUCTION_SCALAR_INPUT_INLINE_ASM,
     MINIC_CORE_INSTRUCTION_COMPILER_BARRIER,
     MINIC_CORE_INSTRUCTION_CALL
@@ -157,6 +158,14 @@ typedef struct MinicCoreInstruction {
             MinicCoreInlineAsmId inline_asm_id;
             MinicCoreValueId operand;
         } register_output_input_inline_asm;
+        struct {
+            MinicCoreInlineAsmId inline_asm_id;
+            MinicCoreValueId memory_address;
+            MinicCoreValueId operand;
+            size_t memory_operand_index;
+            size_t register_output_operand_index;
+            size_t scalar_input_operand_index;
+        } memory_readwrite_scalar_input_inline_asm;
         struct {
             MinicCoreInlineAsmId inline_asm_id;
             MinicCoreValueId operand;

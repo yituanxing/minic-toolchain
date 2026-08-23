@@ -383,6 +383,84 @@ static bool core_register_output_input_inline_asm_supported(
     return true;
 }
 
+static bool core_memory_readwrite_scalar_input_inline_asm_supported(
+    const MinicCoreFunction *function, const MinicCoreInstruction *instruction) {
+    const MinicCoreInlineAsm *inline_asm;
+    MinicCoreValueId memory_address;
+    MinicCoreValueId operand;
+    size_t memory_index;
+    size_t register_index;
+    size_t scalar_index;
+    size_t index;
+    bool has_register_output;
+
+    if (function == NULL || instruction == NULL ||
+        instruction->kind != MINIC_CORE_INSTRUCTION_MEMORY_READWRITE_SCALAR_INPUT_INLINE_ASM ||
+        instruction->value.memory_readwrite_scalar_input_inline_asm.inline_asm_id >=
+            function->inline_asm_count) {
+        return false;
+    }
+    memory_address = instruction->value.memory_readwrite_scalar_input_inline_asm.memory_address;
+    operand = instruction->value.memory_readwrite_scalar_input_inline_asm.operand;
+    memory_index = instruction->value.memory_readwrite_scalar_input_inline_asm.memory_operand_index;
+    register_index =
+        instruction->value.memory_readwrite_scalar_input_inline_asm.register_output_operand_index;
+    scalar_index =
+        instruction->value.memory_readwrite_scalar_input_inline_asm.scalar_input_operand_index;
+    has_register_output = register_index != SIZE_MAX;
+    if (memory_address >= function->value_count || operand >= function->value_count ||
+        !minic_type_is_pointer(function->values[memory_address].type) ||
+        (!minic_type_is_integer(function->values[operand].type) &&
+         !minic_type_is_pointer(function->values[operand].type)) ||
+        memory_index > 9U || scalar_index > 9U || memory_index == scalar_index ||
+        (has_register_output &&
+         (register_index > 9U || register_index == memory_index || register_index == scalar_index))) {
+        return false;
+    }
+    if (has_register_output) {
+        if ((!minic_type_is_integer(instruction->type) &&
+             !minic_type_is_pointer(instruction->type)) ||
+            instruction->result == MINIC_CORE_VALUE_INVALID) {
+            return false;
+        }
+    } else if (!minic_type_is_void(instruction->type) ||
+               instruction->result != MINIC_CORE_VALUE_INVALID) {
+        return false;
+    }
+    inline_asm = &function->inline_asms[
+        instruction->value.memory_readwrite_scalar_input_inline_asm.inline_asm_id];
+    if (inline_asm->template_text == NULL || inline_asm->template_length == 0U ||
+        !inline_asm->is_volatile || !inline_asm->has_memory_clobber) {
+        return false;
+    }
+    for (index = 0U; index < inline_asm->template_length; ++index) {
+        size_t operand_index;
+        unsigned char ch;
+
+        if (inline_asm->template_text[index] != '%') {
+            continue;
+        }
+        if (index + 1U >= inline_asm->template_length) {
+            return false;
+        }
+        ch = (unsigned char)inline_asm->template_text[index + 1U];
+        if (ch == '%') {
+            index += 1U;
+            continue;
+        }
+        if (ch < '0' || ch > '9') {
+            return false;
+        }
+        operand_index = (size_t)(ch - '0');
+        if (operand_index != memory_index && operand_index != scalar_index &&
+            (!has_register_output || operand_index != register_index)) {
+            return false;
+        }
+        index += 1U;
+    }
+    return true;
+}
+
 static bool core_scalar_input_inline_asm_supported(
     const MinicCoreFunction *function, const MinicCoreInstruction *instruction) {
     const MinicCoreInlineAsm *inline_asm;
@@ -485,6 +563,8 @@ static bool core_instruction_supported(const MinicC0Program *program,
         return core_register_output_inline_asm_supported(function, instruction);
     case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INPUT_INLINE_ASM:
         return core_register_output_input_inline_asm_supported(function, instruction);
+    case MINIC_CORE_INSTRUCTION_MEMORY_READWRITE_SCALAR_INPUT_INLINE_ASM:
+        return core_memory_readwrite_scalar_input_inline_asm_supported(function, instruction);
     case MINIC_CORE_INSTRUCTION_SCALAR_INPUT_INLINE_ASM:
         return core_scalar_input_inline_asm_supported(function, instruction);
     case MINIC_CORE_INSTRUCTION_COMPILER_BARRIER:
@@ -992,6 +1072,93 @@ static bool emit_register_output_input_inline_asm(
     return store_core_value(file, frame, instruction->result, "t0");
 }
 
+static bool emit_memory_readwrite_scalar_input_inline_asm(
+    FILE *file,
+    const MinicC0Program *program,
+    const MinicCoreFunction *function,
+    const MinicRiscv64CoreFrame *frame,
+    const MinicCoreInstruction *instruction) {
+    const MinicCoreInlineAsm *inline_asm;
+    size_t memory_index;
+    size_t register_index;
+    size_t scalar_index;
+    size_t index;
+    bool has_register_output;
+
+    if (file == NULL || program == NULL || frame == NULL ||
+        !core_memory_readwrite_scalar_input_inline_asm_supported(function, instruction) ||
+        !load_core_value(
+            file,
+            frame,
+            instruction->value.memory_readwrite_scalar_input_inline_asm.memory_address,
+            "t0") ||
+        !load_core_value(
+            file, frame, instruction->value.memory_readwrite_scalar_input_inline_asm.operand, "t2")) {
+        return false;
+    }
+    memory_index = instruction->value.memory_readwrite_scalar_input_inline_asm.memory_operand_index;
+    register_index =
+        instruction->value.memory_readwrite_scalar_input_inline_asm.register_output_operand_index;
+    scalar_index =
+        instruction->value.memory_readwrite_scalar_input_inline_asm.scalar_input_operand_index;
+    has_register_output = register_index != SIZE_MAX;
+    inline_asm = &function->inline_asms[
+        instruction->value.memory_readwrite_scalar_input_inline_asm.inline_asm_id];
+    if (fprintf(file, "  ") < 0) {
+        return false;
+    }
+    for (index = 0U; index < inline_asm->template_length; ++index) {
+        size_t operand_index;
+        unsigned char ch;
+
+        if (inline_asm->template_text[index] != '%') {
+            if (fputc((unsigned char)inline_asm->template_text[index], file) == EOF) {
+                return false;
+            }
+            continue;
+        }
+        index += 1U;
+        ch = (unsigned char)inline_asm->template_text[index];
+        if (ch == '%') {
+            if (fputc('%', file) == EOF) {
+                return false;
+            }
+            continue;
+        }
+        if (ch < '0' || ch > '9') {
+            return false;
+        }
+        operand_index = (size_t)(ch - '0');
+        if (operand_index == memory_index) {
+            if (fprintf(file, "(t0)") < 0) {
+                return false;
+            }
+        } else if (has_register_output && operand_index == register_index) {
+            if (fprintf(file, "t1") < 0) {
+                return false;
+            }
+        } else if (operand_index == scalar_index) {
+            if (fprintf(file, "t2") < 0) {
+                return false;
+            }
+        } else {
+            return false;
+        }
+    }
+    if (fputc('\n', file) == EOF) {
+        return false;
+    }
+    if (!has_register_output) {
+        return true;
+    }
+    if (minic_type_is_integer(instruction->type) &&
+        !minic_riscv64_emit_integer_conversion_for_program(
+            file, program, instruction->type, "t1")) {
+        return false;
+    }
+    return store_core_value(file, frame, instruction->result, "t1");
+}
+
 static bool emit_scalar_input_inline_asm(
     FILE *file,
     const MinicCoreFunction *function,
@@ -1390,6 +1557,9 @@ static bool emit_instruction(FILE *file,
         return emit_register_output_inline_asm(file, program, function, frame, instruction);
     case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INPUT_INLINE_ASM:
         return emit_register_output_input_inline_asm(file, program, function, frame, instruction);
+    case MINIC_CORE_INSTRUCTION_MEMORY_READWRITE_SCALAR_INPUT_INLINE_ASM:
+        return emit_memory_readwrite_scalar_input_inline_asm(
+            file, program, function, frame, instruction);
     case MINIC_CORE_INSTRUCTION_SCALAR_INPUT_INLINE_ASM:
         return emit_scalar_input_inline_asm(file, function, frame, instruction);
     case MINIC_CORE_INSTRUCTION_COMPILER_BARRIER:

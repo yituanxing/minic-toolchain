@@ -3126,6 +3126,23 @@ lower_while(MinicCoreLowerContext *context, const MinicStatement *statement, boo
     return MINIC_CORE_LOWER_OK;
 }
 
+static bool core_inline_asm_constraint_is(const MinicInlineAsmOperand *operand,
+                                              const char *text) {
+    size_t length;
+
+    if (operand == NULL || text == NULL || operand->constraint_text == NULL) {
+        return false;
+    }
+    length = strlen(text);
+    return operand->constraint_length == length &&
+           memcmp(operand->constraint_text, text, length) == 0;
+}
+
+static bool core_inline_asm_register_output_constraint(const MinicInlineAsmOperand *operand) {
+    return core_inline_asm_constraint_is(operand, "=r") ||
+           core_inline_asm_constraint_is(operand, "=&r");
+}
+
 static MinicCoreLowerStatus lower_opaque_inline_asm(MinicCoreLowerContext *context,
                                                     const MinicStatement *statement) {
     const MinicInlineAsm *source;
@@ -3156,6 +3173,225 @@ static MinicCoreLowerStatus lower_opaque_inline_asm(MinicCoreLowerContext *conte
                    context->function, context->block_id, &instruction)
                    ? MINIC_CORE_LOWER_OK
                    : MINIC_CORE_LOWER_ERROR;
+    }
+
+    if (source->is_volatile && !source->is_goto && source->template_text != NULL &&
+        source->template_length != 0U && source->outputs != NULL && source->inputs != NULL &&
+        source->output_count == 2U && source->input_count == 1U && source->has_memory_clobber &&
+        source->label_count == 0U && source->register_clobber_count == 0U &&
+        source->clobber_count == 1U) {
+        const MinicInlineAsmOperand *input;
+        const MinicInlineAsmOperand *memory_output;
+        const MinicInlineAsmOperand *register_output;
+        const MinicExpression *input_expression;
+        const MinicExpression *memory_expression;
+        const MinicExpression *register_expression;
+        const MinicLocal *register_local;
+        MinicCoreValueId input_value;
+        MinicCoreValueId memory_address;
+        MinicCoreValueId output_address;
+        MinicCoreValueId output_value;
+        MinicCoreLowerStatus status;
+        MinicType input_type;
+        MinicType memory_type;
+        MinicType output_type;
+        size_t memory_index;
+        size_t register_index;
+
+        input = &source->inputs[0];
+        memory_output = NULL;
+        register_output = NULL;
+        memory_index = SIZE_MAX;
+        register_index = SIZE_MAX;
+        for (size_t output_index = 0U; output_index < 2U; ++output_index) {
+            const MinicInlineAsmOperand *candidate;
+
+            candidate = &source->outputs[output_index];
+            if (candidate->access == MINIC_INLINE_ASM_OPERAND_READ_WRITE &&
+                core_inline_asm_constraint_is(candidate, "+A")) {
+                if (memory_output != NULL) {
+                    return MINIC_CORE_LOWER_UNSUPPORTED;
+                }
+                memory_output = candidate;
+                memory_index = output_index;
+            } else if (candidate->access == MINIC_INLINE_ASM_OPERAND_WRITE_ONLY &&
+                       core_inline_asm_register_output_constraint(candidate)) {
+                if (register_output != NULL) {
+                    return MINIC_CORE_LOWER_UNSUPPORTED;
+                }
+                register_output = candidate;
+                register_index = output_index;
+            } else {
+                memory_output = NULL;
+                register_output = NULL;
+                break;
+            }
+        }
+        input_expression = minic_c0_program_expression(context->body->program, input->expression);
+        memory_expression = memory_output == NULL
+                                ? NULL
+                                : minic_c0_program_expression(context->body->program,
+                                                              memory_output->expression);
+        register_expression = register_output == NULL
+                                  ? NULL
+                                  : minic_c0_program_expression(context->body->program,
+                                                                register_output->expression);
+        if (memory_output != NULL && register_output != NULL &&
+            input->access == MINIC_INLINE_ASM_OPERAND_READ_ONLY &&
+            core_inline_asm_constraint_is(input, "r") && input_expression != NULL &&
+            memory_expression != NULL && register_expression != NULL &&
+            memory_expression->value_category == MINIC_VALUE_LVALUE &&
+            register_expression->kind == MINIC_EXPRESSION_LOCAL &&
+            register_expression->value_category == MINIC_VALUE_LVALUE &&
+            !minic_type_is_const(memory_expression->type) &&
+            !minic_type_is_const(register_expression->type) &&
+            !minic_type_is_volatile(register_expression->type) &&
+            minic_type_unqualified(memory_expression->type, &memory_type) &&
+            minic_type_unqualified(register_expression->type, &output_type) &&
+            core_memory_scalar_type(memory_type) && core_memory_scalar_type(output_type) &&
+            core_scalar_expression_value_type(context->body, input_expression, &input_type) &&
+            minic_type_equal(memory_type, input_type) && minic_type_equal(output_type, memory_type)) {
+            register_local = minic_c0_program_local(
+                context->body->program, register_expression->value.local_id);
+            if (register_local == NULL) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            if (!register_local->is_array &&
+                minic_c0_program_local_fixed_register_binding(
+                    context->body->program, register_expression->value.local_id) == NULL &&
+                minic_type_equal(register_local->type, register_expression->type)) {
+                status = lower_expression(context, input->expression, &input_value);
+                if (status != MINIC_CORE_LOWER_OK) {
+                    return status;
+                }
+                status = lower_address(context, memory_output->expression, &memory_address);
+                if (status != MINIC_CORE_LOWER_OK) {
+                    return status;
+                }
+                if (input_value >= context->function->value_count ||
+                    memory_address >= context->function->value_count ||
+                    !minic_type_equal(context->function->values[input_value].type, input_type)) {
+                    return MINIC_CORE_LOWER_ERROR;
+                }
+                if (!minic_core_function_add_opaque_inline_asm(context->function,
+                                                               source->template_text,
+                                                               source->template_length,
+                                                               source->is_volatile,
+                                                               source->has_memory_clobber,
+                                                               &inline_asm_id)) {
+                    return MINIC_CORE_LOWER_ERROR;
+                }
+                (void)memset(&instruction, 0, sizeof(instruction));
+                instruction.kind = MINIC_CORE_INSTRUCTION_MEMORY_READWRITE_SCALAR_INPUT_INLINE_ASM;
+                instruction.span = statement->span;
+                instruction.type = output_type;
+                instruction.result = MINIC_CORE_VALUE_INVALID;
+                instruction.value.memory_readwrite_scalar_input_inline_asm.inline_asm_id =
+                    inline_asm_id;
+                instruction.value.memory_readwrite_scalar_input_inline_asm.memory_address =
+                    memory_address;
+                instruction.value.memory_readwrite_scalar_input_inline_asm.operand = input_value;
+                instruction.value.memory_readwrite_scalar_input_inline_asm.memory_operand_index =
+                    memory_index;
+                instruction.value.memory_readwrite_scalar_input_inline_asm.register_output_operand_index =
+                    register_index;
+                instruction.value.memory_readwrite_scalar_input_inline_asm.scalar_input_operand_index =
+                    2U;
+                if (!minic_core_function_append_value_instruction(
+                        context->function, context->block_id, &instruction, &output_value)) {
+                    return MINIC_CORE_LOWER_ERROR;
+                }
+                status = lower_address(context, register_output->expression, &output_address);
+                if (status != MINIC_CORE_LOWER_OK) {
+                    return status;
+                }
+                (void)memset(&instruction, 0, sizeof(instruction));
+                instruction.kind = MINIC_CORE_INSTRUCTION_STORE;
+                instruction.span = statement->span;
+                instruction.type = minic_type_void();
+                instruction.result = MINIC_CORE_VALUE_INVALID;
+                instruction.value.store.address = output_address;
+                instruction.value.store.stored_value = output_value;
+                instruction.value.store.is_volatile = false;
+                return minic_core_function_append_effect_instruction(
+                           context->function, context->block_id, &instruction)
+                           ? MINIC_CORE_LOWER_OK
+                           : MINIC_CORE_LOWER_ERROR;
+            }
+        }
+    }
+
+    if (source->is_volatile && !source->is_goto && source->template_text != NULL &&
+        source->template_length != 0U && source->outputs != NULL && source->inputs != NULL &&
+        source->output_count == 1U && source->input_count == 1U && source->has_memory_clobber &&
+        source->label_count == 0U && source->register_clobber_count == 0U &&
+        source->clobber_count == 1U) {
+        const MinicInlineAsmOperand *input;
+        const MinicInlineAsmOperand *memory_output;
+        const MinicExpression *input_expression;
+        const MinicExpression *memory_expression;
+        MinicCoreValueId input_value;
+        MinicCoreValueId memory_address;
+        MinicCoreLowerStatus status;
+        MinicType input_type;
+        MinicType memory_type;
+
+        memory_output = &source->outputs[0];
+        input = &source->inputs[0];
+        memory_expression =
+            minic_c0_program_expression(context->body->program, memory_output->expression);
+        input_expression = minic_c0_program_expression(context->body->program, input->expression);
+        if (memory_output->access == MINIC_INLINE_ASM_OPERAND_READ_WRITE &&
+            input->access == MINIC_INLINE_ASM_OPERAND_READ_ONLY &&
+            core_inline_asm_constraint_is(memory_output, "+A") &&
+            core_inline_asm_constraint_is(input, "r") && memory_expression != NULL &&
+            input_expression != NULL && memory_expression->value_category == MINIC_VALUE_LVALUE &&
+            !minic_type_is_const(memory_expression->type) &&
+            minic_type_unqualified(memory_expression->type, &memory_type) &&
+            core_memory_scalar_type(memory_type) &&
+            core_scalar_expression_value_type(context->body, input_expression, &input_type) &&
+            minic_type_equal(memory_type, input_type)) {
+            status = lower_expression(context, input->expression, &input_value);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
+            status = lower_address(context, memory_output->expression, &memory_address);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
+            if (input_value >= context->function->value_count ||
+                memory_address >= context->function->value_count ||
+                !minic_type_equal(context->function->values[input_value].type, input_type)) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            if (!minic_core_function_add_opaque_inline_asm(context->function,
+                                                           source->template_text,
+                                                           source->template_length,
+                                                           source->is_volatile,
+                                                           source->has_memory_clobber,
+                                                           &inline_asm_id)) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            (void)memset(&instruction, 0, sizeof(instruction));
+            instruction.kind = MINIC_CORE_INSTRUCTION_MEMORY_READWRITE_SCALAR_INPUT_INLINE_ASM;
+            instruction.span = statement->span;
+            instruction.type = minic_type_void();
+            instruction.result = MINIC_CORE_VALUE_INVALID;
+            instruction.value.memory_readwrite_scalar_input_inline_asm.inline_asm_id =
+                inline_asm_id;
+            instruction.value.memory_readwrite_scalar_input_inline_asm.memory_address =
+                memory_address;
+            instruction.value.memory_readwrite_scalar_input_inline_asm.operand = input_value;
+            instruction.value.memory_readwrite_scalar_input_inline_asm.memory_operand_index = 0U;
+            instruction.value.memory_readwrite_scalar_input_inline_asm.register_output_operand_index =
+                SIZE_MAX;
+            instruction.value.memory_readwrite_scalar_input_inline_asm.scalar_input_operand_index =
+                1U;
+            return minic_core_function_append_effect_instruction(
+                       context->function, context->block_id, &instruction)
+                       ? MINIC_CORE_LOWER_OK
+                       : MINIC_CORE_LOWER_ERROR;
+        }
     }
 
     if (source->is_volatile && !source->is_goto && source->template_text != NULL &&
