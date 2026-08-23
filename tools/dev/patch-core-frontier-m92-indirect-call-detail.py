@@ -128,7 +128,6 @@ def apply_pointer_difference(text: str) -> str:
         minic_type_is_integer(expression->type)) {
         const MinicExpression *left_expression;
         const MinicExpression *right_expression;
-        MinicCoreInstruction instruction;
         MinicCoreLowerStatus status;
         MinicCoreObjectId left_object;
         MinicCoreValueId left_pointer;
