@@ -42,6 +42,7 @@ jobs:
           python3 tools/dev/patch-core-frontier-m52-memory-rw-input-asm.py
           python3 tools/dev/patch-core-frontier-m53-void-conditional.py
           python3 tools/dev/patch-core-frontier-m54-void-conditional-statement.py
+          python3 tools/dev/patch-core-frontier-m55-scalar-conditional-conversion.py
 
       - name: Build exact compiler
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-strict500-compiler
@@ -76,9 +77,9 @@ jobs:
           summary = json.loads(Path('build/core-strict500-probe/frontier-summary.json').read_text())
           if summary['selected'] != 1:
               raise SystemExit(f"expected one Linux probe TU, got {summary['selected']}")
-          remaining = [b for b in summary['blockers'] if b['function'] == '__set_bit_le']
+          remaining = [b for b in summary['blockers'] if b['function'] == 'hweight_long']
           if remaining:
-              raise SystemExit(f"Linux probe still blocked at __set_bit_le: {remaining}")
+              raise SystemExit(f"Linux probe still blocked at hweight_long: {remaining}")
           print('LINUX_FRONTIER_PROBE_PASSED_OLD_BLOCKER')
           PY
 
@@ -124,10 +125,11 @@ jobs:
               'test_and_set_bit',
               'arch_atomic_add',
               '__set_bit_le',
+              'hweight_long',
           }
           remaining = [b for b in summary['blockers'] if b['function'] in forbidden]
           if remaining:
-              raise SystemExit(f"M54/earlier blocker remains: {remaining}")
+              raise SystemExit(f"M55/earlier blocker remains: {remaining}")
           PY
 
       - name: Upload frontier evidence
@@ -148,7 +150,7 @@ jobs:
             build/core-strict500-frontier/frontier-summary.json
           if-no-files-found: warn
 
-      - name: Persist M53/M54 source changes
+      - name: Persist M55 source changes
         if: success()
         shell: bash
         run: |
@@ -162,5 +164,5 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -- "${files[@]}"
-          git commit -m 'core: lower void conditional expression statements'
+          git commit -m 'core: convert scalar conditional arms'
           git push origin HEAD:refactor/declaration-sema-v1
