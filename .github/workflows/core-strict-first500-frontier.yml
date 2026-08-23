@@ -33,13 +33,14 @@ jobs:
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
 
-      - name: Apply M52 atomic memory inline asm family
+      - name: Apply M53 void conditional expression
         run: |
           python3 tools/dev/patch-core-frontier-m50-scalar-input-asm.py
           python3 tools/dev/patch-core-frontier-m50b-void-statement-expression.py
           python3 tools/dev/patch-core-frontier-m50c-output-input-asm.py
           python3 tools/dev/patch-core-frontier-m51-compound-shift.py
           python3 tools/dev/patch-core-frontier-m52-memory-rw-input-asm.py
+          python3 tools/dev/patch-core-frontier-m53-void-conditional.py
 
       - name: Build exact compiler
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-strict500-compiler
@@ -85,10 +86,11 @@ jobs:
               '__ffs',
               'test_and_set_bit',
               'arch_atomic_add',
+              '__set_bit_le',
           }
           remaining = [b for b in summary['blockers'] if b['function'] in forbidden]
           if remaining:
-              raise SystemExit(f"M52 atomic/earlier blocker remains: {remaining}")
+              raise SystemExit(f"M53/earlier blocker remains: {remaining}")
           PY
 
       - name: Upload frontier evidence
@@ -104,16 +106,13 @@ jobs:
             build/core-strict500-frontier/frontier-summary.json
           if-no-files-found: warn
 
-      - name: Persist M52 source changes
+      - name: Persist M53 source changes
         if: success()
         shell: bash
         run: |
           set -Eeuo pipefail
           files=(
-            src/core/core_ir.h
-            src/core/core_ir.c
             src/core/core_lower.c
-            src/target/riscv64/core_codegen.c
           )
           if git diff --quiet -- "${files[@]}"; then
             exit 0
@@ -121,5 +120,5 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -- "${files[@]}"
-          git commit -m 'core: lower atomic memory inline asm operands'
+          git commit -m 'core: lower void conditional expressions'
           git push origin HEAD:refactor/declaration-sema-v1
