@@ -50,6 +50,7 @@ jobs:
           python3 tools/dev/patch-core-frontier-m56-prefix-update.py
           python3 tools/dev/patch-core-frontier-m57-constant-conditional.py
           python3 tools/dev/patch-core-frontier-m58-logical-or.py
+          python3 tools/dev/patch-core-frontier-m59-empty-scalar-input-barrier.py
 
       - name: Build exact compiler
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-strict500-compiler
@@ -84,9 +85,9 @@ jobs:
           summary = json.loads(Path('build/core-strict500-probe/frontier-summary.json').read_text())
           if summary['selected'] != 6:
               raise SystemExit(f"expected six Linux frontier probes, got {summary['selected']}")
-          remaining = [b for b in summary['blockers'] if b['function'] == 'IS_ERR_OR_NULL']
+          remaining = [b for b in summary['blockers'] if b['function'] == 'memzero_explicit']
           if remaining:
-              raise SystemExit(f"Linux probe still blocked at IS_ERR_OR_NULL: {remaining}")
+              raise SystemExit(f"Linux probe still blocked at memzero_explicit: {remaining}")
           print('LINUX_MULTI_FRONTIER_PROBE_PASSED_TARGET')
           PY
 
@@ -126,11 +127,11 @@ jobs:
               'arch_local_irq_restore', 'arch_local_save_flags', 'arch_irqs_disabled',
               'arch_irqs_disabled_flags', '__ffs', 'test_and_set_bit', 'arch_atomic_add',
               '__set_bit_le', 'hweight_long', 'get_count_order', '__order_base_2',
-              'IS_ERR_OR_NULL',
+              'IS_ERR_OR_NULL', 'memzero_explicit',
           }
           remaining = [b for b in summary['blockers'] if b['function'] in forbidden]
           if remaining:
-              raise SystemExit(f"M58/earlier blocker remains: {remaining}")
+              raise SystemExit(f"M59/earlier blocker remains: {remaining}")
           PY
 
       - name: Upload frontier evidence
@@ -151,7 +152,7 @@ jobs:
             build/core-strict500-frontier/frontier-summary.json
           if-no-files-found: warn
 
-      - name: Persist M58 source changes
+      - name: Persist M59 source changes
         if: success()
         shell: bash
         run: |
@@ -163,5 +164,5 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -- "${files[@]}"
-          git commit -m 'core: lower logical or values'
+          git commit -m 'core: lower empty scalar-input barriers'
           git push origin HEAD:refactor/declaration-sema-v1
