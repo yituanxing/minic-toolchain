@@ -69,6 +69,8 @@ typedef enum MinicCoreInstructionKind {
     MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INPUT_INLINE_ASM,
     MINIC_CORE_INSTRUCTION_MEMORY_READWRITE_SCALAR_INPUT_INLINE_ASM,
     MINIC_CORE_INSTRUCTION_SCALAR_INPUT_INLINE_ASM,
+    /* M67_STRUCTURED_MULTI_OPERAND_INLINE_ASM: target-neutral operand bindings. */
+    MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM,
     MINIC_CORE_INSTRUCTION_COMPILER_BARRIER,
     MINIC_CORE_INSTRUCTION_CALL
 } MinicCoreInstructionKind;
@@ -109,6 +111,20 @@ typedef struct MinicCoreInlineAsm {
     bool is_volatile;
     bool has_memory_clobber;
 } MinicCoreInlineAsm;
+
+#define MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT 8U
+
+typedef enum MinicCoreStructuredInlineAsmOperandKind {
+    MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT = 0,
+    MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE,
+    MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT
+} MinicCoreStructuredInlineAsmOperandKind;
+
+typedef struct MinicCoreStructuredInlineAsmOperand {
+    MinicCoreStructuredInlineAsmOperandKind kind;
+    size_t operand_index;
+    MinicCoreValueId value;
+} MinicCoreStructuredInlineAsmOperand;
 
 typedef struct MinicCoreInstruction {
     MinicCoreInstructionKind kind;
@@ -173,6 +189,11 @@ typedef struct MinicCoreInstruction {
             MinicCoreInlineAsmId inline_asm_id;
             MinicCoreValueId operand;
         } scalar_input_inline_asm;
+        struct {
+            MinicCoreInlineAsmId inline_asm_id;
+            size_t operand_count;
+            MinicCoreStructuredInlineAsmOperand operands[MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT];
+        } structured_inline_asm;
         struct {
             MinicCoreCalleeId callee_id;
             size_t argument_begin;

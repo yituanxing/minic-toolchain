@@ -840,6 +840,67 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
         return inline_asm->template_text != NULL && inline_asm->template_length != 0U &&
                inline_asm->is_volatile;
     }
+    /* M67_STRUCTURED_MULTI_OPERAND_INLINE_ASM: Core records operand roles and
+       semantic values/addresses; target register assignment stays in the backend. */
+    case MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM: {
+        const MinicCoreInlineAsm *inline_asm;
+        bool used_indices[10] = {false};
+        bool has_memory_readwrite = false;
+        size_t operand_index;
+
+        if (instruction->result != MINIC_CORE_VALUE_INVALID ||
+            !minic_type_is_void(instruction->type) ||
+            instruction->value.structured_inline_asm.inline_asm_id >= function->inline_asm_count ||
+            instruction->value.structured_inline_asm.operand_count == 0U ||
+            instruction->value.structured_inline_asm.operand_count >
+                MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT) {
+            return false;
+        }
+        inline_asm = &function->inline_asms[
+            instruction->value.structured_inline_asm.inline_asm_id];
+        if (inline_asm->template_text == NULL || inline_asm->template_length == 0U ||
+            !inline_asm->is_volatile) {
+            return false;
+        }
+        for (operand_index = 0U;
+             operand_index < instruction->value.structured_inline_asm.operand_count;
+             ++operand_index) {
+            const MinicCoreStructuredInlineAsmOperand *binding;
+            MinicType pointee;
+            MinicType value_type;
+
+            binding = &instruction->value.structured_inline_asm.operands[operand_index];
+            if (binding->operand_index > 9U || used_indices[binding->operand_index] ||
+                binding->value >= function->value_count || !available_values[binding->value]) {
+                return false;
+            }
+            used_indices[binding->operand_index] = true;
+            switch (binding->kind) {
+            case MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
+            case MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE:
+                if (!available_pointer_pointee(
+                        function, available_values, binding->value, &pointee) ||
+                    minic_type_is_const(pointee) ||
+                    !minic_type_unqualified(pointee, &value_type) ||
+                    (!minic_type_is_integer(value_type) && !minic_type_is_pointer(value_type))) {
+                    return false;
+                }
+                if (binding->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE) {
+                    has_memory_readwrite = true;
+                }
+                break;
+            case MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT:
+                if (!minic_type_is_integer(function->values[binding->value].type) &&
+                    !minic_type_is_pointer(function->values[binding->value].type)) {
+                    return false;
+                }
+                break;
+            default:
+                return false;
+            }
+        }
+        return !has_memory_readwrite || inline_asm->has_memory_clobber;
+    }
     case MINIC_CORE_INSTRUCTION_COMPILER_BARRIER:
         return instruction->result == MINIC_CORE_VALUE_INVALID &&
                minic_type_is_void(instruction->type);
@@ -1334,6 +1395,22 @@ static bool dump_instruction(FILE *output,
                        "  asm.scalar_input id=%" PRIu32 " %%%" PRIu32 "%s%s\n",
                        inline_asm_id,
                        instruction->value.scalar_input_inline_asm.operand,
+                       inline_asm->is_volatile ? " volatile" : "",
+                       inline_asm->has_memory_clobber ? " memory" : "") >= 0;
+    }
+    case MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM: {
+        MinicCoreInlineAsmId inline_asm_id;
+        const MinicCoreInlineAsm *inline_asm;
+
+        inline_asm_id = instruction->value.structured_inline_asm.inline_asm_id;
+        if (function == NULL || inline_asm_id >= function->inline_asm_count) {
+            return false;
+        }
+        inline_asm = &function->inline_asms[inline_asm_id];
+        return fprintf(output,
+                       "  asm.structured id=%" PRIu32 " operands=%zu%s%s\n",
+                       inline_asm_id,
+                       instruction->value.structured_inline_asm.operand_count,
                        inline_asm->is_volatile ? " volatile" : "",
                        inline_asm->has_memory_clobber ? " memory" : "") >= 0;
     }

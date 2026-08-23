@@ -500,6 +500,91 @@ static bool core_scalar_input_inline_asm_supported(
     return true;
 }
 
+/* M67_STRUCTURED_MULTI_OPERAND_INLINE_ASM: the Core model is generic;
+   this RV64 emission tier currently accepts the proven 2 register outputs +
+   1 read/write memory + 2 scalar inputs shape. */
+static bool core_structured_inline_asm_supported(const MinicCoreFunction *function,
+                                                 const MinicCoreInstruction *instruction) {
+    const MinicCoreInlineAsm *inline_asm;
+    bool bound[10] = {false};
+    size_t register_outputs = 0U;
+    size_t memory_readwrites = 0U;
+    size_t scalar_inputs = 0U;
+    size_t binding_index;
+    size_t template_index;
+
+    if (function == NULL || instruction == NULL ||
+        instruction->kind != MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM ||
+        instruction->result != MINIC_CORE_VALUE_INVALID || !minic_type_is_void(instruction->type) ||
+        instruction->value.structured_inline_asm.inline_asm_id >= function->inline_asm_count ||
+        instruction->value.structured_inline_asm.operand_count != 5U) {
+        return false;
+    }
+    inline_asm = &function->inline_asms[instruction->value.structured_inline_asm.inline_asm_id];
+    if (inline_asm->template_text == NULL || inline_asm->template_length == 0U ||
+        !inline_asm->is_volatile || !inline_asm->has_memory_clobber) {
+        return false;
+    }
+    for (binding_index = 0U;
+         binding_index < instruction->value.structured_inline_asm.operand_count;
+         ++binding_index) {
+        const MinicCoreStructuredInlineAsmOperand *binding =
+            &instruction->value.structured_inline_asm.operands[binding_index];
+        MinicType pointee;
+        MinicType value_type;
+
+        if (binding->operand_index > 9U || bound[binding->operand_index] ||
+            binding->value >= function->value_count) {
+            return false;
+        }
+        bound[binding->operand_index] = true;
+        switch (binding->kind) {
+        case MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
+            if (!minic_type_pointee(function->values[binding->value].type, &pointee) ||
+                !minic_type_unqualified(pointee, &value_type) || !core_scalar_type(value_type)) {
+                return false;
+            }
+            register_outputs += 1U;
+            break;
+        case MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE:
+            if (!minic_type_pointee(function->values[binding->value].type, &pointee) ||
+                !minic_type_unqualified(pointee, &value_type) || !core_scalar_type(value_type)) {
+                return false;
+            }
+            memory_readwrites += 1U;
+            break;
+        case MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT:
+            if (!core_scalar_type(function->values[binding->value].type)) {
+                return false;
+            }
+            scalar_inputs += 1U;
+            break;
+        default:
+            return false;
+        }
+    }
+    if (register_outputs != 2U || memory_readwrites != 1U || scalar_inputs != 2U) {
+        return false;
+    }
+    for (template_index = 0U; template_index < inline_asm->template_length; ++template_index) {
+        unsigned char ch;
+        if (inline_asm->template_text[template_index] != '%') {
+            continue;
+        }
+        if (template_index + 1U >= inline_asm->template_length) {
+            return false;
+        }
+        ch = (unsigned char)inline_asm->template_text[++template_index];
+        if (ch == '%') {
+            continue;
+        }
+        if (ch < '0' || ch > '9' || !bound[(size_t)(ch - '0')]) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool core_instruction_supported(const MinicC0Program *program,
                                        const MinicCoreFunction *function,
                                        const MinicCoreInstruction *instruction) {
@@ -570,6 +655,8 @@ static bool core_instruction_supported(const MinicC0Program *program,
         return core_memory_readwrite_scalar_input_inline_asm_supported(function, instruction);
     case MINIC_CORE_INSTRUCTION_SCALAR_INPUT_INLINE_ASM:
         return core_scalar_input_inline_asm_supported(function, instruction);
+    case MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM:
+        return core_structured_inline_asm_supported(function, instruction);
     case MINIC_CORE_INSTRUCTION_COMPILER_BARRIER:
         return true;
     case MINIC_CORE_INSTRUCTION_CALL:
@@ -1203,6 +1290,124 @@ static bool emit_scalar_input_inline_asm(
     return fputc('\n', file) != EOF;
 }
 
+static bool emit_structured_inline_asm(FILE *file,
+                                       const MinicC0Program *program,
+                                       const MinicCoreFunction *function,
+                                       const MinicRiscv64CoreFrame *frame,
+                                       const MinicCoreInstruction *instruction) {
+    static const char *const output_registers[2] = {"t0", "t1"};
+    static const char *const memory_registers[1] = {"t2"};
+    static const char *const input_registers[2] = {"t3", "t4"};
+    const MinicCoreInlineAsm *inline_asm;
+    const char *operand_registers[10] = {NULL};
+    bool memory_operand[10] = {false};
+    size_t output_index = 0U;
+    size_t memory_index = 0U;
+    size_t input_index = 0U;
+    size_t binding_index;
+    size_t index;
+
+    if (file == NULL || program == NULL || frame == NULL ||
+        !core_structured_inline_asm_supported(function, instruction)) {
+        return false;
+    }
+    inline_asm = &function->inline_asms[instruction->value.structured_inline_asm.inline_asm_id];
+    for (binding_index = 0U;
+         binding_index < instruction->value.structured_inline_asm.operand_count;
+         ++binding_index) {
+        const MinicCoreStructuredInlineAsmOperand *binding =
+            &instruction->value.structured_inline_asm.operands[binding_index];
+        const char *register_name;
+
+        switch (binding->kind) {
+        case MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
+            register_name = output_registers[output_index++];
+            break;
+        case MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE:
+            register_name = memory_registers[memory_index++];
+            memory_operand[binding->operand_index] = true;
+            if (!load_core_value(file, frame, binding->value, register_name)) {
+                return false;
+            }
+            break;
+        case MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT:
+            register_name = input_registers[input_index++];
+            if (!load_core_value(file, frame, binding->value, register_name)) {
+                return false;
+            }
+            break;
+        default:
+            return false;
+        }
+        operand_registers[binding->operand_index] = register_name;
+    }
+    if (fprintf(file, "  ") < 0) {
+        return false;
+    }
+    for (index = 0U; index < inline_asm->template_length; ++index) {
+        unsigned char ch;
+        size_t operand_index;
+        if (inline_asm->template_text[index] != '%') {
+            if (fputc((unsigned char)inline_asm->template_text[index], file) == EOF) {
+                return false;
+            }
+            continue;
+        }
+        if (++index >= inline_asm->template_length) {
+            return false;
+        }
+        ch = (unsigned char)inline_asm->template_text[index];
+        if (ch == '%') {
+            if (fputc('%', file) == EOF) {
+                return false;
+            }
+            continue;
+        }
+        if (ch < '0' || ch > '9') {
+            return false;
+        }
+        operand_index = (size_t)(ch - '0');
+        if (operand_registers[operand_index] == NULL) {
+            return false;
+        }
+        if (memory_operand[operand_index]) {
+            if (fprintf(file, "(%s)", operand_registers[operand_index]) < 0) {
+                return false;
+            }
+        } else if (fprintf(file, "%s", operand_registers[operand_index]) < 0) {
+            return false;
+        }
+    }
+    if (fputc('\n', file) == EOF) {
+        return false;
+    }
+    for (binding_index = 0U;
+         binding_index < instruction->value.structured_inline_asm.operand_count;
+         ++binding_index) {
+        const MinicCoreStructuredInlineAsmOperand *binding =
+            &instruction->value.structured_inline_asm.operands[binding_index];
+        MinicType pointee;
+        MinicType value_type;
+        const char *register_name;
+
+        if (binding->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT) {
+            continue;
+        }
+        register_name = operand_registers[binding->operand_index];
+        if (!minic_type_pointee(function->values[binding->value].type, &pointee) ||
+            !minic_type_unqualified(pointee, &value_type) ||
+            (minic_type_is_integer(value_type) &&
+             !minic_riscv64_emit_integer_conversion_for_program(
+                 file, program, value_type, register_name)) ||
+            !load_core_value(file, frame, binding->value, "t5") ||
+            !minic_riscv64_emit_scalar_store_for_program(
+                file, program, value_type, register_name, "t5")) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool emit_instruction(FILE *file,
                              const MinicC0Program *program,
                              const MinicCoreFunction *function,
@@ -1570,6 +1775,8 @@ static bool emit_instruction(FILE *file,
             file, program, function, frame, instruction);
     case MINIC_CORE_INSTRUCTION_SCALAR_INPUT_INLINE_ASM:
         return emit_scalar_input_inline_asm(file, function, frame, instruction);
+    case MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM:
+        return emit_structured_inline_asm(file, program, function, frame, instruction);
     case MINIC_CORE_INSTRUCTION_COMPILER_BARRIER:
         return true;
     case MINIC_CORE_INSTRUCTION_CALL:
