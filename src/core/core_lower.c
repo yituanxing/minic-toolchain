@@ -3128,6 +3128,104 @@ static MinicCoreLowerStatus lower_opaque_inline_asm(MinicCoreLowerContext *conte
     }
 
     if (source->is_volatile && !source->is_goto && source->template_text != NULL &&
+        source->template_length != 0U && source->outputs != NULL && source->inputs != NULL &&
+        source->output_count == 1U && source->input_count == 1U &&
+        source->label_count == 0U && source->register_clobber_count == 0U &&
+        source->clobber_count == (source->has_memory_clobber ? 1U : 0U)) {
+        const MinicInlineAsmOperand *input;
+        const MinicInlineAsmOperand *output;
+        const MinicExpression *input_expression;
+        const MinicExpression *output_expression;
+        const MinicLocal *local;
+        MinicCoreValueId address_id;
+        MinicCoreValueId input_value;
+        MinicCoreValueId output_value;
+        MinicCoreLowerStatus status;
+        MinicType input_type;
+        MinicType output_type;
+        bool input_register_constraint;
+        bool output_register_constraint;
+
+        output = &source->outputs[0];
+        input = &source->inputs[0];
+        output_expression = minic_c0_program_expression(context->body->program, output->expression);
+        input_expression = minic_c0_program_expression(context->body->program, input->expression);
+        output_register_constraint =
+            output->constraint_text != NULL &&
+            ((output->constraint_length == 2U &&
+              memcmp(output->constraint_text, "=r", 2U) == 0) ||
+             (output->constraint_length == 3U &&
+              memcmp(output->constraint_text, "=&r", 3U) == 0));
+        input_register_constraint =
+            input->constraint_text != NULL &&
+            ((input->constraint_length == 1U && memcmp(input->constraint_text, "r", 1U) == 0) ||
+             (input->constraint_length == 2U && memcmp(input->constraint_text, "rK", 2U) == 0));
+        if (output->access == MINIC_INLINE_ASM_OPERAND_WRITE_ONLY &&
+            input->access == MINIC_INLINE_ASM_OPERAND_READ_ONLY &&
+            output_register_constraint && input_register_constraint &&
+            output_expression != NULL && output_expression->kind == MINIC_EXPRESSION_LOCAL &&
+            output_expression->value_category == MINIC_VALUE_LVALUE &&
+            !minic_type_is_const(output_expression->type) &&
+            !minic_type_is_volatile(output_expression->type) &&
+            minic_type_unqualified(output_expression->type, &output_type) &&
+            core_memory_scalar_type(output_type) && input_expression != NULL &&
+            core_scalar_expression_value_type(context->body, input_expression, &input_type)) {
+            local = minic_c0_program_local(
+                context->body->program, output_expression->value.local_id);
+            if (local == NULL) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            if (!local->is_array &&
+                minic_c0_program_local_fixed_register_binding(
+                    context->body->program, output_expression->value.local_id) == NULL &&
+                minic_type_equal(local->type, output_expression->type)) {
+                status = lower_expression(context, input->expression, &input_value);
+                if (status != MINIC_CORE_LOWER_OK) {
+                    return status;
+                }
+                if (input_value >= context->function->value_count ||
+                    !minic_type_equal(context->function->values[input_value].type, input_type)) {
+                    return MINIC_CORE_LOWER_ERROR;
+                }
+                if (!minic_core_function_add_opaque_inline_asm(context->function,
+                                                               source->template_text,
+                                                               source->template_length,
+                                                               source->is_volatile,
+                                                               source->has_memory_clobber,
+                                                               &inline_asm_id)) {
+                    return MINIC_CORE_LOWER_ERROR;
+                }
+                (void)memset(&instruction, 0, sizeof(instruction));
+                instruction.kind = MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INPUT_INLINE_ASM;
+                instruction.span = statement->span;
+                instruction.type = output_type;
+                instruction.result = MINIC_CORE_VALUE_INVALID;
+                instruction.value.register_output_input_inline_asm.inline_asm_id = inline_asm_id;
+                instruction.value.register_output_input_inline_asm.operand = input_value;
+                if (!minic_core_function_append_value_instruction(
+                        context->function, context->block_id, &instruction, &output_value)) {
+                    return MINIC_CORE_LOWER_ERROR;
+                }
+                if (lower_address(context, output->expression, &address_id) != MINIC_CORE_LOWER_OK) {
+                    return MINIC_CORE_LOWER_ERROR;
+                }
+                (void)memset(&instruction, 0, sizeof(instruction));
+                instruction.kind = MINIC_CORE_INSTRUCTION_STORE;
+                instruction.span = statement->span;
+                instruction.type = minic_type_void();
+                instruction.result = MINIC_CORE_VALUE_INVALID;
+                instruction.value.store.address = address_id;
+                instruction.value.store.stored_value = output_value;
+                instruction.value.store.is_volatile = false;
+                return minic_core_function_append_effect_instruction(
+                           context->function, context->block_id, &instruction)
+                           ? MINIC_CORE_LOWER_OK
+                           : MINIC_CORE_LOWER_ERROR;
+            }
+        }
+    }
+
+    if (source->is_volatile && !source->is_goto && source->template_text != NULL &&
         source->template_length != 0U && source->outputs != NULL &&
         source->output_count == 1U && source->input_count == 0U &&
         source->label_count == 0U && source->register_clobber_count == 0U &&
