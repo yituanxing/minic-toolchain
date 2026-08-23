@@ -5527,7 +5527,7 @@ static MinicCoreLowerStatus lower_opaque_inline_asm(MinicCoreLowerContext *conte
         free(numeric_template);
     }
 
-    if (source->is_volatile && !source->is_goto && source->template_text != NULL &&
+    if (!source->is_goto && source->template_text != NULL &&
         source->template_length != 0U && source->output_count == 0U &&
         source->input_count != 0U && source->inputs != NULL && source->label_count == 0U &&
         source->register_clobber_count == 0U && !source->has_memory_clobber &&
@@ -5545,7 +5545,7 @@ static MinicCoreLowerStatus lower_opaque_inline_asm(MinicCoreLowerContext *conte
                     minic_core_function_add_opaque_inline_asm(context->function,
                                                               specialized_template,
                                                               specialized_length,
-                                                              source->is_volatile,
+                                                              true,
                                                               false,
                                                               &inline_asm_id);
             free(specialized_template);
@@ -6099,7 +6099,7 @@ static MinicCoreLowerStatus lower_opaque_inline_asm(MinicCoreLowerContext *conte
        target instruction. Represent the ordering effect with the existing
        target-neutral compiler barrier rather than inventing an empty opaque
        asm encoding. */
-    if (source->is_volatile && !source->is_goto && source->template_text != NULL &&
+    if (!source->is_goto && source->template_text != NULL &&
         source->template_length == 0U && source->output_count == 0U && source->inputs != NULL &&
         source->input_count == 1U && source->label_count == 0U &&
         source->register_clobber_count == 0U && source->has_memory_clobber &&
@@ -6137,7 +6137,7 @@ static MinicCoreLowerStatus lower_opaque_inline_asm(MinicCoreLowerContext *conte
         }
     }
 
-    if (source->is_volatile && !source->is_goto && source->template_text != NULL &&
+    if (!source->is_goto && source->template_text != NULL &&
         source->template_length != 0U && source->output_count == 0U && source->inputs != NULL &&
         source->input_count == 1U && source->label_count == 0U &&
         source->register_clobber_count == 0U &&
@@ -6171,7 +6171,7 @@ static MinicCoreLowerStatus lower_opaque_inline_asm(MinicCoreLowerContext *conte
             if (!minic_core_function_add_opaque_inline_asm(context->function,
                                                            source->template_text,
                                                            source->template_length,
-                                                           source->is_volatile,
+                                                           true,
                                                            source->has_memory_clobber,
                                                            &inline_asm_id)) {
                 return MINIC_CORE_LOWER_ERROR;
