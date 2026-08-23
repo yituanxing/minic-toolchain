@@ -4731,6 +4731,68 @@ static MinicCoreLowerStatus lower_opaque_inline_asm(MinicCoreLowerContext *conte
         }
     }
 
+    /* M77_EMPTY_TIED_ASM_COPY: an empty, nonvolatile GNU asm with one
+       register output tied to input 0 carries no target instruction semantics.
+       It preserves the input register bit-pattern in the output. Model that
+       target-neutrally as scalar bitcast/copy plus the output store. */
+    if (!source->is_volatile && !source->is_goto && source->template_text != NULL &&
+        source->template_length == 0U && source->outputs != NULL && source->inputs != NULL &&
+        source->output_count == 1U && source->input_count == 1U && source->label_count == 0U &&
+        source->clobber_count == 0U && source->register_clobber_count == 0U &&
+        !source->has_memory_clobber) {
+        const MinicInlineAsmOperand *input = &source->inputs[0];
+        const MinicInlineAsmOperand *output = &source->outputs[0];
+        const MinicExpression *input_expression;
+        const MinicExpression *output_expression;
+        MinicCoreInstruction store;
+        MinicCoreLowerStatus status;
+        MinicCoreValueId input_value;
+        MinicCoreValueId output_address;
+        MinicCoreValueId output_value;
+        MinicType input_type;
+        MinicType output_type;
+
+        input_expression =
+            minic_c0_program_expression(context->body->program, input->expression);
+        output_expression =
+            minic_c0_program_expression(context->body->program, output->expression);
+        if (output->access == MINIC_INLINE_ASM_OPERAND_WRITE_ONLY &&
+            core_inline_asm_register_output_constraint(output) &&
+            input->access == MINIC_INLINE_ASM_OPERAND_READ_ONLY &&
+            core_inline_asm_constraint_is(input, "0") && output_expression != NULL &&
+            output_expression->value_category == MINIC_VALUE_LVALUE &&
+            !minic_type_is_const(output_expression->type) &&
+            minic_type_unqualified(output_expression->type, &output_type) &&
+            core_memory_scalar_type(output_type) && input_expression != NULL &&
+            core_scalar_expression_value_type(context->body, input_expression, &input_type)) {
+            status = lower_expression(context, input->expression, &input_value);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
+            status = append_scalar_bitcast(
+                context, statement->span, output_type, input_value, &output_value);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
+            status = lower_address(context, output->expression, &output_address);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
+            (void)memset(&store, 0, sizeof(store));
+            store.kind = MINIC_CORE_INSTRUCTION_STORE;
+            store.span = statement->span;
+            store.type = minic_type_void();
+            store.result = MINIC_CORE_VALUE_INVALID;
+            store.value.store.address = output_address;
+            store.value.store.stored_value = output_value;
+            store.value.store.is_volatile = minic_type_is_volatile(output_expression->type);
+            return minic_core_function_append_effect_instruction(
+                       context->function, context->block_id, &store)
+                       ? MINIC_CORE_LOWER_OK
+                       : MINIC_CORE_LOWER_ERROR;
+        }
+    }
+
     if (!source->is_volatile && !source->is_goto && source->template_text != NULL &&
         source->template_length == 0U && source->outputs != NULL && source->output_count == 1U &&
         source->input_count == 0U && source->label_count == 0U && source->clobber_count == 0U &&
