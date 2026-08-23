@@ -3,6 +3,9 @@ name: Core Strict First500 Frontier
 on:
   pull_request:
 
+permissions:
+  contents: write
+
 concurrency:
   group: core-strict-first500-${{ github.event.pull_request.number }}
   cancel-in-progress: true
@@ -29,6 +32,9 @@ jobs:
           set -Eeuo pipefail
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
+
+      - name: Apply M47 fixed-register Core lowering
+        run: python3 tools/dev/patch-core-frontier-m47-fixed-register.py
 
       - name: Build exact compiler
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-strict500-compiler
@@ -63,6 +69,8 @@ jobs:
           summary = json.loads(Path('build/core-strict500-frontier/frontier-summary.json').read_text())
           if summary['selected'] != 500:
               raise SystemExit(f"expected 500 frozen TUs, got {summary['selected']}")
+          if any(blocker['function'] == 'get_current' for blocker in summary['blockers']):
+              raise SystemExit('M47 failed: get_current remains a Core strict blocker')
           PY
 
       - name: Upload frontier evidence
@@ -77,3 +85,23 @@ jobs:
             build/core-strict500-frontier/failure-contexts.txt
             build/core-strict500-frontier/frontier-summary.json
           if-no-files-found: warn
+
+      - name: Persist M47 source changes
+        if: success()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          files=(
+            src/core/core_ir.h
+            src/core/core_ir.c
+            src/core/core_lower.c
+            src/target/riscv64/core_codegen.c
+          )
+          if git diff --quiet -- "${files[@]}"; then
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- "${files[@]}"
+          git commit -m 'core: lower fixed-register reads'
+          git push origin HEAD:refactor/declaration-sema-v1
