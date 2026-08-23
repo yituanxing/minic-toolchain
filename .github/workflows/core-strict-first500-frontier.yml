@@ -58,6 +58,7 @@ jobs:
           python3 tools/dev/patch-core-frontier-m68-structured-inline-asm-optional-inputs.py
           python3 tools/dev/patch-core-frontier-m69-structured-asm-register-or-zero.py
           python3 tools/dev/patch-core-frontier-m70-array-lvalue-pointer-decay.py
+          python3 tools/dev/patch-core-frontier-m71-legacy-array-object-subscript.py
 
       - name: Build exact compiler
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-strict500-compiler
@@ -100,7 +101,7 @@ jobs:
           old_family = [b for b in s['blockers'] if b['function'] == 'cpumask_first']
           if old_family:
               raise SystemExit(f"Linux probe still blocked at cpumask_first: {old_family}")
-          print(f"LINUX_SIXTEEN_FRONTIER_PASSED_M70 known_errors={len(s.get('errors', []))}")
+          print(f"LINUX_SIXTEEN_FRONTIER_PASSED_M71 known_errors={len(s.get('errors', []))}")
           PY
 
       - name: Upload fast frontier evidence
@@ -117,11 +118,13 @@ jobs:
             build/core-strict500-probe/minic-stderr
           if-no-files-found: warn
 
-      - name: Persist M70 source changes
+      - name: Persist M71 source changes
         if: success()
         shell: bash
         run: |
           set -Eeuo pipefail
+          git checkout -- src/core/core_lower.c
+          python3 tools/dev/patch-core-frontier-m71-legacy-array-object-subscript.py
           files=(src/core/core_lower.c)
           if git diff --quiet -- "${files[@]}"; then
             exit 0
@@ -129,7 +132,7 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -- "${files[@]}"
-          git commit -m 'core: lower array lvalue pointer decay'
+          git commit -m 'core: lower legacy array object subscripts'
           git push origin HEAD:refactor/declaration-sema-v1
 
   full500-background:
@@ -183,6 +186,7 @@ jobs:
           python3 tools/dev/patch-core-frontier-m68-structured-inline-asm-optional-inputs.py
           python3 tools/dev/patch-core-frontier-m69-structured-asm-register-or-zero.py
           python3 tools/dev/patch-core-frontier-m70-array-lvalue-pointer-decay.py
+          python3 tools/dev/patch-core-frontier-m71-legacy-array-object-subscript.py
 
       - name: Build exact compiler
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-strict500-compiler
