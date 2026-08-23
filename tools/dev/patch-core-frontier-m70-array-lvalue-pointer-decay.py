@@ -3,6 +3,14 @@ from pathlib import Path
 path = Path('src/core/core_lower.c')
 text = path.read_text()
 
+
+def replace_once(source: str, old: str, new: str, name: str) -> str:
+    count = source.count(old)
+    if count != 1:
+        raise SystemExit(f'M70 {name} anchor count={count}')
+    return source.replace(old, new, 1)
+
+
 marker = 'M70_ARRAY_LVALUE_POINTER_DECAY'
 if marker not in text:
     anchor = '''    if (minic_type_is_integer(target_type) && minic_type_is_integer(expression->type)) {
@@ -43,9 +51,7 @@ if marker not in text:
 
     status = lower_expression(context, expression_id, &source_value);
 '''
-    if text.count(anchor) != 1:
-        raise SystemExit(f'M70 anchor count={text.count(anchor)}')
-    text = text.replace(anchor, replacement, 1)
+    text = replace_once(text, anchor, replacement, 'array-decay')
 
 trace_marker = 'M70_FAST_FRONTIER_TRACE'
 if trace_marker not in text:
@@ -63,15 +69,17 @@ static bool core_memory_scalar_type(MinicType type) {
     return minic_type_is_integer(type) || minic_type_is_pointer(type);
 }
 '''
-    if text.count(helper_anchor) != 1:
-        raise SystemExit(f'M70 trace helper anchor count={text.count(helper_anchor)}')
-    text = text.replace(helper_anchor, helper_replacement, 1)
+    text = replace_once(text, helper_anchor, helper_replacement, 'trace-helper')
 
-    indirect_anchor = '''    if (expression->value.call.function_id == MINIC_FUNCTION_INVALID) {
+    # M85 replaces the scalar-only direct-call body with VALUE/OBJECT argument
+    # descriptors. Its outer Core trace is sufficient; do not make this old
+    # diagnostic patch depend on the new call representation.
+    if 'M85_RECORD_CALL_ARGUMENT' not in text:
+        indirect_anchor = '''    if (expression->value.call.function_id == MINIC_FUNCTION_INVALID) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
 '''
-    indirect_replacement = '''    if (expression->value.call.function_id == MINIC_FUNCTION_INVALID) {
+        indirect_replacement = '''    if (expression->value.call.function_id == MINIC_FUNCTION_INVALID) {
         if (core_fast_frontier_trace_enabled()) {
             (void)fprintf(stderr,
                           "CORE_FAST_TRACE stage=direct-call reason=indirect span=%zu:%zu\\n",
@@ -81,16 +89,14 @@ static bool core_memory_scalar_type(MinicType type) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
 '''
-    if text.count(indirect_anchor) != 1:
-        raise SystemExit(f'M70 indirect anchor count={text.count(indirect_anchor)}')
-    text = text.replace(indirect_anchor, indirect_replacement, 1)
+        text = replace_once(text, indirect_anchor, indirect_replacement, 'indirect')
 
-    signature_anchor = '''    if (callee->is_variadic || expression->value.call.argument_count != callee->parameter_count ||
+        signature_anchor = '''    if (callee->is_variadic || expression->value.call.argument_count != callee->parameter_count ||
         (!returns_void && !core_memory_scalar_type(callee->return_type))) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
 '''
-    signature_replacement = '''    if (callee->is_variadic || expression->value.call.argument_count != callee->parameter_count ||
+        signature_replacement = '''    if (callee->is_variadic || expression->value.call.argument_count != callee->parameter_count ||
         (!returns_void && !core_memory_scalar_type(callee->return_type))) {
         if (core_fast_frontier_trace_enabled()) {
             (void)fprintf(stderr,
@@ -105,17 +111,15 @@ static bool core_memory_scalar_type(MinicType type) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
 '''
-    if text.count(signature_anchor) != 1:
-        raise SystemExit(f'M70 signature anchor count={text.count(signature_anchor)}')
-    text = text.replace(signature_anchor, signature_replacement, 1)
+        text = replace_once(text, signature_anchor, signature_replacement, 'signature')
 
-    parameter_anchor = '''    for (argument_index = 0U; argument_index < callee->parameter_count; ++argument_index) {
+        parameter_anchor = '''    for (argument_index = 0U; argument_index < callee->parameter_count; ++argument_index) {
         if (!core_memory_scalar_type(callee->parameter_types[argument_index])) {
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
     }
 '''
-    parameter_replacement = '''    for (argument_index = 0U; argument_index < callee->parameter_count; ++argument_index) {
+        parameter_replacement = '''    for (argument_index = 0U; argument_index < callee->parameter_count; ++argument_index) {
         if (!core_memory_scalar_type(callee->parameter_types[argument_index])) {
             if (core_fast_frontier_trace_enabled()) {
                 (void)fprintf(stderr,
@@ -129,17 +133,15 @@ static bool core_memory_scalar_type(MinicType type) {
         }
     }
 '''
-    if text.count(parameter_anchor) != 1:
-        raise SystemExit(f'M70 parameter anchor count={text.count(parameter_anchor)}')
-    text = text.replace(parameter_anchor, parameter_replacement, 1)
+        text = replace_once(text, parameter_anchor, parameter_replacement, 'parameter')
 
-    argument_anchor = '''        if (status != MINIC_CORE_LOWER_OK) {
+        argument_anchor = '''        if (status != MINIC_CORE_LOWER_OK) {
             free(arguments);
             return status;
         }
         if (arguments[argument_index] >= context->function->value_count ||
 '''
-    argument_replacement = '''        if (status != MINIC_CORE_LOWER_OK) {
+        argument_replacement = '''        if (status != MINIC_CORE_LOWER_OK) {
             if (core_fast_frontier_trace_enabled()) {
                 const MinicExpression *argument_expression = minic_c0_program_expression(
                     context->body->program, expression->value.call.arguments[argument_index]);
@@ -160,17 +162,15 @@ static bool core_memory_scalar_type(MinicType type) {
         }
         if (arguments[argument_index] >= context->function->value_count ||
 '''
-    direct_begin = text.find('static MinicCoreLowerStatus lower_direct_call(')
-    if direct_begin < 0:
-        raise SystemExit('M70 direct-call helper not found')
-    direct_end = text.find('\nstatic MinicCoreLowerStatus ', direct_begin + 1)
-    if direct_end < 0:
-        raise SystemExit('M70 direct-call helper end not found')
-    direct_text = text[direct_begin:direct_end]
-    if direct_text.count(argument_anchor) != 1:
-        raise SystemExit(f'M70 direct-call argument anchor count={direct_text.count(argument_anchor)}')
-    direct_text = direct_text.replace(argument_anchor, argument_replacement, 1)
-    text = text[:direct_begin] + direct_text + text[direct_end:]
+        direct_begin = text.find('static MinicCoreLowerStatus lower_direct_call(')
+        direct_end = text.find('\nstatic MinicCoreLowerStatus ', direct_begin + 1)
+        if direct_begin < 0 or direct_end < 0:
+            raise SystemExit('M70 direct-call helper bounds not found')
+        direct_text = text[direct_begin:direct_end]
+        direct_text = replace_once(direct_text, argument_anchor, argument_replacement, 'direct-argument')
+        text = text[:direct_begin] + direct_text + text[direct_end:]
+    else:
+        print('M70 direct-call detail trace skipped for M85 descriptor call owner')
 
     return_anchor = '''        if (status != MINIC_CORE_LOWER_OK) {
             return status;
@@ -198,9 +198,7 @@ static bool core_memory_scalar_type(MinicType type) {
     }
     return minic_core_function_set_terminator(context->function, context->block_id, &terminator)
 '''
-    if text.count(return_anchor) != 1:
-        raise SystemExit(f'M70 return anchor count={text.count(return_anchor)}')
-    text = text.replace(return_anchor, return_replacement, 1)
+    text = replace_once(text, return_anchor, return_replacement, 'return')
 
 path.write_text(text)
 print('M70 array lvalue pointer decay + fast frontier trace applied')
