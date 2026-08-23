@@ -33,6 +33,10 @@ static bool core_scalar_type(MinicType type) {
     return minic_type_is_integer(type) || minic_type_is_pointer(type);
 }
 
+static bool core_global_addressable_type(MinicType type) {
+    return core_scalar_type(type) || minic_type_is_array(type);
+}
+
 static bool align_up(size_t value, size_t alignment, size_t *result) {
     size_t remainder;
 
@@ -476,7 +480,7 @@ static bool core_function_can_emit_basic_v0(const MinicC0Program *program,
     }
     for (index = 0U; index < function->global_count; ++index) {
         if (function->globals[index].name == NULL || function->globals[index].name_length == 0U ||
-            !core_scalar_type(function->globals[index].type)) {
+            !core_global_addressable_type(function->globals[index].type)) {
             return false;
         }
     }

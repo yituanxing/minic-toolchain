@@ -165,6 +165,11 @@ bool minic_core_function_add_object(MinicCoreFunction *function,
     return true;
 }
 
+static bool core_global_addressable_type(MinicType type) {
+    return minic_type_is_integer(type) || minic_type_is_pointer(type) ||
+           minic_type_is_array(type);
+}
+
 bool minic_core_function_add_global(MinicCoreFunction *function,
                                     const char *name,
                                     size_t name_length,
@@ -175,7 +180,7 @@ bool minic_core_function_add_global(MinicCoreFunction *function,
 
     if (function == NULL || name == NULL || name_length == 0U || global_id == NULL ||
         function->global_count >= (size_t)UINT32_MAX ||
-        (!minic_type_is_integer(type) && !minic_type_is_pointer(type))) {
+        !core_global_addressable_type(type)) {
         return false;
     }
     for (index = 0U; index < function->global_count; ++index) {
@@ -905,7 +910,7 @@ bool minic_core_function_verify(const MinicCoreFunction *function) {
 
         global = &function->globals[index];
         if (global->name == NULL || global->name_length == 0U ||
-            (!minic_type_is_integer(global->type) && !minic_type_is_pointer(global->type))) {
+            !core_global_addressable_type(global->type)) {
             return false;
         }
     }
