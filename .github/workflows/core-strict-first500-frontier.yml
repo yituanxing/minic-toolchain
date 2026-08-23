@@ -6,17 +6,13 @@ on:
 permissions:
   contents: write
 
-env:
-  CORE_FRONTIER_FULL500: '0'
-
-concurrency:
-  group: core-strict-first500-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
-
 jobs:
-  frontier:
+  fast-frontier:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
+    concurrency:
+      group: core-strict-fast-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
         with:
@@ -79,36 +75,17 @@ jobs:
           if r: raise SystemExit(f"still at __preempt_count_dec_and_test: {r}")
           print('LINUX_MULTI_FRONTIER_PROBE_PASSED_TARGET')
           PY
-      - name: Replay full frozen first500 and classify
-        if: env.CORE_FRONTIER_FULL500 == '1'
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-strict500-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-strict500-frontier"
-          set +e
-          MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
-            --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
-            --work "$work" --jobs 5 --offset 0 --limit 500 --sample-count 0 --indices ''
-          set -e
-          python3 tools/ci/classify-core-strict-frontier.py "$work/batch-results.json" \
-            --examples 4 --json-out "$work/frontier-summary.json" --require-no-errors
-      - name: Upload frontier evidence
+      - name: Upload fast frontier evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: core-strict-first500-frontier
+          name: core-strict-fast-${{ github.run_id }}
           path: |
             build/core-strict500-probe/batch-results.json
             build/core-strict500-probe/batch-results.tsv
             build/core-strict500-probe/batch-summary.txt
             build/core-strict500-probe/failure-contexts.txt
             build/core-strict500-probe/frontier-summary.json
-            build/core-strict500-frontier/batch-results.json
-            build/core-strict500-frontier/batch-results.tsv
-            build/core-strict500-frontier/batch-summary.txt
-            build/core-strict500-frontier/failure-contexts.txt
-            build/core-strict500-frontier/frontier-summary.json
           if-no-files-found: warn
       - name: Persist M63 source changes
         if: success()
@@ -122,3 +99,81 @@ jobs:
           git add -- "${files[@]}"
           git commit -m 'core: normalize qualified scalar update values'
           git push origin HEAD:refactor/declaration-sema-v1
+
+  full500-background:
+    if: github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: core-strict-full500-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+      - name: Restore frozen Linux corpus
+        id: linux-corpus-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+      - name: Require frozen corpus
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
+          test -s build/linux-focus-corpus/selected-tus.txt
+      - name: Apply current Linux frontier patches
+        run: |
+          python3 tools/dev/patch-linux-replay-live-progress.py
+          python3 tools/dev/patch-core-frontier-m50-scalar-input-asm.py
+          python3 tools/dev/patch-core-frontier-m50b-void-statement-expression.py
+          python3 tools/dev/patch-core-frontier-m50c-output-input-asm.py
+          python3 tools/dev/patch-core-frontier-m51-compound-shift.py
+          python3 tools/dev/patch-core-frontier-m52-memory-rw-input-asm.py
+          python3 tools/dev/patch-core-frontier-m53-void-conditional.py
+          python3 tools/dev/patch-core-frontier-m54-void-conditional-statement.py
+          python3 tools/dev/patch-core-frontier-m55-scalar-conditional-conversion.py
+          python3 tools/dev/patch-core-frontier-m56-prefix-update.py
+          python3 tools/dev/patch-core-frontier-m57-constant-conditional.py
+          python3 tools/dev/patch-core-frontier-m58-logical-or.py
+          python3 tools/dev/patch-core-frontier-m59-empty-scalar-input-barrier.py
+          python3 tools/dev/patch-core-frontier-m60-pointer-conditional.py
+          python3 tools/dev/patch-core-frontier-m61-immediate-only-asm.py
+          python3 tools/dev/patch-core-frontier-m62-pointer-return-conversion.py
+          python3 tools/dev/patch-core-frontier-m63-qualified-scalar-update.py
+      - name: Build exact compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-strict500-compiler
+      - name: Replay full frozen first500 with live progress
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/core-strict500-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-strict500-frontier"
+          set +e
+          MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
+            --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
+            --work "$work" --jobs 5 --offset 0 --limit 500 --sample-count 0 --indices ''
+          replay_status=$?
+          set -e
+          printf 'CORE_STRICT500_REPLAY_STATUS=%d\n' "$replay_status"
+          python3 tools/ci/classify-core-strict-frontier.py "$work/batch-results.json" \
+            --examples 8 --json-out "$work/frontier-summary.json" --require-no-errors
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          s=json.loads(Path('build/core-strict500-frontier/frontier-summary.json').read_text())
+          if s['selected'] != 500: raise SystemExit(f"expected 500 frozen TUs, got {s['selected']}")
+          print('LINUX_FULL500_BACKGROUND_COMPLETE')
+          PY
+      - name: Upload full500 frontier evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-strict-full500-${{ github.run_id }}
+          path: |
+            build/core-strict500-frontier/batch-results.json
+            build/core-strict500-frontier/batch-results.tsv
+            build/core-strict500-frontier/batch-summary.txt
+            build/core-strict500-frontier/failure-contexts.txt
+            build/core-strict500-frontier/frontier-summary.json
+          if-no-files-found: warn
