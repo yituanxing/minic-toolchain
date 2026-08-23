@@ -93,6 +93,21 @@ def m83_productized() -> bool:
     )
 
 
+def prepare_m86_driver() -> None:
+    # M86 is applied after M85b. Scope its one verifier edit to the verifier
+    # function rather than the earlier destroy-loop with the same callee text.
+    text = M86_DRIVER.read_text()
+    old = '''        "    for (index = 0U; index < function->callee_count; ++index) {",
+        "    for (index = 0U; index < function->call_signature_count; ++index) {",
+'''
+    new = '''        "bool minic_core_function_verify(",
+        "    for (index = 0U; index < function->call_signature_count; ++index) {",
+'''
+    if old in text:
+        M86_DRIVER.write_text(text.replace(old, new, 1))
+        print("M86 verifier region normalized for first application")
+
+
 def main() -> int:
     apply_m82_if_needed()
     if m83_productized():
@@ -113,6 +128,7 @@ def main() -> int:
     status = run_driver(M85B_DRIVER, "M85b")
     if status != 0:
         return status
+    prepare_m86_driver()
     return run_driver(M86_DRIVER, "M86")
 
 
