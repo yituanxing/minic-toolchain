@@ -58,7 +58,10 @@ static bool align_up(size_t value, size_t alignment, size_t *result) {
     return true;
 }
 
-static bool core_function_has_call(const MinicCoreFunction *function) {
+/* M79_CALL_FRAME_RETURN_ADDRESS: a return-address query needs the entry
+   value of ra even in a function that has no ordinary Core CALL yet. Save it
+   in the prologue whenever either a call or this semantic instruction exists. */
+static bool core_function_needs_saved_return_address(const MinicCoreFunction *function) {
     size_t instruction_index;
 
     if (function == NULL) {
@@ -66,7 +69,9 @@ static bool core_function_has_call(const MinicCoreFunction *function) {
     }
     for (instruction_index = 0U; instruction_index < function->instruction_count;
          ++instruction_index) {
-        if (function->instructions[instruction_index].kind == MINIC_CORE_INSTRUCTION_CALL) {
+        MinicCoreInstructionKind kind = function->instructions[instruction_index].kind;
+        if (kind == MINIC_CORE_INSTRUCTION_CALL ||
+            kind == MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS) {
             return true;
         }
     }
@@ -104,7 +109,8 @@ static bool core_frame_initialize(const MinicC0Program *program,
         return false;
     }
     storage_size = frame->value_base_offset + function->value_count * 8U;
-    frame->saves_return_address = core_function_has_call(function);
+    frame->saves_return_address =
+        core_function_needs_saved_return_address(function);
     frame->return_address_offset = 0U;
     if (frame->saves_return_address) {
         if (!align_up(storage_size, 8U, &frame->return_address_offset) ||
@@ -226,6 +232,17 @@ static bool core_field_address_supported(const MinicC0Program *program,
         *field_offset = offset;
     }
     return true;
+}
+
+static bool core_call_frame_address_supported(
+    const MinicCoreInstruction *instruction) {
+    MinicType pointee;
+
+    return instruction != NULL &&
+           instruction->kind == MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS &&
+           instruction->value.call_frame_address.kind == MINIC_CORE_CALL_FRAME_ADDRESS_RETURN &&
+           instruction->value.call_frame_address.level == 0U &&
+           minic_type_pointee(instruction->type, &pointee) && minic_type_is_void(pointee);
 }
 
 static bool core_scalar_bitcast_supported(const MinicC0Program *program,
@@ -628,6 +645,9 @@ static bool core_instruction_supported(const MinicC0Program *program,
     case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE:
     case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT:
     case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:
+        return true;
+    case MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS:
+        return core_call_frame_address_supported(instruction);
     case MINIC_CORE_INSTRUCTION_PARAMETER:
     case MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT:
     case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS:
@@ -1809,6 +1829,12 @@ static bool emit_instruction(FILE *file,
         }
         return store_core_value(file, frame, instruction->result, "t0");
     }
+    case MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS:
+        if (!core_call_frame_address_supported(instruction) || !frame->saves_return_address ||
+            !minic_riscv64_emit_sp_load64(file, "t0", frame->return_address_offset)) {
+            return false;
+        }
+        return store_core_value(file, frame, instruction->result, "t0");
     case MINIC_CORE_INSTRUCTION_PARAMETER:
         return emit_parameter(file, program, function, frame, instruction);
     case MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT:

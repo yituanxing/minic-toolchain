@@ -624,6 +624,18 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
                available_values[instruction->value.operand] &&
                (minic_type_is_integer(function->values[instruction->value.operand].type) ||
                 minic_type_is_pointer(function->values[instruction->value.operand].type));
+    /* M79_CALL_FRAME_RETURN_ADDRESS: Core validates the semantic shape only.
+       Backend support for a particular kind/level pair is a target concern. */
+    case MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS: {
+        MinicType pointee;
+
+        return instruction_result_is_valid(function, instruction) &&
+               (instruction->value.call_frame_address.kind ==
+                    MINIC_CORE_CALL_FRAME_ADDRESS_RETURN ||
+                instruction->value.call_frame_address.kind ==
+                    MINIC_CORE_CALL_FRAME_ADDRESS_FRAME) &&
+               minic_type_pointee(instruction->type, &pointee) && minic_type_is_void(pointee);
+    }
     case MINIC_CORE_INSTRUCTION_PARAMETER:
         return instruction_result_is_valid(function, instruction) &&
                instruction->value.parameter_index < function->parameter_count &&
@@ -1244,6 +1256,15 @@ static bool dump_instruction(FILE *output,
                        "  %%%" PRIu32 " = scalar.is_zero %%%" PRIu32 "\n",
                        instruction->result,
                        instruction->value.operand) >= 0;
+    case MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS:
+        return fprintf(output,
+                       "  %%%" PRIu32 " = call.frame.%s level=%u\n",
+                       instruction->result,
+                       instruction->value.call_frame_address.kind ==
+                               MINIC_CORE_CALL_FRAME_ADDRESS_RETURN
+                           ? "return"
+                           : "frame",
+                       instruction->value.call_frame_address.level) >= 0;
     case MINIC_CORE_INSTRUCTION_PARAMETER:
         return fprintf(output,
                        "  %%%" PRIu32 " = parameter %zu\n",

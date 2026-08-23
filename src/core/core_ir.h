@@ -33,6 +33,14 @@ typedef enum MinicCoreIntegerOverflowOperator {
     MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY
 } MinicCoreIntegerOverflowOperator;
 
+/* M79_CALL_FRAME_RETURN_ADDRESS: target-neutral semantic origin for
+   GNU call-frame address builtins. Backends may support only a subset of
+   kind/level pairs; unsupported pairs remain fail-closed. */
+typedef enum MinicCoreCallFrameAddressKind {
+    MINIC_CORE_CALL_FRAME_ADDRESS_RETURN = 0,
+    MINIC_CORE_CALL_FRAME_ADDRESS_FRAME
+} MinicCoreCallFrameAddressKind;
+
 typedef enum MinicCoreInstructionKind {
     MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT = 0,
     MINIC_CORE_INSTRUCTION_INTEGER_ADD,
@@ -72,6 +80,7 @@ typedef enum MinicCoreInstructionKind {
     /* M67_STRUCTURED_MULTI_OPERAND_INLINE_ASM: target-neutral operand bindings. */
     MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM,
     MINIC_CORE_INSTRUCTION_COMPILER_BARRIER,
+    MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS,
     MINIC_CORE_INSTRUCTION_CALL
 } MinicCoreInstructionKind;
 
@@ -152,6 +161,10 @@ typedef struct MinicCoreInstruction {
         MinicCoreValueId operand;
         size_t parameter_index;
         size_t fixed_register_binding_id;
+        struct {
+            MinicCoreCallFrameAddressKind kind;
+            unsigned int level;
+        } call_frame_address;
         struct {
             size_t parameter_index;
             MinicCoreObjectId object_id;

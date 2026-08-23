@@ -1936,6 +1936,30 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         return append_integer_conversion(
             context, expression->span, target_type, operand_value, value_id);
     }
+    /* M79_CALL_FRAME_RETURN_ADDRESS: keep the semantic builtin in Core rather
+       than lowering it to a target register in the frontend. The first seam
+       is GNU __builtin_return_address(0); deeper levels and frame-address
+       queries remain unsupported until a backend can define them correctly. */
+    if (expression->kind == MINIC_EXPRESSION_CALL_FRAME_ADDRESS) {
+        MinicType pointee;
+
+        if (expression->value.call_frame_address.kind != MINIC_CALL_FRAME_ADDRESS_RETURN ||
+            expression->value.call_frame_address.level != 0U ||
+            !minic_type_pointee(expression->type, &pointee) || !minic_type_is_void(pointee)) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        (void)memset(&instruction, 0, sizeof(instruction));
+        instruction.kind = MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS;
+        instruction.span = expression->span;
+        instruction.type = expression->type;
+        instruction.result = MINIC_CORE_VALUE_INVALID;
+        instruction.value.call_frame_address.kind = MINIC_CORE_CALL_FRAME_ADDRESS_RETURN;
+        instruction.value.call_frame_address.level = 0U;
+        return minic_core_function_append_value_instruction(
+                   context->function, context->block_id, &instruction, value_id)
+                   ? MINIC_CORE_LOWER_OK
+                   : MINIC_CORE_LOWER_ERROR;
+    }
     if (expression->kind == MINIC_EXPRESSION_BITCAST) {
         const MinicExpression *operand;
         MinicCoreValueId operand_value;
