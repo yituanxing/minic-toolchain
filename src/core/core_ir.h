@@ -138,6 +138,23 @@ typedef struct MinicCoreCallSignature {
     size_t parameter_count;
 } MinicCoreCallSignature;
 
+/* M85_RECORD_CALL_ARGUMENT: Core call arguments carry semantic storage form,
+   not target ABI locations. Scalar arguments are SSA values; aggregate
+   by-value arguments are immutable snapshots in Core objects. */
+typedef enum MinicCoreCallArgumentKind {
+    MINIC_CORE_CALL_ARGUMENT_INVALID = 0,
+    MINIC_CORE_CALL_ARGUMENT_VALUE,
+    MINIC_CORE_CALL_ARGUMENT_OBJECT
+} MinicCoreCallArgumentKind;
+
+typedef struct MinicCoreCallArgument {
+    MinicCoreCallArgumentKind kind;
+    union {
+        MinicCoreValueId value_id;
+        MinicCoreObjectId object_id;
+    } value;
+} MinicCoreCallArgument;
+
 typedef struct MinicCoreInlineAsm {
     char *template_text;
     size_t template_length;
@@ -302,7 +319,7 @@ typedef struct MinicCoreFunction {
     MinicCoreInlineAsm *inline_asms;
     size_t inline_asm_count;
     size_t inline_asm_capacity;
-    MinicCoreValueId *call_arguments;
+    MinicCoreCallArgument *call_arguments;
     size_t call_argument_count;
     size_t call_argument_capacity;
     MinicCoreObject *objects;
@@ -363,7 +380,7 @@ bool minic_core_function_add_opaque_inline_asm(MinicCoreFunction *function,
                                                bool has_memory_clobber,
                                                MinicCoreInlineAsmId *inline_asm_id);
 bool minic_core_function_append_call_arguments(MinicCoreFunction *function,
-                                               const MinicCoreValueId *arguments,
+                                               const MinicCoreCallArgument *arguments,
                                                size_t argument_count,
                                                size_t *argument_begin);
 bool minic_core_function_append_value_instruction(MinicCoreFunction *function,

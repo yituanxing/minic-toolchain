@@ -271,6 +271,12 @@ static bool core_call_scalar_type(MinicType type) {
     return minic_type_is_integer(type) || minic_type_is_pointer(type);
 }
 
+/* M85_RECORD_CALL_ARGUMENT: direct calls may transport address-backed records
+   as object snapshots while return values remain on the existing scalar seam. */
+static bool core_call_parameter_type(MinicType type) {
+    return core_call_scalar_type(type) || minic_type_is_record(type);
+}
+
 static bool callee_signature_equal(const MinicCoreCallee *callee,
                                    const char *name,
                                    size_t name_length,
@@ -311,7 +317,7 @@ bool minic_core_function_add_callee(MinicCoreFunction *function,
         return false;
     }
     for (index = 0U; index < parameter_count; ++index) {
-        if (!core_call_scalar_type(parameter_types[index])) {
+        if (!core_call_parameter_type(parameter_types[index])) {
             return false;
         }
     }
@@ -484,7 +490,7 @@ bool minic_core_function_add_opaque_inline_asm(MinicCoreFunction *function,
 }
 
 bool minic_core_function_append_call_arguments(MinicCoreFunction *function,
-                                               const MinicCoreValueId *arguments,
+                                               const MinicCoreCallArgument *arguments,
                                                size_t argument_count,
                                                size_t *argument_begin) {
     size_t index;
@@ -1117,14 +1123,36 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
             instruction->value.call.argument_begin + instruction->value.call.argument_count;
         for (argument_index = instruction->value.call.argument_begin; argument_index < argument_end;
              ++argument_index) {
-            MinicCoreValueId argument;
+            const MinicCoreCallArgument *argument;
+            MinicType parameter_type;
             size_t parameter_index;
 
-            argument = function->call_arguments[argument_index];
+            argument = &function->call_arguments[argument_index];
             parameter_index = argument_index - instruction->value.call.argument_begin;
-            if (argument >= function->value_count || !available_values[argument] ||
-                !minic_type_equal(function->values[argument].type,
-                                  callee->parameter_types[parameter_index])) {
+            parameter_type = callee->parameter_types[parameter_index];
+            if (core_call_scalar_type(parameter_type)) {
+                MinicCoreValueId value_id;
+
+                if (argument->kind != MINIC_CORE_CALL_ARGUMENT_VALUE) {
+                    return false;
+                }
+                value_id = argument->value.value_id;
+                if (value_id >= function->value_count || !available_values[value_id] ||
+                    !minic_type_equal(function->values[value_id].type, parameter_type)) {
+                    return false;
+                }
+            } else if (minic_type_is_record(parameter_type)) {
+                MinicCoreObjectId object_id;
+
+                if (argument->kind != MINIC_CORE_CALL_ARGUMENT_OBJECT) {
+                    return false;
+                }
+                object_id = argument->value.object_id;
+                if (object_id >= function->object_count ||
+                    !minic_type_equal(function->objects[object_id].type, parameter_type)) {
+                    return false;
+                }
+            } else {
                 return false;
             }
         }
@@ -1165,14 +1193,19 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
         for (argument_index = instruction->value.indirect_call.argument_begin;
              argument_index < argument_end;
              ++argument_index) {
-            MinicCoreValueId argument;
+            const MinicCoreCallArgument *argument;
+            MinicCoreValueId value_id;
             size_t parameter_index;
 
-            argument = function->call_arguments[argument_index];
+            argument = &function->call_arguments[argument_index];
             parameter_index =
                 argument_index - instruction->value.indirect_call.argument_begin;
-            if (argument >= function->value_count || !available_values[argument] ||
-                !minic_type_equal(function->values[argument].type,
+            if (argument->kind != MINIC_CORE_CALL_ARGUMENT_VALUE) {
+                return false;
+            }
+            value_id = argument->value.value_id;
+            if (value_id >= function->value_count || !available_values[value_id] ||
+                !minic_type_equal(function->values[value_id].type,
                                   signature->parameter_types[parameter_index])) {
                 return false;
             }
@@ -1315,8 +1348,11 @@ bool minic_core_function_verify(const MinicCoreFunction *function) {
             (callee->parameter_count != 0U && callee->parameter_types == NULL)) {
             return false;
         }
+        /* M85B_RECORD_CALLEE_VERIFIER: direct callees share the same
+           scalar-or-record parameter contract used by creation and CALL
+           instruction verification. Indirect signatures remain scalar-only. */
         for (parameter_index = 0U; parameter_index < callee->parameter_count; ++parameter_index) {
-            if (!core_call_scalar_type(callee->parameter_types[parameter_index])) {
+            if (!core_call_parameter_type(callee->parameter_types[parameter_index])) {
                 return false;
             }
         }
@@ -1717,12 +1753,21 @@ static bool dump_instruction(FILE *output,
         }
         for (argument_index = 0U; argument_index < instruction->value.call.argument_count;
              ++argument_index) {
-            MinicCoreValueId argument;
+            const MinicCoreCallArgument *argument =
+                &function->call_arguments[instruction->value.call.argument_begin + argument_index];
 
-            argument =
-                function->call_arguments[instruction->value.call.argument_begin + argument_index];
-            if ((argument_index != 0U && fprintf(output, ", ") < 0) ||
-                fprintf(output, "%%%" PRIu32, argument) < 0) {
+            if (argument_index != 0U && fprintf(output, ", ") < 0) {
+                return false;
+            }
+            if (argument->kind == MINIC_CORE_CALL_ARGUMENT_VALUE) {
+                if (fprintf(output, "%%%" PRIu32, argument->value.value_id) < 0) {
+                    return false;
+                }
+            } else if (argument->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
+                if (fprintf(output, "%%o%" PRIu32, argument->value.object_id) < 0) {
+                    return false;
+                }
+            } else {
                 return false;
             }
         }
@@ -1751,12 +1796,12 @@ static bool dump_instruction(FILE *output,
         for (argument_index = 0U;
              argument_index < instruction->value.indirect_call.argument_count;
              ++argument_index) {
-            MinicCoreValueId argument;
-
-            argument = function->call_arguments[
+            const MinicCoreCallArgument *argument = &function->call_arguments[
                 instruction->value.indirect_call.argument_begin + argument_index];
-            if ((argument_index != 0U && fprintf(output, ", ") < 0) ||
-                fprintf(output, "%%%" PRIu32, argument) < 0) {
+
+            if (argument->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
+                (argument_index != 0U && fprintf(output, ", ") < 0) ||
+                fprintf(output, "%%%" PRIu32, argument->value.value_id) < 0) {
                 return false;
             }
         }
