@@ -59,6 +59,7 @@ jobs:
           python3 tools/dev/patch-core-frontier-m69-structured-asm-register-or-zero.py
           python3 tools/dev/patch-core-frontier-m70-array-lvalue-pointer-decay.py
           python3 tools/dev/patch-core-frontier-m71-legacy-array-object-subscript.py
+          python3 tools/dev/patch-core-frontier-m72-nested-break-target.py
 
       - name: Build exact compiler
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-strict500-compiler
@@ -98,10 +99,10 @@ jobs:
           ]
           if unexpected_errors:
               raise SystemExit(f"unexpected Linux probe errors: {unexpected_errors}")
-          old_family = [b for b in s['blockers'] if b['function'] == 'cpumask_first']
+          old_family = [b for b in s['blockers'] if b['function'] in {'cpumask_first', 'cpumask_any_but'}]
           if old_family:
-              raise SystemExit(f"Linux probe still blocked at cpumask_first: {old_family}")
-          print(f"LINUX_SIXTEEN_FRONTIER_PASSED_M71 known_errors={len(s.get('errors', []))}")
+              raise SystemExit(f"Linux probe still blocked in cleared cpumask family: {old_family}")
+          print(f"LINUX_SIXTEEN_FRONTIER_PASSED_M72 known_errors={len(s.get('errors', []))}")
           PY
 
       - name: Upload fast frontier evidence
@@ -118,13 +119,13 @@ jobs:
             build/core-strict500-probe/minic-stderr
           if-no-files-found: warn
 
-      - name: Persist M71 source changes
+      - name: Persist M72 source changes
         if: success()
         shell: bash
         run: |
           set -Eeuo pipefail
           git checkout -- src/core/core_lower.c
-          python3 tools/dev/patch-core-frontier-m71-legacy-array-object-subscript.py
+          python3 tools/dev/patch-core-frontier-m72-nested-break-target.py
           files=(src/core/core_lower.c)
           if git diff --quiet -- "${files[@]}"; then
             exit 0
@@ -132,7 +133,7 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -- "${files[@]}"
-          git commit -m 'core: lower legacy array object subscripts'
+          git commit -m 'core: lower nested loop and switch breaks'
           git push origin HEAD:refactor/declaration-sema-v1
 
   full500-background:
@@ -187,6 +188,7 @@ jobs:
           python3 tools/dev/patch-core-frontier-m69-structured-asm-register-or-zero.py
           python3 tools/dev/patch-core-frontier-m70-array-lvalue-pointer-decay.py
           python3 tools/dev/patch-core-frontier-m71-legacy-array-object-subscript.py
+          python3 tools/dev/patch-core-frontier-m72-nested-break-target.py
 
       - name: Build exact compiler
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-strict500-compiler
