@@ -3270,10 +3270,13 @@ static MinicCoreLowerStatus lower_expression_statement(MinicCoreLowerContext *co
     if (expression == NULL) {
         return MINIC_CORE_LOWER_ERROR;
     }
+    /* M83B_CALL_STATEMENT_DISPATCH: CALL ownership lives in lower_expression().
+       Statement context only discards the produced value; it must not force an
+       indirect call back through the legacy direct-call helper. */
     if (expression->kind == MINIC_EXPRESSION_CALL) {
         MinicCoreValueId discarded_value;
 
-        return lower_direct_call(context, expression, &discarded_value);
+        return lower_expression(context, statement->expression, &discarded_value);
     }
     /* M54_VOID_CONDITIONAL_STATEMENT: expression statements are only an
        effect boundary. Once M53 can lower a void conditional expression, the
