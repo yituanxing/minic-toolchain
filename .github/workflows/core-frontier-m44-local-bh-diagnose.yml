@@ -1,91 +1,35 @@
-name: Core M45c Exact Cpumask Diagnose
+name: Core M46 Comma Qualification
 
 on:
   pull_request:
 
 jobs:
-  diagnose:
+  qualify:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
           ref: refactor/declaration-sema-v1
+      - name: Install validation tools
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mapfile -t packages < <(grep -Ev '^[[:space:]]*(#|$)' tools/ci/ubuntu-24.04-packages.txt)
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends "${packages[@]}"
       - name: Restore frozen Linux corpus
         id: corpus
         uses: actions/cache/restore@v4
         with:
           path: build/linux-focus-corpus
           key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
-      - name: Expose exact frozen cpumask body
+      - name: Apply M31b through M46 and build
         shell: bash
         run: |
           set -Eeuo pipefail
           test "${{ steps.corpus.outputs.cache-hit }}" = true
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('build/linux-focus-corpus/kbuild/init/version.i')
-          text = p.read_text(errors='replace')
-          needle = 'cpumask_any_but('
-          positions=[]
-          at=0
-          while True:
-              at=text.find(needle, at)
-              if at < 0: break
-              positions.append(at)
-              at += len(needle)
-          print(f'M45C_CPUMASK_OCCURRENCES count={len(positions)}')
-          for serial,pos in enumerate(positions[:8]):
-              line=text.count('\n',0,pos)+1
-              print(f'M45C_OCCURRENCE serial={serial} line={line}')
-              lo=text.rfind('\n',0,max(0,pos-1200))+1
-              hi=text.find('\n',min(len(text),pos+2200))
-              if hi < 0: hi=len(text)
-              chunk=text[lo:hi]
-              print('M45C_CHUNK_BEGIN')
-              print(chunk)
-              print('M45C_CHUNK_END')
-          # Find the definition occurrence and brace-match it exactly.
-          for pos in positions:
-              brace=text.find('{',pos,pos+1500)
-              semi=text.find(';',pos,pos+1500)
-              if brace < 0 or (semi >= 0 and semi < brace):
-                  continue
-              depth=0
-              quote=None
-              esc=False
-              end=None
-              i=brace
-              while i < len(text):
-                  ch=text[i]
-                  if quote is not None:
-                      if esc: esc=False
-                      elif ch == '\\': esc=True
-                      elif ch == quote: quote=None
-                  elif ch in ('"', "'"):
-                      quote=ch
-                  elif ch == '{':
-                      depth += 1
-                  elif ch == '}':
-                      depth -= 1
-                      if depth == 0:
-                          end=i+1
-                          break
-                  i += 1
-              if end is not None:
-                  start=text.rfind('\n',0,max(0,pos-800))+1
-                  body=text[start:end]
-                  print(f'M45C_DEFINITION line={text.count(chr(10),0,pos)+1} bytes={len(body)}')
-                  print('M45C_DEFINITION_BEGIN')
-                  print(body)
-                  print('M45C_DEFINITION_END')
-                  break
-          PY
-      - name: Apply M31b through M45 and build
-        shell: bash
-        run: |
-          set -Eeuo pipefail
           python3 tools/dev/run-core-frontier-batch-m31b.py
           python3 tools/dev/patch-core-frontier-batch-m32.py
           python3 tools/dev/patch-core-frontier-batch-m33.py
@@ -98,23 +42,139 @@ jobs:
           python3 tools/dev/patch-core-frontier-batch-m43.py
           python3 tools/dev/run-core-frontier-batch-m44.py
           python3 tools/dev/patch-core-frontier-batch-m45.py
+          python3 tools/dev/patch-core-frontier-batch-m46.py
           clang-format-18 -i src/core/core_ir.h src/core/core_ir.c src/core/core_lower.c src/target/riscv64/core_codegen.c
           git diff --check
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m45c
-      - name: Confirm exact frozen blocker
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m46
+      - name: Focused comma sequencing matrix
         shell: bash
         run: |
           set -Eeuo pipefail
-          c="$GITHUB_WORKSPACE/build/m45c/bin/minic"
-          w=build/m45c-rep
+          c="$GITHUB_WORKSPACE/build/m46/bin/minic"
+          w=build/m46-shapes
+          mkdir -p "$w"
+
+          cat > "$w/01_assignment_comma.c" <<'EOF'
+          unsigned int f(unsigned int x) {
+              unsigned int i = 0U;
+              return (i = x + 1U, i < 9U);
+          }
+          EOF
+
+          cat > "$w/02_exact_loop_condition.c" <<'EOF'
+          struct mask { unsigned long bits[1]; };
+          extern unsigned long find_next_bit(const unsigned long *, unsigned long, unsigned long);
+          extern unsigned int check(unsigned int);
+          unsigned int f(const struct mask *mask, unsigned int cpu) {
+              unsigned int i;
+              check(cpu);
+              for ((i) = 0; (i) = find_next_bit(mask->bits, 64U, i), (i) < 64U; (i)++)
+                  if (i != cpu)
+                      break;
+              return i;
+          }
+          EOF
+
+          cat > "$w/03_nested_comma.c" <<'EOF'
+          unsigned int f(unsigned int x) {
+              unsigned int a = 0U;
+              return (a = x, a = a + 2U, a);
+          }
+          EOF
+
+          failures=0
+          for src in "$w"/*.c; do
+            n=$(basename "$src" .c)
+            set +e
+            MINIC_CORE_IR=strict "$c" -S "$src" -o "$w/$n.s" 2>"$w/$n.err"
+            rc=$?
+            set -e
+            if [ "$rc" -eq 0 ]; then
+              printf 'M46_SHAPE_PASS name=%s\n' "$n"
+            else
+              failures=$((failures + 1))
+              printf 'M46_SHAPE_FAIL name=%s rc=%d\n' "$n" "$rc"
+              sed -n '1,12p' "$w/$n.err"
+            fi
+          done
+          printf 'M46_SHAPE_MATRIX failures=%d\n' "$failures"
+          test "$failures" -eq 0
+      - name: RISC-V comma differential
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          c="$GITHUB_WORKSPACE/build/m46/bin/minic"
+          w=build/m46-qemu
+          mkdir -p "$w"
+          cat > "$w/f.c" <<'EOF'
+          extern unsigned long next_bit(unsigned long, unsigned long);
+          unsigned int scan(unsigned int cpu) {
+              unsigned int i;
+              for ((i) = 0; (i) = next_bit(8U, i), (i) < 8U; (i)++)
+                  if (i != cpu)
+                      break;
+              return i;
+          }
+          unsigned int sequence(unsigned int x) {
+              unsigned int a = 0U;
+              return (a = x + 1U, a = a * 2U, a + 3U);
+          }
+          EOF
+          cat > "$w/main.c" <<'EOF'
+          #include <stdio.h>
+          unsigned int scan(unsigned int);
+          unsigned int sequence(unsigned int);
+          unsigned long next_bit(unsigned long size, unsigned long start) {
+              return start < size ? start : size;
+          }
+          int main(void) {
+              printf("%u %u %u %u\n", scan(0U), scan(3U), sequence(4U), sequence(9U));
+              return 0;
+          }
+          EOF
+          MINIC_CORE_IR=strict "$c" -S "$w/f.c" -o "$w/minic.s"
+          riscv64-linux-gnu-gcc -O0 -static "$w/main.c" "$w/minic.s" -o "$w/minic.elf"
+          qemu-riscv64 "$w/minic.elf" > "$w/minic.out"
+          riscv64-linux-gnu-gcc -O0 -static "$w/main.c" "$w/f.c" -o "$w/gcc.elf"
+          qemu-riscv64 "$w/gcc.elf" > "$w/gcc.out"
+          diff -u "$w/gcc.out" "$w/minic.out"
+          echo M46_QEMU_DIFF_PASS
+      - name: Frozen cpumask representative moves
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          c="$GITHUB_WORKSPACE/build/m46/bin/minic"
+          w=build/m46-rep
           mkdir -p "$w"
           set +e
           MINIC_CORE_IR=strict "$c" -S build/linux-focus-corpus/kbuild/init/version.i -o "$w/version.s" 2>"$w/version.err"
           rc=$?
           set -e
-          head -4 "$w/version.err" || true
-          if ! grep -Fq "Core IR shadow does not yet support function 'cpumask_any_but'" "$w/version.err"; then
-            echo 'M45C_UNEXPECTED_REPRESENTATIVE_CHANGE'
+          head -8 "$w/version.err" || true
+          if grep -Fq "Core IR shadow does not yet support function 'cpumask_any_but'" "$w/version.err" || \
+             grep -Fq "Core IR shadow lowering failed for function 'cpumask_any_but'" "$w/version.err"; then
+            echo M46_CPUMASK_DID_NOT_MOVE
             exit 1
           fi
-          printf 'M45C_CPUMASK_CONFIRMED rc=%d\n' "$rc"
+          printf 'M46_CPUMASK_MOVED rc=%d\n' "$rc"
+      - name: Frozen strict first500
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          c="$GITHUB_WORKSPACE/build/m46/bin/minic"
+          w="$GITHUB_WORKSPACE/build/m46-strict500"
+          set +e
+          MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py --minic "$c" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" --work "$w" --jobs 5 --offset 0 --limit 500 --sample-count 0 --indices ''
+          rc=$?
+          set -e
+          printf 'M46_REPLAY_RC=%d\n' "$rc"
+          python3 tools/ci/classify-core-strict-frontier.py "$w/batch-results.json" --examples 5 --json-out "$w/frontier-summary.json" --require-no-errors
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          s=json.loads(Path('build/m46-strict500/frontier-summary.json').read_text())
+          assert s['selected']==500 and s['error']==0 and s['preprocess_missing']==0, s
+          print(f"M46_SUMMARY selected=500 pass={s['pass']} unsupported={s['unsupported']} error=0 distinct={len(s['blockers'])}")
+          for r in s['blockers'][:25]:
+              print(f"M46_BLOCKER count={r['count']} function={r['function']}")
+          PY
