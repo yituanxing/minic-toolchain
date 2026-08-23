@@ -1170,76 +1170,82 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
 
         target = minic_c0_program_expression(
             context->body->program, expression->value.binary.left);
-        source = minic_c0_program_expression(
-            context->body->program, expression->value.binary.right);
-        subtract = expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT;
-        if (target == NULL || source == NULL ||
-            target->value_category != MINIC_VALUE_LVALUE ||
-            minic_type_is_const(target->type) ||
-            (expression->value.binary.operator_kind != MINIC_BINARY_ADD &&
-             expression->value.binary.operator_kind != MINIC_BINARY_SUBTRACT) ||
-            !minic_type_unqualified(target->type, &stored_type) ||
-            !minic_type_is_pointer(stored_type) ||
-            !minic_type_unqualified(expression->type, &expression_value_type) ||
-            !minic_type_equal(expression_value_type, stored_type) ||
-            !core_scalar_expression_value_type(context->body, source, &index_type) ||
-            !minic_type_is_integer(index_type) ||
-            !minic_c0_pointer_arithmetic_element_size(context->body->program,
-                                                      minic_default_data_layout(),
-                                                      stored_type,
-                                                      &element_size)) {
-            return MINIC_CORE_LOWER_UNSUPPORTED;
-        }
-        status = lower_address(context, expression->value.binary.left, &address);
-        if (status != MINIC_CORE_LOWER_OK) {
-            return status;
-        }
-        (void)memset(&instruction, 0, sizeof(instruction));
-        instruction.kind = MINIC_CORE_INSTRUCTION_LOAD;
-        instruction.span = expression->span;
-        instruction.type = stored_type;
-        instruction.result = MINIC_CORE_VALUE_INVALID;
-        instruction.value.load.address = address;
-        instruction.value.load.is_volatile = minic_type_is_volatile(target->type);
-        if (!minic_core_function_append_value_instruction(
-                context->function, context->block_id, &instruction, &current)) {
+        if (target == NULL) {
             return MINIC_CORE_LOWER_ERROR;
         }
-        status = lower_expression(context, expression->value.binary.right, &index);
-        if (status != MINIC_CORE_LOWER_OK) {
-            return status;
+        /* M76_POINTER_COMPOUND_DISPATCH: only claim compound assignments whose
+           destination is actually a pointer. Integer +=/-=/&=/|=/... must
+           continue to the established M51 integer compound-assignment path. */
+        if (minic_type_unqualified(target->type, &stored_type) &&
+            minic_type_is_pointer(stored_type)) {
+            source = minic_c0_program_expression(
+                context->body->program, expression->value.binary.right);
+            subtract = expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT;
+            if (source == NULL || target->value_category != MINIC_VALUE_LVALUE ||
+                minic_type_is_const(target->type) ||
+                (expression->value.binary.operator_kind != MINIC_BINARY_ADD &&
+                 expression->value.binary.operator_kind != MINIC_BINARY_SUBTRACT) ||
+                !minic_type_unqualified(expression->type, &expression_value_type) ||
+                !minic_type_equal(expression_value_type, stored_type) ||
+                !core_scalar_expression_value_type(context->body, source, &index_type) ||
+                !minic_type_is_integer(index_type) ||
+                !minic_c0_pointer_arithmetic_element_size(context->body->program,
+                                                          minic_default_data_layout(),
+                                                          stored_type,
+                                                          &element_size)) {
+                return MINIC_CORE_LOWER_UNSUPPORTED;
+            }
+            status = lower_address(context, expression->value.binary.left, &address);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
+            (void)memset(&instruction, 0, sizeof(instruction));
+            instruction.kind = MINIC_CORE_INSTRUCTION_LOAD;
+            instruction.span = expression->span;
+            instruction.type = stored_type;
+            instruction.result = MINIC_CORE_VALUE_INVALID;
+            instruction.value.load.address = address;
+            instruction.value.load.is_volatile = minic_type_is_volatile(target->type);
+            if (!minic_core_function_append_value_instruction(
+                    context->function, context->block_id, &instruction, &current)) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            status = lower_expression(context, expression->value.binary.right, &index);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
+            if (index >= context->function->value_count ||
+                !minic_type_equal(context->function->values[index].type, index_type)) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            (void)memset(&instruction, 0, sizeof(instruction));
+            instruction.kind = MINIC_CORE_INSTRUCTION_POINTER_OFFSET;
+            instruction.span = expression->span;
+            instruction.type = stored_type;
+            instruction.result = MINIC_CORE_VALUE_INVALID;
+            instruction.value.pointer_offset.base = current;
+            instruction.value.pointer_offset.index = index;
+            instruction.value.pointer_offset.element_size = element_size;
+            instruction.value.pointer_offset.subtract = subtract;
+            if (!minic_core_function_append_value_instruction(
+                    context->function, context->block_id, &instruction, &updated)) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            (void)memset(&store, 0, sizeof(store));
+            store.kind = MINIC_CORE_INSTRUCTION_STORE;
+            store.span = expression->span;
+            store.type = minic_type_void();
+            store.result = MINIC_CORE_VALUE_INVALID;
+            store.value.store.address = address;
+            store.value.store.stored_value = updated;
+            store.value.store.is_volatile = minic_type_is_volatile(target->type);
+            if (!minic_core_function_append_effect_instruction(
+                    context->function, context->block_id, &store)) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            *value_id = updated;
+            return MINIC_CORE_LOWER_OK;
         }
-        if (index >= context->function->value_count ||
-            !minic_type_equal(context->function->values[index].type, index_type)) {
-            return MINIC_CORE_LOWER_ERROR;
-        }
-        (void)memset(&instruction, 0, sizeof(instruction));
-        instruction.kind = MINIC_CORE_INSTRUCTION_POINTER_OFFSET;
-        instruction.span = expression->span;
-        instruction.type = stored_type;
-        instruction.result = MINIC_CORE_VALUE_INVALID;
-        instruction.value.pointer_offset.base = current;
-        instruction.value.pointer_offset.index = index;
-        instruction.value.pointer_offset.element_size = element_size;
-        instruction.value.pointer_offset.subtract = subtract;
-        if (!minic_core_function_append_value_instruction(
-                context->function, context->block_id, &instruction, &updated)) {
-            return MINIC_CORE_LOWER_ERROR;
-        }
-        (void)memset(&store, 0, sizeof(store));
-        store.kind = MINIC_CORE_INSTRUCTION_STORE;
-        store.span = expression->span;
-        store.type = minic_type_void();
-        store.result = MINIC_CORE_VALUE_INVALID;
-        store.value.store.address = address;
-        store.value.store.stored_value = updated;
-        store.value.store.is_volatile = minic_type_is_volatile(target->type);
-        if (!minic_core_function_append_effect_instruction(
-                context->function, context->block_id, &store)) {
-            return MINIC_CORE_LOWER_ERROR;
-        }
-        *value_id = updated;
-        return MINIC_CORE_LOWER_OK;
     }
 
     /* M65_SCALAR_ASSIGNMENT_EXPRESSION_VALUE: simple assignment is an
