@@ -3806,8 +3806,6 @@ lower_while(MinicCoreLowerContext *context, const MinicStatement *statement, boo
     MinicCoreBlockId exit_block;
     MinicCoreBlockId preheader_block;
     MinicCoreBlockId saved_break_target;
-    MinicCoreTerminator terminator;
-    MinicCoreValueId condition;
     MinicCoreLowerStatus status;
     bool body_terminated;
     bool normalized_for;
@@ -3829,7 +3827,9 @@ lower_while(MinicCoreLowerContext *context, const MinicStatement *statement, boo
     if (statement->expression != MINIC_EXPRESSION_INVALID) {
         condition_expression =
             minic_c0_program_expression(context->body->program, statement->expression);
-        if (condition_expression == NULL || !minic_type_is_integer(condition_expression->type)) {
+        if (condition_expression == NULL ||
+            (!minic_type_is_integer(condition_expression->type) &&
+             !minic_type_is_pointer(condition_expression->type))) {
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
     }
@@ -3884,23 +3884,16 @@ lower_while(MinicCoreLowerContext *context, const MinicStatement *statement, boo
             return status;
         }
     } else {
-        status = lower_expression(context, statement->expression, &condition);
+        /* M84_SHARED_LOOP_CONDITION_BRANCH: if/while/normalized-for share one
+           scalar-condition owner. This admits pointer truth values and keeps
+           !/&&/|| short-circuit CFG construction out of the loop lowering. */
+        status = lower_condition_branch(context,
+                                        statement->expression,
+                                        statement->span,
+                                        body_block,
+                                        exit_block);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
-        }
-        if (!minic_type_is_integer(context->function->values[condition].type)) {
-            return MINIC_CORE_LOWER_ERROR;
-        }
-        (void)memset(&terminator, 0, sizeof(terminator));
-        terminator.kind = MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH;
-        terminator.span = statement->span;
-        terminator.return_value = MINIC_CORE_VALUE_INVALID;
-        terminator.conditional.condition = condition;
-        terminator.conditional.when_true = body_block;
-        terminator.conditional.when_false = exit_block;
-        if (!minic_core_function_set_terminator(
-                context->function, condition_block, &terminator)) {
-            return MINIC_CORE_LOWER_ERROR;
         }
     }
 
