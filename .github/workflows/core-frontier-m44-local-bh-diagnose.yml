@@ -1,4 +1,4 @@
-name: Core M44 Label Address Qualification
+name: Core M45 Break CFG Qualification
 
 on:
   pull_request:
@@ -25,7 +25,7 @@ jobs:
         with:
           path: build/linux-focus-corpus
           key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
-      - name: Apply M31b through M44 and build
+      - name: Apply M31b through M45 and build
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -41,46 +41,68 @@ jobs:
           python3 tools/dev/patch-core-frontier-batch-m42.py
           python3 tools/dev/patch-core-frontier-batch-m43.py
           python3 tools/dev/run-core-frontier-batch-m44.py
+          python3 tools/dev/patch-core-frontier-batch-m45.py
           clang-format-18 -i src/core/core_ir.h src/core/core_ir.c src/core/core_lower.c src/target/riscv64/core_codegen.c
           git diff --check
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m44
-      - name: Focused label-address matrix
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m45
+      - name: Focused break CFG matrix
         shell: bash
         run: |
           set -Eeuo pipefail
-          c="$GITHUB_WORKSPACE/build/m44/bin/minic"
-          w=build/m44-shapes
+          c="$GITHUB_WORKSPACE/build/m45/bin/minic"
+          w=build/m45-shapes
           mkdir -p "$w"
 
-          cat > "$w/01_label_address.c" <<'EOF'
-          unsigned long f(void) { return ({ __label__ here; here: (unsigned long)&&here; }); }
-          EOF
-
-          cat > "$w/02_this_ip_call.c" <<'EOF'
-          void sink(unsigned long, unsigned int);
-          void f(void) { sink(({ __label__ here; here: (unsigned long)&&here; }), 512U); }
-          EOF
-
-          cat > "$w/03_forward_address.c" <<'EOF'
-          void *f(void) { void *p = &&later; later: return p; }
-          EOF
-
-          cat > "$w/04_same_label.c" <<'EOF'
-          int f(void) { return ({ __label__ here; here: &&here == &&here; }); }
-          EOF
-
-          cat > "$w/05_preempt_add_barrier.c" <<'EOF'
-          void f(volatile int *p, int v) { *p += v; __asm__ __volatile__("" ::: "memory"); }
-          EOF
-
-          cat > "$w/06_local_bh_shape.c" <<'EOF'
-          static void helper(volatile int *p, unsigned long ip, unsigned int cnt) {
-              (void)ip;
-              *p += (int)cnt;
-              __asm__ __volatile__("" ::: "memory");
+          cat > "$w/01_conditional_while_break.c" <<'EOF'
+          unsigned int f(unsigned int n) {
+              while (n != 0U) {
+                  if (n == 3U)
+                      break;
+                  --n;
+              }
+              return n;
           }
-          void f(volatile int *p) {
-              helper(p, ({ __label__ here; here: (unsigned long)&&here; }), 512U);
+          EOF
+
+          cat > "$w/02_for_break.c" <<'EOF'
+          unsigned int f(unsigned int cpu) {
+              unsigned int i;
+              for (i = 0U; i < 8U; ++i)
+                  if (i != cpu)
+                      break;
+              return i;
+          }
+          EOF
+
+          cat > "$w/03_nested_loop_break.c" <<'EOF'
+          unsigned int f(unsigned int n) {
+              unsigned int outer = 0U;
+              while (outer < n) {
+                  unsigned int inner = 0U;
+                  while (inner < 5U) {
+                      if (inner == 2U)
+                          break;
+                      ++inner;
+                  }
+                  outer += inner != 0U;
+              }
+              return outer;
+          }
+          EOF
+
+          cat > "$w/04_switch_nested_break.c" <<'EOF'
+          unsigned int f(unsigned int x) {
+              switch (x) {
+              case 1U:
+                  if (x != 0U)
+                      break;
+                  x = 9U;
+                  break;
+              default:
+                  x = 7U;
+                  break;
+              }
+              return x;
           }
           EOF
 
@@ -92,31 +114,61 @@ jobs:
             rc=$?
             set -e
             if [ "$rc" -eq 0 ]; then
-              printf 'M44_SHAPE_PASS name=%s\n' "$n"
+              printf 'M45_SHAPE_PASS name=%s\n' "$n"
             else
               failures=$((failures + 1))
-              printf 'M44_SHAPE_FAIL name=%s rc=%d\n' "$n" "$rc"
+              printf 'M45_SHAPE_FAIL name=%s rc=%d\n' "$n" "$rc"
               sed -n '1,12p' "$w/$n.err"
             fi
           done
-          printf 'M44_SHAPE_MATRIX failures=%d\n' "$failures"
+          printf 'M45_SHAPE_MATRIX failures=%d\n' "$failures"
           test "$failures" -eq 0
-      - name: RISC-V label-address differential
+      - name: RISC-V break differential
         shell: bash
         run: |
           set -Eeuo pipefail
-          c="$GITHUB_WORKSPACE/build/m44/bin/minic"
-          w=build/m44-qemu
+          c="$GITHUB_WORKSPACE/build/m45/bin/minic"
+          w=build/m45-qemu
           mkdir -p "$w"
           cat > "$w/f.c" <<'EOF'
-          unsigned long f(void) { return ({ __label__ here; here: (unsigned long)&&here; }); }
-          int same(void) { return ({ __label__ here; here: &&here == &&here; }); }
+          unsigned int while_break(unsigned int n) {
+              while (n != 0U) {
+                  if (n == 3U)
+                      break;
+                  --n;
+              }
+              return n;
+          }
+          unsigned int for_break(unsigned int cpu) {
+              unsigned int i;
+              for (i = 0U; i < 8U; ++i)
+                  if (i != cpu)
+                      break;
+              return i;
+          }
+          unsigned int nested_break(unsigned int n) {
+              unsigned int outer = 0U;
+              while (outer < n) {
+                  unsigned int inner = 0U;
+                  while (inner < 5U) {
+                      if (inner == 2U)
+                          break;
+                      ++inner;
+                  }
+                  outer += inner != 0U;
+              }
+              return outer;
+          }
           EOF
           cat > "$w/main.c" <<'EOF'
           #include <stdio.h>
-          unsigned long f(void);
-          int same(void);
-          int main(void) { printf("%d %d\n", f() != 0UL, same()); return 0; }
+          unsigned int while_break(unsigned int);
+          unsigned int for_break(unsigned int);
+          unsigned int nested_break(unsigned int);
+          int main(void) {
+              printf("%u %u %u\n", while_break(7U), for_break(0U), nested_break(4U));
+              return 0;
+          }
           EOF
           MINIC_CORE_IR=strict "$c" -S "$w/f.c" -o "$w/minic.s"
           riscv64-linux-gnu-gcc -O0 -static "$w/main.c" "$w/minic.s" -o "$w/minic.elf"
@@ -124,40 +176,41 @@ jobs:
           riscv64-linux-gnu-gcc -O0 -static "$w/main.c" "$w/f.c" -o "$w/gcc.elf"
           qemu-riscv64 "$w/gcc.elf" > "$w/gcc.out"
           diff -u "$w/gcc.out" "$w/minic.out"
-          grep -Fx '1 1' "$w/minic.out"
-          echo M44_QEMU_DIFF_PASS
-      - name: Frozen local_bh representative moves
+          grep -Fx '3 1 4' "$w/minic.out"
+          echo M45_QEMU_DIFF_PASS
+      - name: Frozen cpumask representative moves
         shell: bash
         run: |
           set -Eeuo pipefail
-          c="$GITHUB_WORKSPACE/build/m44/bin/minic"
-          w=build/m44-rep
+          c="$GITHUB_WORKSPACE/build/m45/bin/minic"
+          w=build/m45-rep
           mkdir -p "$w"
           set +e
           MINIC_CORE_IR=strict "$c" -S build/linux-focus-corpus/kbuild/init/version.i -o "$w/version.s" 2>"$w/version.err"
           rc=$?
           set -e
           head -12 "$w/version.err" || true
-          ! grep -Fq "Core IR shadow does not yet support function 'local_bh_disable'" "$w/version.err"
-          ! grep -Fq "Core IR shadow lowering failed for function 'local_bh_disable'" "$w/version.err"
-          printf 'M44_LOCAL_BH_MOVED rc=%d\n' "$rc"
+          ! grep -Fq "Core IR shadow does not yet support function 'cpumask_any_but'" "$w/version.err"
+          ! grep -Fq "Core IR shadow lowering failed for function 'cpumask_any_but'" "$w/version.err"
+          printf 'M45_CPUMASK_MOVED rc=%d\n' "$rc"
       - name: Frozen strict first500
         shell: bash
         run: |
           set -Eeuo pipefail
-          c="$GITHUB_WORKSPACE/build/m44/bin/minic"
-          w="$GITHUB_WORKSPACE/build/m44-strict500"
+          c="$GITHUB_WORKSPACE/build/m45/bin/minic"
+          w="$GITHUB_WORKSPACE/build/m45-strict500"
           set +e
           MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py --minic "$c" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" --work "$w" --jobs 5 --offset 0 --limit 500 --sample-count 0 --indices ''
           rc=$?
           set -e
-          printf 'M44_REPLAY_RC=%d\n' "$rc"
+          printf 'M45_REPLAY_RC=%d\n' "$rc"
           python3 tools/ci/classify-core-strict-frontier.py "$w/batch-results.json" --examples 5 --json-out "$w/frontier-summary.json" --require-no-errors
           python3 - <<'PY'
           import json
           from pathlib import Path
-          s=json.loads(Path('build/m44-strict500/frontier-summary.json').read_text())
+          s=json.loads(Path('build/m45-strict500/frontier-summary.json').read_text())
           assert s['selected']==500 and s['error']==0 and s['preprocess_missing']==0, s
-          print(f"M44_SUMMARY selected=500 pass={s['pass']} unsupported={s['unsupported']} error=0 distinct={len(s['blockers'])}")
-          for r in s['blockers'][:25]: print(f"M44_BLOCKER count={r['count']} function={r['function']}")
+          print(f"M45_SUMMARY selected=500 pass={s['pass']} unsupported={s['unsupported']} error=0 distinct={len(s['blockers'])}")
+          for r in s['blockers'][:25]:
+              print(f"M45_BLOCKER count={r['count']} function={r['function']}")
           PY
