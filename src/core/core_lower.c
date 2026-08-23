@@ -28,9 +28,9 @@ static MinicCoreLowerStatus lower_condition_branch(MinicCoreLowerContext *contex
                                                    MinicSourceSpan span,
                                                    MinicCoreBlockId when_true,
                                                    MinicCoreBlockId when_false);
-static MinicCoreLowerStatus lower_postfix_scalar_update(MinicCoreLowerContext *context,
-                                                        const MinicExpression *expression,
-                                                        MinicCoreValueId *value_id);
+static MinicCoreLowerStatus lower_scalar_update(MinicCoreLowerContext *context,
+                                                const MinicExpression *expression,
+                                                MinicCoreValueId *value_id);
 static MinicCoreLowerStatus spill_scalar_value(MinicCoreLowerContext *context,
                                                MinicSourceSpan span,
                                                MinicType type,
@@ -1521,8 +1521,10 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
     }
     if (expression->kind == MINIC_EXPRESSION_UNARY &&
         (expression->value.unary.operator_kind == MINIC_UNARY_POST_INCREMENT ||
-         expression->value.unary.operator_kind == MINIC_UNARY_POST_DECREMENT)) {
-        return lower_postfix_scalar_update(context, expression, value_id);
+         expression->value.unary.operator_kind == MINIC_UNARY_POST_DECREMENT ||
+         expression->value.unary.operator_kind == MINIC_UNARY_PRE_INCREMENT ||
+         expression->value.unary.operator_kind == MINIC_UNARY_PRE_DECREMENT)) {
+        return lower_scalar_update(context, expression, value_id);
     }
     if (expression->kind == MINIC_EXPRESSION_UNARY &&
         expression->value.unary.operator_kind == MINIC_UNARY_NEGATE) {
@@ -2481,9 +2483,9 @@ static MinicCoreLowerStatus lower_assignment(MinicCoreLowerContext *context,
     return lower_assignment_pair(context, target_id, source_id, statement->span);
 }
 
-static MinicCoreLowerStatus lower_postfix_scalar_update(MinicCoreLowerContext *context,
-                                                        const MinicExpression *expression,
-                                                        MinicCoreValueId *value_id) {
+static MinicCoreLowerStatus lower_scalar_update(MinicCoreLowerContext *context,
+                                                const MinicExpression *expression,
+                                                MinicCoreValueId *value_id) {
     const MinicExpression *operand;
     MinicCoreInstruction instruction;
     MinicCoreValueId address;
@@ -2494,15 +2496,24 @@ static MinicCoreLowerStatus lower_postfix_scalar_update(MinicCoreLowerContext *c
     MinicCoreLowerStatus status;
     MinicType stored_type;
     bool increment;
+    bool prefix;
 
+    /* M56_PREFIX_POSTFIX_SCALAR_UPDATE: both forms perform the same single
+       load/update/store. Only the expression result differs: prefix yields the
+       updated value, postfix yields the prior value. */
     if (context == NULL || context->body == NULL || context->body->program == NULL ||
         context->function == NULL || expression == NULL || value_id == NULL ||
         expression->kind != MINIC_EXPRESSION_UNARY ||
         (expression->value.unary.operator_kind != MINIC_UNARY_POST_INCREMENT &&
-         expression->value.unary.operator_kind != MINIC_UNARY_POST_DECREMENT)) {
+         expression->value.unary.operator_kind != MINIC_UNARY_POST_DECREMENT &&
+         expression->value.unary.operator_kind != MINIC_UNARY_PRE_INCREMENT &&
+         expression->value.unary.operator_kind != MINIC_UNARY_PRE_DECREMENT)) {
         return MINIC_CORE_LOWER_ERROR;
     }
-    increment = expression->value.unary.operator_kind == MINIC_UNARY_POST_INCREMENT;
+    increment = expression->value.unary.operator_kind == MINIC_UNARY_POST_INCREMENT ||
+                expression->value.unary.operator_kind == MINIC_UNARY_PRE_INCREMENT;
+    prefix = expression->value.unary.operator_kind == MINIC_UNARY_PRE_INCREMENT ||
+             expression->value.unary.operator_kind == MINIC_UNARY_PRE_DECREMENT;
     operand = minic_c0_program_expression(context->body->program, expression->value.unary.operand);
     if (operand == NULL || operand->value_category != MINIC_VALUE_LVALUE ||
         !core_memory_scalar_type(operand->type) || minic_type_is_const(operand->type) ||
@@ -2610,7 +2621,7 @@ static MinicCoreLowerStatus lower_postfix_scalar_update(MinicCoreLowerContext *c
             context->function, context->block_id, &instruction)) {
         return MINIC_CORE_LOWER_ERROR;
     }
-    *value_id = current;
+    *value_id = prefix ? updated : current;
     return MINIC_CORE_LOWER_OK;
 }
 
@@ -2660,10 +2671,12 @@ static MinicCoreLowerStatus lower_expression_statement(MinicCoreLowerContext *co
     }
     if (expression->kind == MINIC_EXPRESSION_UNARY &&
         (expression->value.unary.operator_kind == MINIC_UNARY_POST_INCREMENT ||
-         expression->value.unary.operator_kind == MINIC_UNARY_POST_DECREMENT)) {
+         expression->value.unary.operator_kind == MINIC_UNARY_POST_DECREMENT ||
+         expression->value.unary.operator_kind == MINIC_UNARY_PRE_INCREMENT ||
+         expression->value.unary.operator_kind == MINIC_UNARY_PRE_DECREMENT)) {
         MinicCoreValueId discarded_value;
 
-        return lower_postfix_scalar_update(context, expression, &discarded_value);
+        return lower_scalar_update(context, expression, &discarded_value);
     }
     if (expression->kind != MINIC_EXPRESSION_ASSIGNMENT) {
         MinicCoreValueId discarded_value;
