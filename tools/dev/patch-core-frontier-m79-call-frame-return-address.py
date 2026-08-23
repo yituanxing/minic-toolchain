@@ -5,6 +5,7 @@ from pathlib import Path
 
 MARKER = "M79_CALL_FRAME_RETURN_ADDRESS"
 IR = Path("src/core/core_ir.h")
+IR_IMPL = Path("src/core/core_ir.c")
 LOWER = Path("src/core/core_lower.c")
 CODEGEN = Path("src/target/riscv64/core_codegen.c")
 
@@ -35,6 +36,23 @@ def patch_ir() -> None:
     text = replace_once(text, union_anchor, union_replacement, "ir-union")
     IR.write_text(text)
     print("M79 core_ir.h applied")
+
+
+def patch_ir_impl() -> None:
+    text = IR_IMPL.read_text()
+    if MARKER in text:
+        print("M79 core_ir.c already applied")
+        return
+
+    valid_anchor = '''    case MINIC_CORE_INSTRUCTION_PARAMETER:\n        return instruction_result_is_valid(function, instruction) &&\n               instruction->value.parameter_index < function->parameter_count &&\n'''
+    valid_replacement = '''    /* M79_CALL_FRAME_RETURN_ADDRESS: Core validates the semantic shape only.\n       Backend support for a particular kind/level pair is a target concern. */\n    case MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS: {\n        MinicType pointee;\n\n        return instruction_result_is_valid(function, instruction) &&\n               (instruction->value.call_frame_address.kind ==\n                    MINIC_CORE_CALL_FRAME_ADDRESS_RETURN ||\n                instruction->value.call_frame_address.kind ==\n                    MINIC_CORE_CALL_FRAME_ADDRESS_FRAME) &&\n               minic_type_pointee(instruction->type, &pointee) && minic_type_is_void(pointee);\n    }\n    case MINIC_CORE_INSTRUCTION_PARAMETER:\n        return instruction_result_is_valid(function, instruction) &&\n               instruction->value.parameter_index < function->parameter_count &&\n'''
+    text = replace_once(text, valid_anchor, valid_replacement, "ir-valid")
+
+    dump_anchor = '''    case MINIC_CORE_INSTRUCTION_PARAMETER:\n        return fprintf(output,\n                       "  %%%" PRIu32 " = parameter %zu\\n",\n                       instruction->result,\n                       instruction->value.parameter_index) >= 0;\n'''
+    dump_replacement = '''    case MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS:\n        return fprintf(output,\n                       "  %%%" PRIu32 " = call.frame.%s level=%u\\n",\n                       instruction->result,\n                       instruction->value.call_frame_address.kind ==\n                               MINIC_CORE_CALL_FRAME_ADDRESS_RETURN\n                           ? "return"\n                           : "frame",\n                       instruction->value.call_frame_address.level) >= 0;\n    case MINIC_CORE_INSTRUCTION_PARAMETER:\n        return fprintf(output,\n                       "  %%%" PRIu32 " = parameter %zu\\n",\n                       instruction->result,\n                       instruction->value.parameter_index) >= 0;\n'''
+    text = replace_once(text, dump_anchor, dump_replacement, "ir-dump")
+    IR_IMPL.write_text(text)
+    print("M79 core_ir.c applied")
 
 
 def patch_lower() -> None:
@@ -82,6 +100,7 @@ def patch_codegen() -> None:
 
 def main() -> int:
     patch_ir()
+    patch_ir_impl()
     patch_lower()
     patch_codegen()
     return 0
