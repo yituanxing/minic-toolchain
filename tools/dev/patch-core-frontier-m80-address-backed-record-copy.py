@@ -19,10 +19,27 @@ def main() -> int:
     for path, marker in M80_PRODUCTS.items():
         if marker not in path.read_text():
             raise SystemExit(f"M80 persisted product missing from {path}: {marker}")
+
     namespace = run_path(str(M81_DRIVER))
     m81_main = namespace.get("main")
-    if not callable(m81_main):
-        raise SystemExit("M81 frontier driver does not expose main()")
+    original_replace_once = namespace.get("replace_once")
+    if not callable(m81_main) or not callable(original_replace_once):
+        raise SystemExit("M81 frontier driver does not expose main()/replace_once()")
+
+    # core_lower.c now has two ADDRESS_OF dispatch sites: lower_address() and
+    # lower_expression(). M81 intentionally inserts the function-value case at
+    # the latter. Keep every other M81 anchor strict and resolve only this
+    # known structural ambiguity to the final occurrence.
+    def frontier_replace_once(text: str, old: str, new: str, name: str) -> str:
+        count = text.count(old)
+        if name == "lower-function" and count == 2:
+            prefix, separator, suffix = text.rpartition(old)
+            if not separator:
+                raise SystemExit("M81 lower-function anchor disappeared")
+            return prefix + new + suffix
+        return original_replace_once(text, old, new, name)
+
+    m81_main.__globals__["replace_once"] = frontier_replace_once
     return int(m81_main())
 
 
