@@ -48,6 +48,7 @@ jobs:
           python3 tools/dev/patch-core-frontier-m61-immediate-only-asm.py
           python3 tools/dev/patch-core-frontier-m62-pointer-return-conversion.py
           python3 tools/dev/patch-core-frontier-m63-qualified-scalar-update.py
+          python3 tools/dev/patch-core-frontier-m64-local-label-address.py
       - name: Build exact compiler
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-strict500-compiler
       - name: Fast Linux multi-frontier probe
@@ -71,8 +72,8 @@ jobs:
           from pathlib import Path
           s=json.loads(Path('build/core-strict500-probe/frontier-summary.json').read_text())
           if s['selected'] != 6: raise SystemExit(f"expected 6 probes, got {s['selected']}")
-          r=[b for b in s['blockers'] if b['function']=='__preempt_count_dec_and_test']
-          if r: raise SystemExit(f"still at __preempt_count_dec_and_test: {r}")
+          r=[b for b in s['blockers'] if b['function']=='local_bh_disable']
+          if r: raise SystemExit(f"still at local_bh_disable: {r}")
           print('LINUX_MULTI_FRONTIER_PROBE_PASSED_TARGET')
           PY
       - name: Upload fast frontier evidence
@@ -87,17 +88,17 @@ jobs:
             build/core-strict500-probe/failure-contexts.txt
             build/core-strict500-probe/frontier-summary.json
           if-no-files-found: warn
-      - name: Persist M63 source changes
+      - name: Persist M64 source changes
         if: success()
         shell: bash
         run: |
           set -Eeuo pipefail
-          files=(src/core/core_lower.c)
+          files=(src/core/core_ir.h src/core/core_ir.c src/core/core_lower.c src/target/riscv64/core_codegen.c)
           if git diff --quiet -- "${files[@]}"; then exit 0; fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -- "${files[@]}"
-          git commit -m 'core: normalize qualified scalar update values'
+          git commit -m 'core: lower local label addresses'
           git push origin HEAD:refactor/declaration-sema-v1
 
   full500-background:
@@ -141,6 +142,7 @@ jobs:
           python3 tools/dev/patch-core-frontier-m61-immediate-only-asm.py
           python3 tools/dev/patch-core-frontier-m62-pointer-return-conversion.py
           python3 tools/dev/patch-core-frontier-m63-qualified-scalar-update.py
+          python3 tools/dev/patch-core-frontier-m64-local-label-address.py
       - name: Build exact compiler
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-strict500-compiler
       - name: Replay full frozen first500 with live progress
