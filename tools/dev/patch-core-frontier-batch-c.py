@@ -51,6 +51,68 @@ new = '''        /* BATCH_C_ZERO_DISTANCE_CLEANUP_EDGE: cleanup ids are semantic
 '''
 replace_once(path, old, new)
 
+# Keep every normalized CFG seam on the same semantic rule instead of requiring
+# the arbitrary ROOT id. Equal current/stop ids mean there is no cleanup work.
+old = '''static bool source_position_equal(MinicSourcePosition left, MinicSourcePosition right) {
+    return left.offset == right.offset && left.line == right.line && left.column == right.column;
+}
+
+static bool normalized_do_while_zero_body'''
+new = '''static bool source_position_equal(MinicSourcePosition left, MinicSourcePosition right) {
+    return left.offset == right.offset && left.line == right.line && left.column == right.column;
+}
+
+static bool core_cleanup_edge_is_empty(const MinicStatement *statement) {
+    return statement != NULL &&
+           statement->cleanup_context == statement->cleanup_stop_context;
+}
+
+static bool normalized_do_while_zero_body'''
+replace_once(path, old, new)
+
+old = '''    if (break_statement == NULL || break_statement->kind != MINIC_STATEMENT_BREAK ||
+        break_statement->cleanup_context != MINIC_CLEANUP_CONTEXT_ROOT ||
+        break_statement->cleanup_stop_context != MINIC_CLEANUP_CONTEXT_ROOT ||
+        !source_position_equal(break_statement->span.begin, loop->span.begin)) {
+'''
+new = '''    if (break_statement == NULL || break_statement->kind != MINIC_STATEMENT_BREAK ||
+        !core_cleanup_edge_is_empty(break_statement) ||
+        !source_position_equal(break_statement->span.begin, loop->span.begin)) {
+'''
+replace_once(path, old, new)
+
+old = '''    if (continue_label == NULL || continue_label->kind != MINIC_STATEMENT_LABEL ||
+        continue_label->target_expression != MINIC_EXPRESSION_INVALID ||
+        continue_label->expression != MINIC_EXPRESSION_INVALID ||
+        continue_label->target_statement != MINIC_STATEMENT_INVALID ||
+        !source_position_equal(continue_label->span.begin, loop->span.begin) || update == NULL ||
+        update->kind != MINIC_STATEMENT_EXPRESSION ||
+        update->cleanup_context != MINIC_CLEANUP_CONTEXT_ROOT ||
+        update->cleanup_stop_context != MINIC_CLEANUP_CONTEXT_ROOT ||
+        update->expression == MINIC_EXPRESSION_INVALID) {
+'''
+new = '''    if (continue_label == NULL || continue_label->kind != MINIC_STATEMENT_LABEL ||
+        continue_label->target_expression != MINIC_EXPRESSION_INVALID ||
+        continue_label->expression != MINIC_EXPRESSION_INVALID ||
+        continue_label->target_statement != MINIC_STATEMENT_INVALID ||
+        !source_position_equal(continue_label->span.begin, loop->span.begin) || update == NULL ||
+        update->kind != MINIC_STATEMENT_EXPRESSION || !core_cleanup_edge_is_empty(update) ||
+        update->expression == MINIC_EXPRESSION_INVALID) {
+'''
+replace_once(path, old, new)
+
+old = '''        context->function == NULL || statement == NULL || terminated == NULL ||
+        statement->kind != MINIC_STATEMENT_WHILE ||
+        statement->cleanup_context != MINIC_CLEANUP_CONTEXT_ROOT ||
+        statement->cleanup_stop_context != MINIC_CLEANUP_CONTEXT_ROOT ||
+        statement->then_block == MINIC_BLOCK_INVALID ||
+'''
+new = '''        context->function == NULL || statement == NULL || terminated == NULL ||
+        statement->kind != MINIC_STATEMENT_WHILE || !core_cleanup_edge_is_empty(statement) ||
+        statement->then_block == MINIC_BLOCK_INVALID ||
+'''
+replace_once(path, old, new)
+
 # Batch C/2: record-return forwarding is already owned by M86's direct-record
 # call result object. Reuse that object as the return terminator payload instead
 # of requiring callers such as fdget() to materialize a redundant local copy.
@@ -78,4 +140,4 @@ new = '''            } else if (expression->kind == MINIC_EXPRESSION_COMPOUND_LI
 '''
 replace_once(path, old, new)
 
-print("CORE_BATCH_C_PATCHED zero-distance-cleanup direct-record-return")
+print("CORE_BATCH_C_PATCHED zero-distance-cleanup normalized-cfg direct-record-return")
