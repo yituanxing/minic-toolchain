@@ -40,7 +40,7 @@ jobs:
           python3 tools/dev/patch-core-frontier-batch-m41.py
           python3 tools/dev/patch-core-frontier-batch-m42.py
           python3 tools/dev/patch-core-frontier-batch-m43.py
-          python3 tools/dev/patch-core-frontier-batch-m44.py
+          python3 tools/dev/run-core-frontier-batch-m44.py
           clang-format-18 -i src/core/core_ir.h src/core/core_ir.c src/core/core_lower.c src/target/riscv64/core_codegen.c
           git diff --check
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m44
