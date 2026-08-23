@@ -2425,8 +2425,12 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                    ? MINIC_CORE_LOWER_OK
                    : MINIC_CORE_LOWER_ERROR;
     }
+    /* M82_BINARY_POINTER_SUBTRACTION: C/GNU pointer +/- integer share the
+       same scaled-offset primitive. Subtraction is only valid with the pointer
+       on the left; integer - pointer remains fail-closed. */
     if (expression->kind == MINIC_EXPRESSION_BINARY &&
-        expression->value.binary.operator_kind == MINIC_BINARY_ADD &&
+        (expression->value.binary.operator_kind == MINIC_BINARY_ADD ||
+         expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT) &&
         minic_type_is_pointer(expression->type)) {
         const MinicExpression *left_expression;
         const MinicExpression *pointer_expression;
@@ -2453,7 +2457,8 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
             index_expression = right_expression;
             pointer_id = expression->value.binary.left;
             index_id = expression->value.binary.right;
-        } else if (minic_type_is_integer(left_expression->type) &&
+        } else if (expression->value.binary.operator_kind == MINIC_BINARY_ADD &&
+                   minic_type_is_integer(left_expression->type) &&
                    minic_type_is_pointer(right_expression->type)) {
             pointer_expression = right_expression;
             index_expression = left_expression;
@@ -2505,6 +2510,11 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         instruction.value.pointer_offset.base = pointer_value;
         instruction.value.pointer_offset.index = index_value;
         instruction.value.pointer_offset.element_size = element_size;
+        /* M75 introduced this flag for compound subtraction. Always initialize
+           it on ordinary pointer arithmetic as well; leaving pointer + integer
+           indeterminate would make the Core program nondeterministic. */
+        instruction.value.pointer_offset.subtract =
+            expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT;
         return minic_core_function_append_value_instruction(
                    context->function, context->block_id, &instruction, value_id)
                    ? MINIC_CORE_LOWER_OK
