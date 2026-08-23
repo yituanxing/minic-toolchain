@@ -65,11 +65,11 @@ def patch_ir_c() -> None:
         return fprintf(output, "  br bb%" PRIu32 "\\n", terminator->branch_target) >= 0;
 '''
     text = replace_once(text, dump_anchor, dump_new, "terminator-dump")
-    # The marker is carried by the enum comment in the header; add one here for idempotence.
-    marker_anchor = '''static bool verify_terminator(const MinicCoreFunction *function,
+    marker_anchor = '''#include <string.h>
 '''
-    text = replace_once(text, marker_anchor, '''/* M91_BUILTIN_UNREACHABLE_TERMINATOR */
-''' + marker_anchor, "ir-marker")
+    text = replace_once(text, marker_anchor, marker_anchor + '''
+/* M91_BUILTIN_UNREACHABLE_TERMINATOR */
+''', "ir-marker")
     IR_C.write_text(text)
     print("M91 core_ir.c applied")
 
