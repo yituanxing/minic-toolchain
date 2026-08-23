@@ -803,17 +803,20 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
                instruction->value.fixed_register_binding_id != SIZE_MAX &&
                (minic_type_is_integer(instruction->type) ||
                 minic_type_is_pointer(instruction->type));
-    case MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT:
+    case MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT: {
+        MinicCoreObjectId object_id;
+        MinicType object_value_type;
+        size_t parameter_index;
+
+        object_id = instruction->value.parameter_object.object_id;
+        parameter_index = instruction->value.parameter_object.parameter_index;
         return instruction->result == MINIC_CORE_VALUE_INVALID &&
                minic_type_is_void(instruction->type) &&
-               instruction->value.parameter_object.parameter_index < function->parameter_count &&
-               instruction->value.parameter_object.object_id < function->object_count &&
-               minic_type_is_record(
-                   function
-                       ->parameter_types[instruction->value.parameter_object.parameter_index]) &&
-               minic_type_equal(
-                   function->parameter_types[instruction->value.parameter_object.parameter_index],
-                   function->objects[instruction->value.parameter_object.object_id].type);
+               parameter_index < function->parameter_count && object_id < function->object_count &&
+               minic_type_is_record(function->parameter_types[parameter_index]) &&
+               minic_type_unqualified(function->objects[object_id].type, &object_value_type) &&
+               minic_type_equal(function->parameter_types[parameter_index], object_value_type);
+    }
     case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS: {
         MinicType pointer_type;
 

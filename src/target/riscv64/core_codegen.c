@@ -221,7 +221,10 @@ static bool core_field_address_supported(const MinicC0Program *program,
     }
     record = minic_c0_program_record(program, instruction->value.field_address.record_id);
     field = minic_c0_record_field(record, instruction->value.field_address.field_index);
-    if (record == NULL || field == NULL || field->is_bit_field ||
+    /* BATCH_A_UNSIGNED_BIT_FIELD_READ: FIELD_ADDRESS may be used internally
+       for a bit-field storage-unit read.  The frontend/Core lowerer still
+       rejects taking a C address of a bit-field. */
+    if (record == NULL || field == NULL ||
         !minic_data_layout_record_field_offset(minic_default_data_layout(),
                                                program,
                                                record,
@@ -1138,6 +1141,7 @@ static bool emit_parameter_object(FILE *file,
                                   const MinicCoreInstruction *instruction) {
     MinicRiscv64AbiArgumentLocation location;
     MinicCoreObjectId object_id;
+    MinicType object_value_type;
     size_t object_offset;
     size_t chunk_index;
 
@@ -1152,8 +1156,9 @@ static bool emit_parameter_object(FILE *file,
         location.value.slot_count == 0U || location.value.slot_count > 2U ||
         location.value.slot_count != location.integer_register_count + location.stack_slot_count ||
         object_id >= function->object_count ||
+        !minic_type_unqualified(function->objects[object_id].type, &object_value_type) ||
         !minic_type_equal(
-            function->objects[object_id].type,
+            object_value_type,
             function->parameter_types[instruction->value.parameter_object.parameter_index]) ||
         !core_object_offset(program, function, object_id, &object_offset)) {
         return false;
