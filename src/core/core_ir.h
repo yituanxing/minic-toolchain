@@ -266,6 +266,9 @@ typedef struct MinicCoreInstruction {
             MinicCoreCalleeId callee_id;
             size_t argument_begin;
             size_t argument_count;
+            /* M86_DIRECT_RECORD_CALL_RESULT: aggregate call results remain
+               address-backed Core objects rather than becoming aggregate SSA. */
+            MinicCoreObjectId result_object;
         } call;
         struct {
             MinicCoreValueId callee;

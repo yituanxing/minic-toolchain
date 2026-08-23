@@ -277,6 +277,12 @@ static bool core_call_parameter_type(MinicType type) {
     return core_call_scalar_type(type) || minic_type_is_record(type);
 }
 
+/* M86_DIRECT_RECORD_CALL_RESULT: direct callees may return an address-backed
+   record object. Indirect-call signatures stay on the scalar-return seam. */
+static bool core_direct_call_return_type(MinicType type) {
+    return minic_type_is_void(type) || core_call_scalar_type(type) || minic_type_is_record(type);
+}
+
 static bool callee_signature_equal(const MinicCoreCallee *callee,
                                    const char *name,
                                    size_t name_length,
@@ -311,7 +317,7 @@ bool minic_core_function_add_callee(MinicCoreFunction *function,
 
     if (function == NULL || name == NULL || name_length == 0U || callee_id == NULL ||
         function->callee_count >= (size_t)UINT32_MAX ||
-        (!minic_type_is_void(return_type) && !core_call_scalar_type(return_type)) ||
+        !core_direct_call_return_type(return_type) ||
         (parameter_count != 0U && parameter_types == NULL) ||
         parameter_count > SIZE_MAX / sizeof(*stored.parameter_types)) {
         return false;
@@ -1115,8 +1121,22 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
             return false;
         }
         returns_void = minic_type_is_void(callee->return_type);
-        if ((returns_void && instruction->result != MINIC_CORE_VALUE_INVALID) ||
-            (!returns_void && !instruction_result_is_valid(function, instruction))) {
+        if (returns_void) {
+            if (instruction->result != MINIC_CORE_VALUE_INVALID ||
+                instruction->value.call.result_object != MINIC_CORE_OBJECT_INVALID) {
+                return false;
+            }
+        } else if (minic_type_is_record(callee->return_type)) {
+            if (instruction->result != MINIC_CORE_VALUE_INVALID ||
+                instruction->value.call.result_object >= function->object_count ||
+                !minic_type_equal(
+                    function->objects[instruction->value.call.result_object].type,
+                    callee->return_type)) {
+                return false;
+            }
+        } else if (!core_call_scalar_type(callee->return_type) ||
+                   instruction->value.call.result_object != MINIC_CORE_OBJECT_INVALID ||
+                   !instruction_result_is_valid(function, instruction)) {
             return false;
         }
         argument_end =
@@ -1343,8 +1363,7 @@ bool minic_core_function_verify(const MinicCoreFunction *function) {
 
         callee = &function->callees[index];
         if (callee->name == NULL || callee->name_length == 0U ||
-            (!minic_type_is_void(callee->return_type) &&
-             !core_call_scalar_type(callee->return_type)) ||
+            !core_direct_call_return_type(callee->return_type) ||
             (callee->parameter_count != 0U && callee->parameter_types == NULL)) {
             return false;
         }
@@ -1740,7 +1759,13 @@ static bool dump_instruction(FILE *output,
             return false;
         }
         callee = &function->callees[instruction->value.call.callee_id];
-        if (instruction->result == MINIC_CORE_VALUE_INVALID) {
+        if (minic_type_is_record(callee->return_type)) {
+            if (fprintf(output,
+                        "  %%o%" PRIu32 " = call @",
+                        instruction->value.call.result_object) < 0) {
+                return false;
+            }
+        } else if (instruction->result == MINIC_CORE_VALUE_INVALID) {
             if (fprintf(output, "  call @") < 0) {
                 return false;
             }

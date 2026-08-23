@@ -677,7 +677,9 @@ static bool core_direct_call_supported(const MinicC0Program *program,
         return false;
     }
     if (program == NULL) {
-        if (callee->parameter_count > 8U) {
+        if ((!minic_type_is_void(callee->return_type) &&
+             !core_scalar_type(callee->return_type)) ||
+            callee->parameter_count > 8U) {
             return false;
         }
         for (argument_index = 0U; argument_index < callee->parameter_count; ++argument_index) {
@@ -690,10 +692,20 @@ static bool core_direct_call_supported(const MinicC0Program *program,
         }
         return true;
     }
+    /* M86_DIRECT_RECORD_CALL_RESULT: mirror the existing callee-side
+       one/two-slot aggregate return ABI on direct call sites. */
     if (!minic_riscv64_abi_cursor_initialize_for_return(
             program, callee->return_type, &cursor, &return_value) ||
         (return_value.kind != MINIC_RISCV64_ABI_VALUE_VOID &&
-         return_value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER)) {
+         return_value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER &&
+         (return_value.kind != MINIC_RISCV64_ABI_VALUE_AGGREGATE ||
+          return_value.slot_count == 0U || return_value.slot_count > 2U)) ||
+        (return_value.kind == MINIC_RISCV64_ABI_VALUE_AGGREGATE &&
+         (!minic_type_is_record(callee->return_type) ||
+          instruction->value.call.result_object >= function->object_count ||
+          !minic_type_equal(
+              function->objects[instruction->value.call.result_object].type,
+              callee->return_type)))) {
         return false;
     }
     for (argument_index = 0U; argument_index < callee->parameter_count; ++argument_index) {
@@ -1266,6 +1278,38 @@ static bool emit_call(FILE *file,
         return false;
     }
     if (minic_type_is_void(instruction->type)) {
+        return true;
+    }
+    if (minic_type_is_record(instruction->type)) {
+        size_t chunk_index;
+        size_t object_offset;
+
+        if (return_value.kind != MINIC_RISCV64_ABI_VALUE_AGGREGATE ||
+            return_value.slot_count == 0U || return_value.slot_count > 2U ||
+            instruction->value.call.result_object >= function->object_count ||
+            !core_object_offset(
+                program, function, instruction->value.call.result_object, &object_offset)) {
+            return false;
+        }
+        for (chunk_index = 0U; chunk_index < return_value.slot_count; ++chunk_index) {
+            size_t chunk_offset = chunk_index * 8U;
+            size_t chunk_size;
+            const char *source_register =
+                minic_core_rv64_argument_registers[chunk_index];
+
+            if (chunk_offset >= return_value.storage_size ||
+                object_offset > SIZE_MAX - chunk_offset) {
+                return false;
+            }
+            chunk_size = return_value.storage_size - chunk_offset;
+            if (chunk_size > 8U) {
+                chunk_size = 8U;
+            }
+            if (!emit_sp_store_chunk(
+                    file, source_register, object_offset + chunk_offset, chunk_size)) {
+                return false;
+            }
+        }
         return true;
     }
     if (minic_type_is_integer(instruction->type) &&

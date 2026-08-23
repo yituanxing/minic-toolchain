@@ -55,6 +55,10 @@ static MinicCoreLowerStatus append_scalar_bitcast(MinicCoreLowerContext *context
                                                   MinicType target_type,
                                                   MinicCoreValueId source_value,
                                                   MinicCoreValueId *value_id);
+static MinicCoreLowerStatus lower_direct_record_call_object(
+    MinicCoreLowerContext *context,
+    const MinicExpression *expression,
+    MinicCoreObjectId *result_object);
 
 static bool core_memory_scalar_type(MinicType type) {
     return minic_type_is_integer(type) || minic_type_is_pointer(type);
@@ -972,6 +976,7 @@ static MinicCoreLowerStatus lower_record_copy_statement(MinicCoreLowerContext *c
     MinicCoreValueId source_address;
     MinicType source_type;
     MinicType target_type;
+    bool direct_record_call;
 
     if (context == NULL || context->body == NULL || context->body->program == NULL ||
         context->function == NULL || statement == NULL ||
@@ -981,6 +986,9 @@ static MinicCoreLowerStatus lower_record_copy_statement(MinicCoreLowerContext *c
     }
     target = minic_c0_program_expression(context->body->program, statement->target_expression);
     source = minic_c0_program_expression(context->body->program, statement->expression);
+    direct_record_call =
+        source != NULL && source->kind == MINIC_EXPRESSION_CALL &&
+        source->value.call.function_id != MINIC_FUNCTION_INVALID;
     if (target == NULL || source == NULL || target->value_category != MINIC_VALUE_LVALUE ||
         !minic_type_is_record(target->type) || !minic_type_is_record(source->type) ||
         target->type.record_id != source->type.record_id ||
@@ -988,17 +996,44 @@ static MinicCoreLowerStatus lower_record_copy_statement(MinicCoreLowerContext *c
         !minic_type_unqualified(source->type, &source_type) ||
         !minic_type_equal(target_type, source_type) || !minic_type_is_record(target_type) ||
         (statement->kind == MINIC_STATEMENT_RECORD_COPY && minic_type_is_const(target->type)) ||
-        !minic_c0_record_value_is_copy_source(context->body->program, statement->expression) ||
-        !minic_c0_record_value_is_address_backed(context->body->program, statement->expression)) {
+        (!direct_record_call &&
+         (!minic_c0_record_value_is_copy_source(context->body->program, statement->expression) ||
+          !minic_c0_record_value_is_address_backed(
+              context->body->program, statement->expression)))) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
     record = minic_c0_program_record(context->body->program, target_type.record_id);
     if (record == NULL || !record->is_complete) {
         return MINIC_CORE_LOWER_ERROR;
     }
-    status = lower_record_value_address(context, statement->expression, &source_address);
-    if (status != MINIC_CORE_LOWER_OK) {
-        return status;
+    if (direct_record_call) {
+        MinicCoreObjectId source_object;
+        MinicType pointer_type;
+
+        status = lower_direct_record_call_object(context, source, &source_object);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        if (source_object >= context->function->object_count ||
+            !minic_type_equal(context->function->objects[source_object].type, source_type) ||
+            !minic_type_pointer_to(source_type, &pointer_type)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        (void)memset(&instruction, 0, sizeof(instruction));
+        instruction.kind = MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS;
+        instruction.span = source->span;
+        instruction.type = pointer_type;
+        instruction.result = MINIC_CORE_VALUE_INVALID;
+        instruction.value.object_id = source_object;
+        if (!minic_core_function_append_value_instruction(
+                context->function, context->block_id, &instruction, &source_address)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+    } else {
+        status = lower_record_value_address(context, statement->expression, &source_address);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
     }
     status = lower_address(context, statement->target_expression, &destination_address);
     if (status != MINIC_CORE_LOWER_OK) {
@@ -1295,6 +1330,7 @@ static MinicCoreLowerStatus lower_direct_call(MinicCoreLowerContext *context,
     instruction.value.call.callee_id = callee_id;
     instruction.value.call.argument_begin = argument_begin;
     instruction.value.call.argument_count = callee->parameter_count;
+    instruction.value.call.result_object = MINIC_CORE_OBJECT_INVALID;
     if (returns_void) {
         *value_id = MINIC_CORE_VALUE_INVALID;
         return minic_core_function_append_effect_instruction(
@@ -1304,6 +1340,148 @@ static MinicCoreLowerStatus lower_direct_call(MinicCoreLowerContext *context,
     }
     return minic_core_function_append_value_instruction(
                context->function, context->block_id, &instruction, value_id)
+               ? MINIC_CORE_LOWER_OK
+               : MINIC_CORE_LOWER_ERROR;
+}
+
+/* M86_DIRECT_RECORD_CALL_RESULT: direct record returns are materialized into
+   private Core objects. Arguments keep the M85 VALUE/OBJECT representation and
+   the RV64 backend remains the sole owner of ABI register placement. */
+static MinicCoreLowerStatus lower_direct_record_call_object(
+    MinicCoreLowerContext *context,
+    const MinicExpression *expression,
+    MinicCoreObjectId *result_object) {
+    const MinicFunction *callee;
+    const char *callee_name;
+    size_t callee_name_length;
+    MinicCoreCalleeId callee_id;
+    MinicCoreInstruction instruction;
+    MinicCoreCallArgument *arguments;
+    MinicCoreObjectId argument_objects[MINIC_MAX_FUNCTION_PARAMETERS];
+    MinicCoreLowerStatus status;
+    size_t argument_begin;
+    size_t argument_index;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        context->function == NULL || expression == NULL || result_object == NULL ||
+        expression->kind != MINIC_EXPRESSION_CALL ||
+        expression->value.call.function_id == MINIC_FUNCTION_INVALID ||
+        !minic_type_is_record(expression->type)) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    callee = minic_c0_program_function(context->body->program, expression->value.call.function_id);
+    if (callee == NULL || callee->name == NULL || callee->name_length == 0U ||
+        !minic_type_is_record(callee->return_type) ||
+        !minic_type_equal(callee->return_type, expression->type)) {
+        return MINIC_CORE_LOWER_UNSUPPORTED;
+    }
+    callee_name = callee->assembler_name != NULL ? callee->assembler_name : callee->name;
+    callee_name_length =
+        callee->assembler_name != NULL ? callee->assembler_name_length : callee->name_length;
+    if (callee_name == NULL || callee_name_length == 0U) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    if (callee->is_variadic || expression->value.call.argument_count != callee->parameter_count) {
+        return MINIC_CORE_LOWER_UNSUPPORTED;
+    }
+    for (argument_index = 0U; argument_index < callee->parameter_count; ++argument_index) {
+        if (!core_memory_scalar_type(callee->parameter_types[argument_index]) &&
+            !minic_type_is_record(callee->parameter_types[argument_index])) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+    }
+    arguments = callee->parameter_count == 0U
+                    ? NULL
+                    : (MinicCoreCallArgument *)calloc(callee->parameter_count, sizeof(*arguments));
+    if (callee->parameter_count != 0U && arguments == NULL) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    for (argument_index = 0U; argument_index < callee->parameter_count; ++argument_index) {
+        if (minic_type_is_record(callee->parameter_types[argument_index])) {
+            MinicCoreObjectId object_id;
+
+            status = lower_record_call_argument_object(
+                context,
+                expression->value.call.arguments[argument_index],
+                callee->parameter_types[argument_index],
+                &object_id);
+            if (status != MINIC_CORE_LOWER_OK) {
+                free(arguments);
+                return status;
+            }
+            arguments[argument_index].kind = MINIC_CORE_CALL_ARGUMENT_OBJECT;
+            arguments[argument_index].value.object_id = object_id;
+            continue;
+        }
+        arguments[argument_index].kind = MINIC_CORE_CALL_ARGUMENT_VALUE;
+        status = lower_scalar_assignment_value(
+            context,
+            callee->parameter_types[argument_index],
+            expression->value.call.arguments[argument_index],
+            &arguments[argument_index].value.value_id);
+        if (status != MINIC_CORE_LOWER_OK) {
+            free(arguments);
+            return status;
+        }
+        if (arguments[argument_index].value.value_id >= context->function->value_count ||
+            !minic_type_equal(
+                context->function->values[arguments[argument_index].value.value_id].type,
+                callee->parameter_types[argument_index])) {
+            free(arguments);
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        status = spill_scalar_value(context,
+                                    expression->span,
+                                    callee->parameter_types[argument_index],
+                                    arguments[argument_index].value.value_id,
+                                    &argument_objects[argument_index]);
+        if (status != MINIC_CORE_LOWER_OK) {
+            free(arguments);
+            return status;
+        }
+    }
+    for (argument_index = 0U; argument_index < callee->parameter_count; ++argument_index) {
+        if (arguments[argument_index].kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
+            continue;
+        }
+        status = reload_scalar_value(context,
+                                     expression->span,
+                                     callee->parameter_types[argument_index],
+                                     argument_objects[argument_index],
+                                     &arguments[argument_index].value.value_id);
+        if (status != MINIC_CORE_LOWER_OK) {
+            free(arguments);
+            return status;
+        }
+    }
+    if (!minic_core_function_add_callee(context->function,
+                                        callee_name,
+                                        callee_name_length,
+                                        callee->return_type,
+                                        callee->parameter_types,
+                                        callee->parameter_count,
+                                        &callee_id) ||
+        !minic_core_function_append_call_arguments(
+            context->function, arguments, callee->parameter_count, &argument_begin)) {
+        free(arguments);
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    free(arguments);
+    if (!minic_core_function_add_object(
+            context->function, expression->span, callee->return_type, result_object)) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    (void)memset(&instruction, 0, sizeof(instruction));
+    instruction.kind = MINIC_CORE_INSTRUCTION_CALL;
+    instruction.span = expression->span;
+    instruction.type = callee->return_type;
+    instruction.result = MINIC_CORE_VALUE_INVALID;
+    instruction.value.call.callee_id = callee_id;
+    instruction.value.call.argument_begin = argument_begin;
+    instruction.value.call.argument_count = callee->parameter_count;
+    instruction.value.call.result_object = *result_object;
+    return minic_core_function_append_effect_instruction(
+               context->function, context->block_id, &instruction)
                ? MINIC_CORE_LOWER_OK
                : MINIC_CORE_LOWER_ERROR;
 }
