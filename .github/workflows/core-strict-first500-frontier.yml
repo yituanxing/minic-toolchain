@@ -114,6 +114,7 @@ jobs:
             build/core-strict500-probe/batch-summary.txt
             build/core-strict500-probe/failure-contexts.txt
             build/core-strict500-probe/frontier-summary.json
+            build/core-strict500-probe/minic-stderr
           if-no-files-found: warn
 
       - name: Persist M70 source changes
