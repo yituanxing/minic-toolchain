@@ -1,0 +1,84 @@
+name: Core M44 Local BH Diagnose
+
+on:
+  pull_request:
+
+jobs:
+  diagnose:
+    if: github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+      - name: Apply M31b through M43 and build
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/run-core-frontier-batch-m31b.py
+          python3 tools/dev/patch-core-frontier-batch-m32.py
+          python3 tools/dev/patch-core-frontier-batch-m33.py
+          python3 tools/dev/patch-core-frontier-batch-m34.py
+          python3 tools/dev/patch-core-frontier-batch-m35.py
+          python3 tools/dev/patch-core-frontier-batch-m36.py
+          python3 tools/dev/patch-core-frontier-batch-m38.py
+          python3 tools/dev/patch-core-frontier-batch-m41.py
+          python3 tools/dev/patch-core-frontier-batch-m42.py
+          python3 tools/dev/patch-core-frontier-batch-m43.py
+          clang-format-18 -i src/core/core_ir.c src/core/core_lower.c
+          git diff --check
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m44-diag
+      - name: Diagnose local_bh_disable seams
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          c="$GITHUB_WORKSPACE/build/m44-diag/bin/minic"
+          w=build/m44-diag-shapes
+          mkdir -p "$w"
+
+          cat > "$w/01_volatile_compound.c" <<'EOF'
+          void f(volatile int *p, int v) { *p += v; }
+          EOF
+
+          cat > "$w/02_label_address.c" <<'EOF'
+          unsigned long f(void) { return ({ __label__ here; here: (unsigned long)&&here; }); }
+          EOF
+
+          cat > "$w/03_this_ip_call.c" <<'EOF'
+          void sink(unsigned long, unsigned int);
+          void f(void) { sink(({ __label__ here; here: (unsigned long)&&here; }), 512U); }
+          EOF
+
+          cat > "$w/04_preempt_add_barrier.c" <<'EOF'
+          void f(volatile int *p, int v) { *p += v; __asm__ __volatile__("" ::: "memory"); }
+          EOF
+
+          cat > "$w/05_local_bh_shape.c" <<'EOF'
+          static void helper(volatile int *p, unsigned long ip, unsigned int cnt) {
+              (void)ip;
+              *p += (int)cnt;
+              __asm__ __volatile__("" ::: "memory");
+          }
+          void f(volatile int *p) {
+              helper(p, ({ __label__ here; here: (unsigned long)&&here; }), 512U);
+          }
+          EOF
+
+          failures=0
+          for src in "$w"/*.c; do
+            n=$(basename "$src" .c)
+            set +e
+            MINIC_CORE_IR=strict "$c" -S "$src" -o "$w/$n.s" 2>"$w/$n.err"
+            rc=$?
+            set -e
+            if [ "$rc" -eq 0 ]; then
+              printf 'M44_DIAG_PASS name=%s\n' "$n"
+            else
+              failures=$((failures + 1))
+              printf 'M44_DIAG_FAIL name=%s rc=%d\n' "$n" "$rc"
+              sed -n '1,12p' "$w/$n.err"
+            fi
+          done
+          printf 'M44_DIAG_SUMMARY failures=%d\n' "$failures"
+          # Diagnostic workflow intentionally succeeds after printing the full matrix.
