@@ -73,14 +73,16 @@ while i < len(text):
 if end < 0 or depth != 0:
     raise SystemExit("M46 lower_expression closing brace missing")
 
-anchor = """    if (expression->kind == MINIC_EXPRESSION_BINARY &&
-        expression->value.binary.operator_kind == MINIC_BINARY_LOGICAL_AND) {
+# M31b..M45 rewrite the condition-lowering area, so do not anchor M46 to a
+# logical-AND implementation detail. The scalar DISCARD arm is the stable first
+# expression-kind arm after the common rvalue/label-address handling.
+anchor = """    if (expression->kind == MINIC_EXPRESSION_DISCARD) {
 """
 pos = text.find(anchor, start, end)
 if pos < 0:
-    raise SystemExit("M46 logical-and anchor missing inside lower_expression")
+    raise SystemExit("M46 discard anchor missing inside lower_expression")
 if text.find(anchor, pos + 1, end) >= 0:
-    raise SystemExit("M46 logical-and anchor is ambiguous inside lower_expression")
+    raise SystemExit("M46 discard anchor is ambiguous inside lower_expression")
 
 insert = """    if (expression->kind == MINIC_EXPRESSION_BINARY &&
         expression->value.binary.operator_kind == MINIC_BINARY_COMMA) {
