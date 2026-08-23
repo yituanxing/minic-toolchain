@@ -71,6 +71,7 @@ static bool core_function_needs_saved_return_address(const MinicCoreFunction *fu
          ++instruction_index) {
         MinicCoreInstructionKind kind = function->instructions[instruction_index].kind;
         if (kind == MINIC_CORE_INSTRUCTION_CALL ||
+            kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL ||
             kind == MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS) {
             return true;
         }
@@ -745,6 +746,25 @@ static bool core_instruction_supported(const MinicC0Program *program,
         }
         callee = &function->callees[instruction->value.call.callee_id];
         return callee->name != NULL && callee->name_length != 0U && callee->parameter_count <= 8U;
+    case MINIC_CORE_INSTRUCTION_INDIRECT_CALL: {
+        const MinicCoreCallSignature *signature;
+        MinicType function_type;
+
+        if (instruction->value.indirect_call.signature_id >= function->call_signature_count ||
+            instruction->value.indirect_call.callee >= function->value_count ||
+            instruction->value.indirect_call.argument_count > 8U) {
+            return false;
+        }
+        signature =
+            &function->call_signatures[instruction->value.indirect_call.signature_id];
+        return signature->parameter_count <= 8U &&
+               instruction->value.indirect_call.argument_count == signature->parameter_count &&
+               minic_type_pointee(
+                   function->values[instruction->value.indirect_call.callee].type,
+                   &function_type) &&
+               minic_type_is_function(function_type) &&
+               function_type.function_type_id == signature->function_type_id;
+    }
     case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:
         return core_field_address_supported(program, instruction, NULL);
     case MINIC_CORE_INSTRUCTION_SCALAR_BITCAST:
@@ -1072,6 +1092,48 @@ static bool emit_call(FILE *file,
         }
     }
     if (fprintf(file, "  call %s\n", callee->name) < 0) {
+        return false;
+    }
+    if (minic_type_is_void(instruction->type)) {
+        return true;
+    }
+    if (minic_type_is_integer(instruction->type) &&
+        !minic_riscv64_emit_integer_conversion_for_program(
+            file, program, instruction->type, "a0")) {
+        return false;
+    }
+    return store_core_value(file, frame, instruction->result, "a0");
+}
+
+static bool emit_indirect_call(FILE *file,
+                               const MinicC0Program *program,
+                               const MinicCoreFunction *function,
+                               const MinicRiscv64CoreFrame *frame,
+                               const MinicCoreInstruction *instruction) {
+    size_t argument_index;
+    size_t argument_offset;
+
+    if (file == NULL || function == NULL || frame == NULL || instruction == NULL ||
+        instruction->kind != MINIC_CORE_INSTRUCTION_INDIRECT_CALL ||
+        !core_instruction_supported(NULL, function, instruction)) {
+        return false;
+    }
+    for (argument_index = 0U;
+         argument_index < instruction->value.indirect_call.argument_count;
+         ++argument_index) {
+        argument_offset =
+            instruction->value.indirect_call.argument_begin + argument_index;
+        if (argument_offset >= function->call_argument_count ||
+            !load_core_value(file,
+                             frame,
+                             function->call_arguments[argument_offset],
+                             minic_core_rv64_argument_registers[argument_index])) {
+            return false;
+        }
+    }
+    if (!load_core_value(
+            file, frame, instruction->value.indirect_call.callee, "t0") ||
+        fprintf(file, "  jalr ra, t0, 0\n") < 0) {
         return false;
     }
     if (minic_type_is_void(instruction->type)) {
@@ -1988,6 +2050,8 @@ static bool emit_instruction(FILE *file,
         return true;
     case MINIC_CORE_INSTRUCTION_CALL:
         return emit_call(file, program, function, frame, instruction);
+    case MINIC_CORE_INSTRUCTION_INDIRECT_CALL:
+        return emit_indirect_call(file, program, function, frame, instruction);
     case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:
         return emit_field_address(file, program, frame, instruction);
     }

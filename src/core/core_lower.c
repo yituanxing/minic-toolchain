@@ -1227,6 +1227,146 @@ static MinicCoreLowerStatus lower_direct_call(MinicCoreLowerContext *context,
                : MINIC_CORE_LOWER_ERROR;
 }
 
+/* M83_FIRST_CLASS_INDIRECT_CALL: keep the callee as a first-class SSA
+   function-pointer value; the static signature is copied into Core so
+   verification and later backends do not depend on frontend Program state. */
+static MinicCoreLowerStatus lower_indirect_call(MinicCoreLowerContext *context,
+                                                const MinicExpression *expression,
+                                                MinicCoreValueId *value_id) {
+    const MinicExpression *callee_expression;
+    const MinicFunctionType *signature;
+    MinicCoreCallSignatureId signature_id;
+    MinicCoreInstruction instruction;
+    MinicCoreValueId callee_value;
+    MinicCoreValueId *arguments;
+    MinicCoreObjectId argument_objects[MINIC_MAX_FUNCTION_PARAMETERS];
+    MinicCoreLowerStatus status;
+    MinicType callee_value_type;
+    MinicType function_type;
+    size_t argument_begin;
+    size_t argument_index;
+    bool returns_void;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        context->function == NULL || expression == NULL || value_id == NULL ||
+        expression->kind != MINIC_EXPRESSION_CALL ||
+        expression->value.call.function_id != MINIC_FUNCTION_INVALID) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    callee_expression =
+        minic_c0_program_expression(context->body->program, expression->value.call.callee);
+    if (callee_expression == NULL ||
+        !core_scalar_expression_value_type(context->body, callee_expression, &callee_value_type) ||
+        !minic_type_pointee(callee_value_type, &function_type) ||
+        !minic_type_is_function(function_type)) {
+        return MINIC_CORE_LOWER_UNSUPPORTED;
+    }
+    signature = minic_c0_program_function_type(
+        context->body->program, function_type.function_type_id);
+    if (signature == NULL || signature->is_variadic ||
+        expression->value.call.argument_count != signature->parameter_count ||
+        !minic_type_equal(expression->type, signature->return_type)) {
+        return MINIC_CORE_LOWER_UNSUPPORTED;
+    }
+    returns_void = minic_type_is_void(signature->return_type);
+    if (!returns_void && !core_memory_scalar_type(signature->return_type)) {
+        return MINIC_CORE_LOWER_UNSUPPORTED;
+    }
+    for (argument_index = 0U; argument_index < signature->parameter_count; ++argument_index) {
+        if (!core_memory_scalar_type(signature->parameter_types[argument_index])) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+    }
+
+    status = lower_expression(context, expression->value.call.callee, &callee_value);
+    if (status != MINIC_CORE_LOWER_OK) {
+        return status;
+    }
+    if (callee_value >= context->function->value_count ||
+        !minic_type_equal(context->function->values[callee_value].type,
+                          callee_value_type)) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+
+    arguments = signature->parameter_count == 0U
+                    ? NULL
+                    : (MinicCoreValueId *)malloc(
+                          signature->parameter_count * sizeof(*arguments));
+    if (signature->parameter_count != 0U && arguments == NULL) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    for (argument_index = 0U; argument_index < signature->parameter_count; ++argument_index) {
+        status = lower_scalar_assignment_value(
+            context,
+            signature->parameter_types[argument_index],
+            expression->value.call.arguments[argument_index],
+            &arguments[argument_index]);
+        if (status != MINIC_CORE_LOWER_OK) {
+            free(arguments);
+            return status;
+        }
+        if (arguments[argument_index] >= context->function->value_count ||
+            !minic_type_equal(context->function->values[arguments[argument_index]].type,
+                              signature->parameter_types[argument_index])) {
+            free(arguments);
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        status = spill_scalar_value(context,
+                                    expression->span,
+                                    signature->parameter_types[argument_index],
+                                    arguments[argument_index],
+                                    &argument_objects[argument_index]);
+        if (status != MINIC_CORE_LOWER_OK) {
+            free(arguments);
+            return status;
+        }
+    }
+    for (argument_index = 0U; argument_index < signature->parameter_count; ++argument_index) {
+        status = reload_scalar_value(context,
+                                     expression->span,
+                                     signature->parameter_types[argument_index],
+                                     argument_objects[argument_index],
+                                     &arguments[argument_index]);
+        if (status != MINIC_CORE_LOWER_OK) {
+            free(arguments);
+            return status;
+        }
+    }
+    if (!minic_core_function_add_call_signature(context->function,
+                                                function_type.function_type_id,
+                                                signature->return_type,
+                                                signature->parameter_types,
+                                                signature->parameter_count,
+                                                &signature_id) ||
+        !minic_core_function_append_call_arguments(
+            context->function, arguments, signature->parameter_count, &argument_begin)) {
+        free(arguments);
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    free(arguments);
+
+    (void)memset(&instruction, 0, sizeof(instruction));
+    instruction.kind = MINIC_CORE_INSTRUCTION_INDIRECT_CALL;
+    instruction.span = expression->span;
+    instruction.type = signature->return_type;
+    instruction.result = MINIC_CORE_VALUE_INVALID;
+    instruction.value.indirect_call.callee = callee_value;
+    instruction.value.indirect_call.signature_id = signature_id;
+    instruction.value.indirect_call.argument_begin = argument_begin;
+    instruction.value.indirect_call.argument_count = signature->parameter_count;
+    if (returns_void) {
+        *value_id = MINIC_CORE_VALUE_INVALID;
+        return minic_core_function_append_effect_instruction(
+                   context->function, context->block_id, &instruction)
+                   ? MINIC_CORE_LOWER_OK
+                   : MINIC_CORE_LOWER_ERROR;
+    }
+    return minic_core_function_append_value_instruction(
+               context->function, context->block_id, &instruction, value_id)
+               ? MINIC_CORE_LOWER_OK
+               : MINIC_CORE_LOWER_ERROR;
+}
+
 static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                                              MinicExpressionId expression_id,
                                              MinicCoreValueId *value_id) {
@@ -1939,6 +2079,9 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         return MINIC_CORE_LOWER_OK;
     }
     if (expression->kind == MINIC_EXPRESSION_CALL) {
+        if (expression->value.call.function_id == MINIC_FUNCTION_INVALID) {
+            return lower_indirect_call(context, expression, value_id);
+        }
         return lower_direct_call(context, expression, value_id);
     }
     if (expression->kind == MINIC_EXPRESSION_FIXED_REGISTER) {

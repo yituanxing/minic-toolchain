@@ -16,6 +16,7 @@ typedef uint32_t MinicCoreObjectId;
 typedef uint32_t MinicCoreGlobalId;
 typedef uint32_t MinicCoreFunctionSymbolId;
 typedef uint32_t MinicCoreCalleeId;
+typedef uint32_t MinicCoreCallSignatureId;
 typedef uint32_t MinicCoreInlineAsmId;
 
 #define MINIC_CORE_VALUE_INVALID UINT32_MAX
@@ -25,6 +26,7 @@ typedef uint32_t MinicCoreInlineAsmId;
 #define MINIC_CORE_GLOBAL_INVALID UINT32_MAX
 #define MINIC_CORE_FUNCTION_SYMBOL_INVALID UINT32_MAX
 #define MINIC_CORE_CALLEE_INVALID UINT32_MAX
+#define MINIC_CORE_CALL_SIGNATURE_INVALID UINT32_MAX
 #define MINIC_CORE_INLINE_ASM_INVALID UINT32_MAX
 
 typedef enum MinicCorePhase { MINIC_CORE_PHASE_EXECUTION_SHADOW = 0 } MinicCorePhase;
@@ -87,7 +89,9 @@ typedef enum MinicCoreInstructionKind {
     MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM,
     MINIC_CORE_INSTRUCTION_COMPILER_BARRIER,
     MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS,
-    MINIC_CORE_INSTRUCTION_CALL
+    MINIC_CORE_INSTRUCTION_CALL,
+    /* M83_FIRST_CLASS_INDIRECT_CALL: callee is an SSA function-pointer value. */
+    MINIC_CORE_INSTRUCTION_INDIRECT_CALL
 } MinicCoreInstructionKind;
 
 typedef enum MinicCoreTerminatorKind {
@@ -124,6 +128,15 @@ typedef struct MinicCoreCallee {
     MinicType *parameter_types;
     size_t parameter_count;
 } MinicCoreCallee;
+
+/* M83_FIRST_CLASS_INDIRECT_CALL: Core owns enough static signature data to
+   verify an indirect call without consulting frontend Program state. */
+typedef struct MinicCoreCallSignature {
+    MinicFunctionTypeId function_type_id;
+    MinicType return_type;
+    MinicType *parameter_types;
+    size_t parameter_count;
+} MinicCoreCallSignature;
 
 typedef struct MinicCoreInlineAsm {
     char *template_text;
@@ -237,6 +250,12 @@ typedef struct MinicCoreInstruction {
             size_t argument_begin;
             size_t argument_count;
         } call;
+        struct {
+            MinicCoreValueId callee;
+            MinicCoreCallSignatureId signature_id;
+            size_t argument_begin;
+            size_t argument_count;
+        } indirect_call;
     } value;
 } MinicCoreInstruction;
 
@@ -277,6 +296,9 @@ typedef struct MinicCoreFunction {
     MinicCoreCallee *callees;
     size_t callee_count;
     size_t callee_capacity;
+    MinicCoreCallSignature *call_signatures;
+    size_t call_signature_count;
+    size_t call_signature_capacity;
     MinicCoreInlineAsm *inline_asms;
     size_t inline_asm_count;
     size_t inline_asm_capacity;
@@ -328,6 +350,12 @@ bool minic_core_function_add_callee(MinicCoreFunction *function,
                                     const MinicType *parameter_types,
                                     size_t parameter_count,
                                     MinicCoreCalleeId *callee_id);
+bool minic_core_function_add_call_signature(MinicCoreFunction *function,
+                                            MinicFunctionTypeId function_type_id,
+                                            MinicType return_type,
+                                            const MinicType *parameter_types,
+                                            size_t parameter_count,
+                                            MinicCoreCallSignatureId *signature_id);
 bool minic_core_function_add_opaque_inline_asm(MinicCoreFunction *function,
                                                const char *template_text,
                                                size_t template_length,

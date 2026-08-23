@@ -55,6 +55,7 @@ void minic_core_function_initialize(MinicCoreFunction *function) {
 void minic_core_function_destroy(MinicCoreFunction *function) {
     size_t block_index;
     size_t callee_index;
+    size_t call_signature_index;
     size_t global_index;
     size_t function_symbol_index;
     size_t inline_asm_index;
@@ -68,6 +69,11 @@ void minic_core_function_destroy(MinicCoreFunction *function) {
     for (callee_index = 0U; callee_index < function->callee_count; ++callee_index) {
         free(function->callees[callee_index].name);
         free(function->callees[callee_index].parameter_types);
+    }
+    for (call_signature_index = 0U;
+         call_signature_index < function->call_signature_count;
+         ++call_signature_index) {
+        free(function->call_signatures[call_signature_index].parameter_types);
     }
     for (global_index = 0U; global_index < function->global_count; ++global_index) {
         free(function->globals[global_index].name);
@@ -85,6 +91,7 @@ void minic_core_function_destroy(MinicCoreFunction *function) {
     free(function->globals);
     free(function->function_symbols);
     free(function->callees);
+    free(function->call_signatures);
     free(function->inline_asms);
     free(function->call_arguments);
     free(function->objects);
@@ -361,6 +368,87 @@ bool minic_core_function_add_callee(MinicCoreFunction *function,
     function->callees[function->callee_count] = stored;
     *callee_id = (MinicCoreCalleeId)function->callee_count;
     function->callee_count += 1U;
+    return true;
+}
+
+/* M83_FIRST_CLASS_INDIRECT_CALL: signatures are separate from direct
+   symbol callees so a function-pointer call never invents a symbolic target. */
+static bool call_signature_equal(const MinicCoreCallSignature *signature,
+                                 MinicFunctionTypeId function_type_id,
+                                 MinicType return_type,
+                                 const MinicType *parameter_types,
+                                 size_t parameter_count) {
+    size_t index;
+
+    if (signature == NULL || signature->function_type_id != function_type_id ||
+        !minic_type_equal(signature->return_type, return_type) ||
+        signature->parameter_count != parameter_count) {
+        return false;
+    }
+    for (index = 0U; index < parameter_count; ++index) {
+        if (!minic_type_equal(signature->parameter_types[index], parameter_types[index])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool minic_core_function_add_call_signature(MinicCoreFunction *function,
+                                            MinicFunctionTypeId function_type_id,
+                                            MinicType return_type,
+                                            const MinicType *parameter_types,
+                                            size_t parameter_count,
+                                            MinicCoreCallSignatureId *signature_id) {
+    MinicCoreCallSignature stored;
+    size_t index;
+
+    if (function == NULL || signature_id == NULL ||
+        function_type_id == MINIC_FUNCTION_TYPE_INVALID ||
+        function->call_signature_count >= (size_t)UINT32_MAX ||
+        (!minic_type_is_void(return_type) && !core_call_scalar_type(return_type)) ||
+        (parameter_count != 0U && parameter_types == NULL) ||
+        parameter_count > SIZE_MAX / sizeof(*stored.parameter_types)) {
+        return false;
+    }
+    for (index = 0U; index < parameter_count; ++index) {
+        if (!core_call_scalar_type(parameter_types[index])) {
+            return false;
+        }
+    }
+    for (index = 0U; index < function->call_signature_count; ++index) {
+        if (call_signature_equal(&function->call_signatures[index],
+                                 function_type_id,
+                                 return_type,
+                                 parameter_types,
+                                 parameter_count)) {
+            *signature_id = (MinicCoreCallSignatureId)index;
+            return true;
+        }
+    }
+    (void)memset(&stored, 0, sizeof(stored));
+    stored.function_type_id = function_type_id;
+    stored.return_type = return_type;
+    stored.parameter_count = parameter_count;
+    if (parameter_count != 0U) {
+        stored.parameter_types =
+            (MinicType *)malloc(parameter_count * sizeof(*stored.parameter_types));
+        if (stored.parameter_types == NULL) {
+            return false;
+        }
+        (void)memcpy(stored.parameter_types,
+                     parameter_types,
+                     parameter_count * sizeof(*stored.parameter_types));
+    }
+    if (!grow_array((void **)&function->call_signatures,
+                    &function->call_signature_capacity,
+                    function->call_signature_count,
+                    sizeof(*function->call_signatures))) {
+        free(stored.parameter_types);
+        return false;
+    }
+    function->call_signatures[function->call_signature_count] = stored;
+    *signature_id = (MinicCoreCallSignatureId)function->call_signature_count;
+    function->call_signature_count += 1U;
     return true;
 }
 
@@ -1042,6 +1130,55 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
         }
         return true;
     }
+    case MINIC_CORE_INSTRUCTION_INDIRECT_CALL: {
+        const MinicCoreCallSignature *signature;
+        MinicCoreValueId callee_value;
+        MinicType function_type;
+        size_t argument_index;
+        size_t argument_end;
+        bool returns_void;
+
+        callee_value = instruction->value.indirect_call.callee;
+        if (instruction->value.indirect_call.signature_id >= function->call_signature_count ||
+            callee_value >= function->value_count || !available_values[callee_value] ||
+            !minic_type_pointee(function->values[callee_value].type, &function_type) ||
+            !minic_type_is_function(function_type) ||
+            instruction->value.indirect_call.argument_begin > function->call_argument_count ||
+            instruction->value.indirect_call.argument_count >
+                function->call_argument_count - instruction->value.indirect_call.argument_begin) {
+            return false;
+        }
+        signature =
+            &function->call_signatures[instruction->value.indirect_call.signature_id];
+        if (function_type.function_type_id != signature->function_type_id ||
+            instruction->value.indirect_call.argument_count != signature->parameter_count ||
+            !minic_type_equal(instruction->type, signature->return_type)) {
+            return false;
+        }
+        returns_void = minic_type_is_void(signature->return_type);
+        if ((returns_void && instruction->result != MINIC_CORE_VALUE_INVALID) ||
+            (!returns_void && !instruction_result_is_valid(function, instruction))) {
+            return false;
+        }
+        argument_end = instruction->value.indirect_call.argument_begin +
+                       instruction->value.indirect_call.argument_count;
+        for (argument_index = instruction->value.indirect_call.argument_begin;
+             argument_index < argument_end;
+             ++argument_index) {
+            MinicCoreValueId argument;
+            size_t parameter_index;
+
+            argument = function->call_arguments[argument_index];
+            parameter_index =
+                argument_index - instruction->value.indirect_call.argument_begin;
+            if (argument >= function->value_count || !available_values[argument] ||
+                !minic_type_equal(function->values[argument].type,
+                                  signature->parameter_types[parameter_index])) {
+                return false;
+            }
+        }
+        return true;
+    }
     }
     return false;
 }
@@ -1138,6 +1275,9 @@ bool minic_core_function_verify(const MinicCoreFunction *function) {
             function->globals, function->global_count, function->global_capacity) ||
         !storage_shape_is_valid(
             function->callees, function->callee_count, function->callee_capacity) ||
+        !storage_shape_is_valid(function->call_signatures,
+                                function->call_signature_count,
+                                function->call_signature_capacity) ||
         !storage_shape_is_valid(
             function->inline_asms, function->inline_asm_count, function->inline_asm_capacity) ||
         !storage_shape_is_valid(function->call_arguments,
@@ -1177,6 +1317,24 @@ bool minic_core_function_verify(const MinicCoreFunction *function) {
         }
         for (parameter_index = 0U; parameter_index < callee->parameter_count; ++parameter_index) {
             if (!core_call_scalar_type(callee->parameter_types[parameter_index])) {
+                return false;
+            }
+        }
+    }
+    for (index = 0U; index < function->call_signature_count; ++index) {
+        const MinicCoreCallSignature *signature;
+        size_t parameter_index;
+
+        signature = &function->call_signatures[index];
+        if (signature->function_type_id == MINIC_FUNCTION_TYPE_INVALID ||
+            (!minic_type_is_void(signature->return_type) &&
+             !core_call_scalar_type(signature->return_type)) ||
+            (signature->parameter_count != 0U && signature->parameter_types == NULL)) {
+            return false;
+        }
+        for (parameter_index = 0U; parameter_index < signature->parameter_count;
+             ++parameter_index) {
+            if (!core_call_scalar_type(signature->parameter_types[parameter_index])) {
                 return false;
             }
         }
@@ -1569,6 +1727,42 @@ static bool dump_instruction(FILE *output,
             }
         }
         return fprintf(output, ")\n") >= 0;
+    }
+    case MINIC_CORE_INSTRUCTION_INDIRECT_CALL: {
+        size_t argument_index;
+
+        if (function == NULL ||
+            instruction->value.indirect_call.signature_id >= function->call_signature_count ||
+            instruction->value.indirect_call.callee >= function->value_count) {
+            return false;
+        }
+        if (instruction->result == MINIC_CORE_VALUE_INVALID) {
+            if (fprintf(output,
+                        "  call.indirect %%%" PRIu32 "(",
+                        instruction->value.indirect_call.callee) < 0) {
+                return false;
+            }
+        } else if (fprintf(output,
+                           "  %%%" PRIu32 " = call.indirect %%%" PRIu32 "(",
+                           instruction->result,
+                           instruction->value.indirect_call.callee) < 0) {
+            return false;
+        }
+        for (argument_index = 0U;
+             argument_index < instruction->value.indirect_call.argument_count;
+             ++argument_index) {
+            MinicCoreValueId argument;
+
+            argument = function->call_arguments[
+                instruction->value.indirect_call.argument_begin + argument_index];
+            if ((argument_index != 0U && fprintf(output, ", ") < 0) ||
+                fprintf(output, "%%%" PRIu32, argument) < 0) {
+                return false;
+            }
+        }
+        return fprintf(output,
+                       ") signature=%" PRIu32 "\n",
+                       instruction->value.indirect_call.signature_id) >= 0;
     }
     }
     return false;
