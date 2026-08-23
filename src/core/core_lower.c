@@ -922,6 +922,48 @@ static MinicCoreLowerStatus lower_integer_binary_operands(MinicCoreLowerContext 
     return MINIC_CORE_LOWER_OK;
 }
 
+/* BATCH_B_RECORD_COMPOUND_LITERAL_OBJECT: a block-scope record compound
+   literal already owns one frontend local backing object and one initializer
+   block. Materialize that exact semantic object so all aggregate consumers
+   (copy, call, return) share one ownership seam. */
+static MinicCoreLowerStatus lower_record_compound_literal_object(
+    MinicCoreLowerContext *context,
+    const MinicExpression *expression,
+    MinicCoreObjectId *object_id) {
+    const MinicBlock *initializer_block;
+    MinicCoreLowerStatus status;
+    bool terminated;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        expression == NULL || object_id == NULL ||
+        expression->kind != MINIC_EXPRESSION_COMPOUND_LITERAL ||
+        !minic_type_is_record(expression->type)) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    initializer_block = minic_c0_program_block(
+        context->body->program, expression->value.compound_literal.initializer_block);
+    if (initializer_block == NULL) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    status = lower_block(context, initializer_block, &terminated);
+    if (status != MINIC_CORE_LOWER_OK) {
+        return status;
+    }
+    if (terminated) {
+        return MINIC_CORE_LOWER_UNSUPPORTED;
+    }
+    status = lower_local_object(
+        context, expression->value.compound_literal.local_id, object_id);
+    if (status != MINIC_CORE_LOWER_OK) {
+        return status;
+    }
+    if (*object_id >= context->function->object_count ||
+        !minic_type_equal(context->function->objects[*object_id].type, expression->type)) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    return MINIC_CORE_LOWER_OK;
+}
+
 /* M80_ADDRESS_BACKED_RECORD_COPY: aggregate values stay address-backed in
    Core. Resolve the subset whose storage already exists: record lvalues,
    lvalue-read wrappers, and GNU statement expressions whose final record value
@@ -940,32 +982,15 @@ static MinicCoreLowerStatus lower_record_value_address(MinicCoreLowerContext *co
         !minic_c0_record_value_is_address_backed(context->body->program, expression_id)) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
-    /* M88_RECORD_COMPOUND_LITERAL_ADDRESS: a block-scope record compound
-       literal already owns a hidden local backing object plus an initializer
-       block. Execute that initializer, then expose the backing object's address
-       to the existing address-backed record-copy seam. */
+    /* M88_RECORD_COMPOUND_LITERAL_ADDRESS: expose the shared semantic backing
+       object through the address-backed aggregate seam. */
     if (expression->kind == MINIC_EXPRESSION_COMPOUND_LITERAL) {
-        const MinicBlock *initializer_block;
         MinicCoreInstruction address_instruction;
         MinicCoreObjectId object_id;
         MinicCoreLowerStatus status;
         MinicType pointer_type;
-        bool terminated;
 
-        initializer_block = minic_c0_program_block(
-            context->body->program, expression->value.compound_literal.initializer_block);
-        if (initializer_block == NULL) {
-            return MINIC_CORE_LOWER_ERROR;
-        }
-        status = lower_block(context, initializer_block, &terminated);
-        if (status != MINIC_CORE_LOWER_OK) {
-            return status;
-        }
-        if (terminated) {
-            return MINIC_CORE_LOWER_UNSUPPORTED;
-        }
-        status = lower_local_object(
-            context, expression->value.compound_literal.local_id, &object_id);
+        status = lower_record_compound_literal_object(context, expression, &object_id);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
@@ -4039,22 +4064,32 @@ static MinicCoreLowerStatus lower_return(MinicCoreLowerContext *context,
                                                    &terminator.return_value);
         } else if (minic_type_is_record(context->source_function->return_type)) {
             const MinicExpression *expression;
-            const MinicLocal *local;
             MinicType value_type;
 
             expression = minic_c0_program_expression(context->body->program, statement->expression);
-            if (expression == NULL || expression->kind != MINIC_EXPRESSION_LOCAL ||
-                expression->value_category != MINIC_VALUE_LVALUE ||
+            if (expression == NULL || !minic_type_is_record(expression->type) ||
                 !minic_type_unqualified(expression->type, &value_type) ||
                 !minic_type_equal(value_type, context->source_function->return_type)) {
                 return MINIC_CORE_LOWER_UNSUPPORTED;
             }
-            local = minic_c0_program_local(context->body->program, expression->value.local_id);
-            if (local == NULL || !minic_type_is_record(local->type)) {
-                return MINIC_CORE_LOWER_ERROR;
+            if (expression->kind == MINIC_EXPRESSION_LOCAL &&
+                expression->value_category == MINIC_VALUE_LVALUE) {
+                const MinicLocal *local;
+
+                local = minic_c0_program_local(context->body->program, expression->value.local_id);
+                if (local == NULL || !minic_type_is_record(local->type)) {
+                    return MINIC_CORE_LOWER_ERROR;
+                }
+                status = lower_local_object(
+                    context, expression->value.local_id, &terminator.return_object);
+            } else if (expression->kind == MINIC_EXPRESSION_COMPOUND_LITERAL &&
+                       minic_c0_record_value_is_address_backed(
+                           context->body->program, statement->expression)) {
+                status = lower_record_compound_literal_object(
+                    context, expression, &terminator.return_object);
+            } else {
+                return MINIC_CORE_LOWER_UNSUPPORTED;
             }
-            status =
-                lower_local_object(context, expression->value.local_id, &terminator.return_object);
         } else {
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
@@ -4264,6 +4299,14 @@ lower_if(MinicCoreLowerContext *context, const MinicStatement *statement, bool *
     context->block_id = then_block;
     status = lower_block(context, then_source, &then_terminated);
     if (status != MINIC_CORE_LOWER_OK) {
+        (void)fprintf(stderr,
+                      "CORE_FAST_TRACE stage=if reason=then-body function=%s "
+                      "status=%d condition_kind=%d span=%zu:%zu\n",
+                      context->source_function->name,
+                      (int)status,
+                      (int)condition_expression->kind,
+                      statement->span.begin.line,
+                      statement->span.begin.column);
         return status;
     }
     then_continuation_block = context->block_id;
@@ -4273,6 +4316,14 @@ lower_if(MinicCoreLowerContext *context, const MinicStatement *statement, bool *
         context->block_id = else_block;
         status = lower_block(context, else_source, &else_terminated);
         if (status != MINIC_CORE_LOWER_OK) {
+            (void)fprintf(stderr,
+                          "CORE_FAST_TRACE stage=if reason=else-body function=%s "
+                          "status=%d condition_kind=%d span=%zu:%zu\n",
+                          context->source_function->name,
+                          (int)status,
+                          (int)condition_expression->kind,
+                          statement->span.begin.line,
+                          statement->span.begin.column);
             return status;
         }
         else_continuation_block = context->block_id;
@@ -4308,6 +4359,14 @@ lower_if(MinicCoreLowerContext *context, const MinicStatement *statement, bool *
     status = lower_condition_branch(
         context, statement->expression, statement->span, then_block, false_target);
     if (status != MINIC_CORE_LOWER_OK) {
+        (void)fprintf(stderr,
+                      "CORE_FAST_TRACE stage=if reason=condition function=%s "
+                      "status=%d condition_kind=%d span=%zu:%zu\n",
+                      context->source_function->name,
+                      (int)status,
+                      (int)condition_expression->kind,
+                      statement->span.begin.line,
+                      statement->span.begin.column);
         return status;
     }
     context->block_id = continuation_block;
@@ -6498,6 +6557,15 @@ lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool
         }
         if (statement->cleanup_context != MINIC_CLEANUP_CONTEXT_ROOT ||
             statement->cleanup_stop_context != MINIC_CLEANUP_CONTEXT_ROOT) {
+            (void)fprintf(stderr,
+                          "CORE_FAST_TRACE stage=statement reason=cleanup-context "
+                          "function=%s kind=%d span=%zu:%zu cleanup=%llu stop=%llu\n",
+                          context->source_function->name,
+                          (int)statement->kind,
+                          statement->span.begin.line,
+                          statement->span.begin.column,
+                          (unsigned long long)statement->cleanup_context,
+                          (unsigned long long)statement->cleanup_stop_context);
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
         statement_terminated = false;
@@ -6558,6 +6626,32 @@ lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool
                     context, context->block_id, statement->span, context->break_target);
                 statement_terminated = status == MINIC_CORE_LOWER_OK;
                 break;
+            case MINIC_STATEMENT_GOTO: {
+                const MinicStatement *target_statement;
+                MinicCoreBlockId target_block;
+
+                if (statement->target_expression != MINIC_EXPRESSION_INVALID ||
+                    statement->expression != MINIC_EXPRESSION_INVALID ||
+                    statement->target_statement == MINIC_STATEMENT_INVALID) {
+                    status = MINIC_CORE_LOWER_UNSUPPORTED;
+                    break;
+                }
+                target_statement = minic_c0_program_statement(
+                    context->body->program, statement->target_statement);
+                if (target_statement == NULL ||
+                    target_statement->kind != MINIC_STATEMENT_LABEL) {
+                    status = MINIC_CORE_LOWER_ERROR;
+                    break;
+                }
+                status = ensure_statement_block(
+                    context, statement->target_statement, &target_block);
+                if (status == MINIC_CORE_LOWER_OK) {
+                    status = set_branch(
+                        context, context->block_id, statement->span, target_block);
+                }
+                statement_terminated = status == MINIC_CORE_LOWER_OK;
+                break;
+            }
             case MINIC_STATEMENT_IF:
                 status = lower_if(context, statement, &statement_terminated);
                 break;
