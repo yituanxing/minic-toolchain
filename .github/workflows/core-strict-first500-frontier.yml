@@ -33,11 +33,12 @@ jobs:
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
 
-      - name: Apply M50 IRQ CSR inline asm family
+      - name: Apply M51 compound shift assignment
         run: |
           python3 tools/dev/patch-core-frontier-m50-scalar-input-asm.py
           python3 tools/dev/patch-core-frontier-m50b-void-statement-expression.py
           python3 tools/dev/patch-core-frontier-m50c-output-input-asm.py
+          python3 tools/dev/patch-core-frontier-m51-compound-shift.py
 
       - name: Build exact compiler
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-strict500-compiler
@@ -81,9 +82,12 @@ jobs:
               'arch_irqs_disabled',
               'arch_irqs_disabled_flags',
           }
-          remaining = [b for b in summary['blockers'] if b['function'] in irq_blockers]
-          if remaining:
-              raise SystemExit(f"M50 IRQ CSR family remains blocked: {remaining}")
+          remaining_irq = [b for b in summary['blockers'] if b['function'] in irq_blockers]
+          if remaining_irq:
+              raise SystemExit(f"M50 IRQ CSR family regressed: {remaining_irq}")
+          remaining_ffs = [b for b in summary['blockers'] if b['function'] == '__ffs']
+          if remaining_ffs:
+              raise SystemExit(f"M51 failed: __ffs remains a Core strict blocker: {remaining_ffs}")
           PY
 
       - name: Upload frontier evidence
@@ -99,16 +103,13 @@ jobs:
             build/core-strict500-frontier/frontier-summary.json
           if-no-files-found: warn
 
-      - name: Persist M50 IRQ CSR source changes
+      - name: Persist M51 source changes
         if: success()
         shell: bash
         run: |
           set -Eeuo pipefail
           files=(
-            src/core/core_ir.h
-            src/core/core_ir.c
             src/core/core_lower.c
-            src/target/riscv64/core_codegen.c
           )
           if git diff --quiet -- "${files[@]}"; then
             exit 0
@@ -116,5 +117,5 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -- "${files[@]}"
-          git commit -m 'core: lower register-output/input inline asm'
+          git commit -m 'core: lower compound shift assignments'
           git push origin HEAD:refactor/declaration-sema-v1
