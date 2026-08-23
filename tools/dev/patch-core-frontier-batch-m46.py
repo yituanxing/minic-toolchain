@@ -15,9 +15,64 @@ function_anchor = """static MinicCoreLowerStatus lower_expression(MinicCoreLower
 start = text.find(function_anchor)
 if start < 0:
     raise SystemExit("M46 lower_expression definition anchor missing")
-end = text.find("\nstatic MinicCoreLowerStatus\nlower_condition_branch", start + len(function_anchor))
-if end < 0:
-    raise SystemExit("M46 lower_expression end boundary missing")
+
+# Scope the patch to the exact C function by matching its outer braces. Ignore
+# braces that occur inside comments and character/string literals so the patcher
+# remains stable as surrounding staged code changes.
+brace = start + function_anchor.rfind("{")
+depth = 0
+state = "code"
+escaped = False
+i = brace
+end = -1
+while i < len(text):
+    ch = text[i]
+    nxt = text[i + 1] if i + 1 < len(text) else ""
+    if state == "line_comment":
+        if ch == "\n":
+            state = "code"
+    elif state == "block_comment":
+        if ch == "*" and nxt == "/":
+            state = "code"
+            i += 1
+    elif state == "string":
+        if escaped:
+            escaped = False
+        elif ch == "\\":
+            escaped = True
+        elif ch == '"':
+            state = "code"
+    elif state == "char":
+        if escaped:
+            escaped = False
+        elif ch == "\\":
+            escaped = True
+        elif ch == "'":
+            state = "code"
+    else:
+        if ch == "/" and nxt == "/":
+            state = "line_comment"
+            i += 1
+        elif ch == "/" and nxt == "*":
+            state = "block_comment"
+            i += 1
+        elif ch == '"':
+            state = "string"
+        elif ch == "'":
+            state = "char"
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+            if depth < 0:
+                raise SystemExit("M46 lower_expression brace depth underflow")
+    i += 1
+if end < 0 or depth != 0:
+    raise SystemExit("M46 lower_expression closing brace missing")
+
 anchor = """    if (expression->kind == MINIC_EXPRESSION_BINARY &&
         expression->value.binary.operator_kind == MINIC_BINARY_LOGICAL_AND) {
 """
