@@ -361,8 +361,9 @@ static bool core_opaque_inline_asm_supported(const MinicCoreFunction *function,
         return false;
     }
     inline_asm = &function->inline_asms[instruction->value.inline_asm_id];
-    if (inline_asm->template_text == NULL || inline_asm->template_length == 0U ||
-        !inline_asm->is_volatile) {
+    /* M89_EMPTY_VOLATILE_OPAQUE_ASM: opaque volatile asm may carry zero
+       target bytes; emit_opaque_inline_asm naturally loops zero times. */
+    if (inline_asm->template_text == NULL || !inline_asm->is_volatile) {
         return false;
     }
     /* M76_SINGLE_LABEL_ASM_GOTO: the target is explicit Core metadata even
@@ -2319,6 +2320,11 @@ static bool emit_terminator(FILE *file,
             return false;
         }
         return fprintf(file, "  j .L%s_core_return\n", symbol_name) >= 0;
+    /* M91_BUILTIN_UNREACHABLE_TERMINATOR: reaching this block is UB; no
+       target instruction is required. The Core terminator still prevents
+       normal CFG fallthrough from being modeled as a supported continuation. */
+    case MINIC_CORE_TERMINATOR_UNREACHABLE:
+        return true;
     case MINIC_CORE_TERMINATOR_BRANCH:
         return fprintf(
                    file, "  j .L%s_core_bb%" PRIu32 "\n", symbol_name, terminator->branch_target) >=

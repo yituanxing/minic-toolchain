@@ -94,10 +94,13 @@ typedef enum MinicCoreInstructionKind {
     MINIC_CORE_INSTRUCTION_INDIRECT_CALL
 } MinicCoreInstructionKind;
 
+/* M91_BUILTIN_UNREACHABLE_TERMINATOR: unreachable is a CFG fact, not a
+   value-producing instruction and not an invented target trap. */
 typedef enum MinicCoreTerminatorKind {
     MINIC_CORE_TERMINATOR_RETURN = 0,
     MINIC_CORE_TERMINATOR_BRANCH,
-    MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH
+    MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH,
+    MINIC_CORE_TERMINATOR_UNREACHABLE
 } MinicCoreTerminatorKind;
 
 typedef struct MinicCoreValue {

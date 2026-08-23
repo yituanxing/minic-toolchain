@@ -4,6 +4,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* M91_BUILTIN_UNREACHABLE_TERMINATOR */
+
 static bool grow_array(void **data, size_t *capacity, size_t count, size_t element_size) {
     void *resized;
     size_t new_capacity;
@@ -331,8 +333,7 @@ bool minic_core_function_add_callee(MinicCoreFunction *function,
         const MinicCoreInlineAsm *inline_asm;
 
         inline_asm = &function->inline_asms[index];
-        if (inline_asm->template_text == NULL || inline_asm->template_length == 0U ||
-            !inline_asm->is_volatile) {
+        if (inline_asm->template_text == NULL || !inline_asm->is_volatile) {
             return false;
         }
     }
@@ -472,13 +473,24 @@ bool minic_core_function_add_opaque_inline_asm(MinicCoreFunction *function,
                                                MinicCoreInlineAsmId *inline_asm_id) {
     MinicCoreInlineAsm stored;
 
-    if (function == NULL || template_text == NULL || template_length == 0U ||
-        template_length == SIZE_MAX || inline_asm_id == NULL || !is_volatile ||
+    /* M89_EMPTY_VOLATILE_OPAQUE_ASM: an empty volatile asm is still an
+       explicit compiler-side effect even though the target text is zero bytes.
+       Keep it in the opaque-asm table rather than erasing it or strengthening it
+       into a memory-clobber barrier. */
+    if (function == NULL || template_text == NULL || template_length == SIZE_MAX ||
+        inline_asm_id == NULL || !is_volatile ||
         function->inline_asm_count >= (size_t)UINT32_MAX) {
         return false;
     }
     (void)memset(&stored, 0, sizeof(stored));
-    stored.template_text = copy_name(template_text, template_length);
+    if (template_length == 0U) {
+        stored.template_text = (char *)malloc(1U);
+        if (stored.template_text != NULL) {
+            stored.template_text[0] = '\0';
+        }
+    } else {
+        stored.template_text = copy_name(template_text, template_length);
+    }
     if (stored.template_text == NULL || !grow_array((void **)&function->inline_asms,
                                                     &function->inline_asm_capacity,
                                                     function->inline_asm_count,
@@ -938,8 +950,7 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
             return false;
         }
         inline_asm = &function->inline_asms[instruction->value.inline_asm_id];
-        return inline_asm->template_text != NULL && inline_asm->template_length != 0U &&
-               inline_asm->is_volatile;
+        return inline_asm->template_text != NULL && inline_asm->is_volatile;
     }
     case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INLINE_ASM: {
         const MinicCoreInlineAsm *inline_asm;
@@ -1257,6 +1268,9 @@ static bool terminator_is_valid(const MinicCoreFunction *function,
                available_values[terminator->return_value] &&
                minic_type_equal(function->values[terminator->return_value].type,
                                 function->return_type);
+    case MINIC_CORE_TERMINATOR_UNREACHABLE:
+        return terminator->return_value == MINIC_CORE_VALUE_INVALID &&
+               terminator->return_object == MINIC_CORE_OBJECT_INVALID;
     case MINIC_CORE_TERMINATOR_BRANCH:
         return terminator->branch_target < function->block_count;
     case MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH:
@@ -1851,6 +1865,8 @@ static bool dump_terminator(FILE *output,
             return fprintf(output, "  return\n") >= 0;
         }
         return fprintf(output, "  return %%%" PRIu32 "\n", terminator->return_value) >= 0;
+    case MINIC_CORE_TERMINATOR_UNREACHABLE:
+        return fprintf(output, "  unreachable\n") >= 0;
     case MINIC_CORE_TERMINATOR_BRANCH:
         return fprintf(output, "  br bb%" PRIu32 "\n", terminator->branch_target) >= 0;
     case MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH:
