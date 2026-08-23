@@ -34,7 +34,9 @@ jobs:
           test -s build/linux-focus-corpus/selected-tus.txt
 
       - name: Apply M50 scalar-input inline asm
-        run: python3 tools/dev/patch-core-frontier-m50-scalar-input-asm.py
+        run: |
+          python3 tools/dev/patch-core-frontier-m50-scalar-input-asm.py
+          python3 tools/dev/patch-core-frontier-m50b-void-statement-expression.py
 
       - name: Build exact compiler
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-strict500-compiler
