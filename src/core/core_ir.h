@@ -58,6 +58,8 @@ typedef enum MinicCoreInstructionKind {
     MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT,
     MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS,
     MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS,
+    /* M64_LOCAL_LABEL_BLOCK_ADDRESS: target-neutral address of a Core basic block. */
+    MINIC_CORE_INSTRUCTION_BLOCK_ADDRESS,
     MINIC_CORE_INSTRUCTION_FIELD_ADDRESS,
     MINIC_CORE_INSTRUCTION_POINTER_OFFSET,
     MINIC_CORE_INSTRUCTION_LOAD,
@@ -134,6 +136,7 @@ typedef struct MinicCoreInstruction {
         } parameter_object;
         MinicCoreObjectId object_id;
         MinicCoreGlobalId global_id;
+        MinicCoreBlockId block_id;
         struct {
             MinicCoreValueId base;
             MinicRecordId record_id;

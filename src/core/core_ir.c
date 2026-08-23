@@ -653,6 +653,11 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
         }
         return minic_type_equal(pointer_type, instruction->type);
     }
+    /* M64_LOCAL_LABEL_BLOCK_ADDRESS: block addresses are first-class pointer values. */
+    case MINIC_CORE_INSTRUCTION_BLOCK_ADDRESS:
+        return instruction_result_is_valid(function, instruction) &&
+               minic_type_is_pointer(instruction->type) &&
+               instruction->value.block_id < function->block_count;
     case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS: {
         MinicType pointer_type;
 
@@ -1195,6 +1200,10 @@ static bool dump_instruction(FILE *output,
                        "  %%%" PRIu32 " = object.addr %%o%" PRIu32 "\n",
                        instruction->result,
                        instruction->value.object_id) >= 0;
+    case MINIC_CORE_INSTRUCTION_BLOCK_ADDRESS:
+        return fprintf(output,
+                       "  %%%" PRIu32 " = block.addr %%bb%" PRIu32 "\n",
+                       instruction->result, instruction->value.block_id) >= 0;
     case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS:
         if (function == NULL || instruction->value.global_id >= function->global_count) {
             return false;

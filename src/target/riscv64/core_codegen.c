@@ -545,6 +545,9 @@ static bool core_instruction_supported(const MinicC0Program *program,
                binding->register_name_length != 0U && core_scalar_type(binding->type) &&
                minic_type_equal(binding->type, instruction->type);
     }
+    /* M64_LOCAL_LABEL_BLOCK_ADDRESS: RV64 spells the Core block label. */
+    case MINIC_CORE_INSTRUCTION_BLOCK_ADDRESS:
+        return minic_type_is_pointer(instruction->type) && instruction->value.block_id < function->block_count;
     case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS:
         return instruction->value.global_id < function->global_count &&
                function->globals[instruction->value.global_id].name != NULL &&
@@ -1204,10 +1207,11 @@ static bool emit_instruction(FILE *file,
                              const MinicC0Program *program,
                              const MinicCoreFunction *function,
                              const MinicRiscv64CoreFrame *frame,
+                             const char *symbol_name,
                              const MinicCoreInstruction *instruction) {
     size_t object_offset;
 
-    if (file == NULL || function == NULL || frame == NULL || instruction == NULL ||
+    if (file == NULL || function == NULL || frame == NULL || symbol_name == NULL || instruction == NULL ||
         !core_instruction_supported(program, function, instruction)) {
         return false;
     }
@@ -1524,6 +1528,10 @@ static bool emit_instruction(FILE *file,
             return false;
         }
         return store_core_value(file, frame, instruction->result, "t0");
+    case MINIC_CORE_INSTRUCTION_BLOCK_ADDRESS:
+        if (instruction->value.block_id >= function->block_count ||
+            fprintf(file, "  la t0, .L%s_core_bb%" PRIu32 "\n", symbol_name, instruction->value.block_id) < 0) return false;
+        return store_core_value(file, frame, instruction->result, "t0");
     case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS:
         if (instruction->value.global_id >= function->global_count ||
             fprintf(file, "  la t0, %s\n", function->globals[instruction->value.global_id].name) <
@@ -1671,8 +1679,7 @@ static bool emit_core_function_basic_v0_with_symbol(FILE *file,
 
             instruction_id = block->instructions[instruction_index];
             if (instruction_id >= function->instruction_count ||
-                !emit_instruction(
-                    file, program, function, &frame, &function->instructions[instruction_id])) {
+                !emit_instruction(file, program, function, &frame, symbol_name, &function->instructions[instruction_id])) {
                 return false;
             }
         }
