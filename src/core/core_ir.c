@@ -732,6 +732,22 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
         return inline_asm->template_text != NULL && inline_asm->template_length != 0U &&
                inline_asm->is_volatile;
     }
+    case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INLINE_ASM: {
+        const MinicCoreInlineAsm *inline_asm;
+
+        if (!instruction_result_is_valid(function, instruction) ||
+            (!minic_type_is_integer(instruction->type) &&
+             !minic_type_is_pointer(instruction->type)) ||
+            instruction->value.inline_asm_id >= function->inline_asm_count) {
+            return false;
+        }
+        inline_asm = &function->inline_asms[instruction->value.inline_asm_id];
+        return inline_asm->template_text != NULL && inline_asm->template_length != 0U &&
+               inline_asm->is_volatile;
+    }
+    case MINIC_CORE_INSTRUCTION_COMPILER_BARRIER:
+        return instruction->result == MINIC_CORE_VALUE_INVALID &&
+               minic_type_is_void(instruction->type);
     case MINIC_CORE_INSTRUCTION_CALL: {
         const MinicCoreCallee *callee;
         size_t argument_index;
@@ -1137,6 +1153,22 @@ static bool dump_instruction(FILE *output,
                        inline_asm->is_volatile ? " volatile" : "",
                        inline_asm->has_memory_clobber ? " memory" : "") >= 0;
     }
+    case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INLINE_ASM: {
+        const MinicCoreInlineAsm *inline_asm;
+
+        if (function == NULL || instruction->value.inline_asm_id >= function->inline_asm_count) {
+            return false;
+        }
+        inline_asm = &function->inline_asms[instruction->value.inline_asm_id];
+        return fprintf(output,
+                       "  %%%" PRIu32 " = asm.register_output id=%" PRIu32 "%s%s\n",
+                       instruction->result,
+                       instruction->value.inline_asm_id,
+                       inline_asm->is_volatile ? " volatile" : "",
+                       inline_asm->has_memory_clobber ? " memory" : "") >= 0;
+    }
+    case MINIC_CORE_INSTRUCTION_COMPILER_BARRIER:
+        return fprintf(output, "  compiler.barrier\n") >= 0;
     case MINIC_CORE_INSTRUCTION_CALL: {
         const MinicCoreCallee *callee;
         size_t argument_index;
