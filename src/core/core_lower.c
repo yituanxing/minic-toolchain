@@ -1137,15 +1137,33 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         MinicType result_type;
         bool terminated;
 
-        if (expression->value.statement_expression.result == MINIC_EXPRESSION_INVALID ||
-            !core_scalar_expression_value_type(context->body, expression, &result_type)) {
-            return MINIC_CORE_LOWER_UNSUPPORTED;
-        }
+        /* M50B_EFFECT_ONLY_STATEMENT_EXPRESSION: a GNU ({ ... }) whose last
+           statement has no value is an effect expression, not a scalar one. */
         statement_block = minic_c0_program_block(context->body->program,
                                                  expression->value.statement_expression.block);
+        if (statement_block == NULL) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        if (expression->value.statement_expression.result == MINIC_EXPRESSION_INVALID) {
+            if (!minic_type_is_void(expression->type)) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            status = lower_block(context, statement_block, &terminated);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
+            if (terminated) {
+                return MINIC_CORE_LOWER_UNSUPPORTED;
+            }
+            *value_id = MINIC_CORE_VALUE_INVALID;
+            return MINIC_CORE_LOWER_OK;
+        }
+        if (!core_scalar_expression_value_type(context->body, expression, &result_type)) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
         statement_result = minic_c0_program_expression(
             context->body->program, expression->value.statement_expression.result);
-        if (statement_block == NULL || statement_result == NULL) {
+        if (statement_result == NULL) {
             return MINIC_CORE_LOWER_ERROR;
         }
         status = lower_block(context, statement_block, &terminated);
@@ -2523,6 +2541,11 @@ static MinicCoreLowerStatus lower_expression_statement(MinicCoreLowerContext *co
         MinicCoreValueId discarded_value;
         MinicType discarded_type;
 
+        if (expression->kind == MINIC_EXPRESSION_STATEMENT &&
+            expression->value.statement_expression.result == MINIC_EXPRESSION_INVALID &&
+            minic_type_is_void(expression->type)) {
+            return lower_expression(context, statement->expression, &discarded_value);
+        }
         if (!core_scalar_expression_value_type(context->body, expression, &discarded_type)) {
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
@@ -3206,6 +3229,59 @@ static MinicCoreLowerStatus lower_opaque_inline_asm(MinicCoreLowerContext *conte
                 !minic_type_is_const(local->type) && !minic_type_is_volatile(local->type)) {
                 return MINIC_CORE_LOWER_OK;
             }
+        }
+    }
+
+    if (source->is_volatile && !source->is_goto && source->template_text != NULL &&
+        source->template_length != 0U && source->output_count == 0U && source->inputs != NULL &&
+        source->input_count == 1U && source->label_count == 0U &&
+        source->register_clobber_count == 0U &&
+        source->clobber_count == (source->has_memory_clobber ? 1U : 0U)) {
+        const MinicInlineAsmOperand *input;
+        const MinicExpression *input_expression;
+        MinicCoreValueId input_value;
+        MinicCoreLowerStatus input_status;
+        MinicType input_type;
+        bool register_constraint;
+
+        input = &source->inputs[0];
+        input_expression = minic_c0_program_expression(context->body->program, input->expression);
+        register_constraint =
+            input->constraint_text != NULL &&
+            ((input->constraint_length == 1U &&
+              memcmp(input->constraint_text, "r", 1U) == 0) ||
+             (input->constraint_length == 2U &&
+              memcmp(input->constraint_text, "rK", 2U) == 0));
+        if (input->access == MINIC_INLINE_ASM_OPERAND_READ_ONLY && register_constraint &&
+            input_expression != NULL &&
+            core_scalar_expression_value_type(context->body, input_expression, &input_type)) {
+            input_status = lower_expression(context, input->expression, &input_value);
+            if (input_status != MINIC_CORE_LOWER_OK) {
+                return input_status;
+            }
+            if (input_value >= context->function->value_count ||
+                !minic_type_equal(context->function->values[input_value].type, input_type)) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            if (!minic_core_function_add_opaque_inline_asm(context->function,
+                                                           source->template_text,
+                                                           source->template_length,
+                                                           source->is_volatile,
+                                                           source->has_memory_clobber,
+                                                           &inline_asm_id)) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            (void)memset(&instruction, 0, sizeof(instruction));
+            instruction.kind = MINIC_CORE_INSTRUCTION_SCALAR_INPUT_INLINE_ASM;
+            instruction.span = statement->span;
+            instruction.type = minic_type_void();
+            instruction.result = MINIC_CORE_VALUE_INVALID;
+            instruction.value.scalar_input_inline_asm.inline_asm_id = inline_asm_id;
+            instruction.value.scalar_input_inline_asm.operand = input_value;
+            return minic_core_function_append_effect_instruction(
+                       context->function, context->block_id, &instruction)
+                       ? MINIC_CORE_LOWER_OK
+                       : MINIC_CORE_LOWER_ERROR;
         }
     }
 

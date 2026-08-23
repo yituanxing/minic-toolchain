@@ -750,6 +750,25 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
         return inline_asm->template_text != NULL && inline_asm->template_length != 0U &&
                inline_asm->is_volatile;
     }
+    case MINIC_CORE_INSTRUCTION_SCALAR_INPUT_INLINE_ASM: {
+        const MinicCoreInlineAsm *inline_asm;
+        MinicCoreValueId operand;
+
+        operand = instruction->value.scalar_input_inline_asm.operand;
+        if (instruction->result != MINIC_CORE_VALUE_INVALID ||
+            !minic_type_is_void(instruction->type) || operand >= function->value_count ||
+            !available_values[operand] ||
+            (!minic_type_is_integer(function->values[operand].type) &&
+             !minic_type_is_pointer(function->values[operand].type)) ||
+            instruction->value.scalar_input_inline_asm.inline_asm_id >=
+                function->inline_asm_count) {
+            return false;
+        }
+        inline_asm = &function->inline_asms[
+            instruction->value.scalar_input_inline_asm.inline_asm_id];
+        return inline_asm->template_text != NULL && inline_asm->template_length != 0U &&
+               inline_asm->is_volatile;
+    }
     case MINIC_CORE_INSTRUCTION_COMPILER_BARRIER:
         return instruction->result == MINIC_CORE_VALUE_INVALID &&
                minic_type_is_void(instruction->type);
@@ -1169,6 +1188,22 @@ static bool dump_instruction(FILE *output,
                        "  %%%" PRIu32 " = asm.register_output id=%" PRIu32 "%s%s\n",
                        instruction->result,
                        instruction->value.inline_asm_id,
+                       inline_asm->is_volatile ? " volatile" : "",
+                       inline_asm->has_memory_clobber ? " memory" : "") >= 0;
+    }
+    case MINIC_CORE_INSTRUCTION_SCALAR_INPUT_INLINE_ASM: {
+        const MinicCoreInlineAsm *inline_asm;
+        MinicCoreInlineAsmId inline_asm_id;
+
+        inline_asm_id = instruction->value.scalar_input_inline_asm.inline_asm_id;
+        if (function == NULL || inline_asm_id >= function->inline_asm_count) {
+            return false;
+        }
+        inline_asm = &function->inline_asms[inline_asm_id];
+        return fprintf(output,
+                       "  asm.scalar_input id=%" PRIu32 " %%%" PRIu32 "%s%s\n",
+                       inline_asm_id,
+                       instruction->value.scalar_input_inline_asm.operand,
                        inline_asm->is_volatile ? " volatile" : "",
                        inline_asm->has_memory_clobber ? " memory" : "") >= 0;
     }

@@ -343,6 +343,45 @@ static bool core_register_output_inline_asm_supported(
     return true;
 }
 
+static bool core_scalar_input_inline_asm_supported(
+    const MinicCoreFunction *function, const MinicCoreInstruction *instruction) {
+    const MinicCoreInlineAsm *inline_asm;
+    MinicCoreValueId operand;
+    size_t index;
+
+    if (function == NULL || instruction == NULL ||
+        instruction->kind != MINIC_CORE_INSTRUCTION_SCALAR_INPUT_INLINE_ASM ||
+        instruction->result != MINIC_CORE_VALUE_INVALID ||
+        !minic_type_is_void(instruction->type) ||
+        instruction->value.scalar_input_inline_asm.inline_asm_id >= function->inline_asm_count) {
+        return false;
+    }
+    operand = instruction->value.scalar_input_inline_asm.operand;
+    if (operand >= function->value_count ||
+        (!minic_type_is_integer(function->values[operand].type) &&
+         !minic_type_is_pointer(function->values[operand].type))) {
+        return false;
+    }
+    inline_asm =
+        &function->inline_asms[instruction->value.scalar_input_inline_asm.inline_asm_id];
+    if (inline_asm->template_text == NULL || inline_asm->template_length == 0U ||
+        !inline_asm->is_volatile) {
+        return false;
+    }
+    for (index = 0U; index < inline_asm->template_length; ++index) {
+        if (inline_asm->template_text[index] != '%') {
+            continue;
+        }
+        if (index + 1U >= inline_asm->template_length ||
+            (inline_asm->template_text[index + 1U] != '%' &&
+             inline_asm->template_text[index + 1U] != '0')) {
+            return false;
+        }
+        index += 1U;
+    }
+    return true;
+}
+
 static bool core_instruction_supported(const MinicC0Program *program,
                                        const MinicCoreFunction *function,
                                        const MinicCoreInstruction *instruction) {
@@ -404,6 +443,8 @@ static bool core_instruction_supported(const MinicC0Program *program,
         return core_opaque_inline_asm_supported(function, instruction);
     case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INLINE_ASM:
         return core_register_output_inline_asm_supported(function, instruction);
+    case MINIC_CORE_INSTRUCTION_SCALAR_INPUT_INLINE_ASM:
+        return core_scalar_input_inline_asm_supported(function, instruction);
     case MINIC_CORE_INSTRUCTION_COMPILER_BARRIER:
         return true;
     case MINIC_CORE_INSTRUCTION_CALL:
@@ -856,6 +897,47 @@ static bool emit_register_output_inline_asm(
     return store_core_value(file, frame, instruction->result, "t0");
 }
 
+static bool emit_scalar_input_inline_asm(
+    FILE *file,
+    const MinicCoreFunction *function,
+    const MinicRiscv64CoreFrame *frame,
+    const MinicCoreInstruction *instruction) {
+    const MinicCoreInlineAsm *inline_asm;
+    size_t index;
+
+    if (file == NULL || frame == NULL ||
+        !core_scalar_input_inline_asm_supported(function, instruction) ||
+        !load_core_value(file, frame, instruction->value.scalar_input_inline_asm.operand, "t0")) {
+        return false;
+    }
+    inline_asm =
+        &function->inline_asms[instruction->value.scalar_input_inline_asm.inline_asm_id];
+    if (fprintf(file, "  ") < 0) {
+        return false;
+    }
+    for (index = 0U; index < inline_asm->template_length; ++index) {
+        if (inline_asm->template_text[index] != '%') {
+            if (fputc((unsigned char)inline_asm->template_text[index], file) == EOF) {
+                return false;
+            }
+            continue;
+        }
+        index += 1U;
+        if (inline_asm->template_text[index] == '%') {
+            if (fputc('%', file) == EOF) {
+                return false;
+            }
+        } else if (inline_asm->template_text[index] == '0') {
+            if (fprintf(file, "t0") < 0) {
+                return false;
+            }
+        } else {
+            return false;
+        }
+    }
+    return fputc('\n', file) != EOF;
+}
+
 static bool emit_instruction(FILE *file,
                              const MinicC0Program *program,
                              const MinicCoreFunction *function,
@@ -1211,6 +1293,8 @@ static bool emit_instruction(FILE *file,
         return emit_opaque_inline_asm(file, function, instruction);
     case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INLINE_ASM:
         return emit_register_output_inline_asm(file, program, function, frame, instruction);
+    case MINIC_CORE_INSTRUCTION_SCALAR_INPUT_INLINE_ASM:
+        return emit_scalar_input_inline_asm(file, function, frame, instruction);
     case MINIC_CORE_INSTRUCTION_COMPILER_BARRIER:
         return true;
     case MINIC_CORE_INSTRUCTION_CALL:

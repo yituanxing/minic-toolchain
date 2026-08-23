@@ -64,6 +64,7 @@ typedef enum MinicCoreInstructionKind {
     MINIC_CORE_INSTRUCTION_STORE,
     MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM,
     MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INLINE_ASM,
+    MINIC_CORE_INSTRUCTION_SCALAR_INPUT_INLINE_ASM,
     MINIC_CORE_INSTRUCTION_COMPILER_BARRIER,
     MINIC_CORE_INSTRUCTION_CALL
 } MinicCoreInstructionKind;
@@ -151,6 +152,10 @@ typedef struct MinicCoreInstruction {
             bool is_volatile;
         } store;
         MinicCoreInlineAsmId inline_asm_id;
+        struct {
+            MinicCoreInlineAsmId inline_asm_id;
+            MinicCoreValueId operand;
+        } scalar_input_inline_asm;
         struct {
             MinicCoreCalleeId callee_id;
             size_t argument_begin;
