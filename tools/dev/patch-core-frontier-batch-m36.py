@@ -44,8 +44,8 @@ replace_once(
     "               minic_type_equal(instruction->type, minic_type_int()) &&\n"
     "               instruction->value.operand < function->value_count &&\n"
     "               available_values[instruction->value.operand] &&\n"
-    "               minic_type_is_integer(function->values[instruction->value.operand].type) &&\n"
-    "               !minic_type_is_bool_integer(function->values[instruction->value.operand].type);\n"
+    "               minic_type_equal(function->values[instruction->value.operand].type,\n"
+    "                                minic_type_unsigned_long_long());\n"
     "    case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:\n",
 )
 
@@ -71,7 +71,6 @@ replace_once(
 )
 
 # The GNU builtin is already normalized by the frontend to unsigned long long -> int.
-# Lower only that semantic builtin here; other unary builtins remain fail-closed.
 replace_once(
     "src/core/core_lower.c",
     "    if (expression->kind == MINIC_EXPRESSION_UNARY &&\n"
@@ -110,8 +109,7 @@ replace_once(
     "        (expression->value.unary.operator_kind == MINIC_UNARY_PRE_INCREMENT ||\n",
 )
 
-# RV64 currently realizes the 64-bit form in baseline RV64I, deliberately avoiding
-# a Zbb dependency. This mirrors the already-qualified legacy backend policy.
+# RV64 realizes clzll in baseline RV64I. Do not silently require Zbb.
 replace_once(
     "src/target/riscv64/core_codegen.c",
     "static bool core_instruction_supported(const MinicC0Program *program,\n",
@@ -129,8 +127,7 @@ replace_once(
     "    }\n"
     "    operand = instruction->value.operand;\n"
     "    if (operand >= function->value_count ||\n"
-    "        !minic_type_is_integer(function->values[operand].type) ||\n"
-    "        minic_type_is_bool_integer(function->values[operand].type) ||\n"
+    "        !minic_type_equal(function->values[operand].type, minic_type_unsigned_long_long()) ||\n"
     "        !minic_data_layout_type(minic_default_data_layout(),\n"
     "                                program,\n"
     "                                function->values[operand].type,\n"
@@ -145,23 +142,14 @@ replace_once(
     "static bool core_instruction_supported(const MinicC0Program *program,\n",
 )
 
+# This adjacency occurs only in the support switch, not in emission.
 replace_once(
     "src/target/riscv64/core_codegen.c",
-    "    case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE:\n"
     "    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT:\n"
     "    case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:\n",
-    "    case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE:\n"
     "    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT:\n"
-    "    case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:\n",
-)
-
-# Add the count operation as a checked target capability instead of the generic true group.
-replace_once(
-    "src/target/riscv64/core_codegen.c",
-    "    case MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW: {\n",
     "    case MINIC_CORE_INSTRUCTION_INTEGER_COUNT_LEADING_ZEROS:\n"
-    "        return core_count_leading_zeros_supported(program, function, instruction);\n"
-    "    case MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW: {\n",
+    "    case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:\n",
 )
 
 replace_once(
