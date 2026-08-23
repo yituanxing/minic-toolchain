@@ -13,6 +13,10 @@ typedef struct MinicCoreLowerContext {
     const MinicTargetInfo *target;
     MinicCoreFunction *function;
     MinicCoreBlockId block_id;
+    /* M72_NESTED_BREAK_TARGET: nearest active loop/switch exit for a
+       semantic break statement. Kept in lowering context so break nested
+       below if/compound blocks still targets the enclosing construct. */
+    MinicCoreBlockId break_target;
     MinicCoreObjectId *local_objects;
     /* M64_LOCAL_LABEL_BLOCK_ADDRESS: semantic statement -> Core block map. */
     MinicCoreBlockId *statement_blocks;
@@ -1512,6 +1516,22 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         return reload_scalar_value(
             context, expression->span, expression->type, result_object, value_id);
     }
+    /* M73_COMMA_EXPRESSION_VALUE: the left operand is sequenced for
+       side effects and its scalar value is discarded; the right operand
+       supplies the value of the whole comma expression. Unsupported left
+       operand forms remain fail-closed through lower_expression(). */
+    if (expression->kind == MINIC_EXPRESSION_BINARY &&
+        expression->value.binary.operator_kind == MINIC_BINARY_COMMA) {
+        MinicCoreValueId discarded_left;
+        MinicCoreLowerStatus status;
+
+        status = lower_expression(context, expression->value.binary.left, &discarded_left);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        return lower_expression(context, expression->value.binary.right, value_id);
+    }
+
     /* M58_LOGICAL_OR_VALUE: lower_condition_branch already owns the
        short-circuit semantics for both && and ||. Their value materialization
        is identical: branch to true/false, store 1/0, then reload. */
@@ -3316,6 +3336,7 @@ lower_while(MinicCoreLowerContext *context, const MinicStatement *statement, boo
     MinicCoreBlockId condition_block;
     MinicCoreBlockId exit_block;
     MinicCoreBlockId preheader_block;
+    MinicCoreBlockId saved_break_target;
     MinicCoreTerminator terminator;
     MinicCoreValueId condition;
     MinicCoreLowerStatus status;
@@ -3390,7 +3411,10 @@ lower_while(MinicCoreLowerContext *context, const MinicStatement *statement, boo
     }
 
     context->block_id = body_block;
+    saved_break_target = context->break_target;
+    context->break_target = exit_block;
     status = lower_block(context, iteration_source, &body_terminated);
+    context->break_target = saved_break_target;
     if (status != MINIC_CORE_LOWER_OK) {
         return status;
     }
@@ -4958,6 +4982,7 @@ lower_switch(MinicCoreLowerContext *context, const MinicStatement *statement, bo
         size_t segment_begin;
         size_t segment_end;
         size_t scan;
+        MinicCoreBlockId saved_break_target;
         bool segment_terminated;
 
         segment_begin = labels[source_index].source_index + 1U;
@@ -4990,7 +5015,10 @@ lower_switch(MinicCoreLowerContext *context, const MinicStatement *statement, bo
             (break_index == SIZE_MAX ? segment_end : break_index) - segment_begin;
         segment.statement_capacity = segment.statement_count;
         if (segment.statement_count != 0U) {
+            saved_break_target = context->break_target;
+            context->break_target = exit_block;
             status = lower_block(context, &segment, &segment_terminated);
+            context->break_target = saved_break_target;
             if (status != MINIC_CORE_LOWER_OK) {
                 return status;
             }
@@ -5085,6 +5113,15 @@ lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool
                 status = lower_return(context, statement);
                 statement_terminated = status == MINIC_CORE_LOWER_OK;
                 break;
+            case MINIC_STATEMENT_BREAK:
+                if (context->break_target == MINIC_CORE_BLOCK_INVALID) {
+                    status = MINIC_CORE_LOWER_UNSUPPORTED;
+                    break;
+                }
+                status = set_branch(
+                    context, context->block_id, statement->span, context->break_target);
+                statement_terminated = status == MINIC_CORE_LOWER_OK;
+                break;
             case MINIC_STATEMENT_IF:
                 status = lower_if(context, statement, &statement_terminated);
                 break;
@@ -5095,9 +5132,26 @@ lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool
                 status = lower_switch(context, statement, &statement_terminated);
                 break;
             default:
+                (void)fprintf(stderr,
+                              "CORE_FAST_TRACE stage=statement reason=unsupported-kind "
+                              "function=%s kind=%d span=%zu:%zu break_target=%llu\n",
+                              context->source_function->name,
+                              (int)statement->kind,
+                              statement->span.begin.line,
+                              statement->span.begin.column,
+                              (unsigned long long)context->break_target);
                 return MINIC_CORE_LOWER_UNSUPPORTED;
             }
             if (status != MINIC_CORE_LOWER_OK) {
+                (void)fprintf(stderr,
+                              "CORE_FAST_TRACE stage=statement reason=lower-status "
+                              "function=%s kind=%d status=%d span=%zu:%zu break_target=%llu\n",
+                              context->source_function->name,
+                              (int)statement->kind,
+                              (int)status,
+                              statement->span.begin.line,
+                              statement->span.begin.column,
+                              (unsigned long long)context->break_target);
                 return status;
             }
         }
@@ -5166,6 +5220,7 @@ MinicCoreLowerStatus minic_core_lower_function(const MinicFunctionBodyView *body
     context.target = target;
     context.function = &lowered;
     context.block_id = block_id;
+    context.break_target = MINIC_CORE_BLOCK_INVALID;
     context.local_objects = local_objects;
     context.statement_blocks = statement_blocks;
     context.statement_block_count = body->program->statement_count;
