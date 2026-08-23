@@ -1,0 +1,149 @@
+name: Core M40b Error Recovery
+
+on:
+  pull_request:
+
+jobs:
+  qualify:
+    if: github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+      - name: Install validation tools
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mapfile -t packages < <(grep -Ev '^[[:space:]]*(#|$)' tools/ci/ubuntu-24.04-packages.txt)
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends "${packages[@]}"
+          sh tools/ci/verify-validation-tools.sh
+      - name: Restore frozen Linux corpus
+        id: corpus
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+      - name: Apply staged Core capabilities and build
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.corpus.outputs.cache-hit }}" = true
+          python3 tools/dev/run-core-frontier-batch-m31b.py
+          python3 tools/dev/patch-core-frontier-batch-m32.py
+          python3 tools/dev/patch-core-frontier-batch-m33.py
+          python3 tools/dev/patch-core-frontier-batch-m34.py
+          python3 tools/dev/patch-core-frontier-batch-m35.py
+          python3 tools/dev/patch-core-frontier-batch-m36.py
+          python3 tools/dev/patch-core-frontier-batch-m38.py
+          clang-format-18 -i src/core/core_lower.c
+          git diff --check
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m40b
+      - name: Focused qualified subscript contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          c="$GITHUB_WORKSPACE/build/m40b/bin/minic"; w=build/m40b-shapes; mkdir -p "$w"
+          cat > "$w/const_index.c" <<'EOF'
+          unsigned long f(const unsigned long *map, unsigned long start) { const unsigned long index = start / 64UL; return map[index]; }
+          EOF
+          cat > "$w/bitmap.c" <<'EOF'
+          unsigned long f(const unsigned long *map, unsigned long start) { const unsigned long index = start / 64UL; const unsigned long offset = start % 64UL; return (map[index] >> offset) & 0xffUL; }
+          EOF
+          for src in "$w/const_index.c" "$w/bitmap.c"; do
+            name=$(basename "$src" .c)
+            MINIC_CORE_IR=strict "$c" -S "$src" -o "$w/$name.s"
+            printf 'M40B_SHAPE_PASS name=%s\n' "$name"
+          done
+          cat > "$w/volatile_index.c" <<'EOF'
+          unsigned long f(const unsigned long *map, volatile unsigned long index) { return map[index]; }
+          EOF
+          set +e
+          MINIC_CORE_IR=strict "$c" -S "$w/volatile_index.c" -o "$w/volatile_index.s" 2>"$w/volatile_index.err"
+          rc=$?
+          set -e
+          test "$rc" -ne 0
+          grep -Fq "Core IR shadow does not yet support function 'f'" "$w/volatile_index.err"
+          echo M40B_VOLATILE_FAIL_CLOSED_PASS
+      - name: RISC-V QEMU differential
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          c="$GITHUB_WORKSPACE/build/m40b/bin/minic"; w=build/m40b-qemu; mkdir -p "$w"
+          cat > "$w/f.c" <<'EOF'
+          unsigned long f(const unsigned long *map, unsigned long start) { const unsigned long index = start / 64UL; const unsigned long offset = start % 64UL; return (map[index] >> offset) & 0xffUL; }
+          EOF
+          cat > "$w/main.c" <<'EOF'
+          #include <stdio.h>
+          unsigned long f(const unsigned long *, unsigned long);
+          int main(void) { unsigned long a[2] = { 0x8877665544332211UL, 0xffeeddccbbaa0099UL }; printf("%lu %lu %lu\n", f(a,0), f(a,24), f(a,64)); return 0; }
+          EOF
+          MINIC_CORE_IR=strict "$c" -S "$w/f.c" -o "$w/minic.s"
+          riscv64-linux-gnu-gcc -O0 -static "$w/main.c" "$w/minic.s" -o "$w/minic.elf"
+          qemu-riscv64 "$w/minic.elf" > "$w/minic.out"
+          riscv64-linux-gnu-gcc -O0 -static "$w/main.c" "$w/f.c" -o "$w/gcc.elf"
+          qemu-riscv64 "$w/gcc.elf" > "$w/gcc.out"
+          diff -u "$w/gcc.out" "$w/minic.out"
+          cat "$w/minic.out"
+          echo M40B_QEMU_DIFF_PASS
+      - name: Frozen bitmap representative
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          c="$GITHUB_WORKSPACE/build/m40b/bin/minic"; w=build/m40b-rep; mkdir -p "$w"
+          set +e
+          MINIC_CORE_IR=strict "$c" -S build/linux-focus-corpus/kbuild/arch/riscv/kernel/alternative.i -o "$w/alternative.s" 2>"$w/alternative.err"
+          rc=$?
+          set -e
+          cat "$w/alternative.err"
+          ! grep -Fq "Core IR shadow lowering failed for function 'bitmap_get_value8'" "$w/alternative.err"
+          if [ "$rc" -ne 0 ]; then grep -Eq 'Core IR shadow (does not yet support|lowering failed) for function' "$w/alternative.err"; fi
+          printf 'M40B_BITMAP_REP_MOVED rc=%d\n' "$rc"
+      - name: Timespec error shape matrix
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          c="$GITHUB_WORKSPACE/build/m40b/bin/minic"; w=build/m40b-timespec; mkdir -p "$w"
+          cat > "$w/basic.c" <<'EOF'
+          struct S { long a; long b; }; struct S f(struct S x, struct S y) { struct S r; r.a=x.a+y.a; r.b=x.b+y.b; return r; }
+          EOF
+          cat > "$w/const_params.c" <<'EOF'
+          struct S { long a; long b; }; struct S f(const struct S x, const struct S y) { struct S r; r.a=x.a+y.a; r.b=x.b+y.b; return r; }
+          EOF
+          cat > "$w/conditional.c" <<'EOF'
+          struct S { long a; long b; }; struct S f(const struct S x, const struct S y) { struct S r; r.a=x.a+y.a; r.b=x.b+y.b; if (r.a < x.a || r.a < y.a) { r.a=0; r.b=0; } return r; }
+          EOF
+          cat > "$w/helper.c" <<'EOF'
+          struct S { long a; long b; }; void norm(struct S*, unsigned long, long); struct S f(const struct S x, const struct S y) { struct S r; norm(&r,(unsigned long)x.a+y.a,x.b+y.b); if (r.a < x.a || r.a < y.a) { r.a=0; r.b=0; } return r; }
+          EOF
+          for src in "$w"/*.c; do
+            name=$(basename "$src" .c)
+            set +e
+            MINIC_CORE_IR=strict "$c" -S "$src" -o "$w/$name.s" 2>"$w/$name.err"
+            rc=$?
+            set -e
+            printf 'M40B_TIMESPEC_SHAPE name=%s rc=%d\n' "$name" "$rc"
+            cat "$w/$name.err"
+          done
+      - name: Frozen strict first500 remeasure
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          c="$GITHUB_WORKSPACE/build/m40b/bin/minic"; w="$GITHUB_WORKSPACE/build/m40b-strict500"
+          set +e
+          MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py --minic "$c" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" --work "$w" --jobs 5 --offset 0 --limit 500 --sample-count 0 --indices ''
+          rc=$?
+          set -e
+          printf 'M40B_STRICT500_REPLAY_STATUS=%d\n' "$rc"
+          python3 tools/ci/classify-core-strict-frontier.py "$w/batch-results.json" --examples 5 --json-out "$w/frontier-summary.json"
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          s=json.loads(Path('build/m40b-strict500/frontier-summary.json').read_text())
+          assert s['selected']==500 and s['preprocess_missing']==0, s
+          assert s['pass']+s['unsupported']+s['error']==500, s
+          print(f"M40B_STRICT500 selected=500 pass={s['pass']} unsupported={s['unsupported']} error={s['error']} distinct={len(s['blockers'])}")
+          for r in s['blockers'][:20]: print(f"M40B_NEXT_BLOCKER count={r['count']} function={r['function']}")
+          PY
