@@ -1,4 +1,4 @@
-name: Core Y88 Csum Fixed Argument Diagnostic
+name: Core Y89 Unary Integer Promotion Focus
 
 on:
   pull_request:
@@ -7,7 +7,7 @@ permissions:
   contents: read
 
 jobs:
-  y88-csum-fixed-argument:
+  y89-unary-integer-promotion:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     steps:
@@ -20,55 +20,60 @@ jobs:
         with:
           path: build/linux-focus-corpus
           key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
-      - name: Audit direct-call code and source
+      - name: Apply unary promotion candidate
         shell: bash
         run: |
           set -Eeuo pipefail
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           python3 - <<'PY'
           from pathlib import Path
-          s=Path('src/core/core_lower.c').read_text()
-          marker='BATCH_D_VARIADIC_DIRECT_CALL'
-          pos=s.index(marker)
-          lo=max(0,pos-5500); hi=min(len(s),pos+8500)
-          first=s.count('\n',0,lo)+1
-          print(f'CORE_Y88_CALL_SOURCE_BEGIN line={first}')
-          for n,line in enumerate(s[lo:hi].splitlines(),first): print(f'{n}: {line}')
-          print('CORE_Y88_CALL_SOURCE_END')
-          corpus=Path('build/linux-focus-corpus/kbuild/init/do_mounts.i')
-          lines=corpus.read_text(errors='replace').splitlines()
-          hits=[i for i,x in enumerate(lines) if 'csum16_sub' in x]
-          print(f'CORE_Y88_CSUM_HITS={[i+1 for i in hits[:10]]}')
-          for i in hits[:2]:
-              lo2=max(0,i-20); hi2=min(len(lines),i+45)
-              print(f'CORE_Y88_CSUM_SOURCE_BEGIN line={lo2+1}')
-              for j in range(lo2,hi2): print(f'{j+1}: {lines[j]}')
-              print('CORE_Y88_CSUM_SOURCE_END')
+          p=Path('src/core/core_lower.c'); s=p.read_text()
+          old='''    if (expression->kind == MINIC_EXPRESSION_UNARY &&\n        expression->value.unary.operator_kind == MINIC_UNARY_NEGATE) {\n        MinicCoreValueId operand_value;\n        MinicCoreLowerStatus status;\n\n        if (!minic_type_is_integer(expression->type)) {\n            return MINIC_CORE_LOWER_UNSUPPORTED;\n        }\n        status = lower_expression(context, expression->value.unary.operand, &operand_value);\n        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n        if (operand_value >= context->function->value_count ||\n            !minic_type_equal(context->function->values[operand_value].type, expression->type)) {\n            return MINIC_CORE_LOWER_UNSUPPORTED;\n        }\n        (void)memset(&instruction, 0, sizeof(instruction));\n        instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_NEGATE;\n'''
+          new='''    if (expression->kind == MINIC_EXPRESSION_UNARY &&\n        expression->value.unary.operator_kind == MINIC_UNARY_NEGATE) {\n        const MinicExpression *operand_expression;\n        MinicCoreValueId operand_value;\n        MinicCoreLowerStatus status;\n        MinicType promoted_type;\n\n        operand_expression = minic_c0_program_expression(\n            context->body->program, expression->value.unary.operand);\n        if (context->target == NULL || operand_expression == NULL ||\n            !minic_type_is_integer(expression->type) ||\n            !minic_type_is_integer(operand_expression->type) ||\n            !minic_target_info_integer_promotion_for_program(\n                context->target, context->body->program, operand_expression->type, &promoted_type) ||\n            !minic_type_equal(promoted_type, expression->type)) {\n            return MINIC_CORE_LOWER_UNSUPPORTED;\n        }\n        status = lower_expression(context, expression->value.unary.operand, &operand_value);\n        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n        status = append_integer_conversion(\n            context, operand_expression->span, promoted_type, operand_value, &operand_value);\n        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n        (void)memset(&instruction, 0, sizeof(instruction));\n        instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_NEGATE;\n'''
+          if s.count(old)!=1: raise SystemExit(f'negate anchor {s.count(old)}')
+          s=s.replace(old,new,1)
+          old='''    if (expression->kind == MINIC_EXPRESSION_UNARY &&\n        expression->value.unary.operator_kind == MINIC_UNARY_BITWISE_NOT) {\n        MinicCoreValueId operand_value;\n        MinicCoreLowerStatus status;\n\n        if (!minic_type_is_integer(expression->type)) {\n            return MINIC_CORE_LOWER_UNSUPPORTED;\n        }\n        status = lower_expression(context, expression->value.unary.operand, &operand_value);\n        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n        if (operand_value >= context->function->value_count ||\n            !minic_type_equal(context->function->values[operand_value].type, expression->type)) {\n            return MINIC_CORE_LOWER_UNSUPPORTED;\n        }\n        (void)memset(&instruction, 0, sizeof(instruction));\n        instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT;\n'''
+          new='''    if (expression->kind == MINIC_EXPRESSION_UNARY &&\n        expression->value.unary.operator_kind == MINIC_UNARY_BITWISE_NOT) {\n        const MinicExpression *operand_expression;\n        MinicCoreValueId operand_value;\n        MinicCoreLowerStatus status;\n        MinicType promoted_type;\n\n        operand_expression = minic_c0_program_expression(\n            context->body->program, expression->value.unary.operand);\n        if (context->target == NULL || operand_expression == NULL ||\n            !minic_type_is_integer(expression->type) ||\n            !minic_type_is_integer(operand_expression->type) ||\n            !minic_target_info_integer_promotion_for_program(\n                context->target, context->body->program, operand_expression->type, &promoted_type) ||\n            !minic_type_equal(promoted_type, expression->type)) {\n            return MINIC_CORE_LOWER_UNSUPPORTED;\n        }\n        status = lower_expression(context, expression->value.unary.operand, &operand_value);\n        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n        status = append_integer_conversion(\n            context, operand_expression->span, promoted_type, operand_value, &operand_value);\n        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n        (void)memset(&instruction, 0, sizeof(instruction));\n        instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT;\n'''
+          if s.count(old)!=1: raise SystemExit(f'not anchor {s.count(old)}')
+          s=s.replace(old,new,1)
+          p.write_text(s)
+
+          p=Path('tests/core/run-core-ir-shadow.sh'); s=p.read_text()
+          anchor='''cat >"$work_dir/variadic-call-unsupported.i" <<'EOF'\n'''
+          addition='''cat >"$work_dir/promoted-unary-call-argument.i" <<'EOF'\ntypedef unsigned short core_u16;\nextern core_u16 core_u16_add(core_u16 left, core_u16 right);\ncore_u16 promoted_unary_call_argument(core_u16 left, core_u16 right) {\n    return core_u16_add(left, ~right);\n}\nint promoted_unary_negate(core_u16 value) {\n    return -value;\n}\nEOF\ncheck_strict_case promoted-unary-call-argument\n\n'''
+          if s.count(anchor)!=1: raise SystemExit(f'test anchor {s.count(anchor)}')
+          p.write_text(s.replace(anchor,addition+anchor,1))
+          print('CORE_Y89_CANDIDATE_APPLIED')
           PY
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y88-compiler
-      - name: Replay csum representative
+      - name: Build and exact Core regressions
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-y88-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-y88-linux"
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y89-compiler
+          MINIC="$GITHUB_WORKSPACE/build/core-y89-compiler/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/core-y89-regression" bash tests/core/run-core-ir-shadow.sh
+      - name: Focused csum qualification
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/core-y89-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-y89-focus"
           mkdir -p "$work"
           set +e
           MINIC_CORE_IR=strict CORE_FAST_TRACE=1 CORE_LOWER_DETAIL=1 CORE_ASSIGN_STAGE=1 python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
-            --work "$work" --jobs 1 --offset 0 --limit 500 --sample-count 0 --indices '2'
+            --work "$work" --jobs 2 --offset 0 --limit 500 --sample-count 0 --indices '2,296'
           status=$?
           set -e
-          echo CORE_Y88_REPLAY_STATUS=$status
+          echo CORE_Y89_FOCUS_STATUS=$status
+          python3 tools/ci/classify-core-strict-frontier.py "$work/batch-results.json" --examples 8 --json-out "$work/frontier-summary.json"
           python3 - <<'PY'
           import json
           from pathlib import Path
-          w=Path('build/core-y88-linux'); rows=json.loads((w/'batch-results.json').read_text())
+          w=Path('build/core-y89-focus'); f=json.loads((w/'frontier-summary.json').read_text())
+          rows=json.loads((w/'batch-results.json').read_text())
           if isinstance(rows,dict): rows=rows.get('results',rows.get('tus',[]))
-          for r in rows:
-              rel=r['input']; print(f"CORE_Y88_INDEX index={r.get('index')} status={r.get('status')} progress={float(r.get('progress_ratio') or 0)*100:.3f}% message={r.get('message','')}")
-              err=w/'minic-stderr'/f'{rel}.stderr'
-              if err.is_file():
-                  for x in err.read_text(errors='replace').splitlines():
-                      if 'csum16_sub' in x or 'csum16_add' in x or 'CORE_LOWER_DETAIL' in x or 'CORE_ASSIGN_STAGE' in x: print(x)
+          print(f"CORE_Y89_FOCUS selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
+          for r in rows: print(f"CORE_Y89_INDEX index={r.get('index')} status={r.get('status')} progress={float(r.get('progress_ratio') or 0)*100:.3f}% message={r.get('message','')}")
+          if f['error'] != 0: raise SystemExit(f'Core ERROR: {f}')
+          if any('csum16_sub' in r.get('message','') for r in rows): raise SystemExit('csum16_sub survived Y89')
           PY
