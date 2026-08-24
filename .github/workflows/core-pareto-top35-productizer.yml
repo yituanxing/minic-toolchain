@@ -1,4 +1,4 @@
-name: Core Chained Bitfield 15 Productizer Active
+name: Core Pointer Arithmetic Rvalue 11 Productizer Active
 
 on:
   pull_request:
@@ -7,7 +7,7 @@ permissions:
   contents: write
 
 jobs:
-  chained-bitfield-15:
+  pointer-arith-rvalue-11:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     steps:
@@ -21,7 +21,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          if grep -Fq 'M115_CHAINED_BIT_FIELD_ASSIGNMENT' src/core/core_lower.c; then
+          if grep -Fq 'M116_POINTER_ARITH_RVALUE_TYPE' src/core/core_lower.c; then
             echo 'needs_patch=false' >> "$GITHUB_OUTPUT"
           else
             echo 'needs_patch=true' >> "$GITHUB_OUTPUT"
@@ -43,68 +43,68 @@ jobs:
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
 
-      - name: Apply generic chained bitfield assignment lowering
+      - name: Apply pointer arithmetic rvalue canonicalization
         if: steps.state.outputs.needs_patch == 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
-          python3 tools/ci/apply-m115-chained-bitfield-assignment.py
+          python3 tools/ci/apply-m116-pointer-arith-rvalue.py
           git diff --check
-          grep -F 'M115_CHAINED_BIT_FIELD_ASSIGNMENT' src/core/core_lower.c
+          grep -F 'M116_POINTER_ARITH_RVALUE_TYPE' src/core/core_lower.c
 
       - name: Build exact patched compiler
         if: steps.state.outputs.needs_patch == 'true'
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/chained-bitfield15-compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/pointer-arith11-compiler
 
       - name: Run fast host regression gate
         if: steps.state.outputs.needs_patch == 'true'
-        run: make -j4 check-fast MODE=release CFLAGS=-Werror BUILD_DIR=build/chained-bitfield15-check
+        run: make -j4 check-fast MODE=release CFLAGS=-Werror BUILD_DIR=build/pointer-arith11-check
 
-      - name: Replay all tcp_clear_options family TUs
+      - name: Replay all iomap_inline_data family TUs
         if: steps.state.outputs.needs_patch == 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/chained-bitfield15-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/chained-bitfield15"
+          compiler="$GITHUB_WORKSPACE/build/pointer-arith11-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/pointer-arith11"
           set +e
           MINIC_CORE_IR=strict CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" \
             --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
             --work "$work" \
             --jobs 4 \
-            --indices '2,209,219,242,357,378,491,492,493,494,495,496,497,498,499'
+            --indices '380,381,382,383,384,385,386,435,437,443,444'
           replay_status=$?
           set -e
-          printf 'CORE_CHAINED_BITFIELD15_REPLAY_STATUS=%d\n' "$replay_status"
+          printf 'CORE_POINTER_ARITH11_REPLAY_STATUS=%d\n' "$replay_status"
           python3 tools/ci/classify-core-strict-frontier.py \
             "$work/batch-results.json" \
-            --examples 15 \
+            --examples 11 \
             --json-out "$work/frontier-summary.json"
           python3 tools/ci/summarize-core-frontier-progress.py \
             "$work/batch-results.json" \
-            --expect-selected 15 \
+            --expect-selected 11 \
             --json-out "$work/progress-summary.json" \
             --text-out "$work/progress-summary.txt"
           python3 - <<'PY'
           import json
           from pathlib import Path
-          work = Path('build/chained-bitfield15')
+          work = Path('build/pointer-arith11')
           rows = json.loads((work / 'batch-results.json').read_text())
           summary = json.loads((work / 'frontier-summary.json').read_text())
-          if len(rows) != 15:
-              raise SystemExit(f'expected 15 rows, got {len(rows)}')
+          if len(rows) != 11:
+              raise SystemExit(f'expected 11 rows, got {len(rows)}')
           if summary['error'] != 0 or summary['preprocess_missing'] != 0:
-              raise SystemExit(f"chained-bitfield15 ERROR/missing: error={summary['error']} missing={summary['preprocess_missing']}")
-          remaining = [b for b in summary.get('blockers', []) if b.get('function') == 'tcp_clear_options']
+              raise SystemExit(f"pointer-arith11 ERROR/missing: error={summary['error']} missing={summary['preprocess_missing']}")
+          remaining = [b for b in summary.get('blockers', []) if b.get('function') == 'iomap_inline_data']
           if remaining:
-              raise SystemExit(f'old tcp_clear_options blocker remains: {remaining}')
-          print(f"CORE_CHAINED_BITFIELD15_ACCEPT pass={summary['pass']} unsupported={summary['unsupported']} error=0 selected=15")
-          print('CORE_CHAINED_BITFIELD15_NEW_FRONTIER ' + json.dumps(summary.get('blockers', [])[:16], sort_keys=True))
+              raise SystemExit(f'old iomap_inline_data blocker remains: {remaining}')
+          print(f"CORE_POINTER_ARITH11_ACCEPT pass={summary['pass']} unsupported={summary['unsupported']} error=0 selected=11")
+          print('CORE_POINTER_ARITH11_NEW_FRONTIER ' + json.dumps(summary.get('blockers', [])[:16], sort_keys=True))
           print((work / 'progress-summary.txt').read_text())
           PY
 
-      - name: Commit chained bitfield semantic batch
+      - name: Commit pointer arithmetic semantic batch
         if: steps.state.outputs.needs_patch == 'true'
         shell: bash
         run: |
@@ -114,18 +114,18 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add src/core/core_lower.c
           git diff --cached --quiet && { echo 'no semantic changes to productize'; exit 1; }
-          git commit -m 'core: preserve chained bitfield assignment values'
+          git commit -m 'core: canonicalize pointer arithmetic rvalues'
           git push origin HEAD:refactor/declaration-sema-v1
 
-      - name: Persist chained bitfield cohort
+      - name: Persist pointer arithmetic cohort
         if: always() && steps.state.outputs.needs_patch == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: core-chained-bitfield15-${{ github.sha }}
+          name: core-pointer-arith11-${{ github.sha }}
           path: |
-            build/chained-bitfield15/batch-results.json
-            build/chained-bitfield15/frontier-summary.json
-            build/chained-bitfield15/progress-summary.json
-            build/chained-bitfield15/progress-summary.txt
-            build/chained-bitfield15/minic-stderr/**
+            build/pointer-arith11/batch-results.json
+            build/pointer-arith11/frontier-summary.json
+            build/pointer-arith11/progress-summary.json
+            build/pointer-arith11/progress-summary.txt
+            build/pointer-arith11/minic-stderr/**
           if-no-files-found: warn
