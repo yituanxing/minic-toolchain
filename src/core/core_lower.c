@@ -4851,18 +4851,36 @@ static MinicCoreLowerStatus lower_expression_statement(MinicCoreLowerContext *co
         MinicType discarded_type;
 
         if (expression->kind == MINIC_EXPRESSION_STATEMENT &&
-            expression->value.statement_expression.result == MINIC_EXPRESSION_INVALID &&
             minic_type_is_void(expression->type)) {
             const MinicBlock *statement_block;
+            const MinicExpression *statement_result;
+            MinicCoreLowerStatus block_status;
             bool statement_expression_terminated;
 
+            /* BATCH_Y_VOID_STATEMENT_EXPRESSION_RESULT: the parser removes a
+               GNU statement-expression's final expression from its block and
+               stores it as `result`.  Effect-only lowering must therefore run
+               both pieces in source order.  A final void call is a real side
+               effect even though the enclosing expression has no scalar value. */
             statement_block = minic_c0_program_block(
                 context->body->program, expression->value.statement_expression.block);
             if (statement_block == NULL) {
                 return MINIC_CORE_LOWER_ERROR;
             }
             statement_expression_terminated = false;
-            return lower_block(context, statement_block, &statement_expression_terminated);
+            block_status = lower_block(context, statement_block, &statement_expression_terminated);
+            if (block_status != MINIC_CORE_LOWER_OK || statement_expression_terminated ||
+                expression->value.statement_expression.result == MINIC_EXPRESSION_INVALID) {
+                return block_status;
+            }
+            statement_result = minic_c0_program_expression(
+                context->body->program, expression->value.statement_expression.result);
+            if (statement_result == NULL || !minic_type_is_void(statement_result->type)) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            return lower_expression(context,
+                                    expression->value.statement_expression.result,
+                                    &discarded_value);
         }
         if (!core_scalar_expression_value_type(context->body, expression, &discarded_type)) {
             return MINIC_CORE_LOWER_UNSUPPORTED;
@@ -5373,8 +5391,10 @@ static bool normalized_for_continue_tail(const MinicCoreLowerContext *context,
         !source_position_equal(continue_label->span.begin, loop->span.begin)) {
         return false;
     }
+    /* The parser-owned synthetic continue label is part of the loop body.
+       Keep it so explicit continue edges and fallthrough converge before the
+       canonical backedge is emitted. */
     *iteration_body = *body;
-    iteration_body->statement_count -= 1U;
     return true;
 }
 
@@ -5404,14 +5424,20 @@ static bool normalized_for_update_tail(const MinicCoreLowerContext *context,
         update->expression == MINIC_EXPRESSION_INVALID) {
         return false;
     }
+    /* Strip only the normalized update.  The preceding synthetic continue
+       label remains in the body and becomes the convergence point before the
+       update is lowered. */
     *iteration_body = *body;
-    iteration_body->statement_count -= 2U;
+    iteration_body->statement_count -= 1U;
     *update_statement = update;
     return true;
 }
 
 static MinicCoreLowerStatus
-lower_while(MinicCoreLowerContext *context, const MinicStatement *statement, bool *terminated) {
+lower_while(MinicCoreLowerContext *context,
+            const MinicStatement *statement,
+            MinicStatementId continue_label_statement,
+            bool *terminated) {
     const MinicBlock *body_source;
     const MinicBlock *iteration_source;
     const MinicExpression *condition_expression;
@@ -5482,6 +5508,18 @@ lower_while(MinicCoreLowerContext *context, const MinicStatement *statement, boo
         !minic_core_function_add_block(context->function, &body_block) ||
         !minic_core_function_add_block(context->function, &exit_block)) {
         return MINIC_CORE_LOWER_ERROR;
+    }
+    if (continue_label_statement != MINIC_STATEMENT_INVALID) {
+        if (context->statement_blocks == NULL ||
+            continue_label_statement >= context->statement_block_count ||
+            context->statement_blocks[continue_label_statement] != MINIC_CORE_BLOCK_INVALID) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        /* CORE_LOOP_CONTINUE_TARGET_V1: a parser-owned while continue label
+           denotes condition re-evaluation. Bind the source label directly to
+           the real condition block before lowering the body, so continue does
+           not manufacture an orphan block. */
+        context->statement_blocks[continue_label_statement] = condition_block;
     }
     status = set_branch(context, preheader_block, statement->span, condition_block);
     if (status != MINIC_CORE_LOWER_OK) {
@@ -7921,7 +7959,10 @@ lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool
                 internal_loop_label = internal_while_label_pair(statement, loop);
             }
             if (internal_loop_label) {
-                status = lower_while(context, loop, &statement_terminated);
+                status = lower_while(context,
+                                     loop,
+                                     source_block->statements[statement_index],
+                                     &statement_terminated);
                 if (status != MINIC_CORE_LOWER_OK) return status;
                 statement_index += 1U;
             } else {
@@ -7999,7 +8040,8 @@ lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool
                 status = lower_if(context, statement, &statement_terminated);
                 break;
             case MINIC_STATEMENT_WHILE:
-                status = lower_while(context, statement, &statement_terminated);
+                status = lower_while(
+                    context, statement, MINIC_STATEMENT_INVALID, &statement_terminated);
                 break;
             case MINIC_STATEMENT_SWITCH:
                 status = lower_switch(context, statement, &statement_terminated);

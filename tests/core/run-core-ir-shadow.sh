@@ -175,6 +175,20 @@ int clear_then_add(int value) {
 EOF
 check_strict_case while-backedge
 
+cat >"$work_dir/while-continue.i" <<'EOF'
+int while_continue(int value) {
+    while (value) {
+        if (value == 1) {
+            value = 0;
+            continue;
+        }
+        value = 1;
+    }
+    return value;
+}
+EOF
+check_strict_case while-continue
+
 cat >"$work_dir/for-shape.i" <<'EOF'
 int for_shape(int value) {
     for (; value;) {
@@ -184,17 +198,28 @@ int for_shape(int value) {
 }
 EOF
 
-"$MINIC" -S "$work_dir/for-shape.i" -o "$work_dir/for-shape-normal.s"
-MINIC_CORE_IR=shadow "$MINIC" -S "$work_dir/for-shape.i" -o "$work_dir/for-shape-shadow.s"
-cmp "$work_dir/for-shape-normal.s" "$work_dir/for-shape-shadow.s"
-if MINIC_CORE_IR=strict "$MINIC" -S "$work_dir/for-shape.i" \
-    -o "$work_dir/for-shape-strict.s" 2>"$work_dir/for-shape-strict.err"; then
-    echo "strict Core IR shadow unexpectedly accepted canonical for-loop lowering" >&2
-    exit 1
-fi
-grep -F "Core IR shadow does not yet support function 'for_shape'" \
-    "$work_dir/for-shape-strict.err" >/dev/null
+check_strict_case for-shape
 
+cat >"$work_dir/for-continue.i" <<'EOF'
+int for_continue(int value) {
+    for (; value; value = value - 1) {
+        if (value == 2)
+            continue;
+    }
+    return value;
+}
+EOF
+check_strict_case for-continue
+
+cat >"$work_dir/void-statement-expression.i" <<'EOF'
+void sink(void);
+
+void void_statement_expression(void) {
+    ({ sink(); });
+    return;
+}
+EOF
+check_strict_case void-statement-expression
 
 cat >"$work_dir/direct-call-v0.i" <<'EOF'
 int direct_callee(int value) {
@@ -285,16 +310,7 @@ int indirect_caller(int (*callee)(int), int value) {
     return callee(value);
 }
 EOF
-"$MINIC" -S "$work_dir/indirect-call-unsupported.i" \
-    -o "$work_dir/indirect-call-unsupported-normal.s"
-if MINIC_CORE_IR=strict "$MINIC" -S "$work_dir/indirect-call-unsupported.i" \
-    -o "$work_dir/indirect-call-unsupported-strict.s" \
-    2>"$work_dir/indirect-call-unsupported-strict.err"; then
-    echo "strict Core IR shadow unexpectedly accepted an indirect call" >&2
-    exit 1
-fi
-grep -F "Core IR shadow does not yet support function 'indirect_caller'" \
-    "$work_dir/indirect-call-unsupported-strict.err" >/dev/null
+check_strict_case indirect-call-unsupported
 
 cat >"$work_dir/variadic-call-unsupported.i" <<'EOF'
 int variadic_external(int first, ...);
@@ -303,16 +319,7 @@ int variadic_caller(int value) {
     return variadic_external(value, value);
 }
 EOF
-"$MINIC" -S "$work_dir/variadic-call-unsupported.i" \
-    -o "$work_dir/variadic-call-unsupported-normal.s"
-if MINIC_CORE_IR=strict "$MINIC" -S "$work_dir/variadic-call-unsupported.i" \
-    -o "$work_dir/variadic-call-unsupported-strict.s" \
-    2>"$work_dir/variadic-call-unsupported-strict.err"; then
-    echo "strict Core IR shadow unexpectedly accepted a variadic call" >&2
-    exit 1
-fi
-grep -F "Core IR shadow does not yet support function 'variadic_caller'" \
-    "$work_dir/variadic-call-unsupported-strict.err" >/dev/null
+check_strict_case variadic-call-unsupported
 
 if MINIC_CORE_IR=invalid "$MINIC" -S "$work_dir/supported.i" \
     -o "$work_dir/invalid-mode.s" 2>"$work_dir/invalid-mode.err"; then
