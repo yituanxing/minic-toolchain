@@ -468,6 +468,16 @@ const char *terminating_switch_return(unsigned short tag) {
 EOF
 check_strict_case terminating-switch-return
 
+cat >"$work_dir/function-designator-address.i" <<'EOF'
+int function_address_target(int value);
+int function_address_consume(int (*callback)(int));
+
+int function_designator_address(void) {
+    return function_address_consume(&function_address_target);
+}
+EOF
+check_strict_case function-designator-address
+
 cat >"$work_dir/function-pointer-parameter-ingress.i" <<'EOF'
 typedef void (*core_callback_t)(void *);
 struct core_param_mask { unsigned long bits[1]; };

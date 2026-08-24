@@ -2084,6 +2084,24 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
     if (expression == NULL) {
         return MINIC_CORE_LOWER_ERROR;
     }
+    /* M104_FUNCTION_DESIGNATOR_ADDRESS: the normalized frontend represents a
+       function designator as its function-pointer semantic value already. C's
+       `&function` therefore has the same pointer type and symbol identity; do
+       not route it through the object-lvalue address seam. */
+    if (expression->kind == MINIC_EXPRESSION_ADDRESS_OF) {
+        const MinicExpression *operand = minic_c0_program_expression(
+            context->body->program, expression->value.unary.operand);
+        MinicType function_type;
+
+        if (operand != NULL && operand->kind == MINIC_EXPRESSION_FUNCTION) {
+            if (!minic_type_equal(expression->type, operand->type) ||
+                !minic_type_pointee(operand->type, &function_type) ||
+                !minic_type_is_function(function_type)) {
+                return MINIC_CORE_LOWER_UNSUPPORTED;
+            }
+            return lower_expression(context, expression->value.unary.operand, value_id);
+        }
+    }
     /* M103_INTEGER_BIT_FIELD_READ: a bit-field is not C-addressable, but
        reading it is a scalar operation. Form the storage-unit address
        internally, load it through an unsigned storage type, extract the field,
