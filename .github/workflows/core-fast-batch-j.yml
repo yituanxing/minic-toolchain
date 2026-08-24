@@ -1,4 +1,4 @@
-name: Core Fast Batch Y11 Remaining Error Reasons
+name: Core Fast Batch Y11b Remaining Error Reasons
 
 on:
   pull_request:
@@ -7,11 +7,11 @@ permissions:
   contents: read
 
 jobs:
-  batch-y11-error-reasons:
+  batch-y11b-error-reasons:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     concurrency:
-      group: core-fast-batch-y11-${{ github.event.pull_request.number }}
+      group: core-fast-batch-y11b-${{ github.event.pull_request.number }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
@@ -36,15 +36,15 @@ jobs:
           for spec in 'kernel/bpf/bpf_lru_list.i:__bpf_lru_list_rotate_inactive' 'mm/page_alloc.i:__alloc_pages_bulk'; do
             input="build/linux-focus-corpus/kbuild/${spec%%:*}"
             fn="${spec#*:}"
-            echo "CORE_Y11_SOURCE_BEGIN input=$input function=$fn"
-            grep -n "$fn" "$input" | head -n 6 || true
-            line=$(grep -n "$fn" "$input" | head -n 1 | cut -d: -f1 || true)
+            echo "CORE_Y11B_SOURCE_BEGIN input=$input function=$fn"
+            grep -n "$fn" "$input" | head -n 8 || true
+            line=$(grep -n "$fn" "$input" | tail -n 1 | cut -d: -f1 || true)
             if [ -n "$line" ]; then
               begin=$((line > 12 ? line - 12 : 1))
-              end=$((line + 150))
+              end=$((line + 180))
               sed -n "${begin},${end}p" "$input"
             fi
-            echo "CORE_Y11_SOURCE_END input=$input function=$fn"
+            echo "CORE_Y11B_SOURCE_END input=$input function=$fn"
           done
       - name: Apply Y continue candidate and verifier reason probe
         shell: bash
@@ -68,58 +68,58 @@ jobs:
 
           p = Path('src/core/core_ir.c')
           s = p.read_text()
-          helper = '''\nstatic bool core_y11_reason_target(const MinicCoreFunction *function) {\n    return function != NULL && function->name != NULL &&\n           (strcmp(function->name, "__bpf_lru_list_rotate_inactive") == 0 ||\n            strcmp(function->name, "__alloc_pages_bulk") == 0);\n}\n\n'''
+          helper = '''\nstatic bool core_y11b_reason_target(const MinicCoreFunction *function) {\n    return function != NULL && function->name != NULL &&\n           (strcmp(function->name, "__bpf_lru_list_rotate_inactive") == 0 ||\n            strcmp(function->name, "__alloc_pages_bulk") == 0);\n}\n\n'''
           anchor = 'static bool verify_block(const MinicCoreFunction *function,'
           if anchor not in s: raise SystemExit('verify_block anchor not found')
           s = s.replace(anchor, helper + anchor, 1)
 
           old = '''    if (!storage_shape_is_valid(\n            block->instructions, block->instruction_count, block->instruction_capacity) ||\n        !block->has_terminator) {\n        return false;\n    }\n'''
-          new = '''    if (!storage_shape_is_valid(\n            block->instructions, block->instruction_count, block->instruction_capacity) ||\n        !block->has_terminator) {\n        if (core_y11_reason_target(function))\n            (void)fprintf(stderr, "CORE_Y11_VERIFY function=%s block=%u reason=block-shape has_term=%d instructions=%zu capacity=%zu\\n", function->name, (unsigned int)block_id, block->has_terminator ? 1 : 0, block->instruction_count, block->instruction_capacity);\n        return false;\n    }\n'''
+          new = '''    if (!storage_shape_is_valid(\n            block->instructions, block->instruction_count, block->instruction_capacity) ||\n        !block->has_terminator) {\n        if (core_y11b_reason_target(function))\n            (void)fprintf(stderr, "CORE_Y11B_VERIFY function=%s block=%u reason=block-shape has_term=%d instructions=%zu capacity=%zu\\n", function->name, (unsigned int)block_id, block->has_terminator ? 1 : 0, block->instruction_count, block->instruction_capacity);\n        return false;\n    }\n'''
           if old not in s: raise SystemExit('block-shape anchor not found')
           s = s.replace(old, new, 1)
 
           old = '''        if (instruction_id >= function->instruction_count || instruction_seen[instruction_id]) {\n            return false;\n        }\n'''
-          new = '''        if (instruction_id >= function->instruction_count || instruction_seen[instruction_id]) {\n            if (core_y11_reason_target(function))\n                (void)fprintf(stderr, "CORE_Y11_VERIFY function=%s block=%u reason=instruction-id index=%zu id=%u total=%zu seen=%d\\n", function->name, (unsigned int)block_id, index, (unsigned int)instruction_id, function->instruction_count, instruction_id < function->instruction_count && instruction_seen[instruction_id] ? 1 : 0);\n            return false;\n        }\n'''
+          new = '''        if (instruction_id >= function->instruction_count || instruction_seen[instruction_id]) {\n            if (core_y11b_reason_target(function))\n                (void)fprintf(stderr, "CORE_Y11B_VERIFY function=%s block=%u reason=instruction-id index=%zu id=%u total=%zu seen=%d\\n", function->name, (unsigned int)block_id, index, (unsigned int)instruction_id, function->instruction_count, instruction_id < function->instruction_count && instruction_seen[instruction_id] ? 1 : 0);\n            return false;\n        }\n'''
           if old not in s: raise SystemExit('instruction-id anchor not found')
           s = s.replace(old, new, 1)
 
           old = '''        if (!instruction_is_valid(function, instruction, available_values)) {\n            return false;\n        }\n'''
-          new = '''        if (!instruction_is_valid(function, instruction, available_values)) {\n            if (core_y11_reason_target(function))\n                (void)fprintf(stderr, "CORE_Y11_VERIFY function=%s block=%u reason=instruction-invalid index=%zu id=%u kind=%d result=%u type_kind=%d\\n", function->name, (unsigned int)block_id, index, (unsigned int)instruction_id, (int)instruction->kind, (unsigned int)instruction->result, (int)instruction->type.kind);\n            return false;\n        }\n'''
+          new = '''        if (!instruction_is_valid(function, instruction, available_values)) {\n            if (core_y11b_reason_target(function))\n                (void)fprintf(stderr, "CORE_Y11B_VERIFY function=%s block=%u reason=instruction-invalid index=%zu id=%u kind=%d result=%u\\n", function->name, (unsigned int)block_id, index, (unsigned int)instruction_id, (int)instruction->kind, (unsigned int)instruction->result);\n            return false;\n        }\n'''
           if old not in s: raise SystemExit('instruction-valid anchor not found')
           s = s.replace(old, new, 1)
 
           old = '''            if (value_seen[instruction->result] || result->definition != instruction_id) {\n                return false;\n            }\n'''
-          new = '''            if (value_seen[instruction->result] || result->definition != instruction_id) {\n                if (core_y11_reason_target(function))\n                    (void)fprintf(stderr, "CORE_Y11_VERIFY function=%s block=%u reason=value-owner id=%u result=%u seen=%d definition=%u expected=%u\\n", function->name, (unsigned int)block_id, (unsigned int)instruction_id, (unsigned int)instruction->result, value_seen[instruction->result] ? 1 : 0, (unsigned int)result->definition, (unsigned int)instruction_id);\n                return false;\n            }\n'''
+          new = '''            if (value_seen[instruction->result] || result->definition != instruction_id) {\n                if (core_y11b_reason_target(function))\n                    (void)fprintf(stderr, "CORE_Y11B_VERIFY function=%s block=%u reason=value-owner id=%u result=%u seen=%d definition=%u expected=%u\\n", function->name, (unsigned int)block_id, (unsigned int)instruction_id, (unsigned int)instruction->result, value_seen[instruction->result] ? 1 : 0, (unsigned int)result->definition, (unsigned int)instruction_id);\n                return false;\n            }\n'''
           if old not in s: raise SystemExit('value-owner anchor not found')
           s = s.replace(old, new, 1)
 
           old = '    return terminator_is_valid(function, &block->terminator, available_values);\n'
-          new = '''    if (!terminator_is_valid(function, &block->terminator, available_values)) {\n        if (core_y11_reason_target(function))\n            (void)fprintf(stderr, "CORE_Y11_VERIFY function=%s block=%u reason=terminator-invalid kind=%d\\n", function->name, (unsigned int)block_id, (int)block->terminator.kind);\n        return false;\n    }\n    return true;\n'''
+          new = '''    if (!terminator_is_valid(function, &block->terminator, available_values)) {\n        if (core_y11b_reason_target(function))\n            (void)fprintf(stderr, "CORE_Y11B_VERIFY function=%s block=%u reason=terminator-invalid kind=%d\\n", function->name, (unsigned int)block_id, (int)block->terminator.kind);\n        return false;\n    }\n    return true;\n'''
           if old not in s: raise SystemExit('terminator anchor not found')
           p.write_text(s.replace(old, new, 1))
-          print('CORE_BATCH_Y11_PATCHED focused verifier reasons')
+          print('CORE_BATCH_Y11B_PATCHED focused verifier reasons')
           PY
       - name: Build exact diagnostic compiler
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-y11-compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-y11b-compiler
       - name: Replay remaining Core errors
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-batch-y11-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-batch-y11-frontier"
+          compiler="$GITHUB_WORKSPACE/build/core-batch-y11b-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-batch-y11b-frontier"
           set +e
           MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
             --work "$work" --jobs 2 --offset 0 --limit 500 --sample-count 0 --indices '208,339'
           replay_status=$?
           set -e
-          printf 'CORE_BATCH_Y11_REPLAY_STATUS=%d\n' "$replay_status"
-          grep -R -E 'CORE_Y11_VERIFY|Core IR shadow lowering failed' "$work/minic-stderr" | tail -n 160 || true
+          printf 'CORE_BATCH_Y11B_REPLAY_STATUS=%d\n' "$replay_status"
+          grep -R -E 'CORE_Y11B_VERIFY|Core IR shadow lowering failed' "$work/minic-stderr" | tail -n 160 || true
           python3 tools/ci/classify-core-strict-frontier.py "$work/batch-results.json" --examples 4 --json-out "$work/frontier-summary.json"
           python3 - <<'PY'
           import json
           from pathlib import Path
-          f=json.loads(Path('build/core-batch-y11-frontier/frontier-summary.json').read_text())
-          print(f"CORE_BATCH_Y11_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
+          f=json.loads(Path('build/core-batch-y11b-frontier/frontier-summary.json').read_text())
+          print(f"CORE_BATCH_Y11B_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
           if f['selected'] != 2: raise SystemExit(f'diagnostic invalid: {f}')
           PY
