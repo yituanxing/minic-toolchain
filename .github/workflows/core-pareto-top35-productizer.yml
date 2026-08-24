@@ -1,4 +1,4 @@
-name: Core Record Conditional 25 Productizer Active
+name: Core Chained Bitfield 15 Productizer Active
 
 on:
   pull_request:
@@ -7,7 +7,7 @@ permissions:
   contents: write
 
 jobs:
-  record-conditional-25:
+  chained-bitfield-15:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     steps:
@@ -21,7 +21,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          if grep -Fq 'M114_RECORD_CONDITIONAL_OBJECT' src/core/core_lower.c; then
+          if grep -Fq 'M115_CHAINED_BIT_FIELD_ASSIGNMENT' src/core/core_lower.c; then
             echo 'needs_patch=false' >> "$GITHUB_OUTPUT"
           else
             echo 'needs_patch=true' >> "$GITHUB_OUTPUT"
@@ -43,68 +43,68 @@ jobs:
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
 
-      - name: Apply generic record-conditional Core materialization
+      - name: Apply generic chained bitfield assignment lowering
         if: steps.state.outputs.needs_patch == 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
-          python3 tools/ci/apply-m114-record-conditional.py
+          python3 tools/ci/apply-m115-chained-bitfield-assignment.py
           git diff --check
-          grep -F 'M114_RECORD_CONDITIONAL_OBJECT' src/core/core_lower.c
+          grep -F 'M115_CHAINED_BIT_FIELD_ASSIGNMENT' src/core/core_lower.c
 
       - name: Build exact patched compiler
         if: steps.state.outputs.needs_patch == 'true'
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/record-cond25-compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/chained-bitfield15-compiler
 
       - name: Run fast host regression gate
         if: steps.state.outputs.needs_patch == 'true'
-        run: make -j4 check-fast MODE=release CFLAGS=-Werror BUILD_DIR=build/record-cond25-check
+        run: make -j4 check-fast MODE=release CFLAGS=-Werror BUILD_DIR=build/chained-bitfield15-check
 
-      - name: Replay all sock_net_uid family TUs
+      - name: Replay all tcp_clear_options family TUs
         if: steps.state.outputs.needs_patch == 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/record-cond25-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/record-cond25"
+          compiler="$GITHUB_WORKSPACE/build/chained-bitfield15-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/chained-bitfield15"
           set +e
           MINIC_CORE_IR=strict CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" \
             --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
             --work "$work" \
             --jobs 4 \
-            --indices '2,194,195,197,209,212,215,219,229,230,242,250,281,357,378,410,491,492,493,494,495,496,497,498,499'
+            --indices '2,209,219,242,357,378,491,492,493,494,495,496,497,498,499'
           replay_status=$?
           set -e
-          printf 'CORE_RECORD_COND25_REPLAY_STATUS=%d\n' "$replay_status"
+          printf 'CORE_CHAINED_BITFIELD15_REPLAY_STATUS=%d\n' "$replay_status"
           python3 tools/ci/classify-core-strict-frontier.py \
             "$work/batch-results.json" \
-            --examples 25 \
+            --examples 15 \
             --json-out "$work/frontier-summary.json"
           python3 tools/ci/summarize-core-frontier-progress.py \
             "$work/batch-results.json" \
-            --expect-selected 25 \
+            --expect-selected 15 \
             --json-out "$work/progress-summary.json" \
             --text-out "$work/progress-summary.txt"
           python3 - <<'PY'
           import json
           from pathlib import Path
-          work = Path('build/record-cond25')
+          work = Path('build/chained-bitfield15')
           rows = json.loads((work / 'batch-results.json').read_text())
           summary = json.loads((work / 'frontier-summary.json').read_text())
-          if len(rows) != 25:
-              raise SystemExit(f'expected 25 rows, got {len(rows)}')
+          if len(rows) != 15:
+              raise SystemExit(f'expected 15 rows, got {len(rows)}')
           if summary['error'] != 0 or summary['preprocess_missing'] != 0:
-              raise SystemExit(f"record-cond25 ERROR/missing: error={summary['error']} missing={summary['preprocess_missing']}")
-          remaining = [b for b in summary.get('blockers', []) if b.get('function') == 'sock_net_uid']
+              raise SystemExit(f"chained-bitfield15 ERROR/missing: error={summary['error']} missing={summary['preprocess_missing']}")
+          remaining = [b for b in summary.get('blockers', []) if b.get('function') == 'tcp_clear_options']
           if remaining:
-              raise SystemExit(f'old sock_net_uid blocker remains: {remaining}')
-          print(f"CORE_RECORD_COND25_ACCEPT pass={summary['pass']} unsupported={summary['unsupported']} error=0 selected=25")
-          print('CORE_RECORD_COND25_NEW_FRONTIER ' + json.dumps(summary.get('blockers', [])[:16], sort_keys=True))
+              raise SystemExit(f'old tcp_clear_options blocker remains: {remaining}')
+          print(f"CORE_CHAINED_BITFIELD15_ACCEPT pass={summary['pass']} unsupported={summary['unsupported']} error=0 selected=15")
+          print('CORE_CHAINED_BITFIELD15_NEW_FRONTIER ' + json.dumps(summary.get('blockers', [])[:16], sort_keys=True))
           print((work / 'progress-summary.txt').read_text())
           PY
 
-      - name: Commit record-conditional semantic batch
+      - name: Commit chained bitfield semantic batch
         if: steps.state.outputs.needs_patch == 'true'
         shell: bash
         run: |
@@ -114,18 +114,18 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add src/core/core_lower.c
           git diff --cached --quiet && { echo 'no semantic changes to productize'; exit 1; }
-          git commit -m 'core: materialize record conditional return values'
+          git commit -m 'core: preserve chained bitfield assignment values'
           git push origin HEAD:refactor/declaration-sema-v1
 
-      - name: Persist record conditional cohort
+      - name: Persist chained bitfield cohort
         if: always() && steps.state.outputs.needs_patch == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: core-record-cond25-active-${{ github.sha }}
+          name: core-chained-bitfield15-${{ github.sha }}
           path: |
-            build/record-cond25/batch-results.json
-            build/record-cond25/frontier-summary.json
-            build/record-cond25/progress-summary.json
-            build/record-cond25/progress-summary.txt
-            build/record-cond25/minic-stderr/**
+            build/chained-bitfield15/batch-results.json
+            build/chained-bitfield15/frontier-summary.json
+            build/chained-bitfield15/progress-summary.json
+            build/chained-bitfield15/progress-summary.txt
+            build/chained-bitfield15/minic-stderr/**
           if-no-files-found: warn
