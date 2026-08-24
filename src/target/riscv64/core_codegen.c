@@ -234,8 +234,8 @@ static bool core_field_address_supported(const MinicC0Program *program,
     }
     record = minic_c0_program_record(program, instruction->value.field_address.record_id);
     field = minic_c0_record_field(record, instruction->value.field_address.field_index);
-    /* BATCH_A_UNSIGNED_BIT_FIELD_READ: FIELD_ADDRESS may be used internally
-       for a bit-field storage-unit read.  The frontend/Core lowerer still
+    /* M103_INTEGER_BIT_FIELD_READ: FIELD_ADDRESS may be used internally
+       for a bit-field storage-unit read. The frontend/Core lowerer still
        rejects taking a C address of a bit-field. */
     if (record == NULL || field == NULL ||
         !minic_data_layout_record_field_offset(minic_default_data_layout(),

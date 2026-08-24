@@ -73,10 +73,11 @@ static bool core_memory_scalar_type(MinicType type) {
 /* A bit-field's C value width is not necessarily the width of the memory
    allocation unit containing it. _Bool is the important case: its semantic
    integer width is one bit, while DataLayout allocates one byte. Keep the
-   semantic value type for the expression result and choose a separate unsigned
-   integer type whose object size/target width matches the storage unit used by
-   the field layout. */
-static bool core_unsigned_bit_field_storage_type(
+   semantic value type for the expression result and choose an unsigned integer
+   type whose object size/target width matches the storage unit used by the
+   field layout. Reading storage as unsigned also gives signed bit-fields a
+   well-defined logical extraction path before explicit sign extension. */
+static bool core_bit_field_storage_type(
     const MinicCoreLowerContext *context,
     MinicType value_type,
     MinicType *storage_type,
@@ -92,7 +93,7 @@ static bool core_unsigned_bit_field_storage_type(
 
     if (context == NULL || context->body == NULL || context->body->program == NULL ||
         context->target == NULL || storage_type == NULL || storage_width == NULL ||
-        !minic_type_is_integer(value_type) || !minic_type_is_unsigned_integer(value_type) ||
+        !minic_type_is_integer(value_type) ||
         !minic_data_layout_type(minic_default_data_layout(),
                                 context->body->program,
                                 value_type,
@@ -103,7 +104,8 @@ static bool core_unsigned_bit_field_storage_type(
     }
     (void)storage_alignment;
 
-    if (minic_target_info_integer_width(
+    if (minic_type_is_unsigned_integer(value_type) &&
+        minic_target_info_integer_width(
             context->target, context->body->program, value_type, &value_width) &&
         (size_t)value_width == storage_size * 8U) {
         *storage_type = value_type;
@@ -2082,11 +2084,11 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
     if (expression == NULL) {
         return MINIC_CORE_LOWER_ERROR;
     }
-    /* BATCH_A_UNSIGNED_BIT_FIELD_READ: a bit-field is not C-addressable,
-       but reading it is a scalar operation.  Form the storage-unit address
-       internally, load the declared integer unit, then extract the field.
-       Signed bit-fields and bit-field writes remain fail-closed for a later
-       semantic batch; this seam is generic for unsigned integer bit-fields. */
+    /* M103_INTEGER_BIT_FIELD_READ: a bit-field is not C-addressable, but
+       reading it is a scalar operation. Form the storage-unit address
+       internally, load it through an unsigned storage type, extract the field,
+       then explicitly sign-extend signed fields from their declared bit width.
+       Bit-field writes remain owned by their dedicated RMW lowering paths. */
     if (expression->kind == MINIC_EXPRESSION_MEMBER &&
         expression->value_category == MINIC_VALUE_LVALUE) {
         const MinicExpression *base;
@@ -2115,8 +2117,7 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
             if (base == NULL || record == NULL || field->bit_width == 0U ||
                 !minic_type_unqualified(expression->type, &value_type) ||
                 !minic_type_is_integer(value_type) ||
-                !minic_type_is_unsigned_integer(value_type) ||
-                !core_unsigned_bit_field_storage_type(
+                !core_bit_field_storage_type(
                     context, value_type, &storage_type, &storage_width) ||
                 storage_width == 0U || storage_width > 64U ||
                 field->bit_width > storage_width ||
@@ -2222,12 +2223,68 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                     return MINIC_CORE_LOWER_ERROR;
                 }
             }
-            if (minic_type_equal(storage_type, value_type)) {
-                *value_id = current;
+            if (minic_type_is_unsigned_integer(value_type)) {
+                if (minic_type_equal(storage_type, value_type)) {
+                    *value_id = current;
+                    return MINIC_CORE_LOWER_OK;
+                }
+                return append_integer_conversion(
+                    context, expression->span, value_type, current, value_id);
+            }
+            {
+                MinicCoreValueId signed_current;
+                unsigned int value_width;
+
+                if (!minic_target_info_integer_width(
+                        context->target, context->body->program, value_type, &value_width) ||
+                    value_width != storage_width) {
+                    return MINIC_CORE_LOWER_UNSUPPORTED;
+                }
+                status = append_integer_conversion(
+                    context, expression->span, value_type, current, &signed_current);
+                if (status != MINIC_CORE_LOWER_OK) {
+                    return status;
+                }
+                if (field->bit_width < storage_width) {
+                    MinicCoreValueId shift;
+                    uint64_t shift_bits = (uint64_t)(storage_width - field->bit_width);
+
+                    (void)memset(&extract, 0, sizeof(extract));
+                    extract.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+                    extract.span = expression->span;
+                    extract.type = minic_type_unsigned_int();
+                    extract.result = MINIC_CORE_VALUE_INVALID;
+                    (void)memcpy(&extract.value.integer_value, &shift_bits, sizeof(shift_bits));
+                    if (!minic_core_function_append_value_instruction(
+                            context->function, context->block_id, &extract, &shift)) {
+                        return MINIC_CORE_LOWER_ERROR;
+                    }
+                    (void)memset(&extract, 0, sizeof(extract));
+                    extract.kind = MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT;
+                    extract.span = expression->span;
+                    extract.type = value_type;
+                    extract.result = MINIC_CORE_VALUE_INVALID;
+                    extract.value.binary.left = signed_current;
+                    extract.value.binary.right = shift;
+                    if (!minic_core_function_append_value_instruction(
+                            context->function, context->block_id, &extract, &signed_current)) {
+                        return MINIC_CORE_LOWER_ERROR;
+                    }
+                    (void)memset(&extract, 0, sizeof(extract));
+                    extract.kind = MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT;
+                    extract.span = expression->span;
+                    extract.type = value_type;
+                    extract.result = MINIC_CORE_VALUE_INVALID;
+                    extract.value.binary.left = signed_current;
+                    extract.value.binary.right = shift;
+                    if (!minic_core_function_append_value_instruction(
+                            context->function, context->block_id, &extract, &signed_current)) {
+                        return MINIC_CORE_LOWER_ERROR;
+                    }
+                }
+                *value_id = signed_current;
                 return MINIC_CORE_LOWER_OK;
             }
-            return append_integer_conversion(
-                context, expression->span, value_type, current, value_id);
         }
     }
     /* BATCH_R_RECORD_CALL_MEMBER_VALUE: projecting a scalar field from a
@@ -4298,7 +4355,7 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                 !minic_type_is_integer(bit_source->type) || context->target == NULL ||
                 !minic_type_unqualified(expression->type, &bit_expression_value_type) ||
                 !minic_type_equal(bit_expression_value_type, bit_value_type) ||
-                !core_unsigned_bit_field_storage_type(
+                !core_bit_field_storage_type(
                     context, bit_value_type, &bit_storage_type, &bit_storage_width) ||
                 bit_storage_width == 0U || bit_storage_width > 64U ||
                 bit_field->bit_width > bit_storage_width ||
@@ -4963,7 +5020,7 @@ static MinicCoreLowerStatus lower_assignment_pair(MinicCoreLowerContext *context
                 !minic_type_is_integer(value_type) ||
                 !minic_type_is_unsigned_integer(value_type) ||
                 minic_type_is_const(target->type) ||
-                !core_unsigned_bit_field_storage_type(
+                !core_bit_field_storage_type(
                     context, value_type, &storage_type, &storage_width) ||
                 storage_width == 0U || storage_width > 64U ||
                 field->bit_width > storage_width ||
@@ -5269,7 +5326,7 @@ static MinicCoreLowerStatus lower_unsigned_bit_field_update(
         !minic_type_equal(expression_value_type, value_type) ||
         !minic_target_info_integer_promotion_for_program(
             context->target, context->body->program, value_type, &promoted_type) ||
-        !core_unsigned_bit_field_storage_type(
+        !core_bit_field_storage_type(
             context, value_type, &storage_type, &storage_width) ||
         storage_width == 0U || storage_width > 64U || field->bit_width > storage_width ||
         !minic_data_layout_record_field_layout(minic_default_data_layout(),

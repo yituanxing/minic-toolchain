@@ -352,6 +352,27 @@ int scalar_return_cleanup(int input) {
 EOF
 check_strict_case scalar-return-cleanup
 
+cat >"$work_dir/signed-bitfield-storage-read.i" <<'EOF'
+struct signed_bitfield_storage {
+    unsigned int prefix : 2;
+    signed int value : 8;
+    unsigned int suffix : 1;
+};
+
+int signed_bitfield_storage_read(const struct signed_bitfield_storage *state) {
+    return state->value;
+}
+
+int signed_bitfield_storage_switch(const struct signed_bitfield_storage *state) {
+    switch (state->value) {
+    case -1: return 11;
+    case 7: return 22;
+    default: return 33;
+    }
+}
+EOF
+check_strict_case signed-bitfield-storage-read
+
 cat >"$work_dir/bool-bitfield-storage-read.i" <<'EOF'
 struct bool_bitfield_storage {
     unsigned int prefix : 1;
