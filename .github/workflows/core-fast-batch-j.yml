@@ -1,19 +1,20 @@
-name: Core Batch Y50b Repeated Local Object
+name: Core Y51 Repeated Local Object Full500 Productizer
 
 on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  y50b-repeated-local-object:
+  y51-repeated-local-object-full500:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: c231a968e4bc2d4da4d80bc4aa737c6d56bcdc6f
+          ref: refactor/declaration-sema-v1
+          fetch-depth: 0
       - name: Restore frozen Linux corpus
         id: linux-corpus-cache
         uses: actions/cache/restore@v4
@@ -26,107 +27,75 @@ jobs:
           set -Eeuo pipefail
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
-      - name: Apply repeated-object candidate
+      - name: Apply exact Y50b candidate
         shell: bash
         run: |
           set -Eeuo pipefail
           python3 tools/dev/patch-linux-replay-live-progress.py
+          git show 4120e6bb55dce496a78d7daec885a56777b7468e:.github/workflows/core-fast-batch-j.yml > /tmp/y50b.yml
           python3 - <<'PY'
           from pathlib import Path
-
-          p=Path('src/core/core_ir.h')
-          s=p.read_text()
-          old='''typedef struct MinicCoreObject {\n    MinicSourceSpan span;\n    MinicType type;\n} MinicCoreObject;\n'''
-          new='''typedef struct MinicCoreObject {\n    MinicSourceSpan span;\n    MinicType type;\n    /* M95_REPEATED_LOCAL_OBJECT: legacy frontend arrays carry element type\n       plus an explicit count. Keep Core object addressing element-typed while\n       owning the complete repeated storage extent. Ordinary objects use 1. */\n    size_t element_count;\n} MinicCoreObject;\n'''
-          if s.count(old)!=1: raise SystemExit(f'object struct count={s.count(old)}')
-          s=s.replace(old,new,1)
-          old='''bool minic_core_function_add_object(MinicCoreFunction *function,\n                                    MinicSourceSpan span,\n                                    MinicType type,\n                                    MinicCoreObjectId *object_id);\n'''
-          new=old+'''bool minic_core_function_add_repeated_object(MinicCoreFunction *function,\n                                             MinicSourceSpan span,\n                                             MinicType element_type,\n                                             size_t element_count,\n                                             MinicCoreObjectId *object_id);\n'''
-          if s.count(old)!=1: raise SystemExit(f'object api count={s.count(old)}')
-          p.write_text(s.replace(old,new,1))
-
-          p=Path('src/core/core_ir.c')
-          s=p.read_text()
-          old='''bool minic_core_function_add_object(MinicCoreFunction *function,\n                                    MinicSourceSpan span,\n                                    MinicType type,\n                                    MinicCoreObjectId *object_id) {\n    MinicCoreObjectId new_id;\n\n    if (function == NULL || object_id == NULL || function->object_count >= (size_t)UINT32_MAX ||\n        minic_type_is_void(type) || minic_type_is_function(type) ||\n        !grow_array((void **)&function->objects,\n                    &function->object_capacity,\n                    function->object_count,\n                    sizeof(*function->objects))) {\n        return false;\n    }\n    new_id = (MinicCoreObjectId)function->object_count;\n    function->objects[function->object_count].span = span;\n    function->objects[function->object_count].type = type;\n    function->object_count += 1U;\n    *object_id = new_id;\n    return true;\n}\n'''
-          new='''bool minic_core_function_add_repeated_object(MinicCoreFunction *function,\n                                             MinicSourceSpan span,\n                                             MinicType element_type,\n                                             size_t element_count,\n                                             MinicCoreObjectId *object_id) {\n    MinicCoreObjectId new_id;\n\n    if (function == NULL || object_id == NULL || element_count == 0U ||\n        function->object_count >= (size_t)UINT32_MAX ||\n        minic_type_is_void(element_type) || minic_type_is_function(element_type) ||\n        !grow_array((void **)&function->objects,\n                    &function->object_capacity,\n                    function->object_count,\n                    sizeof(*function->objects))) {\n        return false;\n    }\n    new_id = (MinicCoreObjectId)function->object_count;\n    function->objects[function->object_count].span = span;\n    function->objects[function->object_count].type = element_type;\n    function->objects[function->object_count].element_count = element_count;\n    function->object_count += 1U;\n    *object_id = new_id;\n    return true;\n}\n\nbool minic_core_function_add_object(MinicCoreFunction *function,\n                                    MinicSourceSpan span,\n                                    MinicType type,\n                                    MinicCoreObjectId *object_id) {\n    return minic_core_function_add_repeated_object(function, span, type, 1U, object_id);\n}\n'''
-          if s.count(old)!=1: raise SystemExit(f'object impl count={s.count(old)}')
-          s=s.replace(old,new,1)
-          verify_pos=s.find('''bool minic_core_function_verify(const MinicCoreFunction *function) {''')
-          if verify_pos < 0: raise SystemExit('verifier marker')
-          before=s[:verify_pos]
-          sub=s[verify_pos:]
-          anchor='''    for (index = 0U; index < function->global_count; ++index) {\n'''
-          extra='''    for (index = 0U; index < function->object_count; ++index) {\n        const MinicCoreObject *object = &function->objects[index];\n        if (object->element_count == 0U || minic_type_is_void(object->type) ||\n            minic_type_is_function(object->type)) {\n            return false;\n        }\n    }\n    for (index = 0U; index < function->global_count; ++index) {\n'''
-          if sub.count(anchor)!=1: raise SystemExit(f'object verifier scoped count={sub.count(anchor)}')
-          p.write_text(before+sub.replace(anchor,extra,1))
-
-          p=Path('src/core/core_lower.c')
-          s=p.read_text()
-          old='''    if (local->is_array ||\n        minic_c0_program_local_fixed_register_binding(context->body->program, local_id) != NULL ||\n        (!core_memory_scalar_type(local->type) && !minic_type_is_record(local->type))) {\n        return MINIC_CORE_LOWER_UNSUPPORTED;\n    }\n    if (!minic_core_function_add_object(\n            context->function, local->name_span, local->type, object_id)) {\n        return MINIC_CORE_LOWER_ERROR;\n    }\n'''
-          new='''    if (minic_c0_program_local_fixed_register_binding(context->body->program, local_id) != NULL ||\n        (!core_memory_scalar_type(local->type) && !minic_type_is_record(local->type))) {\n        return MINIC_CORE_LOWER_UNSUPPORTED;\n    }\n    if (local->is_array) {\n        if (local->element_count == 0U ||\n            !minic_core_function_add_repeated_object(context->function,\n                                                     local->name_span,\n                                                     local->type,\n                                                     local->element_count,\n                                                     object_id)) {\n            return MINIC_CORE_LOWER_ERROR;\n        }\n    } else if (!minic_core_function_add_object(\n                   context->function, local->name_span, local->type, object_id)) {\n        return MINIC_CORE_LOWER_ERROR;\n    }\n'''
-          if s.count(old)!=1: raise SystemExit(f'local object seam count={s.count(old)}')
-          p.write_text(s.replace(old,new,1))
-
-          p=Path('src/target/riscv64/core_codegen.c')
-          s=p.read_text()
-          old='''        if (!minic_data_layout_type(minic_default_data_layout(),\n                                    program,\n                                    function->objects[object_index].type,\n                                    &object_size,\n                                    &object_alignment) ||\n            object_size == 0U || object_alignment == 0U || object_alignment > 16U ||\n            !align_up(storage_size, object_alignment, &storage_size) ||\n            storage_size > SIZE_MAX - object_size) {\n            return false;\n        }\n        storage_size += object_size;\n'''
-          new='''        if (!minic_data_layout_type(minic_default_data_layout(),\n                                    program,\n                                    function->objects[object_index].type,\n                                    &object_size,\n                                    &object_alignment) ||\n            object_size == 0U || object_alignment == 0U || object_alignment > 16U ||\n            function->objects[object_index].element_count == 0U ||\n            object_size > SIZE_MAX / function->objects[object_index].element_count) {\n            return false;\n        }\n        object_size *= function->objects[object_index].element_count;\n        if (!align_up(storage_size, object_alignment, &storage_size) ||\n            storage_size > SIZE_MAX - object_size) {\n            return false;\n        }\n        storage_size += object_size;\n'''
-          if s.count(old)!=1: raise SystemExit(f'frame size seam count={s.count(old)}')
-          s=s.replace(old,new,1)
-          old='''        if (!minic_data_layout_type(minic_default_data_layout(),\n                                    program,\n                                    function->objects[object_index].type,\n                                    &object_size,\n                                    &object_alignment) ||\n            object_size == 0U || object_alignment == 0U || object_alignment > 16U ||\n            !align_up(current_offset, object_alignment, &current_offset)) {\n            return false;\n        }\n        if (object_index == (size_t)object_id) {\n            *offset = current_offset;\n            return true;\n        }\n        if (current_offset > SIZE_MAX - object_size) {\n            return false;\n        }\n        current_offset += object_size;\n'''
-          new='''        if (!minic_data_layout_type(minic_default_data_layout(),\n                                    program,\n                                    function->objects[object_index].type,\n                                    &object_size,\n                                    &object_alignment) ||\n            object_size == 0U || object_alignment == 0U || object_alignment > 16U ||\n            function->objects[object_index].element_count == 0U ||\n            object_size > SIZE_MAX / function->objects[object_index].element_count ||\n            !align_up(current_offset, object_alignment, &current_offset)) {\n            return false;\n        }\n        if (object_index == (size_t)object_id) {\n            *offset = current_offset;\n            return true;\n        }\n        object_size *= function->objects[object_index].element_count;\n        if (current_offset > SIZE_MAX - object_size) {\n            return false;\n        }\n        current_offset += object_size;\n'''
-          if s.count(old)!=1: raise SystemExit(f'object offset seam count={s.count(old)}')
-          p.write_text(s.replace(old,new,1))
-
-          p=Path('tests/core/run-core-ir-shadow.sh')
-          s=p.read_text()
-          anchor='''check_strict_case bool-bitfield-storage-write\n\n'''
-          extra='''check_strict_case bool-bitfield-storage-write\n\ncat >"$work_dir/local-char-array-object.i" <<'EOF'\nint local_char_array_object(int index) {\n    char bytes[4];\n    bytes[0] = 1;\n    bytes[3] = 7;\n    return bytes[index];\n}\nEOF\ncheck_strict_case local-char-array-object\n\ncat >"$work_dir/local-pointer-array-decay.i" <<'EOF'\nstruct local_pointer_array_item;\nextern int consume_local_pointer_array(struct local_pointer_array_item **items);\nint local_pointer_array_decay(struct local_pointer_array_item *item) {\n    struct local_pointer_array_item *items[] = { item, (void *)0 };\n    return consume_local_pointer_array(items);\n}\nEOF\ncheck_strict_case local-pointer-array-decay\n\n'''
-          if s.count(anchor)!=1: raise SystemExit(f'array test anchor count={s.count(anchor)}')
-          p.write_text(s.replace(anchor,extra,1))
-          print('CORE_BATCH_Y50B_PATCHED')
+          text=Path('/tmp/y50b.yml').read_text()
+          start_marker='          from pathlib import Path\n'
+          end_marker="          print('CORE_BATCH_Y50B_PATCHED')\n"
+          start=text.index(start_marker)
+          end=text.index(end_marker,start)+len(end_marker)
+          lines=text[start:end].splitlines()
+          code='\n'.join(line[10:] if line.startswith('          ') else line for line in lines)+'\n'
+          exec(compile(code,'<y50b-candidate>','exec'),{})
+          print('CORE_Y51_EXACT_CANDIDATE_APPLIED')
           PY
       - name: Build exact candidate
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-y50b-compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y51-compiler
       - name: Full Core exact regression suite
         shell: bash
         run: |
           set -Eeuo pipefail
-          MINIC="$GITHUB_WORKSPACE/build/core-batch-y50b-compiler/bin/minic" \
-            BUILD_DIR="$GITHUB_WORKSPACE/build/core-batch-y50b-tests" \
+          MINIC="$GITHUB_WORKSPACE/build/core-y51-compiler/bin/minic" \
+            BUILD_DIR="$GITHUB_WORKSPACE/build/core-y51-tests" \
             bash tests/core/run-core-ir-shadow.sh
-          echo CORE_BATCH_Y50B_CORE_SUITE_PASS
-      - name: Focused Linux main plus sprint
+          echo CORE_Y51_CORE_SUITE_PASS
+      - name: Frozen strict500
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-batch-y50b-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-batch-y50b-linux"
+          compiler="$GITHUB_WORKSPACE/build/core-y51-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-y51-full500"
+          mkdir -p "$work"
           set +e
           MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
-            --work "$work" --jobs 4 --offset 0 --limit 500 --sample-count 0 --indices '0,2,3,7'
+            --work "$work" --jobs 4 --offset 0 --limit 500 --sample-count 0 \
+            >"$work/replay.log" 2>&1
           replay_status=$?
           set -e
-          echo CORE_BATCH_Y50B_REPLAY_STATUS=$replay_status
+          echo CORE_Y51_REPLAY_STATUS=$replay_status
+          cat "$work/replay.log"
           python3 tools/ci/classify-core-strict-frontier.py \
-            "$work/batch-results.json" --examples 12 --json-out "$work/frontier-summary.json"
+            "$work/batch-results.json" --examples 20 --json-out "$work/frontier-summary.json"
+          python3 tools/ci/summarize-core-frontier-progress.py \
+            "$work/batch-results.json" --expect-selected 500 \
+            --json-out "$work/progress-summary.json" --text-out "$work/progress-summary.txt" >/dev/null
           python3 - <<'PY'
           import json
           from pathlib import Path
-          w=Path('build/core-batch-y50b-linux')
-          rows=json.loads((w/'batch-results.json').read_text())
-          if isinstance(rows,dict): rows=rows.get('results',rows.get('tus',[]))
-          by={int(r['index']):r for r in rows}
+          w=Path('build/core-y51-full500')
           f=json.loads((w/'frontier-summary.json').read_text())
-          for i in sorted(by):
-              r=by[i]
-              print(f"CORE_BATCH_Y50B_ROW index={i} status={r.get('status')} progress={float(r.get('progress_ratio') or 0)*100:.2f}% first={r.get('first_error_line')} message={r.get('message','')}")
-          print(f"CORE_BATCH_Y50B_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
-          if f['error'] != 0 or by[7]['status'] != 'PASS':
-              raise SystemExit(f'Y50b focused regression: {f}')
-          if by[0].get('message','').endswith("'do_one_initcall'"):
-              raise SystemExit('Y50b did not advance sprint local array')
-          if any(by[i].get('message','').endswith("'device_add_group'") for i in (2,3)):
-              raise SystemExit('Y50b did not advance main local array')
+          p=json.loads((w/'progress-summary.json').read_text())
+          print(f"CORE_Y51_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']} blockers={f.get('distinct_blockers')}")
+          print(f"CORE_Y51_PROGRESS mean={p.get('tu_mean_progress')} median={p.get('tu_median_progress')} line_weighted={p.get('line_weighted_progress')}")
+          if f['selected'] != 500 or f['error'] != 0:
+              raise SystemExit(f'Y51 full500 regression: {f}')
           PY
+      - name: Commit semantic change
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/core/core_ir.h src/core/core_ir.c src/core/core_lower.c \
+                  src/target/riscv64/core_codegen.c tests/core/run-core-ir-shadow.sh
+          test -n "$(git status --porcelain -- src/core/core_ir.h src/core/core_ir.c src/core/core_lower.c src/target/riscv64/core_codegen.c tests/core/run-core-ir-shadow.sh)"
+          git commit -m 'core: own repeated local array storage'
+          git push origin HEAD:refactor/declaration-sema-v1
+          echo CORE_Y51_SEMANTIC_HEAD=$(git rev-parse HEAD)
