@@ -1,20 +1,19 @@
-name: Core Productize Bitfield Storage Write
+name: Core Batch Y49 Local Array Ownership Shape
 
 on:
   pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  productize-bitfield-write:
+  y49-local-array-shape:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: refactor/declaration-sema-v1
-          fetch-depth: 0
+          ref: c231a968e4bc2d4da4d80bc4aa737c6d56bcdc6f
       - name: Restore frozen Linux corpus
         id: linux-corpus-cache
         uses: actions/cache/restore@v4
@@ -27,7 +26,15 @@ jobs:
           set -Eeuo pipefail
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
-      - name: Apply semantic patch and exact regression
+      - name: Show source shapes
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          echo CORE_BATCH_Y49_SOURCE_BEGIN
+          grep -n -A8 -B3 -m1 'device_add_group(struct device' build/linux-focus-corpus/kbuild/init/do_mounts.i || true
+          grep -n -A20 -B4 -m1 'int do_one_initcall' build/linux-focus-corpus/kbuild/init/main.i || true
+          echo CORE_BATCH_Y49_SOURCE_END
+      - name: Instrument local-array ownership
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -36,94 +43,44 @@ jobs:
           from pathlib import Path
           p=Path('src/core/core_lower.c')
           s=p.read_text()
-          begin=s.find('''    /* BATCH_P_UNSIGNED_BIT_FIELD_WRITE:''')
-          end=s.find('''    if (!minic_type_unqualified(target->type, &stored_type) ||''', begin)
-          if begin < 0 or end < 0: raise SystemExit('bitfield write scope')
-          sub=s[begin:end]
-          old='''            MinicType base_value_type;\n            MinicType record_type;\n            MinicType value_type;\n            size_t byte_offset;\n'''
-          new='''            MinicType base_value_type;\n            MinicType record_type;\n            MinicType storage_access_type;\n            MinicType storage_type;\n            MinicType value_type;\n            size_t byte_offset;\n'''
-          if sub.count(old)!=1: raise SystemExit(f'write decl count={sub.count(old)}')
-          sub=sub.replace(old,new,1)
-          old='''                !minic_type_is_integer(value_type) ||\n                !minic_type_is_unsigned_integer(value_type) ||\n                minic_type_is_const(target->type) || context->target == NULL ||\n                !minic_target_info_integer_width(\n                    context->target, context->body->program, value_type, &storage_width) ||\n                storage_width == 0U || storage_width > 64U ||\n'''
-          new='''                !minic_type_is_integer(value_type) ||\n                !minic_type_is_unsigned_integer(value_type) ||\n                minic_type_is_const(target->type) ||\n                !core_unsigned_bit_field_storage_type(\n                    context, value_type, &storage_type, &storage_width) ||\n                storage_width == 0U || storage_width > 64U ||\n'''
-          if sub.count(old)!=1: raise SystemExit(f'write guard count={sub.count(old)}')
-          sub=sub.replace(old,new,1)
-          old='''            (void)byte_offset;\n\n            bit_status = lower_scalar_assignment_value(\n'''
-          new='''            (void)byte_offset;\n            storage_access_type = storage_type;\n            if (minic_type_is_volatile(target->type) &&\n                !minic_type_add_volatile(storage_access_type, &storage_access_type)) {\n                return MINIC_CORE_LOWER_ERROR;\n            }\n\n            bit_status = lower_scalar_assignment_value(\n'''
-          if sub.count(old)!=1: raise SystemExit(f'write storage access count={sub.count(old)}')
-          sub=sub.replace(old,new,1)
-          old='''                                              target->value.member.record_id,\n                                              target->value.member.field_index,\n                                              target->type,\n                                              &address);\n'''
-          new='''                                              target->value.member.record_id,\n                                              target->value.member.field_index,\n                                              storage_access_type,\n                                              &address);\n'''
-          if sub.count(old)!=1: raise SystemExit(f'write address type count={sub.count(old)}')
-          sub=sub.replace(old,new,1)
-          old='''            operation.kind = MINIC_CORE_INSTRUCTION_LOAD;\n            operation.span = target->span;\n            operation.type = value_type;\n'''
-          new='''            operation.kind = MINIC_CORE_INSTRUCTION_LOAD;\n            operation.span = target->span;\n            operation.type = storage_type;\n'''
-          if sub.count(old)!=1: raise SystemExit(f'write load type count={sub.count(old)}')
-          sub=sub.replace(old,new,1)
-          old='''            bit_status = reload_scalar_value(\n                context, span, value_type, source_object, &field_value);\n            if (bit_status != MINIC_CORE_LOWER_OK) {\n                return bit_status;\n            }\n\n            low_mask = field->bit_width == 64U\n'''
-          new='''            bit_status = reload_scalar_value(\n                context, span, value_type, source_object, &field_value);\n            if (bit_status != MINIC_CORE_LOWER_OK) {\n                return bit_status;\n            }\n            if (!minic_type_equal(storage_type, value_type)) {\n                bit_status = append_integer_conversion(\n                    context, span, storage_type, field_value, &field_value);\n                if (bit_status != MINIC_CORE_LOWER_OK) {\n                    return bit_status;\n                }\n            }\n\n            low_mask = field->bit_width == 64U\n'''
-          if sub.count(old)!=1: raise SystemExit(f'write source conversion count={sub.count(old)}')
-          sub=sub.replace(old,new,1)
-          tail_pos=sub.find('''            low_mask = field->bit_width == 64U''')
-          if tail_pos < 0: raise SystemExit('write RMW tail')
-          head=sub[:tail_pos]
-          tail=sub[tail_pos:]
-          replacements=tail.count('''operation.type = value_type;''')
-          if replacements < 5: raise SystemExit(f'write RMW value type count={replacements}')
-          tail=tail.replace('''operation.type = value_type;''','''operation.type = storage_type;''')
-          p.write_text(s[:begin]+head+tail+s[end:])
+          anchor='''    local = minic_c0_program_local(context->body->program, local_id);\n    if (local == NULL) {\n        return MINIC_CORE_LOWER_ERROR;\n    }\n'''
+          extra=anchor+'''    if (local->is_array && context->source_function != NULL &&\n        (strcmp(context->source_function->name, "device_add_group") == 0 ||\n         strcmp(context->source_function->name, "do_one_initcall") == 0)) {\n        (void)fprintf(stderr,\n                      "CORE_Y49_LOCAL_ARRAY function=%s local=%zu is_array=%d count=%zu "\n                      "type_base=%d type_sign=%d type_rank=%d ptr_depth=%u fixed=%d\\n",\n                      context->source_function->name, (size_t)local_id,\n                      local->is_array ? 1 : 0, local->element_count,\n                      (int)local->type.base_kind, (int)local->type.integer_sign,\n                      (int)local->type.integer_rank, local->type.pointer_depth,\n                      minic_c0_program_local_fixed_register_binding(\n                          context->body->program, local_id) != NULL ? 1 : 0);\n    }\n'''
+          marker='''static MinicCoreLowerStatus lower_local_object(MinicCoreLowerContext *context,'''
+          pos=s.find(marker)
+          if pos < 0: raise SystemExit('lower_local_object marker')
+          before=s[:pos]
+          sub=s[pos:]
+          if sub.count(anchor)<1: raise SystemExit('lower_local_object local fetch anchor')
+          sub=sub.replace(anchor,extra,1)
+          s=before+sub
 
-          p=Path('tests/core/run-core-ir-shadow.sh')
-          s=p.read_text()
-          anchor='''check_strict_case bool-bitfield-storage-read\n\n'''
-          extra='''check_strict_case bool-bitfield-storage-read\n\ncat >"$work_dir/bool-bitfield-storage-write.i" <<'EOF'\nstruct bool_bitfield_storage_write {\n    unsigned int prefix : 1;\n    _Bool ready : 1;\n};\n\nvoid bool_bitfield_storage_write(struct bool_bitfield_storage_write *state) {\n    state->ready = 1;\n    state->ready = 0;\n}\nEOF\ncheck_strict_case bool-bitfield-storage-write\n\n'''
-          if s.count(anchor)!=1: raise SystemExit(f'write test anchor count={s.count(anchor)}')
-          p.write_text(s.replace(anchor,extra,1))
-          print('CORE_PRODUCTIZE_BITFIELD_WRITE_PATCHED')
+          begin=s.find('''    if (expression->kind == MINIC_EXPRESSION_SUBSCRIPT) {''')
+          end=s.find('''    if (expression->kind == MINIC_EXPRESSION_MEMBER) {''', begin)
+          if begin < 0 or end < 0: raise SystemExit('subscript scope')
+          sub=s[begin:end]
+          anchor='''        if (base == NULL || index == NULL ||\n            !minic_c0_expression_array_object_info(context->body->program, base, &array_info) ||\n'''
+          extra='''        if (base != NULL && context->source_function != NULL &&\n            (strcmp(context->source_function->name, "device_add_group") == 0 ||\n             strcmp(context->source_function->name, "do_one_initcall") == 0)) {\n            MinicArrayObjectInfo trace_info;\n            const MinicLocal *trace_local = NULL;\n            bool trace_ok = minic_c0_expression_array_object_info(\n                context->body->program, base, &trace_info);\n            if (base->kind == MINIC_EXPRESSION_LOCAL) {\n                trace_local = minic_c0_program_local(\n                    context->body->program, base->value.local_id);\n            }\n            (void)fprintf(stderr,\n                "CORE_Y49_SUBSCRIPT function=%s expr=%zu base_kind=%d base_cat=%d "\n                "base_type=%d base_ptr=%u info=%d materialized=%d count=%zu incomplete=%d "\n                "elem_base=%d elem_ptr=%u local=%zu local_array=%d local_count=%zu span=%zu:%zu\\n",\n                context->source_function->name, (size_t)expression_id, (int)base->kind,\n                (int)base->value_category, (int)base->type.base_kind, base->type.pointer_depth,\n                trace_ok ? 1 : 0, trace_ok && trace_info.has_materialized_type ? 1 : 0,\n                trace_ok ? trace_info.element_count : 0U,\n                trace_ok && trace_info.is_incomplete ? 1 : 0,\n                trace_ok ? (int)trace_info.element_type.base_kind : -1,\n                trace_ok ? trace_info.element_type.pointer_depth : 0U,\n                trace_local != NULL ? (size_t)base->value.local_id : SIZE_MAX,\n                trace_local != NULL && trace_local->is_array ? 1 : 0,\n                trace_local != NULL ? trace_local->element_count : 0U,\n                expression->span.begin.line, expression->span.begin.column);\n        }\n\n'''+anchor
+          if sub.count(anchor)!=1: raise SystemExit(f'subscript guard anchor count={sub.count(anchor)}')
+          sub=sub.replace(anchor,extra,1)
+          p.write_text(s[:begin]+sub+s[end:])
+          print('CORE_BATCH_Y49_INSTRUMENTED')
           PY
-      - name: Build and Core exact suite
+      - name: Build diagnostic compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-y49-compiler
+      - name: Replay main and sprint representatives
         shell: bash
         run: |
           set -Eeuo pipefail
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-productize-bitfield-write-compiler
-          MINIC="$GITHUB_WORKSPACE/build/core-productize-bitfield-write-compiler/bin/minic" \
-            BUILD_DIR="$GITHUB_WORKSPACE/build/core-productize-bitfield-write-tests" \
-            bash tests/core/run-core-ir-shadow.sh
-      - name: Focused Linux guard
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-productize-bitfield-write-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-productize-bitfield-write-linux"
+          compiler="$GITHUB_WORKSPACE/build/core-batch-y49-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-batch-y49"
           set +e
           MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
-            --work "$work" --jobs 3 --offset 0 --limit 500 --sample-count 0 --indices '2,3,7'
+            --work "$work" --jobs 3 --offset 0 --limit 500 --sample-count 0 --indices '0,2,3'
           status=$?
           set -e
-          python3 tools/ci/classify-core-strict-frontier.py \
-            "$work/batch-results.json" --examples 8 --json-out "$work/frontier-summary.json"
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-          w=Path('build/core-productize-bitfield-write-linux')
-          rows=json.loads((w/'batch-results.json').read_text())
-          if isinstance(rows,dict): rows=rows.get('results',rows.get('tus',[]))
-          by={int(r['index']):r for r in rows}
-          f=json.loads((w/'frontier-summary.json').read_text())
-          print(f"CORE_PRODUCTIZE_BITFIELD_WRITE_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
-          if f['error'] != 0 or by[7]['status'] != 'PASS': raise SystemExit(f)
-          if any(r.get('message','').endswith("'device_set_pm_not_required'") for r in rows):
-              raise SystemExit('write seam did not advance')
-          PY
-      - name: Commit semantic change
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add src/core/core_lower.c tests/core/run-core-ir-shadow.sh
-          test -n "$(git status --porcelain -- src/core/core_lower.c tests/core/run-core-ir-shadow.sh)"
-          git commit -m 'core: use storage width for unsigned bit-field writes'
-          git push origin HEAD:refactor/declaration-sema-v1
-          echo CORE_PRODUCTIZE_BITFIELD_WRITE_HEAD=$(git rev-parse HEAD)
+          echo CORE_BATCH_Y49_REPLAY_STATUS=$status
+          echo CORE_BATCH_Y49_DETAILS_BEGIN
+          grep -R -E 'CORE_Y49_|CORE_ASSIGN_STAGE|CORE_FAST_TRACE|device_add_group|do_one_initcall' \
+            "$work/minic-stderr" | head -n 240 || true
+          echo CORE_BATCH_Y49_DETAILS_END
