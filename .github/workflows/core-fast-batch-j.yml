@@ -17,21 +17,18 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: refactor/declaration-sema-v1
-
       - name: Restore frozen Linux corpus
         id: linux-corpus-cache
         uses: actions/cache/restore@v4
         with:
           path: build/linux-focus-corpus
           key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
-
       - name: Require frozen corpus
         shell: bash
         run: |
           set -Eeuo pipefail
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
-
       - name: Apply Y candidate and verifier dump
         shell: bash
         run: |
@@ -42,29 +39,19 @@ jobs:
           from pathlib import Path
           p = Path('src/core/core_lower.c')
           s = p.read_text()
-          old = '''    if (!minic_core_function_verify(&lowered)) {
-              minic_core_function_destroy(&lowered);
-              return MINIC_CORE_LOWER_ERROR;
-          }
-          '''
-          new = '''    if (!minic_core_function_verify(&lowered)) {
-              if (lowered.name != NULL && strcmp(lowered.name, "__readahead_batch") == 0) {
+          needle = "    if (!minic_core_function_verify(&lowered)) {\n"
+          insert = needle + '''        if (lowered.name != NULL && strcmp(lowered.name, "__readahead_batch") == 0) {
                   (void)fprintf(stderr, "CORE_Y3_VERIFY_DUMP_BEGIN function=__readahead_batch\\n");
                   (void)minic_core_function_dump(stderr, &lowered);
                   (void)fprintf(stderr, "CORE_Y3_VERIFY_DUMP_END function=__readahead_batch\\n");
               }
-              minic_core_function_destroy(&lowered);
-              return MINIC_CORE_LOWER_ERROR;
-          }
           '''
-          if old not in s:
-              raise SystemExit('verify anchor not found')
-          p.write_text(s.replace(old, new, 1))
+          if needle not in s:
+              raise SystemExit('verify line not found')
+          p.write_text(s.replace(needle, insert, 1))
           PY
-
       - name: Build exact diagnostic compiler
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-y3-compiler
-
       - name: One-TU verifier diagnostic
         shell: bash
         run: |
@@ -73,10 +60,8 @@ jobs:
           work="$GITHUB_WORKSPACE/build/core-batch-y3-frontier"
           set +e
           MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
-            --minic "$compiler" \
-            --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
-            --work "$work" \
-            --jobs 1 --offset 0 --limit 500 --sample-count 0 --indices '299'
+            --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
+            --work "$work" --jobs 1 --offset 0 --limit 500 --sample-count 0 --indices '299'
           replay_status=$?
           set -e
           printf 'CORE_BATCH_Y3_REPLAY_STATUS=%d\n' "$replay_status"
@@ -84,13 +69,11 @@ jobs:
           echo CORE_BATCH_Y3_DUMP_BEGIN
           awk '/CORE_Y3_VERIFY_DUMP_BEGIN/{show=1} show{print} /CORE_Y3_VERIFY_DUMP_END/{show=0}' "$stderr" | tail -n 900 || true
           echo CORE_BATCH_Y3_DUMP_END
-          python3 tools/ci/classify-core-strict-frontier.py \
-            "$work/batch-results.json" --examples 1 --json-out "$work/frontier-summary.json"
+          python3 tools/ci/classify-core-strict-frontier.py "$work/batch-results.json" --examples 1 --json-out "$work/frontier-summary.json"
           python3 - <<'PY'
           import json
           from pathlib import Path
-          f = json.loads(Path('build/core-batch-y3-frontier/frontier-summary.json').read_text())
+          f=json.loads(Path('build/core-batch-y3-frontier/frontier-summary.json').read_text())
           print(f"CORE_BATCH_Y3_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
-          if f['selected'] != 1:
-              raise SystemExit(f'diagnostic invalid: {f}')
+          if f['selected'] != 1: raise SystemExit(f'diagnostic invalid: {f}')
           PY
