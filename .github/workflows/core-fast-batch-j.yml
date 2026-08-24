@@ -1,4 +1,4 @@
-name: Core Y84 Enum Parameter Ingress Diagnostic
+name: Core Y85 BTF Csum Stage Audit
 
 on:
   pull_request:
@@ -7,20 +7,20 @@ permissions:
   contents: read
 
 jobs:
-  y84-enum-parameter-ingress:
+  y85-stage-audit:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 40142a09c5c57ee85bb6fbabd84e3138f671cd55
+          ref: c26979e02d06873a401475f8d63a02406c862226
       - name: Restore frozen Linux corpus
         id: linux-corpus-cache
         uses: actions/cache/restore@v4
         with:
           path: build/linux-focus-corpus
           key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
-      - name: Instrument enum ingress and build
+      - name: Audit lowerer source and instrument function stages
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -28,36 +28,53 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           p=Path('src/core/core_lower.c'); s=p.read_text()
-          anchor='''        if (minic_type_is_volatile(parameter->type) || parameter->is_array ||\n            parameter->is_register_storage ||\n            !minic_type_unqualified(parameter->type, &parameter_value_type) ||\n            !minic_type_equal(parameter_value_type,\n                              context->source_function->parameter_types[parameter_index])) {\n            return MINIC_CORE_LOWER_UNSUPPORTED;\n        }\n'''
-          insert='''        if (context->source_function->name != NULL &&\n            strcmp(context->source_function->name, "btf_field_type_name") == 0) {\n            MinicType y84_effective;\n            bool y84_effective_ok = minic_c0_type_effective_integer_type(\n                context->body->program, parameter->type, &y84_effective);\n            (void)fprintf(stderr,\n                          "CORE_Y84_INGRESS param=%zu base=%d enum=%d integer=%d pointer=%d scalar=%d register=%d volatile=%d effective_ok=%d effective_base=%d effective_sign=%d effective_rank=%d effective_scalar=%d signature_base=%d equal=%d\\n",\n                          parameter_index, (int)parameter->type.base_kind,\n                          minic_type_is_enum(parameter->type) ? 1 : 0,\n                          minic_type_is_integer(parameter->type) ? 1 : 0,\n                          minic_type_is_pointer(parameter->type) ? 1 : 0,\n                          core_memory_scalar_type(parameter->type) ? 1 : 0,\n                          parameter->is_register_storage ? 1 : 0,\n                          minic_type_is_volatile(parameter->type) ? 1 : 0,\n                          y84_effective_ok ? 1 : 0,\n                          y84_effective_ok ? (int)y84_effective.base_kind : -1,\n                          y84_effective_ok ? (int)y84_effective.integer_sign : -1,\n                          y84_effective_ok ? (int)y84_effective.integer_rank : -1,\n                          y84_effective_ok && core_memory_scalar_type(y84_effective) ? 1 : 0,\n                          (int)context->source_function->parameter_types[parameter_index].base_kind,\n                          minic_type_equal(parameter->type, context->source_function->parameter_types[parameter_index]) ? 1 : 0);\n        }\n'''+anchor
-          if s.count(anchor)!=1: raise SystemExit(f'ingress anchor {s.count(anchor)}')
-          p.write_text(s.replace(anchor,insert,1))
+          for needle,nextneedle,label in [
+              ('MinicCoreLowerStatus minic_core_lower_function(', None, 'FUNCTION'),
+              ('static MinicCoreLowerStatus lower_switch(', None, 'SWITCH')]:
+              start=s.find(needle)
+              if start < 0: raise SystemExit(f'missing {label} start')
+              # brace-balanced function extent
+              brace=s.find('{',start); depth=0; end=None
+              for i in range(brace,len(s)):
+                  if s[i]=='{': depth+=1
+                  elif s[i]=='}':
+                      depth-=1
+                      if depth==0:
+                          end=i+1; break
+              if end is None: raise SystemExit(f'missing {label} end')
+              first=s.count('\n',0,start)+1
+              print(f'CORE_Y85_{label}_SOURCE_BEGIN line={first}')
+              for n,line in enumerate(s[start:end].splitlines(),first): print(f'{n}: {line}')
+              print(f'CORE_Y85_{label}_SOURCE_END')
           PY
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y84-compiler
-      - name: Replay BTF representatives
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y85-compiler
+      - name: Replay BTF and csum representatives
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-y84-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-y84-linux"
+          compiler="$GITHUB_WORKSPACE/build/core-y85-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-y85-linux"
           mkdir -p "$work"
           set +e
-          MINIC_CORE_IR=strict CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
+          MINIC_CORE_IR=strict CORE_FAST_TRACE=1 CORE_LOWER_DETAIL=1 CORE_ASM_DETAIL=1 CORE_ASSIGN_STAGE=1 python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
-            --work "$work" --jobs 2 --offset 0 --limit 500 --sample-count 0 --indices '186,193'
+            --work "$work" --jobs 3 --offset 0 --limit 500 --sample-count 0 --indices '2,186,193'
           status=$?
           set -e
-          echo CORE_Y84_REPLAY_STATUS=$status
+          echo CORE_Y85_REPLAY_STATUS=$status
           python3 - <<'PY'
           import json
           from pathlib import Path
-          w=Path('build/core-y84-linux'); rows=json.loads((w/'batch-results.json').read_text())
+          w=Path('build/core-y85-linux'); rows=json.loads((w/'batch-results.json').read_text())
           if isinstance(rows,dict): rows=rows.get('results',rows.get('tus',[]))
           for r in rows:
               idx=int(r['index']); rel=r['input']
-              print(f"CORE_Y84_INDEX index={idx} status={r.get('status')} message={r.get('message','')}")
+              print(f"CORE_Y85_INDEX index={idx} status={r.get('status')} progress={float(r.get('progress_ratio') or 0)*100:.3f}% first={r.get('first_error_line')} message={r.get('message','')}")
               err=w/'minic-stderr'/f'{rel}.stderr'
               if err.is_file():
-                  for x in err.read_text(errors='replace').splitlines():
-                      if 'CORE_Y84_INGRESS' in x or "function 'btf_field_type_name'" in x: print(x)
+                  lines=err.read_text(errors='replace').splitlines()
+                  keep=[x for x in lines if ('btf_field_type_name' in x or 'csum16_sub' in x or 'CORE_FAST_TRACE' in x or 'CORE_LOWER_DETAIL' in x or 'CORE_ASM_DETAIL' in x or 'CORE_ASSIGN_STAGE' in x)]
+                  print(f'CORE_Y85_STDERR_BEGIN index={idx}')
+                  for x in keep[-300:]: print(x)
+                  print(f'CORE_Y85_STDERR_END index={idx}')
           PY
