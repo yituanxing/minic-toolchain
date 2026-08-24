@@ -1,4 +1,4 @@
-name: Core Y52 Exact Head Frontier
+name: Core Y53 Perf Caller Regs Shape
 
 on:
   pull_request:
@@ -7,7 +7,7 @@ permissions:
   contents: read
 
 jobs:
-  y52-exact-head-frontier:
+  y53-perf-caller-regs-shape:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     steps:
@@ -26,60 +26,43 @@ jobs:
           set -Eeuo pipefail
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
-      - name: Add replay progress metrics
-        run: python3 tools/dev/patch-linux-replay-live-progress.py
-      - name: Build exact semantic head
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y52-compiler
-      - name: Frozen strict500 compact snapshot
+      - name: Show representative source and Core bitcast path
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-y52-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-y52-full500"
-          mkdir -p "$work"
+          echo CORE_Y53_SOURCE_BEGIN
+          for f in \
+            build/linux-focus-corpus/kbuild/init/main.i \
+            build/linux-focus-corpus/kbuild/init/initramfs.i \
+            build/linux-focus-corpus/kbuild/arch/riscv/kernel/perf_callchain.i; do
+            echo "--- $f"
+            grep -n -A28 -B6 -m1 'perf_fetch_caller_regs' "$f" || true
+          done
+          echo CORE_Y53_SOURCE_END
+          echo CORE_Y53_LOWER_BITCAST_BEGIN
+          grep -n -A55 -B20 'MINIC_EXPRESSION_BITCAST' src/core/core_lower.c || true
+          grep -n -A45 -B15 'append_scalar_bitcast' src/core/core_lower.c || true
+          echo CORE_Y53_LOWER_BITCAST_END
+      - name: Enable compact progress telemetry
+        run: python3 tools/dev/patch-linux-replay-live-progress.py
+      - name: Build exact compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y53-compiler
+      - name: Replay representatives
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/core-y53-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-y53"
           set +e
           MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
-            --work "$work" --jobs 4 --offset 0 --limit 500 --sample-count 0 \
-            >"$work/replay.log" 2>&1
+            --work "$work" --jobs 3 --offset 0 --limit 500 --sample-count 0 --indices '0,4,40'
           replay_status=$?
           set -e
-          echo CORE_Y52_REPLAY_STATUS=$replay_status
+          echo CORE_Y53_REPLAY_STATUS=$replay_status
           python3 tools/ci/classify-core-strict-frontier.py \
-            "$work/batch-results.json" --examples 20 --json-out "$work/frontier-summary.json"
-          python3 tools/ci/summarize-core-frontier-progress.py \
-            "$work/batch-results.json" --expect-selected 500 \
-            --json-out "$work/progress-summary.json" --text-out "$work/progress-summary.txt" >/dev/null
-          python3 - <<'PY'
-          import json
-          from collections import Counter
-          from pathlib import Path
-          w=Path('build/core-y52-full500')
-          f=json.loads((w/'frontier-summary.json').read_text())
-          p=json.loads((w/'progress-summary.json').read_text())
-          rows=json.loads((w/'batch-results.json').read_text())
-          if isinstance(rows,dict): rows=rows.get('results',rows.get('tus',[]))
-          counts=Counter()
-          examples={}
-          for r in rows:
-              if r.get('status') == 'PASS':
-                  continue
-              msg=r.get('message','')
-              marker="Core IR shadow does not yet support function '"
-              if marker in msg:
-                  fn=msg.split(marker,1)[1].split("'",1)[0]
-              else:
-                  fn=msg or '<unknown>'
-              counts[fn]+=1
-              examples.setdefault(fn,[]).append(int(r.get('index',-1)))
-          print(f"CORE_Y52_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']} distinct={len(counts)}")
-          print(f"CORE_Y52_PROGRESS mean={p.get('tu_mean_progress')} median={p.get('tu_median_progress')} line_weighted={p.get('line_weighted_progress')}")
-          for rank,(fn,count) in enumerate(counts.most_common(20),1):
-              print(f"CORE_Y52_BLOCKER rank={rank} count={count} function={fn} examples={examples[fn][:6]}")
-          for i in (0,7,42,95):
-              r=next((x for x in rows if int(x.get('index',-1))==i),None)
-              if r is not None:
-                  print(f"CORE_Y52_SPRINT index={i} status={r.get('status')} progress={float(r.get('progress_ratio') or 0)*100:.3f}% first={r.get('first_error_line')} message={r.get('message','')}")
-          if f['selected'] != 500 or f['error'] != 0:
-              raise SystemExit(f'Y52 exact-head regression: {f}')
-          PY
+            "$work/batch-results.json" --examples 6 --json-out "$work/frontier-summary.json"
+          echo CORE_Y53_TRACE_BEGIN
+          grep -R -E 'perf_fetch_caller_regs|CORE_ASSIGN_STAGE|CORE_LOWER_DETAIL|CORE_FAST_TRACE' \
+            "$work/minic-stderr" | grep -E 'perf_fetch_caller_regs|CORE_ASSIGN_STAGE' | head -n 160 || true
+          echo CORE_Y53_TRACE_END
