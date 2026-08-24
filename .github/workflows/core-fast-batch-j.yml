@@ -1,4 +1,4 @@
-name: Core Y104b Start Kernel Call Diagnostic
+name: Core Y105 Function Address Qualification
 
 on:
   pull_request:
@@ -7,7 +7,7 @@ permissions:
   contents: read
 
 jobs:
-  y104b-start-kernel-call:
+  y105-function-address:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     steps:
@@ -20,52 +20,62 @@ jobs:
         with:
           path: build/linux-focus-corpus
           key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
-      - name: Instrument call assignment
+      - name: Apply function-address candidate
         shell: bash
         run: |
           set -Eeuo pipefail
           python3 - <<'PY'
           from pathlib import Path
           p=Path('src/core/core_lower.c'); s=p.read_text()
-          old='''    status = lower_scalar_assignment_value(context, stored_type, source_id, &stored_value);\n'''
-          new='''    if (context->source_function != NULL && strcmp(context->source_function->name, "start_kernel") == 0 &&\n        source != NULL && source->kind == MINIC_EXPRESSION_CALL) {\n        const MinicFunction *trace_callee = NULL;\n        const MinicExpression *trace_callee_expr = NULL;\n        size_t trace_arg = 0U;\n        if (source->value.call.function_id != MINIC_FUNCTION_INVALID) {\n            trace_callee = minic_c0_program_function(context->body->program, source->value.call.function_id);\n        }\n        trace_callee_expr = minic_c0_program_expression(context->body->program, source->value.call.callee);\n        (void)fprintf(stderr,\n                      "CORE_Y104_CALL callee=%s direct=%d argc=%zu params=%zu variadic=%d return_int=%d return_ptr=%d target_int=%d target_ptr=%d callee_kind=%d span=%zu:%zu\\n",\n                      trace_callee != NULL ? trace_callee->name : "<indirect>",\n                      trace_callee != NULL ? 1 : 0,\n                      source->value.call.argument_count,\n                      trace_callee != NULL ? trace_callee->parameter_count : 0U,\n                      trace_callee != NULL && trace_callee->is_variadic ? 1 : 0,\n                      trace_callee != NULL && minic_type_is_integer(trace_callee->return_type) ? 1 : 0,\n                      trace_callee != NULL && minic_type_is_pointer(trace_callee->return_type) ? 1 : 0,\n                      minic_type_is_integer(stored_type) ? 1 : 0,\n                      minic_type_is_pointer(stored_type) ? 1 : 0,\n                      trace_callee_expr != NULL ? (int)trace_callee_expr->kind : -1,\n                      source->span.begin.line, source->span.begin.column);\n        for (trace_arg = 0U; trace_arg < source->value.call.argument_count; ++trace_arg) {\n            const MinicExpression *arg = minic_c0_program_expression(\n                context->body->program, source->value.call.arguments[trace_arg]);\n            (void)fprintf(stderr,\n                          "CORE_Y104_ARG index=%zu kind=%d category=%d int=%d ptr=%d record=%d span=%zu:%zu\\n",\n                          trace_arg, arg != NULL ? (int)arg->kind : -1,\n                          arg != NULL ? (int)arg->value_category : -1,\n                          arg != NULL && minic_type_is_integer(arg->type) ? 1 : 0,\n                          arg != NULL && minic_type_is_pointer(arg->type) ? 1 : 0,\n                          arg != NULL && minic_type_is_record(arg->type) ? 1 : 0,\n                          arg != NULL ? arg->span.begin.line : (size_t)0U,\n                          arg != NULL ? arg->span.begin.column : (size_t)0U);\n        }\n    }\n    status = lower_scalar_assignment_value(context, stored_type, source_id, &stored_value);\n'''
-          if s.count(old)!=1: raise SystemExit(f'anchor count={s.count(old)}')
+          old='''    if (expression == NULL) {\n        return MINIC_CORE_LOWER_ERROR;\n    }\n    /* M103_INTEGER_BIT_FIELD_READ: a bit-field is not C-addressable, but\n'''
+          new='''    if (expression == NULL) {\n        return MINIC_CORE_LOWER_ERROR;\n    }\n    /* M104_FUNCTION_DESIGNATOR_ADDRESS: the normalized frontend represents a\n       function designator as its function-pointer semantic value already. C's\n       `&function` therefore has the same pointer type and symbol identity; do\n       not route it through the object-lvalue address seam. */\n    if (expression->kind == MINIC_EXPRESSION_ADDRESS_OF) {\n        const MinicExpression *operand = minic_c0_program_expression(\n            context->body->program, expression->value.unary.operand);\n        MinicType function_type;\n\n        if (operand != NULL && operand->kind == MINIC_EXPRESSION_FUNCTION) {\n            if (!minic_type_equal(expression->type, operand->type) ||\n                !minic_type_pointee(operand->type, &function_type) ||\n                !minic_type_is_function(function_type)) {\n                return MINIC_CORE_LOWER_UNSUPPORTED;\n            }\n            return lower_expression(context, expression->value.unary.operand, value_id);\n        }\n    }\n    /* M103_INTEGER_BIT_FIELD_READ: a bit-field is not C-addressable, but\n'''
+          if s.count(old)!=1: raise SystemExit(f'core anchor count={s.count(old)}')
           p.write_text(s.replace(old,new,1))
+
+          t=Path('tests/core/run-core-ir-shadow.sh'); ts=t.read_text()
+          anchor='''cat >"$work_dir/function-pointer-parameter-ingress.i" <<'EOF'\n'''
+          case='''cat >"$work_dir/function-designator-address.i" <<'EOF'\nint function_address_target(int value);\nint function_address_consume(int (*callback)(int));\n\nint function_designator_address(void) {\n    return function_address_consume(&function_address_target);\n}\nEOF\ncheck_strict_case function-designator-address\n\n'''
+          if ts.count(anchor)!=1: raise SystemExit(f'test anchor count={ts.count(anchor)}')
+          t.write_text(ts.replace(anchor,case+anchor,1))
           PY
-      - name: Build exact diagnostic compiler
+      - name: Build exact candidate compiler
         shell: bash
         run: |
           set -Eeuo pipefail
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y104b-compiler
-      - name: Replay start kernel TU
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y105-compiler
+      - name: Run Core shadow qualification
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-y104b-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-y104b-linux"; mkdir -p "$work"
+          MINIC="$GITHUB_WORKSPACE/build/core-y105-compiler/bin/minic" \
+            BUILD_DIR="$GITHUB_WORKSPACE/build/core-y105-shadow" \
+            bash tests/core/run-core-ir-shadow.sh
+      - name: Verify start_kernel moves forward
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/core-y105-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-y105-linux"; mkdir -p "$work"
           set +e
           MINIC_CORE_IR=strict CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
             --work "$work" --jobs 1 --offset 0 --limit 500 --sample-count 0 --indices '0'
-          status=$?; set -e; echo CORE_Y104B_REPLAY_STATUS=$status
+          status=$?; set -e; echo CORE_Y105_REPLAY_STATUS=$status
           python3 - <<'PY'
           import json
           from pathlib import Path
-          w=Path('build/core-y104b-linux')
+          old_first=90330
+          w=Path('build/core-y105-linux')
           rows=json.loads((w/'batch-results.json').read_text())
           if isinstance(rows,dict): rows=rows.get('results',rows.get('tus',[]))
-          for r in rows:
-              print(f"CORE_Y104B_INDEX index={r.get('index')} status={r.get('status')} first={r.get('first_error_line')} total={r.get('total_lines')} progress={r.get('progress_ratio')} message={r.get('message','')}")
-              err=w/'minic-stderr'/f"{r['input']}.stderr"
-              if err.is_file():
-                  for x in err.read_text(errors='replace').splitlines():
-                      if 'CORE_Y104_' in x or ('CORE_' in x and 'start_kernel' in x): print(x)
-              first=r.get('first_error_line')
-              src=Path('build/linux-focus-corpus/kbuild')/r['input']
-              if first and src.is_file():
-                  lines=src.read_text(errors='replace').splitlines()
-                  lo=max(0,int(first)-8); hi=min(len(lines),int(first)+7)
-                  print('CORE_Y104_SOURCE_CONTEXT')
-                  for n in range(lo,hi): print(f'{n+1}: {lines[n]}')
+          if len(rows)!=1: raise SystemExit(f'expected one row, got {len(rows)}')
+          r=rows[0]; first=r.get('first_error_line'); msg=r.get('message','')
+          print(f"CORE_Y105_INDEX status={r.get('status')} first={first} total={r.get('total_lines')} progress={r.get('progress_ratio')} message={msg}")
+          err=w/'minic-stderr'/f"{r['input']}.stderr"
+          if err.is_file():
+              for x in err.read_text(errors='replace').splitlines():
+                  if 'CORE_' in x and ('start_kernel' in x or 'unknown_bootoption' in x): print(x)
+          if r.get('status') != 'PASS' and (not first or int(first) <= old_first):
+              raise SystemExit(f'start_kernel did not move forward: first={first}')
           PY
