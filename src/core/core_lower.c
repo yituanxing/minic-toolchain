@@ -59,6 +59,10 @@ static MinicCoreLowerStatus lower_direct_record_call_object(
     MinicCoreLowerContext *context,
     const MinicExpression *expression,
     MinicCoreObjectId *result_object);
+static MinicCoreLowerStatus lower_record_compound_literal_object(
+    MinicCoreLowerContext *context,
+    const MinicExpression *expression,
+    MinicCoreObjectId *object_id);
 
 static bool core_memory_scalar_type(MinicType type) {
     return minic_type_is_integer(type) || minic_type_is_pointer(type);
@@ -297,6 +301,29 @@ static MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
     }
     if (expression->value_category != MINIC_VALUE_LVALUE) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
+    }
+    /* BATCH_U_RECORD_COMPOUND_LITERAL_ADDRESS: a record compound literal is
+       an lvalue with a real semantic backing object.  Reuse that object for
+       address-of just as the address-backed aggregate seam already does; do
+       not synthesize a second temporary and do not special-case call sites. */
+    if (expression->kind == MINIC_EXPRESSION_COMPOUND_LITERAL &&
+        minic_type_is_record(expression->type)) {
+        status = lower_record_compound_literal_object(context, expression, &object_id);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        (void)memset(&instruction, 0, sizeof(instruction));
+        instruction.kind = MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS;
+        instruction.span = expression->span;
+        instruction.result = MINIC_CORE_VALUE_INVALID;
+        instruction.value.object_id = object_id;
+        if (!minic_type_pointer_to(expression->type, &instruction.type)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        return minic_core_function_append_value_instruction(
+                   context->function, context->block_id, &instruction, address_id)
+                   ? MINIC_CORE_LOWER_OK
+                   : MINIC_CORE_LOWER_ERROR;
     }
     if (expression->kind == MINIC_EXPRESSION_LOCAL) {
         status = lower_local_object(context, expression->value.local_id, &object_id);
@@ -3660,6 +3687,8 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         MinicCoreValueId pointer_value;
         MinicCoreValueId index_value;
         MinicCoreLowerStatus status;
+        MinicType pointer_value_type;
+        MinicType index_value_type;
         size_t element_size;
 
         left_expression =
@@ -3685,7 +3714,19 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         } else {
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
-        if (!minic_type_equal(pointer_expression->type, expression->type) ||
+        /* BATCH_U_POINTER_ARITH_VALUE_TYPES: Core consumes scalar values, not
+           lvalue storage qualifiers.  A member reached through `const T *`
+           has a const-qualified lvalue type in the semantic AST, but its
+           lvalue-to-rvalue result is the unqualified scalar value transported
+           by Core.  Use the shared value-type seam for both operands instead
+           of comparing emitted values against raw expression storage types. */
+        if (!core_scalar_expression_value_type(
+                context->body, pointer_expression, &pointer_value_type) ||
+            !core_scalar_expression_value_type(
+                context->body, index_expression, &index_value_type) ||
+            !minic_type_is_pointer(pointer_value_type) ||
+            !minic_type_is_integer(index_value_type) ||
+            !minic_type_equal(pointer_value_type, expression->type) ||
             !minic_c0_pointer_arithmetic_element_size(context->body->program,
                                                       minic_default_data_layout(),
                                                       expression->type,
@@ -3698,7 +3739,7 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         }
         status = spill_scalar_value(context,
                                     pointer_expression->span,
-                                    pointer_expression->type,
+                                    pointer_value_type,
                                     pointer_value,
                                     &pointer_object);
         if (status != MINIC_CORE_LOWER_OK) {
@@ -3710,7 +3751,7 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         }
         status = reload_scalar_value(context,
                                      pointer_expression->span,
-                                     pointer_expression->type,
+                                     pointer_value_type,
                                      pointer_object,
                                      &pointer_value);
         if (status != MINIC_CORE_LOWER_OK) {
@@ -3719,9 +3760,9 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         if (pointer_value >= context->function->value_count ||
             index_value >= context->function->value_count ||
             !minic_type_equal(context->function->values[pointer_value].type,
-                              pointer_expression->type) ||
+                              pointer_value_type) ||
             !minic_type_equal(context->function->values[index_value].type,
-                              index_expression->type)) {
+                              index_value_type)) {
             return MINIC_CORE_LOWER_ERROR;
         }
         instruction.kind = MINIC_CORE_INSTRUCTION_POINTER_OFFSET;
