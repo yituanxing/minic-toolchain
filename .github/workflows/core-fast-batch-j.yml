@@ -1,4 +1,4 @@
-name: Core Fast Batch Y4 Verify Reason
+name: Core Fast Batch Y5 Block Shape Reason
 
 on:
   pull_request:
@@ -7,11 +7,11 @@ permissions:
   contents: read
 
 jobs:
-  batch-y4-diagnose:
+  batch-y5-diagnose:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     concurrency:
-      group: core-fast-batch-y4-${{ github.event.pull_request.number }}
+      group: core-fast-batch-y5-${{ github.event.pull_request.number }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
@@ -29,7 +29,7 @@ jobs:
           set -Eeuo pipefail
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
-      - name: Apply Y candidate and verifier reason probe
+      - name: Apply Y candidate and block-shape probe
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -39,38 +39,31 @@ jobs:
           from pathlib import Path
           p=Path('src/core/core_ir.c')
           s=p.read_text()
-          a=s.find('static bool verify_block(')
-          b=s.find('\nbool minic_core_function_verify', a)
-          if a < 0 or b < 0: raise SystemExit('verify_block bounds not found')
-          body=s[a:b]
-          repl='''do {\n            if (function->name != NULL && strcmp(function->name, "__readahead_batch") == 0)\n                (void)fprintf(stderr, "CORE_Y4_VERIFY_FAIL block=%u line=%d\\n", (unsigned int)block_id, __LINE__);\n            return false;\n        } while (0);'''
-          body=body.replace('return false;', repl)
-          old='return terminator_is_valid(function, &block->terminator, available_values);'
-          new='''if (!terminator_is_valid(function, &block->terminator, available_values)) {\n        if (function->name != NULL && strcmp(function->name, "__readahead_batch") == 0)\n            (void)fprintf(stderr, "CORE_Y4_VERIFY_FAIL block=%u line=%d terminator=%d\\n", (unsigned int)block_id, __LINE__, (int)block->terminator.kind);\n        return false;\n    }\n    return true;'''
-          if old not in body: raise SystemExit('terminator verify anchor not found')
-          body=body.replace(old,new,1)
-          p.write_text(s[:a]+body+s[b:])
+          old='''    if (!storage_shape_is_valid(\n            block->instructions, block->instruction_count, block->instruction_capacity) ||\n        !block->has_terminator) {\n        return false;\n    }\n'''
+          new='''    {\n        bool storage_ok = storage_shape_is_valid(\n            block->instructions, block->instruction_count, block->instruction_capacity);\n        if (!storage_ok || !block->has_terminator) {\n            if (function->name != NULL && strcmp(function->name, "__readahead_batch") == 0) {\n                (void)fprintf(stderr,\n                              "CORE_Y5_BLOCK_SHAPE block=%u storage_ok=%d has_terminator=%d instruction_count=%zu instruction_capacity=%zu\\n",\n                              (unsigned int)block_id,\n                              storage_ok ? 1 : 0,\n                              block->has_terminator ? 1 : 0,\n                              block->instruction_count,\n                              block->instruction_capacity);\n            }\n            return false;\n        }\n    }\n'''
+          if old not in s: raise SystemExit('block-shape verify anchor not found')
+          p.write_text(s.replace(old,new,1))
           PY
       - name: Build exact diagnostic compiler
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-y4-compiler
-      - name: One-TU verifier reason
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-y5-compiler
+      - name: One-TU block-shape reason
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-batch-y4-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-batch-y4-frontier"
+          compiler="$GITHUB_WORKSPACE/build/core-batch-y5-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-batch-y5-frontier"
           set +e
           MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" --work "$work" --jobs 1 --offset 0 --limit 500 --sample-count 0 --indices '299'
           replay_status=$?
           set -e
-          printf 'CORE_BATCH_Y4_REPLAY_STATUS=%d\n' "$replay_status"
+          printf 'CORE_BATCH_Y5_REPLAY_STATUS=%d\n' "$replay_status"
           stderr="$work/minic-stderr/mm/fadvise.i.stderr"
-          grep -E 'CORE_Y4_VERIFY_FAIL|__readahead_batch' "$stderr" | tail -n 80 || true
+          grep -E 'CORE_Y5_BLOCK_SHAPE|__readahead_batch' "$stderr" | tail -n 80 || true
           python3 tools/ci/classify-core-strict-frontier.py "$work/batch-results.json" --examples 1 --json-out "$work/frontier-summary.json"
           python3 - <<'PY'
           import json
           from pathlib import Path
-          f=json.loads(Path('build/core-batch-y4-frontier/frontier-summary.json').read_text())
-          print(f"CORE_BATCH_Y4_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
+          f=json.loads(Path('build/core-batch-y5-frontier/frontier-summary.json').read_text())
+          print(f"CORE_BATCH_Y5_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
           if f['selected'] != 1: raise SystemExit(f'diagnostic invalid: {f}')
           PY
