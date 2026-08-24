@@ -1,4 +1,4 @@
-name: Core Y104 Start Kernel Call Diagnostic
+name: Core Y104b Start Kernel Call Diagnostic
 
 on:
   pull_request:
@@ -7,7 +7,7 @@ permissions:
   contents: read
 
 jobs:
-  y104-start-kernel-call:
+  y104b-start-kernel-call:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     steps:
@@ -28,7 +28,7 @@ jobs:
           from pathlib import Path
           p=Path('src/core/core_lower.c'); s=p.read_text()
           old='''    status = lower_scalar_assignment_value(context, stored_type, source_id, &stored_value);\n'''
-          new='''    if (context->source_function != NULL && strcmp(context->source_function->name, "start_kernel") == 0 &&\n        source != NULL && source->kind == MINIC_EXPRESSION_CALL) {\n        const MinicFunction *trace_callee = NULL;\n        const MinicExpression *trace_callee_expr = NULL;\n        size_t trace_arg = 0U;\n        if (source->value.call.function_id != MINIC_FUNCTION_INVALID) {\n            trace_callee = minic_c0_program_function(context->body->program, source->value.call.function_id);\n        }\n        trace_callee_expr = minic_c0_program_expression(context->body->program, source->value.call.callee);\n        (void)fprintf(stderr,\n                      "CORE_Y104_CALL callee=%s direct=%d argc=%zu params=%zu variadic=%d return_int=%d return_ptr=%d target_int=%d target_ptr=%d callee_kind=%d span=%zu:%zu\\n",\n                      trace_callee != NULL ? trace_callee->name : "<indirect>",\n                      trace_callee != NULL ? 1 : 0,\n                      source->value.call.argument_count,\n                      trace_callee != NULL ? trace_callee->parameter_count : 0U,\n                      trace_callee != NULL && trace_callee->is_variadic ? 1 : 0,\n                      trace_callee != NULL && minic_type_is_integer(trace_callee->return_type) ? 1 : 0,\n                      trace_callee != NULL && minic_type_is_pointer(trace_callee->return_type) ? 1 : 0,\n                      minic_type_is_integer(stored_type) ? 1 : 0,\n                      minic_type_is_pointer(stored_type) ? 1 : 0,\n                      trace_callee_expr != NULL ? (int)trace_callee_expr->kind : -1,\n                      source->span.line, source->span.column);\n        for (trace_arg = 0U; trace_arg < source->value.call.argument_count; ++trace_arg) {\n            const MinicExpression *arg = minic_c0_program_expression(\n                context->body->program, source->value.call.arguments[trace_arg]);\n            (void)fprintf(stderr,\n                          "CORE_Y104_ARG index=%zu kind=%d category=%d int=%d ptr=%d record=%d span=%zu:%zu\\n",\n                          trace_arg, arg != NULL ? (int)arg->kind : -1,\n                          arg != NULL ? (int)arg->value_category : -1,\n                          arg != NULL && minic_type_is_integer(arg->type) ? 1 : 0,\n                          arg != NULL && minic_type_is_pointer(arg->type) ? 1 : 0,\n                          arg != NULL && minic_type_is_record(arg->type) ? 1 : 0,\n                          arg != NULL ? arg->span.line : (size_t)0U,\n                          arg != NULL ? arg->span.column : (size_t)0U);\n        }\n    }\n    status = lower_scalar_assignment_value(context, stored_type, source_id, &stored_value);\n'''
+          new='''    if (context->source_function != NULL && strcmp(context->source_function->name, "start_kernel") == 0 &&\n        source != NULL && source->kind == MINIC_EXPRESSION_CALL) {\n        const MinicFunction *trace_callee = NULL;\n        const MinicExpression *trace_callee_expr = NULL;\n        size_t trace_arg = 0U;\n        if (source->value.call.function_id != MINIC_FUNCTION_INVALID) {\n            trace_callee = minic_c0_program_function(context->body->program, source->value.call.function_id);\n        }\n        trace_callee_expr = minic_c0_program_expression(context->body->program, source->value.call.callee);\n        (void)fprintf(stderr,\n                      "CORE_Y104_CALL callee=%s direct=%d argc=%zu params=%zu variadic=%d return_int=%d return_ptr=%d target_int=%d target_ptr=%d callee_kind=%d span=%zu:%zu\\n",\n                      trace_callee != NULL ? trace_callee->name : "<indirect>",\n                      trace_callee != NULL ? 1 : 0,\n                      source->value.call.argument_count,\n                      trace_callee != NULL ? trace_callee->parameter_count : 0U,\n                      trace_callee != NULL && trace_callee->is_variadic ? 1 : 0,\n                      trace_callee != NULL && minic_type_is_integer(trace_callee->return_type) ? 1 : 0,\n                      trace_callee != NULL && minic_type_is_pointer(trace_callee->return_type) ? 1 : 0,\n                      minic_type_is_integer(stored_type) ? 1 : 0,\n                      minic_type_is_pointer(stored_type) ? 1 : 0,\n                      trace_callee_expr != NULL ? (int)trace_callee_expr->kind : -1,\n                      source->span.begin.line, source->span.begin.column);\n        for (trace_arg = 0U; trace_arg < source->value.call.argument_count; ++trace_arg) {\n            const MinicExpression *arg = minic_c0_program_expression(\n                context->body->program, source->value.call.arguments[trace_arg]);\n            (void)fprintf(stderr,\n                          "CORE_Y104_ARG index=%zu kind=%d category=%d int=%d ptr=%d record=%d span=%zu:%zu\\n",\n                          trace_arg, arg != NULL ? (int)arg->kind : -1,\n                          arg != NULL ? (int)arg->value_category : -1,\n                          arg != NULL && minic_type_is_integer(arg->type) ? 1 : 0,\n                          arg != NULL && minic_type_is_pointer(arg->type) ? 1 : 0,\n                          arg != NULL && minic_type_is_record(arg->type) ? 1 : 0,\n                          arg != NULL ? arg->span.begin.line : (size_t)0U,\n                          arg != NULL ? arg->span.begin.column : (size_t)0U);\n        }\n    }\n    status = lower_scalar_assignment_value(context, stored_type, source_id, &stored_value);\n'''
           if s.count(old)!=1: raise SystemExit(f'anchor count={s.count(old)}')
           p.write_text(s.replace(old,new,1))
           PY
@@ -37,26 +37,26 @@ jobs:
         run: |
           set -Eeuo pipefail
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y104-compiler
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y104b-compiler
       - name: Replay start kernel TU
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-y104-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-y104-linux"; mkdir -p "$work"
+          compiler="$GITHUB_WORKSPACE/build/core-y104b-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-y104b-linux"; mkdir -p "$work"
           set +e
           MINIC_CORE_IR=strict CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
             --work "$work" --jobs 1 --offset 0 --limit 500 --sample-count 0 --indices '0'
-          status=$?; set -e; echo CORE_Y104_REPLAY_STATUS=$status
+          status=$?; set -e; echo CORE_Y104B_REPLAY_STATUS=$status
           python3 - <<'PY'
           import json
           from pathlib import Path
-          w=Path('build/core-y104-linux')
+          w=Path('build/core-y104b-linux')
           rows=json.loads((w/'batch-results.json').read_text())
           if isinstance(rows,dict): rows=rows.get('results',rows.get('tus',[]))
           for r in rows:
-              print(f"CORE_Y104_INDEX index={r.get('index')} status={r.get('status')} first={r.get('first_error_line')} total={r.get('total_lines')} progress={r.get('progress_ratio')} message={r.get('message','')}")
+              print(f"CORE_Y104B_INDEX index={r.get('index')} status={r.get('status')} first={r.get('first_error_line')} total={r.get('total_lines')} progress={r.get('progress_ratio')} message={r.get('message','')}")
               err=w/'minic-stderr'/f"{r['input']}.stderr"
               if err.is_file():
                   for x in err.read_text(errors='replace').splitlines():
