@@ -4558,13 +4558,23 @@ static MinicCoreLowerStatus lower_expression_statement(MinicCoreLowerContext *co
                    : MINIC_CORE_LOWER_ERROR;
     }
 
-    /* M83B_CALL_STATEMENT_DISPATCH: CALL ownership lives in lower_expression().
-       Statement context only discards the produced value; it must not force an
-       indirect call back through the legacy direct-call helper. */
+    /* BATCH_Q_DISCARDED_RECORD_CALL: a direct call returning an aggregate still
+       executes when its value is discarded by an expression statement. Core
+       already models the returned aggregate as an address-backed result object;
+       statement context simply does not consume that object. Keep indirect
+       record returns fail-closed until their ABI/object result seam exists. */
     if (expression->kind == MINIC_EXPRESSION_CALL) {
-        MinicCoreValueId discarded_value;
+        if (minic_type_is_record(expression->type) &&
+            expression->value.call.function_id != MINIC_FUNCTION_INVALID) {
+            MinicCoreObjectId discarded_object;
 
-        return lower_expression(context, statement->expression, &discarded_value);
+            return lower_direct_record_call_object(context, expression, &discarded_object);
+        }
+        {
+            MinicCoreValueId discarded_value;
+
+            return lower_expression(context, statement->expression, &discarded_value);
+        }
     }
     /* M54_VOID_CONDITIONAL_STATEMENT: expression statements are only an
        effect boundary. Once M53 can lower a void conditional expression, the
