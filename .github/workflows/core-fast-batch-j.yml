@@ -1,4 +1,4 @@
-name: Core Y67 Conditional Value Type Trace
+name: Core Y67b Conditional Value Type Trace
 
 on:
   pull_request:
@@ -7,7 +7,7 @@ permissions:
   contents: read
 
 jobs:
-  y67-conditional-value-type-trace:
+  y67b-conditional-value-type-trace:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     steps:
@@ -38,40 +38,36 @@ jobs:
           if s.count(old)!=1: raise SystemExit(f'guard anchor {s.count(old)}')
           s=s.replace(old,new,1)
           old='''        if (!core_memory_scalar_type(expression->type) ||\n            !core_scalar_expression_value_type(context->body, true_expression, &true_type) ||\n            !core_scalar_expression_value_type(context->body, false_expression, &false_type)) {\n            return MINIC_CORE_LOWER_UNSUPPORTED;\n        }\n        if (!minic_core_function_add_object(\n                context->function, expression->span, expression->type, &result_object) ||\n'''
-          new='''        if (!core_scalar_expression_value_type(context->body, true_expression, &true_type) ||\n            !core_scalar_expression_value_type(context->body, false_expression, &false_type)) {\n            return MINIC_CORE_LOWER_UNSUPPORTED;\n        }\n        (void)fprintf(stderr, "CORE_Y67_META function=%s expr_lvalue=%d result_const=%d value_const=%d true_kind=%d false_kind=%d\\n",\n                      context->source_function != NULL ? context->source_function->name : "?",\n                      expression->value_category == MINIC_VALUE_LVALUE ? 1 : 0,\n                      minic_type_is_const(expression->type) ? 1 : 0,\n                      minic_type_is_const(result_type) ? 1 : 0,\n                      (int)true_expression->kind, (int)false_expression->kind);\n        if (!minic_core_function_add_object(\n                context->function, expression->span, result_type, &result_object) ||\n'''
+          new='''        if (!core_scalar_expression_value_type(context->body, true_expression, &true_type) ||\n            !core_scalar_expression_value_type(context->body, false_expression, &false_type)) {\n            return MINIC_CORE_LOWER_UNSUPPORTED;\n        }\n        (void)fprintf(stderr, "CORE_Y67B_META function=%s expr_lvalue=%d result_const=%d value_const=%d true_kind=%d false_kind=%d\\n",\n                      context->source_function != NULL ? context->source_function->name : "?",\n                      expression->value_category == MINIC_VALUE_LVALUE ? 1 : 0,\n                      minic_type_is_const(expression->type) ? 1 : 0,\n                      minic_type_is_const(result_type) ? 1 : 0,\n                      (int)true_expression->kind, (int)false_expression->kind);\n        if (!minic_core_function_add_object(\n                context->function, expression->span, result_type, &result_object) ||\n'''
           if s.count(old)!=1: raise SystemExit(f'object anchor {s.count(old)}')
           s=s.replace(old,new,1)
-          old='''        status = lower_condition_branch(context,\n                                        expression->value.conditional.condition,\n                                        expression->span,\n                                        true_block,\n                                        false_block);\n        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n'''
-          new='''        status = lower_condition_branch(context,\n                                        expression->value.conditional.condition,\n                                        expression->span,\n                                        true_block,\n                                        false_block);\n        (void)fprintf(stderr, "CORE_Y67_STAGE function=%s stage=condition status=%d\\n",\n                      context->source_function != NULL ? context->source_function->name : "?", (int)status);\n        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n'''
-          if s.count(old)!=1: raise SystemExit(f'condition anchor {s.count(old)}')
-          s=s.replace(old,new,1)
           old='''        status = lower_scalar_assignment_value(context,\n                                               expression->type,\n                                               expression->value.conditional.when_true,\n                                               &arm_value);\n'''
-          new='''        status = lower_scalar_assignment_value(context,\n                                               result_type,\n                                               expression->value.conditional.when_true,\n                                               &arm_value);\n        (void)fprintf(stderr, "CORE_Y67_STAGE function=%s stage=true_assign status=%d value=%u\\n",\n                      context->source_function != NULL ? context->source_function->name : "?",\n                      (int)status, (unsigned int)arm_value);\n'''
+          new='''        status = lower_scalar_assignment_value(context,\n                                               result_type,\n                                               expression->value.conditional.when_true,\n                                               &arm_value);\n        (void)fprintf(stderr, "CORE_Y67B_STAGE function=%s stage=true_assign status=%d value=%u\\n",\n                      context->source_function != NULL ? context->source_function->name : "?",\n                      (int)status, status == MINIC_CORE_LOWER_OK ? (unsigned int)arm_value : 0U);\n'''
           if s.count(old)!=1: raise SystemExit(f'true assign anchor {s.count(old)}')
           s=s.replace(old,new,1)
           old='''        status = store_scalar_value(\n            context, true_expression->span, expression->type, result_object, arm_value);\n'''
-          new='''        status = store_scalar_value(\n            context, true_expression->span, result_type, result_object, arm_value);\n        (void)fprintf(stderr, "CORE_Y67_STAGE function=%s stage=true_store status=%d\\n",\n                      context->source_function != NULL ? context->source_function->name : "?", (int)status);\n'''
+          new='''        status = store_scalar_value(\n            context, true_expression->span, result_type, result_object, arm_value);\n        (void)fprintf(stderr, "CORE_Y67B_STAGE function=%s stage=true_store status=%d\\n",\n                      context->source_function != NULL ? context->source_function->name : "?", (int)status);\n'''
           if s.count(old)!=1: raise SystemExit(f'true store anchor {s.count(old)}')
           s=s.replace(old,new,1)
           old='''        status = lower_scalar_assignment_value(context,\n                                               expression->type,\n                                               expression->value.conditional.when_false,\n                                               &arm_value);\n'''
-          new='''        status = lower_scalar_assignment_value(context,\n                                               result_type,\n                                               expression->value.conditional.when_false,\n                                               &arm_value);\n        (void)fprintf(stderr, "CORE_Y67_STAGE function=%s stage=false_assign status=%d value=%u\\n",\n                      context->source_function != NULL ? context->source_function->name : "?",\n                      (int)status, (unsigned int)arm_value);\n'''
+          new='''        status = lower_scalar_assignment_value(context,\n                                               result_type,\n                                               expression->value.conditional.when_false,\n                                               &arm_value);\n        (void)fprintf(stderr, "CORE_Y67B_STAGE function=%s stage=false_assign status=%d value=%u\\n",\n                      context->source_function != NULL ? context->source_function->name : "?",\n                      (int)status, status == MINIC_CORE_LOWER_OK ? (unsigned int)arm_value : 0U);\n'''
           if s.count(old)!=1: raise SystemExit(f'false assign anchor {s.count(old)}')
           s=s.replace(old,new,1)
           old='''        status = store_scalar_value(\n            context, false_expression->span, expression->type, result_object, arm_value);\n'''
-          new='''        status = store_scalar_value(\n            context, false_expression->span, result_type, result_object, arm_value);\n        (void)fprintf(stderr, "CORE_Y67_STAGE function=%s stage=false_store status=%d\\n",\n                      context->source_function != NULL ? context->source_function->name : "?", (int)status);\n'''
+          new='''        status = store_scalar_value(\n            context, false_expression->span, result_type, result_object, arm_value);\n        (void)fprintf(stderr, "CORE_Y67B_STAGE function=%s stage=false_store status=%d\\n",\n                      context->source_function != NULL ? context->source_function->name : "?", (int)status);\n'''
           if s.count(old)!=1: raise SystemExit(f'false store anchor {s.count(old)}')
           s=s.replace(old,new,1)
           old='''        return reload_scalar_value(\n            context, expression->span, expression->type, result_object, value_id);\n    }\n    /* M73_COMMA_EXPRESSION_VALUE'''
-          new='''        status = reload_scalar_value(\n            context, expression->span, result_type, result_object, value_id);\n        (void)fprintf(stderr, "CORE_Y67_STAGE function=%s stage=reload status=%d value=%u\\n",\n                      context->source_function != NULL ? context->source_function->name : "?",\n                      (int)status, value_id == NULL ? 0U : (unsigned int)*value_id);\n        return status;\n    }\n    /* M73_COMMA_EXPRESSION_VALUE'''
+          new='''        status = reload_scalar_value(\n            context, expression->span, result_type, result_object, value_id);\n        (void)fprintf(stderr, "CORE_Y67B_STAGE function=%s stage=reload status=%d value=%u\\n",\n                      context->source_function != NULL ? context->source_function->name : "?",\n                      (int)status, status == MINIC_CORE_LOWER_OK ? (unsigned int)*value_id : 0U);\n        return status;\n    }\n    /* M73_COMMA_EXPRESSION_VALUE'''
           if s.count(old)!=1: raise SystemExit(f'reload anchor {s.count(old)}')
           p.write_text(s.replace(old,new,1))
           PY
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y67-compiler
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y67b-compiler
       - name: Trace generic reproduction
         shell: bash
         run: |
           set -Eeuo pipefail
-          cat > build/core-y67-generic.i <<'EOF'
+          cat > build/core-y67b-generic.i <<'EOF'
           struct queue_like { unsigned int first; unsigned int second; };
           unsigned int generic_min_like(const struct queue_like *l) {
               return ({
@@ -82,21 +78,21 @@ jobs:
           }
           EOF
           set +e
-          MINIC_CORE_IR=strict build/core-y67-compiler/bin/minic -S build/core-y67-generic.i -o build/core-y67-generic.s \
-            >build/core-y67-generic.out 2>build/core-y67-generic.err
+          MINIC_CORE_IR=strict build/core-y67b-compiler/bin/minic -S build/core-y67b-generic.i -o build/core-y67b-generic.s \
+            >build/core-y67b-generic.out 2>build/core-y67b-generic.err
           rc=$?
           set -e
-          echo CORE_Y67_GENERIC_RC=$rc
-          grep -E 'CORE_Y67|CORE_FAST_TRACE' build/core-y67-generic.err || true
+          echo CORE_Y67B_GENERIC_RC=$rc
+          grep -E 'CORE_Y67B|CORE_FAST_TRACE' build/core-y67b-generic.err || true
       - name: Trace real Linux representative
         shell: bash
         run: |
           set -Eeuo pipefail
           input="$GITHUB_WORKSPACE/build/linux-focus-corpus/kbuild/init/do_mounts_initrd.i"
           set +e
-          MINIC_CORE_IR=strict build/core-y67-compiler/bin/minic -S "$input" -o build/core-y67-linux.s \
-            >build/core-y67-linux.out 2>build/core-y67-linux.err
+          MINIC_CORE_IR=strict build/core-y67b-compiler/bin/minic -S "$input" -o build/core-y67b-linux.s \
+            >build/core-y67b-linux.out 2>build/core-y67b-linux.err
           rc=$?
           set -e
-          echo CORE_Y67_LINUX_RC=$rc
-          grep -E 'CORE_Y67.*queue_max_zone_append_sectors|CORE_FAST_TRACE.*queue_max_zone_append_sectors' build/core-y67-linux.err || true
+          echo CORE_Y67B_LINUX_RC=$rc
+          grep -E 'CORE_Y67B.*queue_max_zone_append_sectors|CORE_FAST_TRACE.*queue_max_zone_append_sectors' build/core-y67b-linux.err || true
