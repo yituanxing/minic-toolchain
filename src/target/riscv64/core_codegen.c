@@ -696,10 +696,14 @@ static bool core_structured_inline_asm_supported(const MinicCoreFunction *functi
            memory_readwrites == 1U && scalar_inputs <= 2U &&
            scalar_inputs + 3U == instruction->value.structured_inline_asm.operand_count &&
            inline_asm->has_memory_clobber) ||
+          /* BATCH_X_TWO_SCALAR_OUTPUTLESS_ASM_OPTIONAL_MEMORY: the emitted
+             instruction operands are identical with or without a compiler
+             memory clobber. Keep register clobbers excluded for this shape,
+             but preserve either memory-effect setting. */
           (register_outputs == 0U && register_readwrites == 0U &&
            memory_readwrites == 0U && scalar_inputs == 2U &&
            instruction->value.structured_inline_asm.operand_count == 2U &&
-           inline_asm->has_memory_clobber) ||
+           inline_asm->register_clobber_count == 0U) ||
           (register_outputs == 0U && register_readwrites == 1U &&
            memory_readwrites == 0U && scalar_inputs == 0U &&
            instruction->value.structured_inline_asm.operand_count == 1U &&

@@ -7267,14 +7267,16 @@ static MinicCoreLowerStatus lower_opaque_inline_asm(MinicCoreLowerContext *conte
         }
     }
 
-    /* BATCH_G_TWO_SCALAR_OUTPUTLESS_ASM: outputless GNU asm is effectively
-       volatile (Batch F). Reuse the generic structured operand model when the
-       statement has two scalar register inputs and a memory clobber. */
+    /* BATCH_X_TWO_SCALAR_OUTPUTLESS_ASM_OPTIONAL_MEMORY: outputless GNU asm is
+       effectively volatile (Batch F).  The two-register-input structured form
+       is valid both for ordering-sensitive asm carrying a memory clobber and
+       for MMIO-style asm whose template itself performs the access.  Preserve
+       the actual memory effect flag rather than requiring one to exist. */
     if (!source->is_goto && source->template_text != NULL &&
         source->template_length != 0U && source->output_count == 0U && source->inputs != NULL &&
         source->input_count == 2U && source->label_count == 0U &&
-        source->register_clobber_count == 0U && source->has_memory_clobber &&
-        source->clobber_count == 1U) {
+        source->register_clobber_count == 0U &&
+        source->clobber_count == (source->has_memory_clobber ? 1U : 0U)) {
         MinicCoreInstruction structured;
         char *numeric_template = NULL;
         size_t numeric_template_length = 0U;
@@ -7311,7 +7313,7 @@ static MinicCoreLowerStatus lower_opaque_inline_asm(MinicCoreLowerContext *conte
                                                               numeric_template,
                                                               numeric_template_length,
                                                               true,
-                                                              true,
+                                                              source->has_memory_clobber,
                                                               &inline_asm_id);
             free(numeric_template);
             if (!added) {
