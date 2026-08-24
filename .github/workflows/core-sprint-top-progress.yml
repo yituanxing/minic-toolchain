@@ -1,0 +1,91 @@
+name: Core Sprint Top Progress
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  sprint:
+    if: github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: core-sprint-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+
+      - name: Restore frozen Linux corpus
+        id: linux-corpus-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+
+      - name: Require frozen corpus
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
+          test -s build/linux-focus-corpus/selected-tus.txt
+
+      - name: Enable compact progress telemetry
+        run: python3 tools/dev/patch-linux-replay-live-progress.py
+
+      - name: Build exact compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-sprint-compiler
+
+      - name: Sprint nearest-to-pass TUs
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/core-sprint-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-sprint"
+          set +e
+          MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
+            --minic "$compiler" \
+            --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
+            --work "$work" \
+            --jobs 4 \
+            --offset 0 \
+            --limit 500 \
+            --sample-count 0 \
+            --indices '0,7,42,95'
+          replay_status=$?
+          set -e
+          printf 'CORE_SPRINT_REPLAY_STATUS=%d\n' "$replay_status"
+          python3 tools/ci/classify-core-strict-frontier.py \
+            "$work/batch-results.json" \
+            --examples 4 \
+            --json-out "$work/frontier-summary.json"
+          python3 tools/ci/summarize-core-frontier-progress.py \
+            "$work/batch-results.json" \
+            --expect-selected 4 \
+            --json-out "$work/progress-summary.json" \
+            --text-out "$work/progress-summary.txt"
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          rows = json.loads(Path('build/core-sprint/batch-results.json').read_text())
+          if isinstance(rows, dict):
+              rows = rows.get('results', rows.get('tus', []))
+          print('CORE_SPRINT_TABLE index status progress first/total input message')
+          def progress(r):
+              p = r.get('progress_ratio')
+              if p is not None:
+                  return float(p)
+              total = r.get('total_lines') or 0
+              first = r.get('first_error_line')
+              return 1.0 if r.get('status') == 'PASS' else ((float(first) / total) if first and total else 0.0)
+          for r in sorted(rows, key=progress, reverse=True):
+              total = r.get('total_lines', '-')
+              first = r.get('first_error_line') or '-'
+              print(f"CORE_SPRINT_ROW index={r.get('index')} status={r.get('status')} progress={progress(r)*100:.2f}% first={first} total={total} input={r.get('input')} message={r.get('message','')}")
+          frontier = json.loads(Path('build/core-sprint/frontier-summary.json').read_text())
+          print(f"CORE_SPRINT_RESULT selected={frontier['selected']} pass={frontier['pass']} unsupported={frontier['unsupported']} error={frontier['error']}")
+          if frontier['error'] != 0:
+              raise SystemExit(f"sprint introduced/contains Core ERRORs: {frontier.get('errors', [])}")
+          PY
