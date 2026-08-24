@@ -1,4 +1,4 @@
-name: Core Batch Y47 Bitfield Storage Write
+name: Core Batch Y48 Bitfield Storage Write Full500
 
 on:
   pull_request:
@@ -7,11 +7,11 @@ permissions:
   contents: read
 
 jobs:
-  y47-bitfield-write:
+  y48-bitfield-write-full500:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     concurrency:
-      group: core-y47-bitfield-write-${{ github.event.pull_request.number }}
+      group: core-y48-bitfield-write-full500-${{ github.event.pull_request.number }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
@@ -29,60 +29,51 @@ jobs:
           set -Eeuo pipefail
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
-      - name: Apply bitfield storage-write candidate
+      - name: Apply exact Y47 candidate
         shell: bash
         run: |
           set -Eeuo pipefail
           python3 tools/dev/patch-linux-replay-live-progress.py
           python3 - <<'PY'
           from pathlib import Path
-
           p=Path('src/core/core_lower.c')
           s=p.read_text()
           begin=s.find('''    /* BATCH_P_UNSIGNED_BIT_FIELD_WRITE:''')
           end=s.find('''    if (!minic_type_unqualified(target->type, &stored_type) ||''', begin)
           if begin < 0 or end < 0: raise SystemExit('bitfield write scope')
           sub=s[begin:end]
-
           old='''            MinicType base_value_type;\n            MinicType record_type;\n            MinicType value_type;\n            size_t byte_offset;\n'''
           new='''            MinicType base_value_type;\n            MinicType record_type;\n            MinicType storage_access_type;\n            MinicType storage_type;\n            MinicType value_type;\n            size_t byte_offset;\n'''
           if sub.count(old)!=1: raise SystemExit(f'write decl count={sub.count(old)}')
           sub=sub.replace(old,new,1)
-
           old='''                !minic_type_is_integer(value_type) ||\n                !minic_type_is_unsigned_integer(value_type) ||\n                minic_type_is_const(target->type) || context->target == NULL ||\n                !minic_target_info_integer_width(\n                    context->target, context->body->program, value_type, &storage_width) ||\n                storage_width == 0U || storage_width > 64U ||\n'''
           new='''                !minic_type_is_integer(value_type) ||\n                !minic_type_is_unsigned_integer(value_type) ||\n                minic_type_is_const(target->type) ||\n                !core_unsigned_bit_field_storage_type(\n                    context, value_type, &storage_type, &storage_width) ||\n                storage_width == 0U || storage_width > 64U ||\n'''
           if sub.count(old)!=1: raise SystemExit(f'write guard count={sub.count(old)}')
           sub=sub.replace(old,new,1)
-
           old='''            (void)byte_offset;\n\n            bit_status = lower_scalar_assignment_value(\n'''
           new='''            (void)byte_offset;\n            storage_access_type = storage_type;\n            if (minic_type_is_volatile(target->type) &&\n                !minic_type_add_volatile(storage_access_type, &storage_access_type)) {\n                return MINIC_CORE_LOWER_ERROR;\n            }\n\n            bit_status = lower_scalar_assignment_value(\n'''
           if sub.count(old)!=1: raise SystemExit(f'write storage access count={sub.count(old)}')
           sub=sub.replace(old,new,1)
-
           old='''                                              target->value.member.record_id,\n                                              target->value.member.field_index,\n                                              target->type,\n                                              &address);\n'''
           new='''                                              target->value.member.record_id,\n                                              target->value.member.field_index,\n                                              storage_access_type,\n                                              &address);\n'''
           if sub.count(old)!=1: raise SystemExit(f'write address type count={sub.count(old)}')
           sub=sub.replace(old,new,1)
-
           old='''            operation.kind = MINIC_CORE_INSTRUCTION_LOAD;\n            operation.span = target->span;\n            operation.type = value_type;\n'''
           new='''            operation.kind = MINIC_CORE_INSTRUCTION_LOAD;\n            operation.span = target->span;\n            operation.type = storage_type;\n'''
           if sub.count(old)!=1: raise SystemExit(f'write load type count={sub.count(old)}')
           sub=sub.replace(old,new,1)
-
           old='''            bit_status = reload_scalar_value(\n                context, span, value_type, source_object, &field_value);\n            if (bit_status != MINIC_CORE_LOWER_OK) {\n                return bit_status;\n            }\n\n            low_mask = field->bit_width == 64U\n'''
           new='''            bit_status = reload_scalar_value(\n                context, span, value_type, source_object, &field_value);\n            if (bit_status != MINIC_CORE_LOWER_OK) {\n                return bit_status;\n            }\n            if (!minic_type_equal(storage_type, value_type)) {\n                bit_status = append_integer_conversion(\n                    context, span, storage_type, field_value, &field_value);\n                if (bit_status != MINIC_CORE_LOWER_OK) {\n                    return bit_status;\n                }\n            }\n\n            low_mask = field->bit_width == 64U\n'''
           if sub.count(old)!=1: raise SystemExit(f'write source conversion count={sub.count(old)}')
           sub=sub.replace(old,new,1)
-
           tail_pos=sub.find('''            low_mask = field->bit_width == 64U''')
           if tail_pos < 0: raise SystemExit('write RMW tail')
           head=sub[:tail_pos]
           tail=sub[tail_pos:]
-          replacements=tail.count('''                operation.type = value_type;''') + tail.count('''            operation.type = value_type;''')
+          replacements=tail.count('''operation.type = value_type;''')
           if replacements < 5: raise SystemExit(f'write RMW value type count={replacements}')
           tail=tail.replace('''operation.type = value_type;''','''operation.type = storage_type;''')
-          sub=head+tail
-          p.write_text(s[:begin]+sub+s[end:])
+          p.write_text(s[:begin]+head+tail+s[end:])
 
           p=Path('tests/core/run-core-ir-shadow.sh')
           s=p.read_text()
@@ -90,47 +81,46 @@ jobs:
           extra='''check_strict_case bool-bitfield-storage-read\n\ncat >"$work_dir/bool-bitfield-storage-write.i" <<'EOF'\nstruct bool_bitfield_storage_write {\n    unsigned int prefix : 1;\n    _Bool ready : 1;\n};\n\nvoid bool_bitfield_storage_write(struct bool_bitfield_storage_write *state) {\n    state->ready = 1;\n    state->ready = 0;\n}\nEOF\ncheck_strict_case bool-bitfield-storage-write\n\n'''
           if s.count(anchor)!=1: raise SystemExit(f'write test anchor count={s.count(anchor)}')
           p.write_text(s.replace(anchor,extra,1))
-          print('CORE_BATCH_Y47_PATCHED')
+          print('CORE_BATCH_Y48_PATCHED')
           PY
       - name: Build exact candidate
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-y47-compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-y48-compiler
       - name: Full Core exact regression suite
         shell: bash
         run: |
           set -Eeuo pipefail
-          MINIC="$GITHUB_WORKSPACE/build/core-batch-y47-compiler/bin/minic" \
-            BUILD_DIR="$GITHUB_WORKSPACE/build/core-batch-y47-tests" \
+          MINIC="$GITHUB_WORKSPACE/build/core-batch-y48-compiler/bin/minic" \
+            BUILD_DIR="$GITHUB_WORKSPACE/build/core-batch-y48-tests" \
             bash tests/core/run-core-ir-shadow.sh
-          echo CORE_BATCH_Y47_CORE_SUITE_PASS
-      - name: Focused Linux gate
+          echo CORE_BATCH_Y48_CORE_SUITE_PASS
+      - name: Frozen strict500
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-batch-y47-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-batch-y47-linux"
+          compiler="$GITHUB_WORKSPACE/build/core-batch-y48-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-batch-y48-full500"
+          mkdir -p "$work"
           set +e
           MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
-            --work "$work" --jobs 3 --offset 0 --limit 500 --sample-count 0 --indices '2,3,7'
+            --work "$work" --jobs 4 --offset 0 --limit 500 --sample-count 0 \
+            >"$work/replay.log" 2>&1
           replay_status=$?
           set -e
-          echo CORE_BATCH_Y47_REPLAY_STATUS=$replay_status
+          echo CORE_BATCH_Y48_REPLAY_STATUS=$replay_status
           python3 tools/ci/classify-core-strict-frontier.py \
-            "$work/batch-results.json" --examples 8 --json-out "$work/frontier-summary.json"
+            "$work/batch-results.json" --examples 12 --json-out "$work/frontier-summary.json"
+          python3 tools/ci/summarize-core-frontier-progress.py \
+            "$work/batch-results.json" --expect-selected 500 \
+            --json-out "$work/progress-summary.json" --text-out "$work/progress-summary.txt" >/dev/null
           python3 - <<'PY'
           import json
           from pathlib import Path
-          w=Path('build/core-batch-y47-linux')
-          rows=json.loads((w/'batch-results.json').read_text())
-          if isinstance(rows,dict): rows=rows.get('results',rows.get('tus',[]))
-          by={int(r['index']):r for r in rows}
+          w=Path('build/core-batch-y48-full500')
           f=json.loads((w/'frontier-summary.json').read_text())
-          for i in sorted(by):
-              r=by[i]
-              print(f"CORE_BATCH_Y47_ROW index={i} status={r.get('status')} progress={float(r.get('progress_ratio') or 0)*100:.2f}% first={r.get('first_error_line')} message={r.get('message','')}")
-          print(f"CORE_BATCH_Y47_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
-          if f['error'] != 0 or by[7]['status'] != 'PASS':
-              raise SystemExit(f'Y47 focused regression: {f}')
-          if any(r.get('message','').endswith("'device_set_pm_not_required'") for r in rows):
-              raise SystemExit('Y47 did not clear device_set_pm_not_required')
+          p=json.loads((w/'progress-summary.json').read_text())
+          print(f"CORE_BATCH_Y48_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
+          print(f"CORE_BATCH_Y48_PROGRESS mean={p.get('tu_mean_progress')} median={p.get('tu_median_progress')} line_weighted={p.get('line_weighted_progress')}")
+          if f['selected'] != 500 or f['error'] != 0:
+              raise SystemExit(f'Y48 full500 regression: {f}')
           PY
