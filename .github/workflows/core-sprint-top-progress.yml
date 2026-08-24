@@ -45,6 +45,12 @@ jobs:
             echo 'changed=true' >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Instrument M106 final fixed-call blocker
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/m106-fixed-call-diagnostic.py
+
       - name: Enable compact progress telemetry
         run: python3 tools/dev/patch-linux-replay-live-progress.py
 
@@ -79,6 +85,7 @@ jobs:
           replay_status=$?
           set -e
           printf 'CORE_SPRINT_REPLAY_STATUS=%d\n' "$replay_status"
+          grep -R 'CORE_M106_' "$work/minic-stderr" || true
           python3 tools/ci/classify-core-strict-frontier.py \
             "$work/batch-results.json" \
             --examples 4 \
@@ -118,11 +125,11 @@ jobs:
                   return None
               function = blocker_function(r.get('message', ''))
               lines = stderr_path.read_text(errors='replace').splitlines()
-              detail_prefixes = ('CORE_ASSIGN_STAGE', 'CORE_LOWER_DETAIL', 'CORE_ASM_DETAIL')
+              detail_prefixes = ('CORE_M106_SCALAR', 'CORE_ASSIGN_STAGE', 'CORE_LOWER_DETAIL', 'CORE_ASM_DETAIL')
               if function:
                   for prefix in detail_prefixes:
                       for line in lines:
-                          if prefix in line and f'function={function}' in line:
+                          if prefix in line:
                               return line.strip()
                   for line in lines:
                       if 'CORE_FAST_TRACE' in line and f'function={function}' in line:
@@ -149,11 +156,9 @@ jobs:
           if frontier['error'] != 0:
               raise SystemExit(f"sprint introduced/contains Core ERRORs: {frontier.get('errors', [])}")
 
-          if Path('src/core/core_lower.c').read_text().find('M105_FIXED_REGISTER_STRUCTURED_ASM') >= 0:
-              for idx in (0, 7, 42):
-                  if idx not in by_index or by_index[idx].get('status') != 'PASS':
-                      raise SystemExit(f'M105 required PASS missing for index {idx}: {by_index.get(idx)}')
-              print('CORE_M105_REQUIRED_PASS indices=0,7,42')
+          for idx in (0, 7, 42):
+              if idx not in by_index or by_index[idx].get('status') != 'PASS':
+                  raise SystemExit(f'required PASS missing for index {idx}: {by_index.get(idx)}')
           PY
 
       - name: Commit M105 production semantic
