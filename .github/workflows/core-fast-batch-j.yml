@@ -1,4 +1,4 @@
-name: Core Y100 Switch Stage Trace
+name: Core Y101 Netdev Selector Shape
 
 on:
   pull_request:
@@ -7,7 +7,7 @@ permissions:
   contents: read
 
 jobs:
-  y100-switch-stage:
+  y101-selector-shape:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     steps:
@@ -20,50 +20,50 @@ jobs:
         with:
           path: build/linux-focus-corpus
           key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
-      - name: Instrument netdev switch stages
+      - name: Instrument selector shape
         shell: bash
         run: |
           set -Eeuo pipefail
           python3 - <<'PY'
           from pathlib import Path
           p=Path('src/core/core_lower.c'); s=p.read_text()
-          def rep(old,new):
-              global s
-              if s.count(old)!=1: raise SystemExit(f'anchor count={s.count(old)} for {old[:80]!r}')
-              s=s.replace(old,new,1)
-          rep('''    status = lower_expression(context, statement->expression, &selector_source);\n    if (status != MINIC_CORE_LOWER_OK) {\n        return status;\n    }\n''','''    status = lower_expression(context, statement->expression, &selector_source);\n    if (context->source_function != NULL && strcmp(context->source_function->name, "netdev_reg_state") == 0)\n        (void)fprintf(stderr, "CORE_Y100_SWITCH function=netdev_reg_state stage=selector-lower status=%d value=%u\\n", (int)status, (unsigned int)selector_source);\n    if (status != MINIC_CORE_LOWER_OK) {\n        return status;\n    }\n''')
-          rep('''    status = append_integer_conversion(\n        context, selector_expression->span, selector_type, selector_source, &selector_normalized);\n    if (status != MINIC_CORE_LOWER_OK) {\n        return status;\n    }\n''','''    status = append_integer_conversion(\n        context, selector_expression->span, selector_type, selector_source, &selector_normalized);\n    if (context->source_function != NULL && strcmp(context->source_function->name, "netdev_reg_state") == 0)\n        (void)fprintf(stderr, "CORE_Y100_SWITCH function=netdev_reg_state stage=selector-convert status=%d value=%u\\n", (int)status, (unsigned int)selector_normalized);\n    if (status != MINIC_CORE_LOWER_OK) {\n        return status;\n    }\n''')
-          rep('''    status = spill_scalar_value(\n        context, selector_expression->span, selector_type, selector_normalized, &selector_object);\n    if (status != MINIC_CORE_LOWER_OK) {\n        return status;\n    }\n''','''    status = spill_scalar_value(\n        context, selector_expression->span, selector_type, selector_normalized, &selector_object);\n    if (context->source_function != NULL && strcmp(context->source_function->name, "netdev_reg_state") == 0)\n        (void)fprintf(stderr, "CORE_Y100_SWITCH function=netdev_reg_state stage=selector-spill status=%d object=%u labels=%zu cases=%zu default=%zu\\n", (int)status, (unsigned int)selector_object, label_count, case_count, default_label);\n    if (status != MINIC_CORE_LOWER_OK) {\n        return status;\n    }\n''')
-          rep('''            status = lower_switch_case_dispatch(context,\n                                                labels[label_index].statement,\n                                                selector_type,\n                                                selector_object,\n                                                labels[label_index].body_block,\n                                                next_target);\n            if (status != MINIC_CORE_LOWER_OK) {\n                return status;\n            }\n''','''            status = lower_switch_case_dispatch(context,\n                                                labels[label_index].statement,\n                                                selector_type,\n                                                selector_object,\n                                                labels[label_index].body_block,\n                                                next_target);\n            if (context->source_function != NULL && strcmp(context->source_function->name, "netdev_reg_state") == 0)\n                (void)fprintf(stderr, "CORE_Y100_SWITCH function=netdev_reg_state stage=dispatch label=%zu status=%d\\n", label_index, (int)status);\n            if (status != MINIC_CORE_LOWER_OK) {\n                return status;\n            }\n''')
-          rep('''        if (segment.statement_count != 0U) {\n            saved_break_target = context->break_target;\n            context->break_target = exit_block;\n            status = lower_block(context, &segment, &segment_terminated);\n            context->break_target = saved_break_target;\n            if (status != MINIC_CORE_LOWER_OK) {\n                return status;\n            }\n        }\n''','''        if (context->source_function != NULL && strcmp(context->source_function->name, "netdev_reg_state") == 0) {\n            (void)fprintf(stderr, "CORE_Y100_SWITCH function=netdev_reg_state stage=segment-begin label=%zu begin=%zu end=%zu count=%zu break=%zu\\n", source_index, segment_begin, segment_end, segment.statement_count, break_index);\n            for (scan = segment_begin; scan < segment_end; ++scan) {\n                const MinicStatement *trace_statement = minic_c0_program_statement(context->body->program, body->statements[scan]);\n                (void)fprintf(stderr, "CORE_Y100_SWITCH function=netdev_reg_state stage=segment-statement label=%zu scan=%zu kind=%d cleanup=%llu stop=%llu\\n", source_index, scan, trace_statement != NULL ? (int)trace_statement->kind : -1, trace_statement != NULL ? (unsigned long long)trace_statement->cleanup_context : 0ULL, trace_statement != NULL ? (unsigned long long)trace_statement->cleanup_stop_context : 0ULL);\n            }\n        }\n        if (segment.statement_count != 0U) {\n            saved_break_target = context->break_target;\n            context->break_target = exit_block;\n            status = lower_block(context, &segment, &segment_terminated);\n            context->break_target = saved_break_target;\n            if (context->source_function != NULL && strcmp(context->source_function->name, "netdev_reg_state") == 0)\n                (void)fprintf(stderr, "CORE_Y100_SWITCH function=netdev_reg_state stage=segment-lower label=%zu status=%d terminated=%d\\n", source_index, (int)status, segment_terminated ? 1 : 0);\n            if (status != MINIC_CORE_LOWER_OK) {\n                return status;\n            }\n        }\n''')
-          p.write_text(s)
+          old='''    status = lower_expression(context, statement->expression, &selector_source);\n    if (status != MINIC_CORE_LOWER_OK) {\n        return status;\n    }\n'''
+          new='''    if (context->source_function != NULL && strcmp(context->source_function->name, "netdev_reg_state") == 0) {\n        const MinicRecord *trace_record = NULL;\n        const MinicRecordField *trace_field = NULL;\n        if (selector_expression->kind == MINIC_EXPRESSION_MEMBER) {\n            trace_record = minic_c0_program_record(context->body->program, selector_expression->value.member.record_id);\n            trace_field = minic_c0_record_field(trace_record, selector_expression->value.member.field_index);\n        }\n        (void)fprintf(stderr,\n                      "CORE_Y101_SELECTOR kind=%d category=%d integer=%d unsigned=%d bool=%d field=%d bitfield=%d width=%u volatile=%d const=%d\\n",\n                      (int)selector_expression->kind,\n                      (int)selector_expression->value_category,\n                      minic_type_is_integer(selector_expression->type) ? 1 : 0,\n                      minic_type_is_unsigned_integer(selector_expression->type) ? 1 : 0,\n                      minic_type_is_bool_integer(selector_expression->type) ? 1 : 0,\n                      trace_field != NULL ? 1 : 0,\n                      trace_field != NULL && trace_field->is_bit_field ? 1 : 0,\n                      trace_field != NULL ? trace_field->bit_width : 0U,\n                      minic_type_is_volatile(selector_expression->type) ? 1 : 0,\n                      minic_type_is_const(selector_expression->type) ? 1 : 0);\n    }\n    status = lower_expression(context, statement->expression, &selector_source);\n    if (status != MINIC_CORE_LOWER_OK) {\n        return status;\n    }\n'''
+          if s.count(old)!=1: raise SystemExit(f'anchor count={s.count(old)}')
+          p.write_text(s.replace(old,new,1))
           PY
       - name: Build exact instrumented compiler
         shell: bash
         run: |
           set -Eeuo pipefail
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y100-compiler
-      - name: Replay netdev representatives
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y101-compiler
+      - name: Replay representatives and source grep
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-y100-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-y100-linux"; mkdir -p "$work"
+          compiler="$GITHUB_WORKSPACE/build/core-y101-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-y101-linux"; mkdir -p "$work"
           set +e
-          MINIC_CORE_IR=strict CORE_FAST_TRACE=1 CORE_LOWER_DETAIL=1 python3 tests/external/linux/corpus_replay.py \
+          MINIC_CORE_IR=strict CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
             --work "$work" --jobs 3 --offset 0 --limit 500 --sample-count 0 --indices '193,242,357'
-          status=$?; set -e; echo CORE_Y100_REPLAY_STATUS=$status
+          status=$?; set -e; echo CORE_Y101_REPLAY_STATUS=$status
           python3 - <<'PY'
-          import json
+          import json,re
           from pathlib import Path
-          w=Path('build/core-y100-linux'); rows=json.loads((w/'batch-results.json').read_text())
+          w=Path('build/core-y101-linux'); corpus=Path('build/linux-focus-corpus/kbuild')
+          rows=json.loads((w/'batch-results.json').read_text())
           if isinstance(rows,dict): rows=rows.get('results',rows.get('tus',[]))
           for r in rows:
-              print(f"CORE_Y100_INDEX index={r.get('index')} status={r.get('status')} message={r.get('message','')}")
+              print(f"CORE_Y101_INDEX index={r.get('index')} status={r.get('status')} message={r.get('message','')}")
               err=w/'minic-stderr'/f"{r['input']}.stderr"
               if err.is_file():
                   for x in err.read_text(errors='replace').splitlines():
-                      if 'CORE_Y100_SWITCH' in x or ('CORE_FAST_TRACE' in x and 'netdev_reg_state' in x): print(x)
+                      if 'CORE_Y101_SELECTOR' in x or ('CORE_FAST_TRACE' in x and 'netdev_reg_state' in x): print(x)
+              lines=(corpus/r['input']).read_text(errors='replace').splitlines()
+              hits=[i for i,x in enumerate(lines) if re.search(r'\breg_state\b.*:',x) or re.search(r':.*\breg_state\b',x)]
+              print(f"CORE_Y101_REGSTATE_DECL_HITS index={r.get('index')} hits={[i+1 for i in hits[:12]]}")
+              for i in hits[:3]:
+                  for n in range(max(0,i-3),min(len(lines),i+4)): print(f'{n+1}: {lines[n]}')
           PY
