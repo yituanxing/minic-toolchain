@@ -1,4 +1,4 @@
-name: Core Fast Batch Y8 For Continue Candidate
+name: Core Fast Batch Y9 Full500 Candidate
 
 on:
   pull_request:
@@ -7,11 +7,11 @@ permissions:
   contents: read
 
 jobs:
-  batch-y8-candidate:
+  batch-y9-full500:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     concurrency:
-      group: core-fast-batch-y8-${{ github.event.pull_request.number }}
+      group: core-fast-batch-y9-${{ github.event.pull_request.number }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
@@ -49,36 +49,36 @@ jobs:
           if old_update not in s:
               raise SystemExit('normalized_for_update_tail anchor not found')
           p.write_text(s.replace(old_update, new_update, 1))
-          print('CORE_BATCH_Y8_PATCHED normalized for continue target')
+          print('CORE_BATCH_Y9_PATCHED Y plus normalized-for continue target')
           PY
       - name: Build exact candidate compiler
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-y8-compiler
-      - name: Readahead candidate replay
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-y9-compiler
+      - name: Full frozen strict500 candidate replay
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-batch-y8-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-batch-y8-frontier"
+          compiler="$GITHUB_WORKSPACE/build/core-batch-y9-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-batch-y9-full500"
           set +e
           MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" \
             --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
             --work "$work" \
-            --jobs 1 --offset 0 --limit 500 --sample-count 0 --indices '299'
+            --jobs 4 --offset 0 --limit 500 --sample-count 0
           replay_status=$?
           set -e
-          printf 'CORE_BATCH_Y8_REPLAY_STATUS=%d\n' "$replay_status"
+          printf 'CORE_BATCH_Y9_REPLAY_STATUS=%d\n' "$replay_status"
           python3 tools/ci/classify-core-strict-frontier.py \
-            "$work/batch-results.json" --examples 4 --json-out "$work/frontier-summary.json"
+            "$work/batch-results.json" --examples 12 --json-out "$work/frontier-summary.json"
           python3 tools/ci/summarize-core-frontier-progress.py \
-            "$work/batch-results.json" --expect-selected 1 \
+            "$work/batch-results.json" --expect-selected 500 \
             --json-out "$work/progress-summary.json" --text-out "$work/progress-summary.txt"
           cat "$work/progress-summary.txt"
           python3 - <<'PY'
           import json
           from pathlib import Path
-          f=json.loads(Path('build/core-batch-y8-frontier/frontier-summary.json').read_text())
-          print(f"CORE_BATCH_Y8_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
-          if f['selected'] != 1 or f['error'] != 0:
-              raise SystemExit(f'candidate retains Core ERROR: {f}')
+          f=json.loads(Path('build/core-batch-y9-full500/frontier-summary.json').read_text())
+          print(f"CORE_BATCH_Y9_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']} distinct_blockers={f.get('distinct_blockers')}")
+          if f['selected'] != 500 or f['error'] != 0:
+              raise SystemExit(f'full500 candidate invalid or has Core ERROR: {f}')
           PY
