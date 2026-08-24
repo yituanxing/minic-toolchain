@@ -1,17 +1,17 @@
-name: Core Fast Batch V
+name: Core Fast Batch W Diagnose
 
 on:
   pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  batch-v:
+  batch-w-diagnose:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     concurrency:
-      group: core-fast-batch-v-${{ github.event.pull_request.number }}
+      group: core-fast-batch-w-${{ github.event.pull_request.number }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
@@ -32,120 +32,49 @@ jobs:
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
 
-      - name: Apply Batch V production changes
+      - name: Enable compact progress telemetry
+        run: python3 tools/dev/patch-linux-replay-live-progress.py
+
+      - name: Build exact production compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-w-compiler
+
+      - name: One-TU is_zero_page diagnostic
         shell: bash
         run: |
           set -Eeuo pipefail
-          python3 tools/dev/patch-linux-replay-live-progress.py
-          python3 tools/dev/patch-core-frontier-batch-v.py
-
-      - name: Build exact patched compiler
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-v-compiler
-
-      - name: Focused transparent-union direct-call regression
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-batch-v-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-batch-v-focused"
-          mkdir -p "$work"
-          cat >"$work/transparent-union.i" <<'EOF'
-          struct page { int x; };
-          struct folio { int x; };
-          struct encoded_page { int x; };
-          typedef union {
-              struct page **pages;
-              struct folio **folios;
-              struct encoded_page **encoded_pages;
-          } release_pages_arg __attribute__((__transparent_union__));
-          extern void release_pages(release_pages_arg arg, int nr);
-          void call_page(struct page **p) { release_pages(p, 1); }
-          void call_folio(struct folio **p) { release_pages(p, 2); }
-          void call_encoded(struct encoded_page **p) { release_pages(p, 3); }
-          void call_null(void) { release_pages(0, 4); }
-          EOF
-          MINIC_CORE_IR=strict "$compiler" -S "$work/transparent-union.i" -o "$work/strict.s"
-          MINIC_CORE_IR=strict MINIC_CORE_CODEGEN=basic-v0 "$compiler" \
-            -S "$work/transparent-union.i" -o "$work/core.s"
-          test "$(grep -c 'call release_pages' "$work/core.s")" -eq 4
-          echo CORE_BATCH_V_FOCUSED_PASS
-
-      - name: Four-TU folios_put frontier
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-batch-v-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-batch-v-frontier"
+          compiler="$GITHUB_WORKSPACE/build/core-batch-w-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-batch-w-frontier"
           set +e
           MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" \
             --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
             --work "$work" \
-            --jobs 4 \
+            --jobs 1 \
             --offset 0 \
             --limit 500 \
             --sample-count 0 \
-            --indices '3,280,288,299'
+            --indices '3'
           replay_status=$?
           set -e
-          printf 'CORE_BATCH_V_REPLAY_STATUS=%d\n' "$replay_status"
-          python3 tools/ci/classify-core-strict-frontier.py \
-            "$work/batch-results.json" --examples 4 --json-out "$work/frontier-summary.json"
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-          f = json.loads(Path('build/core-batch-v-frontier/frontier-summary.json').read_text())
-          blockers = {b.get('function') for b in f.get('blockers', [])}
-          print(f"CORE_BATCH_V_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
-          if f['selected'] != 4 or f['error'] != 0:
-              raise SystemExit(f"Batch V family gate invalid: {f.get('errors', [])}")
-          if 'folios_put' in blockers:
-              raise SystemExit('folios_put still blocks Batch V representative frontier')
-          PY
-
-      - name: Sixteen-TU no-error sanity gate
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-batch-v-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-batch-v-strict16"
-          set +e
-          MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
-            --minic "$compiler" \
-            --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
-            --work "$work" \
-            --jobs 8 \
-            --offset 0 \
-            --limit 500 \
-            --sample-count 0 \
-            --indices '0,1,2,3,4,7,9,20,42,66,95,155,165,280,288,299'
-          replay_status=$?
-          set -e
-          printf 'CORE_BATCH_V_STRICT16_REPLAY_STATUS=%d\n' "$replay_status"
-          python3 tools/ci/classify-core-strict-frontier.py \
-            "$work/batch-results.json" --examples 16 --json-out "$work/frontier-summary.json"
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-          f = json.loads(Path('build/core-batch-v-strict16/frontier-summary.json').read_text())
-          blockers = {b.get('function') for b in f.get('blockers', [])}
-          print(f"CORE_BATCH_V_STRICT16 selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
-          if f['selected'] != 16 or f['error'] != 0:
-              raise SystemExit(f"Batch V strict16 invalid: {f.get('errors', [])}")
-          if 'folios_put' in blockers:
-              raise SystemExit('folios_put still blocks strict16')
-          PY
-
-      - name: Persist qualified Batch V production tree
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          git add -- src/core/core_lower.c
-          if git diff --cached --quiet; then
-            echo CORE_BATCH_V_ALREADY_PERSISTED
-            exit 0
+          printf 'CORE_BATCH_W_REPLAY_STATUS=%d\n' "$replay_status"
+          stderr="$work/minic-stderr/init/do_mounts_initrd.i.stderr"
+          echo CORE_BATCH_W_TRACE_BEGIN
+          grep -E 'function=is_zero_page|CORE_ASSIGN_STAGE.*is_zero_page|CORE_LOWER_DETAIL.*is_zero_page|CORE_ASM_DETAIL.*is_zero_page|CORE_FAST_TRACE.*is_zero_page' "$stderr" || true
+          echo CORE_BATCH_W_TRACE_END
+          src="$(find "$GITHUB_WORKSPACE/build/linux-focus-corpus" -type f -path '*/init/do_mounts_initrd.i' | head -n1)"
+          echo CORE_BATCH_W_SOURCE_BEGIN
+          printf 'CORE_BATCH_W_SOURCE_FILE=%s\n' "$src"
+          if test -n "$src"; then
+            grep -n -A80 -B30 'is_zero_page' "$src" | head -n 500 || true
           fi
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m 'core: materialize transparent-union call arguments'
-          git push origin HEAD:refactor/declaration-sema-v1
+          echo CORE_BATCH_W_SOURCE_END
+          python3 tools/ci/classify-core-strict-frontier.py \
+            "$work/batch-results.json" --examples 1 --json-out "$work/frontier-summary.json"
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          f = json.loads(Path('build/core-batch-w-frontier/frontier-summary.json').read_text())
+          print(f"CORE_BATCH_W_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
+          if f['selected'] != 1 or f['error'] != 0:
+              raise SystemExit(f"diagnostic invalid: {f}")
+          PY
