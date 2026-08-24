@@ -2,6 +2,8 @@ name: Core Strict500 Snapshot
 
 on:
   pull_request:
+    paths-ignore:
+      - '.github/workflows/**'
   workflow_dispatch:
 
 jobs:
