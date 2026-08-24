@@ -7947,6 +7947,8 @@ lower_switch(MinicCoreLowerContext *context, const MinicStatement *statement, bo
     size_t label_count;
     size_t source_index;
     bool all_segments_terminate;
+    bool segment_breaks[MINIC_CORE_SWITCH_LABEL_LIMIT];
+    bool segment_terminates[MINIC_CORE_SWITCH_LABEL_LIMIT];
 
     if (context == NULL || context->body == NULL || context->body->program == NULL ||
         context->function == NULL || statement == NULL || terminated == NULL ||
@@ -8083,11 +8085,12 @@ lower_switch(MinicCoreLowerContext *context, const MinicStatement *statement, bo
         }
     }
 
-    /* M98_TERMINATING_SWITCH: a switch with a default and no path to its
-       synthetic exit is a terminating statement. Track the narrow proven
-       shape first: every label segment itself terminates. Fallthrough/break
-       segments stay conservatively non-terminating. */
-    all_segments_terminate = default_label != SIZE_MAX && label_count != 0U;
+    /* M101_TERMINATING_SWITCH_FALLTHROUGH: termination is a property of the
+       path starting at a label, not only of that label's immediate segment.
+       Record each segment first, then prove fallthrough chains backwards. A
+       break still reaches the synthetic exit and is therefore non-terminating. */
+    (void)memset(segment_breaks, 0, sizeof(segment_breaks));
+    (void)memset(segment_terminates, 0, sizeof(segment_terminates));
     for (source_index = 0U; source_index < label_count; ++source_index) {
         MinicBlock segment;
         MinicCoreBlockId fallthrough_target;
@@ -8136,10 +8139,11 @@ lower_switch(MinicCoreLowerContext *context, const MinicStatement *statement, bo
                 return status;
             }
         }
+        segment_terminates[source_index] = segment_terminated;
+        segment_breaks[source_index] = break_index != SIZE_MAX;
         if (segment_terminated) {
             continue;
         }
-        all_segments_terminate = false;
         if (break_index != SIZE_MAX) {
             fallthrough_target = exit_block;
         } else if (source_index + 1U < label_count) {
@@ -8150,6 +8154,24 @@ lower_switch(MinicCoreLowerContext *context, const MinicStatement *statement, bo
         status = set_branch(context, context->block_id, statement->span, fallthrough_target);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
+        }
+    }
+
+    all_segments_terminate = default_label != SIZE_MAX && label_count != 0U;
+    if (all_segments_terminate) {
+        bool next_path_terminates = false;
+
+        for (source_index = label_count; source_index-- > 0U;) {
+            bool path_terminates;
+
+            path_terminates =
+                segment_terminates[source_index] ||
+                (!segment_breaks[source_index] && source_index + 1U < label_count &&
+                 next_path_terminates);
+            if (!path_terminates) {
+                all_segments_terminate = false;
+            }
+            next_path_terminates = path_terminates;
         }
     }
 

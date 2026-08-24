@@ -470,6 +470,21 @@ const char *omitted_conditional_pointee_const(const struct core_xattr_handler *h
 EOF
 check_strict_case omitted-conditional-pointee-const
 
+cat >"$work_dir/terminating-switch-fallthrough.i" <<'EOF'
+int terminating_switch_fallthrough(int value) {
+    switch (value) {
+    case 0:
+    case 1:
+        return 11;
+    case 2:
+        return 22;
+    default:
+        return 33;
+    }
+}
+EOF
+check_strict_case terminating-switch-fallthrough
+
 cat >"$work_dir/variadic-call-unsupported.i" <<'EOF'
 int variadic_external(int first, ...);
 
