@@ -186,14 +186,14 @@ text = replace_once(
 )
 emit = r'''    case MINIC_CORE_INSTRUCTION_RECORD_LOAD: {
         const char *opcode;
-        size_t object_offset;
+        size_t destination_offset;
         size_t record_size;
 
         if (!core_record_load_supported(program, function, instruction, &record_size) ||
             !core_object_offset(program,
                                 function,
                                 instruction->value.record_load.destination_object,
-                                &object_offset) ||
+                                &destination_offset) ||
             !load_core_value(
                 file, frame, instruction->value.record_load.source_address, "t0")) {
             return false;
@@ -201,7 +201,7 @@ emit = r'''    case MINIC_CORE_INSTRUCTION_RECORD_LOAD: {
         opcode = record_size == 8U ? "ld" : record_size == 4U ? "lwu" :
                  record_size == 2U ? "lhu" : "lbu";
         if (fprintf(file, "  %s t1, 0(t0)\n", opcode) < 0 ||
-            !emit_sp_store_chunk(file, "t1", object_offset, record_size)) {
+            !emit_sp_store_chunk(file, "t1", destination_offset, record_size)) {
             return false;
         }
         return true;
