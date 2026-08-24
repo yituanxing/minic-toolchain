@@ -1,30 +1,37 @@
-name: Core Y69 Conditional Scalar Value Owner
+name: Core Y70 Conditional Scalar Full500 Productize
 
 on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  y69-conditional-scalar-value-owner:
+  y70-conditional-scalar-full500:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
           ref: 884de084fe81cfcfead1ff31232600bb8333fb4f
+          fetch-depth: 0
       - name: Restore frozen Linux corpus
         id: linux-corpus-cache
         uses: actions/cache/restore@v4
         with:
           path: build/linux-focus-corpus
           key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
-      - name: Apply conditional scalar-value candidate
+      - name: Require frozen corpus
         shell: bash
         run: |
           set -Eeuo pipefail
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
+          test -s build/linux-focus-corpus/selected-tus.txt
+      - name: Apply qualified conditional scalar candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/patch-linux-replay-live-progress.py
           python3 - <<'PY'
           from pathlib import Path
           p=Path('src/core/core_lower.c')
@@ -64,43 +71,87 @@ jobs:
           addition='''cat >"$work_dir/qualified-statement-conditional.i" <<'EOF'\nstruct core_cond_limits { unsigned int first; unsigned int second; };\nunsigned int qualified_statement_conditional(const struct core_cond_limits *limits) {\n    return ({\n        __auto_type x = (limits->first);\n        __auto_type y = (limits->second);\n        x < y ? x : y;\n    });\n}\nEOF\ncheck_strict_case qualified-statement-conditional\n\n'''
           if s.count(anchor)!=1: raise SystemExit(f'test anchor {s.count(anchor)}')
           p.write_text(s.replace(anchor,addition+anchor,1))
-          print('CORE_Y69_CANDIDATE_APPLIED')
+          print('CORE_Y70_CANDIDATE_APPLIED')
           PY
       - name: Build and exact Core regressions
         shell: bash
         run: |
           set -Eeuo pipefail
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y69-compiler
-          MINIC="$GITHUB_WORKSPACE/build/core-y69-compiler/bin/minic" \
-            BUILD_DIR="$GITHUB_WORKSPACE/build/core-y69-regression" \
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y70-compiler
+          MINIC="$GITHUB_WORKSPACE/build/core-y70-compiler/bin/minic" \
+            BUILD_DIR="$GITHUB_WORKSPACE/build/core-y70-regression" \
             bash tests/core/run-core-ir-shadow.sh
-      - name: Focused queue zone append replay
+      - name: Frozen strict500 qualification
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-y69-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-y69-linux"
+          compiler="$GITHUB_WORKSPACE/build/core-y70-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-y70-full500"
           mkdir -p "$work"
           set +e
-          MINIC_CORE_IR=strict CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
+          MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
-            --work "$work" --jobs 3 --offset 0 --limit 500 --sample-count 0 --indices '3,301,303'
+            --work "$work" --jobs 4 --offset 0 --limit 500 --sample-count 0 \
+            >"$work/replay.log" 2>&1
           replay_status=$?
           set -e
-          echo CORE_Y69_REPLAY_STATUS=$replay_status
-          python3 tools/ci/classify-core-strict-frontier.py "$work/batch-results.json" --examples 8 --json-out "$work/frontier-summary.json"
+          echo CORE_Y70_REPLAY_STATUS=$replay_status
+          python3 tools/ci/classify-core-strict-frontier.py \
+            "$work/batch-results.json" --examples 12 --json-out "$work/frontier-summary.json"
+          python3 tools/ci/summarize-core-frontier-progress.py \
+            "$work/batch-results.json" --expect-selected 500 \
+            --json-out "$work/progress-summary.json" --text-out "$work/progress-summary.txt" >/dev/null
           python3 - <<'PY'
           import json
+          from collections import Counter
           from pathlib import Path
-          w=Path('build/core-y69-linux')
+          w=Path('build/core-y70-full500')
           f=json.loads((w/'frontier-summary.json').read_text())
+          p=json.loads((w/'progress-summary.json').read_text())
           rows=json.loads((w/'batch-results.json').read_text())
           if isinstance(rows,dict): rows=rows.get('results',rows.get('tus',[]))
-          print(f"CORE_Y69_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
+          c=Counter(); examples={}
+          marker="Core IR shadow does not yet support function '"
           for r in rows:
-              print(f"CORE_Y69_INDEX index={r.get('index')} status={r.get('status')} progress={float(r.get('progress_ratio') or 0)*100:.3f}% message={r.get('message','')}")
-          if f['error'] != 0:
-              raise SystemExit(f'Core ERROR: {f}')
+              if r.get('status') == 'PASS': continue
+              msg=r.get('message','')
+              fn=msg.split(marker,1)[1].split("'",1)[0] if marker in msg else (msg or '<unknown>')
+              c[fn]+=1; examples.setdefault(fn,[]).append(int(r.get('index',-1)))
+          print(f"CORE_Y70_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']} distinct={len(c)}")
+          print(f"CORE_Y70_PROGRESS mean={p.get('tu_mean_progress')} median={p.get('tu_median_progress')} line_weighted={p.get('line_weighted_progress')}")
+          for rank,(fn,count) in enumerate(c.most_common(20),1):
+              print(f"CORE_Y70_BLOCKER rank={rank} count={count} function={fn} examples={examples[fn][:6]}")
+          for i in (0,3,7,42,95,193,301,303):
+              r=next((x for x in rows if int(x.get('index',-1))==i),None)
+              if r:
+                  print(f"CORE_Y70_INDEX index={i} status={r.get('status')} progress={float(r.get('progress_ratio') or 0)*100:.3f}% message={r.get('message','')}")
+          if f['selected'] != 500 or f['error'] != 0:
+              raise SystemExit(f'Y70 qualification failed: {f}')
           if any('queue_max_zone_append_sectors' in r.get('message','') for r in rows):
-              raise SystemExit('queue_max_zone_append_sectors survived Y69')
+              raise SystemExit('queue_max_zone_append_sectors survived full500')
           PY
+      - name: Productize qualified semantic candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git diff -- src/core/core_lower.c tests/core/run-core-ir-shadow.sh > /tmp/y70-semantic.patch
+          test -s /tmp/y70-semantic.patch
+          git reset --hard 884de084fe81cfcfead1ff31232600bb8333fb4f
+          git fetch origin refactor/declaration-sema-v1
+          git diff --quiet 884de084fe81cfcfead1ff31232600bb8333fb4f..origin/refactor/declaration-sema-v1 -- \
+            src/core/core_lower.c tests/core/run-core-ir-shadow.sh
+          git checkout -B y70-productize origin/refactor/declaration-sema-v1
+          git apply /tmp/y70-semantic.patch
+          python3 - <<'PY'
+          import subprocess
+          allowed={'src/core/core_lower.c','tests/core/run-core-ir-shadow.sh'}
+          changed=set(subprocess.check_output(['git','diff','--name-only'],text=True).splitlines())
+          if changed != allowed:
+              raise SystemExit(f'unexpected semantic diff: {sorted(changed)}')
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/core/core_lower.c tests/core/run-core-ir-shadow.sh
+          git commit -m 'core: normalize conditional scalar value types'
+          git push origin HEAD:refactor/declaration-sema-v1
+          echo CORE_Y70_SEMANTIC_COMMIT=$(git rev-parse HEAD)
