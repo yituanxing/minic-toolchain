@@ -424,6 +424,18 @@ int comma_discard_record_assignment(void) {
 EOF
 check_strict_case comma-discard-record-assignment
 
+cat >"$work_dir/qualified-statement-conditional.i" <<'EOF'
+struct core_cond_limits { unsigned int first; unsigned int second; };
+unsigned int qualified_statement_conditional(const struct core_cond_limits *limits) {
+    return ({
+        __auto_type x = (limits->first);
+        __auto_type y = (limits->second);
+        x < y ? x : y;
+    });
+}
+EOF
+check_strict_case qualified-statement-conditional
+
 cat >"$work_dir/variadic-call-unsupported.i" <<'EOF'
 int variadic_external(int first, ...);
 

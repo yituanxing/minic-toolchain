@@ -163,6 +163,13 @@ static bool core_scalar_expression_value_type(const MinicFunctionBodyView *body,
         return statement_result != NULL &&
                core_scalar_expression_value_type(body, statement_result, value_type);
     }
+    /* M97_CONDITIONAL_SCALAR_VALUE_TYPE: GNU C may preserve top-level
+       qualifiers on a scalar conditional expression whose arms originate as
+       qualified lvalues. Once the conditional is consumed as a scalar value,
+       those top-level qualifiers do not belong to the Core SSA/storage type. */
+    if (expression->kind == MINIC_EXPRESSION_CONDITIONAL) {
+        return minic_type_unqualified(expression->type, value_type);
+    }
     if (expression->value_category == MINIC_VALUE_LVALUE) {
         return minic_type_unqualified(expression->type, value_type);
     }
@@ -2869,6 +2876,7 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         MinicCoreValueId arm_value;
         MinicCoreLowerStatus status;
         MinicType false_type;
+        MinicType result_type;
         MinicType true_type;
 
         /* M60_POINTER_CONDITIONAL_VALUE: C conditional values may be pointer
@@ -2878,8 +2886,8 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         if (expression->value.conditional.uses_condition_value ||
             expression->value.conditional.when_true == MINIC_EXPRESSION_INVALID ||
             expression->value.conditional.when_false == MINIC_EXPRESSION_INVALID ||
-            !core_memory_scalar_type(expression->type) || minic_type_is_const(expression->type) ||
-            minic_type_is_volatile(expression->type)) {
+            !core_scalar_expression_value_type(context->body, expression, &result_type) ||
+            !core_memory_scalar_type(result_type)) {
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
         true_expression = minic_c0_program_expression(context->body->program,
@@ -2893,13 +2901,12 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
            conditional result type. The selected arm undergoes the same scalar
            conversion as assignment to that type; its source type need not
            already be identical. */
-        if (!core_memory_scalar_type(expression->type) ||
-            !core_scalar_expression_value_type(context->body, true_expression, &true_type) ||
+        if (!core_scalar_expression_value_type(context->body, true_expression, &true_type) ||
             !core_scalar_expression_value_type(context->body, false_expression, &false_type)) {
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
         if (!minic_core_function_add_object(
-                context->function, expression->span, expression->type, &result_object) ||
+                context->function, expression->span, result_type, &result_object) ||
             !minic_core_function_add_block(context->function, &true_block) ||
             !minic_core_function_add_block(context->function, &false_block) ||
             !minic_core_function_add_block(context->function, &merge_block)) {
@@ -2917,14 +2924,14 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
 
         context->block_id = true_block;
         status = lower_scalar_assignment_value(context,
-                                               expression->type,
+                                               result_type,
                                                expression->value.conditional.when_true,
                                                &arm_value);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
         status = store_scalar_value(
-            context, true_expression->span, expression->type, result_object, arm_value);
+            context, true_expression->span, result_type, result_object, arm_value);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
@@ -2935,14 +2942,14 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
 
         context->block_id = false_block;
         status = lower_scalar_assignment_value(context,
-                                               expression->type,
+                                               result_type,
                                                expression->value.conditional.when_false,
                                                &arm_value);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
         status = store_scalar_value(
-            context, false_expression->span, expression->type, result_object, arm_value);
+            context, false_expression->span, result_type, result_object, arm_value);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
@@ -2953,7 +2960,7 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
 
         context->block_id = merge_block;
         return reload_scalar_value(
-            context, expression->span, expression->type, result_object, value_id);
+            context, expression->span, result_type, result_object, value_id);
     }
     /* M73_COMMA_EXPRESSION_VALUE: the left operand is sequenced for
        side effects and its scalar value is discarded; the right operand
