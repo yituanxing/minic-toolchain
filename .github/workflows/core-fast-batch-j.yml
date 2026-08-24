@@ -1,17 +1,17 @@
-name: Core Fast Batch U
+name: Core Fast Batch U2 Diagnose
 
 on:
   pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  batch-u:
+  batch-u2-diagnose:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     concurrency:
-      group: core-fast-batch-u-${{ github.event.pull_request.number }}
+      group: core-fast-batch-u2-${{ github.event.pull_request.number }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
@@ -32,7 +32,7 @@ jobs:
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
 
-      - name: Apply Batch U production changes
+      - name: Apply U candidate and telemetry
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -40,106 +40,45 @@ jobs:
           python3 tools/dev/patch-core-frontier-batch-u.py
 
       - name: Build exact patched compiler
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-u-compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-u2-compiler
 
-      - name: Focused record compound-literal address regression
+      - name: One-TU find_section diagnostic
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-batch-u-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-batch-u-focused"
-          mkdir -p "$work"
-          cat >"$work/record-compound-address.i" <<'EOF'
-          struct Mount { void *root; };
-          struct Path { struct Mount *mnt; void *dentry; };
-          extern void *open_root(const struct Path *, const char *, int, unsigned int);
-          void *wrap(struct Mount *mnt, const char *name, int flags, unsigned int mode) {
-              return open_root(&(struct Path){.mnt = mnt, .dentry = mnt->root}, name, flags, mode);
-          }
-          EOF
-          MINIC_CORE_IR=strict "$compiler" -S "$work/record-compound-address.i" -o "$work/strict.s"
-          MINIC_CORE_IR=strict MINIC_CORE_CODEGEN=basic-v0 "$compiler" \
-            -S "$work/record-compound-address.i" -o "$work/core.s"
-          grep -q 'wrap:' "$work/core.s"
-          grep -q 'call open_root' "$work/core.s"
-          echo CORE_BATCH_U_FOCUSED_PASS
-
-      - name: Six-TU file_open_root_mnt frontier
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-batch-u-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-batch-u-frontier"
+          compiler="$GITHUB_WORKSPACE/build/core-batch-u2-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-batch-u2-frontier"
           set +e
           MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" \
             --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
             --work "$work" \
-            --jobs 6 \
+            --jobs 1 \
             --offset 0 \
             --limit 500 \
             --sample-count 0 \
-            --indices '2,3,4,280,288,299'
+            --indices '4'
           replay_status=$?
           set -e
-          printf 'CORE_BATCH_U_REPLAY_STATUS=%d\n' "$replay_status"
-          python3 tools/ci/classify-core-strict-frontier.py \
-            "$work/batch-results.json" --examples 6 --json-out "$work/frontier-summary.json"
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-          f = json.loads(Path('build/core-batch-u-frontier/frontier-summary.json').read_text())
-          blockers = {b.get('function') for b in f.get('blockers', [])}
-          print(f"CORE_BATCH_U_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
-          if f['selected'] != 6 or f['error'] != 0:
-              raise SystemExit(f"Batch U family gate invalid: {f.get('errors', [])}")
-          if 'file_open_root_mnt' in blockers:
-              raise SystemExit('file_open_root_mnt still blocks Batch U representative frontier')
-          PY
-
-      - name: Sixteen-TU no-error sanity gate
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-batch-u-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-batch-u-strict16"
-          set +e
-          MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
-            --minic "$compiler" \
-            --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
-            --work "$work" \
-            --jobs 8 \
-            --offset 0 \
-            --limit 500 \
-            --sample-count 0 \
-            --indices '0,1,2,3,4,7,9,20,42,66,95,155,165,280,288,299'
-          replay_status=$?
-          set -e
-          printf 'CORE_BATCH_U_STRICT16_REPLAY_STATUS=%d\n' "$replay_status"
-          python3 tools/ci/classify-core-strict-frontier.py \
-            "$work/batch-results.json" --examples 16 --json-out "$work/frontier-summary.json"
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-          f = json.loads(Path('build/core-batch-u-strict16/frontier-summary.json').read_text())
-          blockers = {b.get('function') for b in f.get('blockers', [])}
-          print(f"CORE_BATCH_U_STRICT16 selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
-          if f['selected'] != 16 or f['error'] != 0:
-              raise SystemExit(f"Batch U strict16 invalid: {f.get('errors', [])}")
-          if 'file_open_root_mnt' in blockers:
-              raise SystemExit('file_open_root_mnt still blocks strict16')
-          PY
-
-      - name: Persist qualified Batch U production tree
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          git add -- src/core/core_lower.c
-          if git diff --cached --quiet; then
-            echo CORE_BATCH_U_ALREADY_PERSISTED
-            exit 0
+          printf 'CORE_BATCH_U2_REPLAY_STATUS=%d\n' "$replay_status"
+          stderr="$work/minic-stderr/init/initramfs.i.stderr"
+          echo CORE_BATCH_U2_TRACE_BEGIN
+          grep -E 'function=find_section|CORE_ASSIGN_STAGE.*find_section|CORE_ASSIGN_DETAIL.*find_section' "$stderr" || true
+          echo CORE_BATCH_U2_TRACE_END
+          src="$(find "$GITHUB_WORKSPACE/build/linux-focus-corpus" -type f -path '*/init/initramfs.i' | head -n1)"
+          echo CORE_BATCH_U2_SOURCE_BEGIN
+          printf 'CORE_BATCH_U2_SOURCE_FILE=%s\n' "$src"
+          if test -n "$src"; then
+            grep -n -A70 -B25 'find_section' "$src" | head -n 420 || true
           fi
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m 'core: address record compound literals'
-          git push origin HEAD:refactor/declaration-sema-v1
+          echo CORE_BATCH_U2_SOURCE_END
+          python3 tools/ci/classify-core-strict-frontier.py \
+            "$work/batch-results.json" --examples 1 --json-out "$work/frontier-summary.json"
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          f = json.loads(Path('build/core-batch-u2-frontier/frontier-summary.json').read_text())
+          print(f"CORE_BATCH_U2_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
+          if f['selected'] != 1 or f['error'] != 1:
+              raise SystemExit(f"diagnostic changed unexpectedly: {f}")
+          PY
