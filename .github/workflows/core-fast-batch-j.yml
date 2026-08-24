@@ -1,29 +1,35 @@
-name: Core Y105 Function Address Qualification
+name: Core Y105b Function Address Productizer
 
 on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  y105-function-address:
+  y105b-productize:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 6e05e5a57e967b017b0d6e403c071e404874fee0
+          ref: refactor/declaration-sema-v1
+          fetch-depth: 0
       - name: Restore frozen Linux corpus
         id: linux-corpus-cache
         uses: actions/cache/restore@v4
         with:
           path: build/linux-focus-corpus
           key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
-      - name: Apply function-address candidate
+      - name: Apply production semantic patch
+        id: patch
         shell: bash
         run: |
           set -Eeuo pipefail
+          if grep -Fq 'M104_FUNCTION_DESIGNATOR_ADDRESS' src/core/core_lower.c; then
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           python3 - <<'PY'
           from pathlib import Path
           p=Path('src/core/core_lower.c'); s=p.read_text()
@@ -38,44 +44,49 @@ jobs:
           if ts.count(anchor)!=1: raise SystemExit(f'test anchor count={ts.count(anchor)}')
           t.write_text(ts.replace(anchor,case+anchor,1))
           PY
-      - name: Build exact candidate compiler
+          echo 'changed=true' >> "$GITHUB_OUTPUT"
+      - name: Build production candidate
+        if: steps.patch.outputs.changed == 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y105-compiler
-      - name: Run Core shadow qualification
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y105b-compiler
+      - name: Run permanent Core shadow regression
+        if: steps.patch.outputs.changed == 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
-          MINIC="$GITHUB_WORKSPACE/build/core-y105-compiler/bin/minic" \
-            BUILD_DIR="$GITHUB_WORKSPACE/build/core-y105-shadow" \
+          MINIC="$GITHUB_WORKSPACE/build/core-y105b-compiler/bin/minic" \
+            BUILD_DIR="$GITHUB_WORKSPACE/build/core-y105b-shadow" \
             bash tests/core/run-core-ir-shadow.sh
-      - name: Verify start_kernel moves forward
+      - name: Require init main strict PASS
+        if: steps.patch.outputs.changed == 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-y105-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-y105-linux"; mkdir -p "$work"
-          set +e
+          compiler="$GITHUB_WORKSPACE/build/core-y105b-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-y105b-linux"; mkdir -p "$work"
           MINIC_CORE_IR=strict CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
             --work "$work" --jobs 1 --offset 0 --limit 500 --sample-count 0 --indices '0'
-          status=$?; set -e; echo CORE_Y105_REPLAY_STATUS=$status
           python3 - <<'PY'
           import json
           from pathlib import Path
-          old_first=90330
-          w=Path('build/core-y105-linux')
-          rows=json.loads((w/'batch-results.json').read_text())
+          rows=json.loads(Path('build/core-y105b-linux/batch-results.json').read_text())
           if isinstance(rows,dict): rows=rows.get('results',rows.get('tus',[]))
-          if len(rows)!=1: raise SystemExit(f'expected one row, got {len(rows)}')
-          r=rows[0]; first=r.get('first_error_line'); msg=r.get('message','')
-          print(f"CORE_Y105_INDEX status={r.get('status')} first={first} total={r.get('total_lines')} progress={r.get('progress_ratio')} message={msg}")
-          err=w/'minic-stderr'/f"{r['input']}.stderr"
-          if err.is_file():
-              for x in err.read_text(errors='replace').splitlines():
-                  if 'CORE_' in x and ('start_kernel' in x or 'unknown_bootoption' in x): print(x)
-          if r.get('status') != 'PASS' and (not first or int(first) <= old_first):
-              raise SystemExit(f'start_kernel did not move forward: first={first}')
+          if len(rows)!=1 or rows[0].get('status')!='PASS':
+              raise SystemExit(f'init/main not PASS: {rows}')
+          print(f"CORE_Y105B_PASS input={rows[0].get('input')} total={rows[0].get('total_lines')}")
           PY
+      - name: Commit production semantic change
+        if: steps.patch.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/core/core_lower.c tests/core/run-core-ir-shadow.sh
+          git diff --cached --check
+          git commit -m 'core: lower function designator addresses'
+          git push origin HEAD:refactor/declaration-sema-v1
