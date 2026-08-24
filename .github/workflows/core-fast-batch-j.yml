@@ -1,4 +1,4 @@
-name: Core Y98b Switch Ownership Audit
+name: Core Y99 Switch Cleanup Trace
 
 on:
   pull_request:
@@ -7,34 +7,69 @@ permissions:
   contents: read
 
 jobs:
-  y98b-switch-audit:
+  y99-switch-cleanup:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
           ref: 86d98851a9741d90bcc08280114f7253f7bc8a43
-      - name: Print switch ownership code
+      - name: Restore frozen Linux corpus
+        id: linux-corpus-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+      - name: Instrument switch cleanup guards
         shell: bash
         run: |
           set -Eeuo pipefail
           python3 - <<'PY'
           from pathlib import Path
-          targets=[
-              ('src/frontend/parser_statement.c','MINIC_STATEMENT_SWITCH'),
-              ('src/frontend/parser_statement.c','MINIC_STATEMENT_CASE'),
-              ('src/frontend/parser_statement.c','MINIC_STATEMENT_DEFAULT'),
-              ('src/target/riscv64/codegen_statement.c','MINIC_STATEMENT_SWITCH'),
-              ('src/core/core_lower.c','MINIC_STATEMENT_SWITCH'),
-              ('src/core/core_lower.c','switch (statement->kind)'),
-          ]
-          for path, needle in targets:
-              lines=Path(path).read_text(errors='replace').splitlines()
-              hits=[i for i,x in enumerate(lines) if needle in x]
-              print(f'Y98B_HITS path={path} needle={needle!r} hits={[i+1 for i in hits]}')
-              for i in hits[:6]:
-                  lo=max(0,i-90); hi=min(len(lines),i+180)
-                  print(f'Y98B_CONTEXT_BEGIN path={path} needle={needle!r} line={lo+1}')
-                  for n in range(lo,hi): print(f'{n+1}: {lines[n]}')
-                  print(f'Y98B_CONTEXT_END path={path} needle={needle!r}')
+          p=Path('src/core/core_lower.c')
+          s=p.read_text()
+          outer='''    if (context == NULL || context->body == NULL || context->body->program == NULL ||\n        context->function == NULL || statement == NULL || terminated == NULL ||\n        statement->kind != MINIC_STATEMENT_SWITCH ||\n'''
+          outer_rep='''    if (context != NULL && context->source_function != NULL && statement != NULL) {\n        (void)fprintf(stderr,\n                      "CORE_Y99_SWITCH_GUARD function=%s cleanup=%llu stop=%llu expression=%zu then=%zu else=%zu\\n",\n                      context->source_function->name,\n                      (unsigned long long)statement->cleanup_context,\n                      (unsigned long long)statement->cleanup_stop_context,\n                      (size_t)statement->expression,\n                      (size_t)statement->then_block,\n                      (size_t)statement->else_block);\n    }\n    if (context == NULL || context->body == NULL || context->body->program == NULL ||\n        context->function == NULL || statement == NULL || terminated == NULL ||\n        statement->kind != MINIC_STATEMENT_SWITCH ||\n'''
+          if s.count(outer)!=1: raise SystemExit(f'outer anchor count={s.count(outer)}')
+          s=s.replace(outer,outer_rep,1)
+          label='''        if (source_statement == NULL) {\n            return MINIC_CORE_LOWER_ERROR;\n        }\n        if (source_statement->kind != MINIC_STATEMENT_CASE &&\n'''
+          label_rep='''        if (source_statement == NULL) {\n            return MINIC_CORE_LOWER_ERROR;\n        }\n        if (source_statement->kind == MINIC_STATEMENT_CASE ||\n            source_statement->kind == MINIC_STATEMENT_DEFAULT) {\n            (void)fprintf(stderr,\n                          "CORE_Y99_SWITCH_LABEL function=%s kind=%d cleanup=%llu stop=%llu source_index=%zu\\n",\n                          context->source_function != NULL ? context->source_function->name : "?",\n                          (int)source_statement->kind,\n                          (unsigned long long)source_statement->cleanup_context,\n                          (unsigned long long)source_statement->cleanup_stop_context,\n                          source_index);\n        }\n        if (source_statement->kind != MINIC_STATEMENT_CASE &&\n'''
+          if s.count(label)!=1: raise SystemExit(f'label anchor count={s.count(label)}')
+          s=s.replace(label,label_rep,1)
+          p.write_text(s)
+          PY
+      - name: Build exact instrumented compiler
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y99-compiler
+      - name: Replay netdev representatives
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/core-y99-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-y99-linux"
+          mkdir -p "$work"
+          set +e
+          MINIC_CORE_IR=strict CORE_FAST_TRACE=1 CORE_LOWER_DETAIL=1 python3 tests/external/linux/corpus_replay.py \
+            --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
+            --work "$work" --jobs 3 --offset 0 --limit 500 --sample-count 0 --indices '193,242,357'
+          status=$?
+          set -e
+          echo CORE_Y99_REPLAY_STATUS=$status
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          w=Path('build/core-y99-linux')
+          rows=json.loads((w/'batch-results.json').read_text())
+          if isinstance(rows,dict): rows=rows.get('results',rows.get('tus',[]))
+          for r in rows:
+              idx=int(r['index']); rel=r['input']
+              print(f"CORE_Y99_INDEX index={idx} status={r.get('status')} progress={float(r.get('progress_ratio') or 0)*100:.3f}% message={r.get('message','')}")
+              err=w/'minic-stderr'/f'{rel}.stderr'
+              if err.is_file():
+                  for x in err.read_text(errors='replace').splitlines():
+                      if 'CORE_Y99_SWITCH_' in x or 'CORE_FAST_TRACE' in x:
+                          print(x)
           PY
