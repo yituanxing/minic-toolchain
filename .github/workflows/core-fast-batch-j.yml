@@ -1,4 +1,4 @@
-name: Core Y68 Conditional Unqualified Value
+name: Core Y69 Conditional Scalar Value Owner
 
 on:
   pull_request:
@@ -7,7 +7,7 @@ permissions:
   contents: read
 
 jobs:
-  y68-conditional-unqualified-value:
+  y69-conditional-scalar-value-owner:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     steps:
@@ -20,7 +20,7 @@ jobs:
         with:
           path: build/linux-focus-corpus
           key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
-      - name: Apply conditional value candidate
+      - name: Apply conditional scalar-value candidate
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -29,12 +29,16 @@ jobs:
           from pathlib import Path
           p=Path('src/core/core_lower.c')
           s=p.read_text()
+          old='''    if (expression->kind == MINIC_EXPRESSION_STATEMENT) {\n        if (expression->value.statement_expression.result == MINIC_EXPRESSION_INVALID) {\n            return false;\n        }\n        statement_result = minic_c0_program_expression(\n            body->program, expression->value.statement_expression.result);\n        return statement_result != NULL &&\n               core_scalar_expression_value_type(body, statement_result, value_type);\n    }\n    if (expression->value_category == MINIC_VALUE_LVALUE) {\n'''
+          new='''    if (expression->kind == MINIC_EXPRESSION_STATEMENT) {\n        if (expression->value.statement_expression.result == MINIC_EXPRESSION_INVALID) {\n            return false;\n        }\n        statement_result = minic_c0_program_expression(\n            body->program, expression->value.statement_expression.result);\n        return statement_result != NULL &&\n               core_scalar_expression_value_type(body, statement_result, value_type);\n    }\n    /* M97_CONDITIONAL_SCALAR_VALUE_TYPE: GNU C may preserve top-level\n       qualifiers on a scalar conditional expression whose arms originate as\n       qualified lvalues. Once the conditional is consumed as a scalar value,\n       those top-level qualifiers do not belong to the Core SSA/storage type. */\n    if (expression->kind == MINIC_EXPRESSION_CONDITIONAL) {\n        return minic_type_unqualified(expression->type, value_type);\n    }\n    if (expression->value_category == MINIC_VALUE_LVALUE) {\n'''
+          if s.count(old)!=1: raise SystemExit(f'helper anchor {s.count(old)}')
+          s=s.replace(old,new,1)
           old='''        MinicCoreLowerStatus status;\n        MinicType false_type;\n        MinicType true_type;\n\n        /* M60_POINTER_CONDITIONAL_VALUE: C conditional values may be pointer\n'''
           new='''        MinicCoreLowerStatus status;\n        MinicType false_type;\n        MinicType result_type;\n        MinicType true_type;\n\n        /* M60_POINTER_CONDITIONAL_VALUE: C conditional values may be pointer\n'''
           if s.count(old)!=1: raise SystemExit(f'decl anchor {s.count(old)}')
           s=s.replace(old,new,1)
           old='''        if (expression->value.conditional.uses_condition_value ||\n            expression->value.conditional.when_true == MINIC_EXPRESSION_INVALID ||\n            expression->value.conditional.when_false == MINIC_EXPRESSION_INVALID ||\n            !core_memory_scalar_type(expression->type) || minic_type_is_const(expression->type) ||\n            minic_type_is_volatile(expression->type)) {\n            return MINIC_CORE_LOWER_UNSUPPORTED;\n        }\n'''
-          new='''        if (expression->value.conditional.uses_condition_value ||\n            expression->value.conditional.when_true == MINIC_EXPRESSION_INVALID ||\n            expression->value.conditional.when_false == MINIC_EXPRESSION_INVALID ||\n            !minic_type_unqualified(expression->type, &result_type) ||\n            !core_memory_scalar_type(result_type)) {\n            return MINIC_CORE_LOWER_UNSUPPORTED;\n        }\n'''
+          new='''        if (expression->value.conditional.uses_condition_value ||\n            expression->value.conditional.when_true == MINIC_EXPRESSION_INVALID ||\n            expression->value.conditional.when_false == MINIC_EXPRESSION_INVALID ||\n            !core_scalar_expression_value_type(context->body, expression, &result_type) ||\n            !core_memory_scalar_type(result_type)) {\n            return MINIC_CORE_LOWER_UNSUPPORTED;\n        }\n'''
           if s.count(old)!=1: raise SystemExit(f'guard anchor {s.count(old)}')
           s=s.replace(old,new,1)
           old='''        if (!core_memory_scalar_type(expression->type) ||\n            !core_scalar_expression_value_type(context->body, true_expression, &true_type) ||\n            !core_scalar_expression_value_type(context->body, false_expression, &false_type)) {\n            return MINIC_CORE_LOWER_UNSUPPORTED;\n        }\n        if (!minic_core_function_add_object(\n                context->function, expression->span, expression->type, &result_object) ||\n'''
@@ -60,22 +64,22 @@ jobs:
           addition='''cat >"$work_dir/qualified-statement-conditional.i" <<'EOF'\nstruct core_cond_limits { unsigned int first; unsigned int second; };\nunsigned int qualified_statement_conditional(const struct core_cond_limits *limits) {\n    return ({\n        __auto_type x = (limits->first);\n        __auto_type y = (limits->second);\n        x < y ? x : y;\n    });\n}\nEOF\ncheck_strict_case qualified-statement-conditional\n\n'''
           if s.count(anchor)!=1: raise SystemExit(f'test anchor {s.count(anchor)}')
           p.write_text(s.replace(anchor,addition+anchor,1))
-          print('CORE_Y68_CANDIDATE_APPLIED')
+          print('CORE_Y69_CANDIDATE_APPLIED')
           PY
       - name: Build and exact Core regressions
         shell: bash
         run: |
           set -Eeuo pipefail
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y68-compiler
-          MINIC="$GITHUB_WORKSPACE/build/core-y68-compiler/bin/minic" \
-            BUILD_DIR="$GITHUB_WORKSPACE/build/core-y68-regression" \
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y69-compiler
+          MINIC="$GITHUB_WORKSPACE/build/core-y69-compiler/bin/minic" \
+            BUILD_DIR="$GITHUB_WORKSPACE/build/core-y69-regression" \
             bash tests/core/run-core-ir-shadow.sh
       - name: Focused queue zone append replay
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-y68-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-y68-linux"
+          compiler="$GITHUB_WORKSPACE/build/core-y69-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-y69-linux"
           mkdir -p "$work"
           set +e
           MINIC_CORE_IR=strict CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
@@ -83,20 +87,20 @@ jobs:
             --work "$work" --jobs 3 --offset 0 --limit 500 --sample-count 0 --indices '3,301,303'
           replay_status=$?
           set -e
-          echo CORE_Y68_REPLAY_STATUS=$replay_status
+          echo CORE_Y69_REPLAY_STATUS=$replay_status
           python3 tools/ci/classify-core-strict-frontier.py "$work/batch-results.json" --examples 8 --json-out "$work/frontier-summary.json"
           python3 - <<'PY'
           import json
           from pathlib import Path
-          w=Path('build/core-y68-linux')
+          w=Path('build/core-y69-linux')
           f=json.loads((w/'frontier-summary.json').read_text())
           rows=json.loads((w/'batch-results.json').read_text())
           if isinstance(rows,dict): rows=rows.get('results',rows.get('tus',[]))
-          print(f"CORE_Y68_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
+          print(f"CORE_Y69_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
           for r in rows:
-              print(f"CORE_Y68_INDEX index={r.get('index')} status={r.get('status')} progress={float(r.get('progress_ratio') or 0)*100:.3f}% message={r.get('message','')}")
+              print(f"CORE_Y69_INDEX index={r.get('index')} status={r.get('status')} progress={float(r.get('progress_ratio') or 0)*100:.3f}% message={r.get('message','')}")
           if f['error'] != 0:
               raise SystemExit(f'Core ERROR: {f}')
           if any('queue_max_zone_append_sectors' in r.get('message','') for r in rows):
-              raise SystemExit('queue_max_zone_append_sectors survived Y68')
+              raise SystemExit('queue_max_zone_append_sectors survived Y69')
           PY
