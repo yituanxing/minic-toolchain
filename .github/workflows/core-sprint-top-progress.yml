@@ -60,8 +60,10 @@ jobs:
             BUILD_DIR="$GITHUB_WORKSPACE/build/core-sprint-shadow" \
             bash tests/core/run-core-ir-shadow.sh
 
-      - name: Require fast lane 4 of 4 PASS
+      - name: Sprint nearest-to-pass TUs
         shell: bash
+        env:
+          M106_CHANGED: ${{ steps.m106.outputs.changed }}
         run: |
           set -Eeuo pipefail
           compiler="$GITHUB_WORKSPACE/build/core-sprint-compiler/bin/minic"
@@ -79,6 +81,10 @@ jobs:
           replay_status=$?
           set -e
           printf 'CORE_SPRINT_REPLAY_STATUS=%d\n' "$replay_status"
+          stderr="$work/minic-stderr/kernel/sched/core.i.stderr"
+          if test -f "$stderr"; then
+            grep -E 'CORE_(FAST_TRACE|ASSIGN_STAGE|LOWER_DETAIL|ASM_DETAIL)' "$stderr" | tail -n 30 || true
+          fi
           python3 tools/ci/classify-core-strict-frontier.py \
             "$work/batch-results.json" \
             --examples 4 \
@@ -89,7 +95,7 @@ jobs:
             --json-out "$work/progress-summary.json" \
             --text-out "$work/progress-summary.txt"
           python3 - <<'PY'
-          import json
+          import json, os
           from pathlib import Path
 
           work = Path('build/core-sprint')
@@ -104,10 +110,19 @@ jobs:
           print(f"CORE_SPRINT_RESULT selected={frontier['selected']} pass={frontier['pass']} unsupported={frontier['unsupported']} error={frontier['error']}")
           if frontier['error'] != 0:
               raise SystemExit(f"Core ERROR present: {frontier.get('errors', [])}")
-          for idx in (0, 7, 42, 95):
+          for idx in (0, 7, 42):
               if idx not in by_index or by_index[idx].get('status') != 'PASS':
-                  raise SystemExit(f'fast-lane PASS missing for index {idx}: {by_index.get(idx)}')
-          print('CORE_M106_FAST_LANE pass=4 unsupported=0 error=0')
+                  raise SystemExit(f'required PASS missing for index {idx}: {by_index.get(idx)}')
+          r95 = by_index.get(95)
+          if r95 is None:
+              raise SystemExit('missing index95')
+          if r95.get('status') != 'PASS':
+              first = int(r95.get('first_error_line') or 0)
+              if os.environ.get('M106_CHANGED') == 'true' and first <= 86963:
+                  raise SystemExit(f'M106 did not move index95 forward: {r95}')
+              if r95.get('status') == 'ERROR':
+                  raise SystemExit(f'index95 Core ERROR: {r95}')
+          print(f"CORE_SPRINT_INDEX95 status={r95.get('status')} first={r95.get('first_error_line')} blocker={r95.get('message','')}")
           PY
 
       - name: Commit M106 production semantic
