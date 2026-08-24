@@ -1,4 +1,4 @@
-name: Core Y58 Bio Comma Discard Trace
+name: Core Y59 Shared Comma Discard Candidate
 
 on:
   pull_request:
@@ -7,7 +7,7 @@ permissions:
   contents: read
 
 jobs:
-  y58-bio-comma-discard:
+  y59-shared-comma-discard:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     steps:
@@ -26,7 +26,7 @@ jobs:
           set -Eeuo pipefail
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
-      - name: Instrument comma discarded operand
+      - name: Apply shared discarded-expression candidate
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -35,31 +35,63 @@ jobs:
           from pathlib import Path
           p=Path('src/core/core_lower.c')
           s=p.read_text()
+          old='''static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,\n                                             MinicExpressionId expression_id,\n                                             MinicCoreValueId *value_id);\n'''
+          new=old+'''static MinicCoreLowerStatus lower_expression_statement(\n    MinicCoreLowerContext *context, const MinicStatement *statement);\n'''
+          if s.count(old)!=1:
+              raise SystemExit(f'forward anchor count={s.count(old)}')
+          s=s.replace(old,new,1)
           old='''        status = lower_expression(context, expression->value.binary.left, &discarded_left);\n        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n'''
-          new='''        {\n            const MinicExpression *discarded_expression = minic_c0_program_expression(\n                context->body->program, expression->value.binary.left);\n            const MinicExpression *assignment_target = NULL;\n            const MinicExpression *assignment_source = NULL;\n            if (discarded_expression != NULL &&\n                discarded_expression->kind == MINIC_EXPRESSION_ASSIGNMENT) {\n                assignment_target = minic_c0_program_expression(\n                    context->body->program, discarded_expression->value.binary.left);\n                assignment_source = minic_c0_program_expression(\n                    context->body->program, discarded_expression->value.binary.right);\n            }\n            if (context->source_function != NULL &&\n                strcmp(context->source_function->name, "bio_segments") == 0) {\n                const MinicExpression *right_expression = minic_c0_program_expression(\n                    context->body->program, expression->value.binary.right);\n                (void)fprintf(stderr,\n                    "CORE_Y58_COMMA span=%zu:%zu left_kind=%d left_record=%d left_cat=%d "\n                    "assign_target_kind=%d assign_source_kind=%d assign_source_record=%d "\n                    "right_kind=%d\\n",\n                    expression->span.begin.line, expression->span.begin.column,\n                    discarded_expression != NULL ? (int)discarded_expression->kind : -1,\n                    discarded_expression != NULL && minic_type_is_record(discarded_expression->type) ? 1 : 0,\n                    discarded_expression != NULL ? (int)discarded_expression->value_category : -1,\n                    assignment_target != NULL ? (int)assignment_target->kind : -1,\n                    assignment_source != NULL ? (int)assignment_source->kind : -1,\n                    assignment_source != NULL && minic_type_is_record(assignment_source->type) ? 1 : 0,\n                    right_expression != NULL ? (int)right_expression->kind : -1);\n            }\n            status = lower_expression(context, expression->value.binary.left, &discarded_left);\n            if (context->source_function != NULL &&\n                strcmp(context->source_function->name, "bio_segments") == 0) {\n                (void)fprintf(stderr,\n                    "CORE_Y58_COMMA_LEFT_STATUS span=%zu:%zu status=%d\\n",\n                    expression->span.begin.line, expression->span.begin.column, (int)status);\n            }\n        }\n        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n'''
+          new='''        {\n            const MinicExpression *discarded_expression;\n            MinicStatement discarded_statement;\n\n            discarded_expression = minic_c0_program_expression(\n                context->body->program, expression->value.binary.left);\n            if (discarded_expression == NULL) {\n                return MINIC_CORE_LOWER_ERROR;\n            }\n            (void)memset(&discarded_statement, 0, sizeof(discarded_statement));\n            discarded_statement.kind = MINIC_STATEMENT_EXPRESSION;\n            discarded_statement.span = discarded_expression->span;\n            discarded_statement.expression = expression->value.binary.left;\n            status = lower_expression_statement(context, &discarded_statement);\n        }\n        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n'''
           if s.count(old)!=1:
               raise SystemExit(f'comma-left anchor count={s.count(old)}')
-          p.write_text(s.replace(old,new,1))
-          print('CORE_Y58_INSTRUMENTED')
+          s=s.replace(old,new,1)
+          p.write_text(s)
+
+          p=Path('tests/core/run-core-ir-shadow.sh')
+          s=p.read_text()
+          anchor='''cat >"$work_dir/variadic-call-unsupported.i" <<'EOF'\n'''
+          addition='''cat >"$work_dir/comma-discard-record-assignment.i" <<'EOF'\nstruct core_comma_pair { int a; int b; };\nint comma_discard_record_assignment(void) {\n    struct core_comma_pair value;\n    return ((value = (struct core_comma_pair){ .a = 1, .b = 2 }), 1);\n}\nEOF\ncheck_strict_case comma-discard-record-assignment\n\n'''
+          if s.count(anchor)!=1:
+              raise SystemExit(f'test anchor count={s.count(anchor)}')
+          p.write_text(s.replace(anchor,addition+anchor,1))
+          print('CORE_Y59_CANDIDATE_APPLIED')
           PY
-      - name: Build diagnostic compiler
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y58-compiler
-      - name: Replay representatives
+      - name: Build candidate
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y59-compiler
+      - name: Full Core exact regression suite
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-y58-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-y58"
+          MINIC="$GITHUB_WORKSPACE/build/core-y59-compiler/bin/minic" \
+            BUILD_DIR="$GITHUB_WORKSPACE/build/core-y59-regression" \
+            bash tests/core/run-core-ir-shadow.sh
+      - name: Focused bio_segments Linux replay
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/core-y59-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-y59-linux"
           mkdir -p "$work"
           set +e
-          MINIC_CORE_IR=strict CORE_FAST_TRACE=1 CORE_ASSIGN_STAGE=1 CORE_LOWER_DETAIL=1 \
-            python3 tests/external/linux/corpus_replay.py \
+          MINIC_CORE_IR=strict CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
             --work "$work" --jobs 3 --offset 0 --limit 500 --sample-count 0 --indices '3,58,301'
           replay_status=$?
           set -e
-          echo CORE_Y58_REPLAY_STATUS=$replay_status
+          echo CORE_Y59_REPLAY_STATUS=$replay_status
           python3 tools/ci/classify-core-strict-frontier.py "$work/batch-results.json" --examples 6 --json-out "$work/frontier-summary.json"
-          echo CORE_Y58_TRACE_BEGIN
-          grep -R -E 'CORE_Y58_|bio_segments|CORE_FAST_TRACE' "$work/minic-stderr" | head -n 240 || true
-          echo CORE_Y58_TRACE_END
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          w=Path('build/core-y59-linux')
+          f=json.loads((w/'frontier-summary.json').read_text())
+          rows=json.loads((w/'batch-results.json').read_text())
+          if isinstance(rows,dict): rows=rows.get('results',rows.get('tus',[]))
+          print(f"CORE_Y59_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
+          for r in rows:
+              print(f"CORE_Y59_INDEX index={r.get('index')} status={r.get('status')} progress={float(r.get('progress_ratio') or 0)*100:.3f}% message={r.get('message','')}")
+          if f['error'] != 0:
+              raise SystemExit(f'focused Core ERROR: {f}')
+          if any('bio_segments' in r.get('message','') for r in rows):
+              raise SystemExit('bio_segments blocker survived Y59')
+          PY
