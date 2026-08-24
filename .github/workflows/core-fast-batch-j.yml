@@ -1,4 +1,4 @@
-name: Core Fast Batch U2 Diagnose
+name: Core Fast Batch U3 Diagnose
 
 on:
   pull_request:
@@ -7,11 +7,11 @@ permissions:
   contents: read
 
 jobs:
-  batch-u2-diagnose:
+  batch-u3-diagnose:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     concurrency:
-      group: core-fast-batch-u2-${{ github.event.pull_request.number }}
+      group: core-fast-batch-u3-${{ github.event.pull_request.number }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
@@ -32,22 +32,48 @@ jobs:
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
 
-      - name: Apply U candidate and telemetry
+      - name: Apply U candidate and pointer-arithmetic trace
         shell: bash
         run: |
           set -Eeuo pipefail
           python3 tools/dev/patch-linux-replay-live-progress.py
           python3 tools/dev/patch-core-frontier-batch-u.py
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/core/core_lower.c')
+          s = p.read_text()
+          begin = s.index('    /* M82_BINARY_POINTER_SUBTRACTION:')
+          end = s.index('    if (expression->kind == MINIC_EXPRESSION_BINARY &&\n        (expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT ||', begin)
+          chunk = s[begin:end]
+          replacements = [
+              ('''        status = lower_expression(context, pointer_id, &pointer_value);\n        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n''',
+               '''        status = lower_expression(context, pointer_id, &pointer_value);\n        if (status != MINIC_CORE_LOWER_OK) {\n            (void)fprintf(stderr, "CORE_PTR_ARITH_TRACE function=%s stage=left-lower status=%d\\n",\n                          context->source_function != NULL ? context->source_function->name : "?",\n                          (int)status);\n            return status;\n        }\n'''),
+              ('''        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n        status = lower_expression(context, index_id, &index_value);\n''',
+               '''        if (status != MINIC_CORE_LOWER_OK) {\n            (void)fprintf(stderr, "CORE_PTR_ARITH_TRACE function=%s stage=left-spill status=%d\\n",\n                          context->source_function != NULL ? context->source_function->name : "?",\n                          (int)status);\n            return status;\n        }\n        status = lower_expression(context, index_id, &index_value);\n'''),
+              ('''        status = lower_expression(context, index_id, &index_value);\n        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n''',
+               '''        status = lower_expression(context, index_id, &index_value);\n        if (status != MINIC_CORE_LOWER_OK) {\n            (void)fprintf(stderr, "CORE_PTR_ARITH_TRACE function=%s stage=right-lower status=%d kind=%d\\n",\n                          context->source_function != NULL ? context->source_function->name : "?",\n                          (int)status, index_expression != NULL ? (int)index_expression->kind : -1);\n            return status;\n        }\n'''),
+              ('''        status = reload_scalar_value(context,\n                                     pointer_expression->span,\n                                     pointer_expression->type,\n                                     pointer_object,\n                                     &pointer_value);\n        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n''',
+               '''        status = reload_scalar_value(context,\n                                     pointer_expression->span,\n                                     pointer_expression->type,\n                                     pointer_object,\n                                     &pointer_value);\n        if (status != MINIC_CORE_LOWER_OK) {\n            (void)fprintf(stderr, "CORE_PTR_ARITH_TRACE function=%s stage=left-reload status=%d\\n",\n                          context->source_function != NULL ? context->source_function->name : "?",\n                          (int)status);\n            return status;\n        }\n'''),
+              ('''        if (pointer_value >= context->function->value_count ||\n            index_value >= context->function->value_count ||\n            !minic_type_equal(context->function->values[pointer_value].type,\n                              pointer_expression->type) ||\n            !minic_type_equal(context->function->values[index_value].type,\n                              index_expression->type)) {\n            return MINIC_CORE_LOWER_ERROR;\n        }\n''',
+               '''        if (pointer_value >= context->function->value_count ||\n            index_value >= context->function->value_count ||\n            !minic_type_equal(context->function->values[pointer_value].type,\n                              pointer_expression->type) ||\n            !minic_type_equal(context->function->values[index_value].type,\n                              index_expression->type)) {\n            (void)fprintf(stderr,\n                          "CORE_PTR_ARITH_TRACE function=%s stage=final-type pointer=%u/%zu index=%u/%zu pointer_match=%d index_match=%d\\n",\n                          context->source_function != NULL ? context->source_function->name : "?",\n                          (unsigned int)pointer_value, context->function->value_count,\n                          (unsigned int)index_value, context->function->value_count,\n                          pointer_value < context->function->value_count &&\n                              minic_type_equal(context->function->values[pointer_value].type, pointer_expression->type),\n                          index_value < context->function->value_count &&\n                              minic_type_equal(context->function->values[index_value].type, index_expression->type));\n            return MINIC_CORE_LOWER_ERROR;\n        }\n'''),
+          ]
+          for old, new in replacements:
+              if old not in chunk:
+                  raise SystemExit('pointer trace anchor missing')
+              chunk = chunk.replace(old, new, 1)
+          p.write_text(s[:begin] + chunk + s[end:])
+          print('CORE_PTR_ARITH_TRACE_PATCHED')
+          PY
 
       - name: Build exact patched compiler
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-u2-compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-u3-compiler
 
-      - name: One-TU find_section diagnostic
+      - name: One-TU find_section pointer diagnostic
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-batch-u2-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-batch-u2-frontier"
+          compiler="$GITHUB_WORKSPACE/build/core-batch-u3-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-batch-u3-frontier"
           set +e
           MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" \
@@ -60,25 +86,18 @@ jobs:
             --indices '4'
           replay_status=$?
           set -e
-          printf 'CORE_BATCH_U2_REPLAY_STATUS=%d\n' "$replay_status"
+          printf 'CORE_BATCH_U3_REPLAY_STATUS=%d\n' "$replay_status"
           stderr="$work/minic-stderr/init/initramfs.i.stderr"
-          echo CORE_BATCH_U2_TRACE_BEGIN
-          grep -E 'function=find_section|CORE_ASSIGN_STAGE.*find_section|CORE_ASSIGN_DETAIL.*find_section' "$stderr" || true
-          echo CORE_BATCH_U2_TRACE_END
-          src="$(find "$GITHUB_WORKSPACE/build/linux-focus-corpus" -type f -path '*/init/initramfs.i' | head -n1)"
-          echo CORE_BATCH_U2_SOURCE_BEGIN
-          printf 'CORE_BATCH_U2_SOURCE_FILE=%s\n' "$src"
-          if test -n "$src"; then
-            grep -n -A70 -B25 'find_section' "$src" | head -n 420 || true
-          fi
-          echo CORE_BATCH_U2_SOURCE_END
+          echo CORE_BATCH_U3_TRACE_BEGIN
+          grep -E 'CORE_PTR_ARITH_TRACE|CORE_ASSIGN_STAGE.*find_section|CORE_FAST_TRACE.*find_section' "$stderr" || true
+          echo CORE_BATCH_U3_TRACE_END
           python3 tools/ci/classify-core-strict-frontier.py \
             "$work/batch-results.json" --examples 1 --json-out "$work/frontier-summary.json"
           python3 - <<'PY'
           import json
           from pathlib import Path
-          f = json.loads(Path('build/core-batch-u2-frontier/frontier-summary.json').read_text())
-          print(f"CORE_BATCH_U2_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
+          f = json.loads(Path('build/core-batch-u3-frontier/frontier-summary.json').read_text())
+          print(f"CORE_BATCH_U3_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
           if f['selected'] != 1 or f['error'] != 1:
               raise SystemExit(f"diagnostic changed unexpectedly: {f}")
           PY
