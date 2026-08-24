@@ -4469,10 +4469,14 @@ static MinicCoreLowerStatus lower_return(MinicCoreLowerContext *context,
             return MINIC_CORE_LOWER_ERROR;
         }
         if (minic_type_is_integer(context->source_function->return_type)) {
-            status = lower_integer_assignment_value(context,
-                                                    context->source_function->return_type,
-                                                    statement->expression,
-                                                    &terminator.return_value);
+            /* BATCH_O_SCALAR_RETURN_ASSIGNMENT_CONVERSION: integer return
+               contexts use ordinary C assignment conversion too.  Reuse the
+               scalar seam so pointer truth values can return as _Bool while
+               ordinary integer returns keep the established integer path. */
+            status = lower_scalar_assignment_value(context,
+                                                   context->source_function->return_type,
+                                                   statement->expression,
+                                                   &terminator.return_value);
         } else if (minic_type_is_pointer(context->source_function->return_type)) {
             /* M62_POINTER_RETURN_CONVERSION: return uses assignment conversion.
                In particular, T * may return as volatile T * / const T * without
