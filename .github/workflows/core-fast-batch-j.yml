@@ -1,4 +1,4 @@
-name: Core Y64 Queue Conditional Trace
+name: Core Y65 Queue Conditional Guard
 
 on:
   pull_request:
@@ -7,7 +7,7 @@ permissions:
   contents: read
 
 jobs:
-  y64-queue-conditional-trace:
+  y65-queue-conditional-guard:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     steps:
@@ -20,7 +20,7 @@ jobs:
         with:
           path: build/linux-focus-corpus
           key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
-      - name: Patch conditional trace and build
+      - name: Patch guard trace and build
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -29,41 +29,25 @@ jobs:
           from pathlib import Path
           p=Path('src/core/core_lower.c')
           s=p.read_text()
-          old='''        true_expression = minic_c0_program_expression(context->body->program,\n                                                      expression->value.conditional.when_true);\n        false_expression = minic_c0_program_expression(context->body->program,\n                                                       expression->value.conditional.when_false);\n        if (true_expression == NULL || false_expression == NULL) {\n            return MINIC_CORE_LOWER_ERROR;\n        }\n        /* M55_SCALAR_CONDITIONAL_ARM_CONVERSION: the frontend owns the\n'''
-          new='''        true_expression = minic_c0_program_expression(context->body->program,\n                                                      expression->value.conditional.when_true);\n        false_expression = minic_c0_program_expression(context->body->program,\n                                                       expression->value.conditional.when_false);\n        if (true_expression == NULL || false_expression == NULL) {\n            return MINIC_CORE_LOWER_ERROR;\n        }\n        if (context->source_function != NULL && context->source_function->name != NULL &&\n            strcmp(context->source_function->name, "queue_max_zone_append_sectors") == 0) {\n            const MinicExpression *y64_condition = minic_c0_program_expression(\n                context->body->program, expression->value.conditional.condition);\n            MinicType y64_true_type; MinicType y64_false_type;\n            bool y64_true_scalar = core_scalar_expression_value_type(\n                context->body, true_expression, &y64_true_type);\n            bool y64_false_scalar = core_scalar_expression_value_type(\n                context->body, false_expression, &y64_false_type);\n            (void)fprintf(stderr,\n                          "CORE_Y64_COND uses=%d result_int=%d result_ptr=%d result_const=%d result_volatile=%d condition=%zu condition_kind=%d true=%zu true_kind=%d true_cat=%d true_scalar=%d false=%zu false_kind=%d false_cat=%d false_scalar=%d\\n",\n                          expression->value.conditional.uses_condition_value ? 1 : 0,\n                          minic_type_is_integer(expression->type) ? 1 : 0,\n                          minic_type_is_pointer(expression->type) ? 1 : 0,\n                          minic_type_is_const(expression->type) ? 1 : 0,\n                          minic_type_is_volatile(expression->type) ? 1 : 0,\n                          expression->value.conditional.condition,\n                          y64_condition == NULL ? -1 : (int)y64_condition->kind,\n                          expression->value.conditional.when_true, (int)true_expression->kind,\n                          (int)true_expression->value_category, y64_true_scalar ? 1 : 0,\n                          expression->value.conditional.when_false, (int)false_expression->kind,\n                          (int)false_expression->value_category, y64_false_scalar ? 1 : 0);\n        }\n        /* M55_SCALAR_CONDITIONAL_ARM_CONVERSION: the frontend owns the\n'''
+          old='''        /* M60_POINTER_CONDITIONAL_VALUE: C conditional values may be pointer\n           scalars as well as integers. The existing arm conversion, spill and\n           reload machinery is already scalar-generic, so keep the semantic\n           restriction at the Core scalar boundary rather than at integer-only. */\n        if (expression->value.conditional.uses_condition_value ||\n'''
+          new='''        /* M60_POINTER_CONDITIONAL_VALUE: C conditional values may be pointer\n           scalars as well as integers. The existing arm conversion, spill and\n           reload machinery is already scalar-generic, so keep the semantic\n           restriction at the Core scalar boundary rather than at integer-only. */\n        if (context->source_function != NULL && context->source_function->name != NULL &&\n            strcmp(context->source_function->name, "queue_max_zone_append_sectors") == 0) {\n            (void)fprintf(stderr,\n                          "CORE_Y65_GUARD uses=%d true_invalid=%d false_invalid=%d memory_scalar=%d integer=%d pointer=%d const=%d volatile=%d true=%zu false=%zu condition=%zu span=%zu:%zu\\n",\n                          expression->value.conditional.uses_condition_value ? 1 : 0,\n                          expression->value.conditional.when_true == MINIC_EXPRESSION_INVALID ? 1 : 0,\n                          expression->value.conditional.when_false == MINIC_EXPRESSION_INVALID ? 1 : 0,\n                          core_memory_scalar_type(expression->type) ? 1 : 0,\n                          minic_type_is_integer(expression->type) ? 1 : 0,\n                          minic_type_is_pointer(expression->type) ? 1 : 0,\n                          minic_type_is_const(expression->type) ? 1 : 0,\n                          minic_type_is_volatile(expression->type) ? 1 : 0,\n                          expression->value.conditional.when_true,\n                          expression->value.conditional.when_false,\n                          expression->value.conditional.condition,\n                          expression->span.begin.line, expression->span.begin.column);\n        }\n        if (expression->value.conditional.uses_condition_value ||\n'''
           if s.count(old)!=1:
-              raise SystemExit(f'metadata anchor count={s.count(old)}')
-          s=s.replace(old,new,1)
-          old='''        status = lower_condition_branch(context,\n                                        expression->value.conditional.condition,\n                                        expression->span,\n                                        true_block,\n                                        false_block);\n        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n\n        context->block_id = true_block;\n        status = lower_scalar_assignment_value(context,\n'''
-          new='''        status = lower_condition_branch(context,\n                                        expression->value.conditional.condition,\n                                        expression->span,\n                                        true_block,\n                                        false_block);\n        if (context->source_function != NULL && context->source_function->name != NULL &&\n            strcmp(context->source_function->name, "queue_max_zone_append_sectors") == 0) {\n            (void)fprintf(stderr, "CORE_Y64_STAGE condition status=%d block=%u\\n",\n                          (int)status, (unsigned int)context->block_id);\n        }\n        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n\n        context->block_id = true_block;\n        status = lower_scalar_assignment_value(context,\n'''
-          if s.count(old)!=1:
-              raise SystemExit(f'condition anchor count={s.count(old)}')
-          s=s.replace(old,new,1)
-          old='''                                               expression->value.conditional.when_true,\n                                               &arm_value);\n        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n        status = store_scalar_value(\n'''
-          new='''                                               expression->value.conditional.when_true,\n                                               &arm_value);\n        if (context->source_function != NULL && context->source_function->name != NULL &&\n            strcmp(context->source_function->name, "queue_max_zone_append_sectors") == 0) {\n            (void)fprintf(stderr, "CORE_Y64_STAGE true_assign status=%d value=%u\\n",\n                          (int)status, (unsigned int)arm_value);\n        }\n        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n        status = store_scalar_value(\n'''
-          if s.count(old)!=1:
-              raise SystemExit(f'true anchor count={s.count(old)}')
-          s=s.replace(old,new,1)
-          old='''                                               expression->value.conditional.when_false,\n                                               &arm_value);\n        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n        status = store_scalar_value(\n'''
-          new='''                                               expression->value.conditional.when_false,\n                                               &arm_value);\n        if (context->source_function != NULL && context->source_function->name != NULL &&\n            strcmp(context->source_function->name, "queue_max_zone_append_sectors") == 0) {\n            (void)fprintf(stderr, "CORE_Y64_STAGE false_assign status=%d value=%u\\n",\n                          (int)status, (unsigned int)arm_value);\n        }\n        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n        status = store_scalar_value(\n'''
-          if s.count(old)!=1:
-              raise SystemExit(f'false anchor count={s.count(old)}')
-          s=s.replace(old,new,1)
-          p.write_text(s)
+              raise SystemExit(f'guard anchor count={s.count(old)}')
+          p.write_text(s.replace(old,new,1))
           PY
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y64-compiler
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y65-compiler
       - name: Direct representative trace
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-y64-compiler/bin/minic"
+          compiler="$GITHUB_WORKSPACE/build/core-y65-compiler/bin/minic"
           input="$GITHUB_WORKSPACE/build/linux-focus-corpus/kbuild/init/do_mounts_initrd.i"
-          mkdir -p build/core-y64-direct
+          mkdir -p build/core-y65-direct
           set +e
-          MINIC_CORE_IR=strict CORE_FAST_TRACE=1 "$compiler" -S "$input" -o build/core-y64-direct/out.s \
-            >build/core-y64-direct/stdout.log 2>build/core-y64-direct/stderr.log
+          MINIC_CORE_IR=strict CORE_FAST_TRACE=1 "$compiler" -S "$input" -o build/core-y65-direct/out.s \
+            >build/core-y65-direct/stdout.log 2>build/core-y65-direct/stderr.log
           rc=$?
           set -e
-          echo CORE_Y64_RC=$rc
-          grep -E 'CORE_Y64|CORE_FAST_TRACE.*queue_max_zone_append_sectors' build/core-y64-direct/stderr.log || true
+          echo CORE_Y65_RC=$rc
+          grep -E 'CORE_Y65|CORE_FAST_TRACE.*queue_max_zone_append_sectors' build/core-y65-direct/stderr.log || true
           test "$rc" -ne 0
