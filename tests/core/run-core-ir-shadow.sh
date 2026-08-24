@@ -377,6 +377,26 @@ void bool_bitfield_storage_write(struct bool_bitfield_storage_write *state) {
 EOF
 check_strict_case bool-bitfield-storage-write
 
+cat >"$work_dir/local-char-array-object.i" <<'EOF'
+int local_char_array_object(int index) {
+    char bytes[4];
+    bytes[0] = 1;
+    bytes[3] = 7;
+    return bytes[index];
+}
+EOF
+check_strict_case local-char-array-object
+
+cat >"$work_dir/local-pointer-array-decay.i" <<'EOF'
+struct local_pointer_array_item;
+extern int consume_local_pointer_array(struct local_pointer_array_item **items);
+int local_pointer_array_decay(struct local_pointer_array_item *item) {
+    struct local_pointer_array_item *items[] = { item, (void *)0 };
+    return consume_local_pointer_array(items);
+}
+EOF
+check_strict_case local-pointer-array-decay
+
 cat >"$work_dir/indirect-cfg-argument.i" <<'EOF'
 int indirect_cfg_argument(int (*callee)(int), int value) {
     return callee(value ? value : 1);

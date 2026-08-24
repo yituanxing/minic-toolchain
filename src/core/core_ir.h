@@ -115,6 +115,10 @@ typedef struct MinicCoreValue {
 typedef struct MinicCoreObject {
     MinicSourceSpan span;
     MinicType type;
+    /* M95_REPEATED_LOCAL_OBJECT: legacy frontend arrays carry element type
+       plus an explicit count. Keep Core object addressing element-typed while
+       owning the complete repeated storage extent. Ordinary objects use 1. */
+    size_t element_count;
 } MinicCoreObject;
 
 typedef struct MinicCoreGlobal {
@@ -387,6 +391,11 @@ bool minic_core_function_add_object(MinicCoreFunction *function,
                                     MinicSourceSpan span,
                                     MinicType type,
                                     MinicCoreObjectId *object_id);
+bool minic_core_function_add_repeated_object(MinicCoreFunction *function,
+                                             MinicSourceSpan span,
+                                             MinicType element_type,
+                                             size_t element_count,
+                                             MinicCoreObjectId *object_id);
 bool minic_core_function_add_global(MinicCoreFunction *function,
                                     const char *name,
                                     size_t name_length,

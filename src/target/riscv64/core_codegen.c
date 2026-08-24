@@ -100,7 +100,12 @@ static bool core_frame_initialize(const MinicC0Program *program,
                                     &object_size,
                                     &object_alignment) ||
             object_size == 0U || object_alignment == 0U || object_alignment > 16U ||
-            !align_up(storage_size, object_alignment, &storage_size) ||
+            function->objects[object_index].element_count == 0U ||
+            object_size > SIZE_MAX / function->objects[object_index].element_count) {
+            return false;
+        }
+        object_size *= function->objects[object_index].element_count;
+        if (!align_up(storage_size, object_alignment, &storage_size) ||
             storage_size > SIZE_MAX - object_size) {
             return false;
         }
@@ -150,6 +155,8 @@ static bool core_object_offset(const MinicC0Program *program,
                                     &object_size,
                                     &object_alignment) ||
             object_size == 0U || object_alignment == 0U || object_alignment > 16U ||
+            function->objects[object_index].element_count == 0U ||
+            object_size > SIZE_MAX / function->objects[object_index].element_count ||
             !align_up(current_offset, object_alignment, &current_offset)) {
             return false;
         }
@@ -157,6 +164,7 @@ static bool core_object_offset(const MinicC0Program *program,
             *offset = current_offset;
             return true;
         }
+        object_size *= function->objects[object_index].element_count;
         if (current_offset > SIZE_MAX - object_size) {
             return false;
         }

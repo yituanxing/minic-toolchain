@@ -167,14 +167,16 @@ bool minic_core_function_add_block(MinicCoreFunction *function, MinicCoreBlockId
     return true;
 }
 
-bool minic_core_function_add_object(MinicCoreFunction *function,
-                                    MinicSourceSpan span,
-                                    MinicType type,
-                                    MinicCoreObjectId *object_id) {
+bool minic_core_function_add_repeated_object(MinicCoreFunction *function,
+                                             MinicSourceSpan span,
+                                             MinicType element_type,
+                                             size_t element_count,
+                                             MinicCoreObjectId *object_id) {
     MinicCoreObjectId new_id;
 
-    if (function == NULL || object_id == NULL || function->object_count >= (size_t)UINT32_MAX ||
-        minic_type_is_void(type) || minic_type_is_function(type) ||
+    if (function == NULL || object_id == NULL || element_count == 0U ||
+        function->object_count >= (size_t)UINT32_MAX ||
+        minic_type_is_void(element_type) || minic_type_is_function(element_type) ||
         !grow_array((void **)&function->objects,
                     &function->object_capacity,
                     function->object_count,
@@ -183,10 +185,18 @@ bool minic_core_function_add_object(MinicCoreFunction *function,
     }
     new_id = (MinicCoreObjectId)function->object_count;
     function->objects[function->object_count].span = span;
-    function->objects[function->object_count].type = type;
+    function->objects[function->object_count].type = element_type;
+    function->objects[function->object_count].element_count = element_count;
     function->object_count += 1U;
     *object_id = new_id;
     return true;
+}
+
+bool minic_core_function_add_object(MinicCoreFunction *function,
+                                    MinicSourceSpan span,
+                                    MinicType type,
+                                    MinicCoreObjectId *object_id) {
+    return minic_core_function_add_repeated_object(function, span, type, 1U, object_id);
 }
 
 /* M74_GLOBAL_RECORD_ADDRESS: global.addr is an address-forming Core
@@ -1466,6 +1476,13 @@ bool minic_core_function_verify(const MinicCoreFunction *function) {
         function->block_count == 0U || function->entry_block != 0U ||
         function->value_count > function->instruction_count) {
         return false;
+    }
+    for (index = 0U; index < function->object_count; ++index) {
+        const MinicCoreObject *object = &function->objects[index];
+        if (object->element_count == 0U || minic_type_is_void(object->type) ||
+            minic_type_is_function(object->type)) {
+            return false;
+        }
     }
     for (index = 0U; index < function->global_count; ++index) {
         const MinicCoreGlobal *global;

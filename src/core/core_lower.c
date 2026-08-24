@@ -206,13 +206,21 @@ static MinicCoreLowerStatus lower_local_object(MinicCoreLowerContext *context,
     if (local == NULL) {
         return MINIC_CORE_LOWER_ERROR;
     }
-    if (local->is_array ||
-        minic_c0_program_local_fixed_register_binding(context->body->program, local_id) != NULL ||
+    if (minic_c0_program_local_fixed_register_binding(context->body->program, local_id) != NULL ||
         (!core_memory_scalar_type(local->type) && !minic_type_is_record(local->type))) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
-    if (!minic_core_function_add_object(
-            context->function, local->name_span, local->type, object_id)) {
+    if (local->is_array) {
+        if (local->element_count == 0U ||
+            !minic_core_function_add_repeated_object(context->function,
+                                                     local->name_span,
+                                                     local->type,
+                                                     local->element_count,
+                                                     object_id)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+    } else if (!minic_core_function_add_object(
+                   context->function, local->name_span, local->type, object_id)) {
         return MINIC_CORE_LOWER_ERROR;
     }
     context->local_objects[local_index] = *object_id;
