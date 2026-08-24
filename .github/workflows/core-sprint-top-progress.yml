@@ -2,16 +2,19 @@ name: Core M107 Productizer
 
 on:
   pull_request:
+  push:
+    branches:
+      - refactor/declaration-sema-v1
 
 permissions:
   contents: write
 
 jobs:
   m107:
-    if: github.head_ref == 'refactor/declaration-sema-v1'
+    if: github.head_ref == 'refactor/declaration-sema-v1' || github.ref == 'refs/heads/refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     concurrency:
-      group: core-m107-${{ github.event.pull_request.number }}
+      group: core-m107-${{ github.event.pull_request.number || github.ref }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
