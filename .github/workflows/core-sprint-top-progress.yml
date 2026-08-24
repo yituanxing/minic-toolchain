@@ -4,7 +4,7 @@ on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   sprint:
@@ -17,6 +17,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: refactor/declaration-sema-v1
+          fetch-depth: 0
 
       - name: Restore frozen Linux corpus
         id: linux-corpus-cache
@@ -32,11 +33,32 @@ jobs:
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
 
+      - name: Apply M105 fixed-register batch
+        id: m105
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/m105-fixed-register-core.py
+          if git diff --quiet -- src/core/core_ir.h src/core/core_lower.c src/target/riscv64/core_codegen.c tests/core/run-core-ir-shadow.sh; then
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'changed=true' >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Enable compact progress telemetry
         run: python3 tools/dev/patch-linux-replay-live-progress.py
 
       - name: Build exact compiler
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-sprint-compiler
+
+      - name: Core shadow qualification
+        if: steps.m105.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/core-sprint-compiler/bin/minic" \
+            BUILD_DIR="$GITHUB_WORKSPACE/build/core-sprint-shadow" \
+            bash tests/core/run-core-ir-shadow.sh
 
       - name: Sprint nearest-to-pass TUs
         shell: bash
@@ -112,7 +134,9 @@ jobs:
               return None
 
           print('CORE_SPRINT_TABLE index status progress first/total input message')
+          by_index = {}
           for r in sorted(rows, key=progress, reverse=True):
+              by_index[int(r['index'])] = r
               total = r.get('total_lines', '-')
               first = r.get('first_error_line') or '-'
               print(f"CORE_SPRINT_ROW index={r.get('index')} status={r.get('status')} progress={progress(r)*100:.2f}% first={first} total={total} input={r.get('input')} message={r.get('message','')}")
@@ -124,4 +148,22 @@ jobs:
           print(f"CORE_SPRINT_RESULT selected={frontier['selected']} pass={frontier['pass']} unsupported={frontier['unsupported']} error={frontier['error']}")
           if frontier['error'] != 0:
               raise SystemExit(f"sprint introduced/contains Core ERRORs: {frontier.get('errors', [])}")
+
+          if Path('src/core/core_lower.c').read_text().find('M105_FIXED_REGISTER_STRUCTURED_ASM') >= 0:
+              for idx in (0, 7, 42):
+                  if idx not in by_index or by_index[idx].get('status') != 'PASS':
+                      raise SystemExit(f'M105 required PASS missing for index {idx}: {by_index.get(idx)}')
+              print('CORE_M105_REQUIRED_PASS indices=0,7,42')
           PY
+
+      - name: Commit M105 production semantic
+        if: steps.m105.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/core/core_ir.h src/core/core_lower.c src/target/riscv64/core_codegen.c tests/core/run-core-ir-shadow.sh
+          git diff --cached --check
+          git commit -m 'core: preserve fixed-register structured asm bindings'
+          git push origin HEAD:refactor/declaration-sema-v1
