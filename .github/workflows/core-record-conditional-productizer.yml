@@ -1,0 +1,370 @@
+name: Core Record Conditional 25 Productizer
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  record-conditional-25:
+    if: github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+          fetch-depth: 0
+
+      - name: Detect already-productized family
+        id: state
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if grep -Fq 'M114_RECORD_CONDITIONAL_OBJECT' src/core/core_lower.c; then
+            echo 'needs_patch=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'needs_patch=true' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Restore frozen Linux corpus
+        if: steps.state.outputs.needs_patch == 'true'
+        id: linux-corpus-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+
+      - name: Require frozen corpus
+        if: steps.state.outputs.needs_patch == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
+          test -s build/linux-focus-corpus/selected-tus.txt
+
+      - name: Apply generic record-conditional Core materialization
+        if: steps.state.outputs.needs_patch == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/core/core_lower.c')
+          text = path.read_text()
+          marker = 'M114_RECORD_CONDITIONAL_OBJECT'
+          if marker in text:
+              raise SystemExit('record conditional batch already present')
+
+          prototype_anchor = '''static MinicCoreLowerStatus lower_record_compound_literal_object(
+              MinicCoreLowerContext *context,
+              const MinicExpression *expression,
+              MinicCoreObjectId *object_id);
+'''
+          prototype_insert = prototype_anchor + '''static MinicCoreLowerStatus lower_record_conditional_object(
+              MinicCoreLowerContext *context,
+              const MinicExpression *expression,
+              MinicCoreObjectId *result_object);
+static MinicCoreLowerStatus lower_record_materialized_address(
+              MinicCoreLowerContext *context,
+              MinicExpressionId expression_id,
+              MinicCoreValueId *address_id);
+'''
+          if text.count(prototype_anchor) != 1:
+              raise SystemExit('prototype anchor mismatch')
+          text = text.replace(prototype_anchor, prototype_insert, 1)
+
+          definition_anchor = '''/* BATCH_M_RECORD_LOAD: turn an address-backed record rvalue/lvalue wrapper
+'''
+          helper = r'''/* M114_RECORD_CONDITIONAL_OBJECT: Core aggregate values remain address-backed.
+   Materialize a record-valued conditional into one private result object and
+   copy exactly the selected arm into it.  Each arm may itself be an ordinary
+   address-backed record, a compound literal, a direct record-returning call,
+   or a nested record conditional.  This is a language/Core ownership seam;
+   no Linux symbol or target ABI rule is encoded here. */
+static MinicCoreLowerStatus lower_record_materialized_address(
+    MinicCoreLowerContext *context,
+    MinicExpressionId expression_id,
+    MinicCoreValueId *address_id) {
+    const MinicExpression *expression;
+    MinicCoreInstruction instruction;
+    MinicCoreObjectId object_id;
+    MinicCoreLowerStatus status;
+    MinicType pointer_type;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        context->function == NULL || address_id == NULL) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    expression = minic_c0_program_expression(context->body->program, expression_id);
+    if (expression == NULL || !minic_type_is_record(expression->type)) {
+        return MINIC_CORE_LOWER_UNSUPPORTED;
+    }
+    if (expression->kind == MINIC_EXPRESSION_CONDITIONAL) {
+        status = lower_record_conditional_object(context, expression, &object_id);
+    } else if (expression->kind == MINIC_EXPRESSION_CALL &&
+               expression->value.call.function_id != MINIC_FUNCTION_INVALID) {
+        status = lower_direct_record_call_object(context, expression, &object_id);
+    } else if (expression->kind == MINIC_EXPRESSION_COMPOUND_LITERAL) {
+        status = lower_record_compound_literal_object(context, expression, &object_id);
+    } else {
+        return lower_record_value_address(context, expression_id, address_id);
+    }
+    if (status != MINIC_CORE_LOWER_OK) {
+        return status;
+    }
+    if (object_id >= context->function->object_count ||
+        !minic_type_pointer_to(context->function->objects[object_id].type, &pointer_type)) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    (void)memset(&instruction, 0, sizeof(instruction));
+    instruction.kind = MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS;
+    instruction.span = expression->span;
+    instruction.type = pointer_type;
+    instruction.result = MINIC_CORE_VALUE_INVALID;
+    instruction.value.object_id = object_id;
+    return minic_core_function_append_value_instruction(
+               context->function, context->block_id, &instruction, address_id)
+               ? MINIC_CORE_LOWER_OK
+               : MINIC_CORE_LOWER_ERROR;
+}
+
+static MinicCoreLowerStatus lower_record_conditional_object(
+    MinicCoreLowerContext *context,
+    const MinicExpression *expression,
+    MinicCoreObjectId *result_object) {
+    const MinicExpression *false_expression;
+    const MinicExpression *true_expression;
+    MinicCoreBlockId false_block;
+    MinicCoreBlockId merge_block;
+    MinicCoreBlockId true_block;
+    MinicCoreInstruction operation;
+    MinicCoreLowerStatus status;
+    MinicCoreValueId destination_address;
+    MinicCoreValueId source_address;
+    MinicType false_type;
+    MinicType pointer_type;
+    MinicType result_type;
+    MinicType true_type;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        context->function == NULL || expression == NULL || result_object == NULL ||
+        expression->kind != MINIC_EXPRESSION_CONDITIONAL ||
+        expression->value.conditional.uses_condition_value ||
+        expression->value.conditional.when_true == MINIC_EXPRESSION_INVALID ||
+        expression->value.conditional.when_false == MINIC_EXPRESSION_INVALID ||
+        !minic_type_is_record(expression->type) ||
+        !minic_type_unqualified(expression->type, &result_type) ||
+        !minic_type_is_record(result_type)) {
+        return MINIC_CORE_LOWER_UNSUPPORTED;
+    }
+    true_expression = minic_c0_program_expression(
+        context->body->program, expression->value.conditional.when_true);
+    false_expression = minic_c0_program_expression(
+        context->body->program, expression->value.conditional.when_false);
+    if (true_expression == NULL || false_expression == NULL ||
+        !minic_type_is_record(true_expression->type) ||
+        !minic_type_is_record(false_expression->type) ||
+        !minic_type_unqualified(true_expression->type, &true_type) ||
+        !minic_type_unqualified(false_expression->type, &false_type) ||
+        !minic_type_equal(result_type, true_type) ||
+        !minic_type_equal(result_type, false_type) ||
+        !minic_type_pointer_to(result_type, &pointer_type)) {
+        return MINIC_CORE_LOWER_UNSUPPORTED;
+    }
+    if (!minic_core_function_add_object(
+            context->function, expression->span, result_type, result_object) ||
+        !minic_core_function_add_block(context->function, &true_block) ||
+        !minic_core_function_add_block(context->function, &false_block) ||
+        !minic_core_function_add_block(context->function, &merge_block)) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    status = lower_condition_branch(context,
+                                    expression->value.conditional.condition,
+                                    expression->span,
+                                    true_block,
+                                    false_block);
+    if (status != MINIC_CORE_LOWER_OK) {
+        return status;
+    }
+
+    context->block_id = true_block;
+    status = lower_record_materialized_address(
+        context, expression->value.conditional.when_true, &source_address);
+    if (status != MINIC_CORE_LOWER_OK) {
+        return status;
+    }
+    (void)memset(&operation, 0, sizeof(operation));
+    operation.kind = MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS;
+    operation.span = true_expression->span;
+    operation.type = pointer_type;
+    operation.result = MINIC_CORE_VALUE_INVALID;
+    operation.value.object_id = *result_object;
+    if (!minic_core_function_append_value_instruction(
+            context->function, context->block_id, &operation, &destination_address)) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    (void)memset(&operation, 0, sizeof(operation));
+    operation.kind = MINIC_CORE_INSTRUCTION_RECORD_COPY;
+    operation.span = true_expression->span;
+    operation.type = result_type;
+    operation.result = MINIC_CORE_VALUE_INVALID;
+    operation.value.record_copy.destination_address = destination_address;
+    operation.value.record_copy.source_address = source_address;
+    if (!minic_core_function_append_effect_instruction(
+            context->function, context->block_id, &operation)) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    status = set_branch(context, context->block_id, expression->span, merge_block);
+    if (status != MINIC_CORE_LOWER_OK) {
+        return status;
+    }
+
+    context->block_id = false_block;
+    status = lower_record_materialized_address(
+        context, expression->value.conditional.when_false, &source_address);
+    if (status != MINIC_CORE_LOWER_OK) {
+        return status;
+    }
+    (void)memset(&operation, 0, sizeof(operation));
+    operation.kind = MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS;
+    operation.span = false_expression->span;
+    operation.type = pointer_type;
+    operation.result = MINIC_CORE_VALUE_INVALID;
+    operation.value.object_id = *result_object;
+    if (!minic_core_function_append_value_instruction(
+            context->function, context->block_id, &operation, &destination_address)) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    (void)memset(&operation, 0, sizeof(operation));
+    operation.kind = MINIC_CORE_INSTRUCTION_RECORD_COPY;
+    operation.span = false_expression->span;
+    operation.type = result_type;
+    operation.result = MINIC_CORE_VALUE_INVALID;
+    operation.value.record_copy.destination_address = destination_address;
+    operation.value.record_copy.source_address = source_address;
+    if (!minic_core_function_append_effect_instruction(
+            context->function, context->block_id, &operation)) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    status = set_branch(context, context->block_id, expression->span, merge_block);
+    if (status != MINIC_CORE_LOWER_OK) {
+        return status;
+    }
+
+    context->block_id = merge_block;
+    return MINIC_CORE_LOWER_OK;
+}
+
+'''
+          if text.count(definition_anchor) != 1:
+              raise SystemExit('definition anchor mismatch')
+          text = text.replace(definition_anchor, helper + definition_anchor, 1)
+
+          return_anchor = '''            } else if (expression->kind == MINIC_EXPRESSION_CALL &&
+                       expression->value.call.function_id != MINIC_FUNCTION_INVALID) {
+                status = lower_direct_record_call_object(
+                    context, expression, &terminator.return_object);
+            } else if (minic_c0_record_value_is_address_backed(
+                           context->body->program, statement->expression)) {
+'''
+          return_insert = '''            } else if (expression->kind == MINIC_EXPRESSION_CALL &&
+                       expression->value.call.function_id != MINIC_FUNCTION_INVALID) {
+                status = lower_direct_record_call_object(
+                    context, expression, &terminator.return_object);
+            } else if (expression->kind == MINIC_EXPRESSION_CONDITIONAL &&
+                       minic_type_is_record(expression->type)) {
+                status = lower_record_conditional_object(
+                    context, expression, &terminator.return_object);
+            } else if (minic_c0_record_value_is_address_backed(
+                           context->body->program, statement->expression)) {
+'''
+          if text.count(return_anchor) != 1:
+              raise SystemExit(f'return anchor mismatch: {text.count(return_anchor)}')
+          text = text.replace(return_anchor, return_insert, 1)
+
+          path.write_text(text)
+          PY
+          git diff --check
+          grep -F 'M114_RECORD_CONDITIONAL_OBJECT' src/core/core_lower.c
+
+      - name: Build exact patched compiler
+        if: steps.state.outputs.needs_patch == 'true'
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/record-cond25-compiler
+
+      - name: Run fast host regression gate
+        if: steps.state.outputs.needs_patch == 'true'
+        run: make -j4 check-fast MODE=release CFLAGS=-Werror BUILD_DIR=build/record-cond25-check
+
+      - name: Replay all sock_net_uid family TUs
+        if: steps.state.outputs.needs_patch == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/record-cond25-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/record-cond25"
+          set +e
+          MINIC_CORE_IR=strict CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
+            --minic "$compiler" \
+            --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
+            --work "$work" \
+            --jobs 4 \
+            --indices '2,194,195,197,209,212,215,219,229,230,242,250,281,357,378,410,491,492,493,494,495,496,497,498,499'
+          replay_status=$?
+          set -e
+          printf 'CORE_RECORD_COND25_REPLAY_STATUS=%d\n' "$replay_status"
+          python3 tools/ci/classify-core-strict-frontier.py \
+            "$work/batch-results.json" \
+            --examples 25 \
+            --json-out "$work/frontier-summary.json"
+          python3 tools/ci/summarize-core-frontier-progress.py \
+            "$work/batch-results.json" \
+            --expect-selected 25 \
+            --json-out "$work/progress-summary.json" \
+            --text-out "$work/progress-summary.txt"
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          work = Path('build/record-cond25')
+          rows = json.loads((work / 'batch-results.json').read_text())
+          summary = json.loads((work / 'frontier-summary.json').read_text())
+          if len(rows) != 25:
+              raise SystemExit(f'expected 25 rows, got {len(rows)}')
+          if summary['error'] != 0 or summary['preprocess_missing'] != 0:
+              raise SystemExit(f"record-cond25 ERROR/missing: error={summary['error']} missing={summary['preprocess_missing']}")
+          remaining = [b for b in summary.get('blockers', [])
+                       if b.get('function') == 'sock_net_uid']
+          if remaining:
+              raise SystemExit(f'old sock_net_uid blocker remains: {remaining}')
+          print(f"CORE_RECORD_COND25_ACCEPT pass={summary['pass']} unsupported={summary['unsupported']} error=0 selected=25")
+          print('CORE_RECORD_COND25_NEW_FRONTIER ' + json.dumps(summary.get('blockers', [])[:16], sort_keys=True))
+          print((work / 'progress-summary.txt').read_text())
+          PY
+
+      - name: Commit record-conditional semantic batch
+        if: steps.state.outputs.needs_patch == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/core/core_lower.c
+          git diff --cached --quiet && { echo 'no semantic changes to productize'; exit 1; }
+          git commit -m 'core: materialize record conditional return values'
+          git push origin HEAD:refactor/declaration-sema-v1
+
+      - name: Persist record conditional cohort
+        if: always() && steps.state.outputs.needs_patch == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-record-cond25-${{ github.sha }}
+          path: |
+            build/record-cond25/batch-results.json
+            build/record-cond25/frontier-summary.json
+            build/record-cond25/progress-summary.json
+            build/record-cond25/progress-summary.txt
+            build/record-cond25/minic-stderr/**
+          if-no-files-found: warn
