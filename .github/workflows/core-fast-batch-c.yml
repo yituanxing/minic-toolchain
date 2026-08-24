@@ -69,6 +69,21 @@ jobs:
           grep -q 'sltu' "$work/core.s"
           echo CORE_BATCH_H_FOCUSED_PASS
 
+      - name: Direct real-TU error probe
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/core-batch-h-compiler/bin/minic"
+          corpus="$GITHUB_WORKSPACE/build/linux-focus-corpus"
+          rel_i="$(awk -F '\t' '$1 == 2 { print $3; exit }' "$corpus/selected-tus.txt")"
+          test -n "$rel_i"
+          echo "CORE_BATCH_H_DIRECT_PROBE input=$rel_i"
+          set +e
+          MINIC_CORE_IR=strict "$compiler" -S "$corpus/kbuild/$rel_i" -o /tmp/core-h-direct.s
+          rc=$?
+          set -e
+          echo "CORE_BATCH_H_DIRECT_RC=$rc"
+
       - name: Strict sixteen frontier
         shell: bash
         run: |
@@ -88,7 +103,6 @@ jobs:
           probe_status=$?
           set -e
           printf 'CORE_BATCH_H_STRICT16_STATUS=%d\n' "$probe_status"
-          grep -R 'CORE_VERIFY_DETAIL' "$work/minic-stderr" || true
           python3 tools/ci/classify-core-strict-frontier.py \
             "$work/batch-results.json" --examples 16 --json-out "$work/frontier-summary.json"
           python3 - <<'PY'
