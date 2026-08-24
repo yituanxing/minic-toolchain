@@ -1,4 +1,4 @@
-name: Core Fast Batch Y12 Loop Continue Candidate
+name: Core Fast Batch Y13 Full500 Loop CFG
 
 on:
   pull_request:
@@ -7,11 +7,11 @@ permissions:
   contents: read
 
 jobs:
-  batch-y12-loop-continue:
+  batch-y13-full500:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     concurrency:
-      group: core-fast-batch-y12-${{ github.event.pull_request.number }}
+      group: core-fast-batch-y13-${{ github.event.pull_request.number }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
@@ -54,31 +54,42 @@ jobs:
           new_label='''            if (internal_loop_label) {\n                MinicCoreBlockId label_block;\n                MinicStatementId label_statement_id = source_block->statements[statement_index];\n\n                /* A source continue is normalized to a goto targeting this synthetic\n                   label. Materialize the label before lowering the paired while so an\n                   already-created continue target becomes a real preheader instead of\n                   a reachable empty block. */\n                status = ensure_statement_block(context, label_statement_id, &label_block);\n                if (status != MINIC_CORE_LOWER_OK) return status;\n                if (!block_terminated && context->block_id != label_block) {\n                    status = set_branch(context, context->block_id, statement->span, label_block);\n                    if (status != MINIC_CORE_LOWER_OK) return status;\n                }\n                context->block_id = label_block;\n                status = lower_while(context, loop, &statement_terminated);\n                if (status != MINIC_CORE_LOWER_OK) return status;\n                statement_index += 1U;\n            } else {\n'''
           if old_label not in s: raise SystemExit('internal loop label anchor not found')
           p.write_text(s.replace(old_label,new_label,1))
-          print('CORE_BATCH_Y12_PATCHED normalized-for plus while continue label preheader')
+          print('CORE_BATCH_Y13_PATCHED Y plus loop continue CFG closure')
           PY
       - name: Build exact candidate compiler
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-y12-compiler
-      - name: Replay the two remaining strict500 Core errors
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-y13-compiler
+      - name: Full frozen strict500 candidate replay
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-batch-y12-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-batch-y12-frontier"
+          compiler="$GITHUB_WORKSPACE/build/core-batch-y13-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-batch-y13-full500"
+          mkdir -p "$work"
           set +e
           MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
-            --work "$work" --jobs 2 --offset 0 --limit 500 --sample-count 0 --indices '208,339'
+            --work "$work" --jobs 4 --offset 0 --limit 500 --sample-count 0 \
+            >"$work/replay.log" 2>&1
           replay_status=$?
           set -e
-          printf 'CORE_BATCH_Y12_REPLAY_STATUS=%d\n' "$replay_status"
-          python3 tools/ci/classify-core-strict-frontier.py "$work/batch-results.json" --examples 8 --json-out "$work/frontier-summary.json"
-          python3 tools/ci/summarize-core-frontier-progress.py "$work/batch-results.json" --expect-selected 2 --json-out "$work/progress-summary.json" --text-out "$work/progress-summary.txt"
-          cat "$work/progress-summary.txt"
+          printf 'CORE_BATCH_Y13_REPLAY_STATUS=%d\n' "$replay_status"
+          python3 tools/ci/classify-core-strict-frontier.py "$work/batch-results.json" --examples 12 --json-out "$work/frontier-summary.json"
+          python3 tools/ci/summarize-core-frontier-progress.py "$work/batch-results.json" --expect-selected 500 --json-out "$work/progress-summary.json" --text-out "$work/progress-summary.txt" >/dev/null
           python3 - <<'PY'
           import json
           from pathlib import Path
-          f=json.loads(Path('build/core-batch-y12-frontier/frontier-summary.json').read_text())
-          print(f"CORE_BATCH_Y12_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
-          if f['selected'] != 2 or f['error'] != 0:
-              raise SystemExit(f'candidate still has Core ERROR: {f}')
+          work=Path('build/core-batch-y13-full500')
+          f=json.loads((work/'frontier-summary.json').read_text())
+          p=json.loads((work/'progress-summary.json').read_text())
+          print(f"CORE_BATCH_Y13_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
+          print(f"CORE_BATCH_Y13_PROGRESS mean={p.get('tu_mean_progress')} median={p.get('tu_median_progress')} line_weighted={p.get('line_weighted_progress')}")
+          errors=f.get('errors') or []
+          print(f"CORE_BATCH_Y13_ERRORS count={len(errors)}")
+          for i,e in enumerate(errors[:20],1):
+              print('CORE_BATCH_Y13_ERROR',i,json.dumps(e,sort_keys=True,separators=(',',':')))
+          if f['selected'] != 500 or f['error'] != 0 or f['pass'] < 14:
+              raise SystemExit(f'full500 candidate gate failed: {f}')
           PY
+          echo CORE_BATCH_Y13_FAILURE_LINES_BEGIN
+          grep -E 'Core IR shadow lowering failed|CORE_STRICT500_ERROR' "$work/replay.log" | tail -n 80 || true
+          echo CORE_BATCH_Y13_FAILURE_LINES_END
