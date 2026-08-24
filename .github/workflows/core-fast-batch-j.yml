@@ -1,13 +1,10 @@
-name: Core Y107 Fixed Register SBI Productizer
+name: Core Fast64 Batch
 
 on:
   pull_request:
 
-permissions:
-  contents: write
-
 jobs:
-  y107-fixed-register-sbi:
+  fast64:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     steps:
@@ -15,283 +12,138 @@ jobs:
         with:
           ref: refactor/declaration-sema-v1
           fetch-depth: 0
+
       - name: Restore frozen Linux corpus
         id: linux-corpus-cache
         uses: actions/cache/restore@v4
         with:
           path: build/linux-focus-corpus
           key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
-      - name: Apply fixed-register structured-asm batch
-        id: patch
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          if grep -Fq 'M105_FIXED_REGISTER_STRUCTURED_ASM' src/core/core_lower.c; then
-            echo 'changed=false' >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          python3 - <<'PY'
-          from pathlib import Path
 
-          def replace_once(path, old, new, label):
-              p = Path(path)
-              s = p.read_text()
-              count = s.count(old)
-              if count != 1:
-                  raise SystemExit(f'{label}: expected one anchor, got {count}')
-              p.write_text(s.replace(old, new, 1))
-
-          replace_once(
-              'src/core/core_ir.h',
-              '''typedef struct MinicCoreStructuredInlineAsmOperand {\n    MinicCoreStructuredInlineAsmOperandKind kind;\n    size_t operand_index;\n    MinicCoreValueId value;\n} MinicCoreStructuredInlineAsmOperand;\n''',
-              '''typedef struct MinicCoreStructuredInlineAsmOperand {\n    MinicCoreStructuredInlineAsmOperandKind kind;\n    size_t operand_index;\n    MinicCoreValueId value;\n    /* M105_FIXED_REGISTER_STRUCTURED_ASM: keep frontend-owned local fixed-register\n       identity as opaque metadata. Core does not interpret the register spelling;\n       the selected backend resolves the binding when materializing asm operands. */\n    size_t fixed_register_binding_id;\n    bool has_fixed_register_binding;\n} MinicCoreStructuredInlineAsmOperand;\n''',
-              'core structured operand metadata')
-
-          replace_once(
-              'src/core/core_lower.c',
-              '''    if (minic_c0_program_local_fixed_register_binding(context->body->program, local_id) != NULL ||\n        (!core_memory_scalar_type(local->type) && !minic_type_is_record(local->type))) {\n        return MINIC_CORE_LOWER_UNSUPPORTED;\n    }\n''',
-              '''    /* M105_FIXED_REGISTER_STRUCTURED_ASM: a GNU local register binding does\n       not change the C object's scalar value semantics. Keep ordinary Core\n       storage for reads/writes; only inline-asm operand materialization consumes\n       the target register binding. */\n    if (!core_memory_scalar_type(local->type) && !minic_type_is_record(local->type)) {\n        return MINIC_CORE_LOWER_UNSUPPORTED;\n    }\n''',
-              'allow fixed-register local Core storage')
-
-          replace_once(
-              'src/core/core_lower.c',
-              '''static bool core_inline_asm_register_output_constraint(const MinicInlineAsmOperand *operand) {\n    return core_inline_asm_constraint_is(operand, "=r") ||\n           core_inline_asm_constraint_is(operand, "=&r");\n}\n\n''',
-              '''static bool core_inline_asm_register_output_constraint(const MinicInlineAsmOperand *operand) {\n    return core_inline_asm_constraint_is(operand, "=r") ||\n           core_inline_asm_constraint_is(operand, "=&r");\n}\n\n/* M105_FIXED_REGISTER_STRUCTURED_ASM: translate the frontend side-table\n   reference into a stable Program-owned id without copying target register\n   strings into Core. */\nstatic bool core_inline_asm_local_fixed_binding_id(const MinicC0Program *program,\n                                                   const MinicExpression *expression,\n                                                   size_t *binding_id) {\n    const MinicFixedRegisterBinding *binding;\n    size_t index;\n\n    if (program == NULL || expression == NULL || binding_id == NULL ||\n        expression->kind != MINIC_EXPRESSION_LOCAL) {\n        return false;\n    }\n    binding = minic_c0_program_local_fixed_register_binding(program, expression->value.local_id);\n    if (binding == NULL) {\n        return false;\n    }\n    for (index = 0U; index < program->fixed_register_binding_count; ++index) {\n        if (&program->fixed_register_bindings[index] == binding) {\n            *binding_id = index;\n            return true;\n        }\n    }\n    return false;\n}\n\n''',
-              'fixed-register binding id helper')
-
-          marker = '''    /* M68_STRUCTURED_INLINE_ASM_OPTIONAL_INPUTS: M67's structured\n'''
-          p = Path('src/core/core_lower.c')
-          s = p.read_text()
-          if s.count(marker) != 1:
-              raise SystemExit(f'M68 insertion anchor count={s.count(marker)}')
-          batch = r'''    /* M105_FIXED_REGISTER_STRUCTURED_ASM: Linux SBI-style extended asm uses
-       two +r outputs and six r inputs, all backed by GNU local fixed-register
-       variables. Preserve the Program-owned binding id on each Core operand;
-       the RV64 backend alone interprets names such as a0..a7. */
-    if (source->is_volatile && !source->is_goto && source->template_text != NULL &&
-        source->template_length != 0U && source->outputs != NULL && source->inputs != NULL &&
-        source->output_count == 2U && source->input_count == 6U && source->has_memory_clobber &&
-        source->label_count == 0U && source->register_clobber_count == 0U &&
-        source->clobber_count == 1U) {
-        MinicCoreInstruction structured;
-        char *numeric_template = NULL;
-        size_t numeric_template_length = 0U;
-        size_t fixed_binding_ids[MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT];
-        size_t output_index;
-        size_t input_index;
-        bool supported_shape = true;
-
-        for (output_index = 0U; output_index < source->output_count; ++output_index) {
-            const MinicInlineAsmOperand *operand = &source->outputs[output_index];
-            const MinicExpression *expression =
-                minic_c0_program_expression(context->body->program, operand->expression);
-            const MinicLocal *local;
-            MinicType value_type;
-
-            if (operand->access != MINIC_INLINE_ASM_OPERAND_READ_WRITE ||
-                (!core_inline_asm_constraint_is(operand, "+r") &&
-                 !core_inline_asm_constraint_is(operand, "+&r")) ||
-                expression == NULL || expression->kind != MINIC_EXPRESSION_LOCAL ||
-                expression->value_category != MINIC_VALUE_LVALUE ||
-                minic_type_is_const(expression->type) || minic_type_is_volatile(expression->type) ||
-                !minic_type_unqualified(expression->type, &value_type) ||
-                !core_memory_scalar_type(value_type) ||
-                !core_inline_asm_local_fixed_binding_id(
-                    context->body->program, expression, &fixed_binding_ids[output_index])) {
-                supported_shape = false;
-                break;
-            }
-            local = minic_c0_program_local(context->body->program, expression->value.local_id);
-            if (local == NULL) {
-                return MINIC_CORE_LOWER_ERROR;
-            }
-            if (local->is_array || !minic_type_equal(local->type, expression->type)) {
-                supported_shape = false;
-                break;
-            }
-        }
-        for (input_index = 0U; supported_shape && input_index < source->input_count; ++input_index) {
-            const MinicInlineAsmOperand *operand = &source->inputs[input_index];
-            const MinicExpression *expression =
-                minic_c0_program_expression(context->body->program, operand->expression);
-            MinicType value_type;
-            size_t operand_index = source->output_count + input_index;
-
-            if (operand->access != MINIC_INLINE_ASM_OPERAND_READ_ONLY ||
-                !core_inline_asm_constraint_is(operand, "r") || expression == NULL ||
-                expression->kind != MINIC_EXPRESSION_LOCAL ||
-                !core_scalar_expression_value_type(context->body, expression, &value_type) ||
-                !core_memory_scalar_type(value_type) ||
-                !core_inline_asm_local_fixed_binding_id(
-                    context->body->program, expression, &fixed_binding_ids[operand_index])) {
-                supported_shape = false;
-            }
-        }
-        if (supported_shape && core_inline_asm_numeric_template(
-                source, &numeric_template, &numeric_template_length)) {
-            bool added;
-
-            added = minic_core_function_add_opaque_inline_asm(context->function,
-                                                               numeric_template,
-                                                               numeric_template_length,
-                                                               source->is_volatile,
-                                                               source->has_memory_clobber,
-                                                               &inline_asm_id);
-            free(numeric_template);
-            numeric_template = NULL;
-            if (!added) {
-                return MINIC_CORE_LOWER_ERROR;
-            }
-            (void)memset(&structured, 0, sizeof(structured));
-            structured.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
-            structured.span = statement->span;
-            structured.type = minic_type_void();
-            structured.result = MINIC_CORE_VALUE_INVALID;
-            structured.value.structured_inline_asm.inline_asm_id = inline_asm_id;
-            structured.value.structured_inline_asm.operand_count =
-                source->output_count + source->input_count;
-
-            for (output_index = 0U; output_index < source->output_count; ++output_index) {
-                const MinicInlineAsmOperand *operand = &source->outputs[output_index];
-                MinicCoreStructuredInlineAsmOperand *binding =
-                    &structured.value.structured_inline_asm.operands[output_index];
-                MinicCoreLowerStatus status;
-
-                binding->kind = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE;
-                binding->operand_index = output_index;
-                binding->fixed_register_binding_id = fixed_binding_ids[output_index];
-                binding->has_fixed_register_binding = true;
-                status = lower_address(context, operand->expression, &binding->value);
-                if (status != MINIC_CORE_LOWER_OK) {
-                    return status;
-                }
-            }
-            for (input_index = 0U; input_index < source->input_count; ++input_index) {
-                const MinicInlineAsmOperand *operand = &source->inputs[input_index];
-                size_t operand_index = source->output_count + input_index;
-                MinicCoreStructuredInlineAsmOperand *binding =
-                    &structured.value.structured_inline_asm.operands[operand_index];
-                MinicCoreLowerStatus status;
-
-                binding->kind = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
-                binding->operand_index = operand_index;
-                binding->fixed_register_binding_id = fixed_binding_ids[operand_index];
-                binding->has_fixed_register_binding = true;
-                status = lower_expression(context, operand->expression, &binding->value);
-                if (status != MINIC_CORE_LOWER_OK) {
-                    return status;
-                }
-            }
-            return minic_core_function_append_effect_instruction(
-                       context->function, context->block_id, &structured)
-                       ? MINIC_CORE_LOWER_OK
-                       : MINIC_CORE_LOWER_ERROR;
-        }
-        free(numeric_template);
-    }
-
-'''
-          p.write_text(s.replace(marker, batch + marker, 1))
-
-          replace_once(
-              'src/target/riscv64/core_codegen.c',
-              '''    size_t memory_readwrites = 0U;\n    size_t scalar_inputs = 0U;\n    size_t binding_index;\n''',
-              '''    size_t memory_readwrites = 0U;\n    size_t scalar_inputs = 0U;\n    size_t fixed_bindings = 0U;\n    size_t binding_index;\n''',
-              'structured support fixed counter')
-          replace_once(
-              'src/target/riscv64/core_codegen.c',
-              '''        instruction->value.structured_inline_asm.operand_count == 0U ||\n        instruction->value.structured_inline_asm.operand_count > 5U) {\n''',
-              '''        instruction->value.structured_inline_asm.operand_count == 0U ||\n        instruction->value.structured_inline_asm.operand_count >\n            MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT) {\n''',
-              'structured support operand limit')
-          replace_once(
-              'src/target/riscv64/core_codegen.c',
-              '''        bound[binding->operand_index] = true;\n        switch (binding->kind) {\n''',
-              '''        bound[binding->operand_index] = true;\n        if (binding->has_fixed_register_binding) {\n            fixed_bindings += 1U;\n        }\n        switch (binding->kind) {\n''',
-              'structured support count fixed bindings')
-          replace_once(
-              'src/target/riscv64/core_codegen.c',
-              '''    if (!((register_outputs == 2U && register_readwrites == 0U &&\n           memory_readwrites == 1U && scalar_inputs <= 2U &&\n           scalar_inputs + 3U == instruction->value.structured_inline_asm.operand_count &&\n           inline_asm->has_memory_clobber) ||\n''',
-              '''    if (!((register_outputs == 2U && register_readwrites == 0U &&\n           memory_readwrites == 1U && scalar_inputs <= 2U &&\n           scalar_inputs + 3U == instruction->value.structured_inline_asm.operand_count &&\n           inline_asm->has_memory_clobber) ||\n          /* M105_FIXED_REGISTER_STRUCTURED_ASM: SBI ecall family. Every\n             operand carries a Program-owned fixed-register binding, so this\n             tier does not consume the generic temporary-register pool. */\n          (register_outputs == 0U && register_readwrites == 2U &&\n           memory_readwrites == 0U && scalar_inputs == 6U && fixed_bindings == 8U &&\n           instruction->value.structured_inline_asm.operand_count == 8U &&\n           inline_asm->has_memory_clobber && inline_asm->register_clobber_count == 0U) ||\n''',
-              'structured support SBI shape')
-
-          replace_once(
-              'src/target/riscv64/core_codegen.c',
-              '''        const MinicCoreStructuredInlineAsmOperand *binding =\n            &instruction->value.structured_inline_asm.operands[binding_index];\n        const char *register_name;\n\n        switch (binding->kind) {\n''',
-              '''        const MinicCoreStructuredInlineAsmOperand *binding =\n            &instruction->value.structured_inline_asm.operands[binding_index];\n        const MinicFixedRegisterBinding *fixed_binding = NULL;\n        const char *register_name;\n\n        if (binding->has_fixed_register_binding) {\n            fixed_binding = minic_c0_program_fixed_register_binding(\n                program, binding->fixed_register_binding_id);\n            if (fixed_binding == NULL || !fixed_binding->is_local ||\n                fixed_binding->register_name == NULL || fixed_binding->register_name_length == 0U) {\n                return false;\n            }\n        }\n        switch (binding->kind) {\n''',
-              'structured emitter resolve fixed binding')
-          replace_once(
-              'src/target/riscv64/core_codegen.c',
-              '''            while (output_index < 2U &&\n                   core_inline_asm_clobbers_register(\n                       inline_asm, output_registers[output_index])) {\n                output_index += 1U;\n            }\n            if (output_index >= 2U) {\n                return false;\n            }\n            register_name = output_registers[output_index++];\n            if (binding->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE) {\n                if (!load_core_value(file, frame, binding->value, "t5") ||\n                    !minic_type_pointee(function->values[binding->value].type, &pointee) ||\n                    !minic_type_unqualified(pointee, &value_type) ||\n                    !core_scalar_type(value_type) ||\n                    !minic_riscv64_emit_scalar_load_for_program(\n                        file, program, value_type, register_name, "t5")) {\n                    return false;\n                }\n            }\n''',
-              '''            if (fixed_binding != NULL) {\n                register_name = fixed_binding->register_name;\n            } else {\n                while (output_index < 2U &&\n                       core_inline_asm_clobbers_register(\n                           inline_asm, output_registers[output_index])) {\n                    output_index += 1U;\n                }\n                if (output_index >= 2U) {\n                    return false;\n                }\n                register_name = output_registers[output_index++];\n            }\n            if (binding->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE) {\n                if (!load_core_value(file, frame, binding->value, "t5") ||\n                    !minic_type_pointee(function->values[binding->value].type, &pointee) ||\n                    !minic_type_unqualified(pointee, &value_type) ||\n                    !core_scalar_type(value_type) ||\n                    (fixed_binding != NULL &&\n                     !minic_type_equal(fixed_binding->type, value_type)) ||\n                    !minic_riscv64_emit_scalar_load_for_program(\n                        file, program, value_type, register_name, "t5")) {\n                    return false;\n                }\n            }\n''',
-              'structured emitter fixed output register')
-          replace_once(
-              'src/target/riscv64/core_codegen.c',
-              '''        case MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT:\n            register_name = input_registers[input_index++];\n            if (!load_core_value(file, frame, binding->value, register_name)) {\n                return false;\n            }\n            break;\n''',
-              '''        case MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT:\n            if (fixed_binding != NULL) {\n                MinicType fixed_value_type;\n                if (!minic_type_unqualified(fixed_binding->type, &fixed_value_type) ||\n                    !minic_type_equal(\n                        fixed_value_type, function->values[binding->value].type)) {\n                    return false;\n                }\n                register_name = fixed_binding->register_name;\n            } else {\n                if (input_index >= 2U) {\n                    return false;\n                }\n                register_name = input_registers[input_index++];\n            }\n            if (!load_core_value(file, frame, binding->value, register_name)) {\n                return false;\n            }\n            break;\n''',
-              'structured emitter fixed scalar inputs')
-
-          t = Path('tests/core/run-core-ir-shadow.sh')
-          ts = t.read_text()
-          anchor = '''cat >"$work_dir/function-designator-address.i" <<'EOF'\n'''
-          case = '''cat >"$work_dir/fixed-register-sbi-ecall.i" <<'EOF'\nstruct core_sbi_ret { long error; long value; };\n\nstruct core_sbi_ret fixed_register_sbi_ecall(long x0, long x1, long x2, long x3,\n                                              long x4, long x5, long fid, long ext) {\n    struct core_sbi_ret ret;\n    register unsigned long a0 asm("a0") = (unsigned long)x0;\n    register unsigned long a1 asm("a1") = (unsigned long)x1;\n    register unsigned long a2 asm("a2") = (unsigned long)x2;\n    register unsigned long a3 asm("a3") = (unsigned long)x3;\n    register unsigned long a4 asm("a4") = (unsigned long)x4;\n    register unsigned long a5 asm("a5") = (unsigned long)x5;\n    register unsigned long a6 asm("a6") = (unsigned long)fid;\n    register unsigned long a7 asm("a7") = (unsigned long)ext;\n    asm volatile("ecall" : "+r"(a0), "+r"(a1)\n                         : "r"(a2), "r"(a3), "r"(a4), "r"(a5), "r"(a6), "r"(a7)\n                         : "memory");\n    ret.error = (long)a0;\n    ret.value = (long)a1;\n    return ret;\n}\nEOF\ncheck_strict_case fixed-register-sbi-ecall\n\n'''
-          if ts.count(anchor) != 1:
-              raise SystemExit(f'core shadow insertion anchor count={ts.count(anchor)}')
-          t.write_text(ts.replace(anchor, case + anchor, 1))
-          PY
-          echo 'changed=true' >> "$GITHUB_OUTPUT"
-      - name: Build exact batch compiler
-        if: steps.patch.outputs.changed == 'true'
+      - name: Require frozen corpus
         shell: bash
         run: |
           set -Eeuo pipefail
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y107-compiler
-      - name: Run permanent Core shadow suite
-        if: steps.patch.outputs.changed == 'true'
+          test -s build/linux-focus-corpus/selected-tus.txt
+
+      - name: Enable compact progress telemetry
+        run: python3 tools/dev/patch-linux-replay-live-progress.py
+
+      - name: Build exact compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/fast64-compiler
+
+      - name: Replay deterministic fast64
         shell: bash
         run: |
           set -Eeuo pipefail
-          MINIC="$GITHUB_WORKSPACE/build/core-y107-compiler/bin/minic" \
-            BUILD_DIR="$GITHUB_WORKSPACE/build/core-y107-shadow" \
-            bash tests/core/run-core-ir-shadow.sh
-      - name: Replay fast lane and require SBI PASS
-        if: steps.patch.outputs.changed == 'true'
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-y107-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-y107-linux"; mkdir -p "$work"
+          compiler="$GITHUB_WORKSPACE/build/fast64-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/fast64"
           set +e
-          MINIC_CORE_IR=strict CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
-            --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
-            --work "$work" --jobs 4 --offset 0 --limit 500 --sample-count 0 --indices '0,7,42,95'
+          MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
+            --minic "$compiler" \
+            --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
+            --work "$work" \
+            --jobs 4 \
+            --offset 0 \
+            --limit 500 \
+            --sample-count 64
           replay_status=$?
           set -e
-          echo CORE_Y107_REPLAY_STATUS=$replay_status
+          printf 'CORE_FAST64_REPLAY_STATUS=%d\n' "$replay_status"
+          python3 tools/ci/classify-core-strict-frontier.py \
+            "$work/batch-results.json" \
+            --examples 8 \
+            --json-out "$work/frontier-summary.json"
+          python3 tools/ci/summarize-core-frontier-progress.py \
+            "$work/batch-results.json" \
+            --expect-selected 64 \
+            --json-out "$work/progress-summary.json" \
+            --text-out "$work/progress-summary.txt"
           python3 - <<'PY'
           import json
           from pathlib import Path
-          rows=json.loads(Path('build/core-y107-linux/batch-results.json').read_text())
-          if isinstance(rows,dict): rows=rows.get('results',rows.get('tus',[]))
-          by_index={int(r['index']):r for r in rows}
-          for idx in sorted(by_index):
-              r=by_index[idx]
-              print(f"CORE_Y107_ROW index={idx} status={r.get('status')} first={r.get('first_error_line')} total={r.get('total_lines')} progress={r.get('progress_ratio')} message={r.get('message','')}")
-          for idx in (0,7,42):
-              if idx not in by_index or by_index[idx].get('status') != 'PASS':
-                  raise SystemExit(f'required fast-lane PASS missing for index {idx}: {by_index.get(idx)}')
-          if 95 in by_index and by_index[95].get('status') == 'ERROR':
-              raise SystemExit(f'index95 became Core ERROR: {by_index[95]}')
-          print('CORE_Y107_REQUIRED_PASS indices=0,7,42')
+          work = Path('build/fast64')
+          frontier = json.loads((work / 'frontier-summary.json').read_text())
+          headline = f"CORE_FAST64_EXACT selected={frontier['selected']} pass={frontier['pass']} unsupported={frontier['unsupported']} error={frontier['error']}"
+          print(headline)
+          (work / 'headline.txt').write_text(headline + '\n')
+          with Path(__import__('os').environ['GITHUB_STEP_SUMMARY']).open('a') as f:
+              f.write('## Core Fast64\n\n')
+              f.write(f'`{headline}`\n\n')
+              f.write((work / 'progress-summary.txt').read_text())
           PY
-      - name: Commit production semantic batch
-        if: steps.patch.outputs.changed == 'true'
+
+      - name: Persist fast64 result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-fast64-${{ github.sha }}
+          path: |
+            build/fast64/batch-results.json
+            build/fast64/frontier-summary.json
+            build/fast64/progress-summary.json
+            build/fast64/progress-summary.txt
+            build/fast64/headline.txt
+          if-no-files-found: warn
+
+  neigh-output-error-cohort:
+    if: github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+          fetch-depth: 0
+
+      - name: Restore frozen Linux corpus
+        id: linux-corpus-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+
+      - name: Require frozen corpus
         shell: bash
         run: |
           set -Eeuo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add src/core/core_ir.h src/core/core_lower.c src/target/riscv64/core_codegen.c tests/core/run-core-ir-shadow.sh
-          git diff --cached --check
-          git commit -m 'core: preserve fixed-register structured asm bindings'
-          git push origin HEAD:refactor/declaration-sema-v1
+          test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
+          test -s build/linux-focus-corpus/selected-tus.txt
+
+      - name: Build exact compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/neigh-error-compiler
+
+      - name: Replay all neigh_output ERROR TUs with Core detail
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/neigh-error-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/neigh-error-cohort"
+          set +e
+          MINIC_CORE_IR=strict CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
+            --minic "$compiler" \
+            --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
+            --work "$work" \
+            --jobs 4 \
+            --indices '194,195,197,212,215,219,229,230,250,281,357,410'
+          replay_status=$?
+          set -e
+          printf 'CORE_NEIGH_ERROR_COHORT_STATUS=%d\n' "$replay_status"
+          python3 tools/ci/classify-core-strict-frontier.py \
+            "$work/batch-results.json" \
+            --examples 12 \
+            --json-out "$work/frontier-summary.json"
+          echo CORE_NEIGH_ERROR_DETAIL_BEGIN
+          grep -R -h -E 'CORE_LOWER_DETAIL|CORE_FAST_TRACE|Core IR shadow' "$work/minic-stderr" | tail -800 || true
+          echo CORE_NEIGH_ERROR_DETAIL_END
+
+      - name: Persist neigh_output cohort
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-neigh-output-errors-${{ github.sha }}
+          path: |
+            build/neigh-error-cohort/batch-results.json
+            build/neigh-error-cohort/frontier-summary.json
+            build/neigh-error-cohort/minic-stderr/**
+          if-no-files-found: warn
