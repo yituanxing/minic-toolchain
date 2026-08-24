@@ -1,4 +1,4 @@
-name: Core Y62 Queue Zone Direct Trace
+name: Core Y63 Queue Statement Expr Trace
 
 on:
   pull_request:
@@ -7,7 +7,7 @@ permissions:
   contents: read
 
 jobs:
-  y62-queue-zone-direct-trace:
+  y63-queue-statement-expr-trace:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     steps:
@@ -20,28 +20,39 @@ jobs:
         with:
           path: build/linux-focus-corpus
           key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
-      - name: Build exact semantic head
+      - name: Patch trace and build
         shell: bash
         run: |
           set -Eeuo pipefail
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y62-compiler
-      - name: Direct trace representative TU
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('src/core/core_lower.c')
+          s=p.read_text()
+          old='''        if (statement_block == NULL) {\n            return MINIC_CORE_LOWER_ERROR;\n        }\n        if (expression->value.statement_expression.result == MINIC_EXPRESSION_INVALID) {\n'''
+          new='''        if (statement_block == NULL) {\n            return MINIC_CORE_LOWER_ERROR;\n        }\n        if (context->source_function != NULL && context->source_function->name != NULL &&\n            strcmp(context->source_function->name, "queue_max_zone_append_sectors") == 0) {\n            size_t y63_index;\n            (void)fprintf(stderr,\n                          "CORE_Y63_STMT_EXPR block=%zu statements=%zu result=%zu span=%zu:%zu\\n",\n                          expression->value.statement_expression.block,\n                          statement_block->statement_count,\n                          expression->value.statement_expression.result,\n                          expression->span.begin.line, expression->span.begin.column);\n            for (y63_index = 0U; y63_index < statement_block->statement_count; ++y63_index) {\n                const MinicStatement *y63_statement = minic_c0_program_statement(\n                    context->body->program, statement_block->statements[y63_index]);\n                const MinicExpression *y63_expression = NULL;\n                if (y63_statement != NULL && y63_statement->expression != MINIC_EXPRESSION_INVALID) {\n                    y63_expression = minic_c0_program_expression(\n                        context->body->program, y63_statement->expression);\n                }\n                (void)fprintf(stderr,\n                              "CORE_Y63_INNER index=%zu id=%zu kind=%d span=%zu:%zu expr=%zu expr_kind=%d cleanup=%zu stop=%zu\\n",\n                              y63_index, statement_block->statements[y63_index],\n                              y63_statement == NULL ? -1 : (int)y63_statement->kind,\n                              y63_statement == NULL ? 0U : y63_statement->span.begin.line,\n                              y63_statement == NULL ? 0U : y63_statement->span.begin.column,\n                              y63_statement == NULL ? MINIC_EXPRESSION_INVALID : y63_statement->expression,\n                              y63_expression == NULL ? -1 : (int)y63_expression->kind,\n                              y63_statement == NULL ? 0U : y63_statement->cleanup_context,\n                              y63_statement == NULL ? 0U : y63_statement->cleanup_stop_context);\n            }\n        }\n        if (expression->value.statement_expression.result == MINIC_EXPRESSION_INVALID) {\n'''
+          if s.count(old)!=1:
+              raise SystemExit(f'block anchor count={s.count(old)}')
+          s=s.replace(old,new,1)
+          old='''        status = lower_block(context, statement_block, &terminated);\n        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n        if (terminated) {\n            return MINIC_CORE_LOWER_UNSUPPORTED;\n        }\n        status =\n            lower_expression(context, expression->value.statement_expression.result, &result_value);\n'''
+          new='''        status = lower_block(context, statement_block, &terminated);\n        if (context->source_function != NULL && context->source_function->name != NULL &&\n            strcmp(context->source_function->name, "queue_max_zone_append_sectors") == 0) {\n            const MinicExpression *y63_result = minic_c0_program_expression(\n                context->body->program, expression->value.statement_expression.result);\n            (void)fprintf(stderr,\n                          "CORE_Y63_BLOCK_STATUS status=%d terminated=%d result_kind=%d block_id=%u\\n",\n                          (int)status, terminated ? 1 : 0,\n                          y63_result == NULL ? -1 : (int)y63_result->kind,\n                          (unsigned int)context->block_id);\n        }\n        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n        if (terminated) {\n            return MINIC_CORE_LOWER_UNSUPPORTED;\n        }\n        status =\n            lower_expression(context, expression->value.statement_expression.result, &result_value);\n        if (context->source_function != NULL && context->source_function->name != NULL &&\n            strcmp(context->source_function->name, "queue_max_zone_append_sectors") == 0) {\n            (void)fprintf(stderr, "CORE_Y63_RESULT_STATUS status=%d value=%u\\n",\n                          (int)status, (unsigned int)result_value);\n        }\n'''
+          if s.count(old)!=1:
+              raise SystemExit(f'status anchor count={s.count(old)}')
+          p.write_text(s.replace(old,new,1))
+          PY
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y63-compiler
+      - name: Direct representative trace
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-y62-compiler/bin/minic"
+          compiler="$GITHUB_WORKSPACE/build/core-y63-compiler/bin/minic"
           input="$GITHUB_WORKSPACE/build/linux-focus-corpus/kbuild/init/do_mounts_initrd.i"
-          mkdir -p build/core-y62-direct
+          mkdir -p build/core-y63-direct
           set +e
-          MINIC_CORE_IR=strict CORE_FAST_TRACE=1 CORE_LOWER_DETAIL=1 CORE_ASSIGN_STAGE=1 CORE_ASM_DETAIL=1 \
-            "$compiler" -S "$input" -o build/core-y62-direct/out.s \
-            >build/core-y62-direct/stdout.log 2>build/core-y62-direct/stderr.log
+          MINIC_CORE_IR=strict CORE_FAST_TRACE=1 "$compiler" -S "$input" -o build/core-y63-direct/out.s \
+            >build/core-y63-direct/stdout.log 2>build/core-y63-direct/stderr.log
           rc=$?
           set -e
-          echo CORE_Y62_RC=$rc
-          echo '=== CORE_Y62 STDERR FILTERED ==='
-          grep -E 'CORE_|queue_max_zone_append_sectors|unsupported|UNSUPPORTED|error:' build/core-y62-direct/stderr.log | tail -n 300 || true
-          echo '=== CORE_Y62 STDERR TAIL ==='
-          tail -n 200 build/core-y62-direct/stderr.log || true
+          echo CORE_Y63_RC=$rc
+          grep -E 'CORE_Y63|CORE_FAST_TRACE.*queue_max_zone_append_sectors' build/core-y63-direct/stderr.log || true
           test "$rc" -ne 0
