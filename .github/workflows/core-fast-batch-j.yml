@@ -1,4 +1,4 @@
-name: Core Batch Y43 Device Power Field Shape
+name: Core Batch Y44 Bool Bitfield Read Guard
 
 on:
   pull_request:
@@ -7,7 +7,7 @@ permissions:
   contents: read
 
 jobs:
-  clean-head:
+  y44-bitfield-guard:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     steps:
@@ -26,75 +26,7 @@ jobs:
           set -Eeuo pipefail
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
-      - name: Build clean production head
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-y43-clean-compiler
-      - name: Full Core exact suite
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          MINIC="$GITHUB_WORKSPACE/build/core-batch-y43-clean-compiler/bin/minic" \
-            BUILD_DIR="$GITHUB_WORKSPACE/build/core-batch-y43-clean-tests" \
-            bash tests/core/run-core-ir-shadow.sh
-      - name: Clean frozen strict500
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          python3 tools/dev/patch-linux-replay-live-progress.py
-          compiler="$GITHUB_WORKSPACE/build/core-batch-y43-clean-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-batch-y43-clean-full500"
-          mkdir -p "$work"
-          set +e
-          MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
-            --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
-            --work "$work" --jobs 4 --offset 0 --limit 500 --sample-count 0 \
-            >"$work/replay.log" 2>&1
-          replay_status=$?
-          set -e
-          echo CORE_BATCH_Y43_CLEAN_REPLAY_STATUS=$replay_status
-          python3 tools/ci/classify-core-strict-frontier.py \
-            "$work/batch-results.json" --examples 12 --json-out "$work/frontier-summary.json"
-          python3 tools/ci/summarize-core-frontier-progress.py \
-            "$work/batch-results.json" --expect-selected 500 \
-            --json-out "$work/progress-summary.json" --text-out "$work/progress-summary.txt" >/dev/null
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-          w=Path('build/core-batch-y43-clean-full500')
-          f=json.loads((w/'frontier-summary.json').read_text())
-          p=json.loads((w/'progress-summary.json').read_text())
-          print(f"CORE_BATCH_Y43_CLEAN_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
-          print(f"CORE_BATCH_Y43_CLEAN_PROGRESS mean={p.get('tu_mean_progress')} median={p.get('tu_median_progress')} line_weighted={p.get('line_weighted_progress')}")
-          if f['selected'] != 500 or f['error'] != 0:
-              raise SystemExit(f'Y43 clean exact-head regression: {f}')
-          PY
-
-  field-shape:
-    if: github.head_ref == 'refactor/declaration-sema-v1'
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: b6bdeb8fa8302a2f22bd06a4c740de9e39dc59e8
-      - name: Restore frozen Linux corpus
-        id: linux-corpus-cache
-        uses: actions/cache/restore@v4
-        with:
-          path: build/linux-focus-corpus
-          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
-      - name: Require frozen corpus
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
-          test -s build/linux-focus-corpus/selected-tus.txt
-      - name: Show real preprocessed field declarations
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          echo CORE_BATCH_Y43_DECLS_BEGIN
-          grep -n -m 20 -E 'is_prepared|async_suspend' build/linux-focus-corpus/kbuild/init/do_mounts.i || true
-          echo CORE_BATCH_Y43_DECLS_END
-      - name: Instrument device power member metadata
+      - name: Instrument bitfield read guard
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -103,34 +35,32 @@ jobs:
           from pathlib import Path
           p=Path('src/core/core_lower.c')
           s=p.read_text()
-          anchor='''    expression = minic_c0_program_expression(context->body->program, expression_id);\n    if (expression == NULL) {\n        return MINIC_CORE_LOWER_ERROR;\n    }\n'''
-          extra=anchor+'''    if (context->source_function != NULL &&\n        strcmp(context->source_function->name, "device_enable_async_suspend") == 0 &&\n        expression->kind == MINIC_EXPRESSION_MEMBER) {\n        const MinicExpression *trace_base;\n        const MinicRecord *trace_record;\n        const MinicRecordField *trace_field;\n        trace_base = minic_c0_program_expression(\n            context->body->program, expression->value.member.base);\n        trace_record = minic_c0_program_record(\n            context->body->program, expression->value.member.record_id);\n        trace_field = minic_c0_record_field(trace_record, expression->value.member.field_index);\n        (void)fprintf(stderr,\n                      "CORE_Y43_MEMBER expression=%llu kind=%d category=%d type_kind=%d "\n                      "record=%llu field=%zu bit=%d signed=%d width=%u storage=%u "\n                      "base_kind=%d base_category=%d base_type_kind=%d span=%zu:%zu\\n",\n                      (unsigned long long)expression_id, (int)expression->kind,\n                      (int)expression->value_category, (int)expression->type.kind,\n                      (unsigned long long)expression->value.member.record_id,\n                      expression->value.member.field_index,\n                      trace_field != NULL && trace_field->is_bit_field ? 1 : 0,\n                      trace_field != NULL && trace_field->is_signed ? 1 : 0,\n                      trace_field != NULL ? trace_field->bit_width : 0U,\n                      trace_field != NULL ? trace_field->storage_unit_width : 0U,\n                      trace_base != NULL ? (int)trace_base->kind : -1,\n                      trace_base != NULL ? (int)trace_base->value_category : -1,\n                      trace_base != NULL ? (int)trace_base->type.kind : -1,\n                      expression->span.begin.line, expression->span.begin.column);\n    }\n'''
-          if s.count(anchor) < 1: raise SystemExit(f'expression anchor count={s.count(anchor)}')
-          # Instrument the real lower_expression definition, not helper lookups before it.
-          marker='''static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,\n                                             MinicExpressionId expression_id,\n                                             MinicCoreValueId *value_id) {'''
-          pos=s.find(marker)
-          if pos < 0: raise SystemExit('lower_expression definition')
-          before=s[:pos]
-          sub=s[pos:]
-          if anchor not in sub: raise SystemExit('lower_expression fetch anchor')
-          p.write_text(before+sub.replace(anchor,extra,1))
-          print('CORE_BATCH_Y43_INSTRUMENTED')
+          begin=s.find('''    /* BATCH_A_UNSIGNED_BIT_FIELD_READ:''')
+          end=s.find('''    /* BATCH_R_RECORD_CALL_MEMBER_VALUE:''', begin)
+          if begin < 0 or end < 0: raise SystemExit('bitfield read scope')
+          sub=s[begin:end]
+          anchor='''        field = minic_c0_record_field(record, expression->value.member.field_index);\n        if (field != NULL && field->is_bit_field) {\n'''
+          extra=anchor+'''            MinicType trace_value_type;\n            MinicType trace_base_value_type;\n            MinicType trace_pointee_type;\n            unsigned int trace_storage_width = 0U;\n            size_t trace_byte_offset = 0U;\n            size_t trace_bit_offset = 0U;\n            bool trace_unqualified;\n            bool trace_integer;\n            bool trace_unsigned;\n            bool trace_width_ok;\n            bool trace_layout_ok;\n            bool trace_base_scalar;\n            bool trace_base_pointer;\n            bool trace_pointee_ok;\n\n            (void)memset(&trace_value_type, 0, sizeof(trace_value_type));\n            (void)memset(&trace_base_value_type, 0, sizeof(trace_base_value_type));\n            (void)memset(&trace_pointee_type, 0, sizeof(trace_pointee_type));\n            trace_unqualified = minic_type_unqualified(expression->type, &trace_value_type);\n            trace_integer = trace_unqualified && minic_type_is_integer(trace_value_type);\n            trace_unsigned = trace_integer && minic_type_is_unsigned_integer(trace_value_type);\n            trace_width_ok = trace_unsigned && context->target != NULL &&\n                minic_target_info_integer_width(context->target, context->body->program,\n                                                trace_value_type, &trace_storage_width);\n            trace_layout_ok = record != NULL &&\n                minic_data_layout_record_field_layout(minic_default_data_layout(),\n                                                      context->body->program, record,\n                                                      expression->value.member.field_index,\n                                                      &trace_byte_offset, &trace_bit_offset);\n            trace_base_scalar = base != NULL &&\n                core_scalar_expression_value_type(context->body, base, &trace_base_value_type);\n            trace_base_pointer = trace_base_scalar && minic_type_is_pointer(trace_base_value_type);\n            trace_pointee_ok = trace_base_pointer &&\n                minic_type_pointee(trace_base_value_type, &trace_pointee_type);\n            if (context->source_function != NULL &&\n                strcmp(context->source_function->name, "device_enable_async_suspend") == 0) {\n                (void)fprintf(stderr,\n                    "CORE_Y44_BITFIELD expr=%llu field=%zu bit_width=%zu "\n                    "expr_base=%d expr_sign=%d expr_rank=%d field_base=%d field_sign=%d field_rank=%d "\n                    "unqual=%d integer=%d unsigned=%d width_ok=%d storage_width=%u "\n                    "layout=%d byte=%zu bit=%zu base_kind=%d base_cat=%d base_base=%d "\n                    "base_scalar=%d base_pointer=%d pointee=%d pointee_base=%d pointee_record=%llu target_record=%llu\\n",\n                    (unsigned long long)expression_id, expression->value.member.field_index,\n                    field->bit_width,\n                    (int)trace_value_type.base_kind, (int)trace_value_type.integer_sign,\n                    (int)trace_value_type.integer_rank,\n                    (int)field->type.base_kind, (int)field->type.integer_sign,\n                    (int)field->type.integer_rank,\n                    trace_unqualified ? 1 : 0, trace_integer ? 1 : 0, trace_unsigned ? 1 : 0,\n                    trace_width_ok ? 1 : 0, trace_storage_width, trace_layout_ok ? 1 : 0,\n                    trace_byte_offset, trace_bit_offset,\n                    base != NULL ? (int)base->kind : -1,\n                    base != NULL ? (int)base->value_category : -1,\n                    base != NULL ? (int)base->type.base_kind : -1,\n                    trace_base_scalar ? 1 : 0, trace_base_pointer ? 1 : 0, trace_pointee_ok ? 1 : 0,\n                    trace_pointee_ok ? (int)trace_pointee_type.base_kind : -1,\n                    trace_pointee_ok ? (unsigned long long)trace_pointee_type.record_id : 0ULL,\n                    (unsigned long long)expression->value.member.record_id);\n            }\n'''
+          if sub.count(anchor)!=1: raise SystemExit(f'bitfield anchor count={sub.count(anchor)}')
+          sub=sub.replace(anchor,extra,1)
+          p.write_text(s[:begin]+sub+s[end:])
+          print('CORE_BATCH_Y44_INSTRUMENTED')
           PY
       - name: Build diagnostic compiler
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-y43-diag-compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-y44-compiler
       - name: Replay representatives
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-batch-y43-diag-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-batch-y43-diag"
+          compiler="$GITHUB_WORKSPACE/build/core-batch-y44-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-batch-y44"
           set +e
           MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
             --work "$work" --jobs 2 --offset 0 --limit 500 --sample-count 0 --indices '2,3'
           status=$?
           set -e
-          echo CORE_BATCH_Y43_REPLAY_STATUS=$status
-          echo CORE_BATCH_Y43_META_BEGIN
-          grep -R -E 'CORE_Y43_MEMBER|device_enable_async_suspend|CORE_FAST_TRACE' "$work/minic-stderr" | head -n 160 || true
-          echo CORE_BATCH_Y43_META_END
+          echo CORE_BATCH_Y44_REPLAY_STATUS=$status
+          echo CORE_BATCH_Y44_DETAILS_BEGIN
+          grep -R -E 'CORE_Y44_BITFIELD|device_enable_async_suspend|CORE_FAST_TRACE' "$work/minic-stderr" | head -n 120 || true
+          echo CORE_BATCH_Y44_DETAILS_END
