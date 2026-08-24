@@ -1,29 +1,36 @@
-name: Core Y102b Signed Bit-field Qualification
+name: Core Y102c Signed Bit-field Productizer
 
 on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  y102b-signed-bitfield:
+  y102c-productize:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 86d98851a9741d90bcc08280114f7253f7bc8a43
+          ref: refactor/declaration-sema-v1
+          fetch-depth: 0
       - name: Restore frozen Linux corpus
         id: linux-corpus-cache
         uses: actions/cache/restore@v4
         with:
           path: build/linux-focus-corpus
           key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
-      - name: Apply signed bit-field candidate and focused regression
+      - name: Apply production semantic patch
+        id: patch
         shell: bash
         run: |
           set -Eeuo pipefail
+          if grep -Fq 'M103_INTEGER_BIT_FIELD_READ' src/core/core_lower.c; then
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+            echo 'signed bit-field read already productized'
+            exit 0
+          fi
           python3 - <<'PY'
           from pathlib import Path
 
@@ -71,6 +78,12 @@ jobs:
               raise SystemExit(f'read result anchor count={s.count(old)}')
           p.write_text(s.replace(old, new, 1))
 
+          cg = Path('src/target/riscv64/core_codegen.c')
+          cgs = cg.read_text()
+          cgs = cgs.replace('/* BATCH_A_UNSIGNED_BIT_FIELD_READ: FIELD_ADDRESS may be used internally\n       for a bit-field storage-unit read.  The frontend/Core lowerer still\n       rejects taking a C address of a bit-field. */',
+                            '/* M103_INTEGER_BIT_FIELD_READ: FIELD_ADDRESS may be used internally\n       for a bit-field storage-unit read. The frontend/Core lowerer still\n       rejects taking a C address of a bit-field. */', 1)
+          cg.write_text(cgs)
+
           t = Path('tests/core/run-core-ir-shadow.sh')
           ts = t.read_text()
           anchor = '''cat >"$work_dir/bool-bitfield-storage-read.i" <<'EOF'\n'''
@@ -79,47 +92,61 @@ jobs:
               raise SystemExit(f'test anchor count={ts.count(anchor)}')
           t.write_text(ts.replace(anchor, case + anchor, 1))
           PY
-      - name: Build exact candidate compiler
+          echo 'changed=true' >> "$GITHUB_OUTPUT"
+      - name: Build exact production candidate
+        if: steps.patch.outputs.changed == 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y102b-compiler
-      - name: Run Core shadow qualification
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y102c-compiler
+      - name: Run permanent Core shadow regression
+        if: steps.patch.outputs.changed == 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
-          MINIC="$GITHUB_WORKSPACE/build/core-y102b-compiler/bin/minic" \
-            BUILD_DIR="$GITHUB_WORKSPACE/build/core-y102b-shadow" \
+          MINIC="$GITHUB_WORKSPACE/build/core-y102c-compiler/bin/minic" \
+            BUILD_DIR="$GITHUB_WORKSPACE/build/core-y102c-shadow" \
             bash tests/core/run-core-ir-shadow.sh
       - name: Verify Linux blocker movement
+        if: steps.patch.outputs.changed == 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-y102b-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-y102b-linux"; mkdir -p "$work"
+          compiler="$GITHUB_WORKSPACE/build/core-y102c-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-y102c-linux"; mkdir -p "$work"
           set +e
           MINIC_CORE_IR=strict CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
             --work "$work" --jobs 3 --offset 0 --limit 500 --sample-count 0 --indices '193,242,357'
-          status=$?; set -e; echo CORE_Y102B_REPLAY_STATUS=$status
+          status=$?; set -e; echo CORE_Y102C_REPLAY_STATUS=$status
           python3 - <<'PY'
           import json
           from pathlib import Path
           old_first={193:79024,242:80624,357:81214}
-          w=Path('build/core-y102b-linux')
+          w=Path('build/core-y102c-linux')
           rows=json.loads((w/'batch-results.json').read_text())
           if isinstance(rows,dict): rows=rows.get('results',rows.get('tus',[]))
           seen=set()
           for r in rows:
               i=int(r['index']); seen.add(i)
-              first=r.get('first_error_line')
-              msg=r.get('message','')
-              print(f"CORE_Y102B_INDEX index={i} status={r.get('status')} first={first} total={r.get('total_lines')} progress={r.get('progress_ratio')} message={msg}")
-              if "netdev_reg_state" in msg:
+              first=r.get('first_error_line'); msg=r.get('message','')
+              print(f"CORE_Y102C_INDEX index={i} status={r.get('status')} first={first} total={r.get('total_lines')} progress={r.get('progress_ratio')} message={msg}")
+              if 'netdev_reg_state' in msg:
                   raise SystemExit(f'netdev_reg_state still blocks index {i}')
               if r.get('status') != 'PASS' and (not first or int(first) <= old_first[i]):
                   raise SystemExit(f'index {i} did not move forward: first={first} old={old_first[i]}')
           if seen != set(old_first):
               raise SystemExit(f'missing indices: {set(old_first)-seen}')
           PY
+      - name: Commit production semantic change
+        if: steps.patch.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/core/core_lower.c src/target/riscv64/core_codegen.c tests/core/run-core-ir-shadow.sh
+          git diff --cached --check
+          git commit -m 'core: lower signed bit-field scalar reads'
+          git push origin HEAD:refactor/declaration-sema-v1
