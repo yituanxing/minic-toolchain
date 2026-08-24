@@ -2720,12 +2720,13 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         MinicCoreInstruction zero_test;
         MinicCoreTerminator terminator;
         MinicType assignment_type;
+        MinicType result_type;
 
         if (expression->value.conditional.condition == MINIC_EXPRESSION_INVALID ||
             expression->value.conditional.when_true != expression->value.conditional.condition ||
             expression->value.conditional.when_false == MINIC_EXPRESSION_INVALID ||
-            !core_memory_scalar_type(expression->type) ||
-            minic_type_is_const(expression->type) || minic_type_is_volatile(expression->type)) {
+            !core_scalar_expression_value_type(context->body, expression, &result_type) ||
+            !core_memory_scalar_type(result_type)) {
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
         condition_expression = minic_c0_program_expression(
@@ -2736,15 +2737,15 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
             (!minic_type_is_integer(condition_expression->type) &&
              !minic_type_is_pointer(condition_expression->type)) ||
             !minic_c0_assignment_compatible(context->body->program,
-                                            expression->type,
+                                            result_type,
                                             expression->value.conditional.condition) ||
             !minic_c0_assignment_compatible(context->body->program,
-                                            expression->type,
+                                            result_type,
                                             expression->value.conditional.when_false)) {
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
         if (!minic_core_function_add_object(
-                context->function, expression->span, expression->type, &result_object) ||
+                context->function, expression->span, result_type, &result_object) ||
             !minic_core_function_add_block(context->function, &true_block) ||
             !minic_core_function_add_block(context->function, &false_block) ||
             !minic_core_function_add_block(context->function, &merge_block)) {
@@ -2759,11 +2760,11 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         if (condition_value >= context->function->value_count) {
             return MINIC_CORE_LOWER_ERROR;
         }
-        if (minic_type_is_integer(expression->type) &&
+        if (minic_type_is_integer(result_type) &&
             minic_type_is_integer(condition_expression->type)) {
             if (!minic_c0_integer_assignment_value_type(
                     context->body->program,
-                    expression->type,
+                    result_type,
                     expression->value.conditional.condition,
                     &assignment_type)) {
                 return MINIC_CORE_LOWER_UNSUPPORTED;
@@ -2773,14 +2774,14 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                                                assignment_type,
                                                condition_value,
                                                &true_value);
-        } else if (minic_type_is_pointer(expression->type) &&
+        } else if (minic_type_is_pointer(result_type) &&
                    (minic_type_is_pointer(condition_expression->type) ||
                     minic_c0_expression_is_null_pointer_constant_v0(
                         context->body->program,
                         expression->value.conditional.condition))) {
             status = append_scalar_bitcast(context,
                                            condition_expression->span,
-                                           expression->type,
+                                           result_type,
                                            condition_value,
                                            &true_value);
         } else {
@@ -2791,7 +2792,7 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         }
         status = store_scalar_value(context,
                                     condition_expression->span,
-                                    expression->type,
+                                    result_type,
                                     result_object,
                                     true_value);
         if (status != MINIC_CORE_LOWER_OK) {
@@ -2843,7 +2844,7 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
 
         context->block_id = false_block;
         status = lower_scalar_assignment_value(context,
-                                               expression->type,
+                                               result_type,
                                                expression->value.conditional.when_false,
                                                &false_value);
         if (status != MINIC_CORE_LOWER_OK) {
@@ -2851,7 +2852,7 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         }
         status = store_scalar_value(context,
                                     false_expression->span,
-                                    expression->type,
+                                    result_type,
                                     result_object,
                                     false_value);
         if (status != MINIC_CORE_LOWER_OK) {
@@ -2864,7 +2865,7 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
 
         context->block_id = merge_block;
         return reload_scalar_value(
-            context, expression->span, expression->type, result_object, value_id);
+            context, expression->span, result_type, result_object, value_id);
     }
     if (expression->kind == MINIC_EXPRESSION_CONDITIONAL) {
         const MinicExpression *false_expression;

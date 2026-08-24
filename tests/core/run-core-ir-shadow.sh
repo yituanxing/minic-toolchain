@@ -458,6 +458,18 @@ void function_pointer_parameter_ingress(core_callback_t func, void *info, int wa
 EOF
 check_strict_case function-pointer-parameter-ingress
 
+cat >"$work_dir/omitted-conditional-pointee-const.i" <<'EOF'
+struct core_xattr_handler {
+    const char *prefix;
+    const char *name;
+};
+
+const char *omitted_conditional_pointee_const(const struct core_xattr_handler *handler) {
+    return handler->prefix ?: handler->name;
+}
+EOF
+check_strict_case omitted-conditional-pointee-const
+
 cat >"$work_dir/variadic-call-unsupported.i" <<'EOF'
 int variadic_external(int first, ...);
 
