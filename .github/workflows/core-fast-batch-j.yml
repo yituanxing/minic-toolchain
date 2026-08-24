@@ -1,17 +1,17 @@
-name: Core Fast Batch P
+name: Core Fast Batch Q Diagnose
 
 on:
   pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  batch-p:
+  batch-q-diagnose:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     concurrency:
-      group: core-fast-batch-p-${{ github.event.pull_request.number }}
+      group: core-fast-batch-q-${{ github.event.pull_request.number }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
@@ -32,46 +32,18 @@ jobs:
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
 
-      - name: Apply Batch P production changes
+      - name: Enable compact progress telemetry
+        run: python3 tools/dev/patch-linux-replay-live-progress.py
+
+      - name: Build exact compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-q-compiler
+
+      - name: One-TU ptep_clear diagnostic
         shell: bash
         run: |
           set -Eeuo pipefail
-          python3 tools/dev/patch-linux-replay-live-progress.py
-          python3 tools/dev/patch-core-frontier-batch-p.py
-
-      - name: Build exact patched compiler
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-p-compiler
-
-      - name: Focused unsigned bit-field write regression
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-batch-p-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-batch-p-focused"
-          mkdir -p "$work"
-          cat >"$work/bitfield-write.i" <<'EOF'
-          struct flags {
-              unsigned int low : 3;
-              unsigned int active : 1;
-              unsigned int high : 4;
-          };
-          void set_active(struct flags *p, unsigned int value) {
-              p->active = value;
-          }
-          EOF
-          MINIC_CORE_IR=strict "$compiler" -S "$work/bitfield-write.i" -o "$work/strict.s"
-          MINIC_CORE_IR=strict MINIC_CORE_CODEGEN=basic-v0 "$compiler" \
-            -S "$work/bitfield-write.i" -o "$work/core.s"
-          grep -q 'and ' "$work/core.s"
-          grep -q 'or ' "$work/core.s"
-          echo CORE_BATCH_P_FOCUSED_PASS
-
-      - name: One-TU sched frontier
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-batch-p-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-batch-p-frontier"
+          compiler="$GITHUB_WORKSPACE/build/core-batch-q-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-batch-q-frontier"
           set +e
           MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" \
@@ -81,67 +53,24 @@ jobs:
             --offset 0 \
             --limit 500 \
             --sample-count 0 \
-            --indices '95'
+            --indices '155'
           replay_status=$?
           set -e
-          printf 'CORE_BATCH_P_REPLAY_STATUS=%d\n' "$replay_status"
+          printf 'CORE_BATCH_Q_REPLAY_STATUS=%d\n' "$replay_status"
+          stderr="$work/minic-stderr/kernel/time/time.i.stderr"
+          echo CORE_BATCH_Q_TRACE_BEGIN
+          grep -E 'CORE_(FAST_TRACE|ASSIGN_STAGE|LOWER_DETAIL|ASM_DETAIL)' "$stderr" | tail -n 40 || true
+          echo CORE_BATCH_Q_TRACE_END
+          echo CORE_BATCH_Q_SOURCE_BEGIN
+          grep -n -A12 -B8 'ptep_clear' "$GITHUB_WORKSPACE/build/linux-focus-corpus/kernel/time/time.i" | head -n 120 || true
+          echo CORE_BATCH_Q_SOURCE_END
           python3 tools/ci/classify-core-strict-frontier.py \
             "$work/batch-results.json" --examples 1 --json-out "$work/frontier-summary.json"
           python3 - <<'PY'
           import json
           from pathlib import Path
-          f = json.loads(Path('build/core-batch-p-frontier/frontier-summary.json').read_text())
-          blockers = {b.get('function') for b in f.get('blockers', [])}
-          print(f"CORE_BATCH_P_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
+          f = json.loads(Path('build/core-batch-q-frontier/frontier-summary.json').read_text())
+          print(f"CORE_BATCH_Q_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
           if f['selected'] != 1 or f['error'] != 0:
-              raise SystemExit(f"Batch P one-TU invalid: {f.get('errors', [])}")
-          if 'io_schedule_prepare' in blockers:
-              raise SystemExit('io_schedule_prepare still blocks Batch P')
+              raise SystemExit(f"diagnostic invalid: {f.get('errors', [])}")
           PY
-
-      - name: Sixteen-TU no-error sanity gate
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-batch-p-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-batch-p-strict16"
-          set +e
-          MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
-            --minic "$compiler" \
-            --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
-            --work "$work" \
-            --jobs 8 \
-            --offset 0 \
-            --limit 500 \
-            --sample-count 0 \
-            --indices '0,1,2,3,4,7,9,20,42,66,95,155,165,280,288,299'
-          replay_status=$?
-          set -e
-          printf 'CORE_BATCH_P_STRICT16_REPLAY_STATUS=%d\n' "$replay_status"
-          python3 tools/ci/classify-core-strict-frontier.py \
-            "$work/batch-results.json" --examples 16 --json-out "$work/frontier-summary.json"
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-          f = json.loads(Path('build/core-batch-p-strict16/frontier-summary.json').read_text())
-          blockers = {b.get('function') for b in f.get('blockers', [])}
-          print(f"CORE_BATCH_P_STRICT16 selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
-          if f['selected'] != 16 or f['error'] != 0:
-              raise SystemExit(f"Batch P strict16 invalid: {f.get('errors', [])}")
-          if 'io_schedule_prepare' in blockers:
-              raise SystemExit('io_schedule_prepare still blocks strict16')
-          PY
-
-      - name: Persist qualified Batch P production tree
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          git add -- src/core/core_lower.c
-          if git diff --cached --quiet; then
-            echo CORE_BATCH_P_ALREADY_PERSISTED
-            exit 0
-          fi
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m 'core: lower unsigned bit-field assignment stores'
-          git push origin HEAD:refactor/declaration-sema-v1
