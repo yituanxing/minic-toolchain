@@ -200,6 +200,9 @@ typedef enum MinicCoreStructuredInlineAsmOperandKind {
     /* A register read/write operand is address-backed: load the lvalue before
        asm, bind one target register, then store the post-asm value back. */
     MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE,
+    /* M107_STRUCTURED_MEMORY_OUTPUT_ASM: address-backed write-only memory
+       operand (`=m`). Keep this distinct from read/write memory (`+m`/`+A`). */
+    MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT,
     MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE,
     MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT
 } MinicCoreStructuredInlineAsmOperandKind;

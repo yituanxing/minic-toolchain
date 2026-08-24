@@ -7875,6 +7875,148 @@ static MinicCoreLowerStatus lower_opaque_inline_asm(MinicCoreLowerContext *conte
                    : MINIC_CORE_LOWER_ERROR;
     }
 
+    /* M107_STRUCTURED_MEMORY_OUTPUT_ASM: GCC-style asm may pair one
+       register read/write output with one write-only memory output and a
+       scalar register/immediate input. Preserve those access roles in Core;
+       target register allocation and template interpretation remain backend-owned. */
+    if (source->is_volatile && !source->is_goto && source->template_text != NULL &&
+        source->template_length != 0U && source->outputs != NULL && source->inputs != NULL &&
+        source->output_count == 2U && source->input_count == 1U &&
+        source->label_count == 0U && source->register_clobber_count == 0U &&
+        !source->has_memory_clobber && source->clobber_count == 0U) {
+        const MinicInlineAsmOperand *input = &source->inputs[0];
+        const MinicInlineAsmOperand *memory_output = NULL;
+        const MinicInlineAsmOperand *register_output = NULL;
+        const MinicExpression *input_expression;
+        const MinicExpression *memory_expression;
+        const MinicExpression *register_expression;
+        const MinicLocal *register_local;
+        MinicCoreInstruction structured;
+        MinicType input_type;
+        MinicType memory_type;
+        MinicType register_type;
+        char *numeric_template = NULL;
+        size_t numeric_template_length = 0U;
+        size_t memory_index = SIZE_MAX;
+        size_t register_index = SIZE_MAX;
+        size_t output_index;
+        bool supported_shape = true;
+
+        for (output_index = 0U; output_index < source->output_count; ++output_index) {
+            const MinicInlineAsmOperand *candidate = &source->outputs[output_index];
+
+            if (candidate->access == MINIC_INLINE_ASM_OPERAND_READ_WRITE &&
+                core_inline_asm_constraint_is(candidate, "+r")) {
+                if (register_output != NULL) {
+                    supported_shape = false;
+                    break;
+                }
+                register_output = candidate;
+                register_index = output_index;
+            } else if (candidate->access == MINIC_INLINE_ASM_OPERAND_WRITE_ONLY &&
+                       core_inline_asm_constraint_is(candidate, "=m")) {
+                if (memory_output != NULL) {
+                    supported_shape = false;
+                    break;
+                }
+                memory_output = candidate;
+                memory_index = output_index;
+            } else {
+                supported_shape = false;
+                break;
+            }
+        }
+
+        input_expression = minic_c0_program_expression(context->body->program, input->expression);
+        memory_expression = memory_output == NULL
+                                ? NULL
+                                : minic_c0_program_expression(context->body->program,
+                                                              memory_output->expression);
+        register_expression = register_output == NULL
+                                  ? NULL
+                                  : minic_c0_program_expression(context->body->program,
+                                                                register_output->expression);
+        register_local = register_expression == NULL ||
+                                 register_expression->kind != MINIC_EXPRESSION_LOCAL
+                             ? NULL
+                             : minic_c0_program_local(context->body->program,
+                                                      register_expression->value.local_id);
+        if (!supported_shape || register_output == NULL || memory_output == NULL ||
+            register_index == SIZE_MAX || memory_index == SIZE_MAX || input_expression == NULL ||
+            memory_expression == NULL || register_expression == NULL || register_local == NULL ||
+            input->access != MINIC_INLINE_ASM_OPERAND_READ_ONLY ||
+            (!core_inline_asm_constraint_is(input, "rJ") &&
+             !core_inline_asm_constraint_is(input, "r")) ||
+            register_expression->value_category != MINIC_VALUE_LVALUE ||
+            memory_expression->value_category != MINIC_VALUE_LVALUE ||
+            minic_type_is_const(register_expression->type) ||
+            minic_type_is_volatile(register_expression->type) ||
+            minic_type_is_const(memory_expression->type) || register_local->is_array ||
+            minic_c0_program_local_fixed_register_binding(
+                context->body->program, register_expression->value.local_id) != NULL ||
+            !minic_type_equal(register_local->type, register_expression->type) ||
+            !minic_type_unqualified(register_expression->type, &register_type) ||
+            !minic_type_unqualified(memory_expression->type, &memory_type) ||
+            !core_memory_scalar_type(register_type) || !core_memory_scalar_type(memory_type) ||
+            !core_scalar_expression_value_type(context->body, input_expression, &input_type) ||
+            !core_memory_scalar_type(input_type)) {
+            supported_shape = false;
+        }
+
+        if (supported_shape &&
+            core_inline_asm_numeric_template(
+                source, &numeric_template, &numeric_template_length)) {
+            MinicCoreLowerStatus status;
+
+            if (!minic_core_function_add_opaque_inline_asm(context->function,
+                                                           numeric_template,
+                                                           numeric_template_length,
+                                                           source->is_volatile,
+                                                           source->has_memory_clobber,
+                                                           &inline_asm_id)) {
+                free(numeric_template);
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            free(numeric_template);
+            numeric_template = NULL;
+            (void)memset(&structured, 0, sizeof(structured));
+            structured.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
+            structured.span = statement->span;
+            structured.type = minic_type_void();
+            structured.result = MINIC_CORE_VALUE_INVALID;
+            structured.value.structured_inline_asm.inline_asm_id = inline_asm_id;
+            structured.value.structured_inline_asm.operand_count = 3U;
+
+            for (output_index = 0U; output_index < source->output_count; ++output_index) {
+                const MinicInlineAsmOperand *operand = &source->outputs[output_index];
+                MinicCoreStructuredInlineAsmOperand *binding =
+                    &structured.value.structured_inline_asm.operands[output_index];
+
+                binding->operand_index = output_index;
+                binding->kind = output_index == register_index
+                                    ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE
+                                    : MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT;
+                status = lower_address(context, operand->expression, &binding->value);
+                if (status != MINIC_CORE_LOWER_OK) {
+                    return status;
+                }
+            }
+            structured.value.structured_inline_asm.operands[2].kind =
+                MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+            structured.value.structured_inline_asm.operands[2].operand_index = 2U;
+            status = lower_expression(
+                context, input->expression, &structured.value.structured_inline_asm.operands[2].value);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
+            return minic_core_function_append_effect_instruction(
+                       context->function, context->block_id, &structured)
+                       ? MINIC_CORE_LOWER_OK
+                       : MINIC_CORE_LOWER_ERROR;
+        }
+        free(numeric_template);
+    }
+
     if (source->is_volatile && !source->is_goto && source->template_text != NULL &&
         source->template_length != 0U && source->outputs != NULL && source->inputs != NULL &&
         source->output_count == 2U && source->input_count == 1U && source->has_memory_clobber &&

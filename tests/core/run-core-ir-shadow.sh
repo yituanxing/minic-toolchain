@@ -480,6 +480,20 @@ int materialized_local_array_address(void) {
 EOF
 check_strict_case materialized-local-array-address
 
+cat >"$work_dir/register-readwrite-memory-output-asm.i" <<'EOF'
+long core_put_user_shape(int *p, int x) {
+    long err = 0;
+    __asm__ __volatile__(
+        "1:\n\t"
+        "sw %z2, %1\n"
+        "2:\n"
+        : "+r" (err), "=m" (*p)
+        : "rJ" (x));
+    return err;
+}
+EOF
+check_strict_case register-readwrite-memory-output-asm
+
 cat >"$work_dir/fixed-register-sbi-ecall.i" <<'EOF'
 struct core_sbi_ret { long error; long value; };
 

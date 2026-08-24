@@ -1184,6 +1184,7 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
             switch (binding->kind) {
             case MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
             case MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE:
+            case MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT:
             case MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE:
                 if (!available_pointer_pointee(
                         function, available_values, binding->value, &pointee) ||
