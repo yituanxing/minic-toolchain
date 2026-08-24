@@ -578,7 +578,7 @@ static bool core_structured_inline_asm_supported(const MinicCoreFunction *functi
         instruction->kind != MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM ||
         instruction->result != MINIC_CORE_VALUE_INVALID || !minic_type_is_void(instruction->type) ||
         instruction->value.structured_inline_asm.inline_asm_id >= function->inline_asm_count ||
-        instruction->value.structured_inline_asm.operand_count < 3U ||
+        instruction->value.structured_inline_asm.operand_count == 0U ||
         instruction->value.structured_inline_asm.operand_count > 5U) {
         return false;
     }
@@ -625,8 +625,10 @@ static bool core_structured_inline_asm_supported(const MinicCoreFunction *functi
             return false;
         }
     }
-    if (register_outputs != 2U || memory_readwrites != 1U || scalar_inputs > 2U ||
-        scalar_inputs + 3U != instruction->value.structured_inline_asm.operand_count) {
+    if (!((register_outputs == 2U && memory_readwrites == 1U && scalar_inputs <= 2U &&
+           scalar_inputs + 3U == instruction->value.structured_inline_asm.operand_count) ||
+          (register_outputs == 0U && memory_readwrites == 0U && scalar_inputs == 2U &&
+           instruction->value.structured_inline_asm.operand_count == 2U))) {
         return false;
     }
     for (template_index = 0U; template_index < inline_asm->template_length; ++template_index) {
