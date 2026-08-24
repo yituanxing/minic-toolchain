@@ -1,4 +1,4 @@
-name: Core Fast Batch Y5 Block Shape Reason
+name: Core Fast Batch Y6 Statement Expr CFG Trace
 
 on:
   pull_request:
@@ -7,11 +7,11 @@ permissions:
   contents: read
 
 jobs:
-  batch-y5-diagnose:
+  batch-y6-diagnose:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     concurrency:
-      group: core-fast-batch-y5-${{ github.event.pull_request.number }}
+      group: core-fast-batch-y6-${{ github.event.pull_request.number }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
@@ -29,7 +29,12 @@ jobs:
           set -Eeuo pipefail
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
-      - name: Apply Y candidate and block-shape probe
+      - name: Show failing source window
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sed -n '51135,51220p' build/linux-focus-corpus/kbuild/mm/fadvise.i || true
+      - name: Apply Y candidate and CFG trace
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -37,33 +42,44 @@ jobs:
           python3 tools/dev/patch-core-frontier-batch-y.py
           python3 - <<'PY'
           from pathlib import Path
+          p=Path('src/core/core_lower.c')
+          s=p.read_text()
+          old='''            statement_expression_terminated = false;\n            block_status = lower_block(context, statement_block, &statement_expression_terminated);\n            if (block_status != MINIC_CORE_LOWER_OK || statement_expression_terminated ||\n                expression->value.statement_expression.result == MINIC_EXPRESSION_INVALID) {\n                return block_status;\n            }\n'''
+          new='''            statement_expression_terminated = false;\n            if (context->source_function != NULL && context->source_function->name != NULL &&\n                strcmp(context->source_function->name, "__readahead_batch") == 0) {\n                (void)fprintf(stderr,\n                              "CORE_Y6_STMTEXPR phase=before-block block=%u blocks=%zu result=%u\\n",\n                              (unsigned int)context->block_id,\n                              context->function->block_count,\n                              (unsigned int)expression->value.statement_expression.result);\n            }\n            block_status = lower_block(context, statement_block, &statement_expression_terminated);\n            if (context->source_function != NULL && context->source_function->name != NULL &&\n                strcmp(context->source_function->name, "__readahead_batch") == 0) {\n                (void)fprintf(stderr,\n                              "CORE_Y6_STMTEXPR phase=after-block block=%u blocks=%zu terminated=%d status=%d\\n",\n                              (unsigned int)context->block_id,\n                              context->function->block_count,\n                              statement_expression_terminated ? 1 : 0,\n                              (int)block_status);\n            }\n            if (block_status != MINIC_CORE_LOWER_OK || statement_expression_terminated ||\n                expression->value.statement_expression.result == MINIC_EXPRESSION_INVALID) {\n                return block_status;\n            }\n'''
+          if old not in s: raise SystemExit('Y6 statement-expression block anchor not found')
+          s=s.replace(old,new,1)
+          old2='''            return lower_expression(context,\n                                    expression->value.statement_expression.result,\n                                    &discarded_value);\n'''
+          new2='''            block_status = lower_expression(context,\n                                            expression->value.statement_expression.result,\n                                            &discarded_value);\n            if (context->source_function != NULL && context->source_function->name != NULL &&\n                strcmp(context->source_function->name, "__readahead_batch") == 0) {\n                (void)fprintf(stderr,\n                              "CORE_Y6_STMTEXPR phase=after-result block=%u blocks=%zu status=%d discarded=%u\\n",\n                              (unsigned int)context->block_id,\n                              context->function->block_count,\n                              (int)block_status,\n                              (unsigned int)discarded_value);\n            }\n            return block_status;\n'''
+          if old2 not in s: raise SystemExit('Y6 statement-expression result anchor not found')
+          p.write_text(s.replace(old2,new2,1))
+
           p=Path('src/core/core_ir.c')
           s=p.read_text()
           old='''    if (!storage_shape_is_valid(\n            block->instructions, block->instruction_count, block->instruction_capacity) ||\n        !block->has_terminator) {\n        return false;\n    }\n'''
-          new='''    {\n        bool storage_ok = storage_shape_is_valid(\n            block->instructions, block->instruction_count, block->instruction_capacity);\n        if (!storage_ok || !block->has_terminator) {\n            if (function->name != NULL && strcmp(function->name, "__readahead_batch") == 0) {\n                (void)fprintf(stderr,\n                              "CORE_Y5_BLOCK_SHAPE block=%u storage_ok=%d has_terminator=%d instruction_count=%zu instruction_capacity=%zu\\n",\n                              (unsigned int)block_id,\n                              storage_ok ? 1 : 0,\n                              block->has_terminator ? 1 : 0,\n                              block->instruction_count,\n                              block->instruction_capacity);\n            }\n            return false;\n        }\n    }\n'''
-          if old not in s: raise SystemExit('block-shape verify anchor not found')
+          new='''    {\n        bool storage_ok = storage_shape_is_valid(\n            block->instructions, block->instruction_count, block->instruction_capacity);\n        if (!storage_ok || !block->has_terminator) {\n            if (function->name != NULL && strcmp(function->name, "__readahead_batch") == 0) {\n                (void)fprintf(stderr,\n                              "CORE_Y6_BLOCK_SHAPE block=%u storage_ok=%d has_terminator=%d instruction_count=%zu instruction_capacity=%zu\\n",\n                              (unsigned int)block_id,\n                              storage_ok ? 1 : 0,\n                              block->has_terminator ? 1 : 0,\n                              block->instruction_count,\n                              block->instruction_capacity);\n            }\n            return false;\n        }\n    }\n'''
+          if old not in s: raise SystemExit('Y6 block-shape verify anchor not found')
           p.write_text(s.replace(old,new,1))
           PY
       - name: Build exact diagnostic compiler
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-y5-compiler
-      - name: One-TU block-shape reason
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-y6-compiler
+      - name: One-TU CFG trace
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-batch-y5-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-batch-y5-frontier"
+          compiler="$GITHUB_WORKSPACE/build/core-batch-y6-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-batch-y6-frontier"
           set +e
           MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" --work "$work" --jobs 1 --offset 0 --limit 500 --sample-count 0 --indices '299'
           replay_status=$?
           set -e
-          printf 'CORE_BATCH_Y5_REPLAY_STATUS=%d\n' "$replay_status"
+          printf 'CORE_BATCH_Y6_REPLAY_STATUS=%d\n' "$replay_status"
           stderr="$work/minic-stderr/mm/fadvise.i.stderr"
-          grep -E 'CORE_Y5_BLOCK_SHAPE|__readahead_batch' "$stderr" | tail -n 80 || true
+          grep -E 'CORE_Y6_STMTEXPR|CORE_Y6_BLOCK_SHAPE|__readahead_batch' "$stderr" | tail -n 160 || true
           python3 tools/ci/classify-core-strict-frontier.py "$work/batch-results.json" --examples 1 --json-out "$work/frontier-summary.json"
           python3 - <<'PY'
           import json
           from pathlib import Path
-          f=json.loads(Path('build/core-batch-y5-frontier/frontier-summary.json').read_text())
-          print(f"CORE_BATCH_Y5_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
+          f=json.loads(Path('build/core-batch-y6-frontier/frontier-summary.json').read_text())
+          print(f"CORE_BATCH_Y6_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
           if f['selected'] != 1: raise SystemExit(f'diagnostic invalid: {f}')
           PY
