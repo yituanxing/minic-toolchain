@@ -3688,7 +3688,14 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
             core_scalar_expression_value_type(context->body, left_expression, &left_type) &&
             core_scalar_expression_value_type(context->body, right_expression, &right_type) &&
             minic_type_is_pointer(left_type) && minic_type_is_pointer(right_type) &&
-            minic_type_equal(left_type, right_type) &&
+            /* BATCH_W_QUALIFIED_POINTER_DIFFERENCE: language compatibility is
+               owned by frontend/Sema.  `const T * - T *` is a valid pointer
+               difference when the pointed-to object types are compatible;
+               Core must not re-impose exact pointer-type equality after Sema
+               has accepted the expression.  The representation and stride
+               lowering below remain target-neutral and unchanged. */
+            minic_c0_pointer_difference_compatible(
+                context->body->program, left_type, right_type) &&
             minic_c0_pointer_arithmetic_element_size(context->body->program,
                                                       minic_default_data_layout(),
                                                       left_type,
