@@ -4434,6 +4434,8 @@ static MinicCoreLowerStatus lower_assignment_pair(MinicCoreLowerContext *context
             MinicCoreLowerStatus bit_status;
             MinicType base_value_type;
             MinicType record_type;
+            MinicType storage_access_type;
+            MinicType storage_type;
             MinicType value_type;
             size_t byte_offset;
             size_t bit_offset;
@@ -4447,9 +4449,9 @@ static MinicCoreLowerStatus lower_assignment_pair(MinicCoreLowerContext *context
                 !minic_type_unqualified(target->type, &value_type) ||
                 !minic_type_is_integer(value_type) ||
                 !minic_type_is_unsigned_integer(value_type) ||
-                minic_type_is_const(target->type) || context->target == NULL ||
-                !minic_target_info_integer_width(
-                    context->target, context->body->program, value_type, &storage_width) ||
+                minic_type_is_const(target->type) ||
+                !core_unsigned_bit_field_storage_type(
+                    context, value_type, &storage_type, &storage_width) ||
                 storage_width == 0U || storage_width > 64U ||
                 field->bit_width > storage_width ||
                 !minic_data_layout_record_field_layout(minic_default_data_layout(),
@@ -4467,6 +4469,11 @@ static MinicCoreLowerStatus lower_assignment_pair(MinicCoreLowerContext *context
                 return MINIC_CORE_LOWER_UNSUPPORTED;
             }
             (void)byte_offset;
+            storage_access_type = storage_type;
+            if (minic_type_is_volatile(target->type) &&
+                !minic_type_add_volatile(storage_access_type, &storage_access_type)) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
 
             bit_status = lower_scalar_assignment_value(
                 context, value_type, source_id, &field_value);
@@ -4492,7 +4499,7 @@ static MinicCoreLowerStatus lower_assignment_pair(MinicCoreLowerContext *context
                                               base_value,
                                               target->value.member.record_id,
                                               target->value.member.field_index,
-                                              target->type,
+                                              storage_access_type,
                                               &address);
             if (bit_status != MINIC_CORE_LOWER_OK) {
                 return bit_status;
@@ -4500,7 +4507,7 @@ static MinicCoreLowerStatus lower_assignment_pair(MinicCoreLowerContext *context
             (void)memset(&operation, 0, sizeof(operation));
             operation.kind = MINIC_CORE_INSTRUCTION_LOAD;
             operation.span = target->span;
-            operation.type = value_type;
+            operation.type = storage_type;
             operation.result = MINIC_CORE_VALUE_INVALID;
             operation.value.load.address = address;
             operation.value.load.is_volatile = minic_type_is_volatile(target->type);
@@ -4513,6 +4520,13 @@ static MinicCoreLowerStatus lower_assignment_pair(MinicCoreLowerContext *context
             if (bit_status != MINIC_CORE_LOWER_OK) {
                 return bit_status;
             }
+            if (!minic_type_equal(storage_type, value_type)) {
+                bit_status = append_integer_conversion(
+                    context, span, storage_type, field_value, &field_value);
+                if (bit_status != MINIC_CORE_LOWER_OK) {
+                    return bit_status;
+                }
+            }
 
             low_mask = field->bit_width == 64U
                            ? UINT64_MAX
@@ -4521,7 +4535,7 @@ static MinicCoreLowerStatus lower_assignment_pair(MinicCoreLowerContext *context
                 (void)memset(&operation, 0, sizeof(operation));
                 operation.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
                 operation.span = span;
-                operation.type = value_type;
+                operation.type = storage_type;
                 operation.result = MINIC_CORE_VALUE_INVALID;
                 (void)memcpy(&operation.value.integer_value, &low_mask, sizeof(low_mask));
                 if (!minic_core_function_append_value_instruction(
@@ -4531,7 +4545,7 @@ static MinicCoreLowerStatus lower_assignment_pair(MinicCoreLowerContext *context
                 (void)memset(&operation, 0, sizeof(operation));
                 operation.kind = MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND;
                 operation.span = span;
-                operation.type = value_type;
+                operation.type = storage_type;
                 operation.result = MINIC_CORE_VALUE_INVALID;
                 operation.value.binary.left = field_value;
                 operation.value.binary.right = constant;
@@ -4546,7 +4560,7 @@ static MinicCoreLowerStatus lower_assignment_pair(MinicCoreLowerContext *context
                 (void)memset(&operation, 0, sizeof(operation));
                 operation.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
                 operation.span = span;
-                operation.type = value_type;
+                operation.type = storage_type;
                 operation.result = MINIC_CORE_VALUE_INVALID;
                 (void)memcpy(&operation.value.integer_value, &shift_bits, sizeof(shift_bits));
                 if (!minic_core_function_append_value_instruction(
@@ -4556,7 +4570,7 @@ static MinicCoreLowerStatus lower_assignment_pair(MinicCoreLowerContext *context
                 (void)memset(&operation, 0, sizeof(operation));
                 operation.kind = MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT;
                 operation.span = span;
-                operation.type = value_type;
+                operation.type = storage_type;
                 operation.result = MINIC_CORE_VALUE_INVALID;
                 operation.value.binary.left = field_value;
                 operation.value.binary.right = constant;
@@ -4574,7 +4588,7 @@ static MinicCoreLowerStatus lower_assignment_pair(MinicCoreLowerContext *context
             (void)memset(&operation, 0, sizeof(operation));
             operation.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
             operation.span = span;
-            operation.type = value_type;
+            operation.type = storage_type;
             operation.result = MINIC_CORE_VALUE_INVALID;
             (void)memcpy(&operation.value.integer_value, &clear_mask, sizeof(clear_mask));
             if (!minic_core_function_append_value_instruction(
@@ -4584,7 +4598,7 @@ static MinicCoreLowerStatus lower_assignment_pair(MinicCoreLowerContext *context
             (void)memset(&operation, 0, sizeof(operation));
             operation.kind = MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND;
             operation.span = span;
-            operation.type = value_type;
+            operation.type = storage_type;
             operation.result = MINIC_CORE_VALUE_INVALID;
             operation.value.binary.left = current;
             operation.value.binary.right = constant;
@@ -4595,7 +4609,7 @@ static MinicCoreLowerStatus lower_assignment_pair(MinicCoreLowerContext *context
             (void)memset(&operation, 0, sizeof(operation));
             operation.kind = MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR;
             operation.span = span;
-            operation.type = value_type;
+            operation.type = storage_type;
             operation.result = MINIC_CORE_VALUE_INVALID;
             operation.value.binary.left = merged;
             operation.value.binary.right = field_value;

@@ -364,6 +364,19 @@ int bool_bitfield_storage_read(struct bool_bitfield_storage *state) {
 EOF
 check_strict_case bool-bitfield-storage-read
 
+cat >"$work_dir/bool-bitfield-storage-write.i" <<'EOF'
+struct bool_bitfield_storage_write {
+    unsigned int prefix : 1;
+    _Bool ready : 1;
+};
+
+void bool_bitfield_storage_write(struct bool_bitfield_storage_write *state) {
+    state->ready = 1;
+    state->ready = 0;
+}
+EOF
+check_strict_case bool-bitfield-storage-write
+
 cat >"$work_dir/indirect-cfg-argument.i" <<'EOF'
 int indirect_cfg_argument(int (*callee)(int), int value) {
     return callee(value ? value : 1);
