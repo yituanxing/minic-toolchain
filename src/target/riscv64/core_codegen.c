@@ -726,7 +726,19 @@ static bool core_structured_inline_asm_supported(const MinicCoreFunction *functi
           fixed_bindings == 0U)) {
         return false;
     }
-    if (!((register_outputs == 0U && register_readwrites == 1U && memory_outputs == 1U &&
+    if (!((register_outputs >= 1U && register_outputs <= 5U &&
+           register_readwrites == 0U && memory_outputs == 0U &&
+           memory_readwrites == 0U && scalar_inputs == 0U &&
+           instruction->value.structured_inline_asm.operand_count == register_outputs &&
+           !inline_asm->has_memory_clobber && inline_asm->register_clobber_count == 0U &&
+           fixed_bindings == 0U) ||
+          (register_outputs == 0U && register_readwrites == 0U &&
+           memory_outputs == 0U && memory_readwrites == 0U &&
+           scalar_inputs >= 1U && scalar_inputs <= 4U &&
+           instruction->value.structured_inline_asm.operand_count == scalar_inputs &&
+           !inline_asm->has_memory_clobber && inline_asm->register_clobber_count == 0U &&
+           fixed_bindings == 0U) ||
+          (register_outputs == 0U && register_readwrites == 1U && memory_outputs == 1U &&
            memory_readwrites == 0U && scalar_inputs == 1U &&
            instruction->value.structured_inline_asm.operand_count == 3U &&
            !inline_asm->has_memory_clobber && inline_asm->register_clobber_count == 0U &&
@@ -1895,9 +1907,9 @@ static bool emit_structured_inline_asm(FILE *file,
                                        const MinicCoreFunction *function,
                                        const MinicRiscv64CoreFrame *frame,
                                        const MinicCoreInstruction *instruction) {
-    static const char *const output_registers[2] = {"t0", "t1"};
+    static const char *const output_registers[5] = {"t0", "t1", "t2", "t3", "t4"};
     static const char *const memory_registers[1] = {"t2"};
-    static const char *const input_registers[2] = {"t3", "t4"};
+    static const char *const input_registers[4] = {"t3", "t4", "t5", "t6"};
     const MinicCoreInlineAsm *inline_asm;
     const char *operand_registers[10] = {NULL};
     bool memory_operand[10] = {false};
@@ -1937,12 +1949,12 @@ static bool emit_structured_inline_asm(FILE *file,
             if (fixed_binding != NULL) {
                 register_name = fixed_binding->register_name;
             } else {
-                while (output_index < 2U &&
+                while (output_index < 5U &&
                        core_inline_asm_clobbers_register(
                            inline_asm, output_registers[output_index])) {
                     output_index += 1U;
                 }
-                if (output_index >= 2U) {
+                if (output_index >= 5U) {
                     return false;
                 }
                 register_name = output_registers[output_index++];
@@ -1979,7 +1991,7 @@ static bool emit_structured_inline_asm(FILE *file,
                 }
                 register_name = fixed_binding->register_name;
             } else {
-                if (input_index >= 2U) {
+                if (input_index >= 4U) {
                     return false;
                 }
                 register_name = input_registers[input_index++];

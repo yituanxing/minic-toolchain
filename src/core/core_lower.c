@@ -1133,8 +1133,107 @@ static MinicCoreLowerStatus lower_record_value_address(MinicCoreLowerContext *co
         return MINIC_CORE_LOWER_ERROR;
     }
     expression = minic_c0_program_expression(context->body->program, expression_id);
-    if (expression == NULL || !minic_type_is_record(expression->type) ||
-        !minic_c0_record_value_is_address_backed(context->body->program, expression_id)) {
+    if (expression == NULL || !minic_type_is_record(expression->type)) {
+        return MINIC_CORE_LOWER_UNSUPPORTED;
+    }
+    /* M109_CHAINED_RECORD_ASSIGNMENT_VALUE: an aggregate assignment is an
+       rvalue whose bytes are the fully evaluated RHS. Keep that value
+       address-backed: snapshot the RHS before evaluating the destination, copy
+       the snapshot to the destination, and return the snapshot address. This
+       composes chained assignments without aggregate SSA or target ABI rules. */
+    if (expression->kind == MINIC_EXPRESSION_ASSIGNMENT) {
+        const MinicExpression *source;
+        const MinicExpression *target;
+        MinicCoreInstruction operation;
+        MinicCoreObjectId snapshot_object;
+        MinicCoreValueId destination_address;
+        MinicCoreValueId snapshot_address;
+        MinicCoreValueId source_address;
+        MinicCoreLowerStatus status;
+        MinicType expression_type;
+        MinicType pointer_type;
+        MinicType source_type;
+        MinicType target_type;
+
+        target = minic_c0_program_expression(
+            context->body->program, expression->value.binary.left);
+        source = minic_c0_program_expression(
+            context->body->program, expression->value.binary.right);
+        if (target == NULL || source == NULL ||
+            target->value_category != MINIC_VALUE_LVALUE ||
+            !minic_type_is_record(target->type) || !minic_type_is_record(source->type) ||
+            minic_type_is_const(target->type) || minic_type_is_volatile(target->type) ||
+            minic_type_is_volatile(source->type) ||
+            !minic_type_unqualified(expression->type, &expression_type) ||
+            !minic_type_unqualified(target->type, &target_type) ||
+            !minic_type_unqualified(source->type, &source_type) ||
+            !minic_type_equal(expression_type, target_type) ||
+            !minic_type_equal(expression_type, source_type) ||
+            !minic_type_is_record(expression_type)) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        status = lower_record_value_address(
+            context, expression->value.binary.right, &source_address);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        if (!minic_core_function_add_object(
+                context->function, expression->span, expression_type, &snapshot_object) ||
+            !minic_type_pointer_to(expression_type, &pointer_type)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        (void)memset(&operation, 0, sizeof(operation));
+        operation.kind = MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS;
+        operation.span = expression->span;
+        operation.type = pointer_type;
+        operation.result = MINIC_CORE_VALUE_INVALID;
+        operation.value.object_id = snapshot_object;
+        if (!minic_core_function_append_value_instruction(
+                context->function, context->block_id, &operation, &snapshot_address)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        (void)memset(&operation, 0, sizeof(operation));
+        operation.kind = MINIC_CORE_INSTRUCTION_RECORD_COPY;
+        operation.span = expression->span;
+        operation.type = expression_type;
+        operation.result = MINIC_CORE_VALUE_INVALID;
+        operation.value.record_copy.destination_address = snapshot_address;
+        operation.value.record_copy.source_address = source_address;
+        if (!minic_core_function_append_effect_instruction(
+                context->function, context->block_id, &operation)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        status = lower_address(
+            context, expression->value.binary.left, &destination_address);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        (void)memset(&operation, 0, sizeof(operation));
+        operation.kind = MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS;
+        operation.span = expression->span;
+        operation.type = pointer_type;
+        operation.result = MINIC_CORE_VALUE_INVALID;
+        operation.value.object_id = snapshot_object;
+        if (!minic_core_function_append_value_instruction(
+                context->function, context->block_id, &operation, &snapshot_address)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        (void)memset(&operation, 0, sizeof(operation));
+        operation.kind = MINIC_CORE_INSTRUCTION_RECORD_COPY;
+        operation.span = expression->span;
+        operation.type = expression_type;
+        operation.result = MINIC_CORE_VALUE_INVALID;
+        operation.value.record_copy.destination_address = destination_address;
+        operation.value.record_copy.source_address = snapshot_address;
+        if (!minic_core_function_append_effect_instruction(
+                context->function, context->block_id, &operation)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        *address_id = snapshot_address;
+        return MINIC_CORE_LOWER_OK;
+    }
+    if (!minic_c0_record_value_is_address_backed(
+            context->body->program, expression_id)) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
     /* M88_RECORD_COMPOUND_LITERAL_ADDRESS: expose the shared semantic backing
@@ -1273,6 +1372,7 @@ static MinicCoreLowerStatus lower_record_copy_statement(MinicCoreLowerContext *c
     MinicType source_type;
     MinicType target_type;
     bool direct_record_call;
+    bool record_assignment_value;
 
     if (context == NULL || context->body == NULL || context->body->program == NULL ||
         context->function == NULL || statement == NULL ||
@@ -1285,6 +1385,8 @@ static MinicCoreLowerStatus lower_record_copy_statement(MinicCoreLowerContext *c
     direct_record_call =
         source != NULL && source->kind == MINIC_EXPRESSION_CALL &&
         source->value.call.function_id != MINIC_FUNCTION_INVALID;
+    record_assignment_value =
+        source != NULL && source->kind == MINIC_EXPRESSION_ASSIGNMENT;
     if (target == NULL || source == NULL || target->value_category != MINIC_VALUE_LVALUE ||
         !minic_type_is_record(target->type) || !minic_type_is_record(source->type) ||
         target->type.record_id != source->type.record_id ||
@@ -1292,7 +1394,7 @@ static MinicCoreLowerStatus lower_record_copy_statement(MinicCoreLowerContext *c
         !minic_type_unqualified(source->type, &source_type) ||
         !minic_type_equal(target_type, source_type) || !minic_type_is_record(target_type) ||
         (statement->kind == MINIC_STATEMENT_RECORD_COPY && minic_type_is_const(target->type)) ||
-        (!direct_record_call &&
+        (!direct_record_call && !record_assignment_value &&
          (!minic_c0_record_value_is_copy_source(context->body->program, statement->expression) ||
           !minic_c0_record_value_is_address_backed(
               context->body->program, statement->expression)))) {
@@ -2027,17 +2129,12 @@ static MinicCoreLowerStatus lower_indirect_call(MinicCoreLowerContext *context,
             return status;
         }
     }
-    for (argument_index = 0U; argument_index < signature->parameter_count; ++argument_index) {
-        status = reload_scalar_value(context,
-                                     expression->span,
-                                     signature->parameter_types[argument_index],
-                                     argument_objects[argument_index],
-                                     &arguments[argument_index].value.value_id);
-        if (status != MINIC_CORE_LOWER_OK) {
-            free(arguments);
-            return status;
-        }
-    }
+    /* M112_INDIRECT_CALL_FINAL_BLOCK_ARGUMENTS: argument expressions may
+       create control flow, and so may the indirect callee expression (for
+       example an address-backed/statement-expression function-pointer load).
+       Keep argument values in Core objects until the callee has been evaluated;
+       then reload them in the final call block so the verifier sees both the
+       callee SSA value and every call argument as block-local available values. */
     status = lower_expression(context, expression->value.call.callee, &callee_value);
     if (status != MINIC_CORE_LOWER_OK) {
         (void)fprintf(stderr,
@@ -2048,6 +2145,17 @@ static MinicCoreLowerStatus lower_indirect_call(MinicCoreLowerContext *context,
                       callee_expression != NULL ? (int)callee_expression->kind : -1);
         free(arguments);
         return status;
+    }
+    for (argument_index = 0U; argument_index < signature->parameter_count; ++argument_index) {
+        status = reload_scalar_value(context,
+                                     expression->span,
+                                     signature->parameter_types[argument_index],
+                                     argument_objects[argument_index],
+                                     &arguments[argument_index].value.value_id);
+        if (status != MINIC_CORE_LOWER_OK) {
+            free(arguments);
+            return status;
+        }
     }
     if (callee_value >= context->function->value_count ||
         !minic_type_equal(context->function->values[callee_value].type, callee_value_type)) {
@@ -7676,6 +7784,150 @@ static MinicCoreLowerStatus lower_opaque_inline_asm(MinicCoreLowerContext *conte
                 status = lower_expression(context, operand->expression, &binding->value);
                 if (status != MINIC_CORE_LOWER_OK) {
                     return status;
+                }
+            }
+            return minic_core_function_append_effect_instruction(
+                       context->function, context->block_id, &structured)
+                       ? MINIC_CORE_LOWER_OK
+                       : MINIC_CORE_LOWER_ERROR;
+        }
+        free(numeric_template);
+    }
+
+    /* M110_PURE_REGISTER_OUTPUT_ASM: ordinary volatile extended asm
+       with 1..5 write-only register outputs and no inputs/clobbers. */
+    if (source->is_volatile && !source->is_goto && source->template_text != NULL &&
+        source->template_length != 0U && source->outputs != NULL &&
+        source->output_count >= 1U && source->output_count <= 5U &&
+        source->input_count == 0U && source->label_count == 0U &&
+        source->register_clobber_count == 0U && !source->has_memory_clobber &&
+        source->clobber_count == 0U) {
+        MinicCoreInstruction structured;
+        char *numeric_template = NULL;
+        size_t numeric_template_length = 0U;
+        size_t output_index;
+        bool supported_shape = true;
+
+        for (output_index = 0U; output_index < source->output_count; ++output_index) {
+            const MinicInlineAsmOperand *operand = &source->outputs[output_index];
+            const MinicExpression *output_expression =
+                minic_c0_program_expression(context->body->program, operand->expression);
+            MinicType value_type;
+
+            if (operand->access != MINIC_INLINE_ASM_OPERAND_WRITE_ONLY ||
+                !core_inline_asm_register_output_constraint(operand) ||
+                output_expression == NULL ||
+                output_expression->value_category != MINIC_VALUE_LVALUE ||
+                minic_type_is_const(output_expression->type) ||
+                !minic_type_unqualified(output_expression->type, &value_type) ||
+                !core_memory_scalar_type(value_type) ||
+                (output_expression->kind == MINIC_EXPRESSION_LOCAL &&
+                 minic_c0_program_local_fixed_register_binding(
+                     context->body->program, output_expression->value.local_id) != NULL)) {
+                supported_shape = false;
+                break;
+            }
+        }
+        if (supported_shape && core_inline_asm_numeric_template(
+                source, &numeric_template, &numeric_template_length)) {
+            bool added = minic_core_function_add_opaque_inline_asm(context->function,
+                                                                    numeric_template,
+                                                                    numeric_template_length,
+                                                                    true,
+                                                                    false,
+                                                                    &inline_asm_id);
+            free(numeric_template);
+            numeric_template = NULL;
+            if (!added) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            (void)memset(&structured, 0, sizeof(structured));
+            structured.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
+            structured.span = statement->span;
+            structured.type = minic_type_void();
+            structured.result = MINIC_CORE_VALUE_INVALID;
+            structured.value.structured_inline_asm.inline_asm_id = inline_asm_id;
+            structured.value.structured_inline_asm.operand_count = source->output_count;
+            for (output_index = 0U; output_index < source->output_count; ++output_index) {
+                MinicCoreStructuredInlineAsmOperand *binding =
+                    &structured.value.structured_inline_asm.operands[output_index];
+                MinicCoreLowerStatus output_status;
+
+                binding->kind = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+                binding->operand_index = output_index;
+                output_status = lower_address(
+                    context, source->outputs[output_index].expression, &binding->value);
+                if (output_status != MINIC_CORE_LOWER_OK) {
+                    return output_status;
+                }
+            }
+            return minic_core_function_append_effect_instruction(
+                       context->function, context->block_id, &structured)
+                       ? MINIC_CORE_LOWER_OK
+                       : MINIC_CORE_LOWER_ERROR;
+        }
+        free(numeric_template);
+    }
+
+    /* M111_PURE_REGISTER_INPUT_ASM: 1..4 read-only scalar register inputs,
+       no outputs/clobbers. This is the input-side dual of M110. */
+    if (source->is_volatile && !source->is_goto && source->template_text != NULL &&
+        source->template_length != 0U && source->output_count == 0U &&
+        source->inputs != NULL && source->input_count >= 1U && source->input_count <= 4U &&
+        source->label_count == 0U && source->register_clobber_count == 0U &&
+        !source->has_memory_clobber && source->clobber_count == 0U) {
+        MinicCoreInstruction structured;
+        char *numeric_template = NULL;
+        size_t numeric_template_length = 0U;
+        size_t input_index;
+        bool supported_shape = true;
+
+        for (input_index = 0U; input_index < source->input_count; ++input_index) {
+            const MinicInlineAsmOperand *operand = &source->inputs[input_index];
+            const MinicExpression *input_expression =
+                minic_c0_program_expression(context->body->program, operand->expression);
+            MinicType value_type;
+
+            if (operand->access != MINIC_INLINE_ASM_OPERAND_READ_ONLY ||
+                !core_inline_asm_constraint_is(operand, "r") ||
+                input_expression == NULL ||
+                !core_scalar_expression_value_type(context->body, input_expression, &value_type) ||
+                !core_memory_scalar_type(value_type)) {
+                supported_shape = false;
+                break;
+            }
+        }
+        if (supported_shape && core_inline_asm_numeric_template(
+                source, &numeric_template, &numeric_template_length)) {
+            bool added = minic_core_function_add_opaque_inline_asm(context->function,
+                                                                    numeric_template,
+                                                                    numeric_template_length,
+                                                                    true,
+                                                                    false,
+                                                                    &inline_asm_id);
+            free(numeric_template);
+            numeric_template = NULL;
+            if (!added) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            (void)memset(&structured, 0, sizeof(structured));
+            structured.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
+            structured.span = statement->span;
+            structured.type = minic_type_void();
+            structured.result = MINIC_CORE_VALUE_INVALID;
+            structured.value.structured_inline_asm.inline_asm_id = inline_asm_id;
+            structured.value.structured_inline_asm.operand_count = source->input_count;
+            for (input_index = 0U; input_index < source->input_count; ++input_index) {
+                MinicCoreStructuredInlineAsmOperand *binding =
+                    &structured.value.structured_inline_asm.operands[input_index];
+                MinicCoreLowerStatus input_status;
+
+                binding->kind = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+                binding->operand_index = input_index;
+                input_status = lower_expression(
+                    context, source->inputs[input_index].expression, &binding->value);
+                if (input_status != MINIC_CORE_LOWER_OK) {
+                    return input_status;
                 }
             }
             return minic_core_function_append_effect_instruction(
