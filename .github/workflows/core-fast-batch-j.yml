@@ -1,4 +1,4 @@
-name: Core Batch Y33 Cleanup Return Candidate
+name: Core Batch Y34 Cleanup And Pointer Offset
 
 on:
   pull_request:
@@ -7,11 +7,11 @@ permissions:
   contents: read
 
 jobs:
-  y33-candidate:
+  y34-candidate:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     concurrency:
-      group: core-y33-candidate-${{ github.event.pull_request.number }}
+      group: core-y34-candidate-${{ github.event.pull_request.number }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
@@ -29,7 +29,7 @@ jobs:
           set -Eeuo pipefail
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
-      - name: Apply cleanup-return candidate and pointer trace
+      - name: Apply Y34 candidate
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -39,84 +39,90 @@ jobs:
           p=Path('src/core/core_lower.c')
           s=p.read_text()
 
+          # Narrow cleanup-edge ownership: only return currently consumes cleanup contexts.
           anchor='''static MinicCoreLowerStatus lower_return(MinicCoreLowerContext *context,\n                                         const MinicStatement *statement) {'''
-          helper='''static MinicCoreLowerStatus lower_cleanup_contexts(\n    MinicCoreLowerContext *context, MinicCleanupContextId current, MinicCleanupContextId stop) {\n    if (context == NULL || context->body == NULL || context->body->program == NULL ||\n        !minic_c0_cleanup_context_reaches(context->body->program, current, stop)) {\n        return MINIC_CORE_LOWER_ERROR;\n    }\n    while (current != stop) {\n        const MinicCleanupContext *cleanup;\n        MinicCoreValueId discarded_value;\n        MinicCoreLowerStatus status;\n\n        cleanup = minic_c0_program_cleanup_context(context->body->program, current);\n        if (cleanup == NULL || cleanup->parent == current ||\n            cleanup->cleanup_expression == MINIC_EXPRESSION_INVALID) {\n            return MINIC_CORE_LOWER_ERROR;\n        }\n        status = lower_expression(context, cleanup->cleanup_expression, &discarded_value);\n        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n        current = cleanup->parent;\n    }\n    return MINIC_CORE_LOWER_OK;\n}\n\n'''+anchor
+          helper='''static MinicCoreLowerStatus lower_cleanup_contexts(\n    MinicCoreLowerContext *context, MinicCleanupContextId current, MinicCleanupContextId stop) {\n    if (context == NULL || context->body == NULL || context->body->program == NULL ||\n        !minic_c0_cleanup_context_reaches(context->body->program, current, stop)) {\n        return MINIC_CORE_LOWER_ERROR;\n    }\n    while (current != stop) {\n        const MinicCleanupContext *cleanup;\n        const MinicExpression *cleanup_expression;\n        MinicCoreValueId discarded_value;\n        MinicCoreLowerStatus status;\n\n        cleanup = minic_c0_program_cleanup_context(context->body->program, current);\n        if (cleanup == NULL || cleanup->parent == current ||\n            cleanup->cleanup_expression == MINIC_EXPRESSION_INVALID) {\n            return MINIC_CORE_LOWER_ERROR;\n        }\n        cleanup_expression = minic_c0_program_expression(\n            context->body->program, cleanup->cleanup_expression);\n        if (cleanup_expression == NULL) {\n            return MINIC_CORE_LOWER_ERROR;\n        }\n        status = lower_expression(context, cleanup->cleanup_expression, &discarded_value);\n        (void)fprintf(stderr,\n                      "CORE_CLEANUP_LOWER function=%s context=%llu expr=%llu kind=%d "\n                      "span=%zu:%zu status=%d block=%u value=%u\\n",\n                      context->source_function != NULL ? context->source_function->name : "?",\n                      (unsigned long long)current,\n                      (unsigned long long)cleanup->cleanup_expression,\n                      (int)cleanup_expression->kind, cleanup_expression->span.begin.line,\n                      cleanup_expression->span.begin.column, (int)status,\n                      (unsigned int)context->block_id, (unsigned int)discarded_value);\n        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n        current = cleanup->parent;\n    }\n    return MINIC_CORE_LOWER_OK;\n}\n\n'''+anchor
           if s.count(anchor)!=1: raise SystemExit(f'return anchor count={s.count(anchor)}')
           s=s.replace(anchor,helper,1)
 
+          pos=s.find(anchor)
+          sub=s[pos:]
           old='''    MinicCoreTerminator terminator;\n    MinicCoreLowerStatus status;\n\n    if (context == NULL || context->source_function == NULL || statement == NULL) {'''
           new='''    MinicCoreTerminator terminator;\n    MinicCoreLowerStatus status;\n    MinicCoreObjectId cleanup_return_object;\n    bool has_cleanup;\n\n    if (context == NULL || context->source_function == NULL || statement == NULL) {'''
-          if s.count(old)<1: raise SystemExit('return declarations anchor')
-          # replace occurrence following lower_return only
-          pos=s.find(anchor)
-          sub=s[pos:]
-          if old not in sub: raise SystemExit('return declarations not after function')
-          sub=sub.replace(old,new,1)
-          s=s[:pos]+sub
+          if old not in sub: raise SystemExit('return decl anchor')
+          sub=sub.replace(old,new,1); s=s[:pos]+sub
 
+          pos=s.find(anchor); sub=s[pos:]
           old='''    (void)memset(&terminator, 0, sizeof(terminator));\n    terminator.kind = MINIC_CORE_TERMINATOR_RETURN;'''
           new='''    has_cleanup = statement->cleanup_context != statement->cleanup_stop_context;\n    cleanup_return_object = MINIC_CORE_OBJECT_INVALID;\n    if (has_cleanup &&\n        !minic_c0_cleanup_context_reaches(context->body->program,\n                                          statement->cleanup_context,\n                                          statement->cleanup_stop_context)) {\n        return MINIC_CORE_LOWER_ERROR;\n    }\n    (void)memset(&terminator, 0, sizeof(terminator));\n    terminator.kind = MINIC_CORE_TERMINATOR_RETURN;'''
-          pos=s.find(anchor)
-          sub=s[pos:]
           if old not in sub: raise SystemExit('return init anchor')
-          sub=sub.replace(old,new,1)
-          s=s[:pos]+sub
+          sub=sub.replace(old,new,1); s=s[:pos]+sub
 
+          pos=s.find(anchor); sub=s[pos:]
           old='''        } else if (minic_type_is_record(context->source_function->return_type)) {\n            const MinicExpression *expression;'''
           new='''        } else if (minic_type_is_record(context->source_function->return_type)) {\n            const MinicExpression *expression;\n\n            if (has_cleanup) {\n                return MINIC_CORE_LOWER_UNSUPPORTED;\n            }'''
-          pos=s.find(anchor)
-          sub=s[pos:]
           if old not in sub: raise SystemExit('record return anchor')
-          sub=sub.replace(old,new,1)
-          s=s[:pos]+sub
+          sub=sub.replace(old,new,1); s=s[:pos]+sub
 
+          pos=s.find(anchor); sub=s[pos:]
           old='''        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n    }\n    return minic_core_function_set_terminator(context->function, context->block_id, &terminator)'''
-          new='''        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n    }\n    if (has_cleanup) {\n        if (core_memory_scalar_type(context->source_function->return_type)) {\n            status = spill_scalar_value(context,\n                                        statement->span,\n                                        context->source_function->return_type,\n                                        terminator.return_value,\n                                        &cleanup_return_object);\n            if (status != MINIC_CORE_LOWER_OK) {\n                return status;\n            }\n        }\n        status = lower_cleanup_contexts(context,\n                                        statement->cleanup_context,\n                                        statement->cleanup_stop_context);\n        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n        if (core_memory_scalar_type(context->source_function->return_type)) {\n            status = reload_scalar_value(context,\n                                         statement->span,\n                                         context->source_function->return_type,\n                                         cleanup_return_object,\n                                         &terminator.return_value);\n            if (status != MINIC_CORE_LOWER_OK) {\n                return status;\n            }\n        }\n    }\n    return minic_core_function_set_terminator(context->function, context->block_id, &terminator)'''
-          pos=s.find(anchor)
-          sub=s[pos:]
-          if old not in sub: raise SystemExit('return completion anchor')
-          sub=sub.replace(old,new,1)
-          s=s[:pos]+sub
+          new='''        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n    }\n    if (has_cleanup) {\n        if (core_memory_scalar_type(context->source_function->return_type)) {\n            status = spill_scalar_value(context, statement->span,\n                                        context->source_function->return_type,\n                                        terminator.return_value, &cleanup_return_object);\n            if (status != MINIC_CORE_LOWER_OK) {\n                return status;\n            }\n        }\n        status = lower_cleanup_contexts(context, statement->cleanup_context,\n                                        statement->cleanup_stop_context);\n        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n        if (core_memory_scalar_type(context->source_function->return_type)) {\n            status = reload_scalar_value(context, statement->span,\n                                         context->source_function->return_type,\n                                         cleanup_return_object, &terminator.return_value);\n            if (status != MINIC_CORE_LOWER_OK) {\n                return status;\n            }\n        }\n    }\n    return minic_core_function_set_terminator(context->function, context->block_id, &terminator)'''
+          if old not in sub: raise SystemExit('return end anchor')
+          sub=sub.replace(old,new,1); s=s[:pos]+sub
 
           old='''        if (statement->cleanup_context != statement->cleanup_stop_context) {\n            (void)fprintf(stderr,'''
           new='''        if (statement->cleanup_context != statement->cleanup_stop_context &&\n            statement->kind != MINIC_STATEMENT_RETURN) {\n            (void)fprintf(stderr,'''
-          if s.count(old)!=1: raise SystemExit(f'cleanup guard anchor count={s.count(old)}')
+          if s.count(old)!=1: raise SystemExit(f'cleanup guard count={s.count(old)}')
           s=s.replace(old,new,1)
 
-          # Add stage tracing to the existing pointer +/- integer path.
-          marker='''        /* BATCH_U_POINTER_ARITH_VALUE_TYPES: Core consumes scalar values, not\n           lvalue storage qualifiers.'''
-          trace='''        if (context->source_function != NULL &&\n            strcmp(context->source_function->name, "bvec_advance") == 0) {\n            MinicType trace_pointer_type;\n            MinicType trace_index_type;\n            size_t trace_element_size = 0U;\n            bool trace_pointer_ok = core_scalar_expression_value_type(\n                context->body, pointer_expression, &trace_pointer_type);\n            bool trace_index_ok = core_scalar_expression_value_type(\n                context->body, index_expression, &trace_index_type);\n            bool trace_element_ok = minic_c0_pointer_arithmetic_element_size(\n                context->body->program, minic_default_data_layout(), expression->type,\n                &trace_element_size);\n            (void)fprintf(stderr,\n                          "CORE_POINTER_OFFSET_DETAIL function=bvec_advance pointer_ok=%d index_ok=%d "\n                          "pointer_equal_result=%d pointer_base=%d pointer_depth=%u pointer_bq=%u "\n                          "pointer_pq=%u result_base=%d result_depth=%u result_bq=%u result_pq=%u "\n                          "index_base=%d index_depth=%u element_ok=%d element_size=%zu\\n",\n                          trace_pointer_ok ? 1 : 0, trace_index_ok ? 1 : 0,\n                          trace_pointer_ok && minic_type_equal(trace_pointer_type, expression->type) ? 1 : 0,\n                          trace_pointer_ok ? (int)trace_pointer_type.base_kind : -1,\n                          trace_pointer_ok ? trace_pointer_type.pointer_depth : 0U,\n                          trace_pointer_ok ? trace_pointer_type.base_qualifiers : 0U,\n                          trace_pointer_ok ? trace_pointer_type.pointer_qualifiers : 0U,\n                          (int)expression->type.base_kind, expression->type.pointer_depth,\n                          expression->type.base_qualifiers, expression->type.pointer_qualifiers,\n                          trace_index_ok ? (int)trace_index_type.base_kind : -1,\n                          trace_index_ok ? trace_index_type.pointer_depth : 0U,\n                          trace_element_ok ? 1 : 0, trace_element_size);\n        }\n'''+marker
-          if s.count(marker)!=1: raise SystemExit(f'pointer marker count={s.count(marker)}')
-          s=s.replace(marker,trace,1)
+          # Pointer +/- integer: compute in the lvalue-to-rvalue pointer type.
+          old='''        MinicCoreValueId pointer_value;\n        MinicCoreValueId index_value;\n        MinicCoreLowerStatus status;\n        MinicType pointer_value_type;\n        MinicType index_value_type;\n        size_t element_size;'''
+          new='''        MinicCoreValueId pointer_value;\n        MinicCoreValueId index_value;\n        MinicCoreValueId offset_value;\n        MinicCoreLowerStatus status;\n        MinicType expression_value_type;\n        MinicType pointer_value_type;\n        MinicType index_value_type;\n        size_t element_size;'''
+          if s.count(old)!=1: raise SystemExit(f'pointer decl count={s.count(old)}')
+          s=s.replace(old,new,1)
+
+          old='''            !minic_type_is_pointer(pointer_value_type) ||\n            !minic_type_is_integer(index_value_type) ||\n            !minic_type_equal(pointer_value_type, expression->type) ||\n            !minic_c0_pointer_arithmetic_element_size(context->body->program,\n                                                      minic_default_data_layout(),\n                                                      expression->type,\n                                                      &element_size)) {'''
+          new='''            !minic_type_is_pointer(pointer_value_type) ||\n            !minic_type_is_integer(index_value_type) ||\n            !minic_type_unqualified(expression->type, &expression_value_type) ||\n            !minic_type_equal(pointer_value_type, expression_value_type) ||\n            !minic_c0_pointer_arithmetic_element_size(context->body->program,\n                                                      minic_default_data_layout(),\n                                                      pointer_value_type,\n                                                      &element_size)) {'''
+          if s.count(old)!=1: raise SystemExit(f'pointer validation count={s.count(old)}')
+          s=s.replace(old,new,1)
+
+          old='''        instruction.kind = MINIC_CORE_INSTRUCTION_POINTER_OFFSET;\n        instruction.value.pointer_offset.base = pointer_value;\n        instruction.value.pointer_offset.index = index_value;\n        instruction.value.pointer_offset.element_size = element_size;\n        /* M75 introduced this flag for compound subtraction. Always initialize\n           it on ordinary pointer arithmetic as well; leaving pointer + integer\n           indeterminate would make the Core program nondeterministic. */\n        instruction.value.pointer_offset.subtract =\n            expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT;\n        return minic_core_function_append_value_instruction(\n                   context->function, context->block_id, &instruction, value_id)\n                   ? MINIC_CORE_LOWER_OK\n                   : MINIC_CORE_LOWER_ERROR;'''
+          new='''        instruction.kind = MINIC_CORE_INSTRUCTION_POINTER_OFFSET;\n        instruction.type = pointer_value_type;\n        instruction.value.pointer_offset.base = pointer_value;\n        instruction.value.pointer_offset.index = index_value;\n        instruction.value.pointer_offset.element_size = element_size;\n        /* M75 introduced this flag for compound subtraction. Always initialize\n           it on ordinary pointer arithmetic as well; leaving pointer + integer\n           indeterminate would make the Core program nondeterministic. */\n        instruction.value.pointer_offset.subtract =\n            expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT;\n        if (!minic_core_function_append_value_instruction(\n                context->function, context->block_id, &instruction, &offset_value)) {\n            return MINIC_CORE_LOWER_ERROR;\n        }\n        if (minic_type_equal(pointer_value_type, expression->type)) {\n            *value_id = offset_value;\n            return MINIC_CORE_LOWER_OK;\n        }\n        return append_scalar_bitcast(\n            context, expression->span, expression->type, offset_value, value_id);'''
+          if s.count(old)!=1: raise SystemExit(f'pointer emit count={s.count(old)}')
+          s=s.replace(old,new,1)
           p.write_text(s)
-          print('CORE_BATCH_Y33_PATCHED')
+          print('CORE_BATCH_Y34_PATCHED')
           PY
       - name: Build exact candidate
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-y33-compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-y34-compiler
       - name: Full Core regression suite
         shell: bash
         run: |
           set -Eeuo pipefail
-          MINIC="$GITHUB_WORKSPACE/build/core-batch-y33-compiler/bin/minic" \
-            BUILD_DIR="$GITHUB_WORKSPACE/build/core-batch-y33-tests" \
+          MINIC="$GITHUB_WORKSPACE/build/core-batch-y34-compiler/bin/minic" \
+            BUILD_DIR="$GITHUB_WORKSPACE/build/core-batch-y34-tests" \
             bash tests/core/run-core-ir-shadow.sh
-          echo CORE_BATCH_Y33_CORE_SUITE_PASS
+          echo CORE_BATCH_Y34_CORE_SUITE_PASS
       - name: Replay focused blockers
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-batch-y33-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-batch-y33"
+          compiler="$GITHUB_WORKSPACE/build/core-batch-y34-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-batch-y34"
           set +e
           MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
             --work "$work" --jobs 3 --offset 0 --limit 500 --sample-count 0 --indices '2,3,7'
           replay_status=$?
           set -e
-          echo CORE_BATCH_Y33_REPLAY_STATUS=$replay_status
-          echo CORE_BATCH_Y33_DETAILS_BEGIN
-          grep -R -E 'CORE_POINTER_OFFSET_DETAIL|CORE_FAST_TRACE|CORE_ASSIGN_STAGE' "$work/minic-stderr" | grep -E 'bvec_advance|device_has_driver_override|device_match_driver_override|CORE_POINTER_OFFSET_DETAIL' || true
-          echo CORE_BATCH_Y33_DETAILS_END
+          echo CORE_BATCH_Y34_REPLAY_STATUS=$replay_status
+          echo CORE_BATCH_Y34_DEVICE_SOURCE_BEGIN
+          f=$(find build/linux-focus-corpus -type f -path '*/init/do_mounts.i' | head -n1)
+          sed -n '42155,42182p' "$f"
+          echo CORE_BATCH_Y34_DEVICE_SOURCE_END
+          echo CORE_BATCH_Y34_DETAILS_BEGIN
+          grep -R -E 'CORE_CLEANUP_LOWER|CORE_FAST_TRACE|CORE_ASSIGN_STAGE|CORE_LOWER_DETAIL|CORE_ASM_DETAIL' "$work/minic-stderr" | grep -E 'device_has_driver_override|device_match_driver_override|bvec_advance|CORE_CLEANUP_LOWER' || true
+          echo CORE_BATCH_Y34_DETAILS_END
           python3 tools/ci/classify-core-strict-frontier.py \
             "$work/batch-results.json" --examples 8 --json-out "$work/frontier-summary.json"
           python3 tools/ci/summarize-core-frontier-progress.py \
@@ -125,13 +131,13 @@ jobs:
           python3 - <<'PY'
           import json
           from pathlib import Path
-          w=Path('build/core-batch-y33')
+          w=Path('build/core-batch-y34')
           rows=json.loads((w/'batch-results.json').read_text())
           if isinstance(rows,dict): rows=rows.get('results',rows.get('tus',[]))
           for r in sorted(rows,key=lambda x:x.get('index',-1)):
-              print(f"CORE_BATCH_Y33_ROW index={r.get('index')} status={r.get('status')} progress={float(r.get('progress_ratio') or 0)*100:.2f}% first={r.get('first_error_line')} message={r.get('message','')}")
+              print(f"CORE_BATCH_Y34_ROW index={r.get('index')} status={r.get('status')} progress={float(r.get('progress_ratio') or 0)*100:.2f}% first={r.get('first_error_line')} message={r.get('message','')}")
           f=json.loads((w/'frontier-summary.json').read_text())
-          print(f"CORE_BATCH_Y33_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
+          print(f"CORE_BATCH_Y34_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
           if f['error'] != 0 or next(r for r in rows if int(r['index'])==7)['status'] != 'PASS':
-              raise SystemExit(f'Y33 regression/error: {f}')
+              raise SystemExit(f'Y34 regression/error: {f}')
           PY
