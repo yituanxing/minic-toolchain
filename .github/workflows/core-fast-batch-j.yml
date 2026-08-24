@@ -1,4 +1,4 @@
-name: Core Y85 BTF Csum Stage Audit
+name: Core Y86 BTF Function Stage
 
 on:
   pull_request:
@@ -7,7 +7,7 @@ permissions:
   contents: read
 
 jobs:
-  y85-stage-audit:
+  y86-btf-function-stage:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     steps:
@@ -20,7 +20,7 @@ jobs:
         with:
           path: build/linux-focus-corpus
           key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
-      - name: Audit lowerer source and instrument function stages
+      - name: Instrument function stage and build
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -28,53 +28,36 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           p=Path('src/core/core_lower.c'); s=p.read_text()
-          for needle,nextneedle,label in [
-              ('MinicCoreLowerStatus minic_core_lower_function(', None, 'FUNCTION'),
-              ('static MinicCoreLowerStatus lower_switch(', None, 'SWITCH')]:
-              start=s.find(needle)
-              if start < 0: raise SystemExit(f'missing {label} start')
-              # brace-balanced function extent
-              brace=s.find('{',start); depth=0; end=None
-              for i in range(brace,len(s)):
-                  if s[i]=='{': depth+=1
-                  elif s[i]=='}':
-                      depth-=1
-                      if depth==0:
-                          end=i+1; break
-              if end is None: raise SystemExit(f'missing {label} end')
-              first=s.count('\n',0,start)+1
-              print(f'CORE_Y85_{label}_SOURCE_BEGIN line={first}')
-              for n,line in enumerate(s[start:end].splitlines(),first): print(f'{n}: {line}')
-              print(f'CORE_Y85_{label}_SOURCE_END')
+          old='''    status = lower_parameter_ingress(&context);\n    terminated = false;\n    if (status == MINIC_CORE_LOWER_OK) status = lower_block(&context, source_block, &terminated);\n'''
+          new='''    status = lower_parameter_ingress(&context);\n    if (source_function->name != NULL && strcmp(source_function->name, "btf_field_type_name") == 0) {\n        (void)fprintf(stderr, "CORE_Y86_STAGE function=btf_field_type_name stage=parameter-ingress status=%d values=%zu objects=%zu blocks=%zu\\n",\n                      (int)status, lowered.value_count, lowered.object_count, lowered.block_count);\n    }\n    terminated = false;\n    if (status == MINIC_CORE_LOWER_OK) {\n        status = lower_block(&context, source_block, &terminated);\n        if (source_function->name != NULL && strcmp(source_function->name, "btf_field_type_name") == 0) {\n            (void)fprintf(stderr, "CORE_Y86_STAGE function=btf_field_type_name stage=body status=%d terminated=%d values=%zu objects=%zu blocks=%zu\\n",\n                          (int)status, terminated ? 1 : 0, lowered.value_count, lowered.object_count, lowered.block_count);\n        }\n    }\n'''
+          if s.count(old)!=1: raise SystemExit(f'function-stage anchor {s.count(old)}')
+          p.write_text(s.replace(old,new,1))
           PY
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y85-compiler
-      - name: Replay BTF and csum representatives
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y86-compiler
+      - name: Replay BTF representatives
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-y85-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-y85-linux"
+          compiler="$GITHUB_WORKSPACE/build/core-y86-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-y86-linux"
           mkdir -p "$work"
           set +e
-          MINIC_CORE_IR=strict CORE_FAST_TRACE=1 CORE_LOWER_DETAIL=1 CORE_ASM_DETAIL=1 CORE_ASSIGN_STAGE=1 python3 tests/external/linux/corpus_replay.py \
+          MINIC_CORE_IR=strict CORE_FAST_TRACE=1 CORE_LOWER_DETAIL=1 CORE_ASM_DETAIL=1 python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
-            --work "$work" --jobs 3 --offset 0 --limit 500 --sample-count 0 --indices '2,186,193'
+            --work "$work" --jobs 2 --offset 0 --limit 500 --sample-count 0 --indices '186,193'
           status=$?
           set -e
-          echo CORE_Y85_REPLAY_STATUS=$status
+          echo CORE_Y86_REPLAY_STATUS=$status
           python3 - <<'PY'
           import json
           from pathlib import Path
-          w=Path('build/core-y85-linux'); rows=json.loads((w/'batch-results.json').read_text())
+          w=Path('build/core-y86-linux'); rows=json.loads((w/'batch-results.json').read_text())
           if isinstance(rows,dict): rows=rows.get('results',rows.get('tus',[]))
           for r in rows:
               idx=int(r['index']); rel=r['input']
-              print(f"CORE_Y85_INDEX index={idx} status={r.get('status')} progress={float(r.get('progress_ratio') or 0)*100:.3f}% first={r.get('first_error_line')} message={r.get('message','')}")
+              print(f"CORE_Y86_INDEX index={idx} status={r.get('status')} progress={float(r.get('progress_ratio') or 0)*100:.3f}% message={r.get('message','')}")
               err=w/'minic-stderr'/f'{rel}.stderr'
               if err.is_file():
-                  lines=err.read_text(errors='replace').splitlines()
-                  keep=[x for x in lines if ('btf_field_type_name' in x or 'csum16_sub' in x or 'CORE_FAST_TRACE' in x or 'CORE_LOWER_DETAIL' in x or 'CORE_ASM_DETAIL' in x or 'CORE_ASSIGN_STAGE' in x)]
-                  print(f'CORE_Y85_STDERR_BEGIN index={idx}')
-                  for x in keep[-300:]: print(x)
-                  print(f'CORE_Y85_STDERR_END index={idx}')
+                  for x in err.read_text(errors='replace').splitlines():
+                      if 'CORE_Y86_STAGE' in x or ('CORE_FAST_TRACE' in x and 'btf_field_type_name' in x) or ('CORE_ASM_DETAIL' in x and 'btf_field_type_name' in x): print(x)
           PY
