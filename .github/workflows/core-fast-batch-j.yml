@@ -1,17 +1,17 @@
-name: Core Fast Batch R
+name: Core Fast Batch S Diagnose
 
 on:
   pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  batch-r:
+  batch-s-diagnose:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     concurrency:
-      group: core-fast-batch-r-${{ github.event.pull_request.number }}
+      group: core-fast-batch-s-${{ github.event.pull_request.number }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
@@ -32,110 +32,49 @@ jobs:
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
 
-      - name: Apply Batch R production changes
+      - name: Enable compact progress telemetry
+        run: python3 tools/dev/patch-linux-replay-live-progress.py
+
+      - name: Build exact compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-s-compiler
+
+      - name: One-TU qtree_depth diagnostic
         shell: bash
         run: |
           set -Eeuo pipefail
-          python3 tools/dev/patch-linux-replay-live-progress.py
-          python3 tools/dev/patch-core-frontier-batch-r.py
-
-      - name: Build exact patched compiler
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-r-compiler
-
-      - name: Focused record-call member projection regression
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-batch-r-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-batch-r-focused"
-          mkdir -p "$work"
-          cat >"$work/record-call-member.i" <<'EOF'
-          struct prot { unsigned long bits; };
-          extern struct prot normalize(void);
-          int same_bits(unsigned long bits) { return bits == normalize().bits; }
-          EOF
-          MINIC_CORE_IR=strict "$compiler" -S "$work/record-call-member.i" -o "$work/strict.s"
-          MINIC_CORE_IR=strict MINIC_CORE_CODEGEN=basic-v0 "$compiler" \
-            -S "$work/record-call-member.i" -o "$work/core.s"
-          grep -q 'call normalize' "$work/core.s"
-          echo CORE_BATCH_R_FOCUSED_PASS
-
-      - name: Four-TU pgprot_modify frontier
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-batch-r-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-batch-r-frontier"
+          compiler="$GITHUB_WORKSPACE/build/core-batch-s-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-batch-s-frontier"
           set +e
           MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" \
             --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
             --work "$work" \
-            --jobs 4 \
+            --jobs 1 \
             --offset 0 \
             --limit 500 \
             --sample-count 0 \
-            --indices '155,165,280,288'
+            --indices '4'
           replay_status=$?
           set -e
-          printf 'CORE_BATCH_R_REPLAY_STATUS=%d\n' "$replay_status"
-          python3 tools/ci/classify-core-strict-frontier.py \
-            "$work/batch-results.json" --examples 4 --json-out "$work/frontier-summary.json"
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-          f = json.loads(Path('build/core-batch-r-frontier/frontier-summary.json').read_text())
-          blockers = {b.get('function') for b in f.get('blockers', [])}
-          print(f"CORE_BATCH_R_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
-          if f['selected'] != 4 or f['error'] != 0:
-              raise SystemExit(f"Batch R family gate invalid: {f.get('errors', [])}")
-          if 'pgprot_modify' in blockers:
-              raise SystemExit('pgprot_modify still blocks Batch R representative frontier')
-          PY
-
-      - name: Sixteen-TU no-error sanity gate
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-batch-r-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-batch-r-strict16"
-          set +e
-          MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
-            --minic "$compiler" \
-            --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
-            --work "$work" \
-            --jobs 8 \
-            --offset 0 \
-            --limit 500 \
-            --sample-count 0 \
-            --indices '0,1,2,3,4,7,9,20,42,66,95,155,165,280,288,299'
-          replay_status=$?
-          set -e
-          printf 'CORE_BATCH_R_STRICT16_REPLAY_STATUS=%d\n' "$replay_status"
-          python3 tools/ci/classify-core-strict-frontier.py \
-            "$work/batch-results.json" --examples 16 --json-out "$work/frontier-summary.json"
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-          f = json.loads(Path('build/core-batch-r-strict16/frontier-summary.json').read_text())
-          blockers = {b.get('function') for b in f.get('blockers', [])}
-          print(f"CORE_BATCH_R_STRICT16 selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
-          if f['selected'] != 16 or f['error'] != 0:
-              raise SystemExit(f"Batch R strict16 invalid: {f.get('errors', [])}")
-          if 'pgprot_modify' in blockers:
-              raise SystemExit('pgprot_modify still blocks strict16')
-          PY
-
-      - name: Persist qualified Batch R production tree
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          git add -- src/core/core_lower.c
-          if git diff --cached --quiet; then
-            echo CORE_BATCH_R_ALREADY_PERSISTED
-            exit 0
+          printf 'CORE_BATCH_S_REPLAY_STATUS=%d\n' "$replay_status"
+          stderr="$work/minic-stderr/init/initramfs.i.stderr"
+          echo CORE_BATCH_S_TRACE_BEGIN
+          grep 'function=qtree_depth' "$stderr" || true
+          echo CORE_BATCH_S_TRACE_END
+          src="$(find "$GITHUB_WORKSPACE/build/linux-focus-corpus" -type f -path '*/init/initramfs.i' | head -n1)"
+          echo CORE_BATCH_S_SOURCE_BEGIN
+          printf 'CORE_BATCH_S_SOURCE_FILE=%s\n' "$src"
+          if test -n "$src"; then
+            grep -n -A35 -B15 'qtree_depth' "$src" | head -n 260 || true
           fi
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m 'core: project scalar members from direct record calls'
-          git push origin HEAD:refactor/declaration-sema-v1
+          echo CORE_BATCH_S_SOURCE_END
+          python3 tools/ci/classify-core-strict-frontier.py \
+            "$work/batch-results.json" --examples 1 --json-out "$work/frontier-summary.json"
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          f = json.loads(Path('build/core-batch-s-frontier/frontier-summary.json').read_text())
+          print(f"CORE_BATCH_S_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
+          if f['selected'] != 1 or f['error'] != 0:
+              raise SystemExit(f"diagnostic invalid: {f.get('errors', [])}")
+          PY
