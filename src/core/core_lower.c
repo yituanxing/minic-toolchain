@@ -26,6 +26,8 @@ typedef struct MinicCoreLowerContext {
 static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                                              MinicExpressionId expression_id,
                                              MinicCoreValueId *value_id);
+static MinicCoreLowerStatus lower_expression_statement(
+    MinicCoreLowerContext *context, const MinicStatement *statement);
 static MinicCoreLowerStatus
 lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool *terminated);
 static MinicCoreLowerStatus set_branch(MinicCoreLowerContext *context,
@@ -2959,10 +2961,20 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
        operand forms remain fail-closed through lower_expression(). */
     if (expression->kind == MINIC_EXPRESSION_BINARY &&
         expression->value.binary.operator_kind == MINIC_BINARY_COMMA) {
-        MinicCoreValueId discarded_left;
+        const MinicExpression *discarded_expression;
+        MinicStatement discarded_statement;
         MinicCoreLowerStatus status;
 
-        status = lower_expression(context, expression->value.binary.left, &discarded_left);
+        discarded_expression = minic_c0_program_expression(
+            context->body->program, expression->value.binary.left);
+        if (discarded_expression == NULL) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        (void)memset(&discarded_statement, 0, sizeof(discarded_statement));
+        discarded_statement.kind = MINIC_STATEMENT_EXPRESSION;
+        discarded_statement.span = discarded_expression->span;
+        discarded_statement.expression = expression->value.binary.left;
+        status = lower_expression_statement(context, &discarded_statement);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }

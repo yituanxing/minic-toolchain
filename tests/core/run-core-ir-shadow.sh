@@ -415,6 +415,15 @@ unsigned long core_frame_address_level_zero(void) {
 EOF
 check_strict_case call-frame-address-level-zero
 
+cat >"$work_dir/comma-discard-record-assignment.i" <<'EOF'
+struct core_comma_pair { int a; int b; };
+int comma_discard_record_assignment(void) {
+    struct core_comma_pair value;
+    return ((value = (struct core_comma_pair){ .a = 1, .b = 2 }), 1);
+}
+EOF
+check_strict_case comma-discard-record-assignment
+
 cat >"$work_dir/variadic-call-unsupported.i" <<'EOF'
 int variadic_external(int first, ...);
 
