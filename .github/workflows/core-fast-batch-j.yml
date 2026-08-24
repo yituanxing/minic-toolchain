@@ -1,20 +1,19 @@
-name: Core Y51 Repeated Local Object Full500 Productizer
+name: Core Y52 Exact Head Frontier
 
 on:
   pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  y51-repeated-local-object-full500:
+  y52-exact-head-frontier:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: refactor/declaration-sema-v1
-          fetch-depth: 0
+          ref: 996066104f58d75bcc547847449186bcbc76b0f9
       - name: Restore frozen Linux corpus
         id: linux-corpus-cache
         uses: actions/cache/restore@v4
@@ -27,40 +26,16 @@ jobs:
           set -Eeuo pipefail
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
-      - name: Apply exact Y50b candidate
+      - name: Add replay progress metrics
+        run: python3 tools/dev/patch-linux-replay-live-progress.py
+      - name: Build exact semantic head
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y52-compiler
+      - name: Frozen strict500 compact snapshot
         shell: bash
         run: |
           set -Eeuo pipefail
-          python3 tools/dev/patch-linux-replay-live-progress.py
-          git show 4120e6bb55dce496a78d7daec885a56777b7468e:.github/workflows/core-fast-batch-j.yml > /tmp/y50b.yml
-          python3 - <<'PY'
-          from pathlib import Path
-          text=Path('/tmp/y50b.yml').read_text()
-          start_marker='          from pathlib import Path\n'
-          end_marker="          print('CORE_BATCH_Y50B_PATCHED')\n"
-          start=text.index(start_marker)
-          end=text.index(end_marker,start)+len(end_marker)
-          lines=text[start:end].splitlines()
-          code='\n'.join(line[10:] if line.startswith('          ') else line for line in lines)+'\n'
-          exec(compile(code,'<y50b-candidate>','exec'),{})
-          print('CORE_Y51_EXACT_CANDIDATE_APPLIED')
-          PY
-      - name: Build exact candidate
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y51-compiler
-      - name: Full Core exact regression suite
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          MINIC="$GITHUB_WORKSPACE/build/core-y51-compiler/bin/minic" \
-            BUILD_DIR="$GITHUB_WORKSPACE/build/core-y51-tests" \
-            bash tests/core/run-core-ir-shadow.sh
-          echo CORE_Y51_CORE_SUITE_PASS
-      - name: Frozen strict500
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-y51-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-y51-full500"
+          compiler="$GITHUB_WORKSPACE/build/core-y52-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-y52-full500"
           mkdir -p "$work"
           set +e
           MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
@@ -69,8 +44,7 @@ jobs:
             >"$work/replay.log" 2>&1
           replay_status=$?
           set -e
-          echo CORE_Y51_REPLAY_STATUS=$replay_status
-          cat "$work/replay.log"
+          echo CORE_Y52_REPLAY_STATUS=$replay_status
           python3 tools/ci/classify-core-strict-frontier.py \
             "$work/batch-results.json" --examples 20 --json-out "$work/frontier-summary.json"
           python3 tools/ci/summarize-core-frontier-progress.py \
@@ -78,24 +52,34 @@ jobs:
             --json-out "$work/progress-summary.json" --text-out "$work/progress-summary.txt" >/dev/null
           python3 - <<'PY'
           import json
+          from collections import Counter
           from pathlib import Path
-          w=Path('build/core-y51-full500')
+          w=Path('build/core-y52-full500')
           f=json.loads((w/'frontier-summary.json').read_text())
           p=json.loads((w/'progress-summary.json').read_text())
-          print(f"CORE_Y51_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']} blockers={f.get('distinct_blockers')}")
-          print(f"CORE_Y51_PROGRESS mean={p.get('tu_mean_progress')} median={p.get('tu_median_progress')} line_weighted={p.get('line_weighted_progress')}")
+          rows=json.loads((w/'batch-results.json').read_text())
+          if isinstance(rows,dict): rows=rows.get('results',rows.get('tus',[]))
+          counts=Counter()
+          examples={}
+          for r in rows:
+              if r.get('status') == 'PASS':
+                  continue
+              msg=r.get('message','')
+              marker="Core IR shadow does not yet support function '"
+              if marker in msg:
+                  fn=msg.split(marker,1)[1].split("'",1)[0]
+              else:
+                  fn=msg or '<unknown>'
+              counts[fn]+=1
+              examples.setdefault(fn,[]).append(int(r.get('index',-1)))
+          print(f"CORE_Y52_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']} distinct={len(counts)}")
+          print(f"CORE_Y52_PROGRESS mean={p.get('tu_mean_progress')} median={p.get('tu_median_progress')} line_weighted={p.get('line_weighted_progress')}")
+          for rank,(fn,count) in enumerate(counts.most_common(20),1):
+              print(f"CORE_Y52_BLOCKER rank={rank} count={count} function={fn} examples={examples[fn][:6]}")
+          for i in (0,7,42,95):
+              r=next((x for x in rows if int(x.get('index',-1))==i),None)
+              if r is not None:
+                  print(f"CORE_Y52_SPRINT index={i} status={r.get('status')} progress={float(r.get('progress_ratio') or 0)*100:.3f}% first={r.get('first_error_line')} message={r.get('message','')}")
           if f['selected'] != 500 or f['error'] != 0:
-              raise SystemExit(f'Y51 full500 regression: {f}')
+              raise SystemExit(f'Y52 exact-head regression: {f}')
           PY
-      - name: Commit semantic change
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add src/core/core_ir.h src/core/core_ir.c src/core/core_lower.c \
-                  src/target/riscv64/core_codegen.c tests/core/run-core-ir-shadow.sh
-          test -n "$(git status --porcelain -- src/core/core_ir.h src/core/core_ir.c src/core/core_lower.c src/target/riscv64/core_codegen.c tests/core/run-core-ir-shadow.sh)"
-          git commit -m 'core: own repeated local array storage'
-          git push origin HEAD:refactor/declaration-sema-v1
-          echo CORE_Y51_SEMANTIC_HEAD=$(git rev-parse HEAD)
