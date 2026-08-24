@@ -1,4 +1,4 @@
-name: Core Y98 Netdev Reg State Diagnostic
+name: Core Y98b Switch Ownership Audit
 
 on:
   pull_request:
@@ -7,64 +7,34 @@ permissions:
   contents: read
 
 jobs:
-  y98-netdev-reg-state:
+  y98b-switch-audit:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
           ref: 86d98851a9741d90bcc08280114f7253f7bc8a43
-      - name: Restore frozen Linux corpus
-        id: linux-corpus-cache
-        uses: actions/cache/restore@v4
-        with:
-          path: build/linux-focus-corpus
-          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
-      - name: Build exact compiler
+      - name: Print switch ownership code
         shell: bash
         run: |
           set -Eeuo pipefail
-          test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y98-compiler
-      - name: Diagnose netdev_reg_state representatives
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-y98-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-y98-linux"
-          mkdir -p "$work"
-          set +e
-          MINIC_CORE_IR=strict CORE_FAST_TRACE=1 CORE_LOWER_DETAIL=1 CORE_ASM_DETAIL=1 CORE_ASSIGN_STAGE=1 python3 tests/external/linux/corpus_replay.py \
-            --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
-            --work "$work" --jobs 3 --offset 0 --limit 500 --sample-count 0 --indices '193,242,357'
-          status=$?
-          set -e
-          echo CORE_Y98_REPLAY_STATUS=$status
           python3 - <<'PY'
-          import json
           from pathlib import Path
-          w=Path('build/core-y98-linux'); corpus=Path('build/linux-focus-corpus/kbuild')
-          rows=json.loads((w/'batch-results.json').read_text())
-          if isinstance(rows,dict): rows=rows.get('results',rows.get('tus',[]))
-          needle='netdev_reg_state'
-          for r in rows:
-              idx=int(r['index']); rel=r['input']
-              print(f"CORE_Y98_INDEX index={idx} status={r.get('status')} progress={float(r.get('progress_ratio') or 0)*100:.3f}% first={r.get('first_error_line')} message={r.get('message','')}")
-              lines=(corpus/rel).read_text(errors='replace').splitlines()
+          targets=[
+              ('src/frontend/parser_statement.c','MINIC_STATEMENT_SWITCH'),
+              ('src/frontend/parser_statement.c','MINIC_STATEMENT_CASE'),
+              ('src/frontend/parser_statement.c','MINIC_STATEMENT_DEFAULT'),
+              ('src/target/riscv64/codegen_statement.c','MINIC_STATEMENT_SWITCH'),
+              ('src/core/core_lower.c','MINIC_STATEMENT_SWITCH'),
+              ('src/core/core_lower.c','switch (statement->kind)'),
+          ]
+          for path, needle in targets:
+              lines=Path(path).read_text(errors='replace').splitlines()
               hits=[i for i,x in enumerate(lines) if needle in x]
-              print(f'CORE_Y98_HITS index={idx} hits={[i+1 for i in hits[:12]]}')
-              if hits:
-                  i=hits[0]; lo=max(0,i-30); hi=min(len(lines),i+100)
-                  print(f'CORE_Y98_SOURCE_BEGIN index={idx} line={lo+1}')
+              print(f'Y98B_HITS path={path} needle={needle!r} hits={[i+1 for i in hits]}')
+              for i in hits[:6]:
+                  lo=max(0,i-90); hi=min(len(lines),i+180)
+                  print(f'Y98B_CONTEXT_BEGIN path={path} needle={needle!r} line={lo+1}')
                   for n in range(lo,hi): print(f'{n+1}: {lines[n]}')
-                  print(f'CORE_Y98_SOURCE_END index={idx}')
-              err=w/'minic-stderr'/f'{rel}.stderr'
-              if err.is_file():
-                  keep=[]
-                  for x in err.read_text(errors='replace').splitlines():
-                      if needle in x or 'CORE_FAST_TRACE' in x or 'CORE_LOWER_DETAIL' in x or 'CORE_ASM_DETAIL' in x or 'CORE_ASSIGN_STAGE' in x:
-                          keep.append(x)
-                  print(f'CORE_Y98_STDERR_BEGIN index={idx}')
-                  for x in keep[-420:]: print(x)
-                  print(f'CORE_Y98_STDERR_END index={idx}')
+                  print(f'Y98B_CONTEXT_END path={path} needle={needle!r}')
           PY
