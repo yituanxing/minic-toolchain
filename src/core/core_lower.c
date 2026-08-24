@@ -403,6 +403,7 @@ static MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
         MinicCoreValueId index_value;
         MinicCoreLowerStatus subscript_status;
         MinicType array_pointer_type;
+        MinicType base_value_type;
         MinicType element_type;
         MinicType index_value_type;
         MinicType pointer_type;
@@ -466,23 +467,29 @@ static MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
                 return MINIC_CORE_LOWER_ERROR;
             }
         } else {
-            if (!minic_type_is_pointer(base->type) ||
-                !minic_type_pointee(base->type, &element_type) ||
+            /* Pointer-valued lvalues undergo lvalue-to-rvalue conversion before
+               subscript arithmetic.  In particular, a pointer member selected
+               through a const record carries qualified storage type in the AST
+               while its scalar value type is unqualified.  Validate and carry
+               that semantic value type rather than requiring storage identity. */
+            if (!core_scalar_expression_value_type(context->body, base, &base_value_type) ||
+                !minic_type_is_pointer(base_value_type) ||
+                !minic_type_pointee(base_value_type, &element_type) ||
                 !minic_type_equal(element_type, expression->type) ||
                 !minic_c0_pointer_arithmetic_element_size(context->body->program,
                                                           minic_default_data_layout(),
-                                                          base->type,
+                                                          base_value_type,
                                                           &element_size)) {
                 return MINIC_CORE_LOWER_UNSUPPORTED;
             }
-            pointer_type = base->type;
+            pointer_type = base_value_type;
             subscript_status =
                 lower_expression(context, expression->value.subscript.base, &base_value);
             if (subscript_status != MINIC_CORE_LOWER_OK) {
                 return subscript_status;
             }
             if (base_value >= context->function->value_count ||
-                !minic_type_equal(context->function->values[base_value].type, base->type)) {
+                !minic_type_equal(context->function->values[base_value].type, base_value_type)) {
                 return MINIC_CORE_LOWER_ERROR;
             }
         }
@@ -1870,28 +1877,10 @@ static MinicCoreLowerStatus lower_indirect_call(MinicCoreLowerContext *context,
         }
     }
 
-    status = lower_expression(context, expression->value.call.callee, &callee_value);
-    if (status != MINIC_CORE_LOWER_OK) {
-        (void)fprintf(stderr,
-                      "CORE_LOWER_DETAIL marker=M92_INDIRECT_CALL_HOT_DETAIL function=%s "
-                      "stage=indirect-call reason=callee-lower status=%d callee_kind=%d\n",
-                      context->source_function != NULL ? context->source_function->name : "?",
-                      (int)status,
-                      callee_expression != NULL ? (int)callee_expression->kind : -1);
-        return status;
-    }
-    if (callee_value >= context->function->value_count ||
-        !minic_type_equal(context->function->values[callee_value].type,
-                          callee_value_type)) {
-        (void)fprintf(stderr,
-                      "CORE_LOWER_DETAIL marker=M92_INDIRECT_CALL_HOT_DETAIL function=%s "
-                      "stage=indirect-call reason=callee-value-type value=%u count=%zu\n",
-                      context->source_function != NULL ? context->source_function->name : "?",
-                      (unsigned int)callee_value,
-                      context->function->value_count);
-        return MINIC_CORE_LOWER_ERROR;
-    }
-
+    /* C leaves the relative evaluation order of the function designator and
+       call arguments unspecified.  Lower and stabilize arguments first, then
+       evaluate the callee exactly once in the final call block.  This keeps the
+       callee SSA value block-local even when an argument creates control flow. */
     arguments = signature->parameter_count == 0U
                     ? NULL
                     : (MinicCoreCallArgument *)calloc(
@@ -1937,6 +1926,27 @@ static MinicCoreLowerStatus lower_indirect_call(MinicCoreLowerContext *context,
             free(arguments);
             return status;
         }
+    }
+    status = lower_expression(context, expression->value.call.callee, &callee_value);
+    if (status != MINIC_CORE_LOWER_OK) {
+        (void)fprintf(stderr,
+                      "CORE_LOWER_DETAIL marker=M92_INDIRECT_CALL_HOT_DETAIL function=%s "
+                      "stage=indirect-call reason=callee-lower status=%d callee_kind=%d\n",
+                      context->source_function != NULL ? context->source_function->name : "?",
+                      (int)status,
+                      callee_expression != NULL ? (int)callee_expression->kind : -1);
+        free(arguments);
+        return status;
+    }
+    if (callee_value >= context->function->value_count ||
+        !minic_type_equal(context->function->values[callee_value].type, callee_value_type)) {
+        (void)fprintf(stderr,
+                      "CORE_LOWER_DETAIL marker=M92_INDIRECT_CALL_HOT_DETAIL function=%s "
+                      "stage=indirect-call reason=callee-value-type value=%u count=%zu\n",
+                      context->source_function != NULL ? context->source_function->name : "?",
+                      (unsigned int)callee_value, context->function->value_count);
+        free(arguments);
+        return MINIC_CORE_LOWER_ERROR;
     }
     if (!minic_core_function_add_call_signature(context->function,
                                                 function_type.function_type_id,
@@ -5391,10 +5401,14 @@ static bool normalized_for_continue_tail(const MinicCoreLowerContext *context,
         !source_position_equal(continue_label->span.begin, loop->span.begin)) {
         return false;
     }
-    /* The parser-owned synthetic continue label is part of the loop body.
-       Keep it so explicit continue edges and fallthrough converge before the
-       canonical backedge is emitted. */
+    /* A normalized for-loop's synthetic continue label is part of the
+       iteration body only when reaching it does not cross a cleanup lifetime.
+       Cleanup-bearing scopes keep the historical tail shape until Core owns
+       cleanup transitions explicitly. */
     *iteration_body = *body;
+    if (!core_cleanup_edge_is_empty(continue_label)) {
+        iteration_body->statement_count -= 1U;
+    }
     return true;
 }
 
@@ -5424,11 +5438,13 @@ static bool normalized_for_update_tail(const MinicCoreLowerContext *context,
         update->expression == MINIC_EXPRESSION_INVALID) {
         return false;
     }
-    /* Strip only the normalized update.  The preceding synthetic continue
-       label remains in the body and becomes the convergence point before the
-       update is lowered. */
+    /* The update is always outside the lowered iteration body.  Preserve the
+       preceding synthetic continue label only for a zero-distance cleanup
+       edge; otherwise leave cleanup-bearing for scopes on the established
+       fail-closed path. */
     *iteration_body = *body;
-    iteration_body->statement_count -= 1U;
+    iteration_body->statement_count -=
+        core_cleanup_edge_is_empty(continue_label) ? 1U : 2U;
     *update_statement = update;
     return true;
 }

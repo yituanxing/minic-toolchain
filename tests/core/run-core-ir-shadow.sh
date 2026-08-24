@@ -312,6 +312,25 @@ int indirect_caller(int (*callee)(int), int value) {
 EOF
 check_strict_case indirect-call-unsupported
 
+cat >"$work_dir/const-record-member-subscript.i" <<'EOF'
+struct pointer_view {
+    int *items;
+};
+
+int *const_record_member_subscript(const struct pointer_view *view,
+                                   unsigned long index) {
+    return &view->items[index];
+}
+EOF
+check_strict_case const-record-member-subscript
+
+cat >"$work_dir/indirect-cfg-argument.i" <<'EOF'
+int indirect_cfg_argument(int (*callee)(int), int value) {
+    return callee(value ? value : 1);
+}
+EOF
+check_strict_case indirect-cfg-argument
+
 cat >"$work_dir/variadic-call-unsupported.i" <<'EOF'
 int variadic_external(int first, ...);
 
