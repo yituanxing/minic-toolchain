@@ -3917,9 +3917,16 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
     /* M51_SHIFT_COMPOUND_ASSIGNMENT: shifts use integer promotions on each operand
        independently; unlike arithmetic compound assignments they do not use the
        usual arithmetic conversions to a shared operand type. */
+    /* BATCH_S_ARITHMETIC_COMPOUND_ASSIGNMENT: multiplication, division and
+       remainder use the same usual-arithmetic-conversion path already owned by
+       += and -=.  The Core arithmetic opcodes already exist; extend the generic
+       load/operate/convert/store seam rather than special-casing qtree_depth. */
     if (expression->kind == MINIC_EXPRESSION_COMPOUND_ASSIGNMENT &&
         (expression->value.binary.operator_kind == MINIC_BINARY_ADD ||
          expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT ||
+         expression->value.binary.operator_kind == MINIC_BINARY_MULTIPLY ||
+         expression->value.binary.operator_kind == MINIC_BINARY_DIVIDE ||
+         expression->value.binary.operator_kind == MINIC_BINARY_REMAINDER ||
          expression->value.binary.operator_kind == MINIC_BINARY_SHIFT_LEFT ||
          expression->value.binary.operator_kind == MINIC_BINARY_SHIFT_RIGHT ||
          expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_AND ||
@@ -4032,6 +4039,15 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
             break;
         case MINIC_BINARY_SUBTRACT:
             instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT;
+            break;
+        case MINIC_BINARY_MULTIPLY:
+            instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY;
+            break;
+        case MINIC_BINARY_DIVIDE:
+            instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE;
+            break;
+        case MINIC_BINARY_REMAINDER:
+            instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER;
             break;
         case MINIC_BINARY_SHIFT_LEFT:
             instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT;
