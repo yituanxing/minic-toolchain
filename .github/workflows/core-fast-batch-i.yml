@@ -1,0 +1,121 @@
+name: Core Fast Batch I
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  batch-i:
+    if: github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: core-fast-batch-i-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+
+      - name: Restore frozen Linux corpus
+        id: linux-corpus-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+
+      - name: Require frozen corpus
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
+          test -s build/linux-focus-corpus/selected-tus.txt
+
+      - name: Apply Batch I production changes
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/patch-linux-replay-live-progress.py
+          python3 tools/dev/patch-core-frontier-batch-i.py
+
+      - name: Build exact patched compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-i-compiler
+
+      - name: Focused register-output immediate regression
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/core-batch-i-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-batch-i-focused"
+          mkdir -p "$work"
+          cat >"$work/register-output-immediate.i" <<'EOF'
+          unsigned long immediate_output(void) {
+              unsigned long value;
+              asm("li %0, %1\n\taddi %0, %0, %2\n\tslli %0, %0, %3\n\tori %0, %0, %4"
+                  : "=r"(value)
+                  : "I"(1), "I"(2), "I"(3), "I"(4));
+              return value;
+          }
+          EOF
+          MINIC_CORE_IR=strict "$compiler" -S "$work/register-output-immediate.i" -o "$work/strict.s"
+          MINIC_CORE_IR=strict MINIC_CORE_CODEGEN=basic-v0 "$compiler" \
+            -S "$work/register-output-immediate.i" -o "$work/core.s"
+          grep -q 'li t0, 1' "$work/core.s"
+          grep -q 'addi t0, t0, 2' "$work/core.s"
+          grep -q 'slli t0, t0, 3' "$work/core.s"
+          grep -q 'ori t0, t0, 4' "$work/core.s"
+          if grep -Eq '%[1-9]' "$work/core.s"; then
+            echo 'unresolved immediate operand remained in Core output' >&2
+            exit 1
+          fi
+          echo CORE_BATCH_I_FOCUSED_PASS
+
+      - name: Four-TU riscv_page_mtmask frontier
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/core-batch-i-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-batch-i-frontier"
+          set +e
+          MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
+            --minic "$compiler" \
+            --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
+            --work "$work" \
+            --jobs 4 \
+            --offset 0 \
+            --limit 500 \
+            --sample-count 0 \
+            --indices '7,165,280,288'
+          replay_status=$?
+          set -e
+          printf 'CORE_BATCH_I_REPLAY_STATUS=%d\n' "$replay_status"
+          python3 tools/ci/classify-core-strict-frontier.py \
+            "$work/batch-results.json" --examples 4 --json-out "$work/frontier-summary.json"
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          f = json.loads(Path('build/core-batch-i-frontier/frontier-summary.json').read_text())
+          blockers = {b.get('function') for b in f.get('blockers', [])}
+          print(f"CORE_BATCH_I_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']} distinct_blockers={len(f.get('blockers', []))}")
+          if f['selected'] != 4:
+              raise SystemExit(f"expected 4 probes, got {f['selected']}")
+          if f['error'] != 0:
+              raise SystemExit(f"Batch I introduced Core ERRORs: {f.get('errors', [])}")
+          if 'riscv_page_mtmask' in blockers:
+              raise SystemExit('riscv_page_mtmask blocker did not clear')
+          PY
+
+      - name: Persist qualified Batch I production tree
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git add src/core/core_lower.c
+          if git diff --cached --quiet; then
+            echo CORE_BATCH_I_ALREADY_PERSISTED
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'core: specialize immediate inputs for register-output asm'
+          git push origin HEAD:refactor/declaration-sema-v1
