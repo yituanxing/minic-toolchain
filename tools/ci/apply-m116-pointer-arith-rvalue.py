@@ -7,6 +7,33 @@ marker = "M116_POINTER_ARITH_RVALUE_TYPE"
 if marker in text:
     raise SystemExit("M116 already applied")
 
+helper_anchor = """    if (expression->kind == MINIC_EXPRESSION_CONDITIONAL ||
+        expression->kind == MINIC_EXPRESSION_CONVERSION) {
+        return minic_type_unqualified(expression->type, value_type);
+    }
+    if (expression->value_category == MINIC_VALUE_LVALUE) {
+"""
+helper_insert = """    if (expression->kind == MINIC_EXPRESSION_CONDITIONAL ||
+        expression->kind == MINIC_EXPRESSION_CONVERSION) {
+        return minic_type_unqualified(expression->type, value_type);
+    }
+    /* M116_POINTER_ARITH_RVALUE_TYPE: pointer-valued +/- is a transported
+       scalar value just like a conditional/conversion result.  The semantic AST
+       may retain a top-level qualifier inherited from the source object, but
+       every Core consumer (calls, returns, nested arithmetic, stores) must see
+       the same unqualified rvalue type.  Keep pointee qualifiers intact. */
+    if (expression->kind == MINIC_EXPRESSION_BINARY &&
+        minic_type_is_pointer(expression->type) &&
+        (expression->value.binary.operator_kind == MINIC_BINARY_ADD ||
+         expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT)) {
+        return minic_type_unqualified(expression->type, value_type);
+    }
+    if (expression->value_category == MINIC_VALUE_LVALUE) {
+"""
+if text.count(helper_anchor) != 1:
+    raise SystemExit(f"scalar value-type helper anchor mismatch: {text.count(helper_anchor)}")
+text = text.replace(helper_anchor, helper_insert, 1)
+
 old_decl = """        MinicType expression_value_type;
         MinicType pointer_value_type;
         MinicType index_value_type;
@@ -78,6 +105,6 @@ if text.count(old_tail) != 1:
     raise SystemExit(f"M82 result tail anchor mismatch: {text.count(old_tail)}")
 text = text.replace(old_tail, new_tail, 1)
 
-if text.count(marker) != 2:
-    raise SystemExit(f"expected two M116 markers, got {text.count(marker)}")
+if text.count(marker) != 3:
+    raise SystemExit(f"expected three M116 markers, got {text.count(marker)}")
 path.write_text(text)
