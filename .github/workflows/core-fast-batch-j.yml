@@ -32,48 +32,121 @@ jobs:
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
 
-      - name: Enable compact progress telemetry
+      - name: Apply Batch M production changes
         shell: bash
         run: |
           set -Eeuo pipefail
           python3 tools/dev/patch-linux-replay-live-progress.py
+          python3 tools/dev/patch-core-frontier-batch-m.py
 
-      - name: Build exact compiler
+      - name: Build exact patched compiler
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-m-compiler
 
-      - name: Diagnose one real ptep_get frontier
+      - name: Focused volatile record return regression
         shell: bash
         run: |
           set -Eeuo pipefail
           compiler="$GITHUB_WORKSPACE/build/core-batch-m-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-batch-m-diagnostic"
+          work="$GITHUB_WORKSPACE/build/core-batch-m-focused"
+          mkdir -p "$work"
+          cat >"$work/volatile-record-return.i" <<'EOF'
+          typedef struct { unsigned long bits; } word_t;
+          word_t load_once(word_t *ptr) {
+              return ({ (*(const volatile word_t *)&(*ptr)); });
+          }
+          EOF
+          MINIC_CORE_IR=strict "$compiler" -S "$work/volatile-record-return.i" -o "$work/strict.s"
+          MINIC_CORE_IR=strict MINIC_CORE_CODEGEN=basic-v0 "$compiler" \
+            -S "$work/volatile-record-return.i" -o "$work/core.s"
+          grep -q 'ld t1, 0(t0)' "$work/core.s"
+          echo CORE_BATCH_M_FOCUSED_PASS
+
+      - name: Six-TU ptep family frontier
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/core-batch-m-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-batch-m-frontier"
           set +e
           MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" \
             --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
             --work "$work" \
-            --jobs 1 \
+            --jobs 6 \
             --offset 0 \
             --limit 500 \
             --sample-count 0 \
-            --indices '56'
+            --indices '56,131,155,161,165,280'
           replay_status=$?
           set -e
-          printf 'CORE_BATCH_M_DIAGNOSTIC_STATUS=%d\n' "$replay_status"
-          echo '--- failure context ---'
-          cat "$work/failure-contexts.txt"
-          echo '--- Core trace ---'
-          find "$work/minic-stderr" -type f -name '*.stderr' -print0 | \
-            xargs -0 grep -E 'CORE_FAST_TRACE|CORE_ASSIGN|ptep_get' || true
+          printf 'CORE_BATCH_M_REPLAY_STATUS=%d\n' "$replay_status"
           python3 tools/ci/classify-core-strict-frontier.py \
-            "$work/batch-results.json" --examples 1 --json-out "$work/frontier-summary.json"
+            "$work/batch-results.json" --examples 6 --json-out "$work/frontier-summary.json"
           python3 - <<'PY'
           import json
           from pathlib import Path
-          f = json.loads(Path('build/core-batch-m-diagnostic/frontier-summary.json').read_text())
-          print(f"CORE_BATCH_M_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
-          if f['selected'] != 1:
-              raise SystemExit('expected exactly one diagnostic TU')
+          f = json.loads(Path('build/core-batch-m-frontier/frontier-summary.json').read_text())
+          blockers = {b.get('function') for b in f.get('blockers', [])}
+          print(f"CORE_BATCH_M_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']} distinct_blockers={len(f.get('blockers', []))}")
+          if f['selected'] != 6:
+              raise SystemExit(f"expected 6 probes, got {f['selected']}")
           if f['error'] != 0:
-              raise SystemExit(f"unexpected Core ERROR: {f.get('errors', [])}")
+              raise SystemExit(f"Batch M introduced Core ERRORs: {f.get('errors', [])}")
+          if 'ptep_get' in blockers:
+              raise SystemExit('ptep_get still blocks Batch M representative frontier')
           PY
+
+      - name: Sixteen-TU no-error sanity gate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/core-batch-m-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-batch-m-strict16"
+          set +e
+          MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
+            --minic "$compiler" \
+            --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
+            --work "$work" \
+            --jobs 8 \
+            --offset 0 \
+            --limit 500 \
+            --sample-count 0 \
+            --indices '0,1,2,3,4,7,9,20,42,66,95,155,165,280,288,299'
+          replay_status=$?
+          set -e
+          printf 'CORE_BATCH_M_STRICT16_REPLAY_STATUS=%d\n' "$replay_status"
+          python3 tools/ci/classify-core-strict-frontier.py \
+            "$work/batch-results.json" --examples 16 --json-out "$work/frontier-summary.json"
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          f = json.loads(Path('build/core-batch-m-strict16/frontier-summary.json').read_text())
+          blockers = {b.get('function') for b in f.get('blockers', [])}
+          print(f"CORE_BATCH_M_STRICT16 selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
+          if f['selected'] != 16:
+              raise SystemExit(f"expected 16 probes, got {f['selected']}")
+          if f['error'] != 0:
+              raise SystemExit(f"Batch M strict16 Core ERRORs: {f.get('errors', [])}")
+          if 'ptep_get' in blockers:
+              raise SystemExit('ptep_get still blocks strict16')
+          PY
+
+      - name: Persist qualified Batch M production tree
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          files=(
+            src/core/core_ir.h
+            src/core/core_ir.c
+            src/core/core_lower.c
+            src/target/riscv64/core_codegen.c
+          )
+          git add -- "${files[@]}"
+          if git diff --cached --quiet; then
+            echo CORE_BATCH_M_ALREADY_PERSISTED
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'core: load address-backed record values'
+          git push origin HEAD:refactor/declaration-sema-v1
