@@ -1,150 +1,63 @@
-name: Core Y82 Omitted Conditional Scalar Qualification
+name: Core Y83 BTF Warn Frontier Diagnostic
 
 on:
   pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  y82-omitted-conditional-scalar:
+  y83-btf-warn-frontier:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
           ref: 40142a09c5c57ee85bb6fbabd84e3138f671cd55
-          fetch-depth: 0
       - name: Restore frozen Linux corpus
         id: linux-corpus-cache
         uses: actions/cache/restore@v4
         with:
           path: build/linux-focus-corpus
           key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
-      - name: Apply omitted conditional scalar candidate
+      - name: Build exact compiler
         shell: bash
         run: |
           set -Eeuo pipefail
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
-          python3 - <<'PY'
-          from pathlib import Path
-          p=Path('src/core/core_lower.c'); s=p.read_text()
-          marker='/* BATCH_N_GNU_OMITTED_MIDDLE_CONDITIONAL:'
-          start=s.index(marker)
-          end=s.index('    if (expression->kind == MINIC_EXPRESSION_CONDITIONAL) {', start + len(marker))
-          block=s[start:end]
-          old=block
-          block=block.replace('''        MinicCoreTerminator terminator;\n        MinicType assignment_type;\n''','''        MinicCoreTerminator terminator;\n        MinicType assignment_type;\n        MinicType result_type;\n''',1)
-          block=block.replace('''            expression->value.conditional.when_false == MINIC_EXPRESSION_INVALID ||\n            !core_memory_scalar_type(expression->type) ||\n            minic_type_is_const(expression->type) || minic_type_is_volatile(expression->type)) {\n''','''            expression->value.conditional.when_false == MINIC_EXPRESSION_INVALID ||\n            !core_scalar_expression_value_type(context->body, expression, &result_type) ||\n            !core_memory_scalar_type(result_type)) {\n''',1)
-          block=block.replace('''                                            expression->type,\n                                            expression->value.conditional.condition) ||\n            !minic_c0_assignment_compatible(context->body->program,\n                                            expression->type,\n                                            expression->value.conditional.when_false)) {\n''','''                                            result_type,\n                                            expression->value.conditional.condition) ||\n            !minic_c0_assignment_compatible(context->body->program,\n                                            result_type,\n                                            expression->value.conditional.when_false)) {\n''',1)
-          block=block.replace('context->function, expression->span, expression->type, &result_object)','context->function, expression->span, result_type, &result_object)',1)
-          block=block.replace('minic_type_is_integer(expression->type) &&','minic_type_is_integer(result_type) &&',1)
-          block=block.replace('''                    expression->type,\n                    expression->value.conditional.condition,\n''','''                    result_type,\n                    expression->value.conditional.condition,\n''',1)
-          block=block.replace('minic_type_is_pointer(expression->type) &&','minic_type_is_pointer(result_type) &&',1)
-          block=block.replace('''                                           expression->type,\n                                           condition_value,\n''','''                                           result_type,\n                                           condition_value,\n''',1)
-          block=block.replace('''                                    expression->type,\n                                    result_object,\n                                    true_value);\n''','''                                    result_type,\n                                    result_object,\n                                    true_value);\n''',1)
-          block=block.replace('''                                               expression->type,\n                                               expression->value.conditional.when_false,\n''','''                                               result_type,\n                                               expression->value.conditional.when_false,\n''',1)
-          block=block.replace('''                                    expression->type,\n                                    result_object,\n                                    false_value);\n''','''                                    result_type,\n                                    result_object,\n                                    false_value);\n''',1)
-          block=block.replace('''            context, expression->span, expression->type, result_object, value_id);\n''','''            context, expression->span, result_type, result_object, value_id);\n''',1)
-          if block == old: raise SystemExit('no omitted-conditional changes')
-          if 'minic_type_is_const(expression->type)' in block or 'minic_type_is_volatile(expression->type)' in block:
-              raise SystemExit('raw qualifier guard survived')
-          p.write_text(s[:start]+block+s[end:])
-
-          p=Path('tests/core/run-core-ir-shadow.sh'); s=p.read_text()
-          anchor='''cat >"$work_dir/variadic-call-unsupported.i" <<'EOF'\n'''
-          addition='''cat >"$work_dir/omitted-conditional-pointee-const.i" <<'EOF'\nstruct core_xattr_handler {\n    const char *prefix;\n    const char *name;\n};\n\nconst char *omitted_conditional_pointee_const(const struct core_xattr_handler *handler) {\n    return handler->prefix ?: handler->name;\n}\nEOF\ncheck_strict_case omitted-conditional-pointee-const\n\n'''
-          if s.count(anchor)!=1: raise SystemExit(f'test anchor {s.count(anchor)}')
-          p.write_text(s.replace(anchor,addition+anchor,1))
-          print('CORE_Y82_CANDIDATE_APPLIED')
-          PY
-      - name: Build and exact Core regressions
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y83-compiler
+      - name: Diagnose BTF representatives
         shell: bash
         run: |
           set -Eeuo pipefail
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y82-compiler
-          MINIC="$GITHUB_WORKSPACE/build/core-y82-compiler/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/core-y82-regression" bash tests/core/run-core-ir-shadow.sh
-      - name: Focused xattr qualification
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-y82-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-y82-focus"
+          compiler="$GITHUB_WORKSPACE/build/core-y83-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-y83-linux"
           mkdir -p "$work"
           set +e
-          MINIC_CORE_IR=strict CORE_FAST_TRACE=1 CORE_LOWER_DETAIL=1 python3 tests/external/linux/corpus_replay.py \
+          MINIC_CORE_IR=strict CORE_FAST_TRACE=1 CORE_LOWER_DETAIL=1 CORE_ASM_DETAIL=1 CORE_ASSIGN_STAGE=1 python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
-            --work "$work" --jobs 3 --offset 0 --limit 500 --sample-count 0 --indices '2,296,305'
+            --work "$work" --jobs 2 --offset 0 --limit 500 --sample-count 0 --indices '186,193'
           status=$?
           set -e
-          echo CORE_Y82_FOCUS_STATUS=$status
-          python3 tools/ci/classify-core-strict-frontier.py "$work/batch-results.json" --examples 8 --json-out "$work/frontier-summary.json"
+          echo CORE_Y83_REPLAY_STATUS=$status
           python3 - <<'PY'
           import json
           from pathlib import Path
-          w=Path('build/core-y82-focus')
-          f=json.loads((w/'frontier-summary.json').read_text())
+          w=Path('build/core-y83-linux')
           rows=json.loads((w/'batch-results.json').read_text())
           if isinstance(rows,dict): rows=rows.get('results',rows.get('tus',[]))
-          print(f"CORE_Y82_FOCUS selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
-          for r in rows: print(f"CORE_Y82_INDEX index={r.get('index')} status={r.get('status')} progress={float(r.get('progress_ratio') or 0)*100:.3f}% message={r.get('message','')}")
-          if f['error'] != 0: raise SystemExit(f'Core ERROR: {f}')
-          if any('xattr_prefix' in r.get('message','') for r in rows): raise SystemExit('xattr_prefix survived Y82')
-          PY
-      - name: Frozen strict500 qualification
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          python3 tools/dev/patch-linux-replay-live-progress.py
-          compiler="$GITHUB_WORKSPACE/build/core-y82-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-y82-full500"
-          mkdir -p "$work"
-          set +e
-          MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" --work "$work" --jobs 4 --offset 0 --limit 500 --sample-count 0 >"$work/replay.log" 2>&1
-          replay_status=$?
-          set -e
-          echo CORE_Y82_REPLAY_STATUS=$replay_status
-          python3 tools/ci/classify-core-strict-frontier.py "$work/batch-results.json" --examples 12 --json-out "$work/frontier-summary.json"
-          python3 tools/ci/summarize-core-frontier-progress.py "$work/batch-results.json" --expect-selected 500 --json-out "$work/progress-summary.json" --text-out "$work/progress-summary.txt" >/dev/null
-          python3 - <<'PY'
-          import json
-          from collections import Counter
-          from pathlib import Path
-          w=Path('build/core-y82-full500')
-          f=json.loads((w/'frontier-summary.json').read_text()); p=json.loads((w/'progress-summary.json').read_text())
-          rows=json.loads((w/'batch-results.json').read_text())
-          if isinstance(rows,dict): rows=rows.get('results',rows.get('tus',[]))
-          c=Counter(); examples={}; marker="Core IR shadow does not yet support function '"
           for r in rows:
-              if r.get('status')=='PASS': continue
-              msg=r.get('message',''); fn=msg.split(marker,1)[1].split("'",1)[0] if marker in msg else (msg or '<unknown>')
-              c[fn]+=1; examples.setdefault(fn,[]).append(int(r.get('index',-1)))
-          print(f"CORE_Y82_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']} distinct={len(c)}")
-          print(f"CORE_Y82_PROGRESS mean={p.get('tu_mean_progress')} median={p.get('tu_median_progress')} line_weighted={p.get('line_weighted_progress')}")
-          for rank,(fn,count) in enumerate(c.most_common(15),1): print(f"CORE_Y82_BLOCKER rank={rank} count={count} function={fn} examples={examples[fn][:6]}")
-          if f['selected'] != 500 or f['error'] != 0: raise SystemExit(f'Y82 qualification failed: {f}')
-          if any('xattr_prefix' in r.get('message','') for r in rows): raise SystemExit('xattr_prefix survived full500')
+              idx=int(r['index']); rel=r['input']
+              print(f"CORE_Y83_INDEX index={idx} status={r.get('status')} progress={float(r.get('progress_ratio') or 0)*100:.3f}% first={r.get('first_error_line')} message={r.get('message','')}")
+              err=w/'minic-stderr'/f'{rel}.stderr'
+              if not err.is_file(): continue
+              lines=err.read_text(errors='replace').splitlines()
+              keep=[]
+              for x in lines:
+                  if ('btf_field_type_name' in x or 'CORE_FAST_TRACE' in x or 'CORE_LOWER_DETAIL' in x or
+                      'CORE_ASM_DETAIL' in x or 'CORE_ASSIGN_STAGE' in x):
+                      keep.append(x)
+              print(f'CORE_Y83_STDERR_BEGIN index={idx}')
+              for x in keep[-260:]: print(x)
+              print(f'CORE_Y83_STDERR_END index={idx}')
           PY
-      - name: Productize omitted conditional scalar normalization
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          git diff -- src/core/core_lower.c tests/core/run-core-ir-shadow.sh > /tmp/y82-semantic.patch
-          test -s /tmp/y82-semantic.patch
-          git reset --hard 40142a09c5c57ee85bb6fbabd84e3138f671cd55
-          git fetch origin refactor/declaration-sema-v1
-          git diff --quiet 40142a09c5c57ee85bb6fbabd84e3138f671cd55..origin/refactor/declaration-sema-v1 -- src/core/core_lower.c tests/core/run-core-ir-shadow.sh
-          git checkout -B y82-productize origin/refactor/declaration-sema-v1
-          git apply /tmp/y82-semantic.patch
-          python3 - <<'PY'
-          import subprocess
-          allowed={'src/core/core_lower.c','tests/core/run-core-ir-shadow.sh'}
-          changed=set(subprocess.check_output(['git','diff','--name-only'],text=True).splitlines())
-          if changed != allowed: raise SystemExit(f'unexpected semantic diff: {sorted(changed)}')
-          PY
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add src/core/core_lower.c tests/core/run-core-ir-shadow.sh
-          git commit -m 'core: normalize omitted conditional scalar values'
-          git push origin HEAD:refactor/declaration-sema-v1
-          echo CORE_Y82_SEMANTIC_COMMIT=$(git rev-parse HEAD)
