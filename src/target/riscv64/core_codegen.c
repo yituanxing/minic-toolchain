@@ -798,6 +798,7 @@ static bool core_instruction_supported(const MinicC0Program *program,
     case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT:
     case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT:
     case MINIC_CORE_INSTRUCTION_INTEGER_LESS:
+    case MINIC_CORE_INSTRUCTION_POINTER_LESS:
     case MINIC_CORE_INSTRUCTION_SCALAR_EQUAL:
     case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION:
     case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE:
@@ -2027,6 +2028,18 @@ static bool emit_instruction(FILE *file,
         }
         return store_core_value(file, frame, instruction->result, "t0");
     }
+    case MINIC_CORE_INSTRUCTION_POINTER_LESS:
+        if (instruction->value.binary.left >= function->value_count ||
+            instruction->value.binary.right >= function->value_count ||
+            !minic_type_is_pointer(function->values[instruction->value.binary.left].type) ||
+            !minic_type_equal(function->values[instruction->value.binary.left].type,
+                              function->values[instruction->value.binary.right].type) ||
+            !load_core_value(file, frame, instruction->value.binary.left, "t0") ||
+            !load_core_value(file, frame, instruction->value.binary.right, "t1") ||
+            fprintf(file, "  sltu t0, t0, t1\n") < 0) {
+            return false;
+        }
+        return store_core_value(file, frame, instruction->result, "t0");
     case MINIC_CORE_INSTRUCTION_SCALAR_EQUAL:
         if (!load_core_value(file, frame, instruction->value.binary.left, "t0") ||
             !load_core_value(file, frame, instruction->value.binary.right, "t1") ||
