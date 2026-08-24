@@ -1,4 +1,4 @@
-name: Core Fast Batch Y11b Remaining Error Reasons
+name: Core Fast Batch Y12 Loop Continue Candidate
 
 on:
   pull_request:
@@ -7,11 +7,11 @@ permissions:
   contents: read
 
 jobs:
-  batch-y11b-error-reasons:
+  batch-y12-loop-continue:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     concurrency:
-      group: core-fast-batch-y11b-${{ github.event.pull_request.number }}
+      group: core-fast-batch-y12-${{ github.event.pull_request.number }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
@@ -29,24 +29,7 @@ jobs:
           set -Eeuo pipefail
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
-      - name: Show failing source functions
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          for spec in 'kernel/bpf/bpf_lru_list.i:__bpf_lru_list_rotate_inactive' 'mm/page_alloc.i:__alloc_pages_bulk'; do
-            input="build/linux-focus-corpus/kbuild/${spec%%:*}"
-            fn="${spec#*:}"
-            echo "CORE_Y11B_SOURCE_BEGIN input=$input function=$fn"
-            grep -n "$fn" "$input" | head -n 8 || true
-            line=$(grep -n "$fn" "$input" | tail -n 1 | cut -d: -f1 || true)
-            if [ -n "$line" ]; then
-              begin=$((line > 12 ? line - 12 : 1))
-              end=$((line + 180))
-              sed -n "${begin},${end}p" "$input"
-            fi
-            echo "CORE_Y11B_SOURCE_END input=$input function=$fn"
-          done
-      - name: Apply Y continue candidate and verifier reason probe
+      - name: Apply Y plus loop continue CFG candidates
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -54,72 +37,48 @@ jobs:
           python3 tools/dev/patch-core-frontier-batch-y.py
           python3 - <<'PY'
           from pathlib import Path
+          p=Path('src/core/core_lower.c')
+          s=p.read_text()
 
-          p = Path('src/core/core_lower.c')
-          s = p.read_text()
-          old_continue = '''    *iteration_body = *body;\n    iteration_body->statement_count -= 1U;\n    return true;\n}\n\nstatic bool normalized_for_update_tail'''
-          new_continue = '''    /* BATCH_Y8_FOR_CONTINUE_LABEL */\n    *iteration_body = *body;\n    return true;\n}\n\nstatic bool normalized_for_update_tail'''
+          old_continue='''    *iteration_body = *body;\n    iteration_body->statement_count -= 1U;\n    return true;\n}\n\nstatic bool normalized_for_update_tail'''
+          new_continue='''    /* Keep the synthetic continue label in the lowered iteration body. */\n    *iteration_body = *body;\n    return true;\n}\n\nstatic bool normalized_for_update_tail'''
           if old_continue not in s: raise SystemExit('normalized_for_continue_tail anchor not found')
-          s = s.replace(old_continue, new_continue, 1)
-          old_update = '''    *iteration_body = *body;\n    iteration_body->statement_count -= 2U;\n    *update_statement = update;\n    return true;\n}\n\nstatic MinicCoreLowerStatus\nlower_while'''
-          new_update = '''    *iteration_body = *body;\n    iteration_body->statement_count -= 1U;\n    *update_statement = update;\n    return true;\n}\n\nstatic MinicCoreLowerStatus\nlower_while'''
+          s=s.replace(old_continue,new_continue,1)
+
+          old_update='''    *iteration_body = *body;\n    iteration_body->statement_count -= 2U;\n    *update_statement = update;\n    return true;\n}\n\nstatic MinicCoreLowerStatus\nlower_while'''
+          new_update='''    /* Keep the synthetic continue label and strip only the update statement. */\n    *iteration_body = *body;\n    iteration_body->statement_count -= 1U;\n    *update_statement = update;\n    return true;\n}\n\nstatic MinicCoreLowerStatus\nlower_while'''
           if old_update not in s: raise SystemExit('normalized_for_update_tail anchor not found')
-          p.write_text(s.replace(old_update, new_update, 1))
+          s=s.replace(old_update,new_update,1)
 
-          p = Path('src/core/core_ir.c')
-          s = p.read_text()
-          helper = '''\nstatic bool core_y11b_reason_target(const MinicCoreFunction *function) {\n    return function != NULL && function->name != NULL &&\n           (strcmp(function->name, "__bpf_lru_list_rotate_inactive") == 0 ||\n            strcmp(function->name, "__alloc_pages_bulk") == 0);\n}\n\n'''
-          anchor = 'static bool verify_block(const MinicCoreFunction *function,'
-          if anchor not in s: raise SystemExit('verify_block anchor not found')
-          s = s.replace(anchor, helper + anchor, 1)
-
-          old = '''    if (!storage_shape_is_valid(\n            block->instructions, block->instruction_count, block->instruction_capacity) ||\n        !block->has_terminator) {\n        return false;\n    }\n'''
-          new = '''    if (!storage_shape_is_valid(\n            block->instructions, block->instruction_count, block->instruction_capacity) ||\n        !block->has_terminator) {\n        if (core_y11b_reason_target(function))\n            (void)fprintf(stderr, "CORE_Y11B_VERIFY function=%s block=%u reason=block-shape has_term=%d instructions=%zu capacity=%zu\\n", function->name, (unsigned int)block_id, block->has_terminator ? 1 : 0, block->instruction_count, block->instruction_capacity);\n        return false;\n    }\n'''
-          if old not in s: raise SystemExit('block-shape anchor not found')
-          s = s.replace(old, new, 1)
-
-          old = '''        if (instruction_id >= function->instruction_count || instruction_seen[instruction_id]) {\n            return false;\n        }\n'''
-          new = '''        if (instruction_id >= function->instruction_count || instruction_seen[instruction_id]) {\n            if (core_y11b_reason_target(function))\n                (void)fprintf(stderr, "CORE_Y11B_VERIFY function=%s block=%u reason=instruction-id index=%zu id=%u total=%zu seen=%d\\n", function->name, (unsigned int)block_id, index, (unsigned int)instruction_id, function->instruction_count, instruction_id < function->instruction_count && instruction_seen[instruction_id] ? 1 : 0);\n            return false;\n        }\n'''
-          if old not in s: raise SystemExit('instruction-id anchor not found')
-          s = s.replace(old, new, 1)
-
-          old = '''        if (!instruction_is_valid(function, instruction, available_values)) {\n            return false;\n        }\n'''
-          new = '''        if (!instruction_is_valid(function, instruction, available_values)) {\n            if (core_y11b_reason_target(function))\n                (void)fprintf(stderr, "CORE_Y11B_VERIFY function=%s block=%u reason=instruction-invalid index=%zu id=%u kind=%d result=%u\\n", function->name, (unsigned int)block_id, index, (unsigned int)instruction_id, (int)instruction->kind, (unsigned int)instruction->result);\n            return false;\n        }\n'''
-          if old not in s: raise SystemExit('instruction-valid anchor not found')
-          s = s.replace(old, new, 1)
-
-          old = '''            if (value_seen[instruction->result] || result->definition != instruction_id) {\n                return false;\n            }\n'''
-          new = '''            if (value_seen[instruction->result] || result->definition != instruction_id) {\n                if (core_y11b_reason_target(function))\n                    (void)fprintf(stderr, "CORE_Y11B_VERIFY function=%s block=%u reason=value-owner id=%u result=%u seen=%d definition=%u expected=%u\\n", function->name, (unsigned int)block_id, (unsigned int)instruction_id, (unsigned int)instruction->result, value_seen[instruction->result] ? 1 : 0, (unsigned int)result->definition, (unsigned int)instruction_id);\n                return false;\n            }\n'''
-          if old not in s: raise SystemExit('value-owner anchor not found')
-          s = s.replace(old, new, 1)
-
-          old = '    return terminator_is_valid(function, &block->terminator, available_values);\n'
-          new = '''    if (!terminator_is_valid(function, &block->terminator, available_values)) {\n        if (core_y11b_reason_target(function))\n            (void)fprintf(stderr, "CORE_Y11B_VERIFY function=%s block=%u reason=terminator-invalid kind=%d\\n", function->name, (unsigned int)block_id, (int)block->terminator.kind);\n        return false;\n    }\n    return true;\n'''
-          if old not in s: raise SystemExit('terminator anchor not found')
-          p.write_text(s.replace(old, new, 1))
-          print('CORE_BATCH_Y11B_PATCHED focused verifier reasons')
+          old_label='''            if (internal_loop_label) {\n                status = lower_while(context, loop, &statement_terminated);\n                if (status != MINIC_CORE_LOWER_OK) return status;\n                statement_index += 1U;\n            } else {\n'''
+          new_label='''            if (internal_loop_label) {\n                MinicCoreBlockId label_block;\n                MinicStatementId label_statement_id = source_block->statements[statement_index];\n\n                /* A source continue is normalized to a goto targeting this synthetic\n                   label. Materialize the label before lowering the paired while so an\n                   already-created continue target becomes a real preheader instead of\n                   a reachable empty block. */\n                status = ensure_statement_block(context, label_statement_id, &label_block);\n                if (status != MINIC_CORE_LOWER_OK) return status;\n                if (!block_terminated && context->block_id != label_block) {\n                    status = set_branch(context, context->block_id, statement->span, label_block);\n                    if (status != MINIC_CORE_LOWER_OK) return status;\n                }\n                context->block_id = label_block;\n                status = lower_while(context, loop, &statement_terminated);\n                if (status != MINIC_CORE_LOWER_OK) return status;\n                statement_index += 1U;\n            } else {\n'''
+          if old_label not in s: raise SystemExit('internal loop label anchor not found')
+          p.write_text(s.replace(old_label,new_label,1))
+          print('CORE_BATCH_Y12_PATCHED normalized-for plus while continue label preheader')
           PY
-      - name: Build exact diagnostic compiler
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-y11b-compiler
-      - name: Replay remaining Core errors
+      - name: Build exact candidate compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-y12-compiler
+      - name: Replay the two remaining strict500 Core errors
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-batch-y11b-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-batch-y11b-frontier"
+          compiler="$GITHUB_WORKSPACE/build/core-batch-y12-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-batch-y12-frontier"
           set +e
           MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
             --work "$work" --jobs 2 --offset 0 --limit 500 --sample-count 0 --indices '208,339'
           replay_status=$?
           set -e
-          printf 'CORE_BATCH_Y11B_REPLAY_STATUS=%d\n' "$replay_status"
-          grep -R -E 'CORE_Y11B_VERIFY|Core IR shadow lowering failed' "$work/minic-stderr" | tail -n 160 || true
-          python3 tools/ci/classify-core-strict-frontier.py "$work/batch-results.json" --examples 4 --json-out "$work/frontier-summary.json"
+          printf 'CORE_BATCH_Y12_REPLAY_STATUS=%d\n' "$replay_status"
+          python3 tools/ci/classify-core-strict-frontier.py "$work/batch-results.json" --examples 8 --json-out "$work/frontier-summary.json"
+          python3 tools/ci/summarize-core-frontier-progress.py "$work/batch-results.json" --expect-selected 2 --json-out "$work/progress-summary.json" --text-out "$work/progress-summary.txt"
+          cat "$work/progress-summary.txt"
           python3 - <<'PY'
           import json
           from pathlib import Path
-          f=json.loads(Path('build/core-batch-y11b-frontier/frontier-summary.json').read_text())
-          print(f"CORE_BATCH_Y11B_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
-          if f['selected'] != 2: raise SystemExit(f'diagnostic invalid: {f}')
+          f=json.loads(Path('build/core-batch-y12-frontier/frontier-summary.json').read_text())
+          print(f"CORE_BATCH_Y12_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
+          if f['selected'] != 2 or f['error'] != 0:
+              raise SystemExit(f'candidate still has Core ERROR: {f}')
           PY
