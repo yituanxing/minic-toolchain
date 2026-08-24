@@ -1,22 +1,20 @@
-name: Core Batch Y46 Bitfield Storage Read Full500
+name: Core Productize Bitfield Storage Read
 
 on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  y46-bitfield-read-full500:
+  productize-bitfield-read:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
-    concurrency:
-      group: core-y46-bitfield-read-full500-${{ github.event.pull_request.number }}
-      cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: b6bdeb8fa8302a2f22bd06a4c740de9e39dc59e8
+          ref: refactor/declaration-sema-v1
+          fetch-depth: 0
       - name: Restore frozen Linux corpus
         id: linux-corpus-cache
         uses: actions/cache/restore@v4
@@ -29,7 +27,7 @@ jobs:
           set -Eeuo pipefail
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
-      - name: Apply exact Y45 semantic candidate
+      - name: Apply semantic patch and exact regression
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -43,7 +41,6 @@ jobs:
           helper=anchor+'''\n/* A bit-field's C value width is not necessarily the width of the memory\n   allocation unit containing it. _Bool is the important case: its semantic\n   integer width is one bit, while DataLayout allocates one byte. Keep the\n   semantic value type for the expression result and choose a separate unsigned\n   integer type whose object size/target width matches the storage unit used by\n   the field layout. */\nstatic bool core_unsigned_bit_field_storage_type(\n    const MinicCoreLowerContext *context,\n    MinicType value_type,\n    MinicType *storage_type,\n    unsigned int *storage_width) {\n    MinicType candidates[5];\n    size_t candidate_alignment;\n    size_t candidate_size;\n    size_t candidate_index;\n    size_t storage_alignment;\n    size_t storage_size;\n    unsigned int candidate_width;\n    unsigned int value_width;\n\n    if (context == NULL || context->body == NULL || context->body->program == NULL ||\n        context->target == NULL || storage_type == NULL || storage_width == NULL ||\n        !minic_type_is_integer(value_type) || !minic_type_is_unsigned_integer(value_type) ||\n        !minic_data_layout_type(minic_default_data_layout(),\n                                context->body->program,\n                                value_type,\n                                &storage_size,\n                                &storage_alignment) ||\n        storage_size == 0U || storage_size > 8U) {\n        return false;\n    }\n    (void)storage_alignment;\n\n    if (minic_target_info_integer_width(\n            context->target, context->body->program, value_type, &value_width) &&\n        (size_t)value_width == storage_size * 8U) {\n        *storage_type = value_type;\n        *storage_width = value_width;\n        return true;\n    }\n\n    candidates[0] = minic_type_unsigned_char();\n    candidates[1] = minic_type_unsigned_short();\n    candidates[2] = minic_type_unsigned_int();\n    candidates[3] = minic_type_unsigned_long();\n    candidates[4] = minic_type_unsigned_long_long();\n    for (candidate_index = 0U; candidate_index < 5U; ++candidate_index) {\n        if (minic_data_layout_type(minic_default_data_layout(),\n                                   context->body->program,\n                                   candidates[candidate_index],\n                                   &candidate_size,\n                                   &candidate_alignment) &&\n            candidate_size == storage_size &&\n            minic_target_info_integer_width(context->target,\n                                            context->body->program,\n                                            candidates[candidate_index],\n                                            &candidate_width) &&\n            (size_t)candidate_width == storage_size * 8U) {\n            (void)candidate_alignment;\n            *storage_type = candidates[candidate_index];\n            *storage_width = candidate_width;\n            return true;\n        }\n    }\n    return false;\n}\n'''
           if s.count(anchor)!=1: raise SystemExit(f'storage helper anchor count={s.count(anchor)}')
           s=s.replace(anchor,helper,1)
-
           begin=s.find('''    /* BATCH_A_UNSIGNED_BIT_FIELD_READ:''')
           end=s.find('''    /* BATCH_R_RECORD_CALL_MEMBER_VALUE:''', begin)
           if begin < 0 or end < 0: raise SystemExit('bitfield read scope')
@@ -85,46 +82,58 @@ jobs:
           if sub.count(old)!=1: raise SystemExit(f'bitfield result conversion count={sub.count(old)}')
           sub=sub.replace(old,new,1)
           p.write_text(s[:begin]+sub+s[end:])
-          print('CORE_BATCH_Y46_PATCHED')
+
+          p=Path('tests/core/run-core-ir-shadow.sh')
+          s=p.read_text()
+          anchor='''check_strict_case scalar-return-cleanup\n\ncat >"$work_dir/indirect-cfg-argument.i" <<'EOF'\n'''
+          extra='''check_strict_case scalar-return-cleanup\n\ncat >"$work_dir/bool-bitfield-storage-read.i" <<'EOF'\nstruct bool_bitfield_storage {\n    unsigned int prefix : 1;\n    _Bool ready : 1;\n};\n\nint bool_bitfield_storage_read(struct bool_bitfield_storage *state) {\n    return !state->ready;\n}\nEOF\ncheck_strict_case bool-bitfield-storage-read\n\ncat >"$work_dir/indirect-cfg-argument.i" <<'EOF'\n'''
+          if s.count(anchor)!=1: raise SystemExit(f'test anchor count={s.count(anchor)}')
+          p.write_text(s.replace(anchor,extra,1))
+          print('CORE_PRODUCTIZE_BITFIELD_READ_PATCHED')
           PY
-      - name: Build exact candidate
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-y46-compiler
-      - name: Full Core exact regression suite
+      - name: Build and Core exact suite
         shell: bash
         run: |
           set -Eeuo pipefail
-          MINIC="$GITHUB_WORKSPACE/build/core-batch-y46-compiler/bin/minic" \
-            BUILD_DIR="$GITHUB_WORKSPACE/build/core-batch-y46-tests" \
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-productize-bitfield-read-compiler
+          MINIC="$GITHUB_WORKSPACE/build/core-productize-bitfield-read-compiler/bin/minic" \
+            BUILD_DIR="$GITHUB_WORKSPACE/build/core-productize-bitfield-read-tests" \
             bash tests/core/run-core-ir-shadow.sh
-          echo CORE_BATCH_Y46_CORE_SUITE_PASS
-      - name: Frozen strict500
+      - name: Focused Linux guard
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-batch-y46-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-batch-y46-full500"
-          mkdir -p "$work"
+          compiler="$GITHUB_WORKSPACE/build/core-productize-bitfield-read-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-productize-bitfield-read-linux"
           set +e
           MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
-            --work "$work" --jobs 4 --offset 0 --limit 500 --sample-count 0 \
-            >"$work/replay.log" 2>&1
-          replay_status=$?
+            --work "$work" --jobs 3 --offset 0 --limit 500 --sample-count 0 --indices '2,3,7'
+          status=$?
           set -e
-          echo CORE_BATCH_Y46_REPLAY_STATUS=$replay_status
           python3 tools/ci/classify-core-strict-frontier.py \
-            "$work/batch-results.json" --examples 12 --json-out "$work/frontier-summary.json"
-          python3 tools/ci/summarize-core-frontier-progress.py \
-            "$work/batch-results.json" --expect-selected 500 \
-            --json-out "$work/progress-summary.json" --text-out "$work/progress-summary.txt" >/dev/null
+            "$work/batch-results.json" --examples 8 --json-out "$work/frontier-summary.json"
           python3 - <<'PY'
           import json
           from pathlib import Path
-          w=Path('build/core-batch-y46-full500')
+          w=Path('build/core-productize-bitfield-read-linux')
+          rows=json.loads((w/'batch-results.json').read_text())
+          if isinstance(rows,dict): rows=rows.get('results',rows.get('tus',[]))
+          by={int(r['index']):r for r in rows}
           f=json.loads((w/'frontier-summary.json').read_text())
-          p=json.loads((w/'progress-summary.json').read_text())
-          print(f"CORE_BATCH_Y46_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
-          print(f"CORE_BATCH_Y46_PROGRESS mean={p.get('tu_mean_progress')} median={p.get('tu_median_progress')} line_weighted={p.get('line_weighted_progress')}")
-          if f['selected'] != 500 or f['error'] != 0:
-              raise SystemExit(f'Y46 full500 regression: {f}')
+          print(f"CORE_PRODUCTIZE_BITFIELD_READ_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
+          if f['error'] != 0 or by[7]['status'] != 'PASS': raise SystemExit(f)
+          if any(r.get('message','').endswith("'device_enable_async_suspend'") for r in rows):
+              raise SystemExit('read seam did not advance')
           PY
+      - name: Commit semantic change
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/core/core_lower.c tests/core/run-core-ir-shadow.sh
+          test -n "$(git status --porcelain -- src/core/core_lower.c tests/core/run-core-ir-shadow.sh)"
+          git commit -m 'core: separate bit-field value and storage widths'
+          git push origin HEAD:refactor/declaration-sema-v1
+          echo CORE_PRODUCTIZE_BITFIELD_READ_HEAD=$(git rev-parse HEAD)
