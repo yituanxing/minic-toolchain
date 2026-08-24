@@ -1,4 +1,4 @@
-name: Core Batch Y38 Return Cleanup Tail
+name: Core Batch Y39 Return Cleanup Full500
 
 on:
   pull_request:
@@ -7,11 +7,11 @@ permissions:
   contents: read
 
 jobs:
-  y38-cleanup-tail:
+  y39-cleanup-full500:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     concurrency:
-      group: core-y38-cleanup-tail-${{ github.event.pull_request.number }}
+      group: core-y39-cleanup-full500-${{ github.event.pull_request.number }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
@@ -72,46 +72,46 @@ jobs:
           new='''        if (statement->cleanup_context != statement->cleanup_stop_context &&\n            statement->kind != MINIC_STATEMENT_RETURN) {\n            (void)fprintf(stderr,'''
           if s.count(old)!=1: raise SystemExit('cleanup guard')
           p.write_text(s.replace(old,new,1))
-          print('CORE_BATCH_Y38_PATCHED')
+          print('CORE_BATCH_Y39_PATCHED')
           PY
       - name: Build exact candidate
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-y38-compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-y39-compiler
       - name: Full Core exact regression suite
         shell: bash
         run: |
           set -Eeuo pipefail
-          MINIC="$GITHUB_WORKSPACE/build/core-batch-y38-compiler/bin/minic" \
-            BUILD_DIR="$GITHUB_WORKSPACE/build/core-batch-y38-tests" \
+          MINIC="$GITHUB_WORKSPACE/build/core-batch-y39-compiler/bin/minic" \
+            BUILD_DIR="$GITHUB_WORKSPACE/build/core-batch-y39-tests" \
             bash tests/core/run-core-ir-shadow.sh
-          echo CORE_BATCH_Y38_CORE_SUITE_PASS
-      - name: Replay cleanup representatives
+          echo CORE_BATCH_Y39_CORE_SUITE_PASS
+      - name: Frozen strict500
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-batch-y38-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-batch-y38"
+          compiler="$GITHUB_WORKSPACE/build/core-batch-y39-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-batch-y39-full500"
+          mkdir -p "$work"
           set +e
           MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
-            --work "$work" --jobs 3 --offset 0 --limit 500 --sample-count 0 --indices '2,3,7'
+            --work "$work" --jobs 4 --offset 0 --limit 500 --sample-count 0 \
+            >"$work/replay.log" 2>&1
           replay_status=$?
           set -e
-          echo CORE_BATCH_Y38_REPLAY_STATUS=$replay_status
+          echo CORE_BATCH_Y39_REPLAY_STATUS=$replay_status
           python3 tools/ci/classify-core-strict-frontier.py \
-            "$work/batch-results.json" --examples 8 --json-out "$work/frontier-summary.json"
+            "$work/batch-results.json" --examples 12 --json-out "$work/frontier-summary.json"
           python3 tools/ci/summarize-core-frontier-progress.py \
-            "$work/batch-results.json" --expect-selected 3 \
-            --json-out "$work/progress-summary.json" --text-out "$work/progress-summary.txt"
+            "$work/batch-results.json" --expect-selected 500 \
+            --json-out "$work/progress-summary.json" --text-out "$work/progress-summary.txt" >/dev/null
           python3 - <<'PY'
           import json
           from pathlib import Path
-          w=Path('build/core-batch-y38')
-          rows=json.loads((w/'batch-results.json').read_text())
-          if isinstance(rows,dict): rows=rows.get('results',rows.get('tus',[]))
-          for r in sorted(rows,key=lambda x:x.get('index',-1)):
-              print(f"CORE_BATCH_Y38_ROW index={r.get('index')} status={r.get('status')} progress={float(r.get('progress_ratio') or 0)*100:.2f}% first={r.get('first_error_line')} message={r.get('message','')}")
+          w=Path('build/core-batch-y39-full500')
           f=json.loads((w/'frontier-summary.json').read_text())
-          print(f"CORE_BATCH_Y38_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
-          if f['error'] != 0 or next(r for r in rows if int(r['index'])==7)['status'] != 'PASS':
-              raise SystemExit(f'Y38 regression/error: {f}')
+          p=json.loads((w/'progress-summary.json').read_text())
+          print(f"CORE_BATCH_Y39_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
+          print(f"CORE_BATCH_Y39_PROGRESS mean={p.get('tu_mean_progress')} median={p.get('tu_median_progress')} line_weighted={p.get('line_weighted_progress')}")
+          if f['selected'] != 500 or f['error'] != 0:
+              raise SystemExit(f'Y39 full500 error/regression: {f}')
           PY
