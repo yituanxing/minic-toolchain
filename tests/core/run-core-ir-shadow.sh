@@ -340,6 +340,18 @@ struct offset_item *const_record_member_pointer_offset(const struct offset_view 
 EOF
 check_strict_case const-record-member-pointer-offset
 
+cat >"$work_dir/scalar-return-cleanup.i" <<'EOF'
+void cleanup_scalar(int *value) {
+    *value = *value + 1;
+}
+
+int scalar_return_cleanup(int input) {
+    int guard __attribute__((cleanup(cleanup_scalar))) = input;
+    return guard + 7;
+}
+EOF
+check_strict_case scalar-return-cleanup
+
 cat >"$work_dir/indirect-cfg-argument.i" <<'EOF'
 int indirect_cfg_argument(int (*callee)(int), int value) {
     return callee(value ? value : 1);

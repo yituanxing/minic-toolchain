@@ -4914,12 +4914,64 @@ static MinicCoreLowerStatus lower_expression_statement(MinicCoreLowerContext *co
     return lower_assignment_pair(context, target_id, source_id, expression->span);
 }
 
+static bool core_is_materialized_cleanup_statement(
+    const MinicCoreLowerContext *context, const MinicStatement *statement) {
+    size_t cleanup_index;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        statement == NULL || statement->kind != MINIC_STATEMENT_EXPRESSION ||
+        statement->expression == MINIC_EXPRESSION_INVALID) {
+        return false;
+    }
+    for (cleanup_index = 0U; cleanup_index < context->body->program->cleanup_context_count;
+         ++cleanup_index) {
+        if (context->body->program->cleanup_contexts[cleanup_index].cleanup_expression ==
+            statement->expression) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static MinicCoreLowerStatus lower_cleanup_contexts(
+    MinicCoreLowerContext *context, MinicCleanupContextId current, MinicCleanupContextId stop) {
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        !minic_c0_cleanup_context_reaches(context->body->program, current, stop)) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    while (current != stop) {
+        const MinicCleanupContext *cleanup;
+        MinicCoreValueId discarded_value;
+        MinicCoreLowerStatus status;
+
+        cleanup = minic_c0_program_cleanup_context(context->body->program, current);
+        if (cleanup == NULL || cleanup->parent == current ||
+            cleanup->cleanup_expression == MINIC_EXPRESSION_INVALID) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        status = lower_expression(context, cleanup->cleanup_expression, &discarded_value);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        current = cleanup->parent;
+    }
+    return MINIC_CORE_LOWER_OK;
+}
+
 static MinicCoreLowerStatus lower_return(MinicCoreLowerContext *context,
                                          const MinicStatement *statement) {
     MinicCoreTerminator terminator;
     MinicCoreLowerStatus status;
+    MinicCoreObjectId cleanup_return_object;
+    bool has_cleanup;
 
     if (context == NULL || context->source_function == NULL || statement == NULL) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    has_cleanup = statement->cleanup_context != statement->cleanup_stop_context;
+    cleanup_return_object = MINIC_CORE_OBJECT_INVALID;
+    if (has_cleanup && !minic_c0_cleanup_context_reaches(
+            context->body->program, statement->cleanup_context, statement->cleanup_stop_context)) {
         return MINIC_CORE_LOWER_ERROR;
     }
     (void)memset(&terminator, 0, sizeof(terminator));
@@ -4981,6 +5033,12 @@ static MinicCoreLowerStatus lower_return(MinicCoreLowerContext *context,
                                                    &terminator.return_value);
         } else if (minic_type_is_record(context->source_function->return_type)) {
             const MinicExpression *expression;
+
+            /* Aggregate return cleanup needs an address-backed return owner.
+               Keep that capability fail-closed until Core models it explicitly. */
+            if (has_cleanup) {
+                return MINIC_CORE_LOWER_UNSUPPORTED;
+            }
             MinicType value_type;
 
             expression = minic_c0_program_expression(context->body->program, statement->expression);
@@ -5020,6 +5078,33 @@ static MinicCoreLowerStatus lower_return(MinicCoreLowerContext *context,
         }
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
+        }
+    }
+    /* A return expression is sequenced before GNU cleanup functions, while the
+       computed scalar return value must survive those calls. Spill the value,
+       execute exactly the cleanup contexts crossed by the return edge, then
+       reload it before installing the RETURN terminator. */
+    if (has_cleanup) {
+        if (core_memory_scalar_type(context->source_function->return_type)) {
+            status = spill_scalar_value(context, statement->span,
+                                        context->source_function->return_type,
+                                        terminator.return_value, &cleanup_return_object);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
+        }
+        status = lower_cleanup_contexts(context, statement->cleanup_context,
+                                        statement->cleanup_stop_context);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+        if (core_memory_scalar_type(context->source_function->return_type)) {
+            status = reload_scalar_value(context, statement->span,
+                                         context->source_function->return_type,
+                                         cleanup_return_object, &terminator.return_value);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
         }
     }
     return minic_core_function_set_terminator(context->function, context->block_id, &terminator)
@@ -7953,7 +8038,12 @@ lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool
             return MINIC_CORE_LOWER_ERROR;
         }
         if (block_terminated) {
-            if (statement->kind == MINIC_STATEMENT_RETURN) {
+            /* Parser scope exit materializes the same cleanup expression for
+               ordinary fallthrough. A return edge above has already consumed
+               that cleanup, so the unreachable duplicate must not run again.
+               Keep all other unreachable expression statements fail-closed. */
+            if (statement->kind == MINIC_STATEMENT_RETURN ||
+                core_is_materialized_cleanup_statement(context, statement)) {
                 continue;
             }
             if (statement->kind != MINIC_STATEMENT_LABEL) {
@@ -7964,7 +8054,8 @@ lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool
            metadata. Equal ids mean the edge crosses no cleanup lifetime, even
            when both ids are non-root. Only an actual context transition needs
            cleanup-expression lowering, which remains fail-closed here. */
-        if (statement->cleanup_context != statement->cleanup_stop_context) {
+        if (statement->cleanup_context != statement->cleanup_stop_context &&
+            statement->kind != MINIC_STATEMENT_RETURN) {
             (void)fprintf(stderr,
                           "CORE_FAST_TRACE stage=statement reason=cleanup-context "
                           "function=%s kind=%d span=%zu:%zu cleanup=%llu stop=%llu\n",
