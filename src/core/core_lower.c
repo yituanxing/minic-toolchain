@@ -3797,7 +3797,9 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         MinicCoreObjectId pointer_object;
         MinicCoreValueId pointer_value;
         MinicCoreValueId index_value;
+        MinicCoreValueId offset_value;
         MinicCoreLowerStatus status;
+        MinicType expression_value_type;
         MinicType pointer_value_type;
         MinicType index_value_type;
         size_t element_size;
@@ -3837,10 +3839,11 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                 context->body, index_expression, &index_value_type) ||
             !minic_type_is_pointer(pointer_value_type) ||
             !minic_type_is_integer(index_value_type) ||
-            !minic_type_equal(pointer_value_type, expression->type) ||
+            !minic_type_unqualified(expression->type, &expression_value_type) ||
+            !minic_type_equal(pointer_value_type, expression_value_type) ||
             !minic_c0_pointer_arithmetic_element_size(context->body->program,
                                                       minic_default_data_layout(),
-                                                      expression->type,
+                                                      pointer_value_type,
                                                       &element_size)) {
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
@@ -3877,18 +3880,26 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
             return MINIC_CORE_LOWER_ERROR;
         }
         instruction.kind = MINIC_CORE_INSTRUCTION_POINTER_OFFSET;
+        instruction.type = pointer_value_type;
         instruction.value.pointer_offset.base = pointer_value;
         instruction.value.pointer_offset.index = index_value;
         instruction.value.pointer_offset.element_size = element_size;
-        /* M75 introduced this flag for compound subtraction. Always initialize
-           it on ordinary pointer arithmetic as well; leaving pointer + integer
-           indeterminate would make the Core program nondeterministic. */
+        /* Pointer arithmetic computes in the lvalue-to-rvalue pointer type.
+           If the semantic expression retains a top-level pointer qualifier,
+           represent that result spelling with Core's pointer bitcast rather
+           than making POINTER_OFFSET violate its base/result type invariant. */
         instruction.value.pointer_offset.subtract =
             expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT;
-        return minic_core_function_append_value_instruction(
-                   context->function, context->block_id, &instruction, value_id)
-                   ? MINIC_CORE_LOWER_OK
-                   : MINIC_CORE_LOWER_ERROR;
+        if (!minic_core_function_append_value_instruction(
+                context->function, context->block_id, &instruction, &offset_value)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        if (minic_type_equal(pointer_value_type, expression->type)) {
+            *value_id = offset_value;
+            return MINIC_CORE_LOWER_OK;
+        }
+        return append_scalar_bitcast(
+            context, expression->span, expression->type, offset_value, value_id);
     }
     if (expression->kind == MINIC_EXPRESSION_BINARY &&
         (expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT ||

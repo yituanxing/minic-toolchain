@@ -324,6 +324,22 @@ int *const_record_member_subscript(const struct pointer_view *view,
 EOF
 check_strict_case const-record-member-subscript
 
+cat >"$work_dir/const-record-member-pointer-offset.i" <<'EOF'
+struct offset_item {
+    long value;
+};
+
+struct offset_view {
+    struct offset_item *items;
+};
+
+struct offset_item *const_record_member_pointer_offset(const struct offset_view *view,
+                                                       unsigned long index) {
+    return view->items + index;
+}
+EOF
+check_strict_case const-record-member-pointer-offset
+
 cat >"$work_dir/indirect-cfg-argument.i" <<'EOF'
 int indirect_cfg_argument(int (*callee)(int), int value) {
     return callee(value ? value : 1);
