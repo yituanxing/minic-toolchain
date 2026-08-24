@@ -1,4 +1,4 @@
-name: Core Fast Batch Y7 Readahead CFG Graph
+name: Core Fast Batch Y8 For Continue Candidate
 
 on:
   pull_request:
@@ -7,11 +7,11 @@ permissions:
   contents: read
 
 jobs:
-  batch-y7-diagnose:
+  batch-y8-candidate:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     concurrency:
-      group: core-fast-batch-y7-${{ github.event.pull_request.number }}
+      group: core-fast-batch-y8-${{ github.event.pull_request.number }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
@@ -29,19 +29,7 @@ jobs:
           set -Eeuo pipefail
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
-      - name: Show readahead function source
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          input=build/linux-focus-corpus/kbuild/mm/fadvise.i
-          grep -n '__readahead_batch' "$input" | head -n 8 || true
-          line=$(grep -n 'unsigned int __readahead_batch' "$input" | head -n 1 | cut -d: -f1 || true)
-          if [ -n "$line" ]; then
-            begin=$((line > 8 ? line - 8 : 1))
-            end=$((line + 110))
-            sed -n "${begin},${end}p" "$input"
-          fi
-      - name: Apply Y candidate and CFG graph probe
+      - name: Apply Y and generic normalized-for continue fix
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -49,33 +37,48 @@ jobs:
           python3 tools/dev/patch-core-frontier-batch-y.py
           python3 - <<'PY'
           from pathlib import Path
-          p=Path('src/core/core_ir.c')
-          s=p.read_text()
-          old='''    if (!storage_shape_is_valid(\n            block->instructions, block->instruction_count, block->instruction_capacity) ||\n        !block->has_terminator) {\n        return false;\n    }\n'''
-          new='''    {\n        bool storage_ok = storage_shape_is_valid(\n            block->instructions, block->instruction_count, block->instruction_capacity);\n        if (!storage_ok || !block->has_terminator) {\n            if (function->name != NULL && strcmp(function->name, "__readahead_batch") == 0) {\n                size_t debug_index;\n                (void)fprintf(stderr,\n                              "CORE_Y7_BLOCK_SHAPE block=%u storage_ok=%d has_terminator=%d instruction_count=%zu instruction_capacity=%zu blocks=%zu\\n",\n                              (unsigned int)block_id,\n                              storage_ok ? 1 : 0,\n                              block->has_terminator ? 1 : 0,\n                              block->instruction_count,\n                              block->instruction_capacity,\n                              function->block_count);\n                for (debug_index = 0U; debug_index < function->block_count; ++debug_index) {\n                    const MinicCoreBlock *debug_block = &function->blocks[debug_index];\n                    (void)fprintf(stderr,\n                                  "CORE_Y7_CFG block=%zu instructions=%zu has_term=%d term=%d",\n                                  debug_index,\n                                  debug_block->instruction_count,\n                                  debug_block->has_terminator ? 1 : 0,\n                                  debug_block->has_terminator ? (int)debug_block->terminator.kind : -1);\n                    if (debug_block->has_terminator) {\n                        switch (debug_block->terminator.kind) {\n                        case MINIC_CORE_TERMINATOR_BRANCH:\n                            (void)fprintf(stderr, " target=%u",\n                                          (unsigned int)debug_block->terminator.branch_target);\n                            break;\n                        case MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH:\n                            (void)fprintf(stderr, " cond=%u true=%u false=%u",\n                                          (unsigned int)debug_block->terminator.conditional.condition,\n                                          (unsigned int)debug_block->terminator.conditional.when_true,\n                                          (unsigned int)debug_block->terminator.conditional.when_false);\n                            break;\n                        case MINIC_CORE_TERMINATOR_RETURN:\n                            (void)fprintf(stderr, " return=%u",\n                                          (unsigned int)debug_block->terminator.return_value);\n                            break;\n                        case MINIC_CORE_TERMINATOR_UNREACHABLE:\n                            break;\n                        }\n                    }\n                    (void)fprintf(stderr, "\\n");\n                }\n            }\n            return false;\n        }\n    }\n'''
-          if old not in s: raise SystemExit('Y7 block-shape verify anchor not found')
-          p.write_text(s.replace(old,new,1))
+          p = Path('src/core/core_lower.c')
+          s = p.read_text()
+          old_continue = '''    *iteration_body = *body;\n    iteration_body->statement_count -= 1U;\n    return true;\n}\n\nstatic bool normalized_for_update_tail'''
+          new_continue = '''    /* BATCH_Y8_FOR_CONTINUE_LABEL: keep the parser-owned synthetic\n       continue label inside the lowered iteration body. A source `continue`\n       is represented as a goto to this label; stripping the label creates a\n       reachable empty Core block with no terminator. For a no-update `for`,\n       lower_block lands on the label and lower_while closes it back to the\n       condition block. */\n    *iteration_body = *body;\n    return true;\n}\n\nstatic bool normalized_for_update_tail'''
+          if old_continue not in s:
+              raise SystemExit('normalized_for_continue_tail anchor not found')
+          s = s.replace(old_continue, new_continue, 1)
+          old_update = '''    *iteration_body = *body;\n    iteration_body->statement_count -= 2U;\n    *update_statement = update;\n    return true;\n}\n\nstatic MinicCoreLowerStatus\nlower_while'''
+          new_update = '''    /* Keep the synthetic continue label in the iteration body and strip only\n       the update statement. All fallthrough and explicit continue edges then\n       converge on one real Core block before the update is lowered. */\n    *iteration_body = *body;\n    iteration_body->statement_count -= 1U;\n    *update_statement = update;\n    return true;\n}\n\nstatic MinicCoreLowerStatus\nlower_while'''
+          if old_update not in s:
+              raise SystemExit('normalized_for_update_tail anchor not found')
+          p.write_text(s.replace(old_update, new_update, 1))
+          print('CORE_BATCH_Y8_PATCHED normalized for continue target')
           PY
-      - name: Build exact diagnostic compiler
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-y7-compiler
-      - name: One-TU CFG graph
+      - name: Build exact candidate compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-y8-compiler
+      - name: Readahead candidate replay
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-batch-y7-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-batch-y7-frontier"
+          compiler="$GITHUB_WORKSPACE/build/core-batch-y8-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-batch-y8-frontier"
           set +e
-          MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" --work "$work" --jobs 1 --offset 0 --limit 500 --sample-count 0 --indices '299'
+          MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
+            --minic "$compiler" \
+            --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
+            --work "$work" \
+            --jobs 1 --offset 0 --limit 500 --sample-count 0 --indices '299'
           replay_status=$?
           set -e
-          printf 'CORE_BATCH_Y7_REPLAY_STATUS=%d\n' "$replay_status"
-          stderr="$work/minic-stderr/mm/fadvise.i.stderr"
-          grep -E 'CORE_Y7_BLOCK_SHAPE|CORE_Y7_CFG|__readahead_batch' "$stderr" | tail -n 220 || true
-          python3 tools/ci/classify-core-strict-frontier.py "$work/batch-results.json" --examples 1 --json-out "$work/frontier-summary.json"
+          printf 'CORE_BATCH_Y8_REPLAY_STATUS=%d\n' "$replay_status"
+          python3 tools/ci/classify-core-strict-frontier.py \
+            "$work/batch-results.json" --examples 4 --json-out "$work/frontier-summary.json"
+          python3 tools/ci/summarize-core-frontier-progress.py \
+            "$work/batch-results.json" --expect-selected 1 \
+            --json-out "$work/progress-summary.json" --text-out "$work/progress-summary.txt"
+          cat "$work/progress-summary.txt"
           python3 - <<'PY'
           import json
           from pathlib import Path
-          f=json.loads(Path('build/core-batch-y7-frontier/frontier-summary.json').read_text())
-          print(f"CORE_BATCH_Y7_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
-          if f['selected'] != 1: raise SystemExit(f'diagnostic invalid: {f}')
+          f=json.loads(Path('build/core-batch-y8-frontier/frontier-summary.json').read_text())
+          print(f"CORE_BATCH_Y8_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
+          if f['selected'] != 1 or f['error'] != 0:
+              raise SystemExit(f'candidate retains Core ERROR: {f}')
           PY
