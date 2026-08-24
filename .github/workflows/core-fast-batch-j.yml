@@ -1,4 +1,4 @@
-name: Core Fast Batch N
+name: Core Fast Batch O
 
 on:
   pull_request:
@@ -7,11 +7,11 @@ permissions:
   contents: write
 
 jobs:
-  batch-n:
+  batch-o:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     concurrency:
-      group: core-fast-batch-n-${{ github.event.pull_request.number }}
+      group: core-fast-batch-o-${{ github.event.pull_request.number }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
@@ -32,75 +32,71 @@ jobs:
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
 
-      - name: Apply Batch N production changes
+      - name: Apply Batch O production changes
         shell: bash
         run: |
           set -Eeuo pipefail
           python3 tools/dev/patch-linux-replay-live-progress.py
-          python3 tools/dev/patch-core-frontier-batch-n.py
+          python3 tools/dev/patch-core-frontier-batch-o.py
 
       - name: Build exact patched compiler
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-n-compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-o-compiler
 
-      - name: Focused GNU omitted-middle conditional regression
+      - name: Focused pointer-to-bool return regression
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-batch-n-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-batch-n-focused"
+          compiler="$GITHUB_WORKSPACE/build/core-batch-o-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-batch-o-focused"
           mkdir -p "$work"
-          cat >"$work/gnu-conditional.i" <<'EOF'
-          extern int next_value(void);
-          int fallback_once(void) { return next_value() ?: -7; }
-          void *pick_ptr(void *left, void *right) { return left ?: right; }
+          cat >"$work/pointer-bool-return.i" <<'EOF'
+          extern char *find_token(char *text);
+          _Bool has_token(char *text) { return find_token(text); }
           EOF
-          MINIC_CORE_IR=strict "$compiler" -S "$work/gnu-conditional.i" -o "$work/strict.s"
+          MINIC_CORE_IR=strict "$compiler" -S "$work/pointer-bool-return.i" -o "$work/strict.s"
           MINIC_CORE_IR=strict MINIC_CORE_CODEGEN=basic-v0 "$compiler" \
-            -S "$work/gnu-conditional.i" -o "$work/core.s"
-          test "$(grep -c 'call next_value' "$work/core.s")" -eq 1
-          echo CORE_BATCH_N_FOCUSED_PASS
+            -S "$work/pointer-bool-return.i" -o "$work/core.s"
+          grep -q 'call find_token' "$work/core.s"
+          echo CORE_BATCH_O_FOCUSED_PASS
 
-      - name: Six-TU copy_struct family frontier
+      - name: One-TU nearest-pass frontier
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-batch-n-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-batch-n-frontier"
+          compiler="$GITHUB_WORKSPACE/build/core-batch-o-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-batch-o-frontier"
           set +e
           MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" \
             --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
             --work "$work" \
-            --jobs 6 \
+            --jobs 1 \
             --offset 0 \
             --limit 500 \
             --sample-count 0 \
-            --indices '2,3,4,15,288,299'
+            --indices '7'
           replay_status=$?
           set -e
-          printf 'CORE_BATCH_N_REPLAY_STATUS=%d\n' "$replay_status"
+          printf 'CORE_BATCH_O_REPLAY_STATUS=%d\n' "$replay_status"
           python3 tools/ci/classify-core-strict-frontier.py \
-            "$work/batch-results.json" --examples 6 --json-out "$work/frontier-summary.json"
+            "$work/batch-results.json" --examples 1 --json-out "$work/frontier-summary.json"
           python3 - <<'PY'
           import json
           from pathlib import Path
-          f = json.loads(Path('build/core-batch-n-frontier/frontier-summary.json').read_text())
-          blockers = {b.get('function') for b in f.get('blockers', [])}
-          print(f"CORE_BATCH_N_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']} distinct_blockers={len(f.get('blockers', []))}")
-          if f['selected'] != 6:
-              raise SystemExit(f"expected 6 probes, got {f['selected']}")
-          if f['error'] != 0:
-              raise SystemExit(f"Batch N introduced Core ERRORs: {f.get('errors', [])}")
-          if 'copy_struct_from_user' in blockers:
-              raise SystemExit('copy_struct_from_user still blocks Batch N representative frontier')
+          f = json.loads(Path('build/core-batch-o-frontier/frontier-summary.json').read_text())
+          print(f"CORE_BATCH_O_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
+          if f['selected'] != 1 or f['error'] != 0:
+              raise SystemExit('Batch O one-TU gate invalid')
+          if f['pass'] != 1:
+              raise SystemExit(f"cmdline_early did not reach PASS: {f.get('blockers', [])}")
           PY
 
       - name: Sixteen-TU no-error sanity gate
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-batch-n-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-batch-n-strict16"
+          compiler="$GITHUB_WORKSPACE/build/core-batch-o-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-batch-o-strict16"
           set +e
           MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" \
@@ -113,33 +109,30 @@ jobs:
             --indices '0,1,2,3,4,7,9,20,42,66,95,155,165,280,288,299'
           replay_status=$?
           set -e
-          printf 'CORE_BATCH_N_STRICT16_REPLAY_STATUS=%d\n' "$replay_status"
+          printf 'CORE_BATCH_O_STRICT16_REPLAY_STATUS=%d\n' "$replay_status"
           python3 tools/ci/classify-core-strict-frontier.py \
             "$work/batch-results.json" --examples 16 --json-out "$work/frontier-summary.json"
           python3 - <<'PY'
           import json
           from pathlib import Path
-          f = json.loads(Path('build/core-batch-n-strict16/frontier-summary.json').read_text())
-          blockers = {b.get('function') for b in f.get('blockers', [])}
-          print(f"CORE_BATCH_N_STRICT16 selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
-          if f['selected'] != 16:
-              raise SystemExit(f"expected 16 probes, got {f['selected']}")
-          if f['error'] != 0:
-              raise SystemExit(f"Batch N strict16 Core ERRORs: {f.get('errors', [])}")
-          if 'copy_struct_from_user' in blockers:
-              raise SystemExit('copy_struct_from_user still blocks strict16')
+          f = json.loads(Path('build/core-batch-o-strict16/frontier-summary.json').read_text())
+          print(f"CORE_BATCH_O_STRICT16 selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
+          if f['selected'] != 16 or f['error'] != 0:
+              raise SystemExit(f"Batch O strict16 invalid: {f.get('errors', [])}")
+          if f['pass'] < 5:
+              raise SystemExit('Batch O did not add the expected strict16 PASS')
           PY
 
-      - name: Persist qualified Batch N production tree
+      - name: Persist qualified Batch O production tree
         shell: bash
         run: |
           set -Eeuo pipefail
           git add -- src/core/core_lower.c
           if git diff --cached --quiet; then
-            echo CORE_BATCH_N_ALREADY_PERSISTED
+            echo CORE_BATCH_O_ALREADY_PERSISTED
             exit 0
           fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m 'core: lower GNU omitted-middle conditional values'
+          git commit -m 'core: apply scalar conversion at integer return'
           git push origin HEAD:refactor/declaration-sema-v1
