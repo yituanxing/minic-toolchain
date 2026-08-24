@@ -1,4 +1,4 @@
-name: Core Y53 Perf Caller Regs Shape
+name: Core Y54 Call Frame Bitcast Trace
 
 on:
   pull_request:
@@ -7,7 +7,7 @@ permissions:
   contents: read
 
 jobs:
-  y53-perf-caller-regs-shape:
+  y54-call-frame-bitcast-trace:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     steps:
@@ -26,43 +26,39 @@ jobs:
           set -Eeuo pipefail
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
-      - name: Show representative source and Core bitcast path
+      - name: Instrument perf caller-reg bitcasts
         shell: bash
         run: |
           set -Eeuo pipefail
-          echo CORE_Y53_SOURCE_BEGIN
-          for f in \
-            build/linux-focus-corpus/kbuild/init/main.i \
-            build/linux-focus-corpus/kbuild/init/initramfs.i \
-            build/linux-focus-corpus/kbuild/arch/riscv/kernel/perf_callchain.i; do
-            echo "--- $f"
-            grep -n -A28 -B6 -m1 'perf_fetch_caller_regs' "$f" || true
-          done
-          echo CORE_Y53_SOURCE_END
-          echo CORE_Y53_LOWER_BITCAST_BEGIN
-          grep -n -A55 -B20 'MINIC_EXPRESSION_BITCAST' src/core/core_lower.c || true
-          grep -n -A45 -B15 'append_scalar_bitcast' src/core/core_lower.c || true
-          echo CORE_Y53_LOWER_BITCAST_END
-      - name: Enable compact progress telemetry
-        run: python3 tools/dev/patch-linux-replay-live-progress.py
-      - name: Build exact compiler
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y53-compiler
+          python3 tools/dev/patch-linux-replay-live-progress.py
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('src/core/core_lower.c')
+          s=p.read_text()
+          old='''        if (!core_scalar_expression_value_type(context->body, operand, &operand_value_type) ||\n            !minic_core_scalar_bitcast_types_valid(expression->type, operand_value_type)) {\n            return MINIC_CORE_LOWER_UNSUPPORTED;\n        }\n        status = lower_expression(context, expression->value.unary.operand, &operand_value);\n        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n'''
+          new='''        (void)memset(&operand_value_type, 0, sizeof(operand_value_type));\n        {\n            bool value_type_ok =\n                core_scalar_expression_value_type(context->body, operand, &operand_value_type);\n            bool bitcast_ok = value_type_ok &&\n                minic_core_scalar_bitcast_types_valid(expression->type, operand_value_type);\n            if (context->source_function != NULL &&\n                strcmp(context->source_function->name, "perf_fetch_caller_regs") == 0) {\n                (void)fprintf(stderr,\n                    "CORE_Y54_BITCAST span=%zu:%zu target_base=%d target_sign=%d target_rank=%d "\n                    "target_ptr=%u operand_kind=%d operand_cat=%d operand_base=%d operand_sign=%d "\n                    "operand_rank=%d operand_ptr=%u value_ok=%d value_base=%d value_sign=%d "\n                    "value_rank=%d value_ptr=%u bitcast_ok=%d frame_kind=%d frame_level=%u\\n",\n                    expression->span.begin.line, expression->span.begin.column,\n                    (int)expression->type.base_kind, (int)expression->type.integer_sign,\n                    (int)expression->type.integer_rank, expression->type.pointer_depth,\n                    (int)operand->kind, (int)operand->value_category,\n                    (int)operand->type.base_kind, (int)operand->type.integer_sign,\n                    (int)operand->type.integer_rank, operand->type.pointer_depth,\n                    value_type_ok ? 1 : 0, (int)operand_value_type.base_kind,\n                    (int)operand_value_type.integer_sign, (int)operand_value_type.integer_rank,\n                    operand_value_type.pointer_depth, bitcast_ok ? 1 : 0,\n                    operand->kind == MINIC_EXPRESSION_CALL_FRAME_ADDRESS\n                        ? (int)operand->value.call_frame_address.kind : -1,\n                    operand->kind == MINIC_EXPRESSION_CALL_FRAME_ADDRESS\n                        ? operand->value.call_frame_address.level : 0U);\n            }\n            if (!value_type_ok || !bitcast_ok) {\n                return MINIC_CORE_LOWER_UNSUPPORTED;\n            }\n        }\n        status = lower_expression(context, expression->value.unary.operand, &operand_value);\n        if (context->source_function != NULL &&\n            strcmp(context->source_function->name, "perf_fetch_caller_regs") == 0) {\n            (void)fprintf(stderr,\n                "CORE_Y54_OPERAND span=%zu:%zu operand_kind=%d frame_kind=%d frame_level=%u status=%d\\n",\n                expression->span.begin.line, expression->span.begin.column, (int)operand->kind,\n                operand->kind == MINIC_EXPRESSION_CALL_FRAME_ADDRESS\n                    ? (int)operand->value.call_frame_address.kind : -1,\n                operand->kind == MINIC_EXPRESSION_CALL_FRAME_ADDRESS\n                    ? operand->value.call_frame_address.level : 0U,\n                (int)status);\n        }\n        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n'''
+          if s.count(old)!=1:
+              raise SystemExit(f'bitcast diagnostic anchor count={s.count(old)}')
+          p.write_text(s.replace(old,new,1))
+          print('CORE_Y54_INSTRUMENTED')
+          PY
+      - name: Build diagnostic compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y54-compiler
       - name: Replay representatives
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-y53-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-y53"
+          compiler="$GITHUB_WORKSPACE/build/core-y54-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-y54"
           set +e
           MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
             --work "$work" --jobs 3 --offset 0 --limit 500 --sample-count 0 --indices '0,4,40'
           replay_status=$?
           set -e
-          echo CORE_Y53_REPLAY_STATUS=$replay_status
+          echo CORE_Y54_REPLAY_STATUS=$replay_status
           python3 tools/ci/classify-core-strict-frontier.py \
             "$work/batch-results.json" --examples 6 --json-out "$work/frontier-summary.json"
-          echo CORE_Y53_TRACE_BEGIN
-          grep -R -E 'perf_fetch_caller_regs|CORE_ASSIGN_STAGE|CORE_LOWER_DETAIL|CORE_FAST_TRACE' \
-            "$work/minic-stderr" | grep -E 'perf_fetch_caller_regs|CORE_ASSIGN_STAGE' | head -n 160 || true
-          echo CORE_Y53_TRACE_END
+          echo CORE_Y54_DETAILS_BEGIN
+          grep -R -E 'CORE_Y54_' "$work/minic-stderr" | head -n 160 || true
+          echo CORE_Y54_DETAILS_END
