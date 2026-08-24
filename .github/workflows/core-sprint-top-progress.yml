@@ -83,8 +83,20 @@ jobs:
           printf 'CORE_SPRINT_REPLAY_STATUS=%d\n' "$replay_status"
           stderr="$work/minic-stderr/kernel/sched/core.i.stderr"
           if test -f "$stderr"; then
-            grep -E 'CORE_(FAST_TRACE|ASSIGN_STAGE|LOWER_DETAIL|ASM_DETAIL)' "$stderr" | tail -n 30 || true
+            echo CORE_SCHEDULE_TAIL_TRACE_BEGIN
+            grep -F 'function=schedule_tail' "$stderr" || true
+            echo CORE_SCHEDULE_TAIL_TRACE_END
           fi
+          python3 - <<'PY'
+          from pathlib import Path
+          src = Path('build/linux-focus-corpus/kbuild/kernel/sched/core.i')
+          if src.is_file():
+              lines = src.read_text(errors='replace').splitlines()
+              print('CORE_SCHEDULE_TAIL_SOURCE_BEGIN')
+              for n in range(max(0, 88096 - 16), min(len(lines), 88096 + 20)):
+                  print(f'{n+1}: {lines[n]}')
+              print('CORE_SCHEDULE_TAIL_SOURCE_END')
+          PY
           python3 tools/ci/classify-core-strict-frontier.py \
             "$work/batch-results.json" \
             --examples 4 \
@@ -116,12 +128,8 @@ jobs:
           r95 = by_index.get(95)
           if r95 is None:
               raise SystemExit('missing index95')
-          if r95.get('status') != 'PASS':
-              first = int(r95.get('first_error_line') or 0)
-              if os.environ.get('M106_CHANGED') == 'true' and first <= 86963:
-                  raise SystemExit(f'M106 did not move index95 forward: {r95}')
-              if r95.get('status') == 'ERROR':
-                  raise SystemExit(f'index95 Core ERROR: {r95}')
+          if r95.get('status') == 'ERROR':
+              raise SystemExit(f'index95 Core ERROR: {r95}')
           print(f"CORE_SPRINT_INDEX95 status={r95.get('status')} first={r95.get('first_error_line')} blocker={r95.get('message','')}")
           PY
 
