@@ -1,0 +1,138 @@
+name: Core Error Cohort
+
+on:
+  pull_request:
+
+jobs:
+  verifier-errors:
+    if: github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+          fetch-depth: 0
+
+      - name: Restore frozen Linux corpus
+        id: linux-corpus-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+
+      - name: Require frozen corpus
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
+          test -s build/linux-focus-corpus/selected-tus.txt
+
+      - name: Instrument Core verifier locally
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/core/core_ir.c')
+          text = p.read_text()
+          old = '''        if (!instruction_is_valid(function, instruction, available_values)) {
+              return false;
+          }
+          '''
+          # Source indentation is intentionally matched without depending on line numbers.
+          if old not in text:
+              old = '''        if (!instruction_is_valid(function, instruction, available_values)) {
+              return false;
+          }
+'''
+          if old not in text:
+              old = '''        if (!instruction_is_valid(function, instruction, available_values)) {
+            return false;
+        }
+'''
+          new = '''        if (!instruction_is_valid(function, instruction, available_values)) {
+            (void)fprintf(stderr,
+                          "CORE_VERIFY_FAIL function=%s block=%zu slot=%zu instruction=%u kind=%d result=%u\\n",
+                          function->name,
+                          block_id,
+                          index,
+                          (unsigned int)instruction_id,
+                          (int)instruction->kind,
+                          (unsigned int)instruction->result);
+            if (instruction->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL) {
+                MinicCoreValueId callee_value = instruction->value.indirect_call.callee;
+                MinicCoreCallSignatureId signature_id =
+                    instruction->value.indirect_call.signature_id;
+                (void)fprintf(stderr,
+                              "CORE_VERIFY_INDIRECT callee=%u signature=%u args=%zu begin=%zu values=%zu signatures=%zu\\n",
+                              (unsigned int)callee_value,
+                              (unsigned int)signature_id,
+                              instruction->value.indirect_call.argument_count,
+                              instruction->value.indirect_call.argument_begin,
+                              function->value_count,
+                              function->call_signature_count);
+                if (callee_value < function->value_count) {
+                    MinicType callee_type = function->values[callee_value].type;
+                    (void)fprintf(stderr,
+                                  "CORE_VERIFY_INDIRECT_CALLEE base=%d depth=%u fn_type=%u qualifiers=%u volatile=%u\\n",
+                                  (int)callee_type.base_kind,
+                                  callee_type.pointer_depth,
+                                  (unsigned int)callee_type.function_type_id,
+                                  callee_type.pointer_qualifiers,
+                                  callee_type.pointer_volatile_qualifiers);
+                }
+                if (signature_id < function->call_signature_count) {
+                    const MinicCoreCallSignature *signature =
+                        &function->call_signatures[signature_id];
+                    (void)fprintf(stderr,
+                                  "CORE_VERIFY_INDIRECT_SIG fn_type=%u params=%zu return_base=%d return_depth=%u\\n",
+                                  (unsigned int)signature->function_type_id,
+                                  signature->parameter_count,
+                                  (int)signature->return_type.base_kind,
+                                  signature->return_type.pointer_depth);
+                }
+            }
+            return false;
+        }
+'''
+          if text.count(old) != 1:
+              raise SystemExit(f'verify-block anchor count={text.count(old)}')
+          p.write_text(text.replace(old, new, 1))
+          PY
+
+      - name: Build diagnostic compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/error-cohort-compiler
+
+      - name: Replay all current verifier-error TUs
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/error-cohort-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/error-cohort"
+          set +e
+          MINIC_CORE_IR=strict CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
+            --minic "$compiler" \
+            --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
+            --work "$work" \
+            --jobs 4 \
+            --indices '194,195,197,212,215,219,229,230,250,281,357,410,435'
+          replay_status=$?
+          set -e
+          printf 'CORE_ERROR_COHORT_STATUS=%d\n' "$replay_status"
+          python3 tools/ci/classify-core-strict-frontier.py \
+            "$work/batch-results.json" \
+            --examples 13 \
+            --json-out "$work/frontier-summary.json"
+          echo CORE_VERIFY_DETAIL_BEGIN
+          grep -R -h -E 'CORE_VERIFY_|CORE_LOWER_DETAIL|Core IR shadow' "$work/minic-stderr" | tail -1200 || true
+          echo CORE_VERIFY_DETAIL_END
+
+      - name: Persist error cohort
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-error-cohort-${{ github.sha }}
+          path: |
+            build/error-cohort/batch-results.json
+            build/error-cohort/frontier-summary.json
+            build/error-cohort/minic-stderr/**
+          if-no-files-found: warn
