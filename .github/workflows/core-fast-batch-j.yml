@@ -1,4 +1,4 @@
-name: Core Y59 Shared Comma Discard Candidate
+name: Core Y59b Shared Comma Discard Candidate
 
 on:
   pull_request:
@@ -7,7 +7,7 @@ permissions:
   contents: read
 
 jobs:
-  y59-shared-comma-discard:
+  y59b-shared-comma-discard:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     steps:
@@ -40,12 +40,11 @@ jobs:
           if s.count(old)!=1:
               raise SystemExit(f'forward anchor count={s.count(old)}')
           s=s.replace(old,new,1)
-          old='''        status = lower_expression(context, expression->value.binary.left, &discarded_left);\n        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n'''
-          new='''        {\n            const MinicExpression *discarded_expression;\n            MinicStatement discarded_statement;\n\n            discarded_expression = minic_c0_program_expression(\n                context->body->program, expression->value.binary.left);\n            if (discarded_expression == NULL) {\n                return MINIC_CORE_LOWER_ERROR;\n            }\n            (void)memset(&discarded_statement, 0, sizeof(discarded_statement));\n            discarded_statement.kind = MINIC_STATEMENT_EXPRESSION;\n            discarded_statement.span = discarded_expression->span;\n            discarded_statement.expression = expression->value.binary.left;\n            status = lower_expression_statement(context, &discarded_statement);\n        }\n        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n'''
+          old='''    if (expression->kind == MINIC_EXPRESSION_BINARY &&\n        expression->value.binary.operator_kind == MINIC_BINARY_COMMA) {\n        MinicCoreValueId discarded_left;\n        MinicCoreLowerStatus status;\n\n        status = lower_expression(context, expression->value.binary.left, &discarded_left);\n        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n        return lower_expression(context, expression->value.binary.right, value_id);\n    }\n'''
+          new='''    if (expression->kind == MINIC_EXPRESSION_BINARY &&\n        expression->value.binary.operator_kind == MINIC_BINARY_COMMA) {\n        const MinicExpression *discarded_expression;\n        MinicStatement discarded_statement;\n        MinicCoreLowerStatus status;\n\n        discarded_expression = minic_c0_program_expression(\n            context->body->program, expression->value.binary.left);\n        if (discarded_expression == NULL) {\n            return MINIC_CORE_LOWER_ERROR;\n        }\n        (void)memset(&discarded_statement, 0, sizeof(discarded_statement));\n        discarded_statement.kind = MINIC_STATEMENT_EXPRESSION;\n        discarded_statement.span = discarded_expression->span;\n        discarded_statement.expression = expression->value.binary.left;\n        status = lower_expression_statement(context, &discarded_statement);\n        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n        return lower_expression(context, expression->value.binary.right, value_id);\n    }\n'''
           if s.count(old)!=1:
-              raise SystemExit(f'comma-left anchor count={s.count(old)}')
-          s=s.replace(old,new,1)
-          p.write_text(s)
+              raise SystemExit(f'comma branch anchor count={s.count(old)}')
+          p.write_text(s.replace(old,new,1))
 
           p=Path('tests/core/run-core-ir-shadow.sh')
           s=p.read_text()
@@ -54,23 +53,23 @@ jobs:
           if s.count(anchor)!=1:
               raise SystemExit(f'test anchor count={s.count(anchor)}')
           p.write_text(s.replace(anchor,addition+anchor,1))
-          print('CORE_Y59_CANDIDATE_APPLIED')
+          print('CORE_Y59B_CANDIDATE_APPLIED')
           PY
       - name: Build candidate
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y59-compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y59b-compiler
       - name: Full Core exact regression suite
         shell: bash
         run: |
           set -Eeuo pipefail
-          MINIC="$GITHUB_WORKSPACE/build/core-y59-compiler/bin/minic" \
-            BUILD_DIR="$GITHUB_WORKSPACE/build/core-y59-regression" \
+          MINIC="$GITHUB_WORKSPACE/build/core-y59b-compiler/bin/minic" \
+            BUILD_DIR="$GITHUB_WORKSPACE/build/core-y59b-regression" \
             bash tests/core/run-core-ir-shadow.sh
       - name: Focused bio_segments Linux replay
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-y59-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-y59-linux"
+          compiler="$GITHUB_WORKSPACE/build/core-y59b-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-y59b-linux"
           mkdir -p "$work"
           set +e
           MINIC_CORE_IR=strict CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
@@ -78,20 +77,20 @@ jobs:
             --work "$work" --jobs 3 --offset 0 --limit 500 --sample-count 0 --indices '3,58,301'
           replay_status=$?
           set -e
-          echo CORE_Y59_REPLAY_STATUS=$replay_status
+          echo CORE_Y59B_REPLAY_STATUS=$replay_status
           python3 tools/ci/classify-core-strict-frontier.py "$work/batch-results.json" --examples 6 --json-out "$work/frontier-summary.json"
           python3 - <<'PY'
           import json
           from pathlib import Path
-          w=Path('build/core-y59-linux')
+          w=Path('build/core-y59b-linux')
           f=json.loads((w/'frontier-summary.json').read_text())
           rows=json.loads((w/'batch-results.json').read_text())
           if isinstance(rows,dict): rows=rows.get('results',rows.get('tus',[]))
-          print(f"CORE_Y59_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
+          print(f"CORE_Y59B_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
           for r in rows:
-              print(f"CORE_Y59_INDEX index={r.get('index')} status={r.get('status')} progress={float(r.get('progress_ratio') or 0)*100:.3f}% message={r.get('message','')}")
+              print(f"CORE_Y59B_INDEX index={r.get('index')} status={r.get('status')} progress={float(r.get('progress_ratio') or 0)*100:.3f}% message={r.get('message','')}")
           if f['error'] != 0:
               raise SystemExit(f'focused Core ERROR: {f}')
           if any('bio_segments' in r.get('message','') for r in rows):
-              raise SystemExit('bio_segments blocker survived Y59')
+              raise SystemExit('bio_segments blocker survived Y59b')
           PY
