@@ -1,4 +1,4 @@
-name: Core Y102 Signed Bit-field Read
+name: Core Y102b Signed Bit-field Qualification
 
 on:
   pull_request:
@@ -7,7 +7,7 @@ permissions:
   contents: read
 
 jobs:
-  y102-signed-bitfield-read:
+  y102b-signed-bitfield:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     steps:
@@ -20,14 +20,26 @@ jobs:
         with:
           path: build/linux-focus-corpus
           key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
-      - name: Apply signed bit-field read candidate
+      - name: Apply signed bit-field candidate and focused regression
         shell: bash
         run: |
           set -Eeuo pipefail
           python3 - <<'PY'
           from pathlib import Path
+
           p = Path('src/core/core_lower.c')
           s = p.read_text()
+
+          count = s.count('core_unsigned_bit_field_storage_type')
+          if count < 3:
+              raise SystemExit(f'bit-field storage helper refs={count}')
+          s = s.replace('core_unsigned_bit_field_storage_type', 'core_bit_field_storage_type')
+
+          old = '''/* A bit-field's C value width is not necessarily the width of the memory\n   allocation unit containing it. _Bool is the important case: its semantic\n   integer width is one bit, while DataLayout allocates one byte. Keep the\n   semantic value type for the expression result and choose a separate unsigned\n   integer type whose object size/target width matches the storage unit used by\n   the field layout. */\n'''
+          new = '''/* A bit-field's C value width is not necessarily the width of the memory\n   allocation unit containing it. _Bool is the important case: its semantic\n   integer width is one bit, while DataLayout allocates one byte. Keep the\n   semantic value type for the expression result and choose an unsigned integer\n   type whose object size/target width matches the storage unit used by the\n   field layout. Reading storage as unsigned also gives signed bit-fields a\n   well-defined logical extraction path before explicit sign extension. */\n'''
+          if s.count(old) != 1:
+              raise SystemExit(f'helper comment anchor count={s.count(old)}')
+          s = s.replace(old, new, 1)
 
           old = '''        !minic_type_is_integer(value_type) || !minic_type_is_unsigned_integer(value_type) ||\n        !minic_data_layout_type(minic_default_data_layout(),\n'''
           new = '''        !minic_type_is_integer(value_type) ||\n        !minic_data_layout_type(minic_default_data_layout(),\n'''
@@ -41,8 +53,14 @@ jobs:
               raise SystemExit(f'helper fast-path anchor count={s.count(old)}')
           s = s.replace(old, new, 1)
 
-          old = '''                !minic_type_is_integer(value_type) ||\n                !minic_type_is_unsigned_integer(value_type) ||\n                !core_unsigned_bit_field_storage_type(\n'''
-          new = '''                !minic_type_is_integer(value_type) ||\n                !core_unsigned_bit_field_storage_type(\n'''
+          old = '''    /* BATCH_A_UNSIGNED_BIT_FIELD_READ: a bit-field is not C-addressable,\n       but reading it is a scalar operation.  Form the storage-unit address\n       internally, load the declared integer unit, then extract the field.\n       Signed bit-fields and bit-field writes remain fail-closed for a later\n       semantic batch; this seam is generic for unsigned integer bit-fields. */\n'''
+          new = '''    /* M103_INTEGER_BIT_FIELD_READ: a bit-field is not C-addressable, but\n       reading it is a scalar operation. Form the storage-unit address\n       internally, load it through an unsigned storage type, extract the field,\n       then explicitly sign-extend signed fields from their declared bit width.\n       Bit-field writes remain owned by their dedicated RMW lowering paths. */\n'''
+          if s.count(old) != 1:
+              raise SystemExit(f'read comment anchor count={s.count(old)}')
+          s = s.replace(old, new, 1)
+
+          old = '''                !minic_type_is_integer(value_type) ||\n                !minic_type_is_unsigned_integer(value_type) ||\n                !core_bit_field_storage_type(\n'''
+          new = '''                !minic_type_is_integer(value_type) ||\n                !core_bit_field_storage_type(\n'''
           if s.count(old) != 1:
               raise SystemExit(f'read guard anchor count={s.count(old)}')
           s = s.replace(old, new, 1)
@@ -52,36 +70,56 @@ jobs:
           if s.count(old) != 1:
               raise SystemExit(f'read result anchor count={s.count(old)}')
           p.write_text(s.replace(old, new, 1))
+
+          t = Path('tests/core/run-core-ir-shadow.sh')
+          ts = t.read_text()
+          anchor = '''cat >"$work_dir/bool-bitfield-storage-read.i" <<'EOF'\n'''
+          case = '''cat >"$work_dir/signed-bitfield-storage-read.i" <<'EOF'\nstruct signed_bitfield_storage {\n    unsigned int prefix : 2;\n    signed int value : 8;\n    unsigned int suffix : 1;\n};\n\nint signed_bitfield_storage_read(const struct signed_bitfield_storage *state) {\n    return state->value;\n}\n\nint signed_bitfield_storage_switch(const struct signed_bitfield_storage *state) {\n    switch (state->value) {\n    case -1: return 11;\n    case 7: return 22;\n    default: return 33;\n    }\n}\nEOF\ncheck_strict_case signed-bitfield-storage-read\n\n'''
+          if ts.count(anchor) != 1:
+              raise SystemExit(f'test anchor count={ts.count(anchor)}')
+          t.write_text(ts.replace(anchor, case + anchor, 1))
           PY
       - name: Build exact candidate compiler
         shell: bash
         run: |
           set -Eeuo pipefail
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y102-compiler
-      - name: Replay netdev representatives
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y102b-compiler
+      - name: Run Core shadow qualification
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-y102-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-y102-linux"; mkdir -p "$work"
+          MINIC="$GITHUB_WORKSPACE/build/core-y102b-compiler/bin/minic" \
+            BUILD_DIR="$GITHUB_WORKSPACE/build/core-y102b-shadow" \
+            bash tests/core/run-core-ir-shadow.sh
+      - name: Verify Linux blocker movement
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/core-y102b-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-y102b-linux"; mkdir -p "$work"
           set +e
           MINIC_CORE_IR=strict CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
             --work "$work" --jobs 3 --offset 0 --limit 500 --sample-count 0 --indices '193,242,357'
-          status=$?; set -e; echo CORE_Y102_REPLAY_STATUS=$status
+          status=$?; set -e; echo CORE_Y102B_REPLAY_STATUS=$status
           python3 - <<'PY'
           import json
           from pathlib import Path
-          w=Path('build/core-y102-linux')
+          old_first={193:79024,242:80624,357:81214}
+          w=Path('build/core-y102b-linux')
           rows=json.loads((w/'batch-results.json').read_text())
           if isinstance(rows,dict): rows=rows.get('results',rows.get('tus',[]))
+          seen=set()
           for r in rows:
-              print(f"CORE_Y102_INDEX index={r.get('index')} status={r.get('status')} first={r.get('first_error_line')} total={r.get('total_lines')} progress={r.get('progress_ratio')} message={r.get('message','')}")
-              err=w/'minic-stderr'/f"{r['input']}.stderr"
-              if err.is_file():
-                  for x in err.read_text(errors='replace').splitlines():
-                      if 'CORE_FAST_TRACE' in x and ('netdev_reg_state' in x or 'function=' in x):
-                          print(x)
+              i=int(r['index']); seen.add(i)
+              first=r.get('first_error_line')
+              msg=r.get('message','')
+              print(f"CORE_Y102B_INDEX index={i} status={r.get('status')} first={first} total={r.get('total_lines')} progress={r.get('progress_ratio')} message={msg}")
+              if "netdev_reg_state" in msg:
+                  raise SystemExit(f'netdev_reg_state still blocks index {i}')
+              if r.get('status') != 'PASS' and (not first or int(first) <= old_first[i]):
+                  raise SystemExit(f'index {i} did not move forward: first={first} old={old_first[i]}')
+          if seen != set(old_first):
+              raise SystemExit(f'missing indices: {set(old_first)-seen}')
           PY
-          test "$status" -eq 0
