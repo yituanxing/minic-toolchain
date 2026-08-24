@@ -1,4 +1,4 @@
-name: Core Batch Y25 Error Detail
+name: Core Batch Y26 Error Repair
 
 on:
   pull_request:
@@ -7,11 +7,11 @@ permissions:
   contents: read
 
 jobs:
-  y25-error-detail:
+  y26-error-repair:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     concurrency:
-      group: core-y25-error-detail-${{ github.event.pull_request.number }}
+      group: core-y26-error-repair-${{ github.event.pull_request.number }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
@@ -23,67 +23,86 @@ jobs:
         with:
           path: build/linux-focus-corpus
           key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
-      - name: Apply Y21 candidate and indirect-call verifier detail
+      - name: Require frozen corpus
         shell: bash
         run: |
           set -Eeuo pipefail
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
+          test -s build/linux-focus-corpus/selected-tus.txt
+      - name: Apply cleanup-safe and Y26 semantic candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
           python3 tools/dev/patch-linux-replay-live-progress.py
           python3 - <<'PY'
           from pathlib import Path
           p=Path('src/core/core_lower.c')
           s=p.read_text()
+
           old='''    /* The parser-owned synthetic continue label is part of the loop body.\n       Keep it so explicit continue edges and fallthrough converge before the\n       canonical backedge is emitted. */\n    *iteration_body = *body;\n    return true;\n}\n\nstatic bool normalized_for_update_tail'''
-          new='''    /* CORE_FOR_CONTINUE_CLEANUP_V1 */\n    *iteration_body = *body;\n    if (!core_cleanup_edge_is_empty(continue_label)) iteration_body->statement_count -= 1U;\n    return true;\n}\n\nstatic bool normalized_for_update_tail'''
+          new='''    /* CORE_FOR_CONTINUE_CLEANUP_V1 */\n    *iteration_body = *body;\n    if (!core_cleanup_edge_is_empty(continue_label)) {\n        iteration_body->statement_count -= 1U;\n    }\n    return true;\n}\n\nstatic bool normalized_for_update_tail'''
           if old not in s: raise SystemExit('continue anchor')
           s=s.replace(old,new,1)
           old='''    /* Strip only the normalized update.  The preceding synthetic continue\n       label remains in the body and becomes the convergence point before the\n       update is lowered. */\n    *iteration_body = *body;\n    iteration_body->statement_count -= 1U;\n    *update_statement = update;\n    return true;\n}\n\nstatic MinicCoreLowerStatus\nlower_while'''
           new='''    /* CORE_FOR_CONTINUE_CLEANUP_V1 */\n    *iteration_body = *body;\n    iteration_body->statement_count -= core_cleanup_edge_is_empty(continue_label) ? 1U : 2U;\n    *update_statement = update;\n    return true;\n}\n\nstatic MinicCoreLowerStatus\nlower_while'''
           if old not in s: raise SystemExit('update anchor')
-          p.write_text(s.replace(old,new,1))
+          s=s.replace(old,new,1)
 
-          p=Path('src/core/core_ir.c')
-          s=p.read_text()
-          old='''        callee_value = instruction->value.indirect_call.callee;\n        if (instruction->value.indirect_call.signature_id >= function->call_signature_count ||\n            callee_value >= function->value_count || !available_values[callee_value] ||\n            !minic_type_pointee(function->values[callee_value].type, &function_type) ||\n            !minic_type_is_function(function_type) ||\n            instruction->value.indirect_call.argument_begin > function->call_argument_count ||\n            instruction->value.indirect_call.argument_count >\n                function->call_argument_count - instruction->value.indirect_call.argument_begin) {\n            return false;\n        }'''
-          new='''        callee_value = instruction->value.indirect_call.callee;\n        if (instruction->value.indirect_call.signature_id >= function->call_signature_count) {\n            (void)fprintf(stderr, "CORE_Y25_INDIRECT function=%s reason=signature-id sig=%u count=%zu\\n", function->name, (unsigned int)instruction->value.indirect_call.signature_id, function->call_signature_count);\n            return false;\n        }\n        if (callee_value >= function->value_count || !available_values[callee_value]) {\n            (void)fprintf(stderr, "CORE_Y25_INDIRECT function=%s reason=callee-availability callee=%u values=%zu available=%d\\n", function->name, (unsigned int)callee_value, function->value_count, callee_value < function->value_count && available_values[callee_value] ? 1 : 0);\n            return false;\n        }\n        if (!minic_type_pointee(function->values[callee_value].type, &function_type) ||\n            !minic_type_is_function(function_type)) {\n            (void)fprintf(stderr, "CORE_Y25_INDIRECT function=%s reason=callee-type callee=%u\\n", function->name, (unsigned int)callee_value);\n            return false;\n        }\n        if (instruction->value.indirect_call.argument_begin > function->call_argument_count ||\n            instruction->value.indirect_call.argument_count > function->call_argument_count - instruction->value.indirect_call.argument_begin) {\n            (void)fprintf(stderr, "CORE_Y25_INDIRECT function=%s reason=argument-range begin=%zu count=%zu total=%zu\\n", function->name, instruction->value.indirect_call.argument_begin, instruction->value.indirect_call.argument_count, function->call_argument_count);\n            return false;\n        }'''
-          if old not in s: raise SystemExit('indirect initial anchor')
+          old='''        if (minic_type_equal(context->function->values[*value_id].type, expression->type)) {\n            return MINIC_CORE_LOWER_OK;\n        }\n        /* M90_LEGACY_ARRAY_ADDRESS_OF: legacy local/member arrays keep their\n           element type plus array-object metadata. lower_address() therefore\n           yields the element-address representation, while C `&array` carries\n           pointer-to-array type. The address bits are identical; preserve the\n           semantic pointer type with Core's target-neutral scalar bitcast. */\n        {\n            const MinicExpression *addressed = minic_c0_program_expression(\n                context->body->program, expression->value.unary.operand);\n            MinicArrayObjectInfo array_info;\n\n            (void)memset(&array_info, 0, sizeof(array_info));\n            if (addressed != NULL &&\n                minic_c0_expression_array_object_info(\n                    context->body->program, addressed, &array_info) &&\n                minic_type_is_pointer(context->function->values[*value_id].type) &&\n                minic_type_is_pointer(expression->type)) {\n                return append_scalar_bitcast(\n                    context, expression->span, expression->type, *value_id, value_id);\n            }\n        }\n        return MINIC_CORE_LOWER_ERROR;'''
+          new='''        if (minic_type_equal(context->function->values[*value_id].type, expression->type)) {\n            return MINIC_CORE_LOWER_OK;\n        }\n        /* CORE_ADDRESS_OF_POINTER_REPRESENTATION_V1: lower_address owns the\n           storage address representation.  Once frontend semantics formed a\n           pointer-valued address-of expression, a pointer/pointer type delta\n           (array-object representation or pointee qualifiers) preserves the\n           same address bits and is represented by Core scalar bitcast. */\n        if (minic_type_is_pointer(context->function->values[*value_id].type) &&\n            minic_type_is_pointer(expression->type)) {\n            return append_scalar_bitcast(\n                context, expression->span, expression->type, *value_id, value_id);\n        }\n        return MINIC_CORE_LOWER_ERROR;'''
+          if old not in s: raise SystemExit('address-of anchor')
           s=s.replace(old,new,1)
-          old='''        if (function_type.function_type_id != signature->function_type_id ||\n            instruction->value.indirect_call.argument_count != signature->parameter_count ||\n            !minic_type_equal(instruction->type, signature->return_type)) {\n            return false;\n        }'''
-          new='''        if (function_type.function_type_id != signature->function_type_id ||\n            instruction->value.indirect_call.argument_count != signature->parameter_count ||\n            !minic_type_equal(instruction->type, signature->return_type)) {\n            (void)fprintf(stderr, "CORE_Y25_INDIRECT function=%s reason=signature-match callee_ft=%u sig_ft=%u argc=%zu params=%zu return_equal=%d\\n", function->name, (unsigned int)function_type.function_type_id, (unsigned int)signature->function_type_id, instruction->value.indirect_call.argument_count, signature->parameter_count, minic_type_equal(instruction->type, signature->return_type) ? 1 : 0);\n            return false;\n        }'''
-          if old not in s: raise SystemExit('signature anchor')
+
+          old='''    status = lower_expression(context, expression->value.call.callee, &callee_value);\n    if (status != MINIC_CORE_LOWER_OK) {\n        (void)fprintf(stderr,\n                      "CORE_LOWER_DETAIL marker=M92_INDIRECT_CALL_HOT_DETAIL function=%s "\n                      "stage=indirect-call reason=callee-lower status=%d callee_kind=%d\\n",\n                      context->source_function != NULL ? context->source_function->name : "?",\n                      (int)status,\n                      callee_expression != NULL ? (int)callee_expression->kind : -1);\n        return status;\n    }\n    if (callee_value >= context->function->value_count ||\n        !minic_type_equal(context->function->values[callee_value].type,\n                          callee_value_type)) {\n        (void)fprintf(stderr,\n                      "CORE_LOWER_DETAIL marker=M92_INDIRECT_CALL_HOT_DETAIL function=%s "\n                      "stage=indirect-call reason=callee-value-type value=%u count=%zu\\n",\n                      context->source_function != NULL ? context->source_function->name : "?",\n                      (unsigned int)callee_value,\n                      context->function->value_count);\n        return MINIC_CORE_LOWER_ERROR;\n    }\n\n    arguments = signature->parameter_count == 0U'''
+          new='''    /* CORE_INDIRECT_CALL_FINAL_BLOCK_CALLEE_V1: the C function designator and\n       arguments have unspecified evaluation order.  Lower arguments first and\n       materialize the callee once in the final call block, so a CFG-producing\n       argument cannot strand the callee SSA value in an earlier block. */\n    arguments = signature->parameter_count == 0U'''
+          if old not in s: raise SystemExit('indirect early-callee anchor')
           s=s.replace(old,new,1)
-          old='''        if ((returns_void && instruction->result != MINIC_CORE_VALUE_INVALID) ||\n            (!returns_void && !instruction_result_is_valid(function, instruction))) {\n            return false;\n        }'''
-          new='''        if ((returns_void && instruction->result != MINIC_CORE_VALUE_INVALID) ||\n            (!returns_void && !instruction_result_is_valid(function, instruction))) {\n            (void)fprintf(stderr, "CORE_Y25_INDIRECT function=%s reason=result returns_void=%d result=%u\\n", function->name, returns_void ? 1 : 0, (unsigned int)instruction->result);\n            return false;\n        }'''
-          if old not in s: raise SystemExit('result anchor')
-          s=s.replace(old,new,1)
-          old='''            if (argument->kind != MINIC_CORE_CALL_ARGUMENT_VALUE) {\n                return false;\n            }\n            value_id = argument->value.value_id;\n            if (value_id >= function->value_count || !available_values[value_id] ||\n                !minic_type_equal(function->values[value_id].type,\n                                  signature->parameter_types[parameter_index])) {\n                return false;\n            }'''
-          new='''            if (argument->kind != MINIC_CORE_CALL_ARGUMENT_VALUE) {\n                (void)fprintf(stderr, "CORE_Y25_INDIRECT function=%s reason=argument-kind param=%zu kind=%d\\n", function->name, parameter_index, (int)argument->kind);\n                return false;\n            }\n            value_id = argument->value.value_id;\n            if (value_id >= function->value_count || !available_values[value_id] ||\n                !minic_type_equal(function->values[value_id].type, signature->parameter_types[parameter_index])) {\n                (void)fprintf(stderr, "CORE_Y25_INDIRECT function=%s reason=argument-value param=%zu value=%u values=%zu available=%d type_equal=%d\\n", function->name, parameter_index, (unsigned int)value_id, function->value_count, value_id < function->value_count && available_values[value_id] ? 1 : 0, value_id < function->value_count && minic_type_equal(function->values[value_id].type, signature->parameter_types[parameter_index]) ? 1 : 0);\n                return false;\n            }'''
-          if old not in s: raise SystemExit('argument anchor')
+
+          old='''    for (argument_index = 0U; argument_index < signature->parameter_count; ++argument_index) {\n        status = reload_scalar_value(context,\n                                     expression->span,\n                                     signature->parameter_types[argument_index],\n                                     argument_objects[argument_index],\n                                     &arguments[argument_index].value.value_id);\n        if (status != MINIC_CORE_LOWER_OK) {\n            free(arguments);\n            return status;\n        }\n    }\n    if (!minic_core_function_add_call_signature(context->function,'''
+          new='''    for (argument_index = 0U; argument_index < signature->parameter_count; ++argument_index) {\n        status = reload_scalar_value(context,\n                                     expression->span,\n                                     signature->parameter_types[argument_index],\n                                     argument_objects[argument_index],\n                                     &arguments[argument_index].value.value_id);\n        if (status != MINIC_CORE_LOWER_OK) {\n            free(arguments);\n            return status;\n        }\n    }\n    status = lower_expression(context, expression->value.call.callee, &callee_value);\n    if (status != MINIC_CORE_LOWER_OK) {\n        (void)fprintf(stderr,\n                      "CORE_LOWER_DETAIL marker=M92_INDIRECT_CALL_HOT_DETAIL function=%s "\n                      "stage=indirect-call reason=callee-lower status=%d callee_kind=%d\\n",\n                      context->source_function != NULL ? context->source_function->name : "?",\n                      (int)status,\n                      callee_expression != NULL ? (int)callee_expression->kind : -1);\n        free(arguments);\n        return status;\n    }\n    if (callee_value >= context->function->value_count ||\n        !minic_type_equal(context->function->values[callee_value].type, callee_value_type)) {\n        (void)fprintf(stderr,\n                      "CORE_LOWER_DETAIL marker=M92_INDIRECT_CALL_HOT_DETAIL function=%s "\n                      "stage=indirect-call reason=callee-value-type value=%u count=%zu\\n",\n                      context->source_function != NULL ? context->source_function->name : "?",\n                      (unsigned int)callee_value, context->function->value_count);\n        free(arguments);\n        return MINIC_CORE_LOWER_ERROR;\n    }\n    if (!minic_core_function_add_call_signature(context->function,'''
+          if old not in s: raise SystemExit('indirect reload anchor')
           p.write_text(s.replace(old,new,1))
-          print('CORE_BATCH_Y25_PATCHED')
+          print('CORE_BATCH_Y26_PATCHED')
           PY
-      - name: Build diagnostic compiler
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-y25-compiler
-      - name: Replay and print detailed traces
+      - name: Build exact candidate
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-y26-compiler
+      - name: Full Core IR regression suite
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-batch-y25-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-batch-y25-frontier"
+          MINIC="$GITHUB_WORKSPACE/build/core-batch-y26-compiler/bin/minic" \
+            BUILD_DIR="$GITHUB_WORKSPACE/build/core-batch-y26-tests" \
+            bash tests/core/run-core-ir-shadow.sh
+          echo CORE_BATCH_Y26_CORE_SUITE_PASS
+      - name: Replay three Y21 errors
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/core-batch-y26-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-batch-y26-frontier"
           set +e
           MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
             --work "$work" --jobs 3 --offset 0 --limit 500 --sample-count 0 --indices '39,152,265'
+          replay_status=$?
           set -e
-          echo CORE_BATCH_Y25_TRACE_BEGIN
-          grep -R -E 'CORE_Y25_INDIRECT|CORE_FAST_TRACE|CORE_ASSIGN_STAGE|CORE_LOWER_DETAIL|CORE_ASM_DETAIL' "$work/minic-stderr" | tail -n 240 || true
-          echo CORE_BATCH_Y25_TRACE_END
-          echo CORE_BATCH_Y25_KALLSYMS_SOURCE_BEGIN
-          sed -n '45390,45430p' build/linux-focus-corpus/kbuild/kernel/module/kallsyms.i
-          echo CORE_BATCH_Y25_KALLSYMS_SOURCE_END
-          echo CORE_BATCH_Y25_REGSET_SOURCE_BEGIN
-          sed -n '26895,26922p' build/linux-focus-corpus/kbuild/kernel/regset.i
-          echo CORE_BATCH_Y25_REGSET_SOURCE_END
-          echo CORE_BATCH_Y25_SUSPEND_FUNC_BEGIN
-          grep -n -A80 -B5 '^int cpu_suspend\|^static.*cpu_suspend\| cpu_suspend(' build/linux-focus-corpus/kbuild/arch/riscv/kernel/suspend.i | tail -n 140 || true
-          echo CORE_BATCH_Y25_SUSPEND_FUNC_END
+          printf 'CORE_BATCH_Y26_REPLAY_STATUS=%d\n' "$replay_status"
+          python3 tools/ci/classify-core-strict-frontier.py \
+            "$work/batch-results.json" --examples 8 --json-out "$work/frontier-summary.json"
+          python3 tools/ci/summarize-core-frontier-progress.py \
+            "$work/batch-results.json" --expect-selected 3 \
+            --json-out "$work/progress-summary.json" --text-out "$work/progress-summary.txt"
+          cat "$work/progress-summary.txt"
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          work=Path('build/core-batch-y26-frontier')
+          f=json.loads((work/'frontier-summary.json').read_text())
+          rows=json.loads((work/'batch-results.json').read_text())
+          if isinstance(rows,dict): rows=rows.get('results',rows.get('tus',[]))
+          for r in sorted(rows,key=lambda x:x.get('index',-1)):
+              print(f"CORE_BATCH_Y26_ROW index={r.get('index')} status={r.get('status')} progress={float(r.get('progress_ratio') or 0)*100:.2f}% message={r.get('message','')}")
+          print(f"CORE_BATCH_Y26_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
+          if f['selected'] != 3 or f['error'] != 0:
+              raise SystemExit(f'Y26 did not clear all Core errors: {f}')
+          PY
