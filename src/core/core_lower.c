@@ -26,6 +26,11 @@ typedef struct MinicCoreLowerContext {
 static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                                              MinicExpressionId expression_id,
                                              MinicCoreValueId *value_id);
+static MinicCoreLowerStatus lower_assignment_pair(MinicCoreLowerContext *context,
+                                                  MinicExpressionId target_id,
+                                                  MinicExpressionId source_id,
+                                                  MinicSourceSpan span,
+                                                  MinicCoreValueId *result_value);
 static MinicCoreLowerStatus lower_expression_statement(
     MinicCoreLowerContext *context, const MinicStatement *statement);
 static MinicCoreLowerStatus
@@ -2816,19 +2821,15 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         }
     }
 
-    /* M65_SCALAR_ASSIGNMENT_EXPRESSION_VALUE: simple assignment is an
-       expression as well as a side effect. Preserve the assigned scalar across
-       evaluation of the destination address, perform the store, then yield the
-       stored (unqualified) value. This is the same semantic seam used by an
-       assignment statement, without inventing a Linux/bitmap special case. */
+    /* M115_CHAINED_BIT_FIELD_ASSIGNMENT: a simple scalar assignment has one
+       lowering owner whether its value is discarded by statement context or
+       consumed by a surrounding expression.  Reuse lower_assignment_pair so
+       addressable scalars and unsigned bit-fields share exactly the same store
+       semantics; expression context additionally receives the value actually
+       stored after destination conversion/bit-field truncation. */
     if (expression->kind == MINIC_EXPRESSION_ASSIGNMENT) {
         const MinicExpression *source;
         const MinicExpression *target;
-        MinicCoreInstruction store;
-        MinicCoreObjectId stored_object;
-        MinicCoreValueId address;
-        MinicCoreValueId stored_value;
-        MinicCoreLowerStatus status;
         MinicType expression_value_type;
         MinicType stored_type;
 
@@ -2845,39 +2846,11 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
             !minic_type_equal(expression_value_type, stored_type)) {
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
-        status = lower_scalar_assignment_value(
-            context, stored_type, expression->value.binary.right, &stored_value);
-        if (status != MINIC_CORE_LOWER_OK) {
-            return status;
-        }
-        status = spill_scalar_value(
-            context, expression->span, stored_type, stored_value, &stored_object);
-        if (status != MINIC_CORE_LOWER_OK) {
-            return status;
-        }
-        status = lower_address(context, expression->value.binary.left, &address);
-        if (status != MINIC_CORE_LOWER_OK) {
-            return status;
-        }
-        status = reload_scalar_value(
-            context, expression->span, stored_type, stored_object, &stored_value);
-        if (status != MINIC_CORE_LOWER_OK) {
-            return status;
-        }
-        (void)memset(&store, 0, sizeof(store));
-        store.kind = MINIC_CORE_INSTRUCTION_STORE;
-        store.span = expression->span;
-        store.type = minic_type_void();
-        store.result = MINIC_CORE_VALUE_INVALID;
-        store.value.store.address = address;
-        store.value.store.stored_value = stored_value;
-        store.value.store.is_volatile = minic_type_is_volatile(target->type);
-        if (!minic_core_function_append_effect_instruction(
-                context->function, context->block_id, &store)) {
-            return MINIC_CORE_LOWER_ERROR;
-        }
-        *value_id = stored_value;
-        return MINIC_CORE_LOWER_OK;
+        return lower_assignment_pair(context,
+                                     expression->value.binary.left,
+                                     expression->value.binary.right,
+                                     expression->span,
+                                     value_id);
     }
     if (expression->kind == MINIC_EXPRESSION_DISCARD) {
         const MinicExpression *operand;
@@ -5285,7 +5258,8 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
 static MinicCoreLowerStatus lower_assignment_pair(MinicCoreLowerContext *context,
                                                   MinicExpressionId target_id,
                                                   MinicExpressionId source_id,
-                                                  MinicSourceSpan span) {
+                                                  MinicSourceSpan span,
+                                                  MinicCoreValueId *result_value) {
     const MinicExpression *target;
     const MinicExpression *source;
     const MinicExpression *source_operand;
@@ -5335,6 +5309,8 @@ static MinicCoreLowerStatus lower_assignment_pair(MinicCoreLowerContext *context
             MinicCoreValueId base_value;
             MinicCoreValueId current;
             MinicCoreValueId field_value;
+            MinicCoreValueId field_storage;
+            MinicCoreValueId assigned_value;
             MinicCoreValueId constant;
             MinicCoreValueId merged;
             MinicCoreLowerStatus bit_status;
@@ -5426,9 +5402,11 @@ static MinicCoreLowerStatus lower_assignment_pair(MinicCoreLowerContext *context
             if (bit_status != MINIC_CORE_LOWER_OK) {
                 return bit_status;
             }
-            if (!minic_type_equal(storage_type, value_type)) {
+            if (minic_type_equal(storage_type, value_type)) {
+                field_storage = field_value;
+            } else {
                 bit_status = append_integer_conversion(
-                    context, span, storage_type, field_value, &field_value);
+                    context, span, storage_type, field_value, &field_storage);
                 if (bit_status != MINIC_CORE_LOWER_OK) {
                     return bit_status;
                 }
@@ -5453,11 +5431,20 @@ static MinicCoreLowerStatus lower_assignment_pair(MinicCoreLowerContext *context
                 operation.span = span;
                 operation.type = storage_type;
                 operation.result = MINIC_CORE_VALUE_INVALID;
-                operation.value.binary.left = field_value;
+                operation.value.binary.left = field_storage;
                 operation.value.binary.right = constant;
                 if (!minic_core_function_append_value_instruction(
-                        context->function, context->block_id, &operation, &field_value)) {
+                        context->function, context->block_id, &operation, &field_storage)) {
                     return MINIC_CORE_LOWER_ERROR;
+                }
+            }
+            if (minic_type_equal(storage_type, value_type)) {
+                assigned_value = field_storage;
+            } else {
+                bit_status = append_integer_conversion(
+                    context, span, value_type, field_storage, &assigned_value);
+                if (bit_status != MINIC_CORE_LOWER_OK) {
+                    return bit_status;
                 }
             }
             if (bit_offset != 0U) {
@@ -5478,10 +5465,10 @@ static MinicCoreLowerStatus lower_assignment_pair(MinicCoreLowerContext *context
                 operation.span = span;
                 operation.type = storage_type;
                 operation.result = MINIC_CORE_VALUE_INVALID;
-                operation.value.binary.left = field_value;
+                operation.value.binary.left = field_storage;
                 operation.value.binary.right = constant;
                 if (!minic_core_function_append_value_instruction(
-                        context->function, context->block_id, &operation, &field_value)) {
+                        context->function, context->block_id, &operation, &field_storage)) {
                     return MINIC_CORE_LOWER_ERROR;
                 }
             }
@@ -5518,7 +5505,7 @@ static MinicCoreLowerStatus lower_assignment_pair(MinicCoreLowerContext *context
             operation.type = storage_type;
             operation.result = MINIC_CORE_VALUE_INVALID;
             operation.value.binary.left = merged;
-            operation.value.binary.right = field_value;
+            operation.value.binary.right = field_storage;
             if (!minic_core_function_append_value_instruction(
                     context->function, context->block_id, &operation, &merged)) {
                 return MINIC_CORE_LOWER_ERROR;
@@ -5531,10 +5518,14 @@ static MinicCoreLowerStatus lower_assignment_pair(MinicCoreLowerContext *context
             operation.value.store.address = address;
             operation.value.store.stored_value = merged;
             operation.value.store.is_volatile = minic_type_is_volatile(target->type);
-            return minic_core_function_append_effect_instruction(
-                       context->function, context->block_id, &operation)
-                       ? MINIC_CORE_LOWER_OK
-                       : MINIC_CORE_LOWER_ERROR;
+            if (!minic_core_function_append_effect_instruction(
+                    context->function, context->block_id, &operation)) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            if (result_value != NULL) {
+                *result_value = assigned_value;
+            }
+            return MINIC_CORE_LOWER_OK;
         }
     }
     if (!minic_type_unqualified(target->type, &stored_type) ||
@@ -5585,6 +5576,9 @@ static MinicCoreLowerStatus lower_assignment_pair(MinicCoreLowerContext *context
                       (int)MINIC_CORE_LOWER_ERROR);
         return MINIC_CORE_LOWER_ERROR;
     }
+    if (result_value != NULL) {
+        *result_value = stored_value;
+    }
     return MINIC_CORE_LOWER_OK;
 }
 
@@ -5598,7 +5592,7 @@ static MinicCoreLowerStatus lower_assignment(MinicCoreLowerContext *context,
     }
     target_id = statement->target_expression;
     source_id = statement->expression;
-    return lower_assignment_pair(context, target_id, source_id, statement->span);
+    return lower_assignment_pair(context, target_id, source_id, statement->span, NULL);
 }
 
 /* M102_UNSIGNED_BIT_FIELD_SCALAR_UPDATE: prefix/postfix ++/-- on a
@@ -6238,7 +6232,7 @@ static MinicCoreLowerStatus lower_expression_statement(MinicCoreLowerContext *co
     }
     target_id = expression->value.binary.left;
     source_id = expression->value.binary.right;
-    return lower_assignment_pair(context, target_id, source_id, expression->span);
+    return lower_assignment_pair(context, target_id, source_id, expression->span, NULL);
 }
 
 static bool core_is_materialized_cleanup_statement(
