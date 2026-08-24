@@ -1,4 +1,4 @@
-name: Core Sprint Y22 Target Address Probe
+name: Core Sprint Y23 Target Source Windows
 
 on:
   pull_request:
@@ -7,11 +7,11 @@ permissions:
   contents: read
 
 jobs:
-  y22-target-address-probe:
+  y23-target-source-windows:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     concurrency:
-      group: core-sprint-y22-target-address-${{ github.event.pull_request.number }}
+      group: core-sprint-y23-target-source-${{ github.event.pull_request.number }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
@@ -23,46 +23,14 @@ jobs:
         with:
           path: build/linux-focus-corpus
           key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
-      - name: Require frozen corpus
+      - name: Show exact near-pass source windows
         shell: bash
         run: |
           set -Eeuo pipefail
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
-          test -s build/linux-focus-corpus/selected-tus.txt
-      - name: Add focused assignment target trace
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          python3 tools/dev/patch-linux-replay-live-progress.py
-          python3 - <<'PY'
-          from pathlib import Path
-          p=Path('src/core/core_lower.c')
-          s=p.read_text()
-          old='''        (void)fprintf(stderr, "CORE_ASSIGN_STAGE function=%s stage=target-address status=%d\\n",\n                      context->source_function != NULL ? context->source_function->name : "?",\n                      (int)status);\n'''
-          new='''        (void)fprintf(stderr,\n                      "CORE_ASSIGN_STAGE function=%s stage=target-address status=%d target_id=%u target_kind=%d target_category=%d target_span=%zu:%zu\\n",\n                      context->source_function != NULL ? context->source_function->name : "?",\n                      (int)status,\n                      (unsigned int)target_id,\n                      (int)target->kind,\n                      (int)target->value_category,\n                      target->span.begin.line,\n                      target->span.begin.column);\n'''
-          if old not in s: raise SystemExit('target-address trace anchor not found')
-          p.write_text(s.replace(old,new,1))
-          print('CORE_SPRINT_Y22_TRACE_PATCHED')
-          PY
-      - name: Build exact diagnostic compiler
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-sprint-y22-compiler
-      - name: Probe shared near-pass target-address seam
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-sprint-y22-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-sprint-y22"
-          set +e
-          MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
-            --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
-            --work "$work" --jobs 2 --offset 0 --limit 500 --sample-count 0 --indices '0,42'
-          replay_status=$?
-          set -e
-          printf 'CORE_SPRINT_Y22_REPLAY_STATUS=%d\n' "$replay_status"
-          echo CORE_SPRINT_Y22_DETAILS_BEGIN
-          grep -R -E 'CORE_ASSIGN_STAGE|Core IR shadow does not yet support' "$work/minic-stderr" | tail -n 100 || true
-          echo CORE_SPRINT_Y22_DETAILS_END
-          python3 tools/ci/summarize-core-frontier-progress.py \
-            "$work/batch-results.json" --expect-selected 2 \
-            --json-out "$work/progress-summary.json" --text-out "$work/progress-summary.txt"
-          cat "$work/progress-summary.txt"
+          echo CORE_SPRINT_Y23_MAIN_BEGIN
+          sed -n '90590,90635p' build/linux-focus-corpus/kbuild/init/main.i
+          echo CORE_SPRINT_Y23_MAIN_END
+          echo CORE_SPRINT_Y23_SBI_BEGIN
+          sed -n '18180,18230p' build/linux-focus-corpus/kbuild/arch/riscv/kernel/sbi.i
+          echo CORE_SPRINT_Y23_SBI_END
