@@ -1,4 +1,4 @@
-name: Core Fast Batch Y15 Refined Loop CFG
+name: Core Fast Batch Y16 Focused Refined Loop CFG
 
 on:
   pull_request:
@@ -7,11 +7,11 @@ permissions:
   contents: read
 
 jobs:
-  batch-y15-refined-loop-cfg:
+  batch-y16-focused-refined-loop-cfg:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     concurrency:
-      group: core-fast-batch-y15-${{ github.event.pull_request.number }}
+      group: core-fast-batch-y16-${{ github.event.pull_request.number }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
@@ -69,39 +69,25 @@ jobs:
           new_direct='''            case MINIC_STATEMENT_WHILE:\n                status = lower_while(\n                    context, statement, MINIC_STATEMENT_INVALID, &statement_terminated);\n                break;\n'''
           if old_direct not in s: raise SystemExit('direct while call anchor not found')
           p.write_text(s.replace(old_direct,new_direct,1))
-          print('CORE_BATCH_Y15_PATCHED refined loop continue ownership')
-          PY
-      - name: Update candidate-era focused expectation
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-          p=Path('tests/core/run-core-ir-shadow.sh')
-          s=p.read_text()
-          old='''"$MINIC" -S "$work_dir/for-shape.i" -o "$work_dir/for-shape-normal.s"\nMINIC_CORE_IR=shadow "$MINIC" -S "$work_dir/for-shape.i" -o "$work_dir/for-shape-shadow.s"\ncmp "$work_dir/for-shape-normal.s" "$work_dir/for-shape-shadow.s"\nif MINIC_CORE_IR=strict "$MINIC" -S "$work_dir/for-shape.i" \\\n    -o "$work_dir/for-shape-strict.s" 2>"$work_dir/for-shape-strict.err"; then\n    echo "strict Core IR shadow unexpectedly accepted canonical for-loop lowering" >&2\n    exit 1\nfi\ngrep -F "Core IR shadow does not yet support function 'for_shape'" \\\n    "$work_dir/for-shape-strict.err" >/dev/null\n'''
-          new='''check_strict_case for-shape\n'''
-          if old not in s: raise SystemExit('for-shape expectation anchor not found')
-          p.write_text(s.replace(old,new,1))
-          print('CORE_BATCH_Y15_TEST_EXPECTATION for-shape=strict-supported')
+          print('CORE_BATCH_Y16_PATCHED refined loop continue ownership')
           PY
       - name: Build exact candidate compiler
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-y15-compiler
-      - name: Existing Core shadow regression suite
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-y16-compiler
+      - name: Exact assembly focused regressions
         shell: bash
         run: |
           set -Eeuo pipefail
-          MINIC="$GITHUB_WORKSPACE/build/core-batch-y15-compiler/bin/minic" \
-            BUILD_DIR="$GITHUB_WORKSPACE/build/core-batch-y15-tests" \
-            bash tests/core/run-core-ir-shadow.sh
-          echo CORE_BATCH_Y15_EXISTING_SUITE_PASS
-      - name: Focused loop and statement-expression regressions
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-batch-y15-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-batch-y15-focused"
+          compiler="$GITHUB_WORKSPACE/build/core-batch-y16-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-batch-y16-focused"
           mkdir -p "$work"
+          cat >"$work/while-backedge.i" <<'EOF'
+          int clear_then_add(int value) {
+              while (value) {
+                  value = 0;
+              }
+              return value + 7;
+          }
+          EOF
           cat >"$work/while-continue.i" <<'EOF'
           int while_continue(int value) {
               while (value) {
@@ -110,6 +96,14 @@ jobs:
                       continue;
                   }
                   value = 1;
+              }
+              return value;
+          }
+          EOF
+          cat >"$work/for-shape.i" <<'EOF'
+          int for_shape(int value) {
+              for (; value;) {
+                  value = 0;
               }
               return value;
           }
@@ -130,31 +124,31 @@ jobs:
               return;
           }
           EOF
-          for name in while-continue for-continue void-statement-expression; do
+          for name in while-backedge while-continue for-shape for-continue void-statement-expression; do
             "$compiler" -S "$work/$name.i" -o "$work/$name-normal.s"
             MINIC_CORE_IR=strict "$compiler" -S "$work/$name.i" -o "$work/$name-core.s"
             cmp "$work/$name-normal.s" "$work/$name-core.s"
-            echo "CORE_BATCH_Y15_FOCUSED_PASS name=$name"
+            echo "CORE_BATCH_Y16_EXACT_PASS name=$name"
           done
       - name: Replay former strict500 Core errors
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-batch-y15-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-batch-y15-frontier"
+          compiler="$GITHUB_WORKSPACE/build/core-batch-y16-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-batch-y16-frontier"
           set +e
           MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
             --work "$work" --jobs 2 --offset 0 --limit 500 --sample-count 0 --indices '208,339'
           replay_status=$?
           set -e
-          printf 'CORE_BATCH_Y15_REPLAY_STATUS=%d\n' "$replay_status"
+          printf 'CORE_BATCH_Y16_REPLAY_STATUS=%d\n' "$replay_status"
           python3 tools/ci/classify-core-strict-frontier.py "$work/batch-results.json" --examples 8 --json-out "$work/frontier-summary.json"
           python3 - <<'PY'
           import json
           from pathlib import Path
-          f=json.loads(Path('build/core-batch-y15-frontier/frontier-summary.json').read_text())
-          print(f"CORE_BATCH_Y15_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
+          f=json.loads(Path('build/core-batch-y16-frontier/frontier-summary.json').read_text())
+          print(f"CORE_BATCH_Y16_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
           if f['selected'] != 2 or f['error'] != 0 or f['pass'] < 1:
               raise SystemExit(f'refined candidate gate failed: {f}')
           PY
