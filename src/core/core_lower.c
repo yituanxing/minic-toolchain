@@ -3234,19 +3234,29 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
     }
     if (expression->kind == MINIC_EXPRESSION_UNARY &&
         expression->value.unary.operator_kind == MINIC_UNARY_NEGATE) {
+        const MinicExpression *operand_expression;
         MinicCoreValueId operand_value;
         MinicCoreLowerStatus status;
+        MinicType promoted_type;
 
-        if (!minic_type_is_integer(expression->type)) {
+        operand_expression = minic_c0_program_expression(
+            context->body->program, expression->value.unary.operand);
+        if (context->target == NULL || operand_expression == NULL ||
+            !minic_type_is_integer(expression->type) ||
+            !minic_type_is_integer(operand_expression->type) ||
+            !minic_target_info_integer_promotion_for_program(
+                context->target, context->body->program, operand_expression->type, &promoted_type) ||
+            !minic_type_equal(promoted_type, expression->type)) {
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
         status = lower_expression(context, expression->value.unary.operand, &operand_value);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
-        if (operand_value >= context->function->value_count ||
-            !minic_type_equal(context->function->values[operand_value].type, expression->type)) {
-            return MINIC_CORE_LOWER_UNSUPPORTED;
+        status = append_integer_conversion(
+            context, operand_expression->span, promoted_type, operand_value, &operand_value);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
         }
         (void)memset(&instruction, 0, sizeof(instruction));
         instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_NEGATE;
@@ -3261,19 +3271,29 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
     }
     if (expression->kind == MINIC_EXPRESSION_UNARY &&
         expression->value.unary.operator_kind == MINIC_UNARY_BITWISE_NOT) {
+        const MinicExpression *operand_expression;
         MinicCoreValueId operand_value;
         MinicCoreLowerStatus status;
+        MinicType promoted_type;
 
-        if (!minic_type_is_integer(expression->type)) {
+        operand_expression = minic_c0_program_expression(
+            context->body->program, expression->value.unary.operand);
+        if (context->target == NULL || operand_expression == NULL ||
+            !minic_type_is_integer(expression->type) ||
+            !minic_type_is_integer(operand_expression->type) ||
+            !minic_target_info_integer_promotion_for_program(
+                context->target, context->body->program, operand_expression->type, &promoted_type) ||
+            !minic_type_equal(promoted_type, expression->type)) {
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
         status = lower_expression(context, expression->value.unary.operand, &operand_value);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
-        if (operand_value >= context->function->value_count ||
-            !minic_type_equal(context->function->values[operand_value].type, expression->type)) {
-            return MINIC_CORE_LOWER_UNSUPPORTED;
+        status = append_integer_conversion(
+            context, operand_expression->span, promoted_type, operand_value, &operand_value);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
         }
         (void)memset(&instruction, 0, sizeof(instruction));
         instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT;

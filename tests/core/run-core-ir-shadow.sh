@@ -485,6 +485,18 @@ int terminating_switch_fallthrough(int value) {
 EOF
 check_strict_case terminating-switch-fallthrough
 
+cat >"$work_dir/promoted-unary-call-argument.i" <<'EOF'
+typedef unsigned short core_u16;
+extern core_u16 core_u16_add(core_u16 left, core_u16 right);
+core_u16 promoted_unary_call_argument(core_u16 left, core_u16 right) {
+    return core_u16_add(left, ~right);
+}
+int promoted_unary_negate(core_u16 value) {
+    return -value;
+}
+EOF
+check_strict_case promoted-unary-call-argument
+
 cat >"$work_dir/variadic-call-unsupported.i" <<'EOF'
 int variadic_external(int first, ...);
 
