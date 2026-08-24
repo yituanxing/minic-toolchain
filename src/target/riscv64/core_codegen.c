@@ -646,6 +646,7 @@ static bool core_structured_inline_asm_supported(const MinicCoreFunction *functi
     size_t register_readwrites = 0U;
     size_t memory_readwrites = 0U;
     size_t scalar_inputs = 0U;
+    size_t fixed_bindings = 0U;
     size_t binding_index;
     size_t template_index;
 
@@ -654,7 +655,8 @@ static bool core_structured_inline_asm_supported(const MinicCoreFunction *functi
         instruction->result != MINIC_CORE_VALUE_INVALID || !minic_type_is_void(instruction->type) ||
         instruction->value.structured_inline_asm.inline_asm_id >= function->inline_asm_count ||
         instruction->value.structured_inline_asm.operand_count == 0U ||
-        instruction->value.structured_inline_asm.operand_count > 5U) {
+        instruction->value.structured_inline_asm.operand_count >
+            MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT) {
         return false;
     }
     inline_asm = &function->inline_asms[instruction->value.structured_inline_asm.inline_asm_id];
@@ -675,6 +677,9 @@ static bool core_structured_inline_asm_supported(const MinicCoreFunction *functi
             return false;
         }
         bound[binding->operand_index] = true;
+        if (binding->has_fixed_register_binding) {
+            fixed_bindings += 1U;
+        }
         switch (binding->kind) {
         case MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
         case MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE:
@@ -709,6 +714,13 @@ static bool core_structured_inline_asm_supported(const MinicCoreFunction *functi
            memory_readwrites == 1U && scalar_inputs <= 2U &&
            scalar_inputs + 3U == instruction->value.structured_inline_asm.operand_count &&
            inline_asm->has_memory_clobber) ||
+          /* M105_FIXED_REGISTER_STRUCTURED_ASM: SBI ecall family. Every
+             operand carries a Program-owned fixed-register binding, so this
+             tier does not consume the generic temporary-register pool. */
+          (register_outputs == 0U && register_readwrites == 2U &&
+           memory_readwrites == 0U && scalar_inputs == 6U && fixed_bindings == 8U &&
+           instruction->value.structured_inline_asm.operand_count == 8U &&
+           inline_asm->has_memory_clobber && inline_asm->register_clobber_count == 0U) ||
           /* BATCH_X_TWO_SCALAR_OUTPUTLESS_ASM_OPTIONAL_MEMORY: the emitted
              instruction operands are identical with or without a compiler
              memory clobber. Keep register clobbers excluded for this shape,
@@ -1884,28 +1896,43 @@ static bool emit_structured_inline_asm(FILE *file,
          ++binding_index) {
         const MinicCoreStructuredInlineAsmOperand *binding =
             &instruction->value.structured_inline_asm.operands[binding_index];
+        const MinicFixedRegisterBinding *fixed_binding = NULL;
         const char *register_name;
 
+        if (binding->has_fixed_register_binding) {
+            fixed_binding = minic_c0_program_fixed_register_binding(
+                program, binding->fixed_register_binding_id);
+            if (fixed_binding == NULL || !fixed_binding->is_local ||
+                fixed_binding->register_name == NULL || fixed_binding->register_name_length == 0U) {
+                return false;
+            }
+        }
         switch (binding->kind) {
         case MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
         case MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE: {
             MinicType pointee;
             MinicType value_type;
 
-            while (output_index < 2U &&
-                   core_inline_asm_clobbers_register(
-                       inline_asm, output_registers[output_index])) {
-                output_index += 1U;
+            if (fixed_binding != NULL) {
+                register_name = fixed_binding->register_name;
+            } else {
+                while (output_index < 2U &&
+                       core_inline_asm_clobbers_register(
+                           inline_asm, output_registers[output_index])) {
+                    output_index += 1U;
+                }
+                if (output_index >= 2U) {
+                    return false;
+                }
+                register_name = output_registers[output_index++];
             }
-            if (output_index >= 2U) {
-                return false;
-            }
-            register_name = output_registers[output_index++];
             if (binding->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE) {
                 if (!load_core_value(file, frame, binding->value, "t5") ||
                     !minic_type_pointee(function->values[binding->value].type, &pointee) ||
                     !minic_type_unqualified(pointee, &value_type) ||
                     !core_scalar_type(value_type) ||
+                    (fixed_binding != NULL &&
+                     !minic_type_equal(fixed_binding->type, value_type)) ||
                     !minic_riscv64_emit_scalar_load_for_program(
                         file, program, value_type, register_name, "t5")) {
                     return false;
@@ -1921,7 +1948,20 @@ static bool emit_structured_inline_asm(FILE *file,
             }
             break;
         case MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT:
-            register_name = input_registers[input_index++];
+            if (fixed_binding != NULL) {
+                MinicType fixed_value_type;
+                if (!minic_type_unqualified(fixed_binding->type, &fixed_value_type) ||
+                    !minic_type_equal(
+                        fixed_value_type, function->values[binding->value].type)) {
+                    return false;
+                }
+                register_name = fixed_binding->register_name;
+            } else {
+                if (input_index >= 2U) {
+                    return false;
+                }
+                register_name = input_registers[input_index++];
+            }
             if (!load_core_value(file, frame, binding->value, register_name)) {
                 return false;
             }

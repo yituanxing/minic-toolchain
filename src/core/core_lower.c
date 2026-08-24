@@ -218,8 +218,11 @@ static MinicCoreLowerStatus lower_local_object(MinicCoreLowerContext *context,
     if (local == NULL) {
         return MINIC_CORE_LOWER_ERROR;
     }
-    if (minic_c0_program_local_fixed_register_binding(context->body->program, local_id) != NULL ||
-        (!core_memory_scalar_type(local->type) && !minic_type_is_record(local->type))) {
+    /* M105_FIXED_REGISTER_STRUCTURED_ASM: a GNU local register binding does
+       not change the C object's scalar value semantics. Keep ordinary Core
+       storage for reads/writes; only inline-asm operand materialization consumes
+       the target register binding. */
+    if (!core_memory_scalar_type(local->type) && !minic_type_is_record(local->type)) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
     if (local->is_array) {
@@ -6725,6 +6728,32 @@ static bool core_inline_asm_register_output_constraint(const MinicInlineAsmOpera
            core_inline_asm_constraint_is(operand, "=&r");
 }
 
+/* M105_FIXED_REGISTER_STRUCTURED_ASM: translate the frontend side-table
+   reference into a stable Program-owned id without copying target register
+   strings into Core. */
+static bool core_inline_asm_local_fixed_binding_id(const MinicC0Program *program,
+                                                   const MinicExpression *expression,
+                                                   size_t *binding_id) {
+    const MinicFixedRegisterBinding *binding;
+    size_t index;
+
+    if (program == NULL || expression == NULL || binding_id == NULL ||
+        expression->kind != MINIC_EXPRESSION_LOCAL) {
+        return false;
+    }
+    binding = minic_c0_program_local_fixed_register_binding(program, expression->value.local_id);
+    if (binding == NULL) {
+        return false;
+    }
+    for (index = 0U; index < program->fixed_register_binding_count; ++index) {
+        if (&program->fixed_register_bindings[index] == binding) {
+            *binding_id = index;
+            return true;
+        }
+    }
+    return false;
+}
+
 /* M61_IMMEDIATE_ONLY_INLINE_ASM: GNU "i" operands are compile-time
    textual operands. Specialize an all-immediate asm template while Core still
    has access to the semantic program, then transport the resulting target
@@ -7508,6 +7537,132 @@ static MinicCoreLowerStatus lower_opaque_inline_asm(MinicCoreLowerContext *conte
                    context->function, context->block_id, &instruction)
                    ? MINIC_CORE_LOWER_OK
                    : MINIC_CORE_LOWER_ERROR;
+    }
+
+    /* M105_FIXED_REGISTER_STRUCTURED_ASM: Linux SBI-style extended asm uses
+       two +r outputs and six r inputs, all backed by GNU local fixed-register
+       variables. Preserve the Program-owned binding id on each Core operand;
+       the RV64 backend alone interprets names such as a0..a7. */
+    if (source->is_volatile && !source->is_goto && source->template_text != NULL &&
+        source->template_length != 0U && source->outputs != NULL && source->inputs != NULL &&
+        source->output_count == 2U && source->input_count == 6U && source->has_memory_clobber &&
+        source->label_count == 0U && source->register_clobber_count == 0U &&
+        source->clobber_count == 1U) {
+        MinicCoreInstruction structured;
+        char *numeric_template = NULL;
+        size_t numeric_template_length = 0U;
+        size_t fixed_binding_ids[MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT];
+        size_t output_index;
+        size_t input_index;
+        bool supported_shape = true;
+
+        for (output_index = 0U; output_index < source->output_count; ++output_index) {
+            const MinicInlineAsmOperand *operand = &source->outputs[output_index];
+            const MinicExpression *expression =
+                minic_c0_program_expression(context->body->program, operand->expression);
+            const MinicLocal *local;
+            MinicType value_type;
+
+            if (operand->access != MINIC_INLINE_ASM_OPERAND_READ_WRITE ||
+                (!core_inline_asm_constraint_is(operand, "+r") &&
+                 !core_inline_asm_constraint_is(operand, "+&r")) ||
+                expression == NULL || expression->kind != MINIC_EXPRESSION_LOCAL ||
+                expression->value_category != MINIC_VALUE_LVALUE ||
+                minic_type_is_const(expression->type) || minic_type_is_volatile(expression->type) ||
+                !minic_type_unqualified(expression->type, &value_type) ||
+                !core_memory_scalar_type(value_type) ||
+                !core_inline_asm_local_fixed_binding_id(
+                    context->body->program, expression, &fixed_binding_ids[output_index])) {
+                supported_shape = false;
+                break;
+            }
+            local = minic_c0_program_local(context->body->program, expression->value.local_id);
+            if (local == NULL) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            if (local->is_array || !minic_type_equal(local->type, expression->type)) {
+                supported_shape = false;
+                break;
+            }
+        }
+        for (input_index = 0U; supported_shape && input_index < source->input_count; ++input_index) {
+            const MinicInlineAsmOperand *operand = &source->inputs[input_index];
+            const MinicExpression *expression =
+                minic_c0_program_expression(context->body->program, operand->expression);
+            MinicType value_type;
+            size_t operand_index = source->output_count + input_index;
+
+            if (operand->access != MINIC_INLINE_ASM_OPERAND_READ_ONLY ||
+                !core_inline_asm_constraint_is(operand, "r") || expression == NULL ||
+                expression->kind != MINIC_EXPRESSION_LOCAL ||
+                !core_scalar_expression_value_type(context->body, expression, &value_type) ||
+                !core_memory_scalar_type(value_type) ||
+                !core_inline_asm_local_fixed_binding_id(
+                    context->body->program, expression, &fixed_binding_ids[operand_index])) {
+                supported_shape = false;
+            }
+        }
+        if (supported_shape && core_inline_asm_numeric_template(
+                source, &numeric_template, &numeric_template_length)) {
+            bool added;
+
+            added = minic_core_function_add_opaque_inline_asm(context->function,
+                                                               numeric_template,
+                                                               numeric_template_length,
+                                                               source->is_volatile,
+                                                               source->has_memory_clobber,
+                                                               &inline_asm_id);
+            free(numeric_template);
+            numeric_template = NULL;
+            if (!added) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            (void)memset(&structured, 0, sizeof(structured));
+            structured.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
+            structured.span = statement->span;
+            structured.type = minic_type_void();
+            structured.result = MINIC_CORE_VALUE_INVALID;
+            structured.value.structured_inline_asm.inline_asm_id = inline_asm_id;
+            structured.value.structured_inline_asm.operand_count =
+                source->output_count + source->input_count;
+
+            for (output_index = 0U; output_index < source->output_count; ++output_index) {
+                const MinicInlineAsmOperand *operand = &source->outputs[output_index];
+                MinicCoreStructuredInlineAsmOperand *binding =
+                    &structured.value.structured_inline_asm.operands[output_index];
+                MinicCoreLowerStatus status;
+
+                binding->kind = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE;
+                binding->operand_index = output_index;
+                binding->fixed_register_binding_id = fixed_binding_ids[output_index];
+                binding->has_fixed_register_binding = true;
+                status = lower_address(context, operand->expression, &binding->value);
+                if (status != MINIC_CORE_LOWER_OK) {
+                    return status;
+                }
+            }
+            for (input_index = 0U; input_index < source->input_count; ++input_index) {
+                const MinicInlineAsmOperand *operand = &source->inputs[input_index];
+                size_t operand_index = source->output_count + input_index;
+                MinicCoreStructuredInlineAsmOperand *binding =
+                    &structured.value.structured_inline_asm.operands[operand_index];
+                MinicCoreLowerStatus status;
+
+                binding->kind = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+                binding->operand_index = operand_index;
+                binding->fixed_register_binding_id = fixed_binding_ids[operand_index];
+                binding->has_fixed_register_binding = true;
+                status = lower_expression(context, operand->expression, &binding->value);
+                if (status != MINIC_CORE_LOWER_OK) {
+                    return status;
+                }
+            }
+            return minic_core_function_append_effect_instruction(
+                       context->function, context->block_id, &structured)
+                       ? MINIC_CORE_LOWER_OK
+                       : MINIC_CORE_LOWER_ERROR;
+        }
+        free(numeric_template);
     }
 
     /* M68_STRUCTURED_INLINE_ASM_OPTIONAL_INPUTS: M67's structured

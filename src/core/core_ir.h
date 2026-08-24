@@ -208,6 +208,11 @@ typedef struct MinicCoreStructuredInlineAsmOperand {
     MinicCoreStructuredInlineAsmOperandKind kind;
     size_t operand_index;
     MinicCoreValueId value;
+    /* M105_FIXED_REGISTER_STRUCTURED_ASM: keep frontend-owned local fixed-register
+       identity as opaque metadata. Core does not interpret the register spelling;
+       the selected backend resolves the binding when materializing asm operands. */
+    size_t fixed_register_binding_id;
+    bool has_fixed_register_binding;
 } MinicCoreStructuredInlineAsmOperand;
 
 typedef struct MinicCoreInstruction {

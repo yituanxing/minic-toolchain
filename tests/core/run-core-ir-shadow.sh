@@ -468,6 +468,30 @@ const char *terminating_switch_return(unsigned short tag) {
 EOF
 check_strict_case terminating-switch-return
 
+cat >"$work_dir/fixed-register-sbi-ecall.i" <<'EOF'
+struct core_sbi_ret { long error; long value; };
+
+struct core_sbi_ret fixed_register_sbi_ecall(long x0, long x1, long x2, long x3,
+                                              long x4, long x5, long fid, long ext) {
+    struct core_sbi_ret ret;
+    register unsigned long a0 asm("a0") = (unsigned long)x0;
+    register unsigned long a1 asm("a1") = (unsigned long)x1;
+    register unsigned long a2 asm("a2") = (unsigned long)x2;
+    register unsigned long a3 asm("a3") = (unsigned long)x3;
+    register unsigned long a4 asm("a4") = (unsigned long)x4;
+    register unsigned long a5 asm("a5") = (unsigned long)x5;
+    register unsigned long a6 asm("a6") = (unsigned long)fid;
+    register unsigned long a7 asm("a7") = (unsigned long)ext;
+    asm volatile("ecall" : "+r"(a0), "+r"(a1)
+                         : "r"(a2), "r"(a3), "r"(a4), "r"(a5), "r"(a6), "r"(a7)
+                         : "memory");
+    ret.error = (long)a0;
+    ret.value = (long)a1;
+    return ret;
+}
+EOF
+check_strict_case fixed-register-sbi-ecall
+
 cat >"$work_dir/function-designator-address.i" <<'EOF'
 int function_address_target(int value);
 int function_address_consume(int (*callback)(int));
