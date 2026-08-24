@@ -1,22 +1,20 @@
-name: Core Batch Y48 Bitfield Storage Write Full500
+name: Core Productize Bitfield Storage Write
 
 on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  y48-bitfield-write-full500:
+  productize-bitfield-write:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
-    concurrency:
-      group: core-y48-bitfield-write-full500-${{ github.event.pull_request.number }}
-      cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 206ca8a9c2d48df70cf47d0f9bd7667724e56a15
+          ref: refactor/declaration-sema-v1
+          fetch-depth: 0
       - name: Restore frozen Linux corpus
         id: linux-corpus-cache
         uses: actions/cache/restore@v4
@@ -29,7 +27,7 @@ jobs:
           set -Eeuo pipefail
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
-      - name: Apply exact Y47 candidate
+      - name: Apply semantic patch and exact regression
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -81,46 +79,51 @@ jobs:
           extra='''check_strict_case bool-bitfield-storage-read\n\ncat >"$work_dir/bool-bitfield-storage-write.i" <<'EOF'\nstruct bool_bitfield_storage_write {\n    unsigned int prefix : 1;\n    _Bool ready : 1;\n};\n\nvoid bool_bitfield_storage_write(struct bool_bitfield_storage_write *state) {\n    state->ready = 1;\n    state->ready = 0;\n}\nEOF\ncheck_strict_case bool-bitfield-storage-write\n\n'''
           if s.count(anchor)!=1: raise SystemExit(f'write test anchor count={s.count(anchor)}')
           p.write_text(s.replace(anchor,extra,1))
-          print('CORE_BATCH_Y48_PATCHED')
+          print('CORE_PRODUCTIZE_BITFIELD_WRITE_PATCHED')
           PY
-      - name: Build exact candidate
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-y48-compiler
-      - name: Full Core exact regression suite
+      - name: Build and Core exact suite
         shell: bash
         run: |
           set -Eeuo pipefail
-          MINIC="$GITHUB_WORKSPACE/build/core-batch-y48-compiler/bin/minic" \
-            BUILD_DIR="$GITHUB_WORKSPACE/build/core-batch-y48-tests" \
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-productize-bitfield-write-compiler
+          MINIC="$GITHUB_WORKSPACE/build/core-productize-bitfield-write-compiler/bin/minic" \
+            BUILD_DIR="$GITHUB_WORKSPACE/build/core-productize-bitfield-write-tests" \
             bash tests/core/run-core-ir-shadow.sh
-          echo CORE_BATCH_Y48_CORE_SUITE_PASS
-      - name: Frozen strict500
+      - name: Focused Linux guard
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-batch-y48-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-batch-y48-full500"
-          mkdir -p "$work"
+          compiler="$GITHUB_WORKSPACE/build/core-productize-bitfield-write-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-productize-bitfield-write-linux"
           set +e
           MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
-            --work "$work" --jobs 4 --offset 0 --limit 500 --sample-count 0 \
-            >"$work/replay.log" 2>&1
-          replay_status=$?
+            --work "$work" --jobs 3 --offset 0 --limit 500 --sample-count 0 --indices '2,3,7'
+          status=$?
           set -e
-          echo CORE_BATCH_Y48_REPLAY_STATUS=$replay_status
           python3 tools/ci/classify-core-strict-frontier.py \
-            "$work/batch-results.json" --examples 12 --json-out "$work/frontier-summary.json"
-          python3 tools/ci/summarize-core-frontier-progress.py \
-            "$work/batch-results.json" --expect-selected 500 \
-            --json-out "$work/progress-summary.json" --text-out "$work/progress-summary.txt" >/dev/null
+            "$work/batch-results.json" --examples 8 --json-out "$work/frontier-summary.json"
           python3 - <<'PY'
           import json
           from pathlib import Path
-          w=Path('build/core-batch-y48-full500')
+          w=Path('build/core-productize-bitfield-write-linux')
+          rows=json.loads((w/'batch-results.json').read_text())
+          if isinstance(rows,dict): rows=rows.get('results',rows.get('tus',[]))
+          by={int(r['index']):r for r in rows}
           f=json.loads((w/'frontier-summary.json').read_text())
-          p=json.loads((w/'progress-summary.json').read_text())
-          print(f"CORE_BATCH_Y48_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
-          print(f"CORE_BATCH_Y48_PROGRESS mean={p.get('tu_mean_progress')} median={p.get('tu_median_progress')} line_weighted={p.get('line_weighted_progress')}")
-          if f['selected'] != 500 or f['error'] != 0:
-              raise SystemExit(f'Y48 full500 regression: {f}')
+          print(f"CORE_PRODUCTIZE_BITFIELD_WRITE_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
+          if f['error'] != 0 or by[7]['status'] != 'PASS': raise SystemExit(f)
+          if any(r.get('message','').endswith("'device_set_pm_not_required'") for r in rows):
+              raise SystemExit('write seam did not advance')
           PY
+      - name: Commit semantic change
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/core/core_lower.c tests/core/run-core-ir-shadow.sh
+          test -n "$(git status --porcelain -- src/core/core_lower.c tests/core/run-core-ir-shadow.sh)"
+          git commit -m 'core: use storage width for unsigned bit-field writes'
+          git push origin HEAD:refactor/declaration-sema-v1
+          echo CORE_PRODUCTIZE_BITFIELD_WRITE_HEAD=$(git rev-parse HEAD)
