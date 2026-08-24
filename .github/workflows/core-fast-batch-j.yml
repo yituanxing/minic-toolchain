@@ -1,4 +1,4 @@
-name: Core Fast Batch L
+name: Core Fast Batch M
 
 on:
   pull_request:
@@ -7,11 +7,11 @@ permissions:
   contents: write
 
 jobs:
-  batch-l:
+  batch-m:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     concurrency:
-      group: core-fast-batch-l-${{ github.event.pull_request.number }}
+      group: core-fast-batch-m-${{ github.event.pull_request.number }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
@@ -32,142 +32,48 @@ jobs:
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
 
-      - name: Apply Batch L production changes
+      - name: Enable compact progress telemetry
         shell: bash
         run: |
           set -Eeuo pipefail
           python3 tools/dev/patch-linux-replay-live-progress.py
-          python3 tools/dev/patch-core-frontier-batch-l.py
 
-      - name: Build exact patched compiler
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-l-compiler
+      - name: Build exact compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-m-compiler
 
-      - name: Focused structured register readwrite regression
+      - name: Diagnose one real ptep_get frontier
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-batch-l-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-batch-l-focused"
-          mkdir -p "$work"
-          cat >"$work/register-readwrite-immediate.i" <<'EOF'
-          unsigned long rw_imm(unsigned long value) {
-              asm volatile(
-                  "li t3, %1\n\t"
-                  "slli t3, t3, %3\n\t"
-                  "and t3, %0, t3\n\t"
-                  "li t3, %2\n\t"
-                  "or %0, %0, t3"
-                  : "+r"(value)
-                  : "I"(7), "I"(3), "I"(1)
-                  : "t3");
-              return value;
-          }
-          EOF
-          MINIC_CORE_IR=strict "$compiler" -S "$work/register-readwrite-immediate.i" \
-            -o "$work/strict.s"
-          MINIC_CORE_IR=strict MINIC_CORE_CODEGEN=basic-v0 "$compiler" \
-            -S "$work/register-readwrite-immediate.i" -o "$work/core.s"
-          grep -q 'li t3, 7' "$work/core.s"
-          grep -q 'slli t3, t3, 1' "$work/core.s"
-          if grep -Eq '%[123]' "$work/core.s"; then
-            echo 'unresolved immediate operand remained in Batch L core assembly' >&2
-            exit 1
-          fi
-          echo CORE_BATCH_L_FOCUSED_PASS
-
-      - name: Ten-TU pfn family frontier
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-batch-l-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-batch-l-frontier"
+          compiler="$GITHUB_WORKSPACE/build/core-batch-m-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-batch-m-diagnostic"
           set +e
           MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" \
             --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
             --work "$work" \
-            --jobs 8 \
+            --jobs 1 \
             --offset 0 \
             --limit 500 \
             --sample-count 0 \
-            --indices '4,7,15,56,131,155,161,165,280,299'
+            --indices '56'
           replay_status=$?
           set -e
-          printf 'CORE_BATCH_L_REPLAY_STATUS=%d\n' "$replay_status"
+          printf 'CORE_BATCH_M_DIAGNOSTIC_STATUS=%d\n' "$replay_status"
+          echo '--- failure context ---'
+          cat "$work/failure-contexts.txt"
+          echo '--- Core trace ---'
+          find "$work/minic-stderr" -type f -name '*.stderr' -print0 | \
+            xargs -0 grep -E 'CORE_FAST_TRACE|CORE_ASSIGN|ptep_get' || true
           python3 tools/ci/classify-core-strict-frontier.py \
-            "$work/batch-results.json" --examples 10 --json-out "$work/frontier-summary.json"
+            "$work/batch-results.json" --examples 1 --json-out "$work/frontier-summary.json"
           python3 - <<'PY'
           import json
           from pathlib import Path
-          f = json.loads(Path('build/core-batch-l-frontier/frontier-summary.json').read_text())
-          blockers = {b.get('function') for b in f.get('blockers', [])}
-          print(
-              f"CORE_BATCH_L_RESULT selected={f['selected']} pass={f['pass']} "
-              f"unsupported={f['unsupported']} error={f['error']} "
-              f"distinct_blockers={len(f.get('blockers', []))}"
-          )
-          if f['selected'] != 10:
-              raise SystemExit(f"expected 10 probes, got {f['selected']}")
+          f = json.loads(Path('build/core-batch-m-diagnostic/frontier-summary.json').read_text())
+          print(f"CORE_BATCH_M_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
+          if f['selected'] != 1:
+              raise SystemExit('expected exactly one diagnostic TU')
           if f['error'] != 0:
-              raise SystemExit(f"Batch L introduced Core ERRORs: {f.get('errors', [])}")
-          if 'pfn_pmd' in blockers:
-              raise SystemExit('pfn_pmd still blocks Batch L representative frontier')
+              raise SystemExit(f"unexpected Core ERROR: {f.get('errors', [])}")
           PY
-
-      - name: Sixteen-TU no-error sanity gate
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-batch-l-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-batch-l-strict16"
-          set +e
-          MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
-            --minic "$compiler" \
-            --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
-            --work "$work" \
-            --jobs 8 \
-            --offset 0 \
-            --limit 500 \
-            --sample-count 0 \
-            --indices '0,1,2,3,4,7,9,20,42,66,95,155,165,280,288,299'
-          replay_status=$?
-          set -e
-          printf 'CORE_BATCH_L_STRICT16_REPLAY_STATUS=%d\n' "$replay_status"
-          python3 tools/ci/classify-core-strict-frontier.py \
-            "$work/batch-results.json" --examples 16 --json-out "$work/frontier-summary.json"
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-          f = json.loads(Path('build/core-batch-l-strict16/frontier-summary.json').read_text())
-          blockers = {b.get('function') for b in f.get('blockers', [])}
-          print(
-              f"CORE_BATCH_L_STRICT16 selected={f['selected']} pass={f['pass']} "
-              f"unsupported={f['unsupported']} error={f['error']}"
-          )
-          if f['selected'] != 16:
-              raise SystemExit(f"expected 16 probes, got {f['selected']}")
-          if f['error'] != 0:
-              raise SystemExit(f"Batch L strict16 Core ERRORs: {f.get('errors', [])}")
-          if 'pfn_pmd' in blockers:
-              raise SystemExit('pfn_pmd still blocks strict16')
-          PY
-
-      - name: Persist qualified Batch L production tree
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          files=(
-            src/core/core_ir.h
-            src/core/core_ir.c
-            src/core/core_lower.c
-            src/target/riscv64/core_codegen.c
-          )
-          git add -- "${files[@]}"
-          if git diff --cached --quiet; then
-            echo CORE_BATCH_L_ALREADY_PERSISTED
-            exit 0
-          fi
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m 'core: lower structured register readwrite asm'
-          git push origin HEAD:refactor/declaration-sema-v1
