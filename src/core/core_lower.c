@@ -7945,6 +7945,7 @@ lower_switch(MinicCoreLowerContext *context, const MinicStatement *statement, bo
     size_t first_case_label;
     size_t label_count;
     size_t source_index;
+    bool all_segments_terminate;
 
     if (context == NULL || context->body == NULL || context->body->program == NULL ||
         context->function == NULL || statement == NULL || terminated == NULL ||
@@ -8081,6 +8082,11 @@ lower_switch(MinicCoreLowerContext *context, const MinicStatement *statement, bo
         }
     }
 
+    /* M98_TERMINATING_SWITCH: a switch with a default and no path to its
+       synthetic exit is a terminating statement. Track the narrow proven
+       shape first: every label segment itself terminates. Fallthrough/break
+       segments stay conservatively non-terminating. */
+    all_segments_terminate = default_label != SIZE_MAX && label_count != 0U;
     for (source_index = 0U; source_index < label_count; ++source_index) {
         MinicBlock segment;
         MinicCoreBlockId fallthrough_target;
@@ -8132,6 +8138,7 @@ lower_switch(MinicCoreLowerContext *context, const MinicStatement *statement, bo
         if (segment_terminated) {
             continue;
         }
+        all_segments_terminate = false;
         if (break_index != SIZE_MAX) {
             fallthrough_target = exit_block;
         } else if (source_index + 1U < label_count) {
@@ -8146,6 +8153,21 @@ lower_switch(MinicCoreLowerContext *context, const MinicStatement *statement, bo
     }
 
     context->block_id = exit_block;
+    if (all_segments_terminate) {
+        MinicCoreTerminator exit_terminator;
+
+        (void)memset(&exit_terminator, 0, sizeof(exit_terminator));
+        exit_terminator.kind = MINIC_CORE_TERMINATOR_UNREACHABLE;
+        exit_terminator.span = statement->span;
+        exit_terminator.return_value = MINIC_CORE_VALUE_INVALID;
+        exit_terminator.return_object = MINIC_CORE_OBJECT_INVALID;
+        if (!minic_core_function_set_terminator(
+                context->function, exit_block, &exit_terminator)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        *terminated = true;
+        return MINIC_CORE_LOWER_OK;
+    }
     *terminated = false;
     return MINIC_CORE_LOWER_OK;
 }

@@ -436,6 +436,17 @@ unsigned int qualified_statement_conditional(const struct core_cond_limits *limi
 EOF
 check_strict_case qualified-statement-conditional
 
+cat >"$work_dir/terminating-switch-return.i" <<'EOF'
+const char *terminating_switch_return(unsigned short tag) {
+    switch (tag) {
+    case 1: return "one";
+    case 2: return "two";
+    default: return "other";
+    }
+}
+EOF
+check_strict_case terminating-switch-return
+
 cat >"$work_dir/variadic-call-unsupported.i" <<'EOF'
 int variadic_external(int first, ...);
 
