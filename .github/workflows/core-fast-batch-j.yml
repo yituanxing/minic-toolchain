@@ -1,19 +1,20 @@
-name: Core Y89 Unary Integer Promotion Focus
+name: Core Y90 Unary Integer Promotion Full500
 
 on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  y89-unary-integer-promotion:
+  y90-unary-integer-promotion-full500:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: c26979e02d06873a401475f8d63a02406c862226
+          ref: 2ed827c10b7b9d3bc6e12ca8e001e9ad134b9111
+          fetch-depth: 0
       - name: Restore frozen Linux corpus
         id: linux-corpus-cache
         uses: actions/cache/restore@v4
@@ -43,37 +44,93 @@ jobs:
           addition='''cat >"$work_dir/promoted-unary-call-argument.i" <<'EOF'\ntypedef unsigned short core_u16;\nextern core_u16 core_u16_add(core_u16 left, core_u16 right);\ncore_u16 promoted_unary_call_argument(core_u16 left, core_u16 right) {\n    return core_u16_add(left, ~right);\n}\nint promoted_unary_negate(core_u16 value) {\n    return -value;\n}\nEOF\ncheck_strict_case promoted-unary-call-argument\n\n'''
           if s.count(anchor)!=1: raise SystemExit(f'test anchor {s.count(anchor)}')
           p.write_text(s.replace(anchor,addition+anchor,1))
-          print('CORE_Y89_CANDIDATE_APPLIED')
+          print('CORE_Y90_CANDIDATE_APPLIED')
           PY
       - name: Build and exact Core regressions
         shell: bash
         run: |
           set -Eeuo pipefail
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y89-compiler
-          MINIC="$GITHUB_WORKSPACE/build/core-y89-compiler/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/core-y89-regression" bash tests/core/run-core-ir-shadow.sh
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y90-compiler
+          MINIC="$GITHUB_WORKSPACE/build/core-y90-compiler/bin/minic" BUILD_DIR="$GITHUB_WORKSPACE/build/core-y90-regression" bash tests/core/run-core-ir-shadow.sh
       - name: Focused csum qualification
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-y89-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-y89-focus"
+          compiler="$GITHUB_WORKSPACE/build/core-y90-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-y90-focus"
           mkdir -p "$work"
           set +e
           MINIC_CORE_IR=strict CORE_FAST_TRACE=1 CORE_LOWER_DETAIL=1 CORE_ASSIGN_STAGE=1 python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
-            --work "$work" --jobs 2 --offset 0 --limit 500 --sample-count 0 --indices '2,296'
+            --work "$work" --jobs 3 --offset 0 --limit 500 --sample-count 0 --indices '2,193,195'
           status=$?
           set -e
-          echo CORE_Y89_FOCUS_STATUS=$status
+          echo CORE_Y90_FOCUS_STATUS=$status
           python3 tools/ci/classify-core-strict-frontier.py "$work/batch-results.json" --examples 8 --json-out "$work/frontier-summary.json"
           python3 - <<'PY'
           import json
           from pathlib import Path
-          w=Path('build/core-y89-focus'); f=json.loads((w/'frontier-summary.json').read_text())
+          w=Path('build/core-y90-focus'); f=json.loads((w/'frontier-summary.json').read_text())
           rows=json.loads((w/'batch-results.json').read_text())
           if isinstance(rows,dict): rows=rows.get('results',rows.get('tus',[]))
-          print(f"CORE_Y89_FOCUS selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
-          for r in rows: print(f"CORE_Y89_INDEX index={r.get('index')} status={r.get('status')} progress={float(r.get('progress_ratio') or 0)*100:.3f}% message={r.get('message','')}")
+          print(f"CORE_Y90_FOCUS selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
+          for r in rows: print(f"CORE_Y90_INDEX index={r.get('index')} status={r.get('status')} progress={float(r.get('progress_ratio') or 0)*100:.3f}% message={r.get('message','')}")
           if f['error'] != 0: raise SystemExit(f'Core ERROR: {f}')
-          if any('csum16_sub' in r.get('message','') for r in rows): raise SystemExit('csum16_sub survived Y89')
+          if any('csum16_sub' in r.get('message','') for r in rows): raise SystemExit('csum16_sub survived Y90')
           PY
+      - name: Frozen strict500 qualification
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/patch-linux-replay-live-progress.py
+          compiler="$GITHUB_WORKSPACE/build/core-y90-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-y90-full500"
+          mkdir -p "$work"
+          set +e
+          MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" --work "$work" --jobs 4 --offset 0 --limit 500 --sample-count 0 >"$work/replay.log" 2>&1
+          replay_status=$?
+          set -e
+          echo CORE_Y90_REPLAY_STATUS=$replay_status
+          python3 tools/ci/classify-core-strict-frontier.py "$work/batch-results.json" --examples 12 --json-out "$work/frontier-summary.json"
+          python3 tools/ci/summarize-core-frontier-progress.py "$work/batch-results.json" --expect-selected 500 --json-out "$work/progress-summary.json" --text-out "$work/progress-summary.txt" >/dev/null
+          python3 - <<'PY'
+          import json
+          from collections import Counter
+          from pathlib import Path
+          w=Path('build/core-y90-full500'); f=json.loads((w/'frontier-summary.json').read_text()); p=json.loads((w/'progress-summary.json').read_text())
+          rows=json.loads((w/'batch-results.json').read_text())
+          if isinstance(rows,dict): rows=rows.get('results',rows.get('tus',[]))
+          c=Counter(); examples={}; marker="Core IR shadow does not yet support function '"
+          for r in rows:
+              if r.get('status')=='PASS': continue
+              msg=r.get('message',''); fn=msg.split(marker,1)[1].split("'",1)[0] if marker in msg else (msg or '<unknown>')
+              c[fn]+=1; examples.setdefault(fn,[]).append(int(r.get('index',-1)))
+          print(f"CORE_Y90_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']} distinct={len(c)}")
+          print(f"CORE_Y90_PROGRESS mean={p.get('tu_mean_progress')} median={p.get('tu_median_progress')} line_weighted={p.get('line_weighted_progress')}")
+          for rank,(fn,count) in enumerate(c.most_common(20),1): print(f"CORE_Y90_BLOCKER rank={rank} count={count} function={fn} examples={examples[fn][:8]}")
+          if f['selected'] != 500 or f['error'] != 0: raise SystemExit(f'Y90 qualification failed: {f}')
+          if any('csum16_sub' in r.get('message','') for r in rows): raise SystemExit('csum16_sub survived full500')
+          PY
+      - name: Productize unary integer promotions
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git diff -- src/core/core_lower.c tests/core/run-core-ir-shadow.sh > /tmp/y90-semantic.patch
+          test -s /tmp/y90-semantic.patch
+          git reset --hard 2ed827c10b7b9d3bc6e12ca8e001e9ad134b9111
+          git fetch origin refactor/declaration-sema-v1
+          git diff --quiet 2ed827c10b7b9d3bc6e12ca8e001e9ad134b9111..origin/refactor/declaration-sema-v1 -- src/core/core_lower.c tests/core/run-core-ir-shadow.sh
+          git checkout -B y90-productize origin/refactor/declaration-sema-v1
+          git apply /tmp/y90-semantic.patch
+          python3 - <<'PY'
+          import subprocess
+          allowed={'src/core/core_lower.c','tests/core/run-core-ir-shadow.sh'}
+          changed=set(subprocess.check_output(['git','diff','--name-only'],text=True).splitlines())
+          if changed != allowed: raise SystemExit(f'unexpected semantic diff: {sorted(changed)}')
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/core/core_lower.c tests/core/run-core-ir-shadow.sh
+          git commit -m 'core: promote integer unary operands'
+          git push origin HEAD:refactor/declaration-sema-v1
+          echo CORE_Y90_SEMANTIC_COMMIT=$(git rev-parse HEAD)
