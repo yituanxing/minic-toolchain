@@ -1,4 +1,4 @@
-name: Core Pareto Top24 Productizer
+name: Core Pareto Top36 Productizer
 
 on:
   pull_request:
@@ -7,7 +7,7 @@ permissions:
   contents: write
 
 jobs:
-  top24:
+  top36:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     steps:
@@ -23,7 +23,8 @@ jobs:
           set -Eeuo pipefail
           if grep -Fq 'M109_CHAINED_RECORD_ASSIGNMENT_VALUE' src/core/core_lower.c && \
              grep -Fq 'M110_PURE_REGISTER_OUTPUT_ASM' src/core/core_lower.c && \
-             grep -Fq 'M111_PURE_REGISTER_INPUT_ASM' src/core/core_lower.c; then
+             grep -Fq 'M111_PURE_REGISTER_INPUT_ASM' src/core/core_lower.c && \
+             grep -Fq 'M112_INDIRECT_CALL_FINAL_BLOCK_ARGUMENTS' src/core/core_lower.c; then
             echo 'needs_patch=false' >> "$GITHUB_OUTPUT"
           else
             echo 'needs_patch=true' >> "$GITHUB_OUTPUT"
@@ -45,56 +46,60 @@ jobs:
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
 
-      - name: Apply Top24 semantic batch
-        if: steps.state.outputs.needs_patch == 'true'
-        run: python3 tools/dev/patch-core-pareto-top35.py
-
-      - name: Build exact patched compiler
-        if: steps.state.outputs.needs_patch == 'true'
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/top24-compiler
-
-      - name: Run fast host regression gate
-        if: steps.state.outputs.needs_patch == 'true'
-        run: make -j4 check-fast MODE=release CFLAGS=-Werror BUILD_DIR=build/top24-check
-
-      - name: Replay combined Top24 cohort
+      - name: Apply Top36 semantic batch
         if: steps.state.outputs.needs_patch == 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/top24-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/top24"
+          python3 tools/dev/patch-core-pareto-top35.py
+          python3 tools/dev/patch-core-indirect-call-final-block.py
+
+      - name: Build exact patched compiler
+        if: steps.state.outputs.needs_patch == 'true'
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/top36-compiler
+
+      - name: Run fast host regression gate
+        if: steps.state.outputs.needs_patch == 'true'
+        run: make -j4 check-fast MODE=release CFLAGS=-Werror BUILD_DIR=build/top36-check
+
+      - name: Replay Top24 plus complete neigh_output cohort
+        if: steps.state.outputs.needs_patch == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/top36-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/top36"
           set +e
           MINIC_CORE_IR=strict CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" \
             --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
             --work "$work" \
             --jobs 4 \
-            --indices '2,209,242,378,491,492,493,494,495,496,497,498,499,16,18,19,23,25,34,49,78,81,83,96'
+            --indices '2,209,242,378,491,492,493,494,495,496,497,498,499,16,18,19,23,25,34,49,78,81,83,96,194,195,197,212,215,219,229,230,250,281,357,410'
           replay_status=$?
           set -e
-          printf 'CORE_TOP24_REPLAY_STATUS=%d\n' "$replay_status"
+          printf 'CORE_TOP36_REPLAY_STATUS=%d\n' "$replay_status"
           python3 tools/ci/classify-core-strict-frontier.py \
             "$work/batch-results.json" \
-            --examples 24 \
+            --examples 36 \
             --json-out "$work/frontier-summary.json"
           python3 - <<'PY'
           import json
           from pathlib import Path
 
-          work = Path('build/top24')
+          work = Path('build/top36')
           rows = json.loads((work / 'batch-results.json').read_text())
           summary = json.loads((work / 'frontier-summary.json').read_text())
-          if len(rows) != 24:
-              raise SystemExit(f'expected 24 rows, got {len(rows)}')
+          if len(rows) != 36:
+              raise SystemExit(f'expected 36 rows, got {len(rows)}')
           if summary['error'] != 0 or summary['preprocess_missing'] != 0:
-              raise SystemExit(f"Top24 introduced ERROR/missing: error={summary['error']} missing={summary['preprocess_missing']}")
+              raise SystemExit(f"Top36 ERROR/missing: error={summary['error']} missing={summary['preprocess_missing']}")
           old = {'minmax_reset', '__vstate_csr_save', '__vstate_csr_restore'}
           remaining = [b for b in summary.get('blockers', []) if b.get('function') in old]
           if remaining:
-              raise SystemExit(f'old Top24 blockers remain: {remaining}')
-          print(f"CORE_TOP24_ACCEPT pass={summary['pass']} unsupported={summary['unsupported']} error=0 selected=24")
-          print('CORE_TOP24_NEW_FRONTIER ' + json.dumps(summary.get('blockers', [])[:12], sort_keys=True))
+              raise SystemExit(f'old Pareto blockers remain: {remaining}')
+          print(f"CORE_TOP36_ACCEPT pass={summary['pass']} unsupported={summary['unsupported']} error=0 selected=36")
+          print('CORE_TOP36_NEW_FRONTIER ' + json.dumps(summary.get('blockers', [])[:16], sort_keys=True))
           PY
 
       - name: Commit semantic batch
@@ -108,16 +113,16 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add src/core/core_lower.c src/target/riscv64/core_codegen.c
           git diff --cached --quiet && { echo 'no semantic changes to productize'; exit 1; }
-          git commit -m 'core: clear chained-record and vector-asm Pareto families'
+          git commit -m 'core: clear record, vector asm, and indirect-call Pareto families'
           git push origin HEAD:refactor/declaration-sema-v1
 
-      - name: Persist Top24 result
+      - name: Persist Top36 result
         if: always() && steps.state.outputs.needs_patch == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: core-pareto-top24-${{ github.sha }}
+          name: core-pareto-top36-${{ github.sha }}
           path: |
-            build/top24/batch-results.json
-            build/top24/frontier-summary.json
-            build/top24/minic-stderr/**
+            build/top36/batch-results.json
+            build/top36/frontier-summary.json
+            build/top36/minic-stderr/**
           if-no-files-found: warn
