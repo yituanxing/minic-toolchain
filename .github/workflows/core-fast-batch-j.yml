@@ -1,22 +1,23 @@
-name: Core Batch Y40 Device Async Suspend Diagnostic
+name: Core Batch Y41 Productize Scalar Return Cleanup
 
 on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  y40-device-async:
+  y41-productize:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     concurrency:
-      group: core-y40-device-async-${{ github.event.pull_request.number }}
+      group: core-y41-productize-${{ github.event.pull_request.number }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: c0c1136a34f08ba62e11cfe8db049913ece58dfe
+          ref: refactor/declaration-sema-v1
+          fetch-depth: 0
       - name: Restore frozen Linux corpus
         id: linux-corpus-cache
         uses: actions/cache/restore@v4
@@ -29,69 +30,121 @@ jobs:
           set -Eeuo pipefail
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
-      - name: Apply Y38 cleanup-return candidate
+      - name: Apply semantic source and exact regression
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p=Path('src/core/core_lower.c')
+          s=p.read_text()
+          anchor='''static MinicCoreLowerStatus lower_return(MinicCoreLowerContext *context,\n                                         const MinicStatement *statement) {'''
+          helpers='''static bool core_is_materialized_cleanup_statement(\n    const MinicCoreLowerContext *context, const MinicStatement *statement) {\n    size_t cleanup_index;\n\n    if (context == NULL || context->body == NULL || context->body->program == NULL ||\n        statement == NULL || statement->kind != MINIC_STATEMENT_EXPRESSION ||\n        statement->expression == MINIC_EXPRESSION_INVALID) {\n        return false;\n    }\n    for (cleanup_index = 0U; cleanup_index < context->body->program->cleanup_context_count;\n         ++cleanup_index) {\n        if (context->body->program->cleanup_contexts[cleanup_index].cleanup_expression ==\n            statement->expression) {\n            return true;\n        }\n    }\n    return false;\n}\n\nstatic MinicCoreLowerStatus lower_cleanup_contexts(\n    MinicCoreLowerContext *context, MinicCleanupContextId current, MinicCleanupContextId stop) {\n    if (context == NULL || context->body == NULL || context->body->program == NULL ||\n        !minic_c0_cleanup_context_reaches(context->body->program, current, stop)) {\n        return MINIC_CORE_LOWER_ERROR;\n    }\n    while (current != stop) {\n        const MinicCleanupContext *cleanup;\n        MinicCoreValueId discarded_value;\n        MinicCoreLowerStatus status;\n\n        cleanup = minic_c0_program_cleanup_context(context->body->program, current);\n        if (cleanup == NULL || cleanup->parent == current ||\n            cleanup->cleanup_expression == MINIC_EXPRESSION_INVALID) {\n            return MINIC_CORE_LOWER_ERROR;\n        }\n        status = lower_expression(context, cleanup->cleanup_expression, &discarded_value);\n        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n        current = cleanup->parent;\n    }\n    return MINIC_CORE_LOWER_OK;\n}\n\n'''+anchor
+          if s.count(anchor)!=1: raise SystemExit(f'return anchor count={s.count(anchor)}')
+          s=s.replace(anchor,helpers,1)
+
+          pos=s.find(anchor); sub=s[pos:]
+          old='''    MinicCoreTerminator terminator;\n    MinicCoreLowerStatus status;\n\n    if (context == NULL || context->source_function == NULL || statement == NULL) {'''
+          new='''    MinicCoreTerminator terminator;\n    MinicCoreLowerStatus status;\n    MinicCoreObjectId cleanup_return_object;\n    bool has_cleanup;\n\n    if (context == NULL || context->source_function == NULL || statement == NULL) {'''
+          if old not in sub: raise SystemExit('return decl anchor')
+          sub=sub.replace(old,new,1); s=s[:pos]+sub
+
+          pos=s.find(anchor); sub=s[pos:]
+          old='''    (void)memset(&terminator, 0, sizeof(terminator));\n    terminator.kind = MINIC_CORE_TERMINATOR_RETURN;'''
+          new='''    has_cleanup = statement->cleanup_context != statement->cleanup_stop_context;\n    cleanup_return_object = MINIC_CORE_OBJECT_INVALID;\n    if (has_cleanup && !minic_c0_cleanup_context_reaches(\n            context->body->program, statement->cleanup_context, statement->cleanup_stop_context)) {\n        return MINIC_CORE_LOWER_ERROR;\n    }\n    (void)memset(&terminator, 0, sizeof(terminator));\n    terminator.kind = MINIC_CORE_TERMINATOR_RETURN;'''
+          if old not in sub: raise SystemExit('return init anchor')
+          sub=sub.replace(old,new,1); s=s[:pos]+sub
+
+          pos=s.find(anchor); sub=s[pos:]
+          old='''        } else if (minic_type_is_record(context->source_function->return_type)) {\n            const MinicExpression *expression;'''
+          new='''        } else if (minic_type_is_record(context->source_function->return_type)) {\n            const MinicExpression *expression;\n\n            /* Aggregate return cleanup needs an address-backed return owner.\n               Keep that capability fail-closed until Core models it explicitly. */\n            if (has_cleanup) {\n                return MINIC_CORE_LOWER_UNSUPPORTED;\n            }'''
+          if old not in sub: raise SystemExit('record return anchor')
+          sub=sub.replace(old,new,1); s=s[:pos]+sub
+
+          pos=s.find(anchor); sub=s[pos:]
+          old='''        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n    }\n    return minic_core_function_set_terminator(context->function, context->block_id, &terminator)\n               ? MINIC_CORE_LOWER_OK\n               : MINIC_CORE_LOWER_ERROR;'''
+          new='''        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n    }\n    /* A return expression is sequenced before GNU cleanup functions, while the\n       computed scalar return value must survive those calls. Spill the value,\n       execute exactly the cleanup contexts crossed by the return edge, then\n       reload it before installing the RETURN terminator. */\n    if (has_cleanup) {\n        if (core_memory_scalar_type(context->source_function->return_type)) {\n            status = spill_scalar_value(context, statement->span,\n                                        context->source_function->return_type,\n                                        terminator.return_value, &cleanup_return_object);\n            if (status != MINIC_CORE_LOWER_OK) {\n                return status;\n            }\n        }\n        status = lower_cleanup_contexts(context, statement->cleanup_context,\n                                        statement->cleanup_stop_context);\n        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n        if (core_memory_scalar_type(context->source_function->return_type)) {\n            status = reload_scalar_value(context, statement->span,\n                                         context->source_function->return_type,\n                                         cleanup_return_object, &terminator.return_value);\n            if (status != MINIC_CORE_LOWER_OK) {\n                return status;\n            }\n        }\n    }\n    return minic_core_function_set_terminator(context->function, context->block_id, &terminator)\n               ? MINIC_CORE_LOWER_OK\n               : MINIC_CORE_LOWER_ERROR;'''
+          if old not in sub: raise SystemExit('return end anchor')
+          sub=sub.replace(old,new,1); s=s[:pos]+sub
+
+          old='''        if (block_terminated) {\n            if (statement->kind == MINIC_STATEMENT_RETURN) {\n                continue;\n            }\n            if (statement->kind != MINIC_STATEMENT_LABEL) {\n                return MINIC_CORE_LOWER_UNSUPPORTED;\n            }\n        }'''
+          new='''        if (block_terminated) {\n            /* Parser scope exit materializes the same cleanup expression for\n               ordinary fallthrough. A return edge above has already consumed\n               that cleanup, so the unreachable duplicate must not run again.\n               Keep all other unreachable expression statements fail-closed. */\n            if (statement->kind == MINIC_STATEMENT_RETURN ||\n                core_is_materialized_cleanup_statement(context, statement)) {\n                continue;\n            }\n            if (statement->kind != MINIC_STATEMENT_LABEL) {\n                return MINIC_CORE_LOWER_UNSUPPORTED;\n            }\n        }'''
+          if s.count(old)!=1: raise SystemExit('terminated tail anchor')
+          s=s.replace(old,new,1)
+
+          old='''        if (statement->cleanup_context != statement->cleanup_stop_context) {\n            (void)fprintf(stderr,'''
+          new='''        if (statement->cleanup_context != statement->cleanup_stop_context &&\n            statement->kind != MINIC_STATEMENT_RETURN) {\n            (void)fprintf(stderr,'''
+          if s.count(old)!=1: raise SystemExit('cleanup guard anchor')
+          p.write_text(s.replace(old,new,1))
+
+          p=Path('tests/core/run-core-ir-shadow.sh')
+          s=p.read_text()
+          anchor='''check_strict_case const-record-member-pointer-offset\n\ncat >"$work_dir/indirect-cfg-argument.i" <<'EOF'\n'''
+          extra='''check_strict_case const-record-member-pointer-offset\n\ncat >"$work_dir/scalar-return-cleanup.i" <<'EOF'\nvoid cleanup_scalar(int *value) {\n    *value = *value + 1;\n}\n\nint scalar_return_cleanup(int input) {\n    int guard __attribute__((cleanup(cleanup_scalar))) = input;\n    return guard + 7;\n}\nEOF\ncheck_strict_case scalar-return-cleanup\n\ncat >"$work_dir/indirect-cfg-argument.i" <<'EOF'\n'''
+          if s.count(anchor)!=1: raise SystemExit(f'test anchor count={s.count(anchor)}')
+          p.write_text(s.replace(anchor,extra,1))
+          print('CORE_BATCH_Y41_PATCHED')
+          PY
+      - name: Build exact production candidate
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-y41-compiler
+      - name: Full Core exact regression suite
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/core-batch-y41-compiler/bin/minic" \
+            BUILD_DIR="$GITHUB_WORKSPACE/build/core-batch-y41-tests" \
+            bash tests/core/run-core-ir-shadow.sh
+          echo CORE_BATCH_Y41_CORE_SUITE_PASS
+      - name: Focused Linux gate
         shell: bash
         run: |
           set -Eeuo pipefail
           python3 tools/dev/patch-linux-replay-live-progress.py
-          python3 - <<'PY'
-          from pathlib import Path
-          p=Path('src/core/core_lower.c')
-          s=p.read_text()
-          anchor='''static MinicCoreLowerStatus lower_return(MinicCoreLowerContext *context,\n                                         const MinicStatement *statement) {'''
-          helper='''static bool core_is_materialized_cleanup_statement(\n    const MinicCoreLowerContext *context, const MinicStatement *statement) {\n    size_t cleanup_index;\n    if (context == NULL || context->body == NULL || context->body->program == NULL ||\n        statement == NULL || statement->kind != MINIC_STATEMENT_EXPRESSION ||\n        statement->expression == MINIC_EXPRESSION_INVALID) return false;\n    for (cleanup_index = 0U; cleanup_index < context->body->program->cleanup_context_count; ++cleanup_index) {\n        if (context->body->program->cleanup_contexts[cleanup_index].cleanup_expression == statement->expression) return true;\n    }\n    return false;\n}\n\nstatic MinicCoreLowerStatus lower_cleanup_contexts(\n    MinicCoreLowerContext *context, MinicCleanupContextId current, MinicCleanupContextId stop) {\n    if (context == NULL || context->body == NULL || context->body->program == NULL ||\n        !minic_c0_cleanup_context_reaches(context->body->program, current, stop)) return MINIC_CORE_LOWER_ERROR;\n    while (current != stop) {\n        const MinicCleanupContext *cleanup; MinicCoreValueId discarded_value; MinicCoreLowerStatus status;\n        cleanup = minic_c0_program_cleanup_context(context->body->program, current);\n        if (cleanup == NULL || cleanup->parent == current || cleanup->cleanup_expression == MINIC_EXPRESSION_INVALID) return MINIC_CORE_LOWER_ERROR;\n        status = lower_expression(context, cleanup->cleanup_expression, &discarded_value);\n        if (status != MINIC_CORE_LOWER_OK) return status;\n        current = cleanup->parent;\n    }\n    return MINIC_CORE_LOWER_OK;\n}\n\n'''+anchor
-          if s.count(anchor)!=1: raise SystemExit('return anchor')
-          s=s.replace(anchor,helper,1)
-          pos=s.find(anchor); sub=s[pos:]
-          old='''    MinicCoreTerminator terminator;\n    MinicCoreLowerStatus status;\n\n    if (context == NULL || context->source_function == NULL || statement == NULL) {'''
-          new='''    MinicCoreTerminator terminator;\n    MinicCoreLowerStatus status;\n    MinicCoreObjectId cleanup_return_object;\n    bool has_cleanup;\n\n    if (context == NULL || context->source_function == NULL || statement == NULL) {'''
-          if old not in sub: raise SystemExit('return decl')
-          sub=sub.replace(old,new,1); s=s[:pos]+sub
-          pos=s.find(anchor); sub=s[pos:]
-          old='''    (void)memset(&terminator, 0, sizeof(terminator));\n    terminator.kind = MINIC_CORE_TERMINATOR_RETURN;'''
-          new='''    has_cleanup = statement->cleanup_context != statement->cleanup_stop_context;\n    cleanup_return_object = MINIC_CORE_OBJECT_INVALID;\n    if (has_cleanup && !minic_c0_cleanup_context_reaches(\n            context->body->program, statement->cleanup_context, statement->cleanup_stop_context)) return MINIC_CORE_LOWER_ERROR;\n    (void)memset(&terminator, 0, sizeof(terminator));\n    terminator.kind = MINIC_CORE_TERMINATOR_RETURN;'''
-          if old not in sub: raise SystemExit('return init')
-          sub=sub.replace(old,new,1); s=s[:pos]+sub
-          pos=s.find(anchor); sub=s[pos:]
-          old='''        } else if (minic_type_is_record(context->source_function->return_type)) {\n            const MinicExpression *expression;'''
-          new='''        } else if (minic_type_is_record(context->source_function->return_type)) {\n            const MinicExpression *expression;\n            if (has_cleanup) return MINIC_CORE_LOWER_UNSUPPORTED;'''
-          if old not in sub: raise SystemExit('record return')
-          sub=sub.replace(old,new,1); s=s[:pos]+sub
-          pos=s.find(anchor); sub=s[pos:]
-          old='''        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n    }\n    return minic_core_function_set_terminator(context->function, context->block_id, &terminator)\n               ? MINIC_CORE_LOWER_OK\n               : MINIC_CORE_LOWER_ERROR;'''
-          new='''        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n    }\n    if (has_cleanup) {\n        if (core_memory_scalar_type(context->source_function->return_type)) {\n            status = spill_scalar_value(context, statement->span, context->source_function->return_type, terminator.return_value, &cleanup_return_object);\n            if (status != MINIC_CORE_LOWER_OK) return status;\n        }\n        status = lower_cleanup_contexts(context, statement->cleanup_context, statement->cleanup_stop_context);\n        if (status != MINIC_CORE_LOWER_OK) return status;\n        if (core_memory_scalar_type(context->source_function->return_type)) {\n            status = reload_scalar_value(context, statement->span, context->source_function->return_type, cleanup_return_object, &terminator.return_value);\n            if (status != MINIC_CORE_LOWER_OK) return status;\n        }\n    }\n    return minic_core_function_set_terminator(context->function, context->block_id, &terminator)\n               ? MINIC_CORE_LOWER_OK\n               : MINIC_CORE_LOWER_ERROR;'''
-          if old not in sub: raise SystemExit('return end')
-          sub=sub.replace(old,new,1); s=s[:pos]+sub
-          old='''        if (block_terminated) {\n            if (statement->kind == MINIC_STATEMENT_RETURN) {\n                continue;\n            }\n            if (statement->kind != MINIC_STATEMENT_LABEL) {\n                return MINIC_CORE_LOWER_UNSUPPORTED;\n            }\n        }'''
-          new='''        if (block_terminated) {\n            if (statement->kind == MINIC_STATEMENT_RETURN || core_is_materialized_cleanup_statement(context, statement)) continue;\n            if (statement->kind != MINIC_STATEMENT_LABEL) return MINIC_CORE_LOWER_UNSUPPORTED;\n        }'''
-          if s.count(old)!=1: raise SystemExit('terminated-tail anchor')
-          s=s.replace(old,new,1)
-          old='''        if (statement->cleanup_context != statement->cleanup_stop_context) {\n            (void)fprintf(stderr,'''
-          new='''        if (statement->cleanup_context != statement->cleanup_stop_context &&\n            statement->kind != MINIC_STATEMENT_RETURN) {\n            (void)fprintf(stderr,'''
-          if s.count(old)!=1: raise SystemExit('cleanup guard')
-          p.write_text(s.replace(old,new,1))
-          PY
-      - name: Build diagnostic candidate
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-y40-compiler
-      - name: Replay representatives and print frontier
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-batch-y40-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-batch-y40"
+          compiler="$GITHUB_WORKSPACE/build/core-batch-y41-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-batch-y41-linux"
           set +e
           MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
-            --work "$work" --jobs 2 --offset 0 --limit 500 --sample-count 0 --indices '2,3'
-          status=$?
+            --work "$work" --jobs 3 --offset 0 --limit 500 --sample-count 0 --indices '2,3,7'
+          replay_status=$?
           set -e
-          echo CORE_BATCH_Y40_REPLAY_STATUS=$status
-          echo CORE_BATCH_Y40_TRACE_BEGIN
-          grep -R -E 'device_enable_async_suspend|CORE_FAST_TRACE|CORE_ASSIGN_STAGE|CORE_LOWER_DETAIL' "$work/minic-stderr" | head -n 120 || true
-          echo CORE_BATCH_Y40_TRACE_END
-          echo CORE_BATCH_Y40_SOURCE_BEGIN
-          for f in init/do_mounts.i init/do_mounts_initrd.i; do
-            echo "--- $f ---"
-            grep -n -A8 -B4 'device_enable_async_suspend' "build/linux-focus-corpus/kbuild/$f" | head -n 80 || true
-          done
-          echo CORE_BATCH_Y40_SOURCE_END
+          echo CORE_BATCH_Y41_REPLAY_STATUS=$replay_status
+          python3 tools/ci/classify-core-strict-frontier.py \
+            "$work/batch-results.json" --examples 4 --json-out "$work/frontier-summary.json"
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          w=Path('build/core-batch-y41-linux')
+          rows=json.loads((w/'batch-results.json').read_text())
+          if isinstance(rows,dict): rows=rows.get('results',rows.get('tus',[]))
+          by={int(r['index']):r for r in rows}
+          f=json.loads((w/'frontier-summary.json').read_text())
+          for i in sorted(by):
+              r=by[i]
+              print(f"CORE_BATCH_Y41_ROW index={i} status={r.get('status')} progress={float(r.get('progress_ratio') or 0)*100:.2f}% message={r.get('message','')}")
+          print(f"CORE_BATCH_Y41_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
+          if f['error'] != 0 or by[7]['status'] != 'PASS':
+              raise SystemExit(f'Y41 focused gate failed: {f}')
+          if any(r.get('message','').endswith("'device_has_driver_override'") for r in rows):
+              raise SystemExit('Y41 cleanup frontier regressed to device_has_driver_override')
+          PY
+      - name: Commit semantic production change
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git restore tests/external/linux/corpus_replay.py
+          python3 - <<'PY'
+          import subprocess
+          allowed={'src/core/core_lower.c','tests/core/run-core-ir-shadow.sh'}
+          changed=set(subprocess.check_output(['git','diff','--name-only'],text=True).splitlines())
+          print('CORE_BATCH_Y41_CHANGED',sorted(changed))
+          if changed != allowed:
+              raise SystemExit(f'unexpected production diff: {changed}')
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/core/core_lower.c tests/core/run-core-ir-shadow.sh
+          git commit -m 'core: lower scalar return cleanup edges'
+          git push origin HEAD:refactor/declaration-sema-v1
+          echo "CORE_BATCH_Y41_PRODUCTION_COMMIT=$(git rev-parse HEAD)"
