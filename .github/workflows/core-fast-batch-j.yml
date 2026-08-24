@@ -1,4 +1,4 @@
-name: Core Fast Batch Y2 Diagnose
+name: Core Fast Batch Y3 Verify Diagnose
 
 on:
   pull_request:
@@ -7,11 +7,11 @@ permissions:
   contents: read
 
 jobs:
-  batch-y2-diagnose:
+  batch-y3-diagnose:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     concurrency:
-      group: core-fast-batch-y2-${{ github.event.pull_request.number }}
+      group: core-fast-batch-y3-${{ github.event.pull_request.number }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
@@ -32,53 +32,65 @@ jobs:
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
 
-      - name: Apply Batch Y candidate
+      - name: Apply Y candidate and verifier dump
         shell: bash
         run: |
           set -Eeuo pipefail
           python3 tools/dev/patch-linux-replay-live-progress.py
           python3 tools/dev/patch-core-frontier-batch-y.py
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/core/core_lower.c')
+          s = p.read_text()
+          old = '''    if (!minic_core_function_verify(&lowered)) {
+              minic_core_function_destroy(&lowered);
+              return MINIC_CORE_LOWER_ERROR;
+          }
+          '''
+          new = '''    if (!minic_core_function_verify(&lowered)) {
+              if (lowered.name != NULL && strcmp(lowered.name, "__readahead_batch") == 0) {
+                  (void)fprintf(stderr, "CORE_Y3_VERIFY_DUMP_BEGIN function=__readahead_batch\\n");
+                  (void)minic_core_function_dump(stderr, &lowered);
+                  (void)fprintf(stderr, "CORE_Y3_VERIFY_DUMP_END function=__readahead_batch\\n");
+              }
+              minic_core_function_destroy(&lowered);
+              return MINIC_CORE_LOWER_ERROR;
+          }
+          '''
+          if old not in s:
+              raise SystemExit('verify anchor not found')
+          p.write_text(s.replace(old, new, 1))
+          PY
 
-      - name: Build exact candidate compiler
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-y2-compiler
+      - name: Build exact diagnostic compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-y3-compiler
 
-      - name: One-TU readahead diagnostic
+      - name: One-TU verifier diagnostic
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-batch-y2-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-batch-y2-frontier"
+          compiler="$GITHUB_WORKSPACE/build/core-batch-y3-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-batch-y3-frontier"
           set +e
           MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" \
             --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
             --work "$work" \
-            --jobs 1 \
-            --offset 0 \
-            --limit 500 \
-            --sample-count 0 \
-            --indices '299'
+            --jobs 1 --offset 0 --limit 500 --sample-count 0 --indices '299'
           replay_status=$?
           set -e
-          printf 'CORE_BATCH_Y2_REPLAY_STATUS=%d\n' "$replay_status"
+          printf 'CORE_BATCH_Y3_REPLAY_STATUS=%d\n' "$replay_status"
           stderr="$work/minic-stderr/mm/fadvise.i.stderr"
-          echo CORE_BATCH_Y2_TRACE_BEGIN
-          grep -E '__readahead_batch|CORE_ASSIGN_STAGE|CORE_LOWER_DETAIL|CORE_ASM_DETAIL|CORE_FAST_TRACE' "$stderr" | tail -n 120 || true
-          echo CORE_BATCH_Y2_TRACE_END
-          src="$(find "$GITHUB_WORKSPACE/build/linux-focus-corpus" -type f -path '*/mm/fadvise.i' | head -n1)"
-          echo CORE_BATCH_Y2_SOURCE_BEGIN
-          printf 'CORE_BATCH_Y2_SOURCE_FILE=%s\n' "$src"
-          if test -n "$src"; then
-            grep -n -A100 -B45 '__readahead_batch' "$src" | head -n 700 || true
-          fi
-          echo CORE_BATCH_Y2_SOURCE_END
+          echo CORE_BATCH_Y3_DUMP_BEGIN
+          awk '/CORE_Y3_VERIFY_DUMP_BEGIN/{show=1} show{print} /CORE_Y3_VERIFY_DUMP_END/{show=0}' "$stderr" | tail -n 900 || true
+          echo CORE_BATCH_Y3_DUMP_END
           python3 tools/ci/classify-core-strict-frontier.py \
             "$work/batch-results.json" --examples 1 --json-out "$work/frontier-summary.json"
           python3 - <<'PY'
           import json
           from pathlib import Path
-          f = json.loads(Path('build/core-batch-y2-frontier/frontier-summary.json').read_text())
-          print(f"CORE_BATCH_Y2_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
+          f = json.loads(Path('build/core-batch-y3-frontier/frontier-summary.json').read_text())
+          print(f"CORE_BATCH_Y3_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
           if f['selected'] != 1:
-              raise SystemExit(f"diagnostic invalid: {f}")
+              raise SystemExit(f'diagnostic invalid: {f}')
           PY
