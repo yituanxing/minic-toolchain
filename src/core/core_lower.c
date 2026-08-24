@@ -68,6 +68,73 @@ static bool core_memory_scalar_type(MinicType type) {
     return minic_type_is_integer(type) || minic_type_is_pointer(type);
 }
 
+/* A bit-field's C value width is not necessarily the width of the memory
+   allocation unit containing it. _Bool is the important case: its semantic
+   integer width is one bit, while DataLayout allocates one byte. Keep the
+   semantic value type for the expression result and choose a separate unsigned
+   integer type whose object size/target width matches the storage unit used by
+   the field layout. */
+static bool core_unsigned_bit_field_storage_type(
+    const MinicCoreLowerContext *context,
+    MinicType value_type,
+    MinicType *storage_type,
+    unsigned int *storage_width) {
+    MinicType candidates[5];
+    size_t candidate_alignment;
+    size_t candidate_size;
+    size_t candidate_index;
+    size_t storage_alignment;
+    size_t storage_size;
+    unsigned int candidate_width;
+    unsigned int value_width;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        context->target == NULL || storage_type == NULL || storage_width == NULL ||
+        !minic_type_is_integer(value_type) || !minic_type_is_unsigned_integer(value_type) ||
+        !minic_data_layout_type(minic_default_data_layout(),
+                                context->body->program,
+                                value_type,
+                                &storage_size,
+                                &storage_alignment) ||
+        storage_size == 0U || storage_size > 8U) {
+        return false;
+    }
+    (void)storage_alignment;
+
+    if (minic_target_info_integer_width(
+            context->target, context->body->program, value_type, &value_width) &&
+        (size_t)value_width == storage_size * 8U) {
+        *storage_type = value_type;
+        *storage_width = value_width;
+        return true;
+    }
+
+    candidates[0] = minic_type_unsigned_char();
+    candidates[1] = minic_type_unsigned_short();
+    candidates[2] = minic_type_unsigned_int();
+    candidates[3] = minic_type_unsigned_long();
+    candidates[4] = minic_type_unsigned_long_long();
+    for (candidate_index = 0U; candidate_index < 5U; ++candidate_index) {
+        if (minic_data_layout_type(minic_default_data_layout(),
+                                   context->body->program,
+                                   candidates[candidate_index],
+                                   &candidate_size,
+                                   &candidate_alignment) &&
+            candidate_size == storage_size &&
+            minic_target_info_integer_width(context->target,
+                                            context->body->program,
+                                            candidates[candidate_index],
+                                            &candidate_width) &&
+            (size_t)candidate_width == storage_size * 8U) {
+            (void)candidate_alignment;
+            *storage_type = candidates[candidate_index];
+            *storage_width = candidate_width;
+            return true;
+        }
+    }
+    return false;
+}
+
 /* M74_GLOBAL_RECORD_ADDRESS: an object need not be scalar to have an
    address. Core field-address lowering already consumes pointers to records;
    permit global record objects to enter that path just like arrays. */
@@ -2015,6 +2082,8 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         MinicCoreLowerStatus status;
         MinicType base_value_type;
         MinicType record_type;
+        MinicType storage_access_type;
+        MinicType storage_type;
         MinicType value_type;
         size_t byte_offset;
         size_t bit_offset;
@@ -2029,9 +2098,8 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                 !minic_type_unqualified(expression->type, &value_type) ||
                 !minic_type_is_integer(value_type) ||
                 !minic_type_is_unsigned_integer(value_type) ||
-                context->target == NULL ||
-                !minic_target_info_integer_width(
-                    context->target, context->body->program, value_type, &storage_width) ||
+                !core_unsigned_bit_field_storage_type(
+                    context, value_type, &storage_type, &storage_width) ||
                 storage_width == 0U || storage_width > 64U ||
                 field->bit_width > storage_width ||
                 !minic_data_layout_record_field_layout(minic_default_data_layout(),
@@ -2049,6 +2117,15 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                 return MINIC_CORE_LOWER_UNSUPPORTED;
             }
             (void)byte_offset;
+            storage_access_type = storage_type;
+            if (minic_type_is_const(expression->type) &&
+                !minic_type_add_const(storage_access_type, &storage_access_type)) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            if (minic_type_is_volatile(expression->type) &&
+                !minic_type_add_volatile(storage_access_type, &storage_access_type)) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
             status = lower_expression(context, expression->value.member.base, &base_id);
             if (status != MINIC_CORE_LOWER_OK) {
                 return status;
@@ -2062,7 +2139,7 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                                           base_id,
                                           expression->value.member.record_id,
                                           expression->value.member.field_index,
-                                          expression->type,
+                                          storage_access_type,
                                           &address_id);
             if (status != MINIC_CORE_LOWER_OK) {
                 return status;
@@ -2070,7 +2147,7 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
             (void)memset(&extract, 0, sizeof(extract));
             extract.kind = MINIC_CORE_INSTRUCTION_LOAD;
             extract.span = expression->span;
-            extract.type = value_type;
+            extract.type = storage_type;
             extract.result = MINIC_CORE_VALUE_INVALID;
             extract.value.load.address = address_id;
             extract.value.load.is_volatile = minic_type_is_volatile(expression->type);
@@ -2092,7 +2169,7 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                 (void)memset(&extract, 0, sizeof(extract));
                 extract.kind = MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT;
                 extract.span = expression->span;
-                extract.type = value_type;
+                extract.type = storage_type;
                 extract.result = MINIC_CORE_VALUE_INVALID;
                 extract.value.binary.left = current;
                 extract.value.binary.right = rhs;
@@ -2108,7 +2185,7 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                 (void)memset(&extract, 0, sizeof(extract));
                 extract.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
                 extract.span = expression->span;
-                extract.type = value_type;
+                extract.type = storage_type;
                 extract.result = MINIC_CORE_VALUE_INVALID;
                 (void)memcpy(&extract.value.integer_value, &mask_bits, sizeof(mask_bits));
                 if (!minic_core_function_append_value_instruction(
@@ -2118,7 +2195,7 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                 (void)memset(&extract, 0, sizeof(extract));
                 extract.kind = MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND;
                 extract.span = expression->span;
-                extract.type = value_type;
+                extract.type = storage_type;
                 extract.result = MINIC_CORE_VALUE_INVALID;
                 extract.value.binary.left = current;
                 extract.value.binary.right = rhs;
@@ -2127,8 +2204,12 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                     return MINIC_CORE_LOWER_ERROR;
                 }
             }
-            *value_id = current;
-            return MINIC_CORE_LOWER_OK;
+            if (minic_type_equal(storage_type, value_type)) {
+                *value_id = current;
+                return MINIC_CORE_LOWER_OK;
+            }
+            return append_integer_conversion(
+                context, expression->span, value_type, current, value_id);
         }
     }
     /* BATCH_R_RECORD_CALL_MEMBER_VALUE: projecting a scalar field from a

@@ -352,6 +352,18 @@ int scalar_return_cleanup(int input) {
 EOF
 check_strict_case scalar-return-cleanup
 
+cat >"$work_dir/bool-bitfield-storage-read.i" <<'EOF'
+struct bool_bitfield_storage {
+    unsigned int prefix : 1;
+    _Bool ready : 1;
+};
+
+int bool_bitfield_storage_read(struct bool_bitfield_storage *state) {
+    return !state->ready;
+}
+EOF
+check_strict_case bool-bitfield-storage-read
+
 cat >"$work_dir/indirect-cfg-argument.i" <<'EOF'
 int indirect_cfg_argument(int (*callee)(int), int value) {
     return callee(value ? value : 1);
