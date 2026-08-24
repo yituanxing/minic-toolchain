@@ -512,6 +512,27 @@ int unsigned_bitfield_xor(struct core_bitfield_compound *item, unsigned char val
 EOF
 check_strict_case unsigned-bitfield-compound
 
+cat >"$work_dir/unsigned-bitfield-update.i" <<'EOF'
+struct core_bitfield_update {
+    unsigned int low : 3;
+    unsigned int value : 3;
+    unsigned int high : 2;
+};
+unsigned int unsigned_bitfield_post_dec(struct core_bitfield_update *item) {
+    return item->value--;
+}
+unsigned int unsigned_bitfield_post_inc(struct core_bitfield_update *item) {
+    return item->value++;
+}
+unsigned int unsigned_bitfield_pre_dec(struct core_bitfield_update *item) {
+    return --item->value;
+}
+unsigned int unsigned_bitfield_pre_inc(struct core_bitfield_update *item) {
+    return ++item->value;
+}
+EOF
+check_strict_case unsigned-bitfield-update
+
 cat >"$work_dir/qualified-scalar-conversion.i" <<'EOF'
 struct core_qualified_scalar_member {
     unsigned short transport_header;
