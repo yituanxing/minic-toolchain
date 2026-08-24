@@ -1,4 +1,4 @@
-name: Core Y80 Omitted Conditional Diagnostic
+name: Core Y81 Top Blocker Source Audit
 
 on:
   pull_request:
@@ -7,57 +7,48 @@ permissions:
   contents: read
 
 jobs:
-  y80-omitted-conditional:
+  y81-top-blocker-audit:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 687b773b03440af4812f17e5ca31303510fd03d0
+          ref: 40142a09c5c57ee85bb6fbabd84e3138f671cd55
       - name: Restore frozen Linux corpus
         id: linux-corpus-cache
         uses: actions/cache/restore@v4
         with:
           path: build/linux-focus-corpus
           key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
-      - name: Instrument conditional shape and build
+      - name: Audit omitted conditional lowerer and BTF blocker
         shell: bash
         run: |
           set -Eeuo pipefail
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           python3 - <<'PY'
           from pathlib import Path
-          p=Path('src/core/core_lower.c'); s=p.read_text()
-          anchor='''        if (expression->value.conditional.uses_condition_value ||\n            expression->value.conditional.when_true == MINIC_EXPRESSION_INVALID ||\n            expression->value.conditional.when_false == MINIC_EXPRESSION_INVALID ||\n            !core_scalar_expression_value_type(context->body, expression, &result_type) ||\n'''
-          insert='''        if (context->source_function != NULL && context->source_function->name != NULL &&\n            strcmp(context->source_function->name, "xattr_prefix") == 0) {\n            const MinicExpression *y80_condition = minic_c0_program_expression(\n                context->body->program, expression->value.conditional.condition);\n            const MinicExpression *y80_true = expression->value.conditional.when_true == MINIC_EXPRESSION_INVALID\n                ? NULL : minic_c0_program_expression(context->body->program, expression->value.conditional.when_true);\n            const MinicExpression *y80_false = expression->value.conditional.when_false == MINIC_EXPRESSION_INVALID\n                ? NULL : minic_c0_program_expression(context->body->program, expression->value.conditional.when_false);\n            (void)fprintf(stderr,\n                          "CORE_Y80_COND uses=%d cond=%u cond_kind=%d cond_cat=%d true=%u true_kind=%d true_cat=%d false=%u false_kind=%d false_cat=%d\\n",\n                          expression->value.conditional.uses_condition_value ? 1 : 0,\n                          (unsigned int)expression->value.conditional.condition,\n                          y80_condition != NULL ? (int)y80_condition->kind : -1,\n                          y80_condition != NULL ? (int)y80_condition->value_category : -1,\n                          (unsigned int)expression->value.conditional.when_true,\n                          y80_true != NULL ? (int)y80_true->kind : -1,\n                          y80_true != NULL ? (int)y80_true->value_category : -1,\n                          (unsigned int)expression->value.conditional.when_false,\n                          y80_false != NULL ? (int)y80_false->kind : -1,\n                          y80_false != NULL ? (int)y80_false->value_category : -1);\n        }\n'''+anchor
-          if s.count(anchor)!=1: raise SystemExit(f'conditional anchor {s.count(anchor)}')
-          p.write_text(s.replace(anchor,insert,1))
-          PY
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y80-compiler
-      - name: Replay xattr representatives
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-y80-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-y80-linux"
-          mkdir -p "$work"
-          set +e
-          MINIC_CORE_IR=strict CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
-            --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
-            --work "$work" --jobs 3 --offset 0 --limit 500 --sample-count 0 --indices '2,296,305'
-          status=$?
-          set -e
-          echo CORE_Y80_REPLAY_STATUS=$status
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-          w=Path('build/core-y80-linux'); rows=json.loads((w/'batch-results.json').read_text())
-          if isinstance(rows,dict): rows=rows.get('results',rows.get('tus',[]))
-          for r in rows:
-              idx=int(r['index']); rel=r['input']
-              print(f"CORE_Y80_INDEX index={idx} status={r.get('status')} message={r.get('message','')}")
-              err=w/'minic-stderr'/f'{rel}.stderr'
-              if err.is_file():
-                  for x in err.read_text(errors='replace').splitlines():
-                      if 'CORE_Y80_COND' in x or "function 'xattr_prefix'" in x: print(x)
+          p=Path('src/core/core_lower.c')
+          s=p.read_text()
+          marker='BATCH_N_GNU_OMITTED_MIDDLE_CONDITIONAL'
+          pos=s.index(marker)
+          line=s.count('\n',0,pos)+1
+          lo=max(0,pos-500); hi=min(len(s),pos+8500)
+          chunk=s[lo:hi]
+          first=s.count('\n',0,lo)+1
+          print(f'CORE_Y81_LOWERER_MARKER_LINE={line}')
+          for n,text in enumerate(chunk.splitlines(),first):
+              print(f'CORE_Y81_CORE {n}: {text}')
+          corpus=Path('build/linux-focus-corpus/kbuild')
+          for idx,rel,needle in [
+              (2,'init/do_mounts.i','xattr_prefix'),
+              (186,'kernel/cgroup/rstat.i','btf_field_type_name'),
+              (193,'kernel/bpf/core.i','btf_field_type_name')]:
+              lines=(corpus/rel).read_text(errors='replace').splitlines()
+              hits=[i for i,x in enumerate(lines) if needle in x]
+              print(f'CORE_Y81_HITS index={idx} needle={needle} hits={[i+1 for i in hits[:8]]}')
+              for i in hits[:1]:
+                  lo2=max(0,i-12); hi2=min(len(lines),i+55)
+                  print(f'CORE_Y81_SOURCE_BEGIN index={idx} line={lo2+1}')
+                  for j in range(lo2,hi2): print(f'{j+1}: {lines[j]}')
+                  print(f'CORE_Y81_SOURCE_END index={idx}')
           PY
