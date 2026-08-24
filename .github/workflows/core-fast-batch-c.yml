@@ -88,6 +88,7 @@ jobs:
           probe_status=$?
           set -e
           printf 'CORE_BATCH_H_STRICT16_STATUS=%d\n' "$probe_status"
+          grep -R 'CORE_VERIFY_DETAIL' "$work/minic-stderr" || true
           python3 tools/ci/classify-core-strict-frontier.py \
             "$work/batch-results.json" --examples 16 --json-out "$work/frontier-summary.json"
           python3 - <<'PY'
@@ -109,12 +110,9 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
+          git checkout HEAD -- src/core/core_ir.c
+          python3 tools/dev/patch-core-frontier-batch-h.py
           git add src/core/core_ir.h src/core/core_ir.c src/core/core_lower.c src/target/riscv64/core_codegen.c
-          git reset src/core/core_ir.c
-          git add -p src/core/core_ir.c <<'EOF' || true
-          n
-          EOF
-          git add src/core/core_ir.h src/core/core_lower.c src/target/riscv64/core_codegen.c
           if git diff --cached --quiet; then
             echo CORE_BATCH_H_ALREADY_PERSISTED
             exit 0
