@@ -14,45 +14,194 @@ def replace_once(path: str, old: str, new: str, label: str) -> None:
 lower = "src/core/core_lower.c"
 codegen = "src/target/riscv64/core_codegen.c"
 
-# Canonicalize pointer-valued arithmetic results as unqualified Core SSA values.
+# M109: aggregate assignment expressions are address-backed Core rvalues.
+# The outer record-copy statement must allow a nested assignment producer to
+# reach lower_record_value_address instead of rejecting it at the old semantic
+# preclassification gate.
 replace_once(
     lower,
-    """    if (expression->kind == MINIC_EXPRESSION_CONDITIONAL ||\n        expression->kind == MINIC_EXPRESSION_CONVERSION) {\n        return minic_type_unqualified(expression->type, value_type);\n    }\n""",
-    """    if (expression->kind == MINIC_EXPRESSION_CONDITIONAL ||\n        expression->kind == MINIC_EXPRESSION_CONVERSION ||\n        (expression->kind == MINIC_EXPRESSION_BINARY &&\n         minic_type_is_pointer(expression->type))) {\n        return minic_type_unqualified(expression->type, value_type);\n    }\n""",
-    "pointer-rvalue-value-type",
+    """    bool direct_record_call;\n""",
+    """    bool direct_record_call;\n    bool record_assignment_value;\n""",
+    "record-copy-assignment-decl",
 )
-
 replace_once(
     lower,
-    """        /* Pointer arithmetic computes in the lvalue-to-rvalue pointer type.\n           If the semantic expression retains a top-level pointer qualifier,\n           represent that result spelling with Core's pointer bitcast rather\n           than making POINTER_OFFSET violate its base/result type invariant. */\n        instruction.value.pointer_offset.subtract =\n            expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT;\n        if (!minic_core_function_append_value_instruction(\n                context->function, context->block_id, &instruction, &offset_value)) {\n            return MINIC_CORE_LOWER_ERROR;\n        }\n        if (minic_type_equal(pointer_value_type, expression->type)) {\n            *value_id = offset_value;\n            return MINIC_CORE_LOWER_OK;\n        }\n        return append_scalar_bitcast(\n            context, expression->span, expression->type, offset_value, value_id);\n""",
-    """        /* Core SSA carries the lvalue-to-rvalue pointer value, so top-level\n           qualifiers on a source expression are not part of POINTER_OFFSET's\n           result type. This also lets nested GNU void* arithmetic compose. */\n        instruction.value.pointer_offset.subtract =\n            expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT;\n        if (!minic_core_function_append_value_instruction(\n                context->function, context->block_id, &instruction, &offset_value)) {\n            return MINIC_CORE_LOWER_ERROR;\n        }\n        *value_id = offset_value;\n        return MINIC_CORE_LOWER_OK;\n""",
-    "pointer-offset-result-canonicalization",
+    """    direct_record_call =\n        source != NULL && source->kind == MINIC_EXPRESSION_CALL &&\n        source->value.call.function_id != MINIC_FUNCTION_INVALID;\n""",
+    """    direct_record_call =\n        source != NULL && source->kind == MINIC_EXPRESSION_CALL &&\n        source->value.call.function_id != MINIC_FUNCTION_INVALID;\n    record_assignment_value =\n        source != NULL && source->kind == MINIC_EXPRESSION_ASSIGNMENT;\n""",
+    "record-copy-assignment-classify",
+)
+replace_once(
+    lower,
+    """        (!direct_record_call &&\n         (!minic_c0_record_value_is_copy_source(context->body->program, statement->expression) ||\n          !minic_c0_record_value_is_address_backed(\n              context->body->program, statement->expression)))) {\n""",
+    """        (!direct_record_call && !record_assignment_value &&\n         (!minic_c0_record_value_is_copy_source(context->body->program, statement->expression) ||\n          !minic_c0_record_value_is_address_backed(\n              context->body->program, statement->expression)))) {\n""",
+    "record-copy-assignment-gate",
 )
 
-# Record assignment expressions are address-backed snapshots in Core.  Snapshot
-# the RHS before evaluating the destination address, then copy it to the target;
-# returning the private snapshot gives chained assignments a stable value.
 replace_once(
     lower,
     """    expression = minic_c0_program_expression(context->body->program, expression_id);\n    if (expression == NULL || !minic_type_is_record(expression->type) ||\n        !minic_c0_record_value_is_address_backed(context->body->program, expression_id)) {\n        return MINIC_CORE_LOWER_UNSUPPORTED;\n    }\n    /* M88_RECORD_COMPOUND_LITERAL_ADDRESS: expose the shared semantic backing\n""",
-    """    expression = minic_c0_program_expression(context->body->program, expression_id);\n    if (expression == NULL || !minic_type_is_record(expression->type)) {\n        return MINIC_CORE_LOWER_UNSUPPORTED;\n    }\n    /* M109_CHAINED_RECORD_ASSIGNMENT_VALUE: aggregate assignment is an rvalue.\n       Keep it address-backed by snapshotting the fully evaluated RHS into a\n       private Core object before evaluating the destination address.  The same\n       snapshot is copied to the destination and returned as the assignment\n       value, so `a = b = value` composes without aggregate SSA or target ABI\n       knowledge. */\n    if (expression->kind == MINIC_EXPRESSION_ASSIGNMENT) {\n        const MinicExpression *source;\n        const MinicExpression *target;\n        MinicCoreInstruction operation;\n        MinicCoreObjectId snapshot_object;\n        MinicCoreValueId destination_address;\n        MinicCoreValueId snapshot_address;\n        MinicCoreValueId source_address;\n        MinicCoreLowerStatus status;\n        MinicType expression_type;\n        MinicType pointer_type;\n        MinicType source_type;\n        MinicType target_type;\n\n        target = minic_c0_program_expression(\n            context->body->program, expression->value.binary.left);\n        source = minic_c0_program_expression(\n            context->body->program, expression->value.binary.right);\n        if (target == NULL || source == NULL ||\n            target->value_category != MINIC_VALUE_LVALUE ||\n            !minic_type_is_record(target->type) || !minic_type_is_record(source->type) ||\n            minic_type_is_const(target->type) || minic_type_is_volatile(target->type) ||\n            minic_type_is_volatile(source->type) ||\n            !minic_type_unqualified(expression->type, &expression_type) ||\n            !minic_type_unqualified(target->type, &target_type) ||\n            !minic_type_unqualified(source->type, &source_type) ||\n            !minic_type_equal(expression_type, target_type) ||\n            !minic_type_equal(expression_type, source_type) ||\n            !minic_type_is_record(expression_type)) {\n            return MINIC_CORE_LOWER_UNSUPPORTED;\n        }\n        status = lower_record_value_address(\n            context, expression->value.binary.right, &source_address);\n        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n        if (!minic_core_function_add_object(\n                context->function, expression->span, expression_type, &snapshot_object) ||\n            !minic_type_pointer_to(expression_type, &pointer_type)) {\n            return MINIC_CORE_LOWER_ERROR;\n        }\n        (void)memset(&operation, 0, sizeof(operation));\n        operation.kind = MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS;\n        operation.span = expression->span;\n        operation.type = pointer_type;\n        operation.result = MINIC_CORE_VALUE_INVALID;\n        operation.value.object_id = snapshot_object;\n        if (!minic_core_function_append_value_instruction(\n                context->function, context->block_id, &operation, &snapshot_address)) {\n            return MINIC_CORE_LOWER_ERROR;\n        }\n        (void)memset(&operation, 0, sizeof(operation));\n        operation.kind = MINIC_CORE_INSTRUCTION_RECORD_COPY;\n        operation.span = expression->span;\n        operation.type = expression_type;\n        operation.result = MINIC_CORE_VALUE_INVALID;\n        operation.value.record_copy.destination_address = snapshot_address;\n        operation.value.record_copy.source_address = source_address;\n        if (!minic_core_function_append_effect_instruction(\n                context->function, context->block_id, &operation)) {\n            return MINIC_CORE_LOWER_ERROR;\n        }\n        status = lower_address(\n            context, expression->value.binary.left, &destination_address);\n        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n        (void)memset(&operation, 0, sizeof(operation));\n        operation.kind = MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS;\n        operation.span = expression->span;\n        operation.type = pointer_type;\n        operation.result = MINIC_CORE_VALUE_INVALID;\n        operation.value.object_id = snapshot_object;\n        if (!minic_core_function_append_value_instruction(\n                context->function, context->block_id, &operation, &snapshot_address)) {\n            return MINIC_CORE_LOWER_ERROR;\n        }\n        (void)memset(&operation, 0, sizeof(operation));\n        operation.kind = MINIC_CORE_INSTRUCTION_RECORD_COPY;\n        operation.span = expression->span;\n        operation.type = expression_type;\n        operation.result = MINIC_CORE_VALUE_INVALID;\n        operation.value.record_copy.destination_address = destination_address;\n        operation.value.record_copy.source_address = snapshot_address;\n        if (!minic_core_function_append_effect_instruction(\n                context->function, context->block_id, &operation)) {\n            return MINIC_CORE_LOWER_ERROR;\n        }\n        *address_id = snapshot_address;\n        return MINIC_CORE_LOWER_OK;\n    }\n    if (!minic_c0_record_value_is_address_backed(\n            context->body->program, expression_id)) {\n        return MINIC_CORE_LOWER_UNSUPPORTED;\n    }\n    /* M88_RECORD_COMPOUND_LITERAL_ADDRESS: expose the shared semantic backing\n""",
+    """    expression = minic_c0_program_expression(context->body->program, expression_id);\n    if (expression == NULL || !minic_type_is_record(expression->type)) {\n        return MINIC_CORE_LOWER_UNSUPPORTED;\n    }\n    /* M109_CHAINED_RECORD_ASSIGNMENT_VALUE: an aggregate assignment is an\n       rvalue whose bytes are the fully evaluated RHS. Keep that value\n       address-backed: snapshot the RHS before evaluating the destination, copy\n       the snapshot to the destination, and return the snapshot address. This\n       composes chained assignments without aggregate SSA or target ABI rules. */\n    if (expression->kind == MINIC_EXPRESSION_ASSIGNMENT) {\n        const MinicExpression *source;\n        const MinicExpression *target;\n        MinicCoreInstruction operation;\n        MinicCoreObjectId snapshot_object;\n        MinicCoreValueId destination_address;\n        MinicCoreValueId snapshot_address;\n        MinicCoreValueId source_address;\n        MinicCoreLowerStatus status;\n        MinicType expression_type;\n        MinicType pointer_type;\n        MinicType source_type;\n        MinicType target_type;\n\n        target = minic_c0_program_expression(\n            context->body->program, expression->value.binary.left);\n        source = minic_c0_program_expression(\n            context->body->program, expression->value.binary.right);\n        if (target == NULL || source == NULL ||\n            target->value_category != MINIC_VALUE_LVALUE ||\n            !minic_type_is_record(target->type) || !minic_type_is_record(source->type) ||\n            minic_type_is_const(target->type) || minic_type_is_volatile(target->type) ||\n            minic_type_is_volatile(source->type) ||\n            !minic_type_unqualified(expression->type, &expression_type) ||\n            !minic_type_unqualified(target->type, &target_type) ||\n            !minic_type_unqualified(source->type, &source_type) ||\n            !minic_type_equal(expression_type, target_type) ||\n            !minic_type_equal(expression_type, source_type) ||\n            !minic_type_is_record(expression_type)) {\n            return MINIC_CORE_LOWER_UNSUPPORTED;\n        }\n        status = lower_record_value_address(\n            context, expression->value.binary.right, &source_address);\n        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n        if (!minic_core_function_add_object(\n                context->function, expression->span, expression_type, &snapshot_object) ||\n            !minic_type_pointer_to(expression_type, &pointer_type)) {\n            return MINIC_CORE_LOWER_ERROR;\n        }\n        (void)memset(&operation, 0, sizeof(operation));\n        operation.kind = MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS;\n        operation.span = expression->span;\n        operation.type = pointer_type;\n        operation.result = MINIC_CORE_VALUE_INVALID;\n        operation.value.object_id = snapshot_object;\n        if (!minic_core_function_append_value_instruction(\n                context->function, context->block_id, &operation, &snapshot_address)) {\n            return MINIC_CORE_LOWER_ERROR;\n        }\n        (void)memset(&operation, 0, sizeof(operation));\n        operation.kind = MINIC_CORE_INSTRUCTION_RECORD_COPY;\n        operation.span = expression->span;\n        operation.type = expression_type;\n        operation.result = MINIC_CORE_VALUE_INVALID;\n        operation.value.record_copy.destination_address = snapshot_address;\n        operation.value.record_copy.source_address = source_address;\n        if (!minic_core_function_append_effect_instruction(\n                context->function, context->block_id, &operation)) {\n            return MINIC_CORE_LOWER_ERROR;\n        }\n        status = lower_address(\n            context, expression->value.binary.left, &destination_address);\n        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n        (void)memset(&operation, 0, sizeof(operation));\n        operation.kind = MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS;\n        operation.span = expression->span;\n        operation.type = pointer_type;\n        operation.result = MINIC_CORE_VALUE_INVALID;\n        operation.value.object_id = snapshot_object;\n        if (!minic_core_function_append_value_instruction(\n                context->function, context->block_id, &operation, &snapshot_address)) {\n            return MINIC_CORE_LOWER_ERROR;\n        }\n        (void)memset(&operation, 0, sizeof(operation));\n        operation.kind = MINIC_CORE_INSTRUCTION_RECORD_COPY;\n        operation.span = expression->span;\n        operation.type = expression_type;\n        operation.result = MINIC_CORE_VALUE_INVALID;\n        operation.value.record_copy.destination_address = destination_address;\n        operation.value.record_copy.source_address = snapshot_address;\n        if (!minic_core_function_append_effect_instruction(\n                context->function, context->block_id, &operation)) {\n            return MINIC_CORE_LOWER_ERROR;\n        }\n        *address_id = snapshot_address;\n        return MINIC_CORE_LOWER_OK;\n    }\n    if (!minic_c0_record_value_is_address_backed(\n            context->body->program, expression_id)) {\n        return MINIC_CORE_LOWER_UNSUPPORTED;\n    }\n    /* M88_RECORD_COMPOUND_LITERAL_ADDRESS: expose the shared semantic backing\n""",
     "record-assignment-address-value",
 )
 
-# Generic pure register-output extended asm.  This uses the already-generic
-# structured operand representation; no RISC-V CSR or Linux special case enters Core.
+# M110/M111: use the existing generic structured-asm IR for two high-frequency
+# families. No CSR spelling or Linux identity enters Core: one family is pure
+# write-only register outputs, the other is pure scalar register inputs.
 anchor = """    /* M68_STRUCTURED_INLINE_ASM_OPTIONAL_INPUTS: M67's structured\n       operand model is variable-sized. Admit the same proven output/memory\n       shape with 0..2 scalar register inputs instead of hard-coding two. */\n"""
-insert = """    /* M110_PURE_REGISTER_OUTPUT_ASM: admit ordinary volatile extended asm\n       with 1..5 write-only register outputs and no inputs/clobbers. Outputs may\n       be any writable scalar lvalue (including record members); Core records\n       their addresses and leaves physical register choice to the backend. */\n    if (source->is_volatile && !source->is_goto && source->template_text != NULL &&\n        source->template_length != 0U && source->outputs != NULL &&\n        source->output_count >= 1U && source->output_count <= 5U &&\n        source->input_count == 0U && source->label_count == 0U &&\n        source->register_clobber_count == 0U && !source->has_memory_clobber &&\n        source->clobber_count == 0U) {\n        MinicCoreInstruction structured;\n        char *numeric_template = NULL;\n        size_t numeric_template_length = 0U;\n        size_t output_index;\n        bool supported_shape = true;\n\n        for (output_index = 0U; output_index < source->output_count; ++output_index) {\n            const MinicInlineAsmOperand *operand = &source->outputs[output_index];\n            const MinicExpression *output_expression =\n                minic_c0_program_expression(context->body->program, operand->expression);\n            MinicType value_type;\n\n            if (operand->access != MINIC_INLINE_ASM_OPERAND_WRITE_ONLY ||\n                !core_inline_asm_register_output_constraint(operand) ||\n                output_expression == NULL ||\n                output_expression->value_category != MINIC_VALUE_LVALUE ||\n                minic_type_is_const(output_expression->type) ||\n                !minic_type_unqualified(output_expression->type, &value_type) ||\n                !core_memory_scalar_type(value_type)) {\n                supported_shape = false;\n                break;\n            }\n            if (output_expression->kind == MINIC_EXPRESSION_LOCAL &&\n                minic_c0_program_local_fixed_register_binding(\n                    context->body->program, output_expression->value.local_id) != NULL) {\n                supported_shape = false;\n                break;\n            }\n        }\n        if (supported_shape && core_inline_asm_numeric_template(\n                source, &numeric_template, &numeric_template_length)) {\n            bool added;\n\n            added = minic_core_function_add_opaque_inline_asm(context->function,\n                                                               numeric_template,\n                                                               numeric_template_length,\n                                                               source->is_volatile,\n                                                               false,\n                                                               &inline_asm_id);\n            free(numeric_template);\n            numeric_template = NULL;\n            if (!added) {\n                return MINIC_CORE_LOWER_ERROR;\n            }\n            (void)memset(&structured, 0, sizeof(structured));\n            structured.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;\n            structured.span = statement->span;\n            structured.type = minic_type_void();\n            structured.result = MINIC_CORE_VALUE_INVALID;\n            structured.value.structured_inline_asm.inline_asm_id = inline_asm_id;\n            structured.value.structured_inline_asm.operand_count = source->output_count;\n            for (output_index = 0U; output_index < source->output_count; ++output_index) {\n                MinicCoreStructuredInlineAsmOperand *binding =\n                    &structured.value.structured_inline_asm.operands[output_index];\n                MinicCoreLowerStatus output_status;\n\n                binding->kind = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;\n                binding->operand_index = output_index;\n                output_status = lower_address(\n                    context, source->outputs[output_index].expression, &binding->value);\n                if (output_status != MINIC_CORE_LOWER_OK) {\n                    return output_status;\n                }\n            }\n            return minic_core_function_append_effect_instruction(\n                       context->function, context->block_id, &structured)\n                       ? MINIC_CORE_LOWER_OK\n                       : MINIC_CORE_LOWER_ERROR;\n        }\n        free(numeric_template);\n    }\n\n""" + anchor
-replace_once(lower, anchor, insert, "pure-register-output-asm")
+insert = r'''    /* M110_PURE_REGISTER_OUTPUT_ASM: ordinary volatile extended asm
+       with 1..5 write-only register outputs and no inputs/clobbers. */
+    if (source->is_volatile && !source->is_goto && source->template_text != NULL &&
+        source->template_length != 0U && source->outputs != NULL &&
+        source->output_count >= 1U && source->output_count <= 5U &&
+        source->input_count == 0U && source->label_count == 0U &&
+        source->register_clobber_count == 0U && !source->has_memory_clobber &&
+        source->clobber_count == 0U) {
+        MinicCoreInstruction structured;
+        char *numeric_template = NULL;
+        size_t numeric_template_length = 0U;
+        size_t output_index;
+        bool supported_shape = true;
 
-# RV64 verifier/emitter: the generic output-only tier may use t0..t4. Existing
-# mixed shapes still consume only their first two outputs, so their register
-# assignments remain unchanged.
+        for (output_index = 0U; output_index < source->output_count; ++output_index) {
+            const MinicInlineAsmOperand *operand = &source->outputs[output_index];
+            const MinicExpression *output_expression =
+                minic_c0_program_expression(context->body->program, operand->expression);
+            MinicType value_type;
+
+            if (operand->access != MINIC_INLINE_ASM_OPERAND_WRITE_ONLY ||
+                !core_inline_asm_register_output_constraint(operand) ||
+                output_expression == NULL ||
+                output_expression->value_category != MINIC_VALUE_LVALUE ||
+                minic_type_is_const(output_expression->type) ||
+                !minic_type_unqualified(output_expression->type, &value_type) ||
+                !core_memory_scalar_type(value_type) ||
+                (output_expression->kind == MINIC_EXPRESSION_LOCAL &&
+                 minic_c0_program_local_fixed_register_binding(
+                     context->body->program, output_expression->value.local_id) != NULL)) {
+                supported_shape = false;
+                break;
+            }
+        }
+        if (supported_shape && core_inline_asm_numeric_template(
+                source, &numeric_template, &numeric_template_length)) {
+            bool added = minic_core_function_add_opaque_inline_asm(context->function,
+                                                                    numeric_template,
+                                                                    numeric_template_length,
+                                                                    true,
+                                                                    false,
+                                                                    &inline_asm_id);
+            free(numeric_template);
+            numeric_template = NULL;
+            if (!added) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            (void)memset(&structured, 0, sizeof(structured));
+            structured.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
+            structured.span = statement->span;
+            structured.type = minic_type_void();
+            structured.result = MINIC_CORE_VALUE_INVALID;
+            structured.value.structured_inline_asm.inline_asm_id = inline_asm_id;
+            structured.value.structured_inline_asm.operand_count = source->output_count;
+            for (output_index = 0U; output_index < source->output_count; ++output_index) {
+                MinicCoreStructuredInlineAsmOperand *binding =
+                    &structured.value.structured_inline_asm.operands[output_index];
+                MinicCoreLowerStatus output_status;
+
+                binding->kind = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+                binding->operand_index = output_index;
+                output_status = lower_address(
+                    context, source->outputs[output_index].expression, &binding->value);
+                if (output_status != MINIC_CORE_LOWER_OK) {
+                    return output_status;
+                }
+            }
+            return minic_core_function_append_effect_instruction(
+                       context->function, context->block_id, &structured)
+                       ? MINIC_CORE_LOWER_OK
+                       : MINIC_CORE_LOWER_ERROR;
+        }
+        free(numeric_template);
+    }
+
+    /* M111_PURE_REGISTER_INPUT_ASM: 1..4 read-only scalar register inputs,
+       no outputs/clobbers. This is the input-side dual of M110. */
+    if (source->is_volatile && !source->is_goto && source->template_text != NULL &&
+        source->template_length != 0U && source->output_count == 0U &&
+        source->inputs != NULL && source->input_count >= 1U && source->input_count <= 4U &&
+        source->label_count == 0U && source->register_clobber_count == 0U &&
+        !source->has_memory_clobber && source->clobber_count == 0U) {
+        MinicCoreInstruction structured;
+        char *numeric_template = NULL;
+        size_t numeric_template_length = 0U;
+        size_t input_index;
+        bool supported_shape = true;
+
+        for (input_index = 0U; input_index < source->input_count; ++input_index) {
+            const MinicInlineAsmOperand *operand = &source->inputs[input_index];
+            const MinicExpression *input_expression =
+                minic_c0_program_expression(context->body->program, operand->expression);
+            MinicType value_type;
+
+            if (operand->access != MINIC_INLINE_ASM_OPERAND_READ_ONLY ||
+                !core_inline_asm_constraint_is(operand, "r") ||
+                input_expression == NULL ||
+                !core_scalar_expression_value_type(context->body, input_expression, &value_type) ||
+                !core_memory_scalar_type(value_type)) {
+                supported_shape = false;
+                break;
+            }
+        }
+        if (supported_shape && core_inline_asm_numeric_template(
+                source, &numeric_template, &numeric_template_length)) {
+            bool added = minic_core_function_add_opaque_inline_asm(context->function,
+                                                                    numeric_template,
+                                                                    numeric_template_length,
+                                                                    true,
+                                                                    false,
+                                                                    &inline_asm_id);
+            free(numeric_template);
+            numeric_template = NULL;
+            if (!added) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            (void)memset(&structured, 0, sizeof(structured));
+            structured.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
+            structured.span = statement->span;
+            structured.type = minic_type_void();
+            structured.result = MINIC_CORE_VALUE_INVALID;
+            structured.value.structured_inline_asm.inline_asm_id = inline_asm_id;
+            structured.value.structured_inline_asm.operand_count = source->input_count;
+            for (input_index = 0U; input_index < source->input_count; ++input_index) {
+                MinicCoreStructuredInlineAsmOperand *binding =
+                    &structured.value.structured_inline_asm.operands[input_index];
+                MinicCoreLowerStatus input_status;
+
+                binding->kind = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+                binding->operand_index = input_index;
+                input_status = lower_expression(
+                    context, source->inputs[input_index].expression, &binding->value);
+                if (input_status != MINIC_CORE_LOWER_OK) {
+                    return input_status;
+                }
+            }
+            return minic_core_function_append_effect_instruction(
+                       context->function, context->block_id, &structured)
+                       ? MINIC_CORE_LOWER_OK
+                       : MINIC_CORE_LOWER_ERROR;
+        }
+        free(numeric_template);
+    }
+
+''' + anchor
+replace_once(lower, anchor, insert, "pure-register-asm-families")
+
+# RV64 structured-asm tier. Preserve existing mixed-shape register choices,
+# while giving output-only and input-only forms enough temporaries.
 replace_once(
     codegen,
     """    if (!((register_outputs == 0U && register_readwrites == 1U && memory_outputs == 1U &&\n""",
-    """    if (!((register_outputs >= 1U && register_outputs <= 5U &&\n           register_readwrites == 0U && memory_outputs == 0U &&\n           memory_readwrites == 0U && scalar_inputs == 0U &&\n           instruction->value.structured_inline_asm.operand_count == register_outputs &&\n           !inline_asm->has_memory_clobber && inline_asm->register_clobber_count == 0U &&\n           fixed_bindings == 0U) ||\n          (register_outputs == 0U && register_readwrites == 1U && memory_outputs == 1U &&\n""",
-    "rv64-pure-output-shape",
+    """    if (!((register_outputs >= 1U && register_outputs <= 5U &&\n           register_readwrites == 0U && memory_outputs == 0U &&\n           memory_readwrites == 0U && scalar_inputs == 0U &&\n           instruction->value.structured_inline_asm.operand_count == register_outputs &&\n           !inline_asm->has_memory_clobber && inline_asm->register_clobber_count == 0U &&\n           fixed_bindings == 0U) ||\n          (register_outputs == 0U && register_readwrites == 0U &&\n           memory_outputs == 0U && memory_readwrites == 0U &&\n           scalar_inputs >= 1U && scalar_inputs <= 4U &&\n           instruction->value.structured_inline_asm.operand_count == scalar_inputs &&\n           !inline_asm->has_memory_clobber && inline_asm->register_clobber_count == 0U &&\n           fixed_bindings == 0U) ||\n          (register_outputs == 0U && register_readwrites == 1U && memory_outputs == 1U &&\n""",
+    "rv64-pure-register-shapes",
 )
 replace_once(
     codegen,
@@ -62,9 +211,21 @@ replace_once(
 )
 replace_once(
     codegen,
+    """    static const char *const input_registers[2] = {\"t3\", \"t4\"};\n""",
+    """    static const char *const input_registers[4] = {\"t3\", \"t4\", \"t5\", \"t6\"};\n""",
+    "rv64-input-register-pool",
+)
+replace_once(
+    codegen,
     """                while (output_index < 2U &&\n                       core_inline_asm_clobbers_register(\n                           inline_asm, output_registers[output_index])) {\n                    output_index += 1U;\n                }\n                if (output_index >= 2U) {\n""",
     """                while (output_index < 5U &&\n                       core_inline_asm_clobbers_register(\n                           inline_asm, output_registers[output_index])) {\n                    output_index += 1U;\n                }\n                if (output_index >= 5U) {\n""",
     "rv64-output-register-limit",
 )
+replace_once(
+    codegen,
+    """                if (input_index >= 2U) {\n                    return false;\n                }\n                register_name = input_registers[input_index++];\n""",
+    """                if (input_index >= 4U) {\n                    return false;\n                }\n                register_name = input_registers[input_index++];\n""",
+    "rv64-input-register-limit",
+)
 
-print("Core Pareto Top35 semantic patch applied")
+print("Core Pareto Top24 semantic patch applied")
