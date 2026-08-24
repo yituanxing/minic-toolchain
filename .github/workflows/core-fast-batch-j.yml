@@ -1,17 +1,17 @@
-name: Core Fast Batch Y
+name: Core Fast Batch Y2 Diagnose
 
 on:
   pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  batch-y:
+  batch-y2-diagnose:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     concurrency:
-      group: core-fast-batch-y-${{ github.event.pull_request.number }}
+      group: core-fast-batch-y2-${{ github.event.pull_request.number }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
@@ -32,118 +32,53 @@ jobs:
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
 
-      - name: Apply Batch Y production changes
+      - name: Apply Batch Y candidate
         shell: bash
         run: |
           set -Eeuo pipefail
           python3 tools/dev/patch-linux-replay-live-progress.py
           python3 tools/dev/patch-core-frontier-batch-y.py
 
-      - name: Build exact patched compiler
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-y-compiler
+      - name: Build exact candidate compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-y2-compiler
 
-      - name: Focused void statement-expression regression
+      - name: One-TU readahead diagnostic
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-batch-y-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-batch-y-focused"
-          mkdir -p "$work"
-          cat >"$work/void-stmt-expr.i" <<'EOF'
-          extern void raw_writeb(unsigned char value, volatile void *addr);
-          extern void mark_pending(void);
-          void wrapped_write(unsigned char value, volatile void *addr) {
-              ({
-                  asm volatile("fence w,o" : : : "memory");
-                  (void)raw_writeb(value, addr);
-                  mark_pending();
-              });
-          }
-          EOF
-          MINIC_CORE_IR=strict "$compiler" -S "$work/void-stmt-expr.i" -o "$work/strict.s"
-          MINIC_CORE_IR=strict MINIC_CORE_CODEGEN=basic-v0 "$compiler" \
-            -S "$work/void-stmt-expr.i" -o "$work/core.s"
-          grep -q 'fence w,o' "$work/core.s"
-          grep -q 'call raw_writeb' "$work/core.s"
-          grep -q 'call mark_pending' "$work/core.s"
-          echo CORE_BATCH_Y_FOCUSED_PASS
-
-      - name: Four-TU iowrite8 frontier
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-batch-y-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-batch-y-frontier"
+          compiler="$GITHUB_WORKSPACE/build/core-batch-y2-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-batch-y2-frontier"
           set +e
           MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" \
             --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
             --work "$work" \
-            --jobs 4 \
+            --jobs 1 \
             --offset 0 \
             --limit 500 \
             --sample-count 0 \
-            --indices '3,155,165,299'
+            --indices '299'
           replay_status=$?
           set -e
-          printf 'CORE_BATCH_Y_REPLAY_STATUS=%d\n' "$replay_status"
-          python3 tools/ci/classify-core-strict-frontier.py \
-            "$work/batch-results.json" --examples 4 --json-out "$work/frontier-summary.json"
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-          f = json.loads(Path('build/core-batch-y-frontier/frontier-summary.json').read_text())
-          blockers = {b.get('function') for b in f.get('blockers', [])}
-          print(f"CORE_BATCH_Y_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
-          if f['selected'] != 4 or f['error'] != 0:
-              raise SystemExit(f"Batch Y family gate invalid: {f.get('errors', [])}")
-          if 'iowrite8' in blockers:
-              raise SystemExit('iowrite8 still blocks Batch Y representative frontier')
-          PY
-
-      - name: Sixteen-TU no-error sanity gate
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-batch-y-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-batch-y-strict16"
-          set +e
-          MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
-            --minic "$compiler" \
-            --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
-            --work "$work" \
-            --jobs 8 \
-            --offset 0 \
-            --limit 500 \
-            --sample-count 0 \
-            --indices '0,1,2,3,4,7,9,20,42,66,95,155,165,280,288,299'
-          replay_status=$?
-          set -e
-          printf 'CORE_BATCH_Y_STRICT16_REPLAY_STATUS=%d\n' "$replay_status"
-          python3 tools/ci/classify-core-strict-frontier.py \
-            "$work/batch-results.json" --examples 16 --json-out "$work/frontier-summary.json"
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-          f = json.loads(Path('build/core-batch-y-strict16/frontier-summary.json').read_text())
-          blockers = {b.get('function') for b in f.get('blockers', [])}
-          print(f"CORE_BATCH_Y_STRICT16 selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
-          if f['selected'] != 16 or f['error'] != 0:
-              raise SystemExit(f"Batch Y strict16 invalid: {f.get('errors', [])}")
-          if 'iowrite8' in blockers:
-              raise SystemExit('iowrite8 still blocks strict16')
-          PY
-
-      - name: Persist qualified Batch Y production tree
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          git add -- src/core/core_lower.c
-          if git diff --cached --quiet; then
-            echo CORE_BATCH_Y_ALREADY_PERSISTED
-            exit 0
+          printf 'CORE_BATCH_Y2_REPLAY_STATUS=%d\n' "$replay_status"
+          stderr="$work/minic-stderr/mm/fadvise.i.stderr"
+          echo CORE_BATCH_Y2_TRACE_BEGIN
+          grep -E '__readahead_batch|CORE_ASSIGN_STAGE|CORE_LOWER_DETAIL|CORE_ASM_DETAIL|CORE_FAST_TRACE' "$stderr" | tail -n 120 || true
+          echo CORE_BATCH_Y2_TRACE_END
+          src="$(find "$GITHUB_WORKSPACE/build/linux-focus-corpus" -type f -path '*/mm/fadvise.i' | head -n1)"
+          echo CORE_BATCH_Y2_SOURCE_BEGIN
+          printf 'CORE_BATCH_Y2_SOURCE_FILE=%s\n' "$src"
+          if test -n "$src"; then
+            grep -n -A100 -B45 '__readahead_batch' "$src" | head -n 700 || true
           fi
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m 'core: lower void statement-expression final effects'
-          git push origin HEAD:refactor/declaration-sema-v1
+          echo CORE_BATCH_Y2_SOURCE_END
+          python3 tools/ci/classify-core-strict-frontier.py \
+            "$work/batch-results.json" --examples 1 --json-out "$work/frontier-summary.json"
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          f = json.loads(Path('build/core-batch-y2-frontier/frontier-summary.json').read_text())
+          print(f"CORE_BATCH_Y2_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
+          if f['selected'] != 1:
+              raise SystemExit(f"diagnostic invalid: {f}")
+          PY
