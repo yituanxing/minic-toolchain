@@ -1,4 +1,4 @@
-name: Core Batch Y24 Remaining Error Reasons
+name: Core Batch Y25 Error Detail
 
 on:
   pull_request:
@@ -7,89 +7,83 @@ permissions:
   contents: read
 
 jobs:
-  y24-error-reasons:
+  y25-error-detail:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     concurrency:
-      group: core-y24-error-reasons-${{ github.event.pull_request.number }}
+      group: core-y25-error-detail-${{ github.event.pull_request.number }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ee86826c9106e30ffaf79cbace164372b3cb6a04
-
       - name: Restore frozen Linux corpus
         id: linux-corpus-cache
         uses: actions/cache/restore@v4
         with:
           path: build/linux-focus-corpus
           key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
-
-      - name: Require frozen corpus
+      - name: Apply Y21 candidate and indirect-call verifier detail
         shell: bash
         run: |
           set -Eeuo pipefail
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
-          test -s build/linux-focus-corpus/selected-tus.txt
-
-      - name: Apply cleanup-safe Y21 candidate and verifier reason probe
-        shell: bash
-        run: |
-          set -Eeuo pipefail
           python3 tools/dev/patch-linux-replay-live-progress.py
           python3 - <<'PY'
           from pathlib import Path
-
           p=Path('src/core/core_lower.c')
           s=p.read_text()
           old='''    /* The parser-owned synthetic continue label is part of the loop body.\n       Keep it so explicit continue edges and fallthrough converge before the\n       canonical backedge is emitted. */\n    *iteration_body = *body;\n    return true;\n}\n\nstatic bool normalized_for_update_tail'''
-          new='''    /* CORE_FOR_CONTINUE_CLEANUP_V1 */\n    *iteration_body = *body;\n    if (!core_cleanup_edge_is_empty(continue_label)) {\n        iteration_body->statement_count -= 1U;\n    }\n    return true;\n}\n\nstatic bool normalized_for_update_tail'''
-          if old not in s: raise SystemExit('continue-tail anchor not found')
+          new='''    /* CORE_FOR_CONTINUE_CLEANUP_V1 */\n    *iteration_body = *body;\n    if (!core_cleanup_edge_is_empty(continue_label)) iteration_body->statement_count -= 1U;\n    return true;\n}\n\nstatic bool normalized_for_update_tail'''
+          if old not in s: raise SystemExit('continue anchor')
           s=s.replace(old,new,1)
           old='''    /* Strip only the normalized update.  The preceding synthetic continue\n       label remains in the body and becomes the convergence point before the\n       update is lowered. */\n    *iteration_body = *body;\n    iteration_body->statement_count -= 1U;\n    *update_statement = update;\n    return true;\n}\n\nstatic MinicCoreLowerStatus\nlower_while'''
           new='''    /* CORE_FOR_CONTINUE_CLEANUP_V1 */\n    *iteration_body = *body;\n    iteration_body->statement_count -= core_cleanup_edge_is_empty(continue_label) ? 1U : 2U;\n    *update_statement = update;\n    return true;\n}\n\nstatic MinicCoreLowerStatus\nlower_while'''
-          if old not in s: raise SystemExit('update-tail anchor not found')
+          if old not in s: raise SystemExit('update anchor')
           p.write_text(s.replace(old,new,1))
 
           p=Path('src/core/core_ir.c')
           s=p.read_text()
-          old='''    block = &function->blocks[block_id];\n    if (!storage_shape_is_valid(\n            block->instructions, block->instruction_count, block->instruction_capacity) ||\n        !block->has_terminator) {\n        return false;\n    }'''
-          new='''    block = &function->blocks[block_id];\n    if (!storage_shape_is_valid(\n            block->instructions, block->instruction_count, block->instruction_capacity) ||\n        !block->has_terminator) {\n        (void)fprintf(stderr,\n                      "CORE_Y24_VERIFY function=%s block=%u reason=block-shape has_term=%d instructions=%zu capacity=%zu\\n",\n                      function->name != NULL ? function->name : "?",\n                      (unsigned int)block_id,\n                      block->has_terminator ? 1 : 0,\n                      block->instruction_count,\n                      block->instruction_capacity);\n        return false;\n    }'''
-          if old not in s: raise SystemExit('block-shape anchor not found')
+          old='''        callee_value = instruction->value.indirect_call.callee;\n        if (instruction->value.indirect_call.signature_id >= function->call_signature_count ||\n            callee_value >= function->value_count || !available_values[callee_value] ||\n            !minic_type_pointee(function->values[callee_value].type, &function_type) ||\n            !minic_type_is_function(function_type) ||\n            instruction->value.indirect_call.argument_begin > function->call_argument_count ||\n            instruction->value.indirect_call.argument_count >\n                function->call_argument_count - instruction->value.indirect_call.argument_begin) {\n            return false;\n        }'''
+          new='''        callee_value = instruction->value.indirect_call.callee;\n        if (instruction->value.indirect_call.signature_id >= function->call_signature_count) {\n            (void)fprintf(stderr, "CORE_Y25_INDIRECT function=%s reason=signature-id sig=%u count=%zu\\n", function->name, (unsigned int)instruction->value.indirect_call.signature_id, function->call_signature_count);\n            return false;\n        }\n        if (callee_value >= function->value_count || !available_values[callee_value]) {\n            (void)fprintf(stderr, "CORE_Y25_INDIRECT function=%s reason=callee-availability callee=%u values=%zu available=%d\\n", function->name, (unsigned int)callee_value, function->value_count, callee_value < function->value_count && available_values[callee_value] ? 1 : 0);\n            return false;\n        }\n        if (!minic_type_pointee(function->values[callee_value].type, &function_type) ||\n            !minic_type_is_function(function_type)) {\n            (void)fprintf(stderr, "CORE_Y25_INDIRECT function=%s reason=callee-type callee=%u\\n", function->name, (unsigned int)callee_value);\n            return false;\n        }\n        if (instruction->value.indirect_call.argument_begin > function->call_argument_count ||\n            instruction->value.indirect_call.argument_count > function->call_argument_count - instruction->value.indirect_call.argument_begin) {\n            (void)fprintf(stderr, "CORE_Y25_INDIRECT function=%s reason=argument-range begin=%zu count=%zu total=%zu\\n", function->name, instruction->value.indirect_call.argument_begin, instruction->value.indirect_call.argument_count, function->call_argument_count);\n            return false;\n        }'''
+          if old not in s: raise SystemExit('indirect initial anchor')
           s=s.replace(old,new,1)
-          old='''        instruction_id = block->instructions[index];\n        if (instruction_id >= function->instruction_count || instruction_seen[instruction_id]) {\n            return false;\n        }\n        instruction = &function->instructions[instruction_id];\n        if (!instruction_is_valid(function, instruction, available_values)) {\n            return false;\n        }'''
-          new='''        instruction_id = block->instructions[index];\n        if (instruction_id >= function->instruction_count || instruction_seen[instruction_id]) {\n            (void)fprintf(stderr,\n                          "CORE_Y24_VERIFY function=%s block=%u reason=instruction-id index=%zu instruction=%u count=%zu duplicate=%d\\n",\n                          function->name != NULL ? function->name : "?",\n                          (unsigned int)block_id, index, (unsigned int)instruction_id,\n                          function->instruction_count,\n                          instruction_id < function->instruction_count && instruction_seen[instruction_id] ? 1 : 0);\n            return false;\n        }\n        instruction = &function->instructions[instruction_id];\n        if (!instruction_is_valid(function, instruction, available_values)) {\n            (void)fprintf(stderr,\n                          "CORE_Y24_VERIFY function=%s block=%u reason=instruction-valid index=%zu instruction=%u kind=%d result=%u\\n",\n                          function->name != NULL ? function->name : "?",\n                          (unsigned int)block_id, index, (unsigned int)instruction_id,\n                          (int)instruction->kind, (unsigned int)instruction->result);\n            return false;\n        }'''
-          if old not in s: raise SystemExit('instruction anchor not found')
+          old='''        if (function_type.function_type_id != signature->function_type_id ||\n            instruction->value.indirect_call.argument_count != signature->parameter_count ||\n            !minic_type_equal(instruction->type, signature->return_type)) {\n            return false;\n        }'''
+          new='''        if (function_type.function_type_id != signature->function_type_id ||\n            instruction->value.indirect_call.argument_count != signature->parameter_count ||\n            !minic_type_equal(instruction->type, signature->return_type)) {\n            (void)fprintf(stderr, "CORE_Y25_INDIRECT function=%s reason=signature-match callee_ft=%u sig_ft=%u argc=%zu params=%zu return_equal=%d\\n", function->name, (unsigned int)function_type.function_type_id, (unsigned int)signature->function_type_id, instruction->value.indirect_call.argument_count, signature->parameter_count, minic_type_equal(instruction->type, signature->return_type) ? 1 : 0);\n            return false;\n        }'''
+          if old not in s: raise SystemExit('signature anchor')
           s=s.replace(old,new,1)
-          old='''            result = &function->values[instruction->result];\n            if (value_seen[instruction->result] || result->definition != instruction_id) {\n                return false;\n            }'''
-          new='''            result = &function->values[instruction->result];\n            if (value_seen[instruction->result] || result->definition != instruction_id) {\n                (void)fprintf(stderr,\n                              "CORE_Y24_VERIFY function=%s block=%u reason=value-owner instruction=%u value=%u seen=%d definition=%u\\n",\n                              function->name != NULL ? function->name : "?",\n                              (unsigned int)block_id, (unsigned int)instruction_id,\n                              (unsigned int)instruction->result,\n                              value_seen[instruction->result] ? 1 : 0,\n                              (unsigned int)result->definition);\n                return false;\n            }'''
-          if old not in s: raise SystemExit('value anchor not found')
+          old='''        if ((returns_void && instruction->result != MINIC_CORE_VALUE_INVALID) ||\n            (!returns_void && !instruction_result_is_valid(function, instruction))) {\n            return false;\n        }'''
+          new='''        if ((returns_void && instruction->result != MINIC_CORE_VALUE_INVALID) ||\n            (!returns_void && !instruction_result_is_valid(function, instruction))) {\n            (void)fprintf(stderr, "CORE_Y25_INDIRECT function=%s reason=result returns_void=%d result=%u\\n", function->name, returns_void ? 1 : 0, (unsigned int)instruction->result);\n            return false;\n        }'''
+          if old not in s: raise SystemExit('result anchor')
           s=s.replace(old,new,1)
-          old='''    return terminator_is_valid(function, &block->terminator, available_values);\n}'''
-          new='''    if (!terminator_is_valid(function, &block->terminator, available_values)) {\n        (void)fprintf(stderr,\n                      "CORE_Y24_VERIFY function=%s block=%u reason=terminator-valid kind=%d\\n",\n                      function->name != NULL ? function->name : "?",\n                      (unsigned int)block_id, (int)block->terminator.kind);\n        return false;\n    }\n    return true;\n}'''
-          if old not in s: raise SystemExit('terminator anchor not found')
+          old='''            if (argument->kind != MINIC_CORE_CALL_ARGUMENT_VALUE) {\n                return false;\n            }\n            value_id = argument->value.value_id;\n            if (value_id >= function->value_count || !available_values[value_id] ||\n                !minic_type_equal(function->values[value_id].type,\n                                  signature->parameter_types[parameter_index])) {\n                return false;\n            }'''
+          new='''            if (argument->kind != MINIC_CORE_CALL_ARGUMENT_VALUE) {\n                (void)fprintf(stderr, "CORE_Y25_INDIRECT function=%s reason=argument-kind param=%zu kind=%d\\n", function->name, parameter_index, (int)argument->kind);\n                return false;\n            }\n            value_id = argument->value.value_id;\n            if (value_id >= function->value_count || !available_values[value_id] ||\n                !minic_type_equal(function->values[value_id].type, signature->parameter_types[parameter_index])) {\n                (void)fprintf(stderr, "CORE_Y25_INDIRECT function=%s reason=argument-value param=%zu value=%u values=%zu available=%d type_equal=%d\\n", function->name, parameter_index, (unsigned int)value_id, function->value_count, value_id < function->value_count && available_values[value_id] ? 1 : 0, value_id < function->value_count && minic_type_equal(function->values[value_id].type, signature->parameter_types[parameter_index]) ? 1 : 0);\n                return false;\n            }'''
+          if old not in s: raise SystemExit('argument anchor')
           p.write_text(s.replace(old,new,1))
-          print('CORE_BATCH_Y24_PATCHED')
+          print('CORE_BATCH_Y25_PATCHED')
           PY
-
       - name: Build diagnostic compiler
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-y24-compiler
-
-      - name: Replay three Y21 Core errors
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-y25-compiler
+      - name: Replay and print detailed traces
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-batch-y24-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-batch-y24-frontier"
+          compiler="$GITHUB_WORKSPACE/build/core-batch-y25-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-batch-y25-frontier"
           set +e
           MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
             --work "$work" --jobs 3 --offset 0 --limit 500 --sample-count 0 --indices '39,152,265'
-          replay_status=$?
           set -e
-          printf 'CORE_BATCH_Y24_REPLAY_STATUS=%d\n' "$replay_status"
-          echo CORE_BATCH_Y24_REASONS_BEGIN
-          grep -R 'CORE_Y24_VERIFY' "$work/minic-stderr" || true
-          echo CORE_BATCH_Y24_REASONS_END
-          python3 tools/ci/classify-core-strict-frontier.py \
-            "$work/batch-results.json" --examples 6 --json-out "$work/frontier-summary.json"
+          echo CORE_BATCH_Y25_TRACE_BEGIN
+          grep -R -E 'CORE_Y25_INDIRECT|CORE_FAST_TRACE|CORE_ASSIGN_STAGE|CORE_LOWER_DETAIL|CORE_ASM_DETAIL' "$work/minic-stderr" | tail -n 240 || true
+          echo CORE_BATCH_Y25_TRACE_END
+          echo CORE_BATCH_Y25_KALLSYMS_SOURCE_BEGIN
+          sed -n '45390,45430p' build/linux-focus-corpus/kbuild/kernel/module/kallsyms.i
+          echo CORE_BATCH_Y25_KALLSYMS_SOURCE_END
+          echo CORE_BATCH_Y25_REGSET_SOURCE_BEGIN
+          sed -n '26895,26922p' build/linux-focus-corpus/kbuild/kernel/regset.i
+          echo CORE_BATCH_Y25_REGSET_SOURCE_END
+          echo CORE_BATCH_Y25_SUSPEND_FUNC_BEGIN
+          grep -n -A80 -B5 '^int cpu_suspend\|^static.*cpu_suspend\| cpu_suspend(' build/linux-focus-corpus/kbuild/arch/riscv/kernel/suspend.i | tail -n 140 || true
+          echo CORE_BATCH_Y25_SUSPEND_FUNC_END
