@@ -167,7 +167,8 @@ static bool core_scalar_expression_value_type(const MinicFunctionBodyView *body,
        qualifiers on a scalar conditional expression whose arms originate as
        qualified lvalues. Once the conditional is consumed as a scalar value,
        those top-level qualifiers do not belong to the Core SSA/storage type. */
-    if (expression->kind == MINIC_EXPRESSION_CONDITIONAL) {
+    if (expression->kind == MINIC_EXPRESSION_CONDITIONAL ||
+        expression->kind == MINIC_EXPRESSION_CONVERSION) {
         return minic_type_unqualified(expression->type, value_type);
     }
     if (expression->value_category == MINIC_VALUE_LVALUE) {
@@ -3361,8 +3362,7 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
             return MINIC_CORE_LOWER_ERROR;
         }
         if (!minic_type_is_integer(expression->type) || !minic_type_is_integer(operand->type) ||
-            !minic_type_unqualified(expression->type, &target_type) ||
-            !minic_type_equal(target_type, expression->type)) {
+            !minic_type_unqualified(expression->type, &target_type)) {
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
         status = lower_expression(context, operand_id, &operand_value);

@@ -512,6 +512,16 @@ int unsigned_bitfield_xor(struct core_bitfield_compound *item, unsigned char val
 EOF
 check_strict_case unsigned-bitfield-compound
 
+cat >"$work_dir/qualified-scalar-conversion.i" <<'EOF'
+struct core_qualified_scalar_member {
+    unsigned short transport_header;
+};
+int qualified_scalar_typeof_cast(const struct core_qualified_scalar_member *item) {
+    return item->transport_header != (typeof(item->transport_header))~0U;
+}
+EOF
+check_strict_case qualified-scalar-conversion
+
 cat >"$work_dir/variadic-call-unsupported.i" <<'EOF'
 int variadic_external(int first, ...);
 
