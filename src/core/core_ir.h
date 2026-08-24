@@ -162,11 +162,22 @@ typedef struct MinicCoreCallArgument {
     } value;
 } MinicCoreCallArgument;
 
+typedef struct MinicCoreInlineAsmRegisterClobber {
+    char *name;
+    size_t name_length;
+} MinicCoreInlineAsmRegisterClobber;
+
 typedef struct MinicCoreInlineAsm {
     char *template_text;
     size_t template_length;
     bool is_volatile;
     bool has_memory_clobber;
+    /* BATCH_L_STRUCTURED_REGISTER_READWRITE: keep register-clobber spelling
+       as opaque target metadata. Core does not interpret register names; the
+       selected backend only uses them to avoid operand/clobber collisions. */
+    MinicCoreInlineAsmRegisterClobber *register_clobbers;
+    size_t register_clobber_count;
+    size_t register_clobber_capacity;
     /* M76_SINGLE_LABEL_ASM_GOTO: preserve the control-flow target in Core
        instead of hiding it inside target assembly text. The first supported
        seam is one label plus one deferred immediate input. */
@@ -179,6 +190,9 @@ typedef struct MinicCoreInlineAsm {
 
 typedef enum MinicCoreStructuredInlineAsmOperandKind {
     MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT = 0,
+    /* A register read/write operand is address-backed: load the lvalue before
+       asm, bind one target register, then store the post-asm value back. */
+    MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE,
     MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE,
     MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT
 } MinicCoreStructuredInlineAsmOperandKind;
@@ -390,6 +404,11 @@ bool minic_core_function_add_opaque_inline_asm(MinicCoreFunction *function,
                                                bool is_volatile,
                                                bool has_memory_clobber,
                                                MinicCoreInlineAsmId *inline_asm_id);
+bool minic_core_function_add_inline_asm_register_clobber(
+    MinicCoreFunction *function,
+    MinicCoreInlineAsmId inline_asm_id,
+    const char *name,
+    size_t name_length);
 bool minic_core_function_append_call_arguments(MinicCoreFunction *function,
                                                const MinicCoreCallArgument *arguments,
                                                size_t argument_count,

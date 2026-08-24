@@ -86,7 +86,15 @@ void minic_core_function_destroy(MinicCoreFunction *function) {
         free(function->function_symbols[function_symbol_index].name);
     }
     for (inline_asm_index = 0U; inline_asm_index < function->inline_asm_count; ++inline_asm_index) {
-        free(function->inline_asms[inline_asm_index].template_text);
+        MinicCoreInlineAsm *inline_asm = &function->inline_asms[inline_asm_index];
+        size_t clobber_index;
+
+        free(inline_asm->template_text);
+        for (clobber_index = 0U; clobber_index < inline_asm->register_clobber_count;
+             ++clobber_index) {
+            free(inline_asm->register_clobbers[clobber_index].name);
+        }
+        free(inline_asm->register_clobbers);
     }
     free(function->name);
     free(function->parameter_types);
@@ -512,6 +520,36 @@ bool minic_core_function_add_opaque_inline_asm(MinicCoreFunction *function,
     function->inline_asms[function->inline_asm_count] = stored;
     *inline_asm_id = (MinicCoreInlineAsmId)function->inline_asm_count;
     function->inline_asm_count += 1U;
+    return true;
+}
+
+
+bool minic_core_function_add_inline_asm_register_clobber(
+    MinicCoreFunction *function,
+    MinicCoreInlineAsmId inline_asm_id,
+    const char *name,
+    size_t name_length) {
+    MinicCoreInlineAsm *inline_asm;
+    MinicCoreInlineAsmRegisterClobber *stored;
+    char *name_copy;
+
+    if (function == NULL || inline_asm_id >= function->inline_asm_count ||
+        name == NULL || name_length == 0U || name_length == SIZE_MAX) {
+        return false;
+    }
+    inline_asm = &function->inline_asms[inline_asm_id];
+    name_copy = copy_name(name, name_length);
+    if (name_copy == NULL ||
+        !grow_array((void **)&inline_asm->register_clobbers,
+                    &inline_asm->register_clobber_capacity,
+                    inline_asm->register_clobber_count,
+                    sizeof(*inline_asm->register_clobbers))) {
+        free(name_copy);
+        return false;
+    }
+    stored = &inline_asm->register_clobbers[inline_asm->register_clobber_count++];
+    stored->name = name_copy;
+    stored->name_length = name_length;
     return true;
 }
 
@@ -1110,6 +1148,7 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
             used_indices[binding->operand_index] = true;
             switch (binding->kind) {
             case MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
+            case MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE:
             case MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE:
                 if (!available_pointer_pointee(
                         function, available_values, binding->value, &pointee) ||

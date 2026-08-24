@@ -6175,6 +6175,84 @@ static MinicCoreLowerStatus lower_opaque_inline_asm(MinicCoreLowerContext *conte
         }
     }
 
+    /* BATCH_L_STRUCTURED_REGISTER_READWRITE: after compile-time i/I inputs
+       are specialized into target text, preserve a +r operand as one
+       address-backed read/write register binding. Register-clobber names stay
+       opaque in Core and are interpreted only by the target backend when it
+       chooses operand registers. */
+    if (source->is_volatile && !source->is_goto && source->template_text != NULL &&
+        source->template_length != 0U && source->outputs != NULL && source->inputs != NULL &&
+        source->output_count == 1U && source->input_count != 0U &&
+        source->label_count == 0U && !source->has_memory_clobber &&
+        source->clobber_count == source->register_clobber_count) {
+        const MinicInlineAsmOperand *output = &source->outputs[0];
+        const MinicExpression *output_expression =
+            minic_c0_program_expression(context->body->program, output->expression);
+        MinicType output_type;
+        char *specialized_template = NULL;
+        size_t specialized_length = 0U;
+
+        if (output->access == MINIC_INLINE_ASM_OPERAND_READ_WRITE &&
+            core_inline_asm_constraint_is(output, "+r") &&
+            output_expression != NULL &&
+            output_expression->value_category == MINIC_VALUE_LVALUE &&
+            !minic_type_is_const(output_expression->type) &&
+            minic_type_unqualified(output_expression->type, &output_type) &&
+            core_memory_scalar_type(output_type) &&
+            core_inline_asm_specialize_register_output_immediates(
+                context, source, &specialized_template, &specialized_length)) {
+            MinicCoreInstruction structured;
+            MinicCoreStructuredInlineAsmOperand *binding;
+            MinicCoreLowerStatus status;
+            size_t clobber_index;
+            bool added;
+
+            added = minic_core_function_add_opaque_inline_asm(context->function,
+                                                               specialized_template,
+                                                               specialized_length,
+                                                               true,
+                                                               false,
+                                                               &inline_asm_id);
+            free(specialized_template);
+            if (!added) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            for (clobber_index = 0U; clobber_index < source->register_clobber_count;
+                 ++clobber_index) {
+                const MinicInlineAsmRegisterClobber *clobber =
+                    &source->register_clobbers[clobber_index];
+                if (clobber->name == NULL || clobber->name_length == 0U ||
+                    !minic_core_function_add_inline_asm_register_clobber(
+                        context->function,
+                        inline_asm_id,
+                        clobber->name,
+                        clobber->name_length)) {
+                    return MINIC_CORE_LOWER_ERROR;
+                }
+            }
+
+            (void)memset(&structured, 0, sizeof(structured));
+            structured.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
+            structured.span = statement->span;
+            structured.type = minic_type_void();
+            structured.result = MINIC_CORE_VALUE_INVALID;
+            structured.value.structured_inline_asm.inline_asm_id = inline_asm_id;
+            structured.value.structured_inline_asm.operand_count = 1U;
+            binding = &structured.value.structured_inline_asm.operands[0];
+            binding->kind = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE;
+            binding->operand_index = 0U;
+            status = lower_address(context, output->expression, &binding->value);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
+            return minic_core_function_append_effect_instruction(
+                       context->function, context->block_id, &structured)
+                       ? MINIC_CORE_LOWER_OK
+                       : MINIC_CORE_LOWER_ERROR;
+        }
+        free(specialized_template);
+    }
+
     /* BATCH_I_REGISTER_OUTPUT_IMMEDIATE_SPECIALIZATION: after all i/I
        inputs are baked into the template, the runtime shape is exactly the
        existing one-register-output instruction. Core has no optimizer that can
