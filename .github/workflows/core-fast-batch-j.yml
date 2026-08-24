@@ -1,88 +1,114 @@
-name: Core Batch Y28 Cleanup-Safe Full500
+name: Core Batch Y29 Productize Y28
 
 on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  y28-full500:
+  y29-productize:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     concurrency:
-      group: core-y28-full500-${{ github.event.pull_request.number }}
+      group: core-y29-productize-${{ github.event.pull_request.number }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ee86826c9106e30ffaf79cbace164372b3cb6a04
+          ref: refactor/declaration-sema-v1
+          fetch-depth: 0
+
       - name: Restore frozen Linux corpus
         id: linux-corpus-cache
         uses: actions/cache/restore@v4
         with:
           path: build/linux-focus-corpus
           key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+
       - name: Require frozen corpus
         shell: bash
         run: |
           set -Eeuo pipefail
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
-      - name: Apply cleanup-safe Y27 candidate
+
+      - name: Apply production Core ownership repairs
         shell: bash
         run: |
           set -Eeuo pipefail
-          python3 tools/dev/patch-linux-replay-live-progress.py
           python3 - <<'PY'
           from pathlib import Path
-          p=Path('src/core/core_lower.c')
-          s=p.read_text()
 
-          old='''    /* The parser-owned synthetic continue label is part of the loop body.\n       Keep it so explicit continue edges and fallthrough converge before the\n       canonical backedge is emitted. */\n    *iteration_body = *body;\n    return true;\n}\n\nstatic bool normalized_for_update_tail'''
-          new='''    /* CORE_FOR_CONTINUE_CLEANUP_V1 */\n    *iteration_body = *body;\n    if (!core_cleanup_edge_is_empty(continue_label)) {\n        iteration_body->statement_count -= 1U;\n    }\n    return true;\n}\n\nstatic bool normalized_for_update_tail'''
-          if old not in s: raise SystemExit('continue anchor')
-          s=s.replace(old,new,1)
-          old='''    /* Strip only the normalized update.  The preceding synthetic continue\n       label remains in the body and becomes the convergence point before the\n       update is lowered. */\n    *iteration_body = *body;\n    iteration_body->statement_count -= 1U;\n    *update_statement = update;\n    return true;\n}\n\nstatic MinicCoreLowerStatus\nlower_while'''
-          new='''    /* CORE_FOR_CONTINUE_CLEANUP_V1 */\n    *iteration_body = *body;\n    iteration_body->statement_count -= core_cleanup_edge_is_empty(continue_label) ? 1U : 2U;\n    *update_statement = update;\n    return true;\n}\n\nstatic MinicCoreLowerStatus\nlower_while'''
-          if old not in s: raise SystemExit('update anchor')
-          s=s.replace(old,new,1)
+          p = Path('src/core/core_lower.c')
+          s = p.read_text()
 
-          old='''        MinicType array_pointer_type;\n        MinicType element_type;\n        MinicType index_value_type;\n        MinicType pointer_type;'''
-          new='''        MinicType array_pointer_type;\n        MinicType base_value_type;\n        MinicType element_type;\n        MinicType index_value_type;\n        MinicType pointer_type;'''
-          if old not in s: raise SystemExit('subscript declaration anchor')
-          s=s.replace(old,new,1)
-          old='''        } else {\n            if (!minic_type_is_pointer(base->type) ||\n                !minic_type_pointee(base->type, &element_type) ||\n                !minic_type_equal(element_type, expression->type) ||\n                !minic_c0_pointer_arithmetic_element_size(context->body->program,\n                                                          minic_default_data_layout(),\n                                                          base->type,\n                                                          &element_size)) {\n                return MINIC_CORE_LOWER_UNSUPPORTED;\n            }\n            pointer_type = base->type;\n            subscript_status =\n                lower_expression(context, expression->value.subscript.base, &base_value);\n            if (subscript_status != MINIC_CORE_LOWER_OK) {\n                return subscript_status;\n            }\n            if (base_value >= context->function->value_count ||\n                !minic_type_equal(context->function->values[base_value].type, base->type)) {\n                return MINIC_CORE_LOWER_ERROR;\n            }\n        }'''
-          new='''        } else {\n            /* CORE_SUBSCRIPT_BASE_VALUE_TYPE_V1 */\n            if (!core_scalar_expression_value_type(context->body, base, &base_value_type) ||\n                !minic_type_is_pointer(base_value_type) ||\n                !minic_type_pointee(base_value_type, &element_type) ||\n                !minic_type_equal(element_type, expression->type) ||\n                !minic_c0_pointer_arithmetic_element_size(context->body->program,\n                                                          minic_default_data_layout(),\n                                                          base_value_type,\n                                                          &element_size)) {\n                return MINIC_CORE_LOWER_UNSUPPORTED;\n            }\n            pointer_type = base_value_type;\n            subscript_status =\n                lower_expression(context, expression->value.subscript.base, &base_value);\n            if (subscript_status != MINIC_CORE_LOWER_OK) {\n                return subscript_status;\n            }\n            if (base_value >= context->function->value_count ||\n                !minic_type_equal(context->function->values[base_value].type, base_value_type)) {\n                return MINIC_CORE_LOWER_ERROR;\n            }\n        }'''
-          if old not in s: raise SystemExit('subscript non-array anchor')
-          s=s.replace(old,new,1)
+          old = '''    /* The parser-owned synthetic continue label is part of the loop body.\n       Keep it so explicit continue edges and fallthrough converge before the\n       canonical backedge is emitted. */\n    *iteration_body = *body;\n    return true;\n}\n\nstatic bool normalized_for_update_tail'''
+          new = '''    /* A normalized for-loop's synthetic continue label is part of the\n       iteration body only when reaching it does not cross a cleanup lifetime.\n       Cleanup-bearing scopes keep the historical tail shape until Core owns\n       cleanup transitions explicitly. */\n    *iteration_body = *body;\n    if (!core_cleanup_edge_is_empty(continue_label)) {\n        iteration_body->statement_count -= 1U;\n    }\n    return true;\n}\n\nstatic bool normalized_for_update_tail'''
+          if s.count(old) != 1:
+              raise SystemExit(f'continue-tail anchor count={s.count(old)}')
+          s = s.replace(old, new, 1)
 
-          old='''    status = lower_expression(context, expression->value.call.callee, &callee_value);\n    if (status != MINIC_CORE_LOWER_OK) {\n        (void)fprintf(stderr,\n                      "CORE_LOWER_DETAIL marker=M92_INDIRECT_CALL_HOT_DETAIL function=%s "\n                      "stage=indirect-call reason=callee-lower status=%d callee_kind=%d\\n",\n                      context->source_function != NULL ? context->source_function->name : "?",\n                      (int)status,\n                      callee_expression != NULL ? (int)callee_expression->kind : -1);\n        return status;\n    }\n    if (callee_value >= context->function->value_count ||\n        !minic_type_equal(context->function->values[callee_value].type,\n                          callee_value_type)) {\n        (void)fprintf(stderr,\n                      "CORE_LOWER_DETAIL marker=M92_INDIRECT_CALL_HOT_DETAIL function=%s "\n                      "stage=indirect-call reason=callee-value-type value=%u count=%zu\\n",\n                      context->source_function != NULL ? context->source_function->name : "?",\n                      (unsigned int)callee_value,\n                      context->function->value_count);\n        return MINIC_CORE_LOWER_ERROR;\n    }\n\n    arguments = signature->parameter_count == 0U'''
-          new='''    /* CORE_INDIRECT_CALL_FINAL_BLOCK_CALLEE_V1 */\n    arguments = signature->parameter_count == 0U'''
-          if old not in s: raise SystemExit('indirect early anchor')
-          s=s.replace(old,new,1)
-          old='''    for (argument_index = 0U; argument_index < signature->parameter_count; ++argument_index) {\n        status = reload_scalar_value(context,\n                                     expression->span,\n                                     signature->parameter_types[argument_index],\n                                     argument_objects[argument_index],\n                                     &arguments[argument_index].value.value_id);\n        if (status != MINIC_CORE_LOWER_OK) {\n            free(arguments);\n            return status;\n        }\n    }\n    if (!minic_core_function_add_call_signature(context->function,'''
-          new='''    for (argument_index = 0U; argument_index < signature->parameter_count; ++argument_index) {\n        status = reload_scalar_value(context,\n                                     expression->span,\n                                     signature->parameter_types[argument_index],\n                                     argument_objects[argument_index],\n                                     &arguments[argument_index].value.value_id);\n        if (status != MINIC_CORE_LOWER_OK) {\n            free(arguments);\n            return status;\n        }\n    }\n    status = lower_expression(context, expression->value.call.callee, &callee_value);\n    if (status != MINIC_CORE_LOWER_OK) {\n        free(arguments);\n        return status;\n    }\n    if (callee_value >= context->function->value_count ||\n        !minic_type_equal(context->function->values[callee_value].type, callee_value_type)) {\n        free(arguments);\n        return MINIC_CORE_LOWER_ERROR;\n    }\n    if (!minic_core_function_add_call_signature(context->function,'''
-          if old not in s: raise SystemExit('indirect reload anchor')
-          p.write_text(s.replace(old,new,1))
-          print('CORE_BATCH_Y28_PATCHED')
+          old = '''    /* Strip only the normalized update.  The preceding synthetic continue\n       label remains in the body and becomes the convergence point before the\n       update is lowered. */\n    *iteration_body = *body;\n    iteration_body->statement_count -= 1U;\n    *update_statement = update;\n    return true;\n}\n\nstatic MinicCoreLowerStatus\nlower_while'''
+          new = '''    /* The update is always outside the lowered iteration body.  Preserve the\n       preceding synthetic continue label only for a zero-distance cleanup\n       edge; otherwise leave cleanup-bearing for scopes on the established\n       fail-closed path. */\n    *iteration_body = *body;\n    iteration_body->statement_count -=\n        core_cleanup_edge_is_empty(continue_label) ? 1U : 2U;\n    *update_statement = update;\n    return true;\n}\n\nstatic MinicCoreLowerStatus\nlower_while'''
+          if s.count(old) != 1:
+              raise SystemExit(f'update-tail anchor count={s.count(old)}')
+          s = s.replace(old, new, 1)
+
+          old = '''        MinicType array_pointer_type;\n        MinicType element_type;\n        MinicType index_value_type;\n        MinicType pointer_type;'''
+          new = '''        MinicType array_pointer_type;\n        MinicType base_value_type;\n        MinicType element_type;\n        MinicType index_value_type;\n        MinicType pointer_type;'''
+          if s.count(old) != 1:
+              raise SystemExit(f'subscript declaration anchor count={s.count(old)}')
+          s = s.replace(old, new, 1)
+
+          old = '''        } else {\n            if (!minic_type_is_pointer(base->type) ||\n                !minic_type_pointee(base->type, &element_type) ||\n                !minic_type_equal(element_type, expression->type) ||\n                !minic_c0_pointer_arithmetic_element_size(context->body->program,\n                                                          minic_default_data_layout(),\n                                                          base->type,\n                                                          &element_size)) {\n                return MINIC_CORE_LOWER_UNSUPPORTED;\n            }\n            pointer_type = base->type;\n            subscript_status =\n                lower_expression(context, expression->value.subscript.base, &base_value);\n            if (subscript_status != MINIC_CORE_LOWER_OK) {\n                return subscript_status;\n            }\n            if (base_value >= context->function->value_count ||\n                !minic_type_equal(context->function->values[base_value].type, base->type)) {\n                return MINIC_CORE_LOWER_ERROR;\n            }\n        }'''
+          new = '''        } else {\n            /* Pointer-valued lvalues undergo lvalue-to-rvalue conversion before\n               subscript arithmetic.  In particular, a pointer member selected\n               through a const record carries qualified storage type in the AST\n               while its scalar value type is unqualified.  Validate and carry\n               that semantic value type rather than requiring storage identity. */\n            if (!core_scalar_expression_value_type(context->body, base, &base_value_type) ||\n                !minic_type_is_pointer(base_value_type) ||\n                !minic_type_pointee(base_value_type, &element_type) ||\n                !minic_type_equal(element_type, expression->type) ||\n                !minic_c0_pointer_arithmetic_element_size(context->body->program,\n                                                          minic_default_data_layout(),\n                                                          base_value_type,\n                                                          &element_size)) {\n                return MINIC_CORE_LOWER_UNSUPPORTED;\n            }\n            pointer_type = base_value_type;\n            subscript_status =\n                lower_expression(context, expression->value.subscript.base, &base_value);\n            if (subscript_status != MINIC_CORE_LOWER_OK) {\n                return subscript_status;\n            }\n            if (base_value >= context->function->value_count ||\n                !minic_type_equal(context->function->values[base_value].type, base_value_type)) {\n                return MINIC_CORE_LOWER_ERROR;\n            }\n        }'''
+          if s.count(old) != 1:
+              raise SystemExit(f'subscript non-array anchor count={s.count(old)}')
+          s = s.replace(old, new, 1)
+
+          old = '''    status = lower_expression(context, expression->value.call.callee, &callee_value);\n    if (status != MINIC_CORE_LOWER_OK) {\n        (void)fprintf(stderr,\n                      "CORE_LOWER_DETAIL marker=M92_INDIRECT_CALL_HOT_DETAIL function=%s "\n                      "stage=indirect-call reason=callee-lower status=%d callee_kind=%d\\n",\n                      context->source_function != NULL ? context->source_function->name : "?",\n                      (int)status,\n                      callee_expression != NULL ? (int)callee_expression->kind : -1);\n        return status;\n    }\n    if (callee_value >= context->function->value_count ||\n        !minic_type_equal(context->function->values[callee_value].type,\n                          callee_value_type)) {\n        (void)fprintf(stderr,\n                      "CORE_LOWER_DETAIL marker=M92_INDIRECT_CALL_HOT_DETAIL function=%s "\n                      "stage=indirect-call reason=callee-value-type value=%u count=%zu\\n",\n                      context->source_function != NULL ? context->source_function->name : "?",\n                      (unsigned int)callee_value,\n                      context->function->value_count);\n        return MINIC_CORE_LOWER_ERROR;\n    }\n\n    arguments = signature->parameter_count == 0U'''
+          new = '''    /* C leaves the relative evaluation order of the function designator and\n       call arguments unspecified.  Lower and stabilize arguments first, then\n       evaluate the callee exactly once in the final call block.  This keeps the\n       callee SSA value block-local even when an argument creates control flow. */\n    arguments = signature->parameter_count == 0U'''
+          if s.count(old) != 1:
+              raise SystemExit(f'indirect early-callee anchor count={s.count(old)}')
+          s = s.replace(old, new, 1)
+
+          old = '''    for (argument_index = 0U; argument_index < signature->parameter_count; ++argument_index) {\n        status = reload_scalar_value(context,\n                                     expression->span,\n                                     signature->parameter_types[argument_index],\n                                     argument_objects[argument_index],\n                                     &arguments[argument_index].value.value_id);\n        if (status != MINIC_CORE_LOWER_OK) {\n            free(arguments);\n            return status;\n        }\n    }\n    if (!minic_core_function_add_call_signature(context->function,'''
+          new = '''    for (argument_index = 0U; argument_index < signature->parameter_count; ++argument_index) {\n        status = reload_scalar_value(context,\n                                     expression->span,\n                                     signature->parameter_types[argument_index],\n                                     argument_objects[argument_index],\n                                     &arguments[argument_index].value.value_id);\n        if (status != MINIC_CORE_LOWER_OK) {\n            free(arguments);\n            return status;\n        }\n    }\n    status = lower_expression(context, expression->value.call.callee, &callee_value);\n    if (status != MINIC_CORE_LOWER_OK) {\n        (void)fprintf(stderr,\n                      "CORE_LOWER_DETAIL marker=M92_INDIRECT_CALL_HOT_DETAIL function=%s "\n                      "stage=indirect-call reason=callee-lower status=%d callee_kind=%d\\n",\n                      context->source_function != NULL ? context->source_function->name : "?",\n                      (int)status,\n                      callee_expression != NULL ? (int)callee_expression->kind : -1);\n        free(arguments);\n        return status;\n    }\n    if (callee_value >= context->function->value_count ||\n        !minic_type_equal(context->function->values[callee_value].type, callee_value_type)) {\n        (void)fprintf(stderr,\n                      "CORE_LOWER_DETAIL marker=M92_INDIRECT_CALL_HOT_DETAIL function=%s "\n                      "stage=indirect-call reason=callee-value-type value=%u count=%zu\\n",\n                      context->source_function != NULL ? context->source_function->name : "?",\n                      (unsigned int)callee_value, context->function->value_count);\n        free(arguments);\n        return MINIC_CORE_LOWER_ERROR;\n    }\n    if (!minic_core_function_add_call_signature(context->function,'''
+          if s.count(old) != 1:
+              raise SystemExit(f'indirect reload anchor count={s.count(old)}')
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+
+          p = Path('tests/core/run-core-ir-shadow.sh')
+          s = p.read_text()
+          anchor = '''cat >"$work_dir/indirect-call-unsupported.i" <<'EOF'\nint indirect_caller(int (*callee)(int), int value) {\n    return callee(value);\n}\nEOF\ncheck_strict_case indirect-call-unsupported\n'''
+          extra = '''\ncat >"$work_dir/const-record-member-subscript.i" <<'EOF'\nstruct pointer_view {\n    int *items;\n};\n\nint *const_record_member_subscript(const struct pointer_view *view,\n                                   unsigned long index) {\n    return &view->items[index];\n}\nEOF\ncheck_strict_case const-record-member-subscript\n\ncat >"$work_dir/indirect-cfg-argument.i" <<'EOF'\nint indirect_cfg_argument(int (*callee)(int), int value) {\n    return callee(value ? value : 1);\n}\nEOF\ncheck_strict_case indirect-cfg-argument\n'''
+          if s.count(anchor) != 1:
+              raise SystemExit(f'indirect test anchor count={s.count(anchor)}')
+          p.write_text(s.replace(anchor, anchor + extra, 1))
+          print('CORE_BATCH_Y29_SOURCE_PATCHED')
           PY
-      - name: Build exact candidate
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-y28-compiler
+
+      - name: Build exact production candidate
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-y29-compiler
+
       - name: Full Core regression suite
         shell: bash
         run: |
           set -Eeuo pipefail
-          MINIC="$GITHUB_WORKSPACE/build/core-batch-y28-compiler/bin/minic" \
-            BUILD_DIR="$GITHUB_WORKSPACE/build/core-batch-y28-tests" \
+          MINIC="$GITHUB_WORKSPACE/build/core-batch-y29-compiler/bin/minic" \
+            BUILD_DIR="$GITHUB_WORKSPACE/build/core-batch-y29-tests" \
             bash tests/core/run-core-ir-shadow.sh
-          echo CORE_BATCH_Y28_CORE_SUITE_PASS
-      - name: Full frozen strict500
+          echo CORE_BATCH_Y29_CORE_SUITE_PASS
+
+      - name: Full frozen strict500 production gate
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-batch-y28-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-batch-y28-full500"
+          python3 tools/dev/patch-linux-replay-live-progress.py
+          compiler="$GITHUB_WORKSPACE/build/core-batch-y29-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-batch-y29-full500"
           mkdir -p "$work"
           set +e
           MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
@@ -91,7 +117,7 @@ jobs:
             >"$work/replay.log" 2>&1
           replay_status=$?
           set -e
-          printf 'CORE_BATCH_Y28_REPLAY_STATUS=%d\n' "$replay_status"
+          printf 'CORE_BATCH_Y29_REPLAY_STATUS=%d\n' "$replay_status"
           python3 tools/ci/classify-core-strict-frontier.py \
             "$work/batch-results.json" --examples 20 --json-out "$work/frontier-summary.json"
           python3 tools/ci/summarize-core-frontier-progress.py \
@@ -100,15 +126,39 @@ jobs:
           python3 - <<'PY'
           import json
           from pathlib import Path
-          work=Path('build/core-batch-y28-full500')
-          f=json.loads((work/'frontier-summary.json').read_text())
-          p=json.loads((work/'progress-summary.json').read_text())
-          print(f"CORE_BATCH_Y28_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
-          print(f"CORE_BATCH_Y28_PROGRESS mean={p.get('tu_mean_progress')} median={p.get('tu_median_progress')} line_weighted={p.get('line_weighted_progress')}")
-          errors=f.get('errors') or []
-          print(f"CORE_BATCH_Y28_ERRORS count={len(errors)}")
-          for i,e in enumerate(errors[:20],1):
-              print('CORE_BATCH_Y28_ERROR',i,json.dumps(e,sort_keys=True,separators=(',',':')))
-          if f['selected'] != 500 or f['error'] != 0 or f['pass'] < 66:
-              raise SystemExit(f'Y28 full500 gate failed: {f}')
+          work = Path('build/core-batch-y29-full500')
+          frontier = json.loads((work/'frontier-summary.json').read_text())
+          progress = json.loads((work/'progress-summary.json').read_text())
+          rows = json.loads((work/'batch-results.json').read_text())
+          if isinstance(rows, dict):
+              rows = rows.get('results', rows.get('tus', []))
+          status = {int(r['index']): r['status'] for r in rows}
+          print(f"CORE_BATCH_Y29_RESULT selected={frontier['selected']} pass={frontier['pass']} unsupported={frontier['unsupported']} error={frontier['error']}")
+          print(f"CORE_BATCH_Y29_PROGRESS mean={progress.get('tu_mean_progress')} median={progress.get('tu_median_progress')} line_weighted={progress.get('line_weighted_progress')}")
+          print(f"CORE_BATCH_Y29_SENTINELS index7={status.get(7)} index39={status.get(39)} index152={status.get(152)} index265={status.get(265)}")
+          if (frontier['selected'] != 500 or frontier['pass'] != 66 or
+              frontier['unsupported'] != 434 or frontier['error'] != 0 or
+              status.get(7) != 'PASS' or status.get(39) != 'PASS'):
+              raise SystemExit(f'Y29 production gate failed: frontier={frontier} sentinels={status.get(7),status.get(39),status.get(152),status.get(265)}')
           PY
+
+      - name: Commit semantic production change
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git restore tests/external/linux/corpus_replay.py
+          git status --short
+          python3 - <<'PY'
+          import subprocess
+          allowed = {'src/core/core_lower.c', 'tests/core/run-core-ir-shadow.sh'}
+          changed = set(subprocess.check_output(['git','diff','--name-only'], text=True).splitlines())
+          print('CORE_BATCH_Y29_CHANGED', sorted(changed))
+          if changed != allowed:
+              raise SystemExit(f'unexpected production diff: {changed}')
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/core/core_lower.c tests/core/run-core-ir-shadow.sh
+          git commit -m 'core: preserve loop and scalar value ownership'
+          git push origin HEAD:refactor/declaration-sema-v1
+          echo "CORE_BATCH_Y29_PRODUCTION_COMMIT=$(git rev-parse HEAD)"
