@@ -1,4 +1,4 @@
-name: Core Y54 Call Frame Bitcast Trace
+name: Core Y55 Frame Address Level Zero
 
 on:
   pull_request:
@@ -7,7 +7,7 @@ permissions:
   contents: read
 
 jobs:
-  y54-call-frame-bitcast-trace:
+  y55-frame-address-level-zero:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     steps:
@@ -26,39 +26,92 @@ jobs:
           set -Eeuo pipefail
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
-      - name: Instrument perf caller-reg bitcasts
+      - name: Apply generic frame-address candidate
         shell: bash
         run: |
           set -Eeuo pipefail
           python3 tools/dev/patch-linux-replay-live-progress.py
           python3 - <<'PY'
           from pathlib import Path
+
           p=Path('src/core/core_lower.c')
           s=p.read_text()
-          old='''        if (!core_scalar_expression_value_type(context->body, operand, &operand_value_type) ||\n            !minic_core_scalar_bitcast_types_valid(expression->type, operand_value_type)) {\n            return MINIC_CORE_LOWER_UNSUPPORTED;\n        }\n        status = lower_expression(context, expression->value.unary.operand, &operand_value);\n        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n'''
-          new='''        (void)memset(&operand_value_type, 0, sizeof(operand_value_type));\n        {\n            bool value_type_ok =\n                core_scalar_expression_value_type(context->body, operand, &operand_value_type);\n            bool bitcast_ok = value_type_ok &&\n                minic_core_scalar_bitcast_types_valid(expression->type, operand_value_type);\n            if (context->source_function != NULL &&\n                strcmp(context->source_function->name, "perf_fetch_caller_regs") == 0) {\n                (void)fprintf(stderr,\n                    "CORE_Y54_BITCAST span=%zu:%zu target_base=%d target_sign=%d target_rank=%d "\n                    "target_ptr=%u operand_kind=%d operand_cat=%d operand_base=%d operand_sign=%d "\n                    "operand_rank=%d operand_ptr=%u value_ok=%d value_base=%d value_sign=%d "\n                    "value_rank=%d value_ptr=%u bitcast_ok=%d frame_kind=%d frame_level=%u\\n",\n                    expression->span.begin.line, expression->span.begin.column,\n                    (int)expression->type.base_kind, (int)expression->type.integer_sign,\n                    (int)expression->type.integer_rank, expression->type.pointer_depth,\n                    (int)operand->kind, (int)operand->value_category,\n                    (int)operand->type.base_kind, (int)operand->type.integer_sign,\n                    (int)operand->type.integer_rank, operand->type.pointer_depth,\n                    value_type_ok ? 1 : 0, (int)operand_value_type.base_kind,\n                    (int)operand_value_type.integer_sign, (int)operand_value_type.integer_rank,\n                    operand_value_type.pointer_depth, bitcast_ok ? 1 : 0,\n                    operand->kind == MINIC_EXPRESSION_CALL_FRAME_ADDRESS\n                        ? (int)operand->value.call_frame_address.kind : -1,\n                    operand->kind == MINIC_EXPRESSION_CALL_FRAME_ADDRESS\n                        ? operand->value.call_frame_address.level : 0U);\n            }\n            if (!value_type_ok || !bitcast_ok) {\n                return MINIC_CORE_LOWER_UNSUPPORTED;\n            }\n        }\n        status = lower_expression(context, expression->value.unary.operand, &operand_value);\n        if (context->source_function != NULL &&\n            strcmp(context->source_function->name, "perf_fetch_caller_regs") == 0) {\n            (void)fprintf(stderr,\n                "CORE_Y54_OPERAND span=%zu:%zu operand_kind=%d frame_kind=%d frame_level=%u status=%d\\n",\n                expression->span.begin.line, expression->span.begin.column, (int)operand->kind,\n                operand->kind == MINIC_EXPRESSION_CALL_FRAME_ADDRESS\n                    ? (int)operand->value.call_frame_address.kind : -1,\n                operand->kind == MINIC_EXPRESSION_CALL_FRAME_ADDRESS\n                    ? operand->value.call_frame_address.level : 0U,\n                (int)status);\n        }\n        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n'''
+          old='''    if (expression->kind == MINIC_EXPRESSION_CALL_FRAME_ADDRESS) {\n        MinicType pointee;\n\n        if (expression->value.call_frame_address.kind != MINIC_CALL_FRAME_ADDRESS_RETURN ||\n            expression->value.call_frame_address.level != 0U ||\n            !minic_type_pointee(expression->type, &pointee) || !minic_type_is_void(pointee)) {\n            return MINIC_CORE_LOWER_UNSUPPORTED;\n        }\n        (void)memset(&instruction, 0, sizeof(instruction));\n        instruction.kind = MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS;\n        instruction.span = expression->span;\n        instruction.type = expression->type;\n        instruction.result = MINIC_CORE_VALUE_INVALID;\n        instruction.value.call_frame_address.kind = MINIC_CORE_CALL_FRAME_ADDRESS_RETURN;\n        instruction.value.call_frame_address.level = 0U;\n        return minic_core_function_append_value_instruction(\n                   context->function, context->block_id, &instruction, value_id)\n                   ? MINIC_CORE_LOWER_OK\n                   : MINIC_CORE_LOWER_ERROR;\n    }\n'''
+          new='''    if (expression->kind == MINIC_EXPRESSION_CALL_FRAME_ADDRESS) {\n        MinicCoreCallFrameAddressKind core_kind;\n        MinicType pointee;\n\n        if (expression->value.call_frame_address.level != 0U ||\n            !minic_type_pointee(expression->type, &pointee) || !minic_type_is_void(pointee)) {\n            return MINIC_CORE_LOWER_UNSUPPORTED;\n        }\n        switch (expression->value.call_frame_address.kind) {\n        case MINIC_CALL_FRAME_ADDRESS_RETURN:\n            core_kind = MINIC_CORE_CALL_FRAME_ADDRESS_RETURN;\n            break;\n        case MINIC_CALL_FRAME_ADDRESS_FRAME:\n            core_kind = MINIC_CORE_CALL_FRAME_ADDRESS_FRAME;\n            break;\n        default:\n            return MINIC_CORE_LOWER_UNSUPPORTED;\n        }\n        (void)memset(&instruction, 0, sizeof(instruction));\n        instruction.kind = MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS;\n        instruction.span = expression->span;\n        instruction.type = expression->type;\n        instruction.result = MINIC_CORE_VALUE_INVALID;\n        instruction.value.call_frame_address.kind = core_kind;\n        instruction.value.call_frame_address.level = 0U;\n        return minic_core_function_append_value_instruction(\n                   context->function, context->block_id, &instruction, value_id)\n                   ? MINIC_CORE_LOWER_OK\n                   : MINIC_CORE_LOWER_ERROR;\n    }\n'''
           if s.count(old)!=1:
-              raise SystemExit(f'bitcast diagnostic anchor count={s.count(old)}')
+              raise SystemExit(f'core_lower call-frame anchor count={s.count(old)}')
           p.write_text(s.replace(old,new,1))
-          print('CORE_Y54_INSTRUMENTED')
+
+          p=Path('src/target/riscv64/core_codegen.c')
+          s=p.read_text()
+          old='''        if (kind == MINIC_CORE_INSTRUCTION_CALL ||\n            kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL ||\n            kind == MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS) {\n            return true;\n        }\n'''
+          new='''        if (kind == MINIC_CORE_INSTRUCTION_CALL ||\n            kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL) {\n            return true;\n        }\n        if (kind == MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS &&\n            function->instructions[instruction_index].value.call_frame_address.kind ==\n                MINIC_CORE_CALL_FRAME_ADDRESS_RETURN) {\n            return true;\n        }\n'''
+          if s.count(old)!=1:
+              raise SystemExit(f'ra-save anchor count={s.count(old)}')
+          s=s.replace(old,new,1)
+          old='''    return instruction != NULL &&\n           instruction->kind == MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS &&\n           instruction->value.call_frame_address.kind == MINIC_CORE_CALL_FRAME_ADDRESS_RETURN &&\n           instruction->value.call_frame_address.level == 0U &&\n           minic_type_pointee(instruction->type, &pointee) && minic_type_is_void(pointee);\n'''
+          new='''    return instruction != NULL &&\n           instruction->kind == MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS &&\n           (instruction->value.call_frame_address.kind == MINIC_CORE_CALL_FRAME_ADDRESS_RETURN ||\n            instruction->value.call_frame_address.kind == MINIC_CORE_CALL_FRAME_ADDRESS_FRAME) &&\n           instruction->value.call_frame_address.level == 0U &&\n           minic_type_pointee(instruction->type, &pointee) && minic_type_is_void(pointee);\n'''
+          if s.count(old)!=1:
+              raise SystemExit(f'call-frame support anchor count={s.count(old)}')
+          s=s.replace(old,new,1)
+          old='''    case MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS:\n        if (!core_call_frame_address_supported(instruction) || !frame->saves_return_address ||\n            !minic_riscv64_emit_sp_load64(file, "t0", frame->return_address_offset)) {\n            return false;\n        }\n        return store_core_value(file, frame, instruction->result, "t0");\n'''
+          new='''    case MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS:\n        if (!core_call_frame_address_supported(instruction)) {\n            return false;\n        }\n        if (instruction->value.call_frame_address.kind == MINIC_CORE_CALL_FRAME_ADDRESS_RETURN) {\n            if (!frame->saves_return_address ||\n                !minic_riscv64_emit_sp_load64(file, "t0", frame->return_address_offset)) {\n                return false;\n            }\n        } else if (instruction->value.call_frame_address.kind ==\n                   MINIC_CORE_CALL_FRAME_ADDRESS_FRAME) {\n            if (fprintf(file, "  mv t0, sp\\n") < 0) {\n                return false;\n            }\n        } else {\n            return false;\n        }\n        return store_core_value(file, frame, instruction->result, "t0");\n'''
+          if s.count(old)!=1:
+              raise SystemExit(f'call-frame emit anchor count={s.count(old)}')
+          p.write_text(s.replace(old,new,1))
+
+          p=Path('tests/core/run-core-ir-shadow.sh')
+          s=p.read_text()
+          anchor='''cat >"$work_dir/variadic-call-unsupported.i" <<'EOF'\n'''
+          addition='''cat >"$work_dir/call-frame-address-level-zero.i" <<'EOF'\nunsigned long core_return_address_level_zero(void) {\n    return (unsigned long)__builtin_return_address(0);\n}\n\nunsigned long core_frame_address_level_zero(void) {\n    return (unsigned long)__builtin_frame_address(0);\n}\nEOF\ncheck_strict_case call-frame-address-level-zero\n\n'''
+          if s.count(anchor)!=1:
+              raise SystemExit(f'core test anchor count={s.count(anchor)}')
+          p.write_text(s.replace(anchor,addition+anchor,1))
+          print('CORE_Y55_CANDIDATE_APPLIED')
           PY
-      - name: Build diagnostic compiler
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y54-compiler
-      - name: Replay representatives
+      - name: Build candidate compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y55-compiler
+      - name: Full Core exact regression suite
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-y54-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-y54"
+          MINIC="$GITHUB_WORKSPACE/build/core-y55-compiler/bin/minic" \
+            BUILD_DIR="$GITHUB_WORKSPACE/build/core-y55-regression" \
+            bash tests/core/run-core-ir-shadow.sh
+      - name: Existing call-frame C0 contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/core-y55-compiler/bin/minic" \
+            BUILD_DIR="$GITHUB_WORKSPACE/build/core-y55-c0" \
+            bash tests/compiler/c0/run-gnu-call-frame-address.sh
+      - name: Focused Linux perf caller regs
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/core-y55-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-y55-linux"
           set +e
           MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
             --work "$work" --jobs 3 --offset 0 --limit 500 --sample-count 0 --indices '0,4,40'
           replay_status=$?
           set -e
-          echo CORE_Y54_REPLAY_STATUS=$replay_status
+          echo CORE_Y55_REPLAY_STATUS=$replay_status
           python3 tools/ci/classify-core-strict-frontier.py \
             "$work/batch-results.json" --examples 6 --json-out "$work/frontier-summary.json"
-          echo CORE_Y54_DETAILS_BEGIN
-          grep -R -E 'CORE_Y54_' "$work/minic-stderr" | head -n 160 || true
-          echo CORE_Y54_DETAILS_END
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          w=Path('build/core-y55-linux')
+          f=json.loads((w/'frontier-summary.json').read_text())
+          rows=json.loads((w/'batch-results.json').read_text())
+          if isinstance(rows,dict): rows=rows.get('results',rows.get('tus',[]))
+          print(f"CORE_Y55_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
+          for r in rows:
+              print(f"CORE_Y55_INDEX index={r.get('index')} status={r.get('status')} progress={float(r.get('progress_ratio') or 0)*100:.3f}% message={r.get('message','')}")
+          if f['error'] != 0:
+              raise SystemExit(f'focused Core ERROR: {f}')
+          if any("perf_fetch_caller_regs" in r.get('message','') for r in rows):
+              raise SystemExit('perf_fetch_caller_regs blocker survived Y55')
+          PY
