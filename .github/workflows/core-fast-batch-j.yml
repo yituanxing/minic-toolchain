@@ -1,92 +1,71 @@
-name: Core Y105b Function Address Productizer
+name: Core Y106 SBI Ecall Target Diagnostic
 
 on:
   pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  y105b-productize:
+  y106-sbi-target:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: refactor/declaration-sema-v1
-          fetch-depth: 0
+          ref: c06064144e345dfb45144f42fb8cc1799efd6a2a
       - name: Restore frozen Linux corpus
         id: linux-corpus-cache
         uses: actions/cache/restore@v4
         with:
           path: build/linux-focus-corpus
           key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
-      - name: Apply production semantic patch
-        id: patch
+      - name: Instrument assignment target
         shell: bash
         run: |
           set -Eeuo pipefail
-          if grep -Fq 'M104_FUNCTION_DESIGNATOR_ADDRESS' src/core/core_lower.c; then
-            echo 'changed=false' >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
           python3 - <<'PY'
           from pathlib import Path
           p=Path('src/core/core_lower.c'); s=p.read_text()
-          old='''    if (expression == NULL) {\n        return MINIC_CORE_LOWER_ERROR;\n    }\n    /* M103_INTEGER_BIT_FIELD_READ: a bit-field is not C-addressable, but\n'''
-          new='''    if (expression == NULL) {\n        return MINIC_CORE_LOWER_ERROR;\n    }\n    /* M104_FUNCTION_DESIGNATOR_ADDRESS: the normalized frontend represents a\n       function designator as its function-pointer semantic value already. C's\n       `&function` therefore has the same pointer type and symbol identity; do\n       not route it through the object-lvalue address seam. */\n    if (expression->kind == MINIC_EXPRESSION_ADDRESS_OF) {\n        const MinicExpression *operand = minic_c0_program_expression(\n            context->body->program, expression->value.unary.operand);\n        MinicType function_type;\n\n        if (operand != NULL && operand->kind == MINIC_EXPRESSION_FUNCTION) {\n            if (!minic_type_equal(expression->type, operand->type) ||\n                !minic_type_pointee(operand->type, &function_type) ||\n                !minic_type_is_function(function_type)) {\n                return MINIC_CORE_LOWER_UNSUPPORTED;\n            }\n            return lower_expression(context, expression->value.unary.operand, value_id);\n        }\n    }\n    /* M103_INTEGER_BIT_FIELD_READ: a bit-field is not C-addressable, but\n'''
-          if s.count(old)!=1: raise SystemExit(f'core anchor count={s.count(old)}')
+          old='''    status = lower_address(context, target_id, &address_id);\n    if (status != MINIC_CORE_LOWER_OK) {\n        (void)fprintf(stderr, "CORE_ASSIGN_STAGE function=%s stage=target-address status=%d\\n",\n                      context->source_function != NULL ? context->source_function->name : "?",\n                      (int)status);\n        return status;\n    }\n'''
+          new='''    status = lower_address(context, target_id, &address_id);\n    if (status != MINIC_CORE_LOWER_OK) {\n        if (context->source_function != NULL && strcmp(context->source_function->name, "sbi_ecall") == 0 &&\n            target != NULL) {\n            const MinicExpression *trace_child = NULL;\n            const MinicExpression *trace_base = NULL;\n            const MinicExpression *trace_index = NULL;\n            const MinicRecord *trace_record = NULL;\n            const MinicRecordField *trace_field = NULL;\n            if (target->kind == MINIC_EXPRESSION_DEREFERENCE ||\n                target->kind == MINIC_EXPRESSION_ADDRESS_OF ||\n                target->kind == MINIC_EXPRESSION_LVALUE_READ) {\n                trace_child = minic_c0_program_expression(context->body->program, target->value.unary.operand);\n            }\n            if (target->kind == MINIC_EXPRESSION_MEMBER) {\n                trace_base = minic_c0_program_expression(context->body->program, target->value.member.base);\n                trace_record = minic_c0_program_record(context->body->program, target->value.member.record_id);\n                trace_field = minic_c0_record_field(trace_record, target->value.member.field_index);\n            }\n            if (target->kind == MINIC_EXPRESSION_SUBSCRIPT) {\n                trace_base = minic_c0_program_expression(context->body->program, target->value.subscript.base);\n                trace_index = minic_c0_program_expression(context->body->program, target->value.subscript.index);\n            }\n            (void)fprintf(stderr,\n                          "CORE_Y106_TARGET kind=%d category=%d int=%d ptr=%d record=%d const=%d volatile=%d span=%zu:%zu child_kind=%d child_cat=%d child_int=%d child_ptr=%d base_kind=%d base_cat=%d base_ptr=%d base_record=%d index_kind=%d index_int=%d field=%d bitfield=%d field_array=%d status=%d\\n",\n                          (int)target->kind, (int)target->value_category,\n                          minic_type_is_integer(target->type) ? 1 : 0,\n                          minic_type_is_pointer(target->type) ? 1 : 0,\n                          minic_type_is_record(target->type) ? 1 : 0,\n                          minic_type_is_const(target->type) ? 1 : 0,\n                          minic_type_is_volatile(target->type) ? 1 : 0,\n                          target->span.begin.line, target->span.begin.column,\n                          trace_child != NULL ? (int)trace_child->kind : -1,\n                          trace_child != NULL ? (int)trace_child->value_category : -1,\n                          trace_child != NULL && minic_type_is_integer(trace_child->type) ? 1 : 0,\n                          trace_child != NULL && minic_type_is_pointer(trace_child->type) ? 1 : 0,\n                          trace_base != NULL ? (int)trace_base->kind : -1,\n                          trace_base != NULL ? (int)trace_base->value_category : -1,\n                          trace_base != NULL && minic_type_is_pointer(trace_base->type) ? 1 : 0,\n                          trace_base != NULL && minic_type_is_record(trace_base->type) ? 1 : 0,\n                          trace_index != NULL ? (int)trace_index->kind : -1,\n                          trace_index != NULL && minic_type_is_integer(trace_index->type) ? 1 : 0,\n                          trace_field != NULL ? 1 : 0,\n                          trace_field != NULL && trace_field->is_bit_field ? 1 : 0,\n                          trace_field != NULL && trace_field->is_array ? 1 : 0,\n                          (int)status);\n        }\n        (void)fprintf(stderr, "CORE_ASSIGN_STAGE function=%s stage=target-address status=%d\\n",\n                      context->source_function != NULL ? context->source_function->name : "?",\n                      (int)status);\n        return status;\n    }\n'''
+          if s.count(old)!=1: raise SystemExit(f'anchor count={s.count(old)}')
           p.write_text(s.replace(old,new,1))
-
-          t=Path('tests/core/run-core-ir-shadow.sh'); ts=t.read_text()
-          anchor='''cat >"$work_dir/function-pointer-parameter-ingress.i" <<'EOF'\n'''
-          case='''cat >"$work_dir/function-designator-address.i" <<'EOF'\nint function_address_target(int value);\nint function_address_consume(int (*callback)(int));\n\nint function_designator_address(void) {\n    return function_address_consume(&function_address_target);\n}\nEOF\ncheck_strict_case function-designator-address\n\n'''
-          if ts.count(anchor)!=1: raise SystemExit(f'test anchor count={ts.count(anchor)}')
-          t.write_text(ts.replace(anchor,case+anchor,1))
           PY
-          echo 'changed=true' >> "$GITHUB_OUTPUT"
-      - name: Build production candidate
-        if: steps.patch.outputs.changed == 'true'
+      - name: Build exact diagnostic compiler
         shell: bash
         run: |
           set -Eeuo pipefail
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y105b-compiler
-      - name: Run permanent Core shadow regression
-        if: steps.patch.outputs.changed == 'true'
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y106-compiler
+      - name: Replay SBI TU
         shell: bash
         run: |
           set -Eeuo pipefail
-          MINIC="$GITHUB_WORKSPACE/build/core-y105b-compiler/bin/minic" \
-            BUILD_DIR="$GITHUB_WORKSPACE/build/core-y105b-shadow" \
-            bash tests/core/run-core-ir-shadow.sh
-      - name: Require init main strict PASS
-        if: steps.patch.outputs.changed == 'true'
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-y105b-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-y105b-linux"; mkdir -p "$work"
+          compiler="$GITHUB_WORKSPACE/build/core-y106-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-y106-linux"; mkdir -p "$work"
+          set +e
           MINIC_CORE_IR=strict CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
-            --work "$work" --jobs 1 --offset 0 --limit 500 --sample-count 0 --indices '0'
+            --work "$work" --jobs 1 --offset 0 --limit 500 --sample-count 0 --indices '42'
+          status=$?; set -e; echo CORE_Y106_REPLAY_STATUS=$status
           python3 - <<'PY'
           import json
           from pathlib import Path
-          rows=json.loads(Path('build/core-y105b-linux/batch-results.json').read_text())
+          w=Path('build/core-y106-linux')
+          rows=json.loads((w/'batch-results.json').read_text())
           if isinstance(rows,dict): rows=rows.get('results',rows.get('tus',[]))
-          if len(rows)!=1 or rows[0].get('status')!='PASS':
-              raise SystemExit(f'init/main not PASS: {rows}')
-          print(f"CORE_Y105B_PASS input={rows[0].get('input')} total={rows[0].get('total_lines')}")
+          for r in rows:
+              print(f"CORE_Y106_INDEX status={r.get('status')} first={r.get('first_error_line')} total={r.get('total_lines')} progress={r.get('progress_ratio')} message={r.get('message','')}")
+              err=w/'minic-stderr'/f"{r['input']}.stderr"
+              if err.is_file():
+                  for x in err.read_text(errors='replace').splitlines():
+                      if 'CORE_Y106_' in x or ('CORE_' in x and 'sbi_ecall' in x): print(x)
+              first=r.get('first_error_line')
+              src=Path('build/linux-focus-corpus/kbuild')/r['input']
+              if first and src.is_file():
+                  lines=src.read_text(errors='replace').splitlines()
+                  lo=max(0,int(first)-10); hi=min(len(lines),int(first)+9)
+                  print('CORE_Y106_SOURCE_CONTEXT')
+                  for n in range(lo,hi): print(f'{n+1}: {lines[n]}')
           PY
-      - name: Commit production semantic change
-        if: steps.patch.outputs.changed == 'true'
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add src/core/core_lower.c tests/core/run-core-ir-shadow.sh
-          git diff --cached --check
-          git commit -m 'core: lower function designator addresses'
-          git push origin HEAD:refactor/declaration-sema-v1
