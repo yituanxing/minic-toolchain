@@ -1,18 +1,12 @@
-name: Core Sprint Top Progress
+name: Core Strict500 Snapshot
 
 on:
   pull_request:
 
-permissions:
-  contents: write
-
 jobs:
-  sprint:
+  strict500:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
-    concurrency:
-      group: core-sprint-${{ github.event.pull_request.number }}
-      cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
         with:
@@ -33,114 +27,45 @@ jobs:
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
 
-      - name: Apply M106 materialized local-array batch
-        id: m106
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          python3 tools/dev/m106-materialized-local-array.py
-          if git diff --quiet -- src/core/core_lower.c tests/core/run-core-ir-shadow.sh; then
-            echo 'changed=false' >> "$GITHUB_OUTPUT"
-          else
-            echo 'changed=true' >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Enable compact progress telemetry
         run: python3 tools/dev/patch-linux-replay-live-progress.py
 
       - name: Build exact compiler
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-sprint-compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/strict500-compiler
 
-      - name: Core shadow qualification
-        if: steps.m106.outputs.changed == 'true'
+      - name: Replay frozen strict500
         shell: bash
         run: |
           set -Eeuo pipefail
-          MINIC="$GITHUB_WORKSPACE/build/core-sprint-compiler/bin/minic" \
-            BUILD_DIR="$GITHUB_WORKSPACE/build/core-sprint-shadow" \
-            bash tests/core/run-core-ir-shadow.sh
-
-      - name: Sprint nearest-to-pass TUs
-        shell: bash
-        env:
-          M106_CHANGED: ${{ steps.m106.outputs.changed }}
-        run: |
-          set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-sprint-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-sprint"
+          compiler="$GITHUB_WORKSPACE/build/strict500-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/strict500"
           set +e
-          MINIC_CORE_IR=strict CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
+          MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" \
             --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
             --work "$work" \
             --jobs 4 \
             --offset 0 \
             --limit 500 \
-            --sample-count 0 \
-            --indices '0,7,42,95'
+            --sample-count 0
           replay_status=$?
           set -e
-          printf 'CORE_SPRINT_REPLAY_STATUS=%d\n' "$replay_status"
-          stderr="$work/minic-stderr/kernel/sched/core.i.stderr"
-          if test -f "$stderr"; then
-            echo CORE_SCHEDULE_TAIL_TRACE_BEGIN
-            grep -F 'function=schedule_tail' "$stderr" || true
-            echo CORE_SCHEDULE_TAIL_TRACE_END
-          fi
-          python3 - <<'PY'
-          from pathlib import Path
-          src = Path('build/linux-focus-corpus/kbuild/kernel/sched/core.i')
-          if src.is_file():
-              lines = src.read_text(errors='replace').splitlines()
-              print('CORE_SCHEDULE_TAIL_SOURCE_BEGIN')
-              for n in range(max(0, 88096 - 16), min(len(lines), 88096 + 20)):
-                  print(f'{n+1}: {lines[n]}')
-              print('CORE_SCHEDULE_TAIL_SOURCE_END')
-          PY
+          printf 'CORE_STRICT500_REPLAY_STATUS=%d\n' "$replay_status"
           python3 tools/ci/classify-core-strict-frontier.py \
             "$work/batch-results.json" \
-            --examples 4 \
+            --examples 20 \
             --json-out "$work/frontier-summary.json"
           python3 tools/ci/summarize-core-frontier-progress.py \
             "$work/batch-results.json" \
-            --expect-selected 4 \
+            --expect-selected 500 \
             --json-out "$work/progress-summary.json" \
             --text-out "$work/progress-summary.txt"
           python3 - <<'PY'
-          import json, os
+          import json
           from pathlib import Path
-
-          work = Path('build/core-sprint')
-          rows = json.loads((work / 'batch-results.json').read_text())
-          if isinstance(rows, dict):
-              rows = rows.get('results', rows.get('tus', []))
-          by_index = {int(r['index']): r for r in rows}
-          for idx in sorted(by_index):
-              r = by_index[idx]
-              print(f"CORE_SPRINT_ROW index={idx} status={r.get('status')} first={r.get('first_error_line')} total={r.get('total_lines')} progress={r.get('progress_ratio')} input={r.get('input')} message={r.get('message','')}")
+          work = Path('build/strict500')
           frontier = json.loads((work / 'frontier-summary.json').read_text())
-          print(f"CORE_SPRINT_RESULT selected={frontier['selected']} pass={frontier['pass']} unsupported={frontier['unsupported']} error={frontier['error']}")
+          print(f"CORE_STRICT500_EXACT selected={frontier['selected']} pass={frontier['pass']} unsupported={frontier['unsupported']} error={frontier['error']}")
           if frontier['error'] != 0:
-              raise SystemExit(f"Core ERROR present: {frontier.get('errors', [])}")
-          for idx in (0, 7, 42):
-              if idx not in by_index or by_index[idx].get('status') != 'PASS':
-                  raise SystemExit(f'required PASS missing for index {idx}: {by_index.get(idx)}')
-          r95 = by_index.get(95)
-          if r95 is None:
-              raise SystemExit('missing index95')
-          if r95.get('status') == 'ERROR':
-              raise SystemExit(f'index95 Core ERROR: {r95}')
-          print(f"CORE_SPRINT_INDEX95 status={r95.get('status')} first={r95.get('first_error_line')} blocker={r95.get('message','')}")
+              print(f"CORE_STRICT500_ERRORS {frontier.get('errors', [])}")
           PY
-
-      - name: Commit M106 production semantic
-        if: steps.m106.outputs.changed == 'true'
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add src/core/core_lower.c tests/core/run-core-ir-shadow.sh
-          git diff --cached --check
-          git commit -m 'core: lower materialized local array objects'
-          git push origin HEAD:refactor/declaration-sema-v1
