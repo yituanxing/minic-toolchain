@@ -1,4 +1,4 @@
-name: Core Y76 OnEachCpu Parameter Ingress
+name: Core Y77 Parameter Local Initialization
 
 on:
   pull_request:
@@ -7,40 +7,55 @@ permissions:
   contents: read
 
 jobs:
-  y76-on-each-cpu-ingress:
+  y77-parameter-local-init:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: d2a46647651f0fd642fcf25484e32f9ce4119d8c
+          ref: 687b773b03440af4812f17e5ca31303510fd03d0
       - name: Restore frozen Linux corpus
         id: linux-corpus-cache
         uses: actions/cache/restore@v4
         with:
           path: build/linux-focus-corpus
           key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
-      - name: Instrument ingress and build
+      - name: Apply parameter-local initialization candidate
         shell: bash
         run: |
           set -Eeuo pipefail
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           python3 - <<'PY'
           from pathlib import Path
-          p=Path('src/core/core_lower.c')
+          p=Path('src/frontend/parser_function.c')
           s=p.read_text()
-          old='''        if (minic_type_is_volatile(parameter->type) || parameter->is_array ||\n            parameter->is_register_storage ||\n            !minic_type_unqualified(parameter->type, &parameter_value_type) ||\n            !minic_type_equal(parameter_value_type,\n                              context->source_function->parameter_types[parameter_index])) {\n            return MINIC_CORE_LOWER_UNSUPPORTED;\n        }\n'''
-          new='''        {\n            bool unqualified_ok = minic_type_unqualified(parameter->type, &parameter_value_type);\n            bool type_equal = unqualified_ok &&\n                minic_type_equal(parameter_value_type,\n                                 context->source_function->parameter_types[parameter_index]);\n            if (context->source_function->name != NULL &&\n                strcmp(context->source_function->name, "on_each_cpu") == 0) {\n                (void)fprintf(stderr,\n                              "CORE_Y76_INGRESS function=on_each_cpu param=%zu volatile=%d array=%d register=%d unqual=%d equal=%d scalar=%d pointer=%d integer=%d\\n",\n                              parameter_index,\n                              minic_type_is_volatile(parameter->type) ? 1 : 0,\n                              parameter->is_array ? 1 : 0,\n                              parameter->is_register_storage ? 1 : 0,\n                              unqualified_ok ? 1 : 0, type_equal ? 1 : 0,\n                              unqualified_ok && core_memory_scalar_type(parameter_value_type) ? 1 : 0,\n                              unqualified_ok && minic_type_is_pointer(parameter_value_type) ? 1 : 0,\n                              unqualified_ok && minic_type_is_integer(parameter_value_type) ? 1 : 0);\n            }\n            if (minic_type_is_volatile(parameter->type) || parameter->is_array ||\n                parameter->is_register_storage || !unqualified_ok || !type_equal) {\n                return MINIC_CORE_LOWER_UNSUPPORTED;\n            }\n        }\n'''
-          if s.count(old)!=1: raise SystemExit(f'ingress anchor {s.count(old)}')
+          old='''            parameter_local.element_count = 1U;\n            parameter_local.is_array = false;\n            if (minic_parser_find_local_in_current_scope(parser, parameter_local.name_span) !=\n'''
+          new='''            parameter_local.element_count = 1U;\n            parameter_local.is_array = false;\n            /* Function parameters are ordinary automatic objects unless their\n               declaration explicitly carries storage metadata. Do not persist\n               an indeterminate stack byte into the semantic local. */\n            parameter_local.is_register_storage = false;\n            if (minic_parser_find_local_in_current_scope(parser, parameter_local.name_span) !=\n'''
+          if s.count(old)!=1: raise SystemExit(f'parameter anchor {s.count(old)}')
           p.write_text(s.replace(old,new,1))
+
+          p=Path('tests/core/run-core-ir-shadow.sh')
+          s=p.read_text()
+          anchor='''cat >"$work_dir/variadic-call-unsupported.i" <<'EOF'\n'''
+          addition='''cat >"$work_dir/function-pointer-parameter-ingress.i" <<'EOF'\ntypedef void (*core_callback_t)(void *);\nstruct core_param_mask { unsigned long bits[1]; };\nextern struct core_param_mask core_param_online;\nextern void core_call_mask(void *, core_callback_t, void *, _Bool, const struct core_param_mask *);\nvoid function_pointer_parameter_ingress(core_callback_t func, void *info, int wait) {\n    core_call_mask((void *)0, func, info, wait, &core_param_online);\n}\nEOF\ncheck_strict_case function-pointer-parameter-ingress\n\n'''
+          if s.count(anchor)!=1: raise SystemExit(f'test anchor {s.count(anchor)}')
+          p.write_text(s.replace(anchor,addition+anchor,1))
+          print('CORE_Y77_CANDIDATE_APPLIED')
           PY
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y76-compiler
-      - name: Replay representatives
+      - name: Build and exact Core regressions
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-y76-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-y76-linux"
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y77-compiler
+          MINIC="$GITHUB_WORKSPACE/build/core-y77-compiler/bin/minic" \
+            BUILD_DIR="$GITHUB_WORKSPACE/build/core-y77-regression" \
+            bash tests/core/run-core-ir-shadow.sh
+      - name: Focused on_each_cpu replay
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/core-y77-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-y77-linux"
           mkdir -p "$work"
           set +e
           MINIC_CORE_IR=strict CORE_FAST_TRACE=1 CORE_LOWER_DETAIL=1 python3 tests/external/linux/corpus_replay.py \
@@ -48,18 +63,18 @@ jobs:
             --work "$work" --jobs 3 --offset 0 --limit 500 --sample-count 0 --indices '193,194,195'
           status=$?
           set -e
-          echo CORE_Y76_REPLAY_STATUS=$status
+          echo CORE_Y77_REPLAY_STATUS=$status
+          python3 tools/ci/classify-core-strict-frontier.py "$work/batch-results.json" --examples 8 --json-out "$work/frontier-summary.json"
           python3 - <<'PY'
           import json
           from pathlib import Path
-          w=Path('build/core-y76-linux')
+          w=Path('build/core-y77-linux')
+          f=json.loads((w/'frontier-summary.json').read_text())
           rows=json.loads((w/'batch-results.json').read_text())
           if isinstance(rows,dict): rows=rows.get('results',rows.get('tus',[]))
+          print(f"CORE_Y77_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
           for r in rows:
-              idx=int(r['index']); rel=r['input']
-              print(f"CORE_Y76_INDEX index={idx} status={r.get('status')} progress={float(r.get('progress_ratio') or 0)*100:.3f}% message={r.get('message','')}")
-              err=w/'minic-stderr'/f'{rel}.stderr'
-              if err.is_file():
-                  for x in err.read_text(errors='replace').splitlines():
-                      if 'CORE_Y76_INGRESS' in x or "function 'on_each_cpu'" in x: print(x)
+              print(f"CORE_Y77_INDEX index={r.get('index')} status={r.get('status')} progress={float(r.get('progress_ratio') or 0)*100:.3f}% message={r.get('message','')}")
+          if f['error'] != 0: raise SystemExit(f'Core ERROR: {f}')
+          if any('on_each_cpu' in r.get('message','') for r in rows): raise SystemExit('on_each_cpu survived Y77')
           PY
