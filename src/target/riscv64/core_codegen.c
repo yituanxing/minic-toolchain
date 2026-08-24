@@ -72,8 +72,12 @@ static bool core_function_needs_saved_return_address(const MinicCoreFunction *fu
          ++instruction_index) {
         MinicCoreInstructionKind kind = function->instructions[instruction_index].kind;
         if (kind == MINIC_CORE_INSTRUCTION_CALL ||
-            kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL ||
-            kind == MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS) {
+            kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL) {
+            return true;
+        }
+        if (kind == MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS &&
+            function->instructions[instruction_index].value.call_frame_address.kind ==
+                MINIC_CORE_CALL_FRAME_ADDRESS_RETURN) {
             return true;
         }
     }
@@ -324,7 +328,8 @@ static bool core_call_frame_address_supported(
 
     return instruction != NULL &&
            instruction->kind == MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS &&
-           instruction->value.call_frame_address.kind == MINIC_CORE_CALL_FRAME_ADDRESS_RETURN &&
+           (instruction->value.call_frame_address.kind == MINIC_CORE_CALL_FRAME_ADDRESS_RETURN ||
+            instruction->value.call_frame_address.kind == MINIC_CORE_CALL_FRAME_ADDRESS_FRAME) &&
            instruction->value.call_frame_address.level == 0U &&
            minic_type_pointee(instruction->type, &pointee) && minic_type_is_void(pointee);
 }
@@ -2332,8 +2337,20 @@ static bool emit_instruction(FILE *file,
         return store_core_value(file, frame, instruction->result, "t0");
     }
     case MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS:
-        if (!core_call_frame_address_supported(instruction) || !frame->saves_return_address ||
-            !minic_riscv64_emit_sp_load64(file, "t0", frame->return_address_offset)) {
+        if (!core_call_frame_address_supported(instruction)) {
+            return false;
+        }
+        if (instruction->value.call_frame_address.kind == MINIC_CORE_CALL_FRAME_ADDRESS_RETURN) {
+            if (!frame->saves_return_address ||
+                !minic_riscv64_emit_sp_load64(file, "t0", frame->return_address_offset)) {
+                return false;
+            }
+        } else if (instruction->value.call_frame_address.kind ==
+                   MINIC_CORE_CALL_FRAME_ADDRESS_FRAME) {
+            if (fprintf(file, "  mv t0, sp\n") < 0) {
+                return false;
+            }
+        } else {
             return false;
         }
         return store_core_value(file, frame, instruction->result, "t0");

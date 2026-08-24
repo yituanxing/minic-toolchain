@@ -3337,11 +3337,21 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
        is GNU __builtin_return_address(0); deeper levels and frame-address
        queries remain unsupported until a backend can define them correctly. */
     if (expression->kind == MINIC_EXPRESSION_CALL_FRAME_ADDRESS) {
+        MinicCoreCallFrameAddressKind core_kind;
         MinicType pointee;
 
-        if (expression->value.call_frame_address.kind != MINIC_CALL_FRAME_ADDRESS_RETURN ||
-            expression->value.call_frame_address.level != 0U ||
+        if (expression->value.call_frame_address.level != 0U ||
             !minic_type_pointee(expression->type, &pointee) || !minic_type_is_void(pointee)) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        switch (expression->value.call_frame_address.kind) {
+        case MINIC_CALL_FRAME_ADDRESS_RETURN:
+            core_kind = MINIC_CORE_CALL_FRAME_ADDRESS_RETURN;
+            break;
+        case MINIC_CALL_FRAME_ADDRESS_FRAME:
+            core_kind = MINIC_CORE_CALL_FRAME_ADDRESS_FRAME;
+            break;
+        default:
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
         (void)memset(&instruction, 0, sizeof(instruction));
@@ -3349,7 +3359,7 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         instruction.span = expression->span;
         instruction.type = expression->type;
         instruction.result = MINIC_CORE_VALUE_INVALID;
-        instruction.value.call_frame_address.kind = MINIC_CORE_CALL_FRAME_ADDRESS_RETURN;
+        instruction.value.call_frame_address.kind = core_kind;
         instruction.value.call_frame_address.level = 0U;
         return minic_core_function_append_value_instruction(
                    context->function, context->block_id, &instruction, value_id)

@@ -404,6 +404,17 @@ int indirect_cfg_argument(int (*callee)(int), int value) {
 EOF
 check_strict_case indirect-cfg-argument
 
+cat >"$work_dir/call-frame-address-level-zero.i" <<'EOF'
+unsigned long core_return_address_level_zero(void) {
+    return (unsigned long)__builtin_return_address(0);
+}
+
+unsigned long core_frame_address_level_zero(void) {
+    return (unsigned long)__builtin_frame_address(0);
+}
+EOF
+check_strict_case call-frame-address-level-zero
+
 cat >"$work_dir/variadic-call-unsupported.i" <<'EOF'
 int variadic_external(int first, ...);
 
