@@ -497,6 +497,21 @@ int promoted_unary_negate(core_u16 value) {
 EOF
 check_strict_case promoted-unary-call-argument
 
+cat >"$work_dir/unsigned-bitfield-compound.i" <<'EOF'
+struct core_bitfield_compound {
+    unsigned char before : 2;
+    unsigned char flag : 1;
+    unsigned char after : 1;
+};
+int unsigned_bitfield_or_pointer(struct core_bitfield_compound *item, void *pointer) {
+    return item->flag |= !!pointer;
+}
+int unsigned_bitfield_xor(struct core_bitfield_compound *item, unsigned char value) {
+    return item->flag ^= value;
+}
+EOF
+check_strict_case unsigned-bitfield-compound
+
 cat >"$work_dir/variadic-call-unsupported.i" <<'EOF'
 int variadic_external(int first, ...);
 
