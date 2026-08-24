@@ -2545,6 +2545,10 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
             parameter_local.type = parameter_types[parameter_index];
             parameter_local.element_count = 1U;
             parameter_local.is_array = false;
+            /* Function parameters are ordinary automatic objects unless their
+               declaration explicitly carries storage metadata. Do not persist
+               an indeterminate stack byte into the semantic local. */
+            parameter_local.is_register_storage = false;
             if (minic_parser_find_local_in_current_scope(parser, parameter_local.name_span) !=
                 MINIC_LOCAL_INVALID) {
                 minic_parser_error(parser, "duplicate parameter name");

@@ -447,6 +447,17 @@ const char *terminating_switch_return(unsigned short tag) {
 EOF
 check_strict_case terminating-switch-return
 
+cat >"$work_dir/function-pointer-parameter-ingress.i" <<'EOF'
+typedef void (*core_callback_t)(void *);
+struct core_param_mask { unsigned long bits[1]; };
+extern struct core_param_mask core_param_online;
+extern void core_call_mask(void *, core_callback_t, void *, _Bool, const struct core_param_mask *);
+void function_pointer_parameter_ingress(core_callback_t func, void *info, int wait) {
+    core_call_mask((void *)0, func, info, wait, &core_param_online);
+}
+EOF
+check_strict_case function-pointer-parameter-ingress
+
 cat >"$work_dir/variadic-call-unsupported.i" <<'EOF'
 int variadic_external(int first, ...);
 
