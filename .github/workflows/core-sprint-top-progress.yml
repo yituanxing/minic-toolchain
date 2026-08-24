@@ -50,6 +50,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           python3 tools/dev/m106-fixed-call-diagnostic.py
+          python3 tools/dev/m106-address-diagnostic.py
 
       - name: Enable compact progress telemetry
         run: python3 tools/dev/patch-linux-replay-live-progress.py
@@ -125,7 +126,7 @@ jobs:
                   return None
               function = blocker_function(r.get('message', ''))
               lines = stderr_path.read_text(errors='replace').splitlines()
-              detail_prefixes = ('CORE_M106_SCALAR', 'CORE_ASSIGN_STAGE', 'CORE_LOWER_DETAIL', 'CORE_ASM_DETAIL')
+              detail_prefixes = ('CORE_M106_ADDRESS', 'CORE_M106_SCALAR', 'CORE_ASSIGN_STAGE', 'CORE_LOWER_DETAIL', 'CORE_ASM_DETAIL')
               if function:
                   for prefix in detail_prefixes:
                       for line in lines:
