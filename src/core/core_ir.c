@@ -975,6 +975,31 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
         return minic_type_equal(value_type, function->values[stored_value].type) &&
                instruction->value.store.is_volatile == minic_type_is_volatile(pointee);
     }
+    /* BATCH_M_RECORD_LOAD: source qualification is semantic metadata.  The
+       destination is an unqualified private snapshot object. */
+    case MINIC_CORE_INSTRUCTION_RECORD_LOAD: {
+        MinicCoreObjectId destination_object;
+        MinicType record_type;
+        MinicType source_pointee;
+        MinicType source_type;
+
+        destination_object = instruction->value.record_load.destination_object;
+        return instruction->result == MINIC_CORE_VALUE_INVALID &&
+               minic_type_is_record(instruction->type) &&
+               minic_type_unqualified(instruction->type, &record_type) &&
+               minic_type_equal(record_type, instruction->type) &&
+               destination_object < function->object_count &&
+               minic_type_equal(function->objects[destination_object].type,
+                                instruction->type) &&
+               available_pointer_pointee(function,
+                                         available_values,
+                                         instruction->value.record_load.source_address,
+                                         &source_pointee) &&
+               minic_type_unqualified(source_pointee, &source_type) &&
+               minic_type_equal(source_type, instruction->type) &&
+               instruction->value.record_load.is_volatile ==
+                   minic_type_is_volatile(source_pointee);
+    }
     /* M80_ADDRESS_BACKED_RECORD_COPY: both SSA operands are addresses to the
        same unqualified record type; legality of writing a const-qualified
        destination is already established by the frontend initializer/copy node. */
@@ -1730,6 +1755,12 @@ static bool dump_instruction(FILE *output,
                        instruction->value.store.is_volatile ? ".volatile" : "",
                        instruction->value.store.stored_value,
                        instruction->value.store.address) >= 0;
+    case MINIC_CORE_INSTRUCTION_RECORD_LOAD:
+        return fprintf(output,
+                       "  record.load%s %%%" PRIu32 ", %%o%" PRIu32 "\n",
+                       instruction->value.record_load.is_volatile ? ".volatile" : "",
+                       instruction->value.record_load.source_address,
+                       instruction->value.record_load.destination_object) >= 0;
     case MINIC_CORE_INSTRUCTION_RECORD_COPY:
         return fprintf(output,
                        "  record.copy %%%" PRIu32 ", %%%" PRIu32 "\n",

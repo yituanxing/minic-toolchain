@@ -239,6 +239,46 @@ static bool core_field_address_supported(const MinicC0Program *program,
     return true;
 }
 
+static bool core_record_load_supported(const MinicC0Program *program,
+                                       const MinicCoreFunction *function,
+                                       const MinicCoreInstruction *instruction,
+                                       size_t *record_size) {
+    MinicCoreObjectId destination_object;
+    MinicCoreValueId source_address;
+    MinicType record_type;
+    MinicType source_pointee;
+    MinicType source_type;
+    size_t alignment;
+    size_t size;
+
+    if (program == NULL || function == NULL || instruction == NULL ||
+        instruction->kind != MINIC_CORE_INSTRUCTION_RECORD_LOAD ||
+        instruction->result != MINIC_CORE_VALUE_INVALID ||
+        !minic_type_is_record(instruction->type) ||
+        !minic_type_unqualified(instruction->type, &record_type) ||
+        !minic_type_equal(record_type, instruction->type)) {
+        return false;
+    }
+    destination_object = instruction->value.record_load.destination_object;
+    source_address = instruction->value.record_load.source_address;
+    if (destination_object >= function->object_count || source_address >= function->value_count ||
+        !minic_type_equal(function->objects[destination_object].type, instruction->type) ||
+        !minic_type_pointee(function->values[source_address].type, &source_pointee) ||
+        !minic_type_unqualified(source_pointee, &source_type) ||
+        !minic_type_equal(source_type, instruction->type) ||
+        instruction->value.record_load.is_volatile != minic_type_is_volatile(source_pointee) ||
+        !minic_data_layout_type(
+            minic_default_data_layout(), program, instruction->type, &size, &alignment) ||
+        (size != 1U && size != 2U && size != 4U && size != 8U)) {
+        return false;
+    }
+    (void)alignment;
+    if (record_size != NULL) {
+        *record_size = size;
+    }
+    return true;
+}
+
 static bool core_record_copy_supported(const MinicC0Program *program,
                                        const MinicCoreFunction *function,
                                        const MinicCoreInstruction *instruction) {
@@ -854,6 +894,8 @@ static bool core_instruction_supported(const MinicC0Program *program,
     case MINIC_CORE_INSTRUCTION_LOAD:
     case MINIC_CORE_INSTRUCTION_STORE:
         return true;
+    case MINIC_CORE_INSTRUCTION_RECORD_LOAD:
+        return core_record_load_supported(program, function, instruction, NULL);
     case MINIC_CORE_INSTRUCTION_RECORD_COPY:
         return core_record_copy_supported(program, function, instruction);
     case MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ: {
@@ -2331,6 +2373,28 @@ static bool emit_instruction(FILE *file,
         return load_core_value(file, frame, instruction->value.store.address, "t0") &&
                load_core_value(file, frame, stored_value, "t1") &&
                minic_riscv64_emit_scalar_store_for_program(file, program, stored_type, "t1", "t0");
+    }
+    case MINIC_CORE_INSTRUCTION_RECORD_LOAD: {
+        const char *opcode;
+        size_t destination_offset;
+        size_t record_size;
+
+        if (!core_record_load_supported(program, function, instruction, &record_size) ||
+            !core_object_offset(program,
+                                function,
+                                instruction->value.record_load.destination_object,
+                                &destination_offset) ||
+            !load_core_value(
+                file, frame, instruction->value.record_load.source_address, "t0")) {
+            return false;
+        }
+        opcode = record_size == 8U ? "ld" : record_size == 4U ? "lwu" :
+                 record_size == 2U ? "lhu" : "lbu";
+        if (fprintf(file, "  %s t1, 0(t0)\n", opcode) < 0 ||
+            !emit_sp_store_chunk(file, "t1", destination_offset, record_size)) {
+            return false;
+        }
+        return true;
     }
     case MINIC_CORE_INSTRUCTION_RECORD_COPY: {
         size_t alignment;

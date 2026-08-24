@@ -1052,6 +1052,59 @@ static MinicCoreLowerStatus lower_record_value_address(MinicCoreLowerContext *co
     return MINIC_CORE_LOWER_UNSUPPORTED;
 }
 
+/* BATCH_M_RECORD_LOAD: turn an address-backed record rvalue/lvalue wrapper
+   into a private Core snapshot object.  The source pointer keeps its qualifiers
+   so volatile aggregate reads remain explicit at the IR boundary. */
+static MinicCoreLowerStatus lower_record_load_object(MinicCoreLowerContext *context,
+                                                     MinicExpressionId expression_id,
+                                                     MinicCoreObjectId *object_id) {
+    const MinicExpression *expression;
+    MinicCoreInstruction instruction;
+    MinicCoreLowerStatus status;
+    MinicCoreValueId source_address;
+    MinicType expression_type;
+    MinicType source_pointee;
+    MinicType source_type;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        context->function == NULL || object_id == NULL) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    expression = minic_c0_program_expression(context->body->program, expression_id);
+    if (expression == NULL || !minic_type_is_record(expression->type) ||
+        !minic_c0_record_value_is_address_backed(context->body->program, expression_id) ||
+        !minic_type_unqualified(expression->type, &expression_type) ||
+        !minic_type_is_record(expression_type)) {
+        return MINIC_CORE_LOWER_UNSUPPORTED;
+    }
+    status = lower_record_value_address(context, expression_id, &source_address);
+    if (status != MINIC_CORE_LOWER_OK) {
+        return status;
+    }
+    if (source_address >= context->function->value_count ||
+        !minic_type_pointee(context->function->values[source_address].type, &source_pointee) ||
+        !minic_type_unqualified(source_pointee, &source_type) ||
+        !minic_type_equal(source_type, expression_type)) {
+        return MINIC_CORE_LOWER_UNSUPPORTED;
+    }
+    if (!minic_core_function_add_object(
+            context->function, expression->span, expression_type, object_id)) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+    (void)memset(&instruction, 0, sizeof(instruction));
+    instruction.kind = MINIC_CORE_INSTRUCTION_RECORD_LOAD;
+    instruction.span = expression->span;
+    instruction.type = expression_type;
+    instruction.result = MINIC_CORE_VALUE_INVALID;
+    instruction.value.record_load.source_address = source_address;
+    instruction.value.record_load.destination_object = *object_id;
+    instruction.value.record_load.is_volatile = minic_type_is_volatile(source_pointee);
+    return minic_core_function_append_effect_instruction(
+               context->function, context->block_id, &instruction)
+               ? MINIC_CORE_LOWER_OK
+               : MINIC_CORE_LOWER_ERROR;
+}
+
 static MinicCoreLowerStatus lower_record_copy_statement(MinicCoreLowerContext *context,
                                                         const MinicStatement *statement) {
     const MinicExpression *source;
@@ -4291,6 +4344,10 @@ static MinicCoreLowerStatus lower_return(MinicCoreLowerContext *context,
                        expression->value.call.function_id != MINIC_FUNCTION_INVALID) {
                 status = lower_direct_record_call_object(
                     context, expression, &terminator.return_object);
+            } else if (minic_c0_record_value_is_address_backed(
+                           context->body->program, statement->expression)) {
+                status = lower_record_load_object(
+                    context, statement->expression, &terminator.return_object);
             } else {
                 return MINIC_CORE_LOWER_UNSUPPORTED;
             }
