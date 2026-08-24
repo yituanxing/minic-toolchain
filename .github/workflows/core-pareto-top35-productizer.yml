@@ -48,45 +48,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          python3 - <<'RUN'
-          from pathlib import Path
-          import re
-
-          workflow = Path('.github/workflows/core-record-conditional-productizer.yml').read_text()
-          needle = "          python3 - <<'PY'\n"
-          start = workflow.index(needle) + len(needle)
-          end = workflow.index("\n          PY", start)
-          lines = workflow[start:end].splitlines()
-          code = '\n'.join(line[10:] if line.startswith('          ') else line for line in lines) + '\n'
-
-          # The semantic patch body is retained in the dedicated M114 workflow,
-          # but the current Core return branch has evolved since that workflow
-          # was authored. Replace only its brittle long text anchor with the
-          # unique address-backed fallback seam that exists in current Core.
-          replacement = r'''return_anchor = ''' + "'''" + r'''            } else if (minic_c0_record_value_is_address_backed(
-                           context->body->program, statement->expression)) {
-''' + "'''" + r'''
-return_insert = ''' + "'''" + r'''            } else if (expression->kind == MINIC_EXPRESSION_CONDITIONAL &&
-                       minic_type_is_record(expression->type)) {
-                status = lower_record_conditional_object(
-                    context, expression, &terminator.return_object);
-            } else if (minic_c0_record_value_is_address_backed(
-                           context->body->program, statement->expression)) {
-''' + "'''" + r'''
-if text.count(return_anchor) != 1:
-    raise SystemExit(f'return fallback anchor mismatch: {text.count(return_anchor)}')
-text = text.replace(return_anchor, return_insert, 1)'''
-          code, replaced = re.subn(
-              r"return_anchor = '''.*?text = text\.replace\(return_anchor, return_insert, 1\)",
-              replacement,
-              code,
-              count=1,
-              flags=re.S,
-          )
-          if replaced != 1:
-              raise SystemExit(f'could not rewrite M114 return anchor block: {replaced}')
-          exec(compile(code, 'record-conditional-inline-patch', 'exec'), {})
-          RUN
+          python3 tools/ci/apply-m114-record-conditional.py
           git diff --check
           grep -F 'M114_RECORD_CONDITIONAL_OBJECT' src/core/core_lower.c
 
