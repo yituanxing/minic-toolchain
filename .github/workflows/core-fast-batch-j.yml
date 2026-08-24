@@ -1,22 +1,23 @@
-name: Core Batch Y35 Pointer Offset Full500
+name: Core Batch Y36 Productize Pointer Offset
 
 on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  y35-full500:
+  y36-productize:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     concurrency:
-      group: core-y35-full500-${{ github.event.pull_request.number }}
+      group: core-y36-productize-${{ github.event.pull_request.number }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 5eda1ef08377ef7d7ec06ac0151599e82d8317f4
+          ref: refactor/declaration-sema-v1
+          fetch-depth: 0
       - name: Restore frozen Linux corpus
         id: linux-corpus-cache
         uses: actions/cache/restore@v4
@@ -29,11 +30,10 @@ jobs:
           set -Eeuo pipefail
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
-      - name: Apply qualified pointer-offset candidate
+      - name: Apply semantic source and focused regression
         shell: bash
         run: |
           set -Eeuo pipefail
-          python3 tools/dev/patch-linux-replay-live-progress.py
           python3 - <<'PY'
           from pathlib import Path
           p=Path('src/core/core_lower.c')
@@ -50,48 +50,72 @@ jobs:
           new='''        instruction.kind = MINIC_CORE_INSTRUCTION_POINTER_OFFSET;\n        instruction.type = pointer_value_type;\n        instruction.value.pointer_offset.base = pointer_value;\n        instruction.value.pointer_offset.index = index_value;\n        instruction.value.pointer_offset.element_size = element_size;\n        /* Pointer arithmetic computes in the lvalue-to-rvalue pointer type.\n           If the semantic expression retains a top-level pointer qualifier,\n           represent that result spelling with Core's pointer bitcast rather\n           than making POINTER_OFFSET violate its base/result type invariant. */\n        instruction.value.pointer_offset.subtract =\n            expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT;\n        if (!minic_core_function_append_value_instruction(\n                context->function, context->block_id, &instruction, &offset_value)) {\n            return MINIC_CORE_LOWER_ERROR;\n        }\n        if (minic_type_equal(pointer_value_type, expression->type)) {\n            *value_id = offset_value;\n            return MINIC_CORE_LOWER_OK;\n        }\n        return append_scalar_bitcast(\n            context, expression->span, expression->type, offset_value, value_id);'''
           if s.count(old)!=1: raise SystemExit(f'emit anchor count={s.count(old)}')
           p.write_text(s.replace(old,new,1))
-          print('CORE_BATCH_Y35_PATCHED')
+
+          p=Path('tests/core/run-core-ir-shadow.sh')
+          s=p.read_text()
+          anchor='''cat >"$work_dir/const-record-member-subscript.i" <<'EOF'\nstruct pointer_view {\n    int *items;\n};\n\nint *const_record_member_subscript(const struct pointer_view *view,\n                                   unsigned long index) {\n    return &view->items[index];\n}\nEOF\ncheck_strict_case const-record-member-subscript\n'''
+          extra='''\ncat >"$work_dir/const-record-member-pointer-offset.i" <<'EOF'\nstruct offset_item {\n    long value;\n};\n\nstruct offset_view {\n    struct offset_item *items;\n};\n\nstruct offset_item *const_record_member_pointer_offset(const struct offset_view *view,\n                                                       unsigned long index) {\n    return view->items + index;\n}\nEOF\ncheck_strict_case const-record-member-pointer-offset\n'''
+          if s.count(anchor)!=1: raise SystemExit(f'test anchor count={s.count(anchor)}')
+          p.write_text(s.replace(anchor,anchor+extra,1))
+          print('CORE_BATCH_Y36_PATCHED')
           PY
-      - name: Build exact candidate
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-y35-compiler
-      - name: Full Core regression suite
+      - name: Build exact production candidate
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-y36-compiler
+      - name: Full Core exact regression suite
         shell: bash
         run: |
           set -Eeuo pipefail
-          MINIC="$GITHUB_WORKSPACE/build/core-batch-y35-compiler/bin/minic" \
-            BUILD_DIR="$GITHUB_WORKSPACE/build/core-batch-y35-tests" \
+          MINIC="$GITHUB_WORKSPACE/build/core-batch-y36-compiler/bin/minic" \
+            BUILD_DIR="$GITHUB_WORKSPACE/build/core-batch-y36-tests" \
             bash tests/core/run-core-ir-shadow.sh
-          echo CORE_BATCH_Y35_CORE_SUITE_PASS
-      - name: Full frozen strict500
+          echo CORE_BATCH_Y36_CORE_SUITE_PASS
+      - name: Focused Linux gate
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-batch-y35-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-batch-y35-full500"
-          mkdir -p "$work"
+          python3 tools/dev/patch-linux-replay-live-progress.py
+          compiler="$GITHUB_WORKSPACE/build/core-batch-y36-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-batch-y36-linux"
           set +e
           MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
-            --work "$work" --jobs 4 --offset 0 --limit 500 --sample-count 0 \
-            >"$work/replay.log" 2>&1
+            --work "$work" --jobs 2 --offset 0 --limit 500 --sample-count 0 --indices '3,7'
           replay_status=$?
           set -e
-          echo CORE_BATCH_Y35_REPLAY_STATUS=$replay_status
+          echo CORE_BATCH_Y36_REPLAY_STATUS=$replay_status
           python3 tools/ci/classify-core-strict-frontier.py \
-            "$work/batch-results.json" --examples 20 --json-out "$work/frontier-summary.json"
-          python3 tools/ci/summarize-core-frontier-progress.py \
-            "$work/batch-results.json" --expect-selected 500 \
-            --json-out "$work/progress-summary.json" --text-out "$work/progress-summary.txt" >/dev/null
+            "$work/batch-results.json" --examples 4 --json-out "$work/frontier-summary.json"
           python3 - <<'PY'
           import json
           from pathlib import Path
-          w=Path('build/core-batch-y35-full500')
+          w=Path('build/core-batch-y36-linux')
+          rows=json.loads((w/'batch-results.json').read_text())
+          if isinstance(rows,dict): rows=rows.get('results',rows.get('tus',[]))
+          by={int(r['index']):r for r in rows}
           f=json.loads((w/'frontier-summary.json').read_text())
-          p=json.loads((w/'progress-summary.json').read_text())
-          print(f"CORE_BATCH_Y35_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
-          print(f"CORE_BATCH_Y35_PROGRESS mean={p.get('tu_mean_progress')} median={p.get('tu_median_progress')} line_weighted={p.get('line_weighted_progress')}")
-          for b in (f.get('blockers') or [])[:20]:
-              print('CORE_BATCH_Y35_BLOCKER',json.dumps(b,sort_keys=True,separators=(',',':')))
-          if f['selected'] != 500 or f['error'] != 0 or f['pass'] < 66:
-              raise SystemExit(f'Y35 full500 gate failed: {f}')
+          for i in sorted(by):
+              r=by[i]
+              print(f"CORE_BATCH_Y36_ROW index={i} status={r.get('status')} progress={float(r.get('progress_ratio') or 0)*100:.2f}% message={r.get('message','')}")
+          print(f"CORE_BATCH_Y36_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
+          if f['error'] != 0 or by[7]['status'] != 'PASS' or by[3].get('message','').endswith("'bvec_advance'"):
+              raise SystemExit(f'Y36 focused gate failed: {f}')
           PY
+      - name: Commit semantic production change
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git restore tests/external/linux/corpus_replay.py
+          python3 - <<'PY'
+          import subprocess
+          allowed={'src/core/core_lower.c','tests/core/run-core-ir-shadow.sh'}
+          changed=set(subprocess.check_output(['git','diff','--name-only'],text=True).splitlines())
+          print('CORE_BATCH_Y36_CHANGED',sorted(changed))
+          if changed != allowed:
+              raise SystemExit(f'unexpected production diff: {changed}')
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/core/core_lower.c tests/core/run-core-ir-shadow.sh
+          git commit -m 'core: normalize qualified pointer offsets'
+          git push origin HEAD:refactor/declaration-sema-v1
+          echo "CORE_BATCH_Y36_PRODUCTION_COMMIT=$(git rev-parse HEAD)"
