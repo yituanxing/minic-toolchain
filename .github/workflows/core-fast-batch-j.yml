@@ -1,4 +1,4 @@
-name: Core Y75 OnEachCpu Emitter Diagnostic
+name: Core Y76 OnEachCpu Parameter Ingress
 
 on:
   pull_request:
@@ -7,7 +7,7 @@ permissions:
   contents: read
 
 jobs:
-  y75-on-each-cpu-emitter:
+  y76-on-each-cpu-ingress:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     steps:
@@ -20,48 +20,46 @@ jobs:
         with:
           path: build/linux-focus-corpus
           key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
-      - name: Instrument emitter gate and build
+      - name: Instrument ingress and build
         shell: bash
         run: |
           set -Eeuo pipefail
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           python3 - <<'PY'
           from pathlib import Path
-          p=Path('src/target/riscv64/core_codegen.c')
+          p=Path('src/core/core_lower.c')
           s=p.read_text()
-          old='''    for (index = 0U; index < function->instruction_count; ++index) {\n        if (!core_instruction_supported(program, function, &function->instructions[index])) {\n            return false;\n        }\n    }\n    return true;\n}\n'''
-          new='''    for (index = 0U; index < function->instruction_count; ++index) {\n        if (!core_instruction_supported(program, function, &function->instructions[index])) {\n            (void)fprintf(stderr,\n                          "CORE_Y75_EMIT_REJECT function=%s stage=instruction index=%zu kind=%d\\n",\n                          function->name != NULL ? function->name : "?", index,\n                          (int)function->instructions[index].kind);\n            return false;\n        }\n    }\n    return true;\n}\n'''
-          if s.count(old)!=1: raise SystemExit(f'instruction gate anchor {s.count(old)}')
+          old='''        if (minic_type_is_volatile(parameter->type) || parameter->is_array ||\n            parameter->is_register_storage ||\n            !minic_type_unqualified(parameter->type, &parameter_value_type) ||\n            !minic_type_equal(parameter_value_type,\n                              context->source_function->parameter_types[parameter_index])) {\n            return MINIC_CORE_LOWER_UNSUPPORTED;\n        }\n'''
+          new='''        {\n            bool unqualified_ok = minic_type_unqualified(parameter->type, &parameter_value_type);\n            bool type_equal = unqualified_ok &&\n                minic_type_equal(parameter_value_type,\n                                 context->source_function->parameter_types[parameter_index]);\n            if (context->source_function->name != NULL &&\n                strcmp(context->source_function->name, "on_each_cpu") == 0) {\n                (void)fprintf(stderr,\n                              "CORE_Y76_INGRESS function=on_each_cpu param=%zu volatile=%d array=%d register=%d unqual=%d equal=%d scalar=%d pointer=%d integer=%d\\n",\n                              parameter_index,\n                              minic_type_is_volatile(parameter->type) ? 1 : 0,\n                              parameter->is_array ? 1 : 0,\n                              parameter->is_register_storage ? 1 : 0,\n                              unqualified_ok ? 1 : 0, type_equal ? 1 : 0,\n                              unqualified_ok && core_memory_scalar_type(parameter_value_type) ? 1 : 0,\n                              unqualified_ok && minic_type_is_pointer(parameter_value_type) ? 1 : 0,\n                              unqualified_ok && minic_type_is_integer(parameter_value_type) ? 1 : 0);\n            }\n            if (minic_type_is_volatile(parameter->type) || parameter->is_array ||\n                parameter->is_register_storage || !unqualified_ok || !type_equal) {\n                return MINIC_CORE_LOWER_UNSUPPORTED;\n            }\n        }\n'''
+          if s.count(old)!=1: raise SystemExit(f'ingress anchor {s.count(old)}')
           p.write_text(s.replace(old,new,1))
           PY
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y75-compiler
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y76-compiler
       - name: Replay representatives
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-y75-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-y75-linux"
+          compiler="$GITHUB_WORKSPACE/build/core-y76-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-y76-linux"
           mkdir -p "$work"
           set +e
-          MINIC_CORE_IR=strict CORE_FAST_TRACE=1 CORE_LOWER_DETAIL=1 \
-            python3 tests/external/linux/corpus_replay.py \
-              --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
-              --work "$work" --jobs 3 --offset 0 --limit 500 --sample-count 0 --indices '193,194,195'
+          MINIC_CORE_IR=strict CORE_FAST_TRACE=1 CORE_LOWER_DETAIL=1 python3 tests/external/linux/corpus_replay.py \
+            --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
+            --work "$work" --jobs 3 --offset 0 --limit 500 --sample-count 0 --indices '193,194,195'
           status=$?
           set -e
-          echo CORE_Y75_REPLAY_STATUS=$status
+          echo CORE_Y76_REPLAY_STATUS=$status
           python3 - <<'PY'
           import json
           from pathlib import Path
-          w=Path('build/core-y75-linux')
+          w=Path('build/core-y76-linux')
           rows=json.loads((w/'batch-results.json').read_text())
           if isinstance(rows,dict): rows=rows.get('results',rows.get('tus',[]))
           for r in rows:
               idx=int(r['index']); rel=r['input']
-              print(f"CORE_Y75_INDEX index={idx} status={r.get('status')} progress={float(r.get('progress_ratio') or 0)*100:.3f}% message={r.get('message','')}")
+              print(f"CORE_Y76_INDEX index={idx} status={r.get('status')} progress={float(r.get('progress_ratio') or 0)*100:.3f}% message={r.get('message','')}")
               err=w/'minic-stderr'/f'{rel}.stderr'
               if err.is_file():
-                  lines=err.read_text(errors='replace').splitlines()
-                  keep=[x for x in lines if 'CORE_Y75_EMIT_REJECT' in x or ('function=on_each_cpu ' in x) or "function 'on_each_cpu'" in x]
-                  for x in keep[-80:]: print(x)
+                  for x in err.read_text(errors='replace').splitlines():
+                      if 'CORE_Y76_INGRESS' in x or "function 'on_each_cpu'" in x: print(x)
           PY
