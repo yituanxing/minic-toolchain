@@ -59,10 +59,16 @@ jobs:
           printf 'CORE_BATCH_Q_REPLAY_STATUS=%d\n' "$replay_status"
           stderr="$work/minic-stderr/kernel/time/time.i.stderr"
           echo CORE_BATCH_Q_TRACE_BEGIN
-          grep -E 'CORE_(FAST_TRACE|ASSIGN_STAGE|LOWER_DETAIL|ASM_DETAIL)' "$stderr" | tail -n 40 || true
+          grep 'function=ptep_clear' "$stderr" || true
           echo CORE_BATCH_Q_TRACE_END
+          echo CORE_BATCH_Q_INDEX_ENTRY
+          sed -n '156p' "$GITHUB_WORKSPACE/build/linux-focus-corpus/selected-tus.txt" || true
           echo CORE_BATCH_Q_SOURCE_BEGIN
-          grep -n -A12 -B8 'ptep_clear' "$GITHUB_WORKSPACE/build/linux-focus-corpus/kernel/time/time.i" | head -n 120 || true
+          src="$(find "$GITHUB_WORKSPACE/build/linux-focus-corpus" -type f -name 'time.i' | head -n1)"
+          printf 'CORE_BATCH_Q_SOURCE_FILE=%s\n' "$src"
+          if test -n "$src"; then
+            grep -n -A14 -B10 'ptep_clear' "$src" | head -n 180 || true
+          fi
           echo CORE_BATCH_Q_SOURCE_END
           python3 tools/ci/classify-core-strict-frontier.py \
             "$work/batch-results.json" --examples 1 --json-out "$work/frontier-summary.json"
