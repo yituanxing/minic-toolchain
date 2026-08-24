@@ -1,4 +1,4 @@
-name: Core Fast Batch Y16 Focused Refined Loop CFG
+name: Core Fast Batch Y17 Refined Full500
 
 on:
   pull_request:
@@ -7,11 +7,11 @@ permissions:
   contents: read
 
 jobs:
-  batch-y16-focused-refined-loop-cfg:
+  batch-y17-refined-full500:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     concurrency:
-      group: core-fast-batch-y16-${{ github.event.pull_request.number }}
+      group: core-fast-batch-y17-${{ github.event.pull_request.number }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
@@ -69,86 +69,39 @@ jobs:
           new_direct='''            case MINIC_STATEMENT_WHILE:\n                status = lower_while(\n                    context, statement, MINIC_STATEMENT_INVALID, &statement_terminated);\n                break;\n'''
           if old_direct not in s: raise SystemExit('direct while call anchor not found')
           p.write_text(s.replace(old_direct,new_direct,1))
-          print('CORE_BATCH_Y16_PATCHED refined loop continue ownership')
+          print('CORE_BATCH_Y17_PATCHED refined loop continue ownership')
           PY
       - name: Build exact candidate compiler
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-y16-compiler
-      - name: Exact assembly focused regressions
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-y17-compiler
+      - name: Full frozen strict500 refined replay
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-batch-y16-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-batch-y16-focused"
+          compiler="$GITHUB_WORKSPACE/build/core-batch-y17-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-batch-y17-full500"
           mkdir -p "$work"
-          cat >"$work/while-backedge.i" <<'EOF'
-          int clear_then_add(int value) {
-              while (value) {
-                  value = 0;
-              }
-              return value + 7;
-          }
-          EOF
-          cat >"$work/while-continue.i" <<'EOF'
-          int while_continue(int value) {
-              while (value) {
-                  if (value == 1) {
-                      value = 0;
-                      continue;
-                  }
-                  value = 1;
-              }
-              return value;
-          }
-          EOF
-          cat >"$work/for-shape.i" <<'EOF'
-          int for_shape(int value) {
-              for (; value;) {
-                  value = 0;
-              }
-              return value;
-          }
-          EOF
-          cat >"$work/for-continue.i" <<'EOF'
-          int for_continue(int value) {
-              for (; value; value = value - 1) {
-                  if (value == 2)
-                      continue;
-              }
-              return value;
-          }
-          EOF
-          cat >"$work/void-statement-expression.i" <<'EOF'
-          void sink(void);
-          void void_statement_expression(void) {
-              ({ sink(); });
-              return;
-          }
-          EOF
-          for name in while-backedge while-continue for-shape for-continue void-statement-expression; do
-            "$compiler" -S "$work/$name.i" -o "$work/$name-normal.s"
-            MINIC_CORE_IR=strict "$compiler" -S "$work/$name.i" -o "$work/$name-core.s"
-            cmp "$work/$name-normal.s" "$work/$name-core.s"
-            echo "CORE_BATCH_Y16_EXACT_PASS name=$name"
-          done
-      - name: Replay former strict500 Core errors
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-batch-y16-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-batch-y16-frontier"
           set +e
           MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
-            --work "$work" --jobs 2 --offset 0 --limit 500 --sample-count 0 --indices '208,339'
+            --work "$work" --jobs 4 --offset 0 --limit 500 --sample-count 0 \
+            >"$work/replay.log" 2>&1
           replay_status=$?
           set -e
-          printf 'CORE_BATCH_Y16_REPLAY_STATUS=%d\n' "$replay_status"
-          python3 tools/ci/classify-core-strict-frontier.py "$work/batch-results.json" --examples 8 --json-out "$work/frontier-summary.json"
+          printf 'CORE_BATCH_Y17_REPLAY_STATUS=%d\n' "$replay_status"
+          python3 tools/ci/classify-core-strict-frontier.py "$work/batch-results.json" --examples 12 --json-out "$work/frontier-summary.json"
+          python3 tools/ci/summarize-core-frontier-progress.py "$work/batch-results.json" --expect-selected 500 --json-out "$work/progress-summary.json" --text-out "$work/progress-summary.txt" >/dev/null
           python3 - <<'PY'
           import json
           from pathlib import Path
-          f=json.loads(Path('build/core-batch-y16-frontier/frontier-summary.json').read_text())
-          print(f"CORE_BATCH_Y16_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
-          if f['selected'] != 2 or f['error'] != 0 or f['pass'] < 1:
-              raise SystemExit(f'refined candidate gate failed: {f}')
+          work=Path('build/core-batch-y17-full500')
+          f=json.loads((work/'frontier-summary.json').read_text())
+          p=json.loads((work/'progress-summary.json').read_text())
+          print(f"CORE_BATCH_Y17_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
+          print(f"CORE_BATCH_Y17_PROGRESS mean={p.get('tu_mean_progress')} median={p.get('tu_median_progress')} line_weighted={p.get('line_weighted_progress')}")
+          errors=f.get('errors') or []
+          print(f"CORE_BATCH_Y17_ERRORS count={len(errors)}")
+          for i,e in enumerate(errors[:20],1):
+              print('CORE_BATCH_Y17_ERROR',i,json.dumps(e,sort_keys=True,separators=(',',':')))
+          if f['selected'] != 500 or f['error'] != 0 or f['pass'] < 14:
+              raise SystemExit(f'refined full500 gate failed: {f}')
           PY
