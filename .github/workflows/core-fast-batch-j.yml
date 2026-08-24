@@ -1,4 +1,4 @@
-name: Core Y74 OnEachCpu Diagnostic
+name: Core Y75 OnEachCpu Emitter Diagnostic
 
 on:
   pull_request:
@@ -7,7 +7,7 @@ permissions:
   contents: read
 
 jobs:
-  y74-on-each-cpu-diagnostic:
+  y75-on-each-cpu-emitter:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     steps:
@@ -20,49 +20,48 @@ jobs:
         with:
           path: build/linux-focus-corpus
           key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
-      - name: Build exact compiler
+      - name: Instrument emitter gate and build
         shell: bash
         run: |
           set -Eeuo pipefail
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y74-compiler
-      - name: Diagnose on_each_cpu representatives
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('src/target/riscv64/core_codegen.c')
+          s=p.read_text()
+          old='''    for (index = 0U; index < function->instruction_count; ++index) {\n        if (!core_instruction_supported(program, function, &function->instructions[index])) {\n            return false;\n        }\n    }\n    return true;\n}\n'''
+          new='''    for (index = 0U; index < function->instruction_count; ++index) {\n        if (!core_instruction_supported(program, function, &function->instructions[index])) {\n            (void)fprintf(stderr,\n                          "CORE_Y75_EMIT_REJECT function=%s stage=instruction index=%zu kind=%d\\n",\n                          function->name != NULL ? function->name : "?", index,\n                          (int)function->instructions[index].kind);\n            return false;\n        }\n    }\n    return true;\n}\n'''
+          if s.count(old)!=1: raise SystemExit(f'instruction gate anchor {s.count(old)}')
+          p.write_text(s.replace(old,new,1))
+          PY
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y75-compiler
+      - name: Replay representatives
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-y74-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-y74-linux"
+          compiler="$GITHUB_WORKSPACE/build/core-y75-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-y75-linux"
           mkdir -p "$work"
           set +e
-          MINIC_CORE_IR=strict CORE_FAST_TRACE=1 CORE_LOWER_DETAIL=1 CORE_ASSIGN_STAGE=1 \
+          MINIC_CORE_IR=strict CORE_FAST_TRACE=1 CORE_LOWER_DETAIL=1 \
             python3 tests/external/linux/corpus_replay.py \
               --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
               --work "$work" --jobs 3 --offset 0 --limit 500 --sample-count 0 --indices '193,194,195'
           status=$?
           set -e
-          echo CORE_Y74_REPLAY_STATUS=$status
+          echo CORE_Y75_REPLAY_STATUS=$status
           python3 - <<'PY'
           import json
           from pathlib import Path
-          w=Path('build/core-y74-linux'); corpus=Path('build/linux-focus-corpus/kbuild')
+          w=Path('build/core-y75-linux')
           rows=json.loads((w/'batch-results.json').read_text())
           if isinstance(rows,dict): rows=rows.get('results',rows.get('tus',[]))
           for r in rows:
               idx=int(r['index']); rel=r['input']
-              print(f"CORE_Y74_INDEX index={idx} status={r.get('status')} progress={float(r.get('progress_ratio') or 0)*100:.3f}% first={r.get('first_error_line')} message={r.get('message','')}")
-              lines=(corpus/rel).read_text(errors='replace').splitlines()
-              hits=[i for i,line in enumerate(lines) if 'on_each_cpu' in line]
-              print(f"CORE_Y74_HITS index={idx} hits={[i+1 for i in hits[:12]]}")
-              for i in hits[:3]:
-                  lo=max(0,i-10); hi=min(len(lines),i+50)
-                  print(f"CORE_Y74_SOURCE_BEGIN index={idx} line={lo+1}")
-                  for n in range(lo,hi): print(f"{n+1}: {lines[n]}")
-                  print(f"CORE_Y74_SOURCE_END index={idx}")
+              print(f"CORE_Y75_INDEX index={idx} status={r.get('status')} progress={float(r.get('progress_ratio') or 0)*100:.3f}% message={r.get('message','')}")
               err=w/'minic-stderr'/f'{rel}.stderr'
               if err.is_file():
-                  text=err.read_text(errors='replace').splitlines()
-                  keep=[x for x in text if 'CORE_FAST_TRACE' in x or 'CORE_' in x or 'on_each_cpu' in x or 'unsupported' in x.lower() or 'error:' in x.lower()]
-                  print(f"CORE_Y74_STDERR_BEGIN index={idx}")
-                  for x in keep[-260:]: print(x)
-                  print(f"CORE_Y74_STDERR_END index={idx}")
+                  lines=err.read_text(errors='replace').splitlines()
+                  keep=[x for x in lines if 'CORE_Y75_EMIT_REJECT' in x or ('function=on_each_cpu ' in x) or "function 'on_each_cpu'" in x]
+                  for x in keep[-80:]: print(x)
           PY
