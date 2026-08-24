@@ -1,4 +1,4 @@
-name: Core Fast Batch Y18 Stale Test Census
+name: Core Fast Batch Y19 Rseq Frontier Probe
 
 on:
   pull_request:
@@ -7,56 +7,61 @@ permissions:
   contents: read
 
 jobs:
-  batch-y18-stale-test-census:
+  batch-y19-rseq-probe:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     concurrency:
-      group: core-fast-batch-y18-${{ github.event.pull_request.number }}
+      group: core-fast-batch-y19-${{ github.event.pull_request.number }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
         with:
           ref: refactor/declaration-sema-v1
-      - name: Build current baseline compiler
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-y18-compiler
-      - name: Census historical unsupported expectations
+      - name: Restore frozen Linux corpus
+        id: linux-corpus-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+      - name: Require frozen corpus
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-batch-y18-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-batch-y18-census"
-          mkdir -p "$work"
-          cat >"$work/indirect-call.i" <<'EOF'
-          int indirect_caller(int (*callee)(int), int value) {
-              return callee(value);
-          }
-          EOF
-          cat >"$work/variadic-call.i" <<'EOF'
-          int variadic_external(int first, ...);
-          int variadic_caller(int value) {
-              return variadic_external(value, value);
-          }
-          EOF
-          cat >"$work/volatile-parameter.i" <<'EOF'
-          unsigned long volatile_parameter(volatile unsigned long value) {
-              return value;
-          }
-          EOF
-          for name in indirect-call variadic-call volatile-parameter; do
-            "$compiler" -S "$work/$name.i" -o "$work/$name-normal.s"
-            set +e
-            MINIC_CORE_IR=strict "$compiler" -S "$work/$name.i" -o "$work/$name-strict.s" 2>"$work/$name.err"
-            status=$?
-            set -e
-            if [ "$status" -eq 0 ]; then
-              if cmp "$work/$name-normal.s" "$work/$name-strict.s"; then
-                echo "CORE_BATCH_Y18_CASE name=$name strict=SUPPORTED exact=YES"
-              else
-                echo "CORE_BATCH_Y18_CASE name=$name strict=SUPPORTED exact=NO"
-                diff -u "$work/$name-normal.s" "$work/$name-strict.s" | head -n 80 || true
-              fi
-            else
-              echo "CORE_BATCH_Y18_CASE name=$name strict=UNSUPPORTED status=$status"
-              tail -n 8 "$work/$name.err" || true
-            fi
-          done
+          test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
+          test -s build/linux-focus-corpus/selected-tus.txt
+      - name: Show rseq source window
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          input=build/linux-focus-corpus/kbuild/init/version.i
+          grep -n 'rseq_signal_deliver' "$input" | head -n 10 || true
+          line=$(grep -n 'rseq_signal_deliver' "$input" | head -n 1 | cut -d: -f1 || true)
+          if [ -n "$line" ]; then
+            begin=$((line > 20 ? line - 20 : 1))
+            end=$((line + 100))
+            sed -n "${begin},${end}p" "$input"
+          fi
+      - name: Enable compact progress telemetry
+        run: python3 tools/dev/patch-linux-replay-live-progress.py
+      - name: Build exact baseline compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-y19-compiler
+      - name: Replay one rseq-frontier TU
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/core-batch-y19-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-batch-y19-frontier"
+          set +e
+          MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
+            --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
+            --work "$work" --jobs 1 --offset 0 --limit 500 --sample-count 0 --indices '1'
+          replay_status=$?
+          set -e
+          printf 'CORE_BATCH_Y19_REPLAY_STATUS=%d\n' "$replay_status"
+          stderr="$work/minic-stderr/init/version.i.stderr"
+          echo CORE_BATCH_Y19_DETAIL_BEGIN
+          grep -E 'rseq_signal_deliver|CORE_ASSIGN_STAGE|CORE_LOWER_DETAIL|CORE_ASM_DETAIL|CORE_FAST_TRACE' "$stderr" | tail -n 160 || true
+          echo CORE_BATCH_Y19_DETAIL_END
+          python3 tools/ci/classify-core-strict-frontier.py "$work/batch-results.json" --examples 4 --json-out "$work/frontier-summary.json"
+          python3 tools/ci/summarize-core-frontier-progress.py "$work/batch-results.json" --expect-selected 1 --json-out "$work/progress-summary.json" --text-out "$work/progress-summary.txt"
+          cat "$work/progress-summary.txt"
