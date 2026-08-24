@@ -42,12 +42,13 @@ jobs:
       - name: Build exact compiler
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m108-compiler
 
-      - name: Capture do_task_dead frontier
+      - name: Capture exact do_task_dead failure
         shell: bash
         run: |
           set -Eeuo pipefail
           compiler="$GITHUB_WORKSPACE/build/m108-compiler/bin/minic"
           work="$GITHUB_WORKSPACE/build/m108-frontier"
+          src="$GITHUB_WORKSPACE/build/linux-focus-corpus/kbuild/kernel/sched/core.i"
           set +e
           MINIC_CORE_IR=strict CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" \
@@ -61,28 +62,16 @@ jobs:
           replay_status=$?
           set -e
           printf 'CORE_M108_REPLAY_STATUS=%d\n' "$replay_status"
+          echo CORE_DO_TASK_DEAD_SOURCE_BEGIN
+          grep -n -A90 -B8 'do_task_dead' "$src" | head -120 || true
+          echo CORE_DO_TASK_DEAD_SOURCE_END
           stderr="$work/minic-stderr/kernel/sched/core.i.stderr"
-          echo CORE_DO_TASK_DEAD_TRACE_BEGIN
+          echo CORE_DO_TASK_DEAD_RAW_TRACE_BEGIN
           if test -f "$stderr"; then
-            grep -F 'function=do_task_dead' "$stderr" || true
+            tail -240 "$stderr"
           fi
-          echo CORE_DO_TASK_DEAD_TRACE_END
-          python3 - <<'PY'
-          from pathlib import Path
-          src = Path('build/linux-focus-corpus/kbuild/kernel/sched/core.i')
-          if src.is_file():
-              lines = src.read_text(errors='replace').splitlines()
-              print('CORE_DO_TASK_DEAD_SOURCE_BEGIN')
-              for n in range(max(0, 88223 - 24), min(len(lines), 88223 + 36)):
-                  print(f'{n+1}: {lines[n]}')
-              print('CORE_DO_TASK_DEAD_SOURCE_END')
-          PY
+          echo CORE_DO_TASK_DEAD_RAW_TRACE_END
           python3 tools/ci/classify-core-strict-frontier.py \
             "$work/batch-results.json" \
             --examples 2 \
             --json-out "$work/frontier-summary.json"
-          python3 tools/ci/summarize-core-frontier-progress.py \
-            "$work/batch-results.json" \
-            --expect-selected 1 \
-            --json-out "$work/progress-summary.json" \
-            --text-out "$work/progress-summary.txt"
