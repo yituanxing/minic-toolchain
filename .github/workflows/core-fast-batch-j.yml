@@ -1,152 +1,71 @@
-name: Core Y102c Signed Bit-field Productizer
+name: Core Y104 Start Kernel Call Diagnostic
 
 on:
   pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  y102c-productize:
+  y104-start-kernel-call:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: refactor/declaration-sema-v1
-          fetch-depth: 0
+          ref: 6e05e5a57e967b017b0d6e403c071e404874fee0
       - name: Restore frozen Linux corpus
         id: linux-corpus-cache
         uses: actions/cache/restore@v4
         with:
           path: build/linux-focus-corpus
           key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
-      - name: Apply production semantic patch
-        id: patch
+      - name: Instrument call assignment
         shell: bash
         run: |
           set -Eeuo pipefail
-          if grep -Fq 'M103_INTEGER_BIT_FIELD_READ' src/core/core_lower.c; then
-            echo 'changed=false' >> "$GITHUB_OUTPUT"
-            echo 'signed bit-field read already productized'
-            exit 0
-          fi
           python3 - <<'PY'
           from pathlib import Path
-
-          p = Path('src/core/core_lower.c')
-          s = p.read_text()
-
-          count = s.count('core_unsigned_bit_field_storage_type')
-          if count < 3:
-              raise SystemExit(f'bit-field storage helper refs={count}')
-          s = s.replace('core_unsigned_bit_field_storage_type', 'core_bit_field_storage_type')
-
-          old = '''/* A bit-field's C value width is not necessarily the width of the memory\n   allocation unit containing it. _Bool is the important case: its semantic\n   integer width is one bit, while DataLayout allocates one byte. Keep the\n   semantic value type for the expression result and choose a separate unsigned\n   integer type whose object size/target width matches the storage unit used by\n   the field layout. */\n'''
-          new = '''/* A bit-field's C value width is not necessarily the width of the memory\n   allocation unit containing it. _Bool is the important case: its semantic\n   integer width is one bit, while DataLayout allocates one byte. Keep the\n   semantic value type for the expression result and choose an unsigned integer\n   type whose object size/target width matches the storage unit used by the\n   field layout. Reading storage as unsigned also gives signed bit-fields a\n   well-defined logical extraction path before explicit sign extension. */\n'''
-          if s.count(old) != 1:
-              raise SystemExit(f'helper comment anchor count={s.count(old)}')
-          s = s.replace(old, new, 1)
-
-          old = '''        !minic_type_is_integer(value_type) || !minic_type_is_unsigned_integer(value_type) ||\n        !minic_data_layout_type(minic_default_data_layout(),\n'''
-          new = '''        !minic_type_is_integer(value_type) ||\n        !minic_data_layout_type(minic_default_data_layout(),\n'''
-          if s.count(old) != 1:
-              raise SystemExit(f'helper guard anchor count={s.count(old)}')
-          s = s.replace(old, new, 1)
-
-          old = '''    if (minic_target_info_integer_width(\n            context->target, context->body->program, value_type, &value_width) &&\n        (size_t)value_width == storage_size * 8U) {\n        *storage_type = value_type;\n        *storage_width = value_width;\n        return true;\n    }\n'''
-          new = '''    if (minic_type_is_unsigned_integer(value_type) &&\n        minic_target_info_integer_width(\n            context->target, context->body->program, value_type, &value_width) &&\n        (size_t)value_width == storage_size * 8U) {\n        *storage_type = value_type;\n        *storage_width = value_width;\n        return true;\n    }\n'''
-          if s.count(old) != 1:
-              raise SystemExit(f'helper fast-path anchor count={s.count(old)}')
-          s = s.replace(old, new, 1)
-
-          old = '''    /* BATCH_A_UNSIGNED_BIT_FIELD_READ: a bit-field is not C-addressable,\n       but reading it is a scalar operation.  Form the storage-unit address\n       internally, load the declared integer unit, then extract the field.\n       Signed bit-fields and bit-field writes remain fail-closed for a later\n       semantic batch; this seam is generic for unsigned integer bit-fields. */\n'''
-          new = '''    /* M103_INTEGER_BIT_FIELD_READ: a bit-field is not C-addressable, but\n       reading it is a scalar operation. Form the storage-unit address\n       internally, load it through an unsigned storage type, extract the field,\n       then explicitly sign-extend signed fields from their declared bit width.\n       Bit-field writes remain owned by their dedicated RMW lowering paths. */\n'''
-          if s.count(old) != 1:
-              raise SystemExit(f'read comment anchor count={s.count(old)}')
-          s = s.replace(old, new, 1)
-
-          old = '''                !minic_type_is_integer(value_type) ||\n                !minic_type_is_unsigned_integer(value_type) ||\n                !core_bit_field_storage_type(\n'''
-          new = '''                !minic_type_is_integer(value_type) ||\n                !core_bit_field_storage_type(\n'''
-          if s.count(old) != 1:
-              raise SystemExit(f'read guard anchor count={s.count(old)}')
-          s = s.replace(old, new, 1)
-
-          old = '''            if (minic_type_equal(storage_type, value_type)) {\n                *value_id = current;\n                return MINIC_CORE_LOWER_OK;\n            }\n            return append_integer_conversion(\n                context, expression->span, value_type, current, value_id);\n'''
-          new = '''            if (minic_type_is_unsigned_integer(value_type)) {\n                if (minic_type_equal(storage_type, value_type)) {\n                    *value_id = current;\n                    return MINIC_CORE_LOWER_OK;\n                }\n                return append_integer_conversion(\n                    context, expression->span, value_type, current, value_id);\n            }\n            {\n                MinicCoreValueId signed_current;\n                unsigned int value_width;\n\n                if (!minic_target_info_integer_width(\n                        context->target, context->body->program, value_type, &value_width) ||\n                    value_width != storage_width) {\n                    return MINIC_CORE_LOWER_UNSUPPORTED;\n                }\n                status = append_integer_conversion(\n                    context, expression->span, value_type, current, &signed_current);\n                if (status != MINIC_CORE_LOWER_OK) {\n                    return status;\n                }\n                if (field->bit_width < storage_width) {\n                    MinicCoreValueId shift;\n                    uint64_t shift_bits = (uint64_t)(storage_width - field->bit_width);\n\n                    (void)memset(&extract, 0, sizeof(extract));\n                    extract.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;\n                    extract.span = expression->span;\n                    extract.type = minic_type_unsigned_int();\n                    extract.result = MINIC_CORE_VALUE_INVALID;\n                    (void)memcpy(&extract.value.integer_value, &shift_bits, sizeof(shift_bits));\n                    if (!minic_core_function_append_value_instruction(\n                            context->function, context->block_id, &extract, &shift)) {\n                        return MINIC_CORE_LOWER_ERROR;\n                    }\n                    (void)memset(&extract, 0, sizeof(extract));\n                    extract.kind = MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT;\n                    extract.span = expression->span;\n                    extract.type = value_type;\n                    extract.result = MINIC_CORE_VALUE_INVALID;\n                    extract.value.binary.left = signed_current;\n                    extract.value.binary.right = shift;\n                    if (!minic_core_function_append_value_instruction(\n                            context->function, context->block_id, &extract, &signed_current)) {\n                        return MINIC_CORE_LOWER_ERROR;\n                    }\n                    (void)memset(&extract, 0, sizeof(extract));\n                    extract.kind = MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT;\n                    extract.span = expression->span;\n                    extract.type = value_type;\n                    extract.result = MINIC_CORE_VALUE_INVALID;\n                    extract.value.binary.left = signed_current;\n                    extract.value.binary.right = shift;\n                    if (!minic_core_function_append_value_instruction(\n                            context->function, context->block_id, &extract, &signed_current)) {\n                        return MINIC_CORE_LOWER_ERROR;\n                    }\n                }\n                *value_id = signed_current;\n                return MINIC_CORE_LOWER_OK;\n            }\n'''
-          if s.count(old) != 1:
-              raise SystemExit(f'read result anchor count={s.count(old)}')
-          p.write_text(s.replace(old, new, 1))
-
-          cg = Path('src/target/riscv64/core_codegen.c')
-          cgs = cg.read_text()
-          cgs = cgs.replace('/* BATCH_A_UNSIGNED_BIT_FIELD_READ: FIELD_ADDRESS may be used internally\n       for a bit-field storage-unit read.  The frontend/Core lowerer still\n       rejects taking a C address of a bit-field. */',
-                            '/* M103_INTEGER_BIT_FIELD_READ: FIELD_ADDRESS may be used internally\n       for a bit-field storage-unit read. The frontend/Core lowerer still\n       rejects taking a C address of a bit-field. */', 1)
-          cg.write_text(cgs)
-
-          t = Path('tests/core/run-core-ir-shadow.sh')
-          ts = t.read_text()
-          anchor = '''cat >"$work_dir/bool-bitfield-storage-read.i" <<'EOF'\n'''
-          case = '''cat >"$work_dir/signed-bitfield-storage-read.i" <<'EOF'\nstruct signed_bitfield_storage {\n    unsigned int prefix : 2;\n    signed int value : 8;\n    unsigned int suffix : 1;\n};\n\nint signed_bitfield_storage_read(const struct signed_bitfield_storage *state) {\n    return state->value;\n}\n\nint signed_bitfield_storage_switch(const struct signed_bitfield_storage *state) {\n    switch (state->value) {\n    case -1: return 11;\n    case 7: return 22;\n    default: return 33;\n    }\n}\nEOF\ncheck_strict_case signed-bitfield-storage-read\n\n'''
-          if ts.count(anchor) != 1:
-              raise SystemExit(f'test anchor count={ts.count(anchor)}')
-          t.write_text(ts.replace(anchor, case + anchor, 1))
+          p=Path('src/core/core_lower.c'); s=p.read_text()
+          old='''    status = lower_scalar_assignment_value(context, stored_type, source_id, &stored_value);\n'''
+          new='''    if (context->source_function != NULL && strcmp(context->source_function->name, "start_kernel") == 0 &&\n        source != NULL && source->kind == MINIC_EXPRESSION_CALL) {\n        const MinicFunction *trace_callee = NULL;\n        const MinicExpression *trace_callee_expr = NULL;\n        size_t trace_arg = 0U;\n        if (source->value.call.function_id != MINIC_FUNCTION_INVALID) {\n            trace_callee = minic_c0_program_function(context->body->program, source->value.call.function_id);\n        }\n        trace_callee_expr = minic_c0_program_expression(context->body->program, source->value.call.callee);\n        (void)fprintf(stderr,\n                      "CORE_Y104_CALL callee=%s direct=%d argc=%zu params=%zu variadic=%d return_int=%d return_ptr=%d target_int=%d target_ptr=%d callee_kind=%d span=%zu:%zu\\n",\n                      trace_callee != NULL ? trace_callee->name : "<indirect>",\n                      trace_callee != NULL ? 1 : 0,\n                      source->value.call.argument_count,\n                      trace_callee != NULL ? trace_callee->parameter_count : 0U,\n                      trace_callee != NULL && trace_callee->is_variadic ? 1 : 0,\n                      trace_callee != NULL && minic_type_is_integer(trace_callee->return_type) ? 1 : 0,\n                      trace_callee != NULL && minic_type_is_pointer(trace_callee->return_type) ? 1 : 0,\n                      minic_type_is_integer(stored_type) ? 1 : 0,\n                      minic_type_is_pointer(stored_type) ? 1 : 0,\n                      trace_callee_expr != NULL ? (int)trace_callee_expr->kind : -1,\n                      source->span.line, source->span.column);\n        for (trace_arg = 0U; trace_arg < source->value.call.argument_count; ++trace_arg) {\n            const MinicExpression *arg = minic_c0_program_expression(\n                context->body->program, source->value.call.arguments[trace_arg]);\n            (void)fprintf(stderr,\n                          "CORE_Y104_ARG index=%zu kind=%d category=%d int=%d ptr=%d record=%d span=%zu:%zu\\n",\n                          trace_arg, arg != NULL ? (int)arg->kind : -1,\n                          arg != NULL ? (int)arg->value_category : -1,\n                          arg != NULL && minic_type_is_integer(arg->type) ? 1 : 0,\n                          arg != NULL && minic_type_is_pointer(arg->type) ? 1 : 0,\n                          arg != NULL && minic_type_is_record(arg->type) ? 1 : 0,\n                          arg != NULL ? arg->span.line : (size_t)0U,\n                          arg != NULL ? arg->span.column : (size_t)0U);\n        }\n    }\n    status = lower_scalar_assignment_value(context, stored_type, source_id, &stored_value);\n'''
+          if s.count(old)!=1: raise SystemExit(f'anchor count={s.count(old)}')
+          p.write_text(s.replace(old,new,1))
           PY
-          echo 'changed=true' >> "$GITHUB_OUTPUT"
-      - name: Build exact production candidate
-        if: steps.patch.outputs.changed == 'true'
+      - name: Build exact diagnostic compiler
         shell: bash
         run: |
           set -Eeuo pipefail
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y102c-compiler
-      - name: Run permanent Core shadow regression
-        if: steps.patch.outputs.changed == 'true'
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y104-compiler
+      - name: Replay start kernel TU
         shell: bash
         run: |
           set -Eeuo pipefail
-          MINIC="$GITHUB_WORKSPACE/build/core-y102c-compiler/bin/minic" \
-            BUILD_DIR="$GITHUB_WORKSPACE/build/core-y102c-shadow" \
-            bash tests/core/run-core-ir-shadow.sh
-      - name: Verify Linux blocker movement
-        if: steps.patch.outputs.changed == 'true'
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-y102c-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-y102c-linux"; mkdir -p "$work"
+          compiler="$GITHUB_WORKSPACE/build/core-y104-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-y104-linux"; mkdir -p "$work"
           set +e
           MINIC_CORE_IR=strict CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
-            --work "$work" --jobs 3 --offset 0 --limit 500 --sample-count 0 --indices '193,242,357'
-          status=$?; set -e; echo CORE_Y102C_REPLAY_STATUS=$status
+            --work "$work" --jobs 1 --offset 0 --limit 500 --sample-count 0 --indices '0'
+          status=$?; set -e; echo CORE_Y104_REPLAY_STATUS=$status
           python3 - <<'PY'
           import json
           from pathlib import Path
-          old_first={193:79024,242:80624,357:81214}
-          w=Path('build/core-y102c-linux')
+          w=Path('build/core-y104-linux')
           rows=json.loads((w/'batch-results.json').read_text())
           if isinstance(rows,dict): rows=rows.get('results',rows.get('tus',[]))
-          seen=set()
           for r in rows:
-              i=int(r['index']); seen.add(i)
-              first=r.get('first_error_line'); msg=r.get('message','')
-              print(f"CORE_Y102C_INDEX index={i} status={r.get('status')} first={first} total={r.get('total_lines')} progress={r.get('progress_ratio')} message={msg}")
-              if 'netdev_reg_state' in msg:
-                  raise SystemExit(f'netdev_reg_state still blocks index {i}')
-              if r.get('status') != 'PASS' and (not first or int(first) <= old_first[i]):
-                  raise SystemExit(f'index {i} did not move forward: first={first} old={old_first[i]}')
-          if seen != set(old_first):
-              raise SystemExit(f'missing indices: {set(old_first)-seen}')
+              print(f"CORE_Y104_INDEX index={r.get('index')} status={r.get('status')} first={r.get('first_error_line')} total={r.get('total_lines')} progress={r.get('progress_ratio')} message={r.get('message','')}")
+              err=w/'minic-stderr'/f"{r['input']}.stderr"
+              if err.is_file():
+                  for x in err.read_text(errors='replace').splitlines():
+                      if 'CORE_Y104_' in x or ('CORE_' in x and 'start_kernel' in x): print(x)
+              first=r.get('first_error_line')
+              src=Path('build/linux-focus-corpus/kbuild')/r['input']
+              if first and src.is_file():
+                  lines=src.read_text(errors='replace').splitlines()
+                  lo=max(0,int(first)-8); hi=min(len(lines),int(first)+7)
+                  print('CORE_Y104_SOURCE_CONTEXT')
+                  for n in range(lo,hi): print(f'{n+1}: {lines[n]}')
           PY
-      - name: Commit production semantic change
-        if: steps.patch.outputs.changed == 'true'
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add src/core/core_lower.c src/target/riscv64/core_codegen.c tests/core/run-core-ir-shadow.sh
-          git diff --cached --check
-          git commit -m 'core: lower signed bit-field scalar reads'
-          git push origin HEAD:refactor/declaration-sema-v1
