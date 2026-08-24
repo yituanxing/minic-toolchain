@@ -1,0 +1,122 @@
+name: Core Pareto Top35 Productizer
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  top35:
+    if: github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+          fetch-depth: 0
+
+      - name: Detect already-productized batch
+        id: state
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if grep -Fq 'M109_CHAINED_RECORD_ASSIGNMENT_VALUE' src/core/core_lower.c && \
+             grep -Fq 'M110_PURE_REGISTER_OUTPUT_ASM' src/core/core_lower.c; then
+            echo 'needs_patch=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'needs_patch=true' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Restore frozen Linux corpus
+        if: steps.state.outputs.needs_patch == 'true'
+        id: linux-corpus-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+
+      - name: Require frozen corpus
+        if: steps.state.outputs.needs_patch == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
+          test -s build/linux-focus-corpus/selected-tus.txt
+
+      - name: Apply Top35 semantic batch
+        if: steps.state.outputs.needs_patch == 'true'
+        run: python3 tools/dev/patch-core-pareto-top35.py
+
+      - name: Build exact patched compiler
+        if: steps.state.outputs.needs_patch == 'true'
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/top35-compiler
+
+      - name: Run fast host regression gate
+        if: steps.state.outputs.needs_patch == 'true'
+        run: make -j4 check-fast MODE=release CFLAGS=-Werror BUILD_DIR=build/top35-check
+
+      - name: Replay combined Top35 cohort
+        if: steps.state.outputs.needs_patch == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/top35-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/top35"
+          set +e
+          MINIC_CORE_IR=strict CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
+            --minic "$compiler" \
+            --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
+            --work "$work" \
+            --jobs 4 \
+            --indices '2,209,242,378,491,492,493,494,495,496,497,498,499,16,18,19,23,25,34,49,78,81,83,96,380,381,382,383,384,385,386,435,437,443,444'
+          replay_status=$?
+          set -e
+          printf 'CORE_TOP35_REPLAY_STATUS=%d\n' "$replay_status"
+          python3 tools/ci/classify-core-strict-frontier.py \
+            "$work/batch-results.json" \
+            --examples 35 \
+            --json-out "$work/frontier-summary.json"
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          work = Path('build/top35')
+          rows = json.loads((work / 'batch-results.json').read_text())
+          summary = json.loads((work / 'frontier-summary.json').read_text())
+          if len(rows) != 35:
+              raise SystemExit(f'expected 35 rows, got {len(rows)}')
+          if summary['error'] != 0 or summary['preprocess_missing'] != 0:
+              raise SystemExit(f"Top35 introduced ERROR/missing: error={summary['error']} missing={summary['preprocess_missing']}")
+          old = {'minmax_reset', '__vstate_csr_save', 'iomap_inline_data'}
+          remaining = [b for b in summary.get('blockers', []) if b.get('function') in old]
+          if remaining:
+              raise SystemExit(f'old Top35 blockers remain: {remaining}')
+          print('CORE_TOP35_ACCEPT old_blockers=0 error=0 selected=35')
+          print('CORE_TOP35_NEW_FRONTIER ' + json.dumps(summary.get('blockers', [])[:12], sort_keys=True))
+          PY
+
+      - name: Commit semantic batch
+        if: steps.state.outputs.needs_patch == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git diff --check
+          git status --short
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/core/core_lower.c src/target/riscv64/core_codegen.c
+          git diff --cached --quiet && { echo 'no semantic changes to productize'; exit 1; }
+          git commit -m 'core: clear top35 Pareto blocker families'
+          git push origin HEAD:refactor/declaration-sema-v1
+
+      - name: Persist Top35 result
+        if: always() && steps.state.outputs.needs_patch == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-pareto-top35-${{ github.sha }}
+          path: |
+            build/top35/batch-results.json
+            build/top35/frontier-summary.json
+            build/top35/minic-stderr/**
+          if-no-files-found: warn
