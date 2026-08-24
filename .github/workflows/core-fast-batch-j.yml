@@ -1,4 +1,4 @@
-name: Core Y61 Queue Zone Append Diagnose
+name: Core Y62 Queue Zone Direct Trace
 
 on:
   pull_request:
@@ -7,7 +7,7 @@ permissions:
   contents: read
 
 jobs:
-  y61-queue-zone-append-diagnose:
+  y62-queue-zone-direct-trace:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     steps:
@@ -20,71 +20,28 @@ jobs:
         with:
           path: build/linux-focus-corpus
           key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
-      - name: Require frozen corpus
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
-          test -s build/linux-focus-corpus/selected-tus.txt
       - name: Build exact semantic head
         shell: bash
         run: |
           set -Eeuo pipefail
-          python3 tools/dev/patch-linux-replay-live-progress.py
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y61-compiler
-      - name: Show queue_max_zone_append_sectors source windows
+          test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y62-compiler
+      - name: Direct trace representative TU
         shell: bash
         run: |
           set -Eeuo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-          needle='queue_max_zone_append_sectors'
-          shown=0
-          for p in Path('build/linux-focus-corpus').rglob('*.i'):
-              try:
-                  lines=p.read_text(errors='replace').splitlines()
-              except OSError:
-                  continue
-              hits=[i for i,line in enumerate(lines) if needle in line]
-              if not hits:
-                  continue
-              for i in hits:
-                  lo=max(0,i-8); hi=min(len(lines),i+35)
-                  print(f'CORE_Y61_SOURCE file={p} hit_line={i+1}')
-                  for n in range(lo,hi):
-                      print(f'{n+1}: {lines[n]}')
-                  print('CORE_Y61_SOURCE_END')
-                  shown += 1
-                  if shown >= 3:
-                      raise SystemExit(0)
-          print(f'CORE_Y61_SOURCE_WINDOWS={shown}')
-          PY
-      - name: Focused Core trace
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-y61-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-y61-linux"
-          mkdir -p "$work"
+          compiler="$GITHUB_WORKSPACE/build/core-y62-compiler/bin/minic"
+          input="$GITHUB_WORKSPACE/build/linux-focus-corpus/kbuild/init/do_mounts_initrd.i"
+          mkdir -p build/core-y62-direct
           set +e
           MINIC_CORE_IR=strict CORE_FAST_TRACE=1 CORE_LOWER_DETAIL=1 CORE_ASSIGN_STAGE=1 CORE_ASM_DETAIL=1 \
-            python3 tests/external/linux/corpus_replay.py \
-              --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
-              --work "$work" --jobs 3 --offset 0 --limit 500 --sample-count 0 --indices '3,301,303'
-          replay_status=$?
+            "$compiler" -S "$input" -o build/core-y62-direct/out.s \
+            >build/core-y62-direct/stdout.log 2>build/core-y62-direct/stderr.log
+          rc=$?
           set -e
-          echo CORE_Y61_REPLAY_STATUS=$replay_status
-          python3 tools/ci/classify-core-strict-frontier.py "$work/batch-results.json" --examples 8 --json-out "$work/frontier-summary.json"
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-          w=Path('build/core-y61-linux')
-          f=json.loads((w/'frontier-summary.json').read_text())
-          rows=json.loads((w/'batch-results.json').read_text())
-          if isinstance(rows,dict): rows=rows.get('results',rows.get('tus',[]))
-          print(f"CORE_Y61_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
-          for r in rows:
-              print(f"CORE_Y61_INDEX index={r.get('index')} status={r.get('status')} progress={float(r.get('progress_ratio') or 0)*100:.3f}% message={r.get('message','')}")
-          if f['error'] != 0:
-              raise SystemExit(f'Core ERROR: {f}')
-          PY
+          echo CORE_Y62_RC=$rc
+          echo '=== CORE_Y62 STDERR FILTERED ==='
+          grep -E 'CORE_|queue_max_zone_append_sectors|unsupported|UNSUPPORTED|error:' build/core-y62-direct/stderr.log | tail -n 300 || true
+          echo '=== CORE_Y62 STDERR TAIL ==='
+          tail -n 200 build/core-y62-direct/stderr.log || true
+          test "$rc" -ne 0
