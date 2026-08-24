@@ -468,6 +468,18 @@ const char *terminating_switch_return(unsigned short tag) {
 EOF
 check_strict_case terminating-switch-return
 
+cat >"$work_dir/materialized-local-array-address.i" <<'EOF'
+struct core_local_mask { unsigned long bits[1]; };
+typedef struct core_local_mask core_local_mask_var_t[1];
+int core_consume_local_mask(core_local_mask_var_t *mask);
+
+int materialized_local_array_address(void) {
+    core_local_mask_var_t mask;
+    return core_consume_local_mask(&mask);
+}
+EOF
+check_strict_case materialized-local-array-address
+
 cat >"$work_dir/fixed-register-sbi-ecall.i" <<'EOF'
 struct core_sbi_ret { long error; long value; };
 
