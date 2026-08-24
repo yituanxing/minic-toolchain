@@ -1,4 +1,4 @@
-name: Core Batch Y50 Repeated Local Object
+name: Core Batch Y50b Repeated Local Object
 
 on:
   pull_request:
@@ -7,7 +7,7 @@ permissions:
   contents: read
 
 jobs:
-  y50-repeated-local-object:
+  y50b-repeated-local-object:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     steps:
@@ -34,7 +34,6 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
 
-          # Core object representation/API.
           p=Path('src/core/core_ir.h')
           s=p.read_text()
           old='''typedef struct MinicCoreObject {\n    MinicSourceSpan span;\n    MinicType type;\n} MinicCoreObject;\n'''
@@ -52,12 +51,15 @@ jobs:
           new='''bool minic_core_function_add_repeated_object(MinicCoreFunction *function,\n                                             MinicSourceSpan span,\n                                             MinicType element_type,\n                                             size_t element_count,\n                                             MinicCoreObjectId *object_id) {\n    MinicCoreObjectId new_id;\n\n    if (function == NULL || object_id == NULL || element_count == 0U ||\n        function->object_count >= (size_t)UINT32_MAX ||\n        minic_type_is_void(element_type) || minic_type_is_function(element_type) ||\n        !grow_array((void **)&function->objects,\n                    &function->object_capacity,\n                    function->object_count,\n                    sizeof(*function->objects))) {\n        return false;\n    }\n    new_id = (MinicCoreObjectId)function->object_count;\n    function->objects[function->object_count].span = span;\n    function->objects[function->object_count].type = element_type;\n    function->objects[function->object_count].element_count = element_count;\n    function->object_count += 1U;\n    *object_id = new_id;\n    return true;\n}\n\nbool minic_core_function_add_object(MinicCoreFunction *function,\n                                    MinicSourceSpan span,\n                                    MinicType type,\n                                    MinicCoreObjectId *object_id) {\n    return minic_core_function_add_repeated_object(function, span, type, 1U, object_id);\n}\n'''
           if s.count(old)!=1: raise SystemExit(f'object impl count={s.count(old)}')
           s=s.replace(old,new,1)
+          verify_pos=s.find('''bool minic_core_function_verify(const MinicCoreFunction *function) {''')
+          if verify_pos < 0: raise SystemExit('verifier marker')
+          before=s[:verify_pos]
+          sub=s[verify_pos:]
           anchor='''    for (index = 0U; index < function->global_count; ++index) {\n'''
           extra='''    for (index = 0U; index < function->object_count; ++index) {\n        const MinicCoreObject *object = &function->objects[index];\n        if (object->element_count == 0U || minic_type_is_void(object->type) ||\n            minic_type_is_function(object->type)) {\n            return false;\n        }\n    }\n    for (index = 0U; index < function->global_count; ++index) {\n'''
-          if s.count(anchor)!=1: raise SystemExit(f'object verifier anchor count={s.count(anchor)}')
-          p.write_text(s.replace(anchor,extra,1))
+          if sub.count(anchor)!=1: raise SystemExit(f'object verifier scoped count={sub.count(anchor)}')
+          p.write_text(before+sub.replace(anchor,extra,1))
 
-          # Local arrays claim one repeated element-typed object instead of failing closed.
           p=Path('src/core/core_lower.c')
           s=p.read_text()
           old='''    if (local->is_array ||\n        minic_c0_program_local_fixed_register_binding(context->body->program, local_id) != NULL ||\n        (!core_memory_scalar_type(local->type) && !minic_type_is_record(local->type))) {\n        return MINIC_CORE_LOWER_UNSUPPORTED;\n    }\n    if (!minic_core_function_add_object(\n            context->function, local->name_span, local->type, object_id)) {\n        return MINIC_CORE_LOWER_ERROR;\n    }\n'''
@@ -65,7 +67,6 @@ jobs:
           if s.count(old)!=1: raise SystemExit(f'local object seam count={s.count(old)}')
           p.write_text(s.replace(old,new,1))
 
-          # RV64 frame ownership: each Core object contributes element_size * element_count.
           p=Path('src/target/riscv64/core_codegen.c')
           s=p.read_text()
           old='''        if (!minic_data_layout_type(minic_default_data_layout(),\n                                    program,\n                                    function->objects[object_index].type,\n                                    &object_size,\n                                    &object_alignment) ||\n            object_size == 0U || object_alignment == 0U || object_alignment > 16U ||\n            !align_up(storage_size, object_alignment, &storage_size) ||\n            storage_size > SIZE_MAX - object_size) {\n            return false;\n        }\n        storage_size += object_size;\n'''
@@ -77,56 +78,55 @@ jobs:
           if s.count(old)!=1: raise SystemExit(f'object offset seam count={s.count(old)}')
           p.write_text(s.replace(old,new,1))
 
-          # Exact regressions for both observed shapes.
           p=Path('tests/core/run-core-ir-shadow.sh')
           s=p.read_text()
           anchor='''check_strict_case bool-bitfield-storage-write\n\n'''
           extra='''check_strict_case bool-bitfield-storage-write\n\ncat >"$work_dir/local-char-array-object.i" <<'EOF'\nint local_char_array_object(int index) {\n    char bytes[4];\n    bytes[0] = 1;\n    bytes[3] = 7;\n    return bytes[index];\n}\nEOF\ncheck_strict_case local-char-array-object\n\ncat >"$work_dir/local-pointer-array-decay.i" <<'EOF'\nstruct local_pointer_array_item;\nextern int consume_local_pointer_array(struct local_pointer_array_item **items);\nint local_pointer_array_decay(struct local_pointer_array_item *item) {\n    struct local_pointer_array_item *items[] = { item, (void *)0 };\n    return consume_local_pointer_array(items);\n}\nEOF\ncheck_strict_case local-pointer-array-decay\n\n'''
           if s.count(anchor)!=1: raise SystemExit(f'array test anchor count={s.count(anchor)}')
           p.write_text(s.replace(anchor,extra,1))
-          print('CORE_BATCH_Y50_PATCHED')
+          print('CORE_BATCH_Y50B_PATCHED')
           PY
       - name: Build exact candidate
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-y50-compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-y50b-compiler
       - name: Full Core exact regression suite
         shell: bash
         run: |
           set -Eeuo pipefail
-          MINIC="$GITHUB_WORKSPACE/build/core-batch-y50-compiler/bin/minic" \
-            BUILD_DIR="$GITHUB_WORKSPACE/build/core-batch-y50-tests" \
+          MINIC="$GITHUB_WORKSPACE/build/core-batch-y50b-compiler/bin/minic" \
+            BUILD_DIR="$GITHUB_WORKSPACE/build/core-batch-y50b-tests" \
             bash tests/core/run-core-ir-shadow.sh
-          echo CORE_BATCH_Y50_CORE_SUITE_PASS
+          echo CORE_BATCH_Y50B_CORE_SUITE_PASS
       - name: Focused Linux main plus sprint
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-batch-y50-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-batch-y50-linux"
+          compiler="$GITHUB_WORKSPACE/build/core-batch-y50b-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-batch-y50b-linux"
           set +e
           MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
             --work "$work" --jobs 4 --offset 0 --limit 500 --sample-count 0 --indices '0,2,3,7'
           replay_status=$?
           set -e
-          echo CORE_BATCH_Y50_REPLAY_STATUS=$replay_status
+          echo CORE_BATCH_Y50B_REPLAY_STATUS=$replay_status
           python3 tools/ci/classify-core-strict-frontier.py \
             "$work/batch-results.json" --examples 12 --json-out "$work/frontier-summary.json"
           python3 - <<'PY'
           import json
           from pathlib import Path
-          w=Path('build/core-batch-y50-linux')
+          w=Path('build/core-batch-y50b-linux')
           rows=json.loads((w/'batch-results.json').read_text())
           if isinstance(rows,dict): rows=rows.get('results',rows.get('tus',[]))
           by={int(r['index']):r for r in rows}
           f=json.loads((w/'frontier-summary.json').read_text())
           for i in sorted(by):
               r=by[i]
-              print(f"CORE_BATCH_Y50_ROW index={i} status={r.get('status')} progress={float(r.get('progress_ratio') or 0)*100:.2f}% first={r.get('first_error_line')} message={r.get('message','')}")
-          print(f"CORE_BATCH_Y50_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
+              print(f"CORE_BATCH_Y50B_ROW index={i} status={r.get('status')} progress={float(r.get('progress_ratio') or 0)*100:.2f}% first={r.get('first_error_line')} message={r.get('message','')}")
+          print(f"CORE_BATCH_Y50B_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
           if f['error'] != 0 or by[7]['status'] != 'PASS':
-              raise SystemExit(f'Y50 focused regression: {f}')
+              raise SystemExit(f'Y50b focused regression: {f}')
           if by[0].get('message','').endswith("'do_one_initcall'"):
-              raise SystemExit('Y50 did not advance sprint local array')
+              raise SystemExit('Y50b did not advance sprint local array')
           if any(by[i].get('message','').endswith("'device_add_group'") for i in (2,3)):
-              raise SystemExit('Y50 did not advance main local array')
+              raise SystemExit('Y50b did not advance main local array')
           PY
