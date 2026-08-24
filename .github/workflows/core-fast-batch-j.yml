@@ -1,4 +1,4 @@
-name: Core Y101b Netdev Selector Shape
+name: Core Y102 Signed Bit-field Read
 
 on:
   pull_request:
@@ -7,7 +7,7 @@ permissions:
   contents: read
 
 jobs:
-  y101b-selector-shape:
+  y102-signed-bitfield-read:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     steps:
@@ -20,45 +20,68 @@ jobs:
         with:
           path: build/linux-focus-corpus
           key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
-      - name: Instrument selector shape
+      - name: Apply signed bit-field read candidate
         shell: bash
         run: |
           set -Eeuo pipefail
           python3 - <<'PY'
           from pathlib import Path
-          p=Path('src/core/core_lower.c'); s=p.read_text()
-          old='''    status = lower_expression(context, statement->expression, &selector_source);\n    if (status != MINIC_CORE_LOWER_OK) {\n        return status;\n    }\n'''
-          new='''    if (context->source_function != NULL && strcmp(context->source_function->name, "netdev_reg_state") == 0) {\n        const MinicRecord *trace_record = NULL;\n        const MinicRecordField *trace_field = NULL;\n        if (selector_expression->kind == MINIC_EXPRESSION_MEMBER) {\n            trace_record = minic_c0_program_record(context->body->program, selector_expression->value.member.record_id);\n            trace_field = minic_c0_record_field(trace_record, selector_expression->value.member.field_index);\n        }\n        (void)fprintf(stderr,\n                      "CORE_Y101_SELECTOR kind=%d category=%d integer=%d unsigned=%d bool=%d field=%d bitfield=%d width=%zu volatile=%d const=%d\\n",\n                      (int)selector_expression->kind,\n                      (int)selector_expression->value_category,\n                      minic_type_is_integer(selector_expression->type) ? 1 : 0,\n                      minic_type_is_unsigned_integer(selector_expression->type) ? 1 : 0,\n                      minic_type_is_bool_integer(selector_expression->type) ? 1 : 0,\n                      trace_field != NULL ? 1 : 0,\n                      trace_field != NULL && trace_field->is_bit_field ? 1 : 0,\n                      trace_field != NULL ? trace_field->bit_width : (size_t)0U,\n                      minic_type_is_volatile(selector_expression->type) ? 1 : 0,\n                      minic_type_is_const(selector_expression->type) ? 1 : 0);\n    }\n    status = lower_expression(context, statement->expression, &selector_source);\n    if (status != MINIC_CORE_LOWER_OK) {\n        return status;\n    }\n'''
-          if s.count(old)!=1: raise SystemExit(f'anchor count={s.count(old)}')
-          p.write_text(s.replace(old,new,1))
+          p = Path('src/core/core_lower.c')
+          s = p.read_text()
+
+          old = '''        !minic_type_is_integer(value_type) || !minic_type_is_unsigned_integer(value_type) ||\n        !minic_data_layout_type(minic_default_data_layout(),\n'''
+          new = '''        !minic_type_is_integer(value_type) ||\n        !minic_data_layout_type(minic_default_data_layout(),\n'''
+          if s.count(old) != 1:
+              raise SystemExit(f'helper guard anchor count={s.count(old)}')
+          s = s.replace(old, new, 1)
+
+          old = '''    if (minic_target_info_integer_width(\n            context->target, context->body->program, value_type, &value_width) &&\n        (size_t)value_width == storage_size * 8U) {\n        *storage_type = value_type;\n        *storage_width = value_width;\n        return true;\n    }\n'''
+          new = '''    if (minic_type_is_unsigned_integer(value_type) &&\n        minic_target_info_integer_width(\n            context->target, context->body->program, value_type, &value_width) &&\n        (size_t)value_width == storage_size * 8U) {\n        *storage_type = value_type;\n        *storage_width = value_width;\n        return true;\n    }\n'''
+          if s.count(old) != 1:
+              raise SystemExit(f'helper fast-path anchor count={s.count(old)}')
+          s = s.replace(old, new, 1)
+
+          old = '''                !minic_type_is_integer(value_type) ||\n                !minic_type_is_unsigned_integer(value_type) ||\n                !core_unsigned_bit_field_storage_type(\n'''
+          new = '''                !minic_type_is_integer(value_type) ||\n                !core_unsigned_bit_field_storage_type(\n'''
+          if s.count(old) != 1:
+              raise SystemExit(f'read guard anchor count={s.count(old)}')
+          s = s.replace(old, new, 1)
+
+          old = '''            if (minic_type_equal(storage_type, value_type)) {\n                *value_id = current;\n                return MINIC_CORE_LOWER_OK;\n            }\n            return append_integer_conversion(\n                context, expression->span, value_type, current, value_id);\n'''
+          new = '''            if (minic_type_is_unsigned_integer(value_type)) {\n                if (minic_type_equal(storage_type, value_type)) {\n                    *value_id = current;\n                    return MINIC_CORE_LOWER_OK;\n                }\n                return append_integer_conversion(\n                    context, expression->span, value_type, current, value_id);\n            }\n            {\n                MinicCoreValueId signed_current;\n                unsigned int value_width;\n\n                if (!minic_target_info_integer_width(\n                        context->target, context->body->program, value_type, &value_width) ||\n                    value_width != storage_width) {\n                    return MINIC_CORE_LOWER_UNSUPPORTED;\n                }\n                status = append_integer_conversion(\n                    context, expression->span, value_type, current, &signed_current);\n                if (status != MINIC_CORE_LOWER_OK) {\n                    return status;\n                }\n                if (field->bit_width < storage_width) {\n                    MinicCoreValueId shift;\n                    uint64_t shift_bits = (uint64_t)(storage_width - field->bit_width);\n\n                    (void)memset(&extract, 0, sizeof(extract));\n                    extract.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;\n                    extract.span = expression->span;\n                    extract.type = minic_type_unsigned_int();\n                    extract.result = MINIC_CORE_VALUE_INVALID;\n                    (void)memcpy(&extract.value.integer_value, &shift_bits, sizeof(shift_bits));\n                    if (!minic_core_function_append_value_instruction(\n                            context->function, context->block_id, &extract, &shift)) {\n                        return MINIC_CORE_LOWER_ERROR;\n                    }\n                    (void)memset(&extract, 0, sizeof(extract));\n                    extract.kind = MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT;\n                    extract.span = expression->span;\n                    extract.type = value_type;\n                    extract.result = MINIC_CORE_VALUE_INVALID;\n                    extract.value.binary.left = signed_current;\n                    extract.value.binary.right = shift;\n                    if (!minic_core_function_append_value_instruction(\n                            context->function, context->block_id, &extract, &signed_current)) {\n                        return MINIC_CORE_LOWER_ERROR;\n                    }\n                    (void)memset(&extract, 0, sizeof(extract));\n                    extract.kind = MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT;\n                    extract.span = expression->span;\n                    extract.type = value_type;\n                    extract.result = MINIC_CORE_VALUE_INVALID;\n                    extract.value.binary.left = signed_current;\n                    extract.value.binary.right = shift;\n                    if (!minic_core_function_append_value_instruction(\n                            context->function, context->block_id, &extract, &signed_current)) {\n                        return MINIC_CORE_LOWER_ERROR;\n                    }\n                }\n                *value_id = signed_current;\n                return MINIC_CORE_LOWER_OK;\n            }\n'''
+          if s.count(old) != 1:
+              raise SystemExit(f'read result anchor count={s.count(old)}')
+          p.write_text(s.replace(old, new, 1))
           PY
-      - name: Build exact instrumented compiler
+      - name: Build exact candidate compiler
         shell: bash
         run: |
           set -Eeuo pipefail
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y101b-compiler
-      - name: Replay representatives
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y102-compiler
+      - name: Replay netdev representatives
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-y101b-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-y101b-linux"; mkdir -p "$work"
+          compiler="$GITHUB_WORKSPACE/build/core-y102-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-y102-linux"; mkdir -p "$work"
           set +e
           MINIC_CORE_IR=strict CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
             --work "$work" --jobs 3 --offset 0 --limit 500 --sample-count 0 --indices '193,242,357'
-          status=$?; set -e; echo CORE_Y101B_REPLAY_STATUS=$status
+          status=$?; set -e; echo CORE_Y102_REPLAY_STATUS=$status
           python3 - <<'PY'
           import json
           from pathlib import Path
-          w=Path('build/core-y101b-linux')
+          w=Path('build/core-y102-linux')
           rows=json.loads((w/'batch-results.json').read_text())
           if isinstance(rows,dict): rows=rows.get('results',rows.get('tus',[]))
           for r in rows:
-              print(f"CORE_Y101B_INDEX index={r.get('index')} status={r.get('status')} message={r.get('message','')}")
+              print(f"CORE_Y102_INDEX index={r.get('index')} status={r.get('status')} first={r.get('first_error_line')} total={r.get('total_lines')} progress={r.get('progress_ratio')} message={r.get('message','')}")
               err=w/'minic-stderr'/f"{r['input']}.stderr"
               if err.is_file():
                   for x in err.read_text(errors='replace').splitlines():
-                      if 'CORE_Y101_SELECTOR' in x or ('CORE_FAST_TRACE' in x and 'netdev_reg_state' in x): print(x)
+                      if 'CORE_FAST_TRACE' in x and ('netdev_reg_state' in x or 'function=' in x):
+                          print(x)
           PY
+          test "$status" -eq 0
