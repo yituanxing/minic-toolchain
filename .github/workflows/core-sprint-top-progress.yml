@@ -1,21 +1,13 @@
-name: Core M108 Frontier
+name: Core Strict500 Snapshot
 
 on:
   pull_request:
-  push:
-    branches:
-      - refactor/declaration-sema-v1
-
-permissions:
-  contents: write
+  workflow_dispatch:
 
 jobs:
-  m108-frontier:
-    if: github.head_ref == 'refactor/declaration-sema-v1' || github.ref == 'refs/heads/refactor/declaration-sema-v1'
+  strict500:
+    if: github.event_name == 'workflow_dispatch' || github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
-    concurrency:
-      group: core-m108-${{ github.event.pull_request.number || github.ref }}
-      cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
         with:
@@ -40,38 +32,61 @@ jobs:
         run: python3 tools/dev/patch-linux-replay-live-progress.py
 
       - name: Build exact compiler
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m108-compiler
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/strict500-compiler
 
-      - name: Capture exact do_task_dead failure
+      - name: Replay frozen strict500
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/m108-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/m108-frontier"
-          src="$GITHUB_WORKSPACE/build/linux-focus-corpus/kbuild/kernel/sched/core.i"
+          compiler="$GITHUB_WORKSPACE/build/strict500-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/strict500"
           set +e
-          MINIC_CORE_IR=strict CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
+          MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" \
             --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
             --work "$work" \
-            --jobs 1 \
+            --jobs 4 \
             --offset 0 \
             --limit 500 \
-            --sample-count 0 \
-            --indices '95'
+            --sample-count 0
           replay_status=$?
           set -e
-          printf 'CORE_M108_REPLAY_STATUS=%d\n' "$replay_status"
-          echo CORE_DO_TASK_DEAD_SOURCE_BEGIN
-          grep -n -A90 -B8 'do_task_dead' "$src" | head -120 || true
-          echo CORE_DO_TASK_DEAD_SOURCE_END
-          stderr="$work/minic-stderr/kernel/sched/core.i.stderr"
-          echo CORE_DO_TASK_DEAD_RAW_TRACE_BEGIN
-          if test -f "$stderr"; then
-            tail -240 "$stderr"
-          fi
-          echo CORE_DO_TASK_DEAD_RAW_TRACE_END
+          printf 'CORE_STRICT500_REPLAY_STATUS=%d\n' "$replay_status"
           python3 tools/ci/classify-core-strict-frontier.py \
             "$work/batch-results.json" \
-            --examples 2 \
+            --examples 20 \
             --json-out "$work/frontier-summary.json"
+          python3 tools/ci/summarize-core-frontier-progress.py \
+            "$work/batch-results.json" \
+            --expect-selected 500 \
+            --json-out "$work/progress-summary.json" \
+            --text-out "$work/progress-summary.txt"
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          work = Path('build/strict500')
+          frontier = json.loads((work / 'frontier-summary.json').read_text())
+          headline = f"CORE_STRICT500_EXACT selected={frontier['selected']} pass={frontier['pass']} unsupported={frontier['unsupported']} error={frontier['error']}"
+          print(headline)
+          with Path('build/strict500/headline.txt').open('w') as f:
+              f.write(headline + '\n')
+          with Path(__import__('os').environ['GITHUB_STEP_SUMMARY']).open('a') as f:
+              f.write('## Core Strict500\n\n')
+              f.write(f'`{headline}`\n\n')
+              f.write((work / 'progress-summary.txt').read_text())
+          if frontier['error'] != 0:
+              print(f"CORE_STRICT500_ERRORS {frontier.get('errors', [])}")
+          PY
+
+      - name: Persist strict500 result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-strict500-${{ github.sha }}
+          path: |
+            build/strict500/batch-results.json
+            build/strict500/frontier-summary.json
+            build/strict500/progress-summary.json
+            build/strict500/progress-summary.txt
+            build/strict500/headline.txt
+          if-no-files-found: warn
