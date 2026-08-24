@@ -1,4 +1,4 @@
-name: Core Y65 Queue Conditional Guard
+name: Core Y66 Conditional Value Type Candidate
 
 on:
   pull_request:
@@ -7,7 +7,7 @@ permissions:
   contents: read
 
 jobs:
-  y65-queue-conditional-guard:
+  y66-conditional-value-type:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     steps:
@@ -20,7 +20,7 @@ jobs:
         with:
           path: build/linux-focus-corpus
           key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
-      - name: Patch guard trace and build
+      - name: Apply conditional value-type candidate
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -29,25 +29,76 @@ jobs:
           from pathlib import Path
           p=Path('src/core/core_lower.c')
           s=p.read_text()
-          old='''        /* M60_POINTER_CONDITIONAL_VALUE: C conditional values may be pointer\n           scalars as well as integers. The existing arm conversion, spill and\n           reload machinery is already scalar-generic, so keep the semantic\n           restriction at the Core scalar boundary rather than at integer-only. */\n        if (expression->value.conditional.uses_condition_value ||\n'''
-          new='''        /* M60_POINTER_CONDITIONAL_VALUE: C conditional values may be pointer\n           scalars as well as integers. The existing arm conversion, spill and\n           reload machinery is already scalar-generic, so keep the semantic\n           restriction at the Core scalar boundary rather than at integer-only. */\n        if (context->source_function != NULL && context->source_function->name != NULL &&\n            strcmp(context->source_function->name, "queue_max_zone_append_sectors") == 0) {\n            (void)fprintf(stderr,\n                          "CORE_Y65_GUARD uses=%d true_invalid=%d false_invalid=%d memory_scalar=%d integer=%d pointer=%d const=%d volatile=%d true=%zu false=%zu condition=%zu span=%zu:%zu\\n",\n                          expression->value.conditional.uses_condition_value ? 1 : 0,\n                          expression->value.conditional.when_true == MINIC_EXPRESSION_INVALID ? 1 : 0,\n                          expression->value.conditional.when_false == MINIC_EXPRESSION_INVALID ? 1 : 0,\n                          core_memory_scalar_type(expression->type) ? 1 : 0,\n                          minic_type_is_integer(expression->type) ? 1 : 0,\n                          minic_type_is_pointer(expression->type) ? 1 : 0,\n                          minic_type_is_const(expression->type) ? 1 : 0,\n                          minic_type_is_volatile(expression->type) ? 1 : 0,\n                          expression->value.conditional.when_true,\n                          expression->value.conditional.when_false,\n                          expression->value.conditional.condition,\n                          expression->span.begin.line, expression->span.begin.column);\n        }\n        if (expression->value.conditional.uses_condition_value ||\n'''
+          old='''        MinicCoreLowerStatus status;\n        MinicType false_type;\n        MinicType true_type;\n\n        /* M60_POINTER_CONDITIONAL_VALUE: C conditional values may be pointer\n'''
+          new='''        MinicCoreLowerStatus status;\n        MinicType false_type;\n        MinicType result_type;\n        MinicType true_type;\n\n        /* M60_POINTER_CONDITIONAL_VALUE: C conditional values may be pointer\n'''
+          if s.count(old)!=1:
+              raise SystemExit(f'decl anchor count={s.count(old)}')
+          s=s.replace(old,new,1)
+          old='''        if (expression->value.conditional.uses_condition_value ||\n            expression->value.conditional.when_true == MINIC_EXPRESSION_INVALID ||\n            expression->value.conditional.when_false == MINIC_EXPRESSION_INVALID ||\n            !core_memory_scalar_type(expression->type) || minic_type_is_const(expression->type) ||\n            minic_type_is_volatile(expression->type)) {\n            return MINIC_CORE_LOWER_UNSUPPORTED;\n        }\n'''
+          new='''        if (expression->value.conditional.uses_condition_value ||\n            expression->value.conditional.when_true == MINIC_EXPRESSION_INVALID ||\n            expression->value.conditional.when_false == MINIC_EXPRESSION_INVALID ||\n            !core_scalar_expression_value_type(context->body, expression, &result_type) ||\n            !core_memory_scalar_type(result_type)) {\n            return MINIC_CORE_LOWER_UNSUPPORTED;\n        }\n'''
           if s.count(old)!=1:
               raise SystemExit(f'guard anchor count={s.count(old)}')
-          p.write_text(s.replace(old,new,1))
+          s=s.replace(old,new,1)
+          old='''        if (!core_memory_scalar_type(expression->type) ||\n            !core_scalar_expression_value_type(context->body, true_expression, &true_type) ||\n            !core_scalar_expression_value_type(context->body, false_expression, &false_type)) {\n            return MINIC_CORE_LOWER_UNSUPPORTED;\n        }\n        if (!minic_core_function_add_object(\n                context->function, expression->span, expression->type, &result_object) ||\n'''
+          new='''        if (!core_scalar_expression_value_type(context->body, true_expression, &true_type) ||\n            !core_scalar_expression_value_type(context->body, false_expression, &false_type)) {\n            return MINIC_CORE_LOWER_UNSUPPORTED;\n        }\n        if (!minic_core_function_add_object(\n                context->function, expression->span, result_type, &result_object) ||\n'''
+          if s.count(old)!=1:
+              raise SystemExit(f'object anchor count={s.count(old)}')
+          s=s.replace(old,new,1)
+          s=s.replace('''        status = lower_scalar_assignment_value(context,\n                                               expression->type,\n                                               expression->value.conditional.when_true,\n                                               &arm_value);\n''','''        status = lower_scalar_assignment_value(context,\n                                               result_type,\n                                               expression->value.conditional.when_true,\n                                               &arm_value);\n''',1)
+          s=s.replace('''        status = store_scalar_value(\n            context, true_expression->span, expression->type, result_object, arm_value);\n''','''        status = store_scalar_value(\n            context, true_expression->span, result_type, result_object, arm_value);\n''',1)
+          s=s.replace('''        status = lower_scalar_assignment_value(context,\n                                               expression->type,\n                                               expression->value.conditional.when_false,\n                                               &arm_value);\n''','''        status = lower_scalar_assignment_value(context,\n                                               result_type,\n                                               expression->value.conditional.when_false,\n                                               &arm_value);\n''',1)
+          s=s.replace('''        status = store_scalar_value(\n            context, false_expression->span, expression->type, result_object, arm_value);\n''','''        status = store_scalar_value(\n            context, false_expression->span, result_type, result_object, arm_value);\n''',1)
+          old='''        return reload_scalar_value(\n            context, expression->span, expression->type, result_object, value_id);\n    }\n    /* M73_COMMA_EXPRESSION_VALUE'''
+          new='''        return reload_scalar_value(\n            context, expression->span, result_type, result_object, value_id);\n    }\n    /* M73_COMMA_EXPRESSION_VALUE'''
+          if s.count(old)!=1:
+              raise SystemExit(f'reload anchor count={s.count(old)}')
+          s=s.replace(old,new,1)
+          p.write_text(s)
+
+          p=Path('tests/core/run-core-ir-shadow.sh')
+          s=p.read_text()
+          anchor='''cat >"$work_dir/variadic-call-unsupported.i" <<'EOF'\n'''
+          addition='''cat >"$work_dir/qualified-lvalue-conditional.i" <<'EOF'\nunsigned int qualified_lvalue_conditional(const unsigned int *left, const unsigned int *right) {\n    const unsigned int x = *left;\n    const unsigned int y = *right;\n    return ({ x < y ? x : y; });\n}\nEOF\ncheck_strict_case qualified-lvalue-conditional\n\n'''
+          if s.count(anchor)!=1:
+              raise SystemExit(f'test anchor count={s.count(anchor)}')
+          p.write_text(s.replace(anchor,addition+anchor,1))
+          print('CORE_Y66_CANDIDATE_APPLIED')
           PY
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y65-compiler
-      - name: Direct representative trace
+      - name: Build and Core exact regressions
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-y65-compiler/bin/minic"
-          input="$GITHUB_WORKSPACE/build/linux-focus-corpus/kbuild/init/do_mounts_initrd.i"
-          mkdir -p build/core-y65-direct
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y66-compiler
+          MINIC="$GITHUB_WORKSPACE/build/core-y66-compiler/bin/minic" \
+            BUILD_DIR="$GITHUB_WORKSPACE/build/core-y66-regression" \
+            bash tests/core/run-core-ir-shadow.sh
+      - name: Focused queue zone append replay
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/core-y66-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-y66-linux"
+          mkdir -p "$work"
           set +e
-          MINIC_CORE_IR=strict CORE_FAST_TRACE=1 "$compiler" -S "$input" -o build/core-y65-direct/out.s \
-            >build/core-y65-direct/stdout.log 2>build/core-y65-direct/stderr.log
-          rc=$?
+          MINIC_CORE_IR=strict CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
+            --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
+            --work "$work" --jobs 3 --offset 0 --limit 500 --sample-count 0 --indices '3,301,303'
+          replay_status=$?
           set -e
-          echo CORE_Y65_RC=$rc
-          grep -E 'CORE_Y65|CORE_FAST_TRACE.*queue_max_zone_append_sectors' build/core-y65-direct/stderr.log || true
-          test "$rc" -ne 0
+          echo CORE_Y66_REPLAY_STATUS=$replay_status
+          python3 tools/ci/classify-core-strict-frontier.py "$work/batch-results.json" --examples 8 --json-out "$work/frontier-summary.json"
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          w=Path('build/core-y66-linux')
+          f=json.loads((w/'frontier-summary.json').read_text())
+          rows=json.loads((w/'batch-results.json').read_text())
+          if isinstance(rows,dict): rows=rows.get('results',rows.get('tus',[]))
+          print(f"CORE_Y66_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
+          for r in rows:
+              print(f"CORE_Y66_INDEX index={r.get('index')} status={r.get('status')} progress={float(r.get('progress_ratio') or 0)*100:.3f}% message={r.get('message','')}")
+          if f['error'] != 0:
+              raise SystemExit(f'Core ERROR: {f}')
+          if any('queue_max_zone_append_sectors' in r.get('message','') for r in rows):
+              raise SystemExit('queue_max_zone_append_sectors survived Y66')
+          PY
