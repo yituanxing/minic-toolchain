@@ -33,7 +33,59 @@ def replace_in_section(text, marker, old, new, label):
         raise SystemExit(f"{label}: section anchor count={count}")
     return text[:begin] + tail.replace(old, new, 1)
 
+# The base patcher reaches its ambiguous validator anchor before writing the
+# RV64 file. Re-apply the three edits that were still only in memory there.
+if "#include <string.h>\n" not in text:
+    if text.count("#include <stdio.h>\n") != 1:
+        raise SystemExit("string header anchor mismatch")
+    text = text.replace(
+        "#include <stdio.h>\n",
+        "#include <stdio.h>\n#include <string.h>\n",
+        1,
+    )
+
+helper = r'''static bool core_inline_asm_clobbers_register(const MinicCoreInlineAsm *inline_asm,
+                                               const char *register_name) {
+    size_t index;
+    size_t name_length;
+
+    if (inline_asm == NULL || register_name == NULL) {
+        return true;
+    }
+    name_length = strlen(register_name);
+    for (index = 0U; index < inline_asm->register_clobber_count; ++index) {
+        const MinicCoreInlineAsmRegisterClobber *clobber =
+            &inline_asm->register_clobbers[index];
+        if (clobber->name != NULL && clobber->name_length == name_length &&
+            memcmp(clobber->name, register_name, name_length) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+'''
+helper_anchor = "/* M67_STRUCTURED_MULTI_OPERAND_INLINE_ASM: the Core model is generic.\n"
+if helper not in text:
+    if text.count(helper_anchor) != 1:
+        raise SystemExit("clobber helper anchor mismatch")
+    text = text.replace(helper_anchor, helper + helper_anchor, 1)
+
 structured = "static bool core_structured_inline_asm_supported"
+text = replace_in_section(
+    text,
+    structured,
+    '''    size_t register_outputs = 0U;
+    size_t memory_readwrites = 0U;
+    size_t scalar_inputs = 0U;
+''',
+    '''    size_t register_outputs = 0U;
+    size_t register_readwrites = 0U;
+    size_t memory_readwrites = 0U;
+    size_t scalar_inputs = 0U;
+''',
+    "structured readwrite counter",
+)
 text = replace_in_section(
     text,
     structured,
