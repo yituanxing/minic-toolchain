@@ -123,7 +123,6 @@ lower_block = r'''    /* M107_STRUCTURED_MEMORY_OUTPUT_ASM: GCC-style asm may pa
         if (supported_shape &&
             core_inline_asm_numeric_template(
                 source, &numeric_template, &numeric_template_length)) {
-            MinicCoreInlineAsmId inline_asm_id;
             MinicCoreLowerStatus status;
 
             if (!minic_core_function_add_opaque_inline_asm(context->function,
