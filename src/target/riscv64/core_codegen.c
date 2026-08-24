@@ -743,6 +743,12 @@ static bool core_structured_inline_asm_supported(const MinicCoreFunction *functi
            instruction->value.structured_inline_asm.operand_count == 3U &&
            !inline_asm->has_memory_clobber && inline_asm->register_clobber_count == 0U &&
            fixed_bindings == 0U) ||
+          /* M113_MIXED_ATOMIC_STRUCTURED_ASM: generic four-role shape. */
+          (register_outputs == 1U && register_readwrites == 1U &&
+           memory_outputs == 0U && memory_readwrites == 1U && scalar_inputs == 1U &&
+           instruction->value.structured_inline_asm.operand_count == 4U &&
+           inline_asm->has_memory_clobber && inline_asm->register_clobber_count == 0U &&
+           fixed_bindings == 0U) ||
           (register_outputs == 2U && register_readwrites == 0U &&
            memory_readwrites == 1U && scalar_inputs <= 2U &&
            scalar_inputs + 3U == instruction->value.structured_inline_asm.operand_count &&
