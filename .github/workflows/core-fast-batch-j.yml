@@ -1,19 +1,20 @@
-name: Core Y55 Frame Address Level Zero
+name: Core Y56 Frame Address Full500 Productize
 
 on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  y55-frame-address-level-zero:
+  y56-frame-address-full500:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
           ref: 996066104f58d75bcc547847449186bcbc76b0f9
+          fetch-depth: 0
       - name: Restore frozen Linux corpus
         id: linux-corpus-cache
         uses: actions/cache/restore@v4
@@ -26,7 +27,7 @@ jobs:
           set -Eeuo pipefail
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
-      - name: Apply generic frame-address candidate
+      - name: Apply qualified frame-address candidate
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -39,7 +40,7 @@ jobs:
           old='''    if (expression->kind == MINIC_EXPRESSION_CALL_FRAME_ADDRESS) {\n        MinicType pointee;\n\n        if (expression->value.call_frame_address.kind != MINIC_CALL_FRAME_ADDRESS_RETURN ||\n            expression->value.call_frame_address.level != 0U ||\n            !minic_type_pointee(expression->type, &pointee) || !minic_type_is_void(pointee)) {\n            return MINIC_CORE_LOWER_UNSUPPORTED;\n        }\n        (void)memset(&instruction, 0, sizeof(instruction));\n        instruction.kind = MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS;\n        instruction.span = expression->span;\n        instruction.type = expression->type;\n        instruction.result = MINIC_CORE_VALUE_INVALID;\n        instruction.value.call_frame_address.kind = MINIC_CORE_CALL_FRAME_ADDRESS_RETURN;\n        instruction.value.call_frame_address.level = 0U;\n        return minic_core_function_append_value_instruction(\n                   context->function, context->block_id, &instruction, value_id)\n                   ? MINIC_CORE_LOWER_OK\n                   : MINIC_CORE_LOWER_ERROR;\n    }\n'''
           new='''    if (expression->kind == MINIC_EXPRESSION_CALL_FRAME_ADDRESS) {\n        MinicCoreCallFrameAddressKind core_kind;\n        MinicType pointee;\n\n        if (expression->value.call_frame_address.level != 0U ||\n            !minic_type_pointee(expression->type, &pointee) || !minic_type_is_void(pointee)) {\n            return MINIC_CORE_LOWER_UNSUPPORTED;\n        }\n        switch (expression->value.call_frame_address.kind) {\n        case MINIC_CALL_FRAME_ADDRESS_RETURN:\n            core_kind = MINIC_CORE_CALL_FRAME_ADDRESS_RETURN;\n            break;\n        case MINIC_CALL_FRAME_ADDRESS_FRAME:\n            core_kind = MINIC_CORE_CALL_FRAME_ADDRESS_FRAME;\n            break;\n        default:\n            return MINIC_CORE_LOWER_UNSUPPORTED;\n        }\n        (void)memset(&instruction, 0, sizeof(instruction));\n        instruction.kind = MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS;\n        instruction.span = expression->span;\n        instruction.type = expression->type;\n        instruction.result = MINIC_CORE_VALUE_INVALID;\n        instruction.value.call_frame_address.kind = core_kind;\n        instruction.value.call_frame_address.level = 0U;\n        return minic_core_function_append_value_instruction(\n                   context->function, context->block_id, &instruction, value_id)\n                   ? MINIC_CORE_LOWER_OK\n                   : MINIC_CORE_LOWER_ERROR;\n    }\n'''
           if s.count(old)!=1:
-              raise SystemExit(f'core_lower call-frame anchor count={s.count(old)}')
+              raise SystemExit(f'core_lower anchor count={s.count(old)}')
           p.write_text(s.replace(old,new,1))
 
           p=Path('src/target/riscv64/core_codegen.c')
@@ -52,12 +53,12 @@ jobs:
           old='''    return instruction != NULL &&\n           instruction->kind == MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS &&\n           instruction->value.call_frame_address.kind == MINIC_CORE_CALL_FRAME_ADDRESS_RETURN &&\n           instruction->value.call_frame_address.level == 0U &&\n           minic_type_pointee(instruction->type, &pointee) && minic_type_is_void(pointee);\n'''
           new='''    return instruction != NULL &&\n           instruction->kind == MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS &&\n           (instruction->value.call_frame_address.kind == MINIC_CORE_CALL_FRAME_ADDRESS_RETURN ||\n            instruction->value.call_frame_address.kind == MINIC_CORE_CALL_FRAME_ADDRESS_FRAME) &&\n           instruction->value.call_frame_address.level == 0U &&\n           minic_type_pointee(instruction->type, &pointee) && minic_type_is_void(pointee);\n'''
           if s.count(old)!=1:
-              raise SystemExit(f'call-frame support anchor count={s.count(old)}')
+              raise SystemExit(f'support anchor count={s.count(old)}')
           s=s.replace(old,new,1)
           old='''    case MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS:\n        if (!core_call_frame_address_supported(instruction) || !frame->saves_return_address ||\n            !minic_riscv64_emit_sp_load64(file, "t0", frame->return_address_offset)) {\n            return false;\n        }\n        return store_core_value(file, frame, instruction->result, "t0");\n'''
           new='''    case MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS:\n        if (!core_call_frame_address_supported(instruction)) {\n            return false;\n        }\n        if (instruction->value.call_frame_address.kind == MINIC_CORE_CALL_FRAME_ADDRESS_RETURN) {\n            if (!frame->saves_return_address ||\n                !minic_riscv64_emit_sp_load64(file, "t0", frame->return_address_offset)) {\n                return false;\n            }\n        } else if (instruction->value.call_frame_address.kind ==\n                   MINIC_CORE_CALL_FRAME_ADDRESS_FRAME) {\n            if (fprintf(file, "  mv t0, sp\\n") < 0) {\n                return false;\n            }\n        } else {\n            return false;\n        }\n        return store_core_value(file, frame, instruction->result, "t0");\n'''
           if s.count(old)!=1:
-              raise SystemExit(f'call-frame emit anchor count={s.count(old)}')
+              raise SystemExit(f'emit anchor count={s.count(old)}')
           p.write_text(s.replace(old,new,1))
 
           p=Path('tests/core/run-core-ir-shadow.sh')
@@ -65,53 +66,87 @@ jobs:
           anchor='''cat >"$work_dir/variadic-call-unsupported.i" <<'EOF'\n'''
           addition='''cat >"$work_dir/call-frame-address-level-zero.i" <<'EOF'\nunsigned long core_return_address_level_zero(void) {\n    return (unsigned long)__builtin_return_address(0);\n}\n\nunsigned long core_frame_address_level_zero(void) {\n    return (unsigned long)__builtin_frame_address(0);\n}\nEOF\ncheck_strict_case call-frame-address-level-zero\n\n'''
           if s.count(anchor)!=1:
-              raise SystemExit(f'core test anchor count={s.count(anchor)}')
+              raise SystemExit(f'test anchor count={s.count(anchor)}')
           p.write_text(s.replace(anchor,addition+anchor,1))
-          print('CORE_Y55_CANDIDATE_APPLIED')
+          print('CORE_Y56_CANDIDATE_APPLIED')
           PY
-      - name: Build candidate compiler
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y55-compiler
-      - name: Full Core exact regression suite
+      - name: Build and exact regressions
         shell: bash
         run: |
           set -Eeuo pipefail
-          MINIC="$GITHUB_WORKSPACE/build/core-y55-compiler/bin/minic" \
-            BUILD_DIR="$GITHUB_WORKSPACE/build/core-y55-regression" \
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-y56-compiler
+          compiler="$GITHUB_WORKSPACE/build/core-y56-compiler/bin/minic"
+          MINIC="$compiler" BUILD_DIR="$GITHUB_WORKSPACE/build/core-y56-regression" \
             bash tests/core/run-core-ir-shadow.sh
-      - name: Existing call-frame C0 contract
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          MINIC="$GITHUB_WORKSPACE/build/core-y55-compiler/bin/minic" \
-            BUILD_DIR="$GITHUB_WORKSPACE/build/core-y55-c0" \
+          MINIC="$compiler" BUILD_DIR="$GITHUB_WORKSPACE/build/core-y56-c0" \
             bash tests/compiler/c0/run-gnu-call-frame-address.sh
-      - name: Focused Linux perf caller regs
+      - name: Frozen strict500 qualification
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-y55-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-y55-linux"
+          compiler="$GITHUB_WORKSPACE/build/core-y56-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-y56-full500"
           set +e
           MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
-            --work "$work" --jobs 3 --offset 0 --limit 500 --sample-count 0 --indices '0,4,40'
+            --work "$work" --jobs 4 --offset 0 --limit 500 --sample-count 0 \
+            >"$work/replay.log" 2>&1
           replay_status=$?
           set -e
-          echo CORE_Y55_REPLAY_STATUS=$replay_status
+          echo CORE_Y56_REPLAY_STATUS=$replay_status
           python3 tools/ci/classify-core-strict-frontier.py \
-            "$work/batch-results.json" --examples 6 --json-out "$work/frontier-summary.json"
+            "$work/batch-results.json" --examples 12 --json-out "$work/frontier-summary.json"
+          python3 tools/ci/summarize-core-frontier-progress.py \
+            "$work/batch-results.json" --expect-selected 500 \
+            --json-out "$work/progress-summary.json" --text-out "$work/progress-summary.txt" >/dev/null
           python3 - <<'PY'
           import json
+          from collections import Counter
           from pathlib import Path
-          w=Path('build/core-y55-linux')
+          w=Path('build/core-y56-full500')
           f=json.loads((w/'frontier-summary.json').read_text())
+          p=json.loads((w/'progress-summary.json').read_text())
           rows=json.loads((w/'batch-results.json').read_text())
           if isinstance(rows,dict): rows=rows.get('results',rows.get('tus',[]))
-          print(f"CORE_Y55_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
+          c=Counter()
           for r in rows:
-              print(f"CORE_Y55_INDEX index={r.get('index')} status={r.get('status')} progress={float(r.get('progress_ratio') or 0)*100:.3f}% message={r.get('message','')}")
-          if f['error'] != 0:
-              raise SystemExit(f'focused Core ERROR: {f}')
+              if r.get('status') == 'PASS':
+                  continue
+              msg=r.get('message','')
+              marker="Core IR shadow does not yet support function '"
+              fn=msg.split(marker,1)[1].split("'",1)[0] if marker in msg else (msg or '<unknown>')
+              c[fn]+=1
+          print(f"CORE_Y56_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']} distinct={len(c)}")
+          print(f"CORE_Y56_PROGRESS mean={p.get('tu_mean_progress')} median={p.get('tu_median_progress')} line_weighted={p.get('line_weighted_progress')}")
+          for rank,(fn,count) in enumerate(c.most_common(15),1):
+              print(f"CORE_Y56_BLOCKER rank={rank} count={count} function={fn}")
+          if f['selected'] != 500 or f['error'] != 0:
+              raise SystemExit(f'Y56 qualification failed: {f}')
           if any("perf_fetch_caller_regs" in r.get('message','') for r in rows):
-              raise SystemExit('perf_fetch_caller_regs blocker survived Y55')
+              raise SystemExit('perf_fetch_caller_regs survived full500')
           PY
+      - name: Productize semantic candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git checkout -- tests/external/linux/corpus_replay.py
+          git diff -- src/core/core_lower.c src/target/riscv64/core_codegen.c tests/core/run-core-ir-shadow.sh > /tmp/y56-semantic.patch
+          test -s /tmp/y56-semantic.patch
+          git fetch origin refactor/declaration-sema-v1
+          git diff --quiet 996066104f58d75bcc547847449186bcbc76b0f9..origin/refactor/declaration-sema-v1 -- \
+            src/core/core_lower.c src/target/riscv64/core_codegen.c tests/core/run-core-ir-shadow.sh
+          git checkout -B y56-productize origin/refactor/declaration-sema-v1
+          git apply /tmp/y56-semantic.patch
+          python3 - <<'PY'
+          import subprocess
+          allowed={'src/core/core_lower.c','src/target/riscv64/core_codegen.c','tests/core/run-core-ir-shadow.sh'}
+          changed=set(subprocess.check_output(['git','diff','--name-only'],text=True).splitlines())
+          if changed != allowed:
+              raise SystemExit(f'unexpected semantic diff: {sorted(changed)}')
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/core/core_lower.c src/target/riscv64/core_codegen.c tests/core/run-core-ir-shadow.sh
+          git commit -m 'core: support level-zero frame address'
+          git push origin HEAD:refactor/declaration-sema-v1
+          echo CORE_Y56_SEMANTIC_COMMIT=$(git rev-parse HEAD)
