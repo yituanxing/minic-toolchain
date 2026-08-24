@@ -1,4 +1,4 @@
-name: Core Batch Y32 Cleanup Statement Expr Diagnosis
+name: Core Batch Y33 Cleanup Return Candidate
 
 on:
   pull_request:
@@ -7,11 +7,11 @@ permissions:
   contents: read
 
 jobs:
-  y32-diagnose:
+  y33-candidate:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     concurrency:
-      group: core-y32-diagnose-${{ github.event.pull_request.number }}
+      group: core-y33-candidate-${{ github.event.pull_request.number }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
@@ -29,7 +29,7 @@ jobs:
           set -Eeuo pipefail
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
-      - name: Add exact cleanup and bvec expression tracing
+      - name: Apply cleanup-return candidate and pointer trace
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -39,38 +39,99 @@ jobs:
           p=Path('src/core/core_lower.c')
           s=p.read_text()
 
-          old='''        if (statement->cleanup_context != statement->cleanup_stop_context) {\n            (void)fprintf(stderr,\n                          "CORE_FAST_TRACE stage=statement reason=cleanup-context "\n                          "function=%s kind=%d span=%zu:%zu cleanup=%llu stop=%llu\\n",\n                          context->source_function->name,\n                          (int)statement->kind,\n                          statement->span.begin.line,\n                          statement->span.begin.column,\n                          (unsigned long long)statement->cleanup_context,\n                          (unsigned long long)statement->cleanup_stop_context);\n            return MINIC_CORE_LOWER_UNSUPPORTED;\n        }'''
-          new='''        if (statement->cleanup_context != statement->cleanup_stop_context) {\n            MinicCleanupContextId trace_context = statement->cleanup_context;\n            unsigned int trace_depth = 0U;\n            (void)fprintf(stderr,\n                          "CORE_FAST_TRACE stage=statement reason=cleanup-context "\n                          "function=%s kind=%d span=%zu:%zu cleanup=%llu stop=%llu\\n",\n                          context->source_function->name,\n                          (int)statement->kind, statement->span.begin.line,\n                          statement->span.begin.column,\n                          (unsigned long long)statement->cleanup_context,\n                          (unsigned long long)statement->cleanup_stop_context);\n            (void)fprintf(stderr,\n                          "CORE_CLEANUP_REACH function=%s reaches=%d\\n",\n                          context->source_function->name,\n                          minic_c0_cleanup_context_reaches(context->body->program,\n                                                           statement->cleanup_context,\n                                                           statement->cleanup_stop_context) ? 1 : 0);\n            while (trace_context != statement->cleanup_stop_context && trace_depth < 8U) {\n                const MinicCleanupContext *cleanup = minic_c0_program_cleanup_context(\n                    context->body->program, trace_context);\n                const MinicExpression *ce = cleanup != NULL\n                    ? minic_c0_program_expression(context->body->program, cleanup->cleanup_expression)\n                    : NULL;\n                (void)fprintf(stderr,\n                              "CORE_CLEANUP_DETAIL function=%s context=%llu parent=%llu expr=%llu "\n                              "kind=%d cat=%d base=%d ptr=%u span=%zu:%zu\\n",\n                              context->source_function->name,\n                              (unsigned long long)trace_context,\n                              cleanup != NULL ? (unsigned long long)cleanup->parent : ~0ULL,\n                              cleanup != NULL ? (unsigned long long)cleanup->cleanup_expression : ~0ULL,\n                              ce != NULL ? (int)ce->kind : -1,\n                              ce != NULL ? (int)ce->value_category : -1,\n                              ce != NULL ? (int)ce->type.base_kind : -1,\n                              ce != NULL ? ce->type.pointer_depth : 0U,\n                              ce != NULL ? ce->span.begin.line : 0U,\n                              ce != NULL ? ce->span.begin.column : 0U);\n                if (cleanup == NULL || cleanup->parent == trace_context) break;\n                trace_context = cleanup->parent;\n                trace_depth += 1U;\n            }\n            return MINIC_CORE_LOWER_UNSUPPORTED;\n        }'''
-          if s.count(old)!=1: raise SystemExit(f'cleanup anchor count={s.count(old)}')
+          anchor='''static MinicCoreLowerStatus lower_return(MinicCoreLowerContext *context,\n                                         const MinicStatement *statement) {'''
+          helper='''static MinicCoreLowerStatus lower_cleanup_contexts(\n    MinicCoreLowerContext *context, MinicCleanupContextId current, MinicCleanupContextId stop) {\n    if (context == NULL || context->body == NULL || context->body->program == NULL ||\n        !minic_c0_cleanup_context_reaches(context->body->program, current, stop)) {\n        return MINIC_CORE_LOWER_ERROR;\n    }\n    while (current != stop) {\n        const MinicCleanupContext *cleanup;\n        MinicCoreValueId discarded_value;\n        MinicCoreLowerStatus status;\n\n        cleanup = minic_c0_program_cleanup_context(context->body->program, current);\n        if (cleanup == NULL || cleanup->parent == current ||\n            cleanup->cleanup_expression == MINIC_EXPRESSION_INVALID) {\n            return MINIC_CORE_LOWER_ERROR;\n        }\n        status = lower_expression(context, cleanup->cleanup_expression, &discarded_value);\n        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n        current = cleanup->parent;\n    }\n    return MINIC_CORE_LOWER_OK;\n}\n\n'''+anchor
+          if s.count(anchor)!=1: raise SystemExit(f'return anchor count={s.count(anchor)}')
+          s=s.replace(anchor,helper,1)
+
+          old='''    MinicCoreTerminator terminator;\n    MinicCoreLowerStatus status;\n\n    if (context == NULL || context->source_function == NULL || statement == NULL) {'''
+          new='''    MinicCoreTerminator terminator;\n    MinicCoreLowerStatus status;\n    MinicCoreObjectId cleanup_return_object;\n    bool has_cleanup;\n\n    if (context == NULL || context->source_function == NULL || statement == NULL) {'''
+          if s.count(old)<1: raise SystemExit('return declarations anchor')
+          # replace occurrence following lower_return only
+          pos=s.find(anchor)
+          sub=s[pos:]
+          if old not in sub: raise SystemExit('return declarations not after function')
+          sub=sub.replace(old,new,1)
+          s=s[:pos]+sub
+
+          old='''    (void)memset(&terminator, 0, sizeof(terminator));\n    terminator.kind = MINIC_CORE_TERMINATOR_RETURN;'''
+          new='''    has_cleanup = statement->cleanup_context != statement->cleanup_stop_context;\n    cleanup_return_object = MINIC_CORE_OBJECT_INVALID;\n    if (has_cleanup &&\n        !minic_c0_cleanup_context_reaches(context->body->program,\n                                          statement->cleanup_context,\n                                          statement->cleanup_stop_context)) {\n        return MINIC_CORE_LOWER_ERROR;\n    }\n    (void)memset(&terminator, 0, sizeof(terminator));\n    terminator.kind = MINIC_CORE_TERMINATOR_RETURN;'''
+          pos=s.find(anchor)
+          sub=s[pos:]
+          if old not in sub: raise SystemExit('return init anchor')
+          sub=sub.replace(old,new,1)
+          s=s[:pos]+sub
+
+          old='''        } else if (minic_type_is_record(context->source_function->return_type)) {\n            const MinicExpression *expression;'''
+          new='''        } else if (minic_type_is_record(context->source_function->return_type)) {\n            const MinicExpression *expression;\n\n            if (has_cleanup) {\n                return MINIC_CORE_LOWER_UNSUPPORTED;\n            }'''
+          pos=s.find(anchor)
+          sub=s[pos:]
+          if old not in sub: raise SystemExit('record return anchor')
+          sub=sub.replace(old,new,1)
+          s=s[:pos]+sub
+
+          old='''        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n    }\n    return minic_core_function_set_terminator(context->function, context->block_id, &terminator)'''
+          new='''        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n    }\n    if (has_cleanup) {\n        if (core_memory_scalar_type(context->source_function->return_type)) {\n            status = spill_scalar_value(context,\n                                        statement->span,\n                                        context->source_function->return_type,\n                                        terminator.return_value,\n                                        &cleanup_return_object);\n            if (status != MINIC_CORE_LOWER_OK) {\n                return status;\n            }\n        }\n        status = lower_cleanup_contexts(context,\n                                        statement->cleanup_context,\n                                        statement->cleanup_stop_context);\n        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n        if (core_memory_scalar_type(context->source_function->return_type)) {\n            status = reload_scalar_value(context,\n                                         statement->span,\n                                         context->source_function->return_type,\n                                         cleanup_return_object,\n                                         &terminator.return_value);\n            if (status != MINIC_CORE_LOWER_OK) {\n                return status;\n            }\n        }\n    }\n    return minic_core_function_set_terminator(context->function, context->block_id, &terminator)'''
+          pos=s.find(anchor)
+          sub=s[pos:]
+          if old not in sub: raise SystemExit('return completion anchor')
+          sub=sub.replace(old,new,1)
+          s=s[:pos]+sub
+
+          old='''        if (statement->cleanup_context != statement->cleanup_stop_context) {\n            (void)fprintf(stderr,'''
+          new='''        if (statement->cleanup_context != statement->cleanup_stop_context &&\n            statement->kind != MINIC_STATEMENT_RETURN) {\n            (void)fprintf(stderr,'''
+          if s.count(old)!=1: raise SystemExit(f'cleanup guard anchor count={s.count(old)}')
           s=s.replace(old,new,1)
 
-          sig='''static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,\n                                             MinicExpressionId expression_id,\n                                             MinicCoreValueId *value_id) {'''
-          start=s.find(sig)
-          if start<0: raise SystemExit('lower_expression definition missing')
-          anchor='''    expression = minic_c0_program_expression(context->body->program, expression_id);\n    if (expression == NULL) {\n        return MINIC_CORE_LOWER_ERROR;\n    }'''
-          pos=s.find(anchor,start)
-          if pos<0: raise SystemExit('lower_expression fetch anchor missing')
-          inject='''    expression = minic_c0_program_expression(context->body->program, expression_id);\n    if (expression == NULL) {\n        return MINIC_CORE_LOWER_ERROR;\n    }\n    if (context->source_function != NULL &&\n        strcmp(context->source_function->name, "bvec_advance") == 0 &&\n        expression->span.begin.line >= 46160U && expression->span.begin.line <= 46175U) {\n        if (expression->kind == MINIC_EXPRESSION_BINARY) {\n            const MinicExpression *left = minic_c0_program_expression(\n                context->body->program, expression->value.binary.left);\n            const MinicExpression *right = minic_c0_program_expression(\n                context->body->program, expression->value.binary.right);\n            (void)fprintf(stderr,\n                          "CORE_BINARY_DETAIL expr=%llu op=%d span=%zu:%zu type_base=%d ptr=%u "\n                          "left=%llu lk=%d lb=%d lp=%u lc=%d right=%llu rk=%d rb=%d rp=%u rc=%d\\n",\n                          (unsigned long long)expression_id,\n                          (int)expression->value.binary.operator_kind,\n                          expression->span.begin.line, expression->span.begin.column,\n                          (int)expression->type.base_kind, expression->type.pointer_depth,\n                          (unsigned long long)expression->value.binary.left,\n                          left != NULL ? (int)left->kind : -1,\n                          left != NULL ? (int)left->type.base_kind : -1,\n                          left != NULL ? left->type.pointer_depth : 0U,\n                          left != NULL ? (int)left->value_category : -1,\n                          (unsigned long long)expression->value.binary.right,\n                          right != NULL ? (int)right->kind : -1,\n                          right != NULL ? (int)right->type.base_kind : -1,\n                          right != NULL ? right->type.pointer_depth : 0U,\n                          right != NULL ? (int)right->value_category : -1);\n        } else if (expression->kind == MINIC_EXPRESSION_STATEMENT) {\n            const MinicExpression *result = expression->value.statement_expression.result != MINIC_EXPRESSION_INVALID\n                ? minic_c0_program_expression(context->body->program,\n                                              expression->value.statement_expression.result)\n                : NULL;\n            (void)fprintf(stderr,\n                          "CORE_STMTEXPR_DETAIL expr=%llu span=%zu:%zu block=%llu result=%llu "\n                          "result_kind=%d result_base=%d result_ptr=%u result_cat=%d\\n",\n                          (unsigned long long)expression_id, expression->span.begin.line,\n                          expression->span.begin.column,\n                          (unsigned long long)expression->value.statement_expression.block,\n                          (unsigned long long)expression->value.statement_expression.result,\n                          result != NULL ? (int)result->kind : -1,\n                          result != NULL ? (int)result->type.base_kind : -1,\n                          result != NULL ? result->type.pointer_depth : 0U,\n                          result != NULL ? (int)result->value_category : -1);\n        } else if (expression->kind == MINIC_EXPRESSION_CONDITIONAL) {\n            (void)fprintf(stderr,\n                          "CORE_COND_DETAIL expr=%llu span=%zu:%zu cond=%llu true=%llu false=%llu uses=%d\\n",\n                          (unsigned long long)expression_id, expression->span.begin.line,\n                          expression->span.begin.column,\n                          (unsigned long long)expression->value.conditional.condition,\n                          (unsigned long long)expression->value.conditional.when_true,\n                          (unsigned long long)expression->value.conditional.when_false,\n                          expression->value.conditional.uses_condition_value ? 1 : 0);\n        }\n    }'''
-          s=s[:pos]+inject+s[pos+len(anchor):]
+          # Add stage tracing to the existing pointer +/- integer path.
+          marker='''        /* BATCH_U_POINTER_ARITH_VALUE_TYPES: Core consumes scalar values, not\n           lvalue storage qualifiers.'''
+          trace='''        if (context->source_function != NULL &&\n            strcmp(context->source_function->name, "bvec_advance") == 0) {\n            MinicType trace_pointer_type;\n            MinicType trace_index_type;\n            size_t trace_element_size = 0U;\n            bool trace_pointer_ok = core_scalar_expression_value_type(\n                context->body, pointer_expression, &trace_pointer_type);\n            bool trace_index_ok = core_scalar_expression_value_type(\n                context->body, index_expression, &trace_index_type);\n            bool trace_element_ok = minic_c0_pointer_arithmetic_element_size(\n                context->body->program, minic_default_data_layout(), expression->type,\n                &trace_element_size);\n            (void)fprintf(stderr,\n                          "CORE_POINTER_OFFSET_DETAIL function=bvec_advance pointer_ok=%d index_ok=%d "\n                          "pointer_equal_result=%d pointer_base=%d pointer_depth=%u pointer_bq=%u "\n                          "pointer_pq=%u result_base=%d result_depth=%u result_bq=%u result_pq=%u "\n                          "index_base=%d index_depth=%u element_ok=%d element_size=%zu\\n",\n                          trace_pointer_ok ? 1 : 0, trace_index_ok ? 1 : 0,\n                          trace_pointer_ok && minic_type_equal(trace_pointer_type, expression->type) ? 1 : 0,\n                          trace_pointer_ok ? (int)trace_pointer_type.base_kind : -1,\n                          trace_pointer_ok ? trace_pointer_type.pointer_depth : 0U,\n                          trace_pointer_ok ? trace_pointer_type.base_qualifiers : 0U,\n                          trace_pointer_ok ? trace_pointer_type.pointer_qualifiers : 0U,\n                          (int)expression->type.base_kind, expression->type.pointer_depth,\n                          expression->type.base_qualifiers, expression->type.pointer_qualifiers,\n                          trace_index_ok ? (int)trace_index_type.base_kind : -1,\n                          trace_index_ok ? trace_index_type.pointer_depth : 0U,\n                          trace_element_ok ? 1 : 0, trace_element_size);\n        }\n'''+marker
+          if s.count(marker)!=1: raise SystemExit(f'pointer marker count={s.count(marker)}')
+          s=s.replace(marker,trace,1)
           p.write_text(s)
-          print('CORE_BATCH_Y32_TRACE_PATCHED')
+          print('CORE_BATCH_Y33_PATCHED')
           PY
-      - name: Build diagnostic compiler
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-y32-compiler
-      - name: Replay representative blockers
+      - name: Build exact candidate
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-y33-compiler
+      - name: Full Core regression suite
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-batch-y32-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-batch-y32"
+          MINIC="$GITHUB_WORKSPACE/build/core-batch-y33-compiler/bin/minic" \
+            BUILD_DIR="$GITHUB_WORKSPACE/build/core-batch-y33-tests" \
+            bash tests/core/run-core-ir-shadow.sh
+          echo CORE_BATCH_Y33_CORE_SUITE_PASS
+      - name: Replay focused blockers
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/core-batch-y33-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-batch-y33"
           set +e
           MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
-            --work "$work" --jobs 2 --offset 0 --limit 500 --sample-count 0 --indices '2,3'
-          status=$?
+            --work "$work" --jobs 3 --offset 0 --limit 500 --sample-count 0 --indices '2,3,7'
+          replay_status=$?
           set -e
-          echo CORE_BATCH_Y32_REPLAY_STATUS=$status
-          echo CORE_BATCH_Y32_DETAILS_BEGIN
-          grep -R -E 'CORE_CLEANUP_|CORE_BINARY_DETAIL|CORE_STMTEXPR_DETAIL|CORE_COND_DETAIL|CORE_ASSIGN_STAGE|CORE_FAST_TRACE' "$work/minic-stderr" | grep -E 'device_has_driver_override|bvec_advance|CORE_BINARY_DETAIL|CORE_STMTEXPR_DETAIL|CORE_COND_DETAIL' || true
-          echo CORE_BATCH_Y32_DETAILS_END
-          python3 tools/ci/classify-core-strict-frontier.py "$work/batch-results.json" --examples 4
+          echo CORE_BATCH_Y33_REPLAY_STATUS=$replay_status
+          echo CORE_BATCH_Y33_DETAILS_BEGIN
+          grep -R -E 'CORE_POINTER_OFFSET_DETAIL|CORE_FAST_TRACE|CORE_ASSIGN_STAGE' "$work/minic-stderr" | grep -E 'bvec_advance|device_has_driver_override|device_match_driver_override|CORE_POINTER_OFFSET_DETAIL' || true
+          echo CORE_BATCH_Y33_DETAILS_END
+          python3 tools/ci/classify-core-strict-frontier.py \
+            "$work/batch-results.json" --examples 8 --json-out "$work/frontier-summary.json"
+          python3 tools/ci/summarize-core-frontier-progress.py \
+            "$work/batch-results.json" --expect-selected 3 \
+            --json-out "$work/progress-summary.json" --text-out "$work/progress-summary.txt"
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          w=Path('build/core-batch-y33')
+          rows=json.loads((w/'batch-results.json').read_text())
+          if isinstance(rows,dict): rows=rows.get('results',rows.get('tus',[]))
+          for r in sorted(rows,key=lambda x:x.get('index',-1)):
+              print(f"CORE_BATCH_Y33_ROW index={r.get('index')} status={r.get('status')} progress={float(r.get('progress_ratio') or 0)*100:.2f}% first={r.get('first_error_line')} message={r.get('message','')}")
+          f=json.loads((w/'frontier-summary.json').read_text())
+          print(f"CORE_BATCH_Y33_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
+          if f['error'] != 0 or next(r for r in rows if int(r['index'])==7)['status'] != 'PASS':
+              raise SystemExit(f'Y33 regression/error: {f}')
+          PY
