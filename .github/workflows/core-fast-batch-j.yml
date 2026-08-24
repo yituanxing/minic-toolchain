@@ -1,23 +1,22 @@
-name: Core Batch Y41 Productize Scalar Return Cleanup
+name: Core Batch Y42 Nested Record Member Base
 
 on:
   pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  y41-productize:
+  clean-head:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     concurrency:
-      group: core-y41-productize-${{ github.event.pull_request.number }}
+      group: core-y42-clean-${{ github.event.pull_request.number }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: refactor/declaration-sema-v1
-          fetch-depth: 0
+          ref: b6bdeb8fa8302a2f22bd06a4c740de9e39dc59e8
       - name: Restore frozen Linux corpus
         id: linux-corpus-cache
         uses: actions/cache/restore@v4
@@ -30,121 +29,179 @@ jobs:
           set -Eeuo pipefail
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
-      - name: Apply semantic source and exact regression
+      - name: Build clean production head
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-y42-clean-compiler
+      - name: Full Core exact suite
         shell: bash
         run: |
           set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/core-batch-y42-clean-compiler/bin/minic" \
+            BUILD_DIR="$GITHUB_WORKSPACE/build/core-batch-y42-clean-tests" \
+            bash tests/core/run-core-ir-shadow.sh
+          echo CORE_BATCH_Y42_CLEAN_CORE_SUITE_PASS
+      - name: Clean frozen strict500
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/patch-linux-replay-live-progress.py
+          compiler="$GITHUB_WORKSPACE/build/core-batch-y42-clean-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-batch-y42-clean-full500"
+          set +e
+          MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
+            --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
+            --work "$work" --jobs 4 --offset 0 --limit 500 --sample-count 0 \
+            >"$work/replay.log" 2>&1
+          replay_status=$?
+          set -e
+          echo CORE_BATCH_Y42_CLEAN_REPLAY_STATUS=$replay_status
+          python3 tools/ci/classify-core-strict-frontier.py \
+            "$work/batch-results.json" --examples 12 --json-out "$work/frontier-summary.json"
+          python3 tools/ci/summarize-core-frontier-progress.py \
+            "$work/batch-results.json" --expect-selected 500 \
+            --json-out "$work/progress-summary.json" --text-out "$work/progress-summary.txt" >/dev/null
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          w=Path('build/core-batch-y42-clean-full500')
+          f=json.loads((w/'frontier-summary.json').read_text())
+          p=json.loads((w/'progress-summary.json').read_text())
+          print(f"CORE_BATCH_Y42_CLEAN_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
+          print(f"CORE_BATCH_Y42_CLEAN_PROGRESS mean={p.get('tu_mean_progress')} median={p.get('tu_median_progress')} line_weighted={p.get('line_weighted_progress')}")
+          if f['selected'] != 500 or f['error'] != 0:
+              raise SystemExit(f'Y42 clean exact-head regression: {f}')
+          PY
+
+  nested-member-focused:
+    if: github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: core-y42-nested-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: b6bdeb8fa8302a2f22bd06a4c740de9e39dc59e8
+      - name: Restore frozen Linux corpus
+        id: linux-corpus-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+      - name: Require frozen corpus
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
+          test -s build/linux-focus-corpus/selected-tus.txt
+      - name: Apply nested record member-base candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/dev/patch-linux-replay-live-progress.py
           python3 - <<'PY'
           from pathlib import Path
 
           p=Path('src/core/core_lower.c')
           s=p.read_text()
-          anchor='''static MinicCoreLowerStatus lower_return(MinicCoreLowerContext *context,\n                                         const MinicStatement *statement) {'''
-          helpers='''static bool core_is_materialized_cleanup_statement(\n    const MinicCoreLowerContext *context, const MinicStatement *statement) {\n    size_t cleanup_index;\n\n    if (context == NULL || context->body == NULL || context->body->program == NULL ||\n        statement == NULL || statement->kind != MINIC_STATEMENT_EXPRESSION ||\n        statement->expression == MINIC_EXPRESSION_INVALID) {\n        return false;\n    }\n    for (cleanup_index = 0U; cleanup_index < context->body->program->cleanup_context_count;\n         ++cleanup_index) {\n        if (context->body->program->cleanup_contexts[cleanup_index].cleanup_expression ==\n            statement->expression) {\n            return true;\n        }\n    }\n    return false;\n}\n\nstatic MinicCoreLowerStatus lower_cleanup_contexts(\n    MinicCoreLowerContext *context, MinicCleanupContextId current, MinicCleanupContextId stop) {\n    if (context == NULL || context->body == NULL || context->body->program == NULL ||\n        !minic_c0_cleanup_context_reaches(context->body->program, current, stop)) {\n        return MINIC_CORE_LOWER_ERROR;\n    }\n    while (current != stop) {\n        const MinicCleanupContext *cleanup;\n        MinicCoreValueId discarded_value;\n        MinicCoreLowerStatus status;\n\n        cleanup = minic_c0_program_cleanup_context(context->body->program, current);\n        if (cleanup == NULL || cleanup->parent == current ||\n            cleanup->cleanup_expression == MINIC_EXPRESSION_INVALID) {\n            return MINIC_CORE_LOWER_ERROR;\n        }\n        status = lower_expression(context, cleanup->cleanup_expression, &discarded_value);\n        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n        current = cleanup->parent;\n    }\n    return MINIC_CORE_LOWER_OK;\n}\n\n'''+anchor
-          if s.count(anchor)!=1: raise SystemExit(f'return anchor count={s.count(anchor)}')
-          s=s.replace(anchor,helpers,1)
 
-          pos=s.find(anchor); sub=s[pos:]
-          old='''    MinicCoreTerminator terminator;\n    MinicCoreLowerStatus status;\n\n    if (context == NULL || context->source_function == NULL || statement == NULL) {'''
-          new='''    MinicCoreTerminator terminator;\n    MinicCoreLowerStatus status;\n    MinicCoreObjectId cleanup_return_object;\n    bool has_cleanup;\n\n    if (context == NULL || context->source_function == NULL || statement == NULL) {'''
-          if old not in sub: raise SystemExit('return decl anchor')
-          sub=sub.replace(old,new,1); s=s[:pos]+sub
+          anchor='''static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,\n                                             MinicExpressionId expression_id,\n                                             MinicCoreValueId *value_id);\n'''
+          extra=anchor+'''static MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,\n                                          MinicExpressionId expression_id,\n                                          MinicCoreValueId *address_id);\n'''
+          if s.count(anchor)!=1: raise SystemExit(f'forward anchor count={s.count(anchor)}')
+          s=s.replace(anchor,extra,1)
 
-          pos=s.find(anchor); sub=s[pos:]
-          old='''    (void)memset(&terminator, 0, sizeof(terminator));\n    terminator.kind = MINIC_CORE_TERMINATOR_RETURN;'''
-          new='''    has_cleanup = statement->cleanup_context != statement->cleanup_stop_context;\n    cleanup_return_object = MINIC_CORE_OBJECT_INVALID;\n    if (has_cleanup && !minic_c0_cleanup_context_reaches(\n            context->body->program, statement->cleanup_context, statement->cleanup_stop_context)) {\n        return MINIC_CORE_LOWER_ERROR;\n    }\n    (void)memset(&terminator, 0, sizeof(terminator));\n    terminator.kind = MINIC_CORE_TERMINATOR_RETURN;'''
-          if old not in sub: raise SystemExit('return init anchor')
-          sub=sub.replace(old,new,1); s=s[:pos]+sub
+          anchor='''static MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,\n                                          MinicExpressionId expression_id,\n                                          MinicCoreValueId *address_id) {'''
+          helper='''static MinicCoreLowerStatus lower_record_member_base_address(\n    MinicCoreLowerContext *context,\n    MinicExpressionId base_expression_id,\n    MinicRecordId record_id,\n    MinicCoreValueId *base_address) {\n    const MinicExpression *base;\n    MinicType base_value_type;\n    MinicType record_type;\n\n    if (context == NULL || context->body == NULL || context->body->program == NULL ||\n        base_address == NULL || record_id == MINIC_RECORD_INVALID) {\n        return MINIC_CORE_LOWER_ERROR;\n    }\n    base = minic_c0_program_expression(context->body->program, base_expression_id);\n    if (base == NULL) {\n        return MINIC_CORE_LOWER_ERROR;\n    }\n\n    /* Direct pointer member selection and nested record-lvalue selection both\n       denote an address of the owning record. Keep one target-neutral owner:\n       scalar pointer bases are evaluated, while record lvalues recurse through\n       the ordinary address path. */\n    if (core_scalar_expression_value_type(context->body, base, &base_value_type) &&\n        minic_type_is_pointer(base_value_type) &&\n        minic_type_pointee(base_value_type, &record_type) &&\n        minic_type_is_record(record_type) && record_type.record_id == record_id) {\n        return lower_expression(context, base_expression_id, base_address);\n    }\n    if (base->value_category == MINIC_VALUE_LVALUE &&\n        minic_type_unqualified(base->type, &record_type) &&\n        minic_type_is_record(record_type) && record_type.record_id == record_id) {\n        return lower_address(context, base_expression_id, base_address);\n    }\n    return MINIC_CORE_LOWER_UNSUPPORTED;\n}\n\n'''+anchor
+          if s.count(anchor)!=1: raise SystemExit(f'lower_address anchor count={s.count(anchor)}')
+          s=s.replace(anchor,helper,1)
 
-          pos=s.find(anchor); sub=s[pos:]
-          old='''        } else if (minic_type_is_record(context->source_function->return_type)) {\n            const MinicExpression *expression;'''
-          new='''        } else if (minic_type_is_record(context->source_function->return_type)) {\n            const MinicExpression *expression;\n\n            /* Aggregate return cleanup needs an address-backed return owner.\n               Keep that capability fail-closed until Core models it explicitly. */\n            if (has_cleanup) {\n                return MINIC_CORE_LOWER_UNSUPPORTED;\n            }'''
-          if old not in sub: raise SystemExit('record return anchor')
-          sub=sub.replace(old,new,1); s=s[:pos]+sub
+          start=s.find(anchor)
+          end=s.find('''    return MINIC_CORE_LOWER_UNSUPPORTED;\n}\n\nstatic MinicCoreLowerStatus append_integer_conversion''', start)
+          if start<0 or end<0: raise SystemExit('lower_address scope')
+          sub=s[start:end]
+          old='''    if (expression->kind == MINIC_EXPRESSION_MEMBER) {\n        const MinicExpression *base;\n        const MinicRecord *record;\n        const MinicRecordField *field;\n        MinicCoreValueId base_id;\n        MinicType base_value_type;\n        MinicType record_type;\n\n        base = minic_c0_program_expression(context->body->program, expression->value.member.base);\n        record =\n            minic_c0_program_record(context->body->program, expression->value.member.record_id);\n        field = minic_c0_record_field(record, expression->value.member.field_index);\n        /* M94_MEMBER_BASE_VALUE_TYPE: selecting a pointer member through\n           `const struct *` qualifies the member lvalue storage, while evaluating\n           it yields the unqualified pointer value. Nested member addressing must\n           compare against that scalar value type, not the qualified lvalue type. */\n        if (base == NULL || record == NULL || field == NULL || field->is_bit_field ||\n            !core_scalar_expression_value_type(context->body, base, &base_value_type) ||\n            !minic_type_is_pointer(base_value_type) ||\n            !minic_type_pointee(base_value_type, &record_type) ||\n            !minic_type_is_record(record_type) ||\n            record_type.record_id != expression->value.member.record_id) {\n            return MINIC_CORE_LOWER_UNSUPPORTED;\n        }\n        status = lower_expression(context, expression->value.member.base, &base_id);\n        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n        if (base_id >= context->function->value_count ||\n            !minic_type_equal(context->function->values[base_id].type, base_value_type)) {\n            return MINIC_CORE_LOWER_ERROR;\n        }\n        return append_field_address(context,\n                                    expression->span,\n                                    base_id,\n                                    expression->value.member.record_id,\n                                    expression->value.member.field_index,\n                                    expression->type,\n                                    address_id);\n    }\n'''
+          new='''    if (expression->kind == MINIC_EXPRESSION_MEMBER) {\n        const MinicRecord *record;\n        const MinicRecordField *field;\n        MinicCoreValueId base_id;\n\n        record =\n            minic_c0_program_record(context->body->program, expression->value.member.record_id);\n        field = minic_c0_record_field(record, expression->value.member.field_index);\n        if (record == NULL || field == NULL || field->is_bit_field) {\n            return MINIC_CORE_LOWER_UNSUPPORTED;\n        }\n        status = lower_record_member_base_address(context,\n                                                  expression->value.member.base,\n                                                  expression->value.member.record_id,\n                                                  &base_id);\n        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n        return append_field_address(context,\n                                    expression->span,\n                                    base_id,\n                                    expression->value.member.record_id,\n                                    expression->value.member.field_index,\n                                    expression->type,\n                                    address_id);\n    }\n'''
+          if sub.count(old)!=1: raise SystemExit(f'member-address anchor count={sub.count(old)}')
+          sub=sub.replace(old,new,1)
+          s=s[:start]+sub+s[end:]
 
-          pos=s.find(anchor); sub=s[pos:]
-          old='''        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n    }\n    return minic_core_function_set_terminator(context->function, context->block_id, &terminator)\n               ? MINIC_CORE_LOWER_OK\n               : MINIC_CORE_LOWER_ERROR;'''
-          new='''        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n    }\n    /* A return expression is sequenced before GNU cleanup functions, while the\n       computed scalar return value must survive those calls. Spill the value,\n       execute exactly the cleanup contexts crossed by the return edge, then\n       reload it before installing the RETURN terminator. */\n    if (has_cleanup) {\n        if (core_memory_scalar_type(context->source_function->return_type)) {\n            status = spill_scalar_value(context, statement->span,\n                                        context->source_function->return_type,\n                                        terminator.return_value, &cleanup_return_object);\n            if (status != MINIC_CORE_LOWER_OK) {\n                return status;\n            }\n        }\n        status = lower_cleanup_contexts(context, statement->cleanup_context,\n                                        statement->cleanup_stop_context);\n        if (status != MINIC_CORE_LOWER_OK) {\n            return status;\n        }\n        if (core_memory_scalar_type(context->source_function->return_type)) {\n            status = reload_scalar_value(context, statement->span,\n                                         context->source_function->return_type,\n                                         cleanup_return_object, &terminator.return_value);\n            if (status != MINIC_CORE_LOWER_OK) {\n                return status;\n            }\n        }\n    }\n    return minic_core_function_set_terminator(context->function, context->block_id, &terminator)\n               ? MINIC_CORE_LOWER_OK\n               : MINIC_CORE_LOWER_ERROR;'''
-          if old not in sub: raise SystemExit('return end anchor')
-          sub=sub.replace(old,new,1); s=s[:pos]+sub
+          read_begin=s.find('''    /* BATCH_A_UNSIGNED_BIT_FIELD_READ:''')
+          read_end=s.find('''    /* BATCH_R_RECORD_CALL_MEMBER_VALUE:''', read_begin)
+          if read_begin<0 or read_end<0: raise SystemExit('bitfield read scope')
+          sub=s[read_begin:read_end]
+          sub=sub.replace('''        MinicType base_value_type;\n        MinicType record_type;\n''','',1)
+          old='''                !minic_data_layout_record_field_layout(minic_default_data_layout(),\n                                                       context->body->program,\n                                                       record,\n                                                       expression->value.member.field_index,\n                                                       &byte_offset,\n                                                       &bit_offset) ||\n                bit_offset + field->bit_width > storage_width ||\n                !core_scalar_expression_value_type(context->body, base, &base_value_type) ||\n                !minic_type_is_pointer(base_value_type) ||\n                !minic_type_pointee(base_value_type, &record_type) ||\n                !minic_type_is_record(record_type) ||\n                record_type.record_id != expression->value.member.record_id) {'''
+          new='''                !minic_data_layout_record_field_layout(minic_default_data_layout(),\n                                                       context->body->program,\n                                                       record,\n                                                       expression->value.member.field_index,\n                                                       &byte_offset,\n                                                       &bit_offset) ||\n                bit_offset + field->bit_width > storage_width) {'''
+          if sub.count(old)!=1: raise SystemExit(f'bitfield read validation count={sub.count(old)}')
+          sub=sub.replace(old,new,1)
+          old='''            (void)byte_offset;\n            status = lower_expression(context, expression->value.member.base, &base_id);\n            if (status != MINIC_CORE_LOWER_OK) {\n                return status;\n            }\n            if (base_id >= context->function->value_count ||\n                !minic_type_equal(context->function->values[base_id].type, base_value_type)) {\n                return MINIC_CORE_LOWER_ERROR;\n            }\n            status = append_field_address(context,'''
+          new='''            (void)byte_offset;\n            status = lower_record_member_base_address(context,\n                                                      expression->value.member.base,\n                                                      expression->value.member.record_id,\n                                                      &base_id);\n            if (status != MINIC_CORE_LOWER_OK) {\n                return status;\n            }\n            status = append_field_address(context,'''
+          if sub.count(old)!=1: raise SystemExit(f'bitfield read base count={sub.count(old)}')
+          sub=sub.replace(old,new,1)
+          s=s[:read_begin]+sub+s[read_end:]
 
-          old='''        if (block_terminated) {\n            if (statement->kind == MINIC_STATEMENT_RETURN) {\n                continue;\n            }\n            if (statement->kind != MINIC_STATEMENT_LABEL) {\n                return MINIC_CORE_LOWER_UNSUPPORTED;\n            }\n        }'''
-          new='''        if (block_terminated) {\n            /* Parser scope exit materializes the same cleanup expression for\n               ordinary fallthrough. A return edge above has already consumed\n               that cleanup, so the unreachable duplicate must not run again.\n               Keep all other unreachable expression statements fail-closed. */\n            if (statement->kind == MINIC_STATEMENT_RETURN ||\n                core_is_materialized_cleanup_statement(context, statement)) {\n                continue;\n            }\n            if (statement->kind != MINIC_STATEMENT_LABEL) {\n                return MINIC_CORE_LOWER_UNSUPPORTED;\n            }\n        }'''
-          if s.count(old)!=1: raise SystemExit('terminated tail anchor')
-          s=s.replace(old,new,1)
-
-          old='''        if (statement->cleanup_context != statement->cleanup_stop_context) {\n            (void)fprintf(stderr,'''
-          new='''        if (statement->cleanup_context != statement->cleanup_stop_context &&\n            statement->kind != MINIC_STATEMENT_RETURN) {\n            (void)fprintf(stderr,'''
-          if s.count(old)!=1: raise SystemExit('cleanup guard anchor')
-          p.write_text(s.replace(old,new,1))
+          write_begin=s.find('''    /* BATCH_P_UNSIGNED_BIT_FIELD_WRITE:''')
+          write_end=s.find('''    if (!minic_type_unqualified(target->type, &stored_type)''', write_begin)
+          if write_begin<0 or write_end<0: raise SystemExit('bitfield write scope')
+          sub=s[write_begin:write_end]
+          sub=sub.replace('''            MinicType base_value_type;\n            MinicType record_type;\n''','',1)
+          old='''                !minic_data_layout_record_field_layout(minic_default_data_layout(),\n                                                       context->body->program,\n                                                       record,\n                                                       target->value.member.field_index,\n                                                       &byte_offset,\n                                                       &bit_offset) ||\n                bit_offset + field->bit_width > storage_width ||\n                !core_scalar_expression_value_type(context->body, base, &base_value_type) ||\n                !minic_type_is_pointer(base_value_type) ||\n                !minic_type_pointee(base_value_type, &record_type) ||\n                !minic_type_is_record(record_type) ||\n                record_type.record_id != target->value.member.record_id) {'''
+          new='''                !minic_data_layout_record_field_layout(minic_default_data_layout(),\n                                                       context->body->program,\n                                                       record,\n                                                       target->value.member.field_index,\n                                                       &byte_offset,\n                                                       &bit_offset) ||\n                bit_offset + field->bit_width > storage_width) {'''
+          if sub.count(old)!=1: raise SystemExit(f'bitfield write validation count={sub.count(old)}')
+          sub=sub.replace(old,new,1)
+          old='''            bit_status = lower_expression(context, target->value.member.base, &base_value);\n            if (bit_status != MINIC_CORE_LOWER_OK) {\n                return bit_status;\n            }\n            if (base_value >= context->function->value_count ||\n                !minic_type_equal(context->function->values[base_value].type, base_value_type)) {\n                return MINIC_CORE_LOWER_ERROR;\n            }\n            bit_status = append_field_address(context,'''
+          new='''            bit_status = lower_record_member_base_address(context,\n                                                          target->value.member.base,\n                                                          target->value.member.record_id,\n                                                          &base_value);\n            if (bit_status != MINIC_CORE_LOWER_OK) {\n                return bit_status;\n            }\n            bit_status = append_field_address(context,'''
+          if sub.count(old)!=1: raise SystemExit(f'bitfield write base count={sub.count(old)}')
+          sub=sub.replace(old,new,1)
+          s=s[:write_begin]+sub+s[write_end:]
+          p.write_text(s)
 
           p=Path('tests/core/run-core-ir-shadow.sh')
           s=p.read_text()
-          anchor='''check_strict_case const-record-member-pointer-offset\n\ncat >"$work_dir/indirect-cfg-argument.i" <<'EOF'\n'''
-          extra='''check_strict_case const-record-member-pointer-offset\n\ncat >"$work_dir/scalar-return-cleanup.i" <<'EOF'\nvoid cleanup_scalar(int *value) {\n    *value = *value + 1;\n}\n\nint scalar_return_cleanup(int input) {\n    int guard __attribute__((cleanup(cleanup_scalar))) = input;\n    return guard + 7;\n}\nEOF\ncheck_strict_case scalar-return-cleanup\n\ncat >"$work_dir/indirect-cfg-argument.i" <<'EOF'\n'''
+          anchor='''check_strict_case scalar-return-cleanup\n\ncat >"$work_dir/indirect-cfg-argument.i" <<'EOF'\n'''
+          extra='''check_strict_case scalar-return-cleanup\n\ncat >"$work_dir/nested-bitfield-read-write.i" <<'EOF'\nstruct nested_power_state {\n    unsigned int is_prepared : 1;\n    unsigned int async_suspend : 1;\n};\n\nstruct nested_device {\n    struct nested_power_state power;\n};\n\nint nested_bitfield_read_write(struct nested_device *dev) {\n    if (!dev->power.is_prepared)\n        dev->power.async_suspend = 1;\n    return dev->power.async_suspend;\n}\nEOF\ncheck_strict_case nested-bitfield-read-write\n\ncat >"$work_dir/indirect-cfg-argument.i" <<'EOF'\n'''
           if s.count(anchor)!=1: raise SystemExit(f'test anchor count={s.count(anchor)}')
           p.write_text(s.replace(anchor,extra,1))
-          print('CORE_BATCH_Y41_PATCHED')
+          print('CORE_BATCH_Y42_NESTED_PATCHED')
           PY
-      - name: Build exact production candidate
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-y41-compiler
+      - name: Build exact candidate
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-y42-nested-compiler
       - name: Full Core exact regression suite
         shell: bash
         run: |
           set -Eeuo pipefail
-          MINIC="$GITHUB_WORKSPACE/build/core-batch-y41-compiler/bin/minic" \
-            BUILD_DIR="$GITHUB_WORKSPACE/build/core-batch-y41-tests" \
+          MINIC="$GITHUB_WORKSPACE/build/core-batch-y42-nested-compiler/bin/minic" \
+            BUILD_DIR="$GITHUB_WORKSPACE/build/core-batch-y42-nested-tests" \
             bash tests/core/run-core-ir-shadow.sh
-          echo CORE_BATCH_Y41_CORE_SUITE_PASS
+          echo CORE_BATCH_Y42_NESTED_CORE_SUITE_PASS
       - name: Focused Linux gate
         shell: bash
         run: |
           set -Eeuo pipefail
-          python3 tools/dev/patch-linux-replay-live-progress.py
-          compiler="$GITHUB_WORKSPACE/build/core-batch-y41-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-batch-y41-linux"
+          compiler="$GITHUB_WORKSPACE/build/core-batch-y42-nested-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-batch-y42-nested-linux"
           set +e
           MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
             --work "$work" --jobs 3 --offset 0 --limit 500 --sample-count 0 --indices '2,3,7'
           replay_status=$?
           set -e
-          echo CORE_BATCH_Y41_REPLAY_STATUS=$replay_status
+          echo CORE_BATCH_Y42_NESTED_REPLAY_STATUS=$replay_status
           python3 tools/ci/classify-core-strict-frontier.py \
-            "$work/batch-results.json" --examples 4 --json-out "$work/frontier-summary.json"
+            "$work/batch-results.json" --examples 8 --json-out "$work/frontier-summary.json"
           python3 - <<'PY'
           import json
           from pathlib import Path
-          w=Path('build/core-batch-y41-linux')
+          w=Path('build/core-batch-y42-nested-linux')
           rows=json.loads((w/'batch-results.json').read_text())
           if isinstance(rows,dict): rows=rows.get('results',rows.get('tus',[]))
           by={int(r['index']):r for r in rows}
           f=json.loads((w/'frontier-summary.json').read_text())
           for i in sorted(by):
               r=by[i]
-              print(f"CORE_BATCH_Y41_ROW index={i} status={r.get('status')} progress={float(r.get('progress_ratio') or 0)*100:.2f}% message={r.get('message','')}")
-          print(f"CORE_BATCH_Y41_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
+              print(f"CORE_BATCH_Y42_NESTED_ROW index={i} status={r.get('status')} progress={float(r.get('progress_ratio') or 0)*100:.2f}% first={r.get('first_error_line')} message={r.get('message','')}")
+          print(f"CORE_BATCH_Y42_NESTED_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
           if f['error'] != 0 or by[7]['status'] != 'PASS':
-              raise SystemExit(f'Y41 focused gate failed: {f}')
-          if any(r.get('message','').endswith("'device_has_driver_override'") for r in rows):
-              raise SystemExit('Y41 cleanup frontier regressed to device_has_driver_override')
+              raise SystemExit(f'Y42 nested focused regression: {f}')
+          if any(r.get('message','').endswith("'device_enable_async_suspend'") for r in rows):
+              raise SystemExit('Y42 nested member candidate did not clear device_enable_async_suspend')
           PY
-      - name: Commit semantic production change
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          git restore tests/external/linux/corpus_replay.py
-          python3 - <<'PY'
-          import subprocess
-          allowed={'src/core/core_lower.c','tests/core/run-core-ir-shadow.sh'}
-          changed=set(subprocess.check_output(['git','diff','--name-only'],text=True).splitlines())
-          print('CORE_BATCH_Y41_CHANGED',sorted(changed))
-          if changed != allowed:
-              raise SystemExit(f'unexpected production diff: {changed}')
-          PY
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add src/core/core_lower.c tests/core/run-core-ir-shadow.sh
-          git commit -m 'core: lower scalar return cleanup edges'
-          git push origin HEAD:refactor/declaration-sema-v1
-          echo "CORE_BATCH_Y41_PRODUCTION_COMMIT=$(git rev-parse HEAD)"
