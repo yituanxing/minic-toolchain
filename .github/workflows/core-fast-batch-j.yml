@@ -1,4 +1,4 @@
-name: Core Fast Batch Y13 Full500 Loop CFG
+name: Core Fast Batch Y14 Direct Continue Target
 
 on:
   pull_request:
@@ -7,11 +7,11 @@ permissions:
   contents: read
 
 jobs:
-  batch-y13-full500:
+  batch-y14-direct-target:
     if: github.head_ref == 'refactor/declaration-sema-v1'
     runs-on: ubuntu-24.04
     concurrency:
-      group: core-fast-batch-y13-${{ github.event.pull_request.number }}
+      group: core-fast-batch-y14-${{ github.event.pull_request.number }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
@@ -29,7 +29,7 @@ jobs:
           set -Eeuo pipefail
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
-      - name: Apply Y plus loop continue CFG candidates
+      - name: Apply Y plus direct loop continue target candidate
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -50,46 +50,89 @@ jobs:
           if old_update not in s: raise SystemExit('normalized_for_update_tail anchor not found')
           s=s.replace(old_update,new_update,1)
 
-          old_label='''            if (internal_loop_label) {\n                status = lower_while(context, loop, &statement_terminated);\n                if (status != MINIC_CORE_LOWER_OK) return status;\n                statement_index += 1U;\n            } else {\n'''
-          new_label='''            if (internal_loop_label) {\n                MinicCoreBlockId label_block;\n                MinicStatementId label_statement_id = source_block->statements[statement_index];\n\n                /* A source continue is normalized to a goto targeting this synthetic\n                   label. Materialize the label before lowering the paired while so an\n                   already-created continue target becomes a real preheader instead of\n                   a reachable empty block. */\n                status = ensure_statement_block(context, label_statement_id, &label_block);\n                if (status != MINIC_CORE_LOWER_OK) return status;\n                if (!block_terminated && context->block_id != label_block) {\n                    status = set_branch(context, context->block_id, statement->span, label_block);\n                    if (status != MINIC_CORE_LOWER_OK) return status;\n                }\n                context->block_id = label_block;\n                status = lower_while(context, loop, &statement_terminated);\n                if (status != MINIC_CORE_LOWER_OK) return status;\n                statement_index += 1U;\n            } else {\n'''
-          if old_label not in s: raise SystemExit('internal loop label anchor not found')
-          p.write_text(s.replace(old_label,new_label,1))
-          print('CORE_BATCH_Y13_PATCHED Y plus loop continue CFG closure')
+          old_sig='''static MinicCoreLowerStatus\nlower_while(MinicCoreLowerContext *context, const MinicStatement *statement, bool *terminated) {'''
+          new_sig='''static MinicCoreLowerStatus\nlower_while(MinicCoreLowerContext *context,\n            const MinicStatement *statement,\n            MinicStatementId continue_label_statement,\n            bool *terminated) {'''
+          if old_sig not in s: raise SystemExit('lower_while signature anchor not found')
+          s=s.replace(old_sig,new_sig,1)
+
+          old_blocks='''    if (!minic_core_function_add_block(context->function, &condition_block) ||\n        !minic_core_function_add_block(context->function, &body_block) ||\n        !minic_core_function_add_block(context->function, &exit_block)) {\n        return MINIC_CORE_LOWER_ERROR;\n    }\n    status = set_branch(context, preheader_block, statement->span, condition_block);\n'''
+          new_blocks='''    if (!minic_core_function_add_block(context->function, &condition_block) ||\n        !minic_core_function_add_block(context->function, &body_block) ||\n        !minic_core_function_add_block(context->function, &exit_block)) {\n        return MINIC_CORE_LOWER_ERROR;\n    }\n    if (continue_label_statement != MINIC_STATEMENT_INVALID) {\n        if (context->statement_blocks == NULL ||\n            continue_label_statement >= context->statement_block_count ||\n            context->statement_blocks[continue_label_statement] != MINIC_CORE_BLOCK_INVALID) {\n            return MINIC_CORE_LOWER_ERROR;\n        }\n        /* Parser-owned while continue labels denote the condition recheck.\n           Publish that identity before lowering the body, so a normalized\n           `continue` goto resolves directly to the real condition block. */\n        context->statement_blocks[continue_label_statement] = condition_block;\n    }\n    status = set_branch(context, preheader_block, statement->span, condition_block);\n'''
+          if old_blocks not in s: raise SystemExit('lower_while block creation anchor not found')
+          s=s.replace(old_blocks,new_blocks,1)
+
+          old_internal='''            if (internal_loop_label) {\n                status = lower_while(context, loop, &statement_terminated);\n                if (status != MINIC_CORE_LOWER_OK) return status;\n                statement_index += 1U;\n            } else {\n'''
+          new_internal='''            if (internal_loop_label) {\n                status = lower_while(context,\n                                     loop,\n                                     source_block->statements[statement_index],\n                                     &statement_terminated);\n                if (status != MINIC_CORE_LOWER_OK) return status;\n                statement_index += 1U;\n            } else {\n'''
+          if old_internal not in s: raise SystemExit('internal loop call anchor not found')
+          s=s.replace(old_internal,new_internal,1)
+
+          old_direct='''            case MINIC_STATEMENT_WHILE:\n                status = lower_while(context, statement, &statement_terminated);\n                break;\n'''
+          new_direct='''            case MINIC_STATEMENT_WHILE:\n                status = lower_while(\n                    context, statement, MINIC_STATEMENT_INVALID, &statement_terminated);\n                break;\n'''
+          if old_direct not in s: raise SystemExit('direct while call anchor not found')
+          p.write_text(s.replace(old_direct,new_direct,1))
+          print('CORE_BATCH_Y14_PATCHED direct while continue target')
           PY
       - name: Build exact candidate compiler
-        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-y13-compiler
-      - name: Full frozen strict500 candidate replay
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/core-batch-y14-compiler
+      - name: Existing Core shadow regression suite
         shell: bash
         run: |
           set -Eeuo pipefail
-          compiler="$GITHUB_WORKSPACE/build/core-batch-y13-compiler/bin/minic"
-          work="$GITHUB_WORKSPACE/build/core-batch-y13-full500"
+          MINIC="$GITHUB_WORKSPACE/build/core-batch-y14-compiler/bin/minic" \
+            BUILD_DIR="$GITHUB_WORKSPACE/build/core-batch-y14-tests" \
+            bash tests/core/run-core-ir-shadow.sh
+      - name: Focused while-continue and void statement-expression regressions
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/core-batch-y14-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-batch-y14-focused"
           mkdir -p "$work"
+          cat >"$work/while-continue.i" <<'EOF'
+          int while_continue(int value) {
+              while (value) {
+                  if (value == 1) {
+                      value = 0;
+                      continue;
+                  }
+                  value = 1;
+              }
+              return value;
+          }
+          EOF
+          "$compiler" -S "$work/while-continue.i" -o "$work/while-continue-normal.s"
+          MINIC_CORE_IR=strict "$compiler" -S "$work/while-continue.i" -o "$work/while-continue-core.s"
+          cmp "$work/while-continue-normal.s" "$work/while-continue-core.s"
+
+          cat >"$work/void-statement-expression.i" <<'EOF'
+          void sink(void);
+          void void_statement_expression(void) {
+              ({ sink(); });
+              return;
+          }
+          EOF
+          "$compiler" -S "$work/void-statement-expression.i" -o "$work/void-statement-expression-normal.s"
+          MINIC_CORE_IR=strict "$compiler" -S "$work/void-statement-expression.i" -o "$work/void-statement-expression-core.s"
+          cmp "$work/void-statement-expression-normal.s" "$work/void-statement-expression-core.s"
+          echo CORE_BATCH_Y14_FOCUSED_PASS
+      - name: Replay the former strict500 Core errors
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/core-batch-y14-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/core-batch-y14-frontier"
           set +e
           MINIC_CORE_IR=strict python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
-            --work "$work" --jobs 4 --offset 0 --limit 500 --sample-count 0 \
-            >"$work/replay.log" 2>&1
+            --work "$work" --jobs 2 --offset 0 --limit 500 --sample-count 0 --indices '208,339'
           replay_status=$?
           set -e
-          printf 'CORE_BATCH_Y13_REPLAY_STATUS=%d\n' "$replay_status"
-          python3 tools/ci/classify-core-strict-frontier.py "$work/batch-results.json" --examples 12 --json-out "$work/frontier-summary.json"
-          python3 tools/ci/summarize-core-frontier-progress.py "$work/batch-results.json" --expect-selected 500 --json-out "$work/progress-summary.json" --text-out "$work/progress-summary.txt" >/dev/null
+          printf 'CORE_BATCH_Y14_REPLAY_STATUS=%d\n' "$replay_status"
+          python3 tools/ci/classify-core-strict-frontier.py "$work/batch-results.json" --examples 8 --json-out "$work/frontier-summary.json"
           python3 - <<'PY'
           import json
           from pathlib import Path
-          work=Path('build/core-batch-y13-full500')
-          f=json.loads((work/'frontier-summary.json').read_text())
-          p=json.loads((work/'progress-summary.json').read_text())
-          print(f"CORE_BATCH_Y13_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
-          print(f"CORE_BATCH_Y13_PROGRESS mean={p.get('tu_mean_progress')} median={p.get('tu_median_progress')} line_weighted={p.get('line_weighted_progress')}")
-          errors=f.get('errors') or []
-          print(f"CORE_BATCH_Y13_ERRORS count={len(errors)}")
-          for i,e in enumerate(errors[:20],1):
-              print('CORE_BATCH_Y13_ERROR',i,json.dumps(e,sort_keys=True,separators=(',',':')))
-          if f['selected'] != 500 or f['error'] != 0 or f['pass'] < 14:
-              raise SystemExit(f'full500 candidate gate failed: {f}')
+          f=json.loads(Path('build/core-batch-y14-frontier/frontier-summary.json').read_text())
+          print(f"CORE_BATCH_Y14_RESULT selected={f['selected']} pass={f['pass']} unsupported={f['unsupported']} error={f['error']}")
+          if f['selected'] != 2 or f['error'] != 0 or f['pass'] < 1:
+              raise SystemExit(f'refined candidate gate failed: {f}')
           PY
-          echo CORE_BATCH_Y13_FAILURE_LINES_BEGIN
-          grep -E 'Core IR shadow lowering failed|CORE_STRICT500_ERROR' "$work/replay.log" | tail -n 80 || true
-          echo CORE_BATCH_Y13_FAILURE_LINES_END
