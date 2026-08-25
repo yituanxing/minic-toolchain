@@ -7382,12 +7382,15 @@ lower_while(MinicCoreLowerContext *context,
     const MinicExpression *condition_expression;
     const MinicStatement *for_update;
     MinicBlock normalized_for_body;
+    MinicBlock scoped_iteration_body;
     MinicBlock normalized_do_while_body;
     MinicStatementId normalized_do_while_continue;
+    MinicStatementId normalized_for_continue;
     MinicCoreBlockId body_block;
     MinicCoreBlockId condition_block;
     MinicCoreBlockId exit_block;
     MinicCoreBlockId preheader_block;
+    MinicCoreBlockId update_block;
     MinicCoreBlockId saved_break_target;
     MinicCoreLowerStatus status;
     bool body_terminated;
@@ -7475,6 +7478,7 @@ lower_while(MinicCoreLowerContext *context,
     iteration_source = body_source;
     for_update = NULL;
     normalized_for = false;
+    normalized_for_continue = MINIC_STATEMENT_INVALID;
     if (normalized_for_update_tail(
             context, statement, body_source, &normalized_for_body, &for_update)) {
         iteration_source = &normalized_for_body;
@@ -7484,27 +7488,80 @@ lower_while(MinicCoreLowerContext *context,
         iteration_source = &normalized_for_body;
         normalized_for = true;
     }
+    /* M149_PARSER_TAIL_CONTINUE_PROVENANCE_OWNER: normalized_for_update_tail
+       and normalized_for_continue_tail have already proven the exact parser
+       shape and same-span synthetic LABEL at the source for-loop tail.  Use
+       that statement id directly; never recover identity by scanning GOTOs.
+       If the adjacent-label path also supplied an id, require exact agreement.
+       This keeps ordinary while ownership on its pre-M137 adjacent-label path
+       while giving detached normalized-for views one structural provenance. */
+    if (normalized_for) {
+        size_t continue_tail_distance = for_update != NULL ? 2U : 1U;
+
+        if (body_source->statement_count < continue_tail_distance) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        normalized_for_continue =
+            body_source->statements[body_source->statement_count - continue_tail_distance];
+        if (normalized_for_continue == MINIC_STATEMENT_INVALID ||
+            normalized_for_continue >= context->statement_block_count) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        if (continue_label_statement != MINIC_STATEMENT_INVALID &&
+            continue_label_statement != normalized_for_continue) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        continue_label_statement = normalized_for_continue;
+    }
+    /* M141_SCOPED_LOOP_CONTINUE_TAIL_OWNER: M137 has already proven that
+       continue_label_statement is the unique parser-owned continue target for
+       this exact loop and lower_while will bind it to condition_block before
+       lowering the body. If the normalized-for view still retains that exact
+       synthetic label as its sequential tail, remove only that statement from
+       the executable iteration view. This prevents generic LABEL lowering from
+       switching context->block_id back to the already-terminated condition
+       block and falsely clearing body termination. Ordinary labels and loops
+       without an M137-proven target are bit-for-bit unchanged. */
+    if (normalized_for && continue_label_statement != MINIC_STATEMENT_INVALID &&
+        iteration_source != NULL && iteration_source->statement_count > 0U &&
+        iteration_source->statements[iteration_source->statement_count - 1U] ==
+            continue_label_statement) {
+        scoped_iteration_body = *iteration_source;
+        scoped_iteration_body.statement_count -= 1U;
+        iteration_source = &scoped_iteration_body;
+    }
     if (statement->expression == MINIC_EXPRESSION_INVALID && !normalized_for) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
 
     preheader_block = context->block_id;
+    update_block = MINIC_CORE_BLOCK_INVALID;
     if (!minic_core_function_add_block(context->function, &condition_block) ||
         !minic_core_function_add_block(context->function, &body_block) ||
+        (normalized_for && for_update != NULL &&
+         continue_label_statement != MINIC_STATEMENT_INVALID &&
+         !minic_core_function_add_block(context->function, &update_block)) ||
         !minic_core_function_add_block(context->function, &exit_block)) {
         return MINIC_CORE_LOWER_ERROR;
     }
+    /* M147_NORMALIZED_FOR_CONTINUE_BINDING_OWNER: M145/M146 proved that the
+       same-span detached-label heuristic must not mutate an ordinary source
+       WHILE CFG.  Keep binding at the established post-block-allocation point,
+       but require parser-normalized `for` provenance first. */
     if (continue_label_statement != MINIC_STATEMENT_INVALID) {
         if (context->statement_blocks == NULL ||
             continue_label_statement >= context->statement_block_count ||
             context->statement_blocks[continue_label_statement] != MINIC_CORE_BLOCK_INVALID) {
             return MINIC_CORE_LOWER_ERROR;
         }
-        /* CORE_LOOP_CONTINUE_TARGET_V1: a parser-owned while continue label
-           denotes condition re-evaluation. Bind the source label directly to
-           the real condition block before lowering the body, so continue does
-           not manufacture an orphan block. */
-        context->statement_blocks[continue_label_statement] = condition_block;
+        /* M148_NORMALIZED_FOR_UPDATE_CONTINUE_CFG_OWNER: C `continue` in a
+           source for-loop executes the iteration expression before condition
+           re-evaluation.  A no-update/unbounded for therefore targets the
+           condition block directly, while an update-bearing for with a proven
+           continue gets a dedicated update block.  Loops without a recovered
+           continue keep the historical inline-update lowering unchanged. */
+        context->statement_blocks[continue_label_statement] =
+            for_update != NULL ? update_block : condition_block;
     }
     status = set_branch(context, preheader_block, statement->span, condition_block);
     if (status != MINIC_CORE_LOWER_OK) {
@@ -7552,7 +7609,17 @@ lower_while(MinicCoreLowerContext *context,
                       statement->span.begin.column);
         return status;
     }
-    if (!body_terminated && for_update != NULL) {
+    if (for_update != NULL && update_block != MINIC_CORE_BLOCK_INVALID) {
+        /* M148_NORMALIZED_FOR_UPDATE_CONTINUE_CFG_OWNER: converge both natural
+           body fallthrough and every continue edge at one update owner, then
+           evaluate the update exactly once before the condition backedge. */
+        if (!body_terminated) {
+            status = set_branch(context, context->block_id, statement->span, update_block);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
+        }
+        context->block_id = update_block;
         status = lower_expression_statement(context, for_update);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
@@ -7560,12 +7627,29 @@ lower_while(MinicCoreLowerContext *context,
         if (context->block_id < context->function->block_count &&
             context->function->blocks[context->block_id].has_terminator) {
             body_terminated = true;
+        } else {
+            body_terminated = false;
+            status = set_branch(context, context->block_id, statement->span, condition_block);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
         }
-    }
-    if (!body_terminated) {
-        status = set_branch(context, context->block_id, statement->span, condition_block);
-        if (status != MINIC_CORE_LOWER_OK) {
-            return status;
+    } else {
+        if (!body_terminated && for_update != NULL) {
+            status = lower_expression_statement(context, for_update);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
+            if (context->block_id < context->function->block_count &&
+                context->function->blocks[context->block_id].has_terminator) {
+                body_terminated = true;
+            }
+        }
+        if (!body_terminated) {
+            status = set_branch(context, context->block_id, statement->span, condition_block);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
         }
     }
     context->block_id = exit_block;
@@ -11151,6 +11235,77 @@ static bool core_unreachable_statement_has_external_reentry(
     return unsafe;
 }
 
+/* M144_UNREFERENCED_LOOP_LABEL_METADATA_OWNER: parser loop normalization can
+   leave an otherwise-empty label at the condition tail even when no source
+   continue/goto refers to it.  internal_while_label_pair() gives this label a
+   strong identity: its source position is exactly that of one normalized WHILE.
+   Treat it as non-executable parser metadata only when that owner is unique and
+   the label has no direct goto, asm-goto, or &&label reference anywhere in the
+   function program. Any real control-flow use remains owned by ordinary LABEL /
+   GOTO lowering and therefore stays fail-closed here. */
+static bool core_unreferenced_internal_loop_label(
+    const MinicCoreLowerContext *context,
+    const MinicStatement *label,
+    MinicStatementId label_id) {
+    const MinicC0Program *program;
+    size_t loop_matches;
+    size_t index;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        label == NULL || label->kind != MINIC_STATEMENT_LABEL) {
+        return false;
+    }
+    program = context->body->program;
+    if (label_id >= program->statement_count) {
+        return false;
+    }
+
+    loop_matches = 0U;
+    for (index = 0U; index < program->statement_count; ++index) {
+        const MinicStatement *candidate = minic_c0_program_statement(program, index);
+        if (candidate == NULL) {
+            return false;
+        }
+        if (candidate->kind == MINIC_STATEMENT_WHILE &&
+            internal_while_label_pair(label, candidate)) {
+            loop_matches += 1U;
+            if (loop_matches > 1U) {
+                return false;
+            }
+        }
+        if (candidate->kind == MINIC_STATEMENT_GOTO &&
+            candidate->target_statement == label_id) {
+            return false;
+        }
+        if (candidate->kind == MINIC_STATEMENT_INLINE_ASM &&
+            candidate->inline_asm_id < program->inline_asm_count) {
+            const MinicInlineAsm *inline_asm = &program->inline_asms[candidate->inline_asm_id];
+            size_t label_index;
+            if (inline_asm->is_goto) {
+                for (label_index = 0U; label_index < inline_asm->label_count; ++label_index) {
+                    if (inline_asm->labels[label_index].target_statement == label_id) {
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+    if (loop_matches != 1U) {
+        return false;
+    }
+    for (index = 0U; index < program->expression_count; ++index) {
+        const MinicExpression *expression = minic_c0_program_expression(program, index);
+        if (expression == NULL) {
+            return false;
+        }
+        if (expression->kind == MINIC_EXPRESSION_LABEL_ADDRESS &&
+            expression->value.label_statement_id == label_id) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static MinicCoreLowerStatus
 lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool *terminated) {
     size_t statement_index;
@@ -11169,6 +11324,11 @@ lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool
                                                source_block->statements[statement_index]);
         if (statement == NULL) {
             return MINIC_CORE_LOWER_ERROR;
+        }
+        if (statement->kind == MINIC_STATEMENT_LABEL &&
+            core_unreferenced_internal_loop_label(
+                context, statement, source_block->statements[statement_index])) {
+            continue;
         }
         if (block_terminated) {
             /* Parser scope exit may materialize cleanup/return tails after an
@@ -11213,8 +11373,24 @@ lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool
            metadata. Equal ids mean the edge crosses no cleanup lifetime, even
            when both ids are non-root. Only an actual context transition needs
            cleanup-expression lowering, which remains fail-closed here. */
+        /* M142_NONEDGE_CLEANUP_METADATA_OWNER: cleanup ids describe the
+           current lifetime context as well as executable cleanup transitions.
+           A plain ASSIGN has no control edge of its own, so crossing cleanup is
+           still owned by the eventual RETURN/BREAK/GOTO/scope-exit edge. An
+           adjacent parser-internal loop label is likewise target metadata, not
+           an executable cleanup edge. Keep every other nonzero-distance shape
+           fail-closed; in particular BREAK/GOTO and structured IF/WHILE are not
+           generalized here. */
         if (statement->cleanup_context != statement->cleanup_stop_context &&
-            statement->kind != MINIC_STATEMENT_RETURN) {
+            statement->kind != MINIC_STATEMENT_RETURN &&
+            statement->kind != MINIC_STATEMENT_ASSIGN &&
+            !(statement->kind == MINIC_STATEMENT_LABEL &&
+              statement_index + 1U < source_block->statement_count &&
+              internal_while_label_pair(
+                  statement,
+                  minic_c0_program_statement(
+                      context->body->program,
+                      source_block->statements[statement_index + 1U])))) {
             (void)fprintf(stderr,
                           "CORE_FAST_TRACE stage=statement reason=cleanup-context "
                           "function=%s kind=%d span=%zu:%zu cleanup=%llu stop=%llu\n",
