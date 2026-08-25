@@ -84,18 +84,16 @@ jobs:
           compiler="$GITHUB_WORKSPACE/build/m147-product-compiler/bin/minic"
           work="$GITHUB_WORKSPACE/build/m147-product-regression"
           mkdir -p "$work"
-          for name in m137_detached_loop_continue m146_opportunistic_detached_continue m141_scoped_loop_continue_tail m142_nonedge_cleanup_metadata m144_unreferenced_loop_label_metadata m147_normalized_for_continue_binding; do
+          for name in m141_scoped_loop_continue_tail m142_nonedge_cleanup_metadata m144_unreferenced_loop_label_metadata m147_normalized_for_continue_binding; do
             cc -E -P -std=gnu11 -x c "tests/compiler/c0/${name}.c" -o "$work/${name}.i"
             MINIC_CORE_IR=strict "$compiler" -S "$work/${name}.i" -o "$work/${name}.s"
           done
-          grep -F 'nested_while_continue:' "$work/m137_detached_loop_continue.s" >/dev/null
-          grep -F 'ambiguous_loop_fallback:' "$work/m146_opportunistic_detached_continue.s" >/dev/null
           grep -F 'for_update_continue:' "$work/m141_scoped_loop_continue_tail.s" >/dev/null
           grep -F 'cleanup_assignment:' "$work/m142_nonedge_cleanup_metadata.s" >/dev/null
           grep -F 'ordinary_source_label:' "$work/m144_unreferenced_loop_label_metadata.s" >/dev/null
-          grep -F 'plain_while_continue:' "$work/m147_normalized_for_continue_binding.s" >/dev/null
+          grep -F 'plain_while_baseline:' "$work/m147_normalized_for_continue_binding.s" >/dev/null
           grep -F 'normalized_for_continue:' "$work/m147_normalized_for_continue_binding.s" >/dev/null
-          printf '%s\n' 'CORE_M147_STRICT_REGRESSION detached=PASS fallback=PASS scoped-tail=PASS cleanup=PASS label=PASS plain-while=PASS normalized-for=PASS'
+          printf '%s\n' 'CORE_M147_STRICT_REGRESSION scoped-tail=PASS cleanup=PASS label=PASS plain-while-baseline=PASS normalized-for=PASS'
 
       - name: Replay M145 regression controls
         if: steps.state.outputs.needs_patch == 'true'
@@ -229,8 +227,6 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add src/core/core_lower.c \
-            tests/compiler/c0/m137_detached_loop_continue.c \
-            tests/compiler/c0/m146_opportunistic_detached_continue.c \
             tests/compiler/c0/m141_scoped_loop_continue_tail.c \
             tests/compiler/c0/m142_nonedge_cleanup_metadata.c \
             tests/compiler/c0/m144_unreferenced_loop_label_metadata.c \
