@@ -53,7 +53,7 @@ jobs:
           git diff --check
           grep -Fq 'M135_CLEANUP_EDGE_CLASSIFICATION' src/core/core_lower.c
           grep -Fq 'M137_DETACHED_LOOP_CONTINUE_OWNER' src/core/core_lower.c
-          test -s tests/compiler/c0/m135_cleanup_non_edge.c
+          test -s tests/compiler/c0/m135_cleanup_metadata_nonedge.c
           test -s tests/compiler/c0/m137_detached_loop_continue.c
 
       - name: Build exact patched compiler
@@ -73,7 +73,7 @@ jobs:
           work="$GITHUB_WORKSPACE/build/m137-product-regression"
           mkdir -p "$work"
 
-          cc -E -P -std=gnu11 -x c tests/compiler/c0/m135_cleanup_non_edge.c -o "$work/m135.i"
+          cc -E -P -std=gnu11 -x c tests/compiler/c0/m135_cleanup_metadata_nonedge.c -o "$work/m135.i"
           MINIC_CORE_IR=strict "$compiler" -S "$work/m135.i" -o "$work/m135.s"
 
           cc -E -P -std=gnu11 -x c tests/compiler/c0/m137_detached_loop_continue.c -o "$work/m137.i"
@@ -188,7 +188,7 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add src/core/core_lower.c \
-            tests/compiler/c0/m135_cleanup_non_edge.c \
+            tests/compiler/c0/m135_cleanup_metadata_nonedge.c \
             tests/compiler/c0/m137_detached_loop_continue.c
           git diff --cached --quiet && { echo 'no M137 semantic changes'; exit 1; }
           git commit -m 'core: recover detached loop continue targets'
