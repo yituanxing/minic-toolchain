@@ -12,7 +12,7 @@ for required in ('M137_DETACHED_LOOP_CONTINUE_OWNER',
     if required not in core:
         raise SystemExit(f'M147 requires staged {required}')
 
-old_early = '''    if (continue_label_statement != MINIC_STATEMENT_INVALID) {
+old = '''    if (continue_label_statement != MINIC_STATEMENT_INVALID) {
         if (context->statement_blocks == NULL ||
             continue_label_statement >= context->statement_block_count ||
             context->statement_blocks[continue_label_statement] != MINIC_CORE_BLOCK_INVALID) {
@@ -24,26 +24,14 @@ old_early = '''    if (continue_label_statement != MINIC_STATEMENT_INVALID) {
            not manufacture an orphan block. */
         context->statement_blocks[continue_label_statement] = condition_block;
     }
-    status = set_branch(context, preheader_block, statement->span, condition_block);
 '''
-new_early = '''    status = set_branch(context, preheader_block, statement->span, condition_block);
-'''
-if core.count(old_early) != 1:
-    raise SystemExit(f'M147 expected one early continue binding seam, found {core.count(old_early)}')
-core = core.replace(old_early, new_early, 1)
-
-needle = '''    if (statement->expression == MINIC_EXPRESSION_INVALID && !normalized_for) {
-        return MINIC_CORE_LOWER_UNSUPPORTED;
-    }
-'''
-replacement = '''    /* M147_NORMALIZED_FOR_CONTINUE_BINDING_OWNER: the same-span detached-label
-       heuristic is parser-normalization metadata, not a property of an ordinary
-       source while.  M145/M146 demonstrated that pre-binding such a label on
-       plain WHILE changes otherwise-valid CFGs.  Delay ownership until the body
-       shape has independently proven this WHILE is a normalized source `for`.
-       Plain while/do-while lowering therefore remains on the legacy path; only
-       a normalized-for loop can bind the recovered continue target to condition
-       re-evaluation. */
+new = '''    /* M147_NORMALIZED_FOR_CONTINUE_BINDING_OWNER: M145/M146 proved that the
+       same-span detached-label heuristic must not mutate an ordinary source
+       WHILE CFG.  Keep binding at the established post-block-allocation point,
+       but require the body-shape recognizers above to have independently proven
+       parser-normalized `for` provenance first.  This preserves the valid
+       condition_block lifetime/order required by unbounded `for (;;)` while
+       leaving plain while/do-while lowering on the baseline path. */
     if (continue_label_statement != MINIC_STATEMENT_INVALID && normalized_for) {
         if (context->statement_blocks == NULL ||
             continue_label_statement >= context->statement_block_count ||
@@ -52,13 +40,10 @@ replacement = '''    /* M147_NORMALIZED_FOR_CONTINUE_BINDING_OWNER: the same-spa
         }
         context->statement_blocks[continue_label_statement] = condition_block;
     }
-    if (statement->expression == MINIC_EXPRESSION_INVALID && !normalized_for) {
-        return MINIC_CORE_LOWER_UNSUPPORTED;
-    }
 '''
-if core.count(needle) != 1:
-    raise SystemExit(f'M147 expected one normalized-for validity seam, found {core.count(needle)}')
-core = core.replace(needle, replacement, 1)
+if core.count(old) != 1:
+    raise SystemExit(f'M147 expected one post-allocation continue binding seam, found {core.count(old)}')
+core = core.replace(old, new, 1)
 core_path.write_text(core)
 
 regression = Path('tests/compiler/c0/m147_normalized_for_continue_binding.c')
@@ -89,4 +74,4 @@ int main(void) {
 }
 ''')
 
-print('M147 normalized-for-only continue binding staged')
+print('M147 normalized-for-only post-allocation continue binding staged')
