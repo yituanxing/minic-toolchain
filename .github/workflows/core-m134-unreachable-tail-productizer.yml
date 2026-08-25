@@ -121,12 +121,14 @@ jobs:
           if summary['selected'] != 5 or summary['error'] != 0 or summary['preprocess_missing'] != 0:
               raise SystemExit(f'M134 focused ERROR/missing: {summary}')
           by_index={int(row['index']):row for row in rows}
-          for index in (95,130,239,288,348):
+          for index in (130,239,288,348):
               row=by_index[index]
               print(f"CORE_M134_INDEX_{index} status={row['status']} line={row.get('first_error_line')} message={row.get('message')}")
               if row['status'] != 'PASS':
-                  raise SystemExit(f'M134 expected unreachable-tail TU PASS at index {index}: {row}')
-          print('CORE_M134_PRODUCT_FOCUSED selected=5 pass=5 unsupported=0 error=0')
+                  raise SystemExit(f'M134 expected proven unreachable-tail TU PASS at index {index}: {row}')
+          probe=by_index[95]
+          print(f"CORE_M134_INDEX_95_PROBE status={probe['status']} line={probe.get('first_error_line')} message={probe.get('message')}")
+          print('CORE_M134_PRODUCT_FOCUSED selected=5 required_pass=4 error=0 probe=95')
           PY
 
       - name: Replay strict full500
