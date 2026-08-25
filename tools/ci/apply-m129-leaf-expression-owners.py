@@ -6,9 +6,12 @@ text = core_path.read_text()
 marker = 'M129_LEAF_EXPRESSION_OWNERS'
 
 if marker not in text:
-    # Discarded record expressions still own all side effects. Reuse the
-    # aggregate materialization owner for the two value-producing forms that
-    # currently reach Linux: record assignment and direct record-return call.
+    # Preserve the established M86B discarded-record assignment owner for the
+    # shapes it already supports. M129 only owns the two proven missing leaves:
+    # a record assignment whose RHS is a conditional aggregate producer, and a
+    # discarded direct record-returning call. This avoids stealing ordinary
+    # Linux record copies (for example WRITE_ONCE-style set_pud assignments)
+    # from the already-qualified record-copy path.
     start_marker = '    /* M86B_RECORD_ASSIGNMENT_EXPRESSION_STATEMENT:'
     end_marker = '    /* M91_BUILTIN_UNREACHABLE_TERMINATOR:'
     start = text.find(start_marker)
@@ -18,27 +21,44 @@ if marker not in text:
     old_segment = text[start:end]
     if 'lower_record_copy_statement(context, &record_copy)' not in old_segment:
         raise SystemExit('legacy discarded record-assignment route changed')
-    new_segment = '''    /* M129_LEAF_EXPRESSION_OWNERS: a discarded aggregate value still has to
-       perform the producer's semantic effects.  Record assignment and a direct
-       record-returning call already have one shared producer owner:
-       lower_record_materialized_address().  Route both through it instead of
-       forcing assignment through the older copy-source gate or forcing a
-       record-return call through the scalar discarded-value gate. */
-    if (minic_type_is_record(expression->type) &&
-        (expression->kind == MINIC_EXPRESSION_ASSIGNMENT ||
-         (expression->kind == MINIC_EXPRESSION_CALL &&
-          expression->value.call.function_id != MINIC_FUNCTION_INVALID))) {
+    new_owner = '''    /* M129_LEAF_EXPRESSION_OWNERS: keep M86B as the default discarded-record
+       assignment owner. Only conditional aggregate RHS values need the newer
+       unified materialization owner here; direct record-return calls need the
+       same owner when their result is discarded after all call side effects. */
+    if (expression->kind == MINIC_EXPRESSION_ASSIGNMENT &&
+        minic_type_is_record(expression->type)) {
+        const MinicExpression *record_source;
+
+        record_source = minic_c0_program_expression(
+            context->body->program, expression->value.binary.right);
+        if (record_source != NULL &&
+            record_source->kind == MINIC_EXPRESSION_CONDITIONAL) {
+            MinicCoreValueId discarded_record_address;
+            MinicCoreLowerStatus status;
+
+            status = lower_record_materialized_address(
+                context, statement->expression, &discarded_record_address);
+            return core_trace_expression_statement_status(
+                context,
+                expression,
+                "discarded-record-conditional-assignment",
+                status);
+        }
+    }
+    if (expression->kind == MINIC_EXPRESSION_CALL &&
+        minic_type_is_record(expression->type) &&
+        expression->value.call.function_id != MINIC_FUNCTION_INVALID) {
         MinicCoreValueId discarded_record_address;
         MinicCoreLowerStatus status;
 
         status = lower_record_materialized_address(
             context, statement->expression, &discarded_record_address);
         return core_trace_expression_statement_status(
-            context, expression, "discarded-record-materialization", status);
+            context, expression, "discarded-record-call", status);
     }
 
 '''
-    text = text[:start] + new_segment + text[end:]
+    text = text[:start] + new_owner + old_segment + text[end:]
 
     # Core has target-neutral integer primitives that exactly express the
     # established RV64 __builtin_isdigit semantics: ((unsigned)x - '0') < 10.
@@ -141,7 +161,7 @@ if marker not in text:
     text = text[:call_pos] + builtin_block + text[call_pos:]
     core_path.write_text(text)
 
-# Two isolated strict-Core contracts.  The Linux focused replay remains the
+# Two isolated strict-Core contracts. The Linux focused replay remains the
 # acceptance oracle, but these keep the semantic owners from disappearing in a
 # later refactor.
 Path('tests/compiler/c0/m129_builtin_isdigit.c').write_text('''int probe_digit(int value) {
