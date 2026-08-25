@@ -17,17 +17,16 @@ if marker not in text:
         raise SystemExit(
             f'record call argument helper expected one address-only consumer, found {segment.count(old_name)}'
         )
-    call_pos = segment.find(old_name)
-    statement_pos = segment.rfind('    argument_status', 0, call_pos)
-    if statement_pos < 0:
-        raise SystemExit('record call argument status statement missing')
-    comment = '''    /* M128_RECORD_CALL_ARGUMENT_MATERIALIZATION: a by-value record
-       argument consumes a record rvalue, not merely an already-address-backed
-       lvalue.  Use the same aggregate materialization seam as record
-       assignment so conditionals, compound literals and direct record-return
-       calls compose uniformly before the private argument copy is made. */
-'''
-    segment = segment[:statement_pos] + comment + segment[statement_pos:]
+    brace = segment.find('{')
+    if brace < 0:
+        raise SystemExit('record call argument helper body missing')
+    comment = '''
+    /* M128_RECORD_CALL_ARGUMENT_MATERIALIZATION: a by-value record argument
+       consumes a record rvalue, not merely an already-address-backed lvalue.
+       Use the same aggregate materialization seam as record assignment so
+       conditionals, compound literals and direct record-return calls compose
+       uniformly before the private argument copy is made. */'''
+    segment = segment[:brace + 1] + comment + segment[brace + 1:]
     segment = segment.replace(old_name, 'lower_record_materialized_address(', 1)
     text = text[:start] + segment + text[end:]
     core_path.write_text(text)
