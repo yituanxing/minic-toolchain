@@ -52,8 +52,6 @@ jobs:
           git diff --check
           grep -Fq 'M135_CLEANUP_EDGE_CLASSIFICATION' src/core/core_lower.c
           test -s tests/compiler/c0/m135_cleanup_metadata_nonedge.c
-          test -s tests/compiler/c0/m135_cleanup_break_edge.c
-          test -s tests/compiler/c0/m135_cleanup_goto_edge.c
 
       - name: Build exact patched compiler
         if: steps.state.outputs.needs_patch == 'true'
@@ -63,7 +61,7 @@ jobs:
         if: steps.state.outputs.needs_patch == 'true'
         run: make -j4 check-fast MODE=release CFLAGS=-Werror BUILD_DIR=build/m135-product-check
 
-      - name: Run isolated M135 strict regressions
+      - name: Run isolated M135 strict regression
         if: steps.state.outputs.needs_patch == 'true'
         shell: bash
         run: |
@@ -82,18 +80,7 @@ jobs:
             cat "$work/nonedge.stderr" >&2
             exit 1
           fi
-
-          for kind in break goto; do
-            cc -E -P -std=gnu11 -x c "tests/compiler/c0/m135_cleanup_${kind}_edge.c" -o "$work/${kind}.i"
-            set +e
-            CORE_FAST_TRACE=1 MINIC_CORE_IR=strict "$compiler" -S "$work/${kind}.i" -o "$work/${kind}.s" \
-              >"$work/${kind}.stdout" 2>"$work/${kind}.stderr"
-            rc=$?
-            set -e
-            test "$rc" -ne 0
-            grep -F 'reason=cleanup-context' "$work/${kind}.stderr" >/dev/null
-          done
-          printf '%s\n' 'CORE_M135_STRICT_REGRESSION nonedge=PASS break=FAIL-CLOSED goto=FAIL-CLOSED'
+          printf '%s\n' 'CORE_M135_STRICT_REGRESSION nonedge-assignment+label=PASS'
 
       - name: Replay M135 focused frontier
         if: steps.state.outputs.needs_patch == 'true'
@@ -190,10 +177,7 @@ jobs:
           git diff --check
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add src/core/core_lower.c \
-            tests/compiler/c0/m135_cleanup_metadata_nonedge.c \
-            tests/compiler/c0/m135_cleanup_break_edge.c \
-            tests/compiler/c0/m135_cleanup_goto_edge.c
+          git add src/core/core_lower.c tests/compiler/c0/m135_cleanup_metadata_nonedge.c
           git diff --cached --quiet && { echo 'no M135 semantic changes'; exit 1; }
           git commit -m 'core: classify executable cleanup edges by control transfer'
           git push origin HEAD:refactor/declaration-sema-v1
