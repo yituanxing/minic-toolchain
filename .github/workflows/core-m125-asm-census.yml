@@ -80,6 +80,7 @@ jobs:
               f"unsupported={frontier['unsupported']} error={frontier['error']}"
           )
 
+          stderr_root = work / 'minic-stderr'
           shape_counts = collections.Counter()
           detail_lines = []
           pattern = re.compile(
@@ -87,9 +88,10 @@ jobs:
               r'outputs=(\d+) inputs=(\d+) labels=(\d+) reg_clobbers=(\d+) '
               r'clobbers=(\d+) memory=(\d+) template_length=(\d+)$'
           )
-          for path in sorted((work / 'minic-stderr').glob('*')):
+          for path in sorted(stderr_root.rglob('*')):
               if not path.is_file():
                   continue
+              relative = path.relative_to(stderr_root)
               lines = path.read_text(errors='replace').splitlines()
               for line in lines:
                   match = pattern.match(line)
@@ -100,9 +102,9 @@ jobs:
                           f"regclob={regs} clob={clobs} mem={mem}"
                       )
                       shape_counts[key] += 1
-                      detail_lines.append(f"{path.name}: {line}")
+                      detail_lines.append(f"{relative}: {line}")
                   elif line.startswith('M125_ASM_OPERAND ') or line.startswith('M125_ASM_CLOBBER '):
-                      detail_lines.append(f"{path.name}: {line}")
+                      detail_lines.append(f"{relative}: {line}")
 
           summary = [
               f"M125_UNCLAIMED_ASM_TOTAL={sum(shape_counts.values())}",
