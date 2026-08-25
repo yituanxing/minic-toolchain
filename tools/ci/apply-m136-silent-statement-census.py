@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 from pathlib import Path
 
-# M136_TRIGGER_V1: post-registration change so pull_request CI runs the census.
+# M136_TRIGGER_V2: attribute the post-termination fail-close to the exact
+# re-entry source before changing semantic reachability ownership.
 path = Path('src/core/core_lower.c')
 text = path.read_text()
 marker = 'M136_SILENT_STATEMENT_CENSUS'
@@ -50,5 +51,81 @@ replacement = '''        statement = minic_c0_program_statement(context->body->p
 if text.count(needle) != 1:
     raise SystemExit(f'expected one lower_block statement-entry seam, found {text.count(needle)}')
 text = text.replace(needle, replacement, 1)
+
+needle = '''        if (source->kind == MINIC_STATEMENT_GOTO &&
+            source->target_statement < program->statement_count &&
+            statement_membership[source->target_statement]) {
+            unsafe = true;
+            break;
+        }
+'''
+replacement = '''        if (source->kind == MINIC_STATEMENT_GOTO &&
+            source->target_statement < program->statement_count &&
+            statement_membership[source->target_statement]) {
+            if (getenv("CORE_M136_STATEMENT_TRACE") != NULL &&
+                context->source_function != NULL && context->source_function->name != NULL &&
+                (strcmp(context->source_function->name, "get_nohz_timer_target") == 0 ||
+                 strcmp(context->source_function->name, "membarrier_global_expedited") == 0)) {
+                (void)fprintf(stderr,
+                              "CORE_M136_REENTRY function=%s source_id=%zu source_kind=%d "
+                              "source_span=%zu:%zu target_id=%llu target_kind=%d "
+                              "target_span=%zu:%zu root_kind=%d root_span=%zu:%zu\\n",
+                              context->source_function->name,
+                              source_index,
+                              (int)source->kind,
+                              source->span.begin.line,
+                              source->span.begin.column,
+                              (unsigned long long)source->target_statement,
+                              (int)program->statements[source->target_statement].kind,
+                              program->statements[source->target_statement].span.begin.line,
+                              program->statements[source->target_statement].span.begin.column,
+                              (int)root_statement->kind,
+                              root_statement->span.begin.line,
+                              root_statement->span.begin.column);
+            }
+            unsafe = true;
+            break;
+        }
+'''
+if text.count(needle) != 1:
+    raise SystemExit(f'expected one unreachable goto re-entry seam, found {text.count(needle)}')
+text = text.replace(needle, replacement, 1)
+
+needle = '''                if (target < program->statement_count && statement_membership[target]) {
+                    unsafe = true;
+                    break;
+                }
+'''
+replacement = '''                if (target < program->statement_count && statement_membership[target]) {
+                    if (getenv("CORE_M136_STATEMENT_TRACE") != NULL &&
+                        context->source_function != NULL && context->source_function->name != NULL &&
+                        (strcmp(context->source_function->name, "get_nohz_timer_target") == 0 ||
+                         strcmp(context->source_function->name, "membarrier_global_expedited") == 0)) {
+                        (void)fprintf(stderr,
+                                      "CORE_M136_REENTRY function=%s source_id=%zu source_kind=%d "
+                                      "source_span=%zu:%zu asm_label=%zu target_id=%llu "
+                                      "target_kind=%d target_span=%zu:%zu root_kind=%d root_span=%zu:%zu\\n",
+                                      context->source_function->name,
+                                      source_index,
+                                      (int)source->kind,
+                                      source->span.begin.line,
+                                      source->span.begin.column,
+                                      label_index,
+                                      (unsigned long long)target,
+                                      (int)program->statements[target].kind,
+                                      program->statements[target].span.begin.line,
+                                      program->statements[target].span.begin.column,
+                                      (int)root_statement->kind,
+                                      root_statement->span.begin.line,
+                                      root_statement->span.begin.column);
+                    }
+                    unsafe = true;
+                    break;
+                }
+'''
+if text.count(needle) != 1:
+    raise SystemExit(f'expected one unreachable asm-goto re-entry seam, found {text.count(needle)}')
+text = text.replace(needle, replacement, 1)
+
 path.write_text(text)
 print('M136 silent statement census staged')
