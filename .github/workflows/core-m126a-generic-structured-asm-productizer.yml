@@ -43,14 +43,16 @@ jobs:
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
 
-      - name: Apply M126A generic structured asm
+      - name: Apply transactional M126A generic structured asm
         if: steps.state.outputs.needs_patch == 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
           python3 tools/ci/apply-m126a-generic-structured-asm.py
+          python3 tools/ci/apply-m126a-transactional-lowering.py
           git diff --check
           grep -Fq 'M126A_GENERIC_STRUCTURED_ASM' src/core/core_ir.h
+          grep -Fq 'Preflight is deliberately side-effect free' src/core/core_lower.c
           grep -Fq 'core_structured_inline_asm_allocate' src/target/riscv64/core_codegen.c
 
       - name: Build exact patched compiler
@@ -61,7 +63,7 @@ jobs:
         if: steps.state.outputs.needs_patch == 'true'
         run: make -j4 check-fast MODE=release CFLAGS=-Werror BUILD_DIR=build/m126a-check
 
-      - name: Replay M126A eight-TU cohort
+      - name: Replay M126A nine-TU cohort
         if: steps.state.outputs.needs_patch == 'true'
         shell: bash
         run: |
@@ -74,7 +76,7 @@ jobs:
             --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
             --work "$work" \
             --jobs 4 \
-            --indices '25,32,58,61,79,94,177,179'
+            --indices '25,27,32,58,61,79,94,177,179'
           replay_status=$?
           set -e
           printf 'CORE_M126A_FOCUSED_REPLAY_STATUS=%d\n' "$replay_status"
@@ -90,11 +92,11 @@ jobs:
           from pathlib import Path
           work = Path('build/m126a-focused')
           summary = json.loads((work / 'frontier-summary.json').read_text())
-          if summary['selected'] != 8:
-              raise SystemExit(f"expected 8 focused TUs, got {summary['selected']}")
+          if summary['selected'] != 9:
+              raise SystemExit(f"expected 9 focused TUs, got {summary['selected']}")
           if summary['error'] != 0 or summary['preprocess_missing'] != 0:
               raise SystemExit(f"focused ERROR/missing: {summary}")
-          print(f"CORE_M126A_FOCUSED selected=8 pass={summary['pass']} unsupported={summary['unsupported']} error=0")
+          print(f"CORE_M126A_FOCUSED selected=9 pass={summary['pass']} unsupported={summary['unsupported']} error=0")
           print((work / 'reason-summary.txt').read_text())
           PY
 
