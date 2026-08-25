@@ -2,6 +2,7 @@
 from pathlib import Path
 import re
 
+# M139_TRIGGER_V1: synchronize after extending the M138 census workflow.
 path = Path('src/core/core_lower.c')
 text = path.read_text()
 marker = 'M139_LOCAL_LOOP_PASSTHROUGH_TRACE'
