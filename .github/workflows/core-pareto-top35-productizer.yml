@@ -66,5 +66,17 @@ jobs:
           rc=$?
           set -e
           echo "M116_PROBE_RC=$rc"
-          cat build/m116-probe/minic-stderr/435.log 2>/dev/null || true
+          echo M116_STDERR_BEGIN
+          find build/m116-probe/minic-stderr -type f -print -exec cat {} \; 2>/dev/null || true
+          echo M116_STDERR_END
           exit 0
+
+      - name: Persist M116 verifier probe
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-m116-verifier-${{ github.sha }}
+          path: |
+            build/m116-probe/batch-results.json
+            build/m116-probe/minic-stderr/**
+          if-no-files-found: warn
