@@ -1,113 +1,98 @@
 #!/usr/bin/env python3
 from pathlib import Path
 
-marker = "M152_NESTED_RECORD_MEMBER_ADDRESS_OWNER"
+marker = "M152_UNSIGNED_ENUM_BIT_FIELD_OWNER"
 path = Path("src/core/core_lower.c")
 text = path.read_text()
 
 if marker in text:
-    print("M152 nested record member address already staged")
+    print("M152 unsigned enum bit-field owner already staged")
     raise SystemExit(0)
 if "M151_INDIRECT_CALL_BATCH_OWNER" not in text:
     raise SystemExit("M152 requires the productized M151 Core baseline")
+if "M152_NESTED_RECORD_MEMBER_ADDRESS_OWNER" in text:
+    raise SystemExit("obsolete M152 nested-member candidate is unexpectedly productized")
 
-function_start = text.find("static MinicCoreLowerStatus lower_address(")
-function_end = text.find("\nstatic MinicCoreLowerStatus append_integer_conversion(", function_start)
-if function_start < 0 or function_end < 0:
-    raise SystemExit("M152 could not locate lower_address bounds")
-body = text[function_start:function_end]
-member_start = body.find("    if (expression->kind == MINIC_EXPRESSION_MEMBER) {")
-final_return = body.rfind("    return MINIC_CORE_LOWER_UNSUPPORTED;\n}")
-if member_start < 0 or final_return < 0 or member_start >= final_return:
-    raise SystemExit("M152 could not locate the lower_address MEMBER owner")
+anchor = """static bool core_memory_scalar_type(MinicType type) {\n    return minic_type_is_integer(type) || minic_type_is_pointer(type);\n}\n"""
+helper = anchor + r'''
 
-new_member = r'''    /* M152_NESTED_RECORD_MEMBER_ADDRESS_OWNER: `p->inner.field` reaches
-       the outer field through an addressable record lvalue (`p->inner`), not
-       through a scalar pointer value.  Preserve the existing pointer-base path
-       for `p->field`, and recursively form the address of a record-lvalue base
-       before applying the next FIELD_ADDRESS.  This keeps source-language
-       member composition in Core lowering while DataLayout/backend continue to
-       own concrete field offsets. */
-    if (expression->kind == MINIC_EXPRESSION_MEMBER) {
-        const MinicExpression *base;
-        const MinicRecord *record;
-        const MinicRecordField *field;
-        MinicCoreValueId base_id;
-        MinicType base_value_type;
-        MinicType record_type;
+/* M152_UNSIGNED_ENUM_BIT_FIELD_OWNER: enum bit-fields keep their semantic enum
+   type in AST/Core values, while C gives every complete enum a compatible
+   integer type.  The existing bit-field RMW is intentionally restricted to
+   unsigned storage semantics; admit an enum only when its frontend-owned
+   compatible integer type is unsigned.  This preserves the signed-bit-field
+   fail-closed boundary and avoids inventing enum-specific Core opcodes. */
+static bool core_unsigned_bit_field_semantic_type(const MinicCoreLowerContext *context,
+                                                  MinicType type) {
+    MinicType effective_type;
 
-        base = minic_c0_program_expression(context->body->program, expression->value.member.base);
-        record =
-            minic_c0_program_record(context->body->program, expression->value.member.record_id);
-        field = minic_c0_record_field(record, expression->value.member.field_index);
-        if (base == NULL || record == NULL || field == NULL || field->is_bit_field) {
-            return MINIC_CORE_LOWER_UNSUPPORTED;
-        }
-
-        if (base->value_category == MINIC_VALUE_LVALUE &&
-            minic_type_is_record(base->type)) {
-            if (base->type.record_id != expression->value.member.record_id) {
-                return MINIC_CORE_LOWER_UNSUPPORTED;
-            }
-            status = lower_address(context, expression->value.member.base, &base_id);
-            if (status != MINIC_CORE_LOWER_OK) {
-                return status;
-            }
-            if (base_id >= context->function->value_count ||
-                !minic_type_is_pointer(context->function->values[base_id].type) ||
-                !minic_type_pointee(context->function->values[base_id].type, &record_type) ||
-                !minic_type_is_record(record_type) ||
-                record_type.record_id != expression->value.member.record_id) {
-                return MINIC_CORE_LOWER_ERROR;
-            }
-        } else {
-            /* M94_MEMBER_BASE_VALUE_TYPE: selecting a pointer member through
-               `const struct *` qualifies the member lvalue storage, while
-               evaluating it yields the unqualified pointer value. */
-            if (!core_scalar_expression_value_type(context->body, base, &base_value_type) ||
-                !minic_type_is_pointer(base_value_type) ||
-                !minic_type_pointee(base_value_type, &record_type) ||
-                !minic_type_is_record(record_type) ||
-                record_type.record_id != expression->value.member.record_id) {
-                return MINIC_CORE_LOWER_UNSUPPORTED;
-            }
-            status = lower_expression(context, expression->value.member.base, &base_id);
-            if (status != MINIC_CORE_LOWER_OK) {
-                return status;
-            }
-            if (base_id >= context->function->value_count ||
-                !minic_type_equal(context->function->values[base_id].type, base_value_type)) {
-                return MINIC_CORE_LOWER_ERROR;
-            }
-        }
-        return append_field_address(context,
-                                    expression->span,
-                                    base_id,
-                                    expression->value.member.record_id,
-                                    expression->value.member.field_index,
-                                    expression->type,
-                                    address_id);
+    if (!minic_type_is_integer(type)) {
+        return false;
     }
+    if (minic_type_is_unsigned_integer(type)) {
+        return true;
+    }
+    return minic_type_is_enum(type) && context != NULL && context->body != NULL &&
+           context->body->program != NULL &&
+           minic_c0_type_effective_integer_type(
+               context->body->program, type, &effective_type) &&
+           minic_type_is_unsigned_integer(effective_type);
+}
 '''
-body = body[:member_start] + new_member + body[final_return:]
-text = text[:function_start] + body + text[function_end:]
+if text.count(anchor) != 1:
+    raise SystemExit("M152 could not locate core_memory_scalar_type anchor")
+text = text.replace(anchor, helper, 1)
+
+simple_old = """                !minic_type_is_integer(value_type) ||\n                !minic_type_is_unsigned_integer(value_type) ||\n                minic_type_is_const(target->type) ||\n"""
+simple_new = """                !minic_type_is_integer(value_type) ||\n                !core_unsigned_bit_field_semantic_type(context, value_type) ||\n                minic_type_is_const(target->type) ||\n"""
+if text.count(simple_old) != 1:
+    raise SystemExit("M152 could not locate simple bit-field unsigned gate")
+text = text.replace(simple_old, simple_new, 1)
+
+compound_old = """                !minic_type_is_integer(bit_value_type) ||\n                !minic_type_is_unsigned_integer(bit_value_type) ||\n                !minic_type_is_integer(bit_source->type) || context->target == NULL ||\n"""
+compound_new = """                !minic_type_is_integer(bit_value_type) ||\n                !core_unsigned_bit_field_semantic_type(context, bit_value_type) ||\n                !minic_type_is_integer(bit_source->type) || context->target == NULL ||\n"""
+if text.count(compound_old) != 1:
+    raise SystemExit("M152 could not locate compound bit-field unsigned gate")
+text = text.replace(compound_old, compound_new, 1)
 path.write_text(text)
 
-regression = Path("tests/compiler/c0/m152_nested_member_address.c")
-regression.write_text(r'''struct inner_state {
-    int state;
-    unsigned long depth;
+regression = Path("tests/compiler/c0/m152_enum_bit_field_write.c")
+regression.write_text(r'''enum iter_state {
+    ITER_INVALID,
+    ITER_ACTIVE,
+    ITER_DRAINED,
 };
 
 struct outer_state {
     int prefix;
-    struct inner_state iter;
+    struct {
+        void *btf;
+        unsigned int btf_id;
+        enum iter_state state : 2;
+        int depth : 30;
+    } iter;
 };
 
-int nested_member_address(struct outer_state *st) {
-    st->iter.state = 7;
-    st->iter.depth = 9;
-    return st->iter.state + (int)st->iter.depth;
+enum value_type {
+    VALUE_UNDEFINED,
+    VALUE_FLAG,
+    VALUE_STRING,
+};
+
+struct parameter {
+    const char *key;
+    enum value_type type : 8;
+    char *string;
+};
+
+void set_iter_state(struct outer_state *st) {
+    st->iter.state = ITER_ACTIVE;
+}
+
+int set_parameter_type(void) {
+    struct parameter param;
+    param.type = VALUE_FLAG;
+    return 0;
 }
 ''')
-print("staged M152 nested record member address owner")
+print("staged M152 unsigned enum bit-field owner")
