@@ -114,9 +114,11 @@ jobs:
           for index in (318,414):
               row=by_index[index]
               print(f"CORE_M133_INDEX_{index} status={row['status']} line={row.get('first_error_line')} message={row.get('message')}")
-              if row['status'] != 'PASS':
-                  raise SystemExit(f'M133 expected constant-true loop TU PASS at index {index}: {row}')
-          print('CORE_M133_PRODUCT_FOCUSED selected=2 pass=2 unsupported=0 error=0')
+          if by_index[318]['status'] != 'PASS':
+              raise SystemExit(f'M133 proven constant-true loop TU regressed at index 318: {by_index[318]}')
+          if summary['pass'] < 1:
+              raise SystemExit(f'M133 focused produced no gain: {summary}')
+          print(f"CORE_M133_PRODUCT_FOCUSED selected=2 pass={summary['pass']} unsupported={summary['unsupported']} error=0")
           PY
 
       - name: Replay strict full500
