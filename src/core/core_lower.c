@@ -4412,7 +4412,10 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
             minic_c0_pointer_arithmetic_element_size(context->body->program,
                                                       minic_default_data_layout(),
                                                       left_type,
-                                                      &element_size)) {
+                                                      &element_size) &&
+            /* M131_ZERO_STRIDE_POINTER_DIFFERENCE_FAIL_CLOSED: unlike pointer
+               +/- integer, pointer difference divides by the pointee stride. */
+            element_size != 0U) {
             status = lower_expression(
                 context, expression->value.binary.left, &left_pointer);
             if (status != MINIC_CORE_LOWER_OK) {

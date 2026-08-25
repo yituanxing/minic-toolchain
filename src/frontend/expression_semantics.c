@@ -16,8 +16,13 @@ bool minic_c0_pointer_arithmetic_element_size(const MinicC0Program *program,
         *element_size = 1U;
         return true;
     }
-    return minic_data_layout_type(layout, program, pointee, element_size, &alignment) &&
-           *element_size != 0U;
+    /* M131_ZERO_SIZE_POINTER_STRIDE: GNU complete zero-size object types
+       (notably empty records, and the zero-size array forms already accepted by
+       the frontend) have a real pointer-arithmetic stride of zero. Completeness
+       is owned by the caller/frontend; DataLayout returning a valid size of zero
+       must not be reinterpreted here as an unsupported type. Incomplete types
+       still fail because DataLayout cannot size them. */
+    return minic_data_layout_type(layout, program, pointee, element_size, &alignment);
 }
 
 static bool integer_type_is_signed(const MinicC0Program *program, MinicType type) {

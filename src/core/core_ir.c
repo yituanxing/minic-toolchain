@@ -958,8 +958,11 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
                minic_type_is_pointer(instruction->type) && base < function->value_count &&
                index < function->value_count && available_values[base] && available_values[index] &&
                minic_type_equal(function->values[base].type, instruction->type) &&
-               minic_type_is_integer(function->values[index].type) &&
-               instruction->value.pointer_offset.element_size != 0U;
+               /* M131_ZERO_STRIDE_POINTER_OFFSET: zero is a valid GNU object
+                  stride. Keeping POINTER_OFFSET rather than folding it in the
+                  producer preserves index evaluation and gives all pointer
+                  arithmetic producers one Core semantic owner. */
+               minic_type_is_integer(function->values[index].type);
     }
     case MINIC_CORE_INSTRUCTION_LOAD: {
         MinicType pointee;
