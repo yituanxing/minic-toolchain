@@ -1,0 +1,197 @@
+name: Core M130 Discarded Lvalue Productizer
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  productize:
+    if: github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+          fetch-depth: 0
+
+      - name: Detect already-productized M130
+        id: state
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if grep -Fq 'M130_DISCARDED_LVALUE_EFFECT_OWNER' src/core/core_lower.c; then
+            echo 'needs_patch=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'needs_patch=true' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Restore frozen Linux corpus
+        if: steps.state.outputs.needs_patch == 'true'
+        id: corpus
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+
+      - name: Require frozen corpus
+        if: steps.state.outputs.needs_patch == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.corpus.outputs.cache-hit }}" = true
+          test -s build/linux-focus-corpus/selected-tus.txt
+
+      - name: Apply M130 discarded-lvalue owner
+        if: steps.state.outputs.needs_patch == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/ci/apply-m130-discarded-lvalue-owner.py
+          git diff --check
+          grep -Fq 'M130_DISCARDED_LVALUE_EFFECT_OWNER' src/core/core_lower.c
+          test -s tests/compiler/c0/m130_discarded_lvalue.c
+
+      - name: Build exact patched compiler
+        if: steps.state.outputs.needs_patch == 'true'
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m130-product-compiler
+
+      - name: Run fast regression gate
+        if: steps.state.outputs.needs_patch == 'true'
+        run: make -j4 check-fast MODE=release CFLAGS=-Werror BUILD_DIR=build/m130-product-check
+
+      - name: Run isolated M130 strict regression
+        if: steps.state.outputs.needs_patch == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/m130-product-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/m130-product-regression"
+          mkdir -p "$work"
+          cc -E -P -std=gnu11 -x c tests/compiler/c0/m130_discarded_lvalue.c -o "$work/discarded-lvalue.i"
+          MINIC_CORE_IR=strict "$compiler" -S "$work/discarded-lvalue.i" -o "$work/discarded-lvalue.s"
+          grep -F 'call touch_item' "$work/discarded-lvalue.s" >/dev/null
+          printf '%s\n' 'CORE_M130_STRICT_REGRESSION discarded-member-lvalue=PASS side-effecting-base=PASS'
+
+      - name: Replay M130 focused frontier
+        if: steps.state.outputs.needs_patch == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/m130-product-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/m130-product-focused"
+          set +e
+          MINIC_CORE_IR=strict CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
+            --minic "$compiler" \
+            --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
+            --work "$work" \
+            --jobs 4 \
+            --indices '96,97,98,137'
+          replay_status=$?
+          set -e
+          printf 'CORE_M130_PRODUCT_FOCUSED_REPLAY_STATUS=%d\n' "$replay_status"
+          python3 tools/ci/classify-core-strict-frontier.py \
+            "$work/batch-results.json" \
+            --stderr-root "$work/minic-stderr" \
+            --ast-header "$GITHUB_WORKSPACE/src/frontend/ast.h" \
+            --examples 12 \
+            --json-out "$work/frontier-summary.json" \
+            --reason-text-out "$work/reason-summary.txt" \
+            --require-no-errors
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          work=Path('build/m130-product-focused')
+          rows=json.loads((work/'batch-results.json').read_text())
+          summary=json.loads((work/'frontier-summary.json').read_text())
+          if summary['selected'] != 4 or summary['error'] != 0 or summary['preprocess_missing'] != 0:
+              raise SystemExit(f'M130 focused ERROR/missing: {summary}')
+          by_index={int(row['index']):row for row in rows}
+          for index in (96,97,98,137):
+              row=by_index[index]
+              print(f"CORE_M130_INDEX_{index} status={row['status']} line={row.get('first_error_line')} message={row.get('message')}")
+          cleared=sum(1 for index in (96,97,98) if by_index[index]['status']=='PASS')
+          if cleared != 3:
+              raise SystemExit(f'M130 did not clear rq_unpin_lock triplet: cleared={cleared}')
+          print(f"CORE_M130_PRODUCT_FOCUSED selected=4 pass={summary['pass']} unsupported={summary['unsupported']} error=0")
+          print((work/'reason-summary.txt').read_text())
+          PY
+
+      - name: Replay strict full500
+        if: steps.state.outputs.needs_patch == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/m130-product-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/m130-product-full500"
+          set +e
+          MINIC_CORE_IR=strict CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
+            --minic "$compiler" \
+            --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
+            --work "$work" \
+            --jobs 4 \
+            --offset 0 \
+            --limit 500 \
+            --sample-count 0
+          replay_status=$?
+          set -e
+          printf 'CORE_M130_PRODUCT_FULL500_REPLAY_STATUS=%d\n' "$replay_status"
+          python3 tools/ci/classify-core-strict-frontier.py \
+            "$work/batch-results.json" \
+            --stderr-root "$work/minic-stderr" \
+            --ast-header "$GITHUB_WORKSPACE/src/frontend/ast.h" \
+            --examples 20 \
+            --json-out "$work/frontier-summary.json" \
+            --reason-text-out "$work/reason-summary.txt" \
+            --require-no-errors
+          python3 tools/ci/summarize-core-frontier-progress.py \
+            "$work/batch-results.json" \
+            --expect-selected 500 \
+            --json-out "$work/progress-summary.json" \
+            --text-out "$work/progress-summary.txt"
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          work=Path('build/m130-product-full500')
+          summary=json.loads((work/'frontier-summary.json').read_text())
+          if summary['selected'] != 500 or summary['error'] != 0 or summary['preprocess_missing'] != 0:
+              raise SystemExit(f'M130 full500 ERROR/missing: {summary}')
+          if summary['pass'] <= 475:
+              raise SystemExit(f"M130 produced no strict500 gain: pass={summary['pass']} baseline=475")
+          print(f"CORE_M130_PRODUCT_FULL500 selected=500 pass={summary['pass']} unsupported={summary['unsupported']} error=0")
+          print((work/'progress-summary.txt').read_text())
+          print((work/'reason-summary.txt').read_text())
+          PY
+
+      - name: Commit M130 semantic batch
+        if: steps.state.outputs.needs_patch == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/core/core_lower.c tests/compiler/c0/m130_discarded_lvalue.c
+          git diff --cached --quiet && { echo 'no M130 semantic changes'; exit 1; }
+          git commit -m 'core: preserve effects of discarded lvalues'
+          git push origin HEAD:refactor/declaration-sema-v1
+
+      - name: Persist M130 results
+        if: always() && steps.state.outputs.needs_patch == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-m130-discarded-lvalue-${{ github.sha }}
+          path: |
+            build/m130-product-regression/**
+            build/m130-product-focused/batch-results.json
+            build/m130-product-focused/frontier-summary.json
+            build/m130-product-focused/reason-summary.txt
+            build/m130-product-focused/minic-stderr/**
+            build/m130-product-full500/batch-results.json
+            build/m130-product-full500/frontier-summary.json
+            build/m130-product-full500/reason-summary.txt
+            build/m130-product-full500/progress-summary.json
+            build/m130-product-full500/progress-summary.txt
+            build/m130-product-full500/minic-stderr/**
+          if-no-files-found: warn
