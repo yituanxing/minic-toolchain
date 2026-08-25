@@ -36,7 +36,8 @@ jobs:
           set -Eeuo pipefail
           python3 tools/ci/apply-m127-expression-statement-census.py
           git diff --check
-          grep -Fq 'CORE_M127_VOID_STMT_EXPR_RESULT' src/core/core_lower.c
+          grep -Fq 'CORE_M127_VOID_STMT_EXPR_ENTER' src/core/core_lower.c
+          grep -Fq 'CORE_M127_INNER_FAIL' src/core/core_lower.c
 
       - name: Build diagnostic compiler
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m127-census-compiler
@@ -57,36 +58,54 @@ jobs:
           status=$?
           set -e
           printf 'CORE_M127_CENSUS_REPLAY_STATUS=%d\n' "$status"
-          grep -Rh 'CORE_M127_VOID_STMT_EXPR_RESULT' "$work/minic-stderr" \
-            | sort | tee "$work/m127-result-census.txt" || true
+          grep -RhE 'CORE_M127_(VOID_STMT_EXPR_(ENTER|EXIT)|INNER_FAIL)' "$work/minic-stderr" \
+            | sort | tee "$work/m127-block-census.txt" || true
           python3 - <<'PY'
           import collections, json, re
           from pathlib import Path
           work = Path('build/m127-census')
-          p = work / 'm127-result-census.txt'
+          p = work / 'm127-block-census.txt'
           rows = p.read_text().splitlines() if p.exists() else []
-          kinds = collections.Counter()
-          statuses = collections.Counter()
+          markers = collections.Counter()
+          fail_expr_kinds = collections.Counter()
+          fail_stmt_kinds = collections.Counter()
+          block_statuses = collections.Counter()
           for row in rows:
-              m = re.search(r'status=(\d+).*result_kind=(\d+)', row)
-              if m:
-                  statuses[int(m.group(1))] += 1
-                  kinds[int(m.group(2))] += 1
-          print('CORE_M127_RESULT_KIND_CENSUS', dict(sorted(kinds.items())))
-          print('CORE_M127_RESULT_STATUS_CENSUS', dict(sorted(statuses.items())))
-          print('CORE_M127_RESULT_ROWS', len(rows))
-          if len(rows) != 13:
-              raise SystemExit(f'expected 13 M127 rows, got {len(rows)}')
+              if 'CORE_M127_VOID_STMT_EXPR_ENTER' in row:
+                  markers['enter'] += 1
+              elif 'CORE_M127_VOID_STMT_EXPR_EXIT' in row:
+                  markers['exit'] += 1
+                  m = re.search(r'block_status=(\d+)', row)
+                  if m:
+                      block_statuses[int(m.group(1))] += 1
+              elif 'CORE_M127_INNER_FAIL' in row:
+                  markers['fail'] += 1
+                  sm = re.search(r'statement_kind=(\d+)', row)
+                  em = re.search(r'expression_kind=(-?\d+)', row)
+                  if sm:
+                      fail_stmt_kinds[int(sm.group(1))] += 1
+                  if em:
+                      fail_expr_kinds[int(em.group(1))] += 1
+          print('CORE_M127_MARKER_CENSUS', dict(markers))
+          print('CORE_M127_BLOCK_STATUS_CENSUS', dict(sorted(block_statuses.items())))
+          print('CORE_M127_FAIL_STATEMENT_KIND_CENSUS', dict(sorted(fail_stmt_kinds.items())))
+          print('CORE_M127_FAIL_EXPRESSION_KIND_CENSUS', dict(sorted(fail_expr_kinds.items())))
+          print('CORE_M127_TRACE_ROWS', len(rows))
+          if len(rows) == 0 or markers['fail'] == 0:
+              raise SystemExit('M127 deep census produced no failing inner statement rows')
 
+          results = json.loads((work / 'batch-results.json').read_text())
+          if len(results) != 13:
+              raise SystemExit(f'expected 13 replay rows, got {len(results)}')
           contexts = []
           corpus = Path('build/linux-focus-corpus/kbuild')
-          for item in json.loads((work / 'batch-results.json').read_text()):
+          for item in results:
               line = int(item['first_error_line'])
               src = corpus / item['input']
               lines = src.read_text(errors='replace').splitlines()
-              lo = max(1, line - 2)
-              hi = min(len(lines), line + 2)
-              contexts.append(f"=== index={item['index']} input={item['input']} function={item.get('message','')} line={line} ===")
+              lo = max(1, line - 3)
+              hi = min(len(lines), line + 3)
+              contexts.append(f"=== index={item['index']} input={item['input']} line={line} ===")
               for n in range(lo, hi + 1):
                   contexts.append(f'{n}: {lines[n-1]}')
           (work / 'm127-source-context.txt').write_text('\n'.join(contexts) + '\n')
@@ -100,7 +119,7 @@ jobs:
           name: core-m127-expression-statement-census-${{ github.sha }}
           path: |
             build/m127-census/batch-results.json
-            build/m127-census/m127-result-census.txt
+            build/m127-census/m127-block-census.txt
             build/m127-census/m127-source-context.txt
             build/m127-census/minic-stderr/**
           if-no-files-found: warn
