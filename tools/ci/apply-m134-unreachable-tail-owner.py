@@ -15,15 +15,55 @@ lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool
 helper = '''/* M134_UNREACHABLE_TAIL_OWNER: once a structured path has a Core
    terminator, ordinary following statements have no runtime semantics and must
    not make strict lowering fail merely because their expression/control-flow
-   owner is unsupported. A nested ordinary label is different: C labels have
-   function scope and a goto may re-enter that otherwise unreachable subtree.
-   Keep such subtrees fail-closed until Core owns jump-into-nested-block CFG.
-   Normalized loop blocks may form a graph, so label discovery must be
-   cycle-safe rather than recursively assuming an AST tree. */
-static bool core_block_contains_label_visit(const MinicCoreLowerContext *context,
-                                            MinicBlockId block_id,
-                                            bool *visited,
-                                            size_t visited_count) {
+   owner is unsupported. The exception is a subtree containing a label that is
+   an actual function-scope jump target: a direct goto or asm-goto may re-enter
+   that otherwise unreachable subtree. Parser-internal loop labels are not jump
+   targets and therefore do not block pruning. Normalized blocks may form a
+   graph, so discovery is cycle-safe rather than assuming an AST tree. */
+static bool core_label_is_jump_target(const MinicCoreLowerContext *context,
+                                      MinicStatementId label_id) {
+    const MinicC0Program *program;
+    size_t statement_index;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL) {
+        return true;
+    }
+    program = context->body->program;
+    for (statement_index = 0U; statement_index < program->statement_count; ++statement_index) {
+        const MinicStatement *statement;
+
+        statement = minic_c0_program_statement(program, statement_index);
+        if (statement == NULL) {
+            return true;
+        }
+        if (statement->kind == MINIC_STATEMENT_GOTO &&
+            statement->target_statement == label_id) {
+            return true;
+        }
+        if (statement->kind == MINIC_STATEMENT_INLINE_ASM &&
+            statement->inline_asm_id < program->inline_asm_count) {
+            const MinicInlineAsm *inline_asm;
+            size_t label_index;
+
+            inline_asm = &program->inline_asms[statement->inline_asm_id];
+            if (!inline_asm->is_goto) {
+                continue;
+            }
+            for (label_index = 0U; label_index < inline_asm->label_count; ++label_index) {
+                if (inline_asm->labels[label_index].target_statement == label_id) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+static bool core_block_contains_jump_target_label_visit(
+    const MinicCoreLowerContext *context,
+    MinicBlockId block_id,
+    bool *visited,
+    size_t visited_count) {
     const MinicBlock *block;
     size_t statement_index;
 
@@ -43,17 +83,19 @@ static bool core_block_contains_label_visit(const MinicCoreLowerContext *context
         return true;
     }
     for (statement_index = 0U; statement_index < block->statement_count; ++statement_index) {
+        MinicStatementId statement_id;
         const MinicStatement *statement;
 
-        statement = minic_c0_program_statement(
-            context->body->program, block->statements[statement_index]);
+        statement_id = block->statements[statement_index];
+        statement = minic_c0_program_statement(context->body->program, statement_id);
         if (statement == NULL) {
             return true;
         }
-        if (statement->kind == MINIC_STATEMENT_LABEL ||
-            core_block_contains_label_visit(
+        if ((statement->kind == MINIC_STATEMENT_LABEL &&
+             core_label_is_jump_target(context, statement_id)) ||
+            core_block_contains_jump_target_label_visit(
                 context, statement->then_block, visited, visited_count) ||
-            core_block_contains_label_visit(
+            core_block_contains_jump_target_label_visit(
                 context, statement->else_block, visited, visited_count)) {
             return true;
         }
@@ -61,7 +103,7 @@ static bool core_block_contains_label_visit(const MinicCoreLowerContext *context
     return false;
 }
 
-static bool core_unreachable_statement_contains_label(
+static bool core_unreachable_statement_contains_jump_target_label(
     const MinicCoreLowerContext *context, const MinicStatement *statement) {
     const MinicC0Program *program;
     bool *visited;
@@ -83,9 +125,9 @@ static bool core_unreachable_statement_contains_label(
         return true;
     }
     contains_label =
-        core_block_contains_label_visit(
+        core_block_contains_jump_target_label_visit(
             context, statement->then_block, visited, program->block_count) ||
-        core_block_contains_label_visit(
+        core_block_contains_jump_target_label_visit(
             context, statement->else_block, visited, program->block_count);
     free(visited);
     return contains_label;
@@ -117,14 +159,15 @@ new_guard = '''        if (block_terminated) {
             /* Parser scope exit may materialize cleanup/return tails after an
                already-terminating edge. More generally, non-label statements
                on this path are unreachable and need no Core instructions.
-               Do not skip a structured subtree containing an ordinary label:
-               a function-scope goto may still make that subtree reachable. */
+               Preserve fail-closed behavior only when a real goto/asm-goto can
+               re-enter a nested label in that structured subtree. */
             if (statement->kind == MINIC_STATEMENT_RETURN ||
                 core_is_materialized_cleanup_statement(context, statement)) {
                 continue;
             }
             if (statement->kind != MINIC_STATEMENT_LABEL) {
-                if (core_unreachable_statement_contains_label(context, statement)) {
+                if (core_unreachable_statement_contains_jump_target_label(
+                        context, statement)) {
                     return MINIC_CORE_LOWER_UNSUPPORTED;
                 }
                 continue;
@@ -167,9 +210,10 @@ live:
 ''')
 
 negative = Path('tests/compiler/c0/m134_unreachable_nested_label.c')
-negative.write_text(r'''int nested_label_must_not_be_dropped(int x) {
+negative.write_text(r'''int nested_label_must_not_be_dropped(void) {
+    goto inside;
     return 1;
-    if (x) {
+    if (1) {
 inside:
         return 2;
     }
