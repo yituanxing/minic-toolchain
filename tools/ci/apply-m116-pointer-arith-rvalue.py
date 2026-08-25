@@ -105,54 +105,78 @@ if text.count(old_tail) != 1:
     raise SystemExit(f"M82 result tail anchor mismatch: {text.count(old_tail)}")
 text = text.replace(old_tail, new_tail, 1)
 
+# M117_BLOCK_LOCAL_POINTER_RELATIONAL: Core intentionally uses block-local SSA.
+# A pointer relational operand may itself contain a conditional or another
+# expression that creates CFG. Preserve the normalized left value in a Core
+# object before lowering the right operand, then reload it in the final compare
+# block. This mirrors the existing block-local discipline used by calls,
+# assignments, integer binary operands, and pointer difference lowering.
+left_anchor = """            if (!minic_type_equal(context->function->values[left].type, common_type)) {
+                status = append_scalar_bitcast(
+                    context, left_expression->span, common_type, left, &left);
+                if (status != MINIC_CORE_LOWER_OK) {
+                    return status;
+                }
+            }
+            status = lower_expression(context, expression->value.binary.right, &right);
+"""
+left_insert = """            if (!minic_type_equal(context->function->values[left].type, common_type)) {
+                status = append_scalar_bitcast(
+                    context, left_expression->span, common_type, left, &left);
+                if (status != MINIC_CORE_LOWER_OK) {
+                    return status;
+                }
+            }
+            /* M117_BLOCK_LOCAL_POINTER_RELATIONAL: lowering the right operand
+               may create a new Core block. Spill the normalized left pointer so
+               the eventual POINTER_LESS never references an SSA value owned by
+               a predecessor block. */
+            MinicCoreObjectId left_object;
+            status = spill_scalar_value(
+                context, left_expression->span, common_type, left, &left_object);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
+            status = lower_expression(context, expression->value.binary.right, &right);
+"""
+if text.count(left_anchor) != 1:
+    raise SystemExit(f"pointer relational left anchor mismatch: {text.count(left_anchor)}")
+text = text.replace(left_anchor, left_insert, 1)
+
+right_anchor = """            if (!minic_type_equal(context->function->values[right].type, common_type)) {
+                status = append_scalar_bitcast(
+                    context, right_expression->span, common_type, right, &right);
+                if (status != MINIC_CORE_LOWER_OK) {
+                    return status;
+                }
+            }
+            swap = expression->value.binary.operator_kind == MINIC_BINARY_GREATER ||
+"""
+right_insert = """            if (!minic_type_equal(context->function->values[right].type, common_type)) {
+                status = append_scalar_bitcast(
+                    context, right_expression->span, common_type, right, &right);
+                if (status != MINIC_CORE_LOWER_OK) {
+                    return status;
+                }
+            }
+            /* M117_BLOCK_LOCAL_POINTER_RELATIONAL: reload only after the right
+               operand is fully lowered and normalized, in the final comparison
+               block. */
+            status = reload_scalar_value(
+                context, left_expression->span, common_type, left_object, &left);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
+            swap = expression->value.binary.operator_kind == MINIC_BINARY_GREATER ||
+"""
+if text.count(right_anchor) != 1:
+    raise SystemExit(f"pointer relational right anchor mismatch: {text.count(right_anchor)}")
+text = text.replace(right_anchor, right_insert, 1)
+
 if text.count(marker) != 3:
     raise SystemExit(f"expected three M116 markers, got {text.count(marker)}")
+if text.count("M117_BLOCK_LOCAL_POINTER_RELATIONAL") != 2:
+    raise SystemExit(
+        f"expected two M117 markers, got {text.count('M117_BLOCK_LOCAL_POINTER_RELATIONAL')}"
+    )
 path.write_text(text)
-
-# Temporary CI-only verifier observability. The historical M116 productizer
-# stages only core_lower.c, so this file can never enter the semantic product
-# commit. It exists solely to identify the exact block-local SSA/type invariant
-# that rejects the ext4 cohort after M116 clears the old blocker.
-verify_path = Path("src/core/core_ir.c")
-verify_text = verify_path.read_text()
-verify_anchor = """        instruction = &function->instructions[instruction_id];
-        if (!instruction_is_valid(function, instruction, available_values)) {
-            return false;
-        }
-"""
-verify_insert = """        instruction = &function->instructions[instruction_id];
-        if (!instruction_is_valid(function, instruction, available_values)) {
-            (void)fprintf(stderr,
-                          "CORE_M116_VERIFY_INSTRUCTION function=%s block=%u position=%zu instruction=%u kind=%d result=%u\\n",
-                          function->name != NULL ? function->name : "<unnamed>",
-                          (unsigned int)block_id,
-                          index,
-                          (unsigned int)instruction_id,
-                          (int)instruction->kind,
-                          (unsigned int)instruction->result);
-            (void)minic_core_function_dump(stderr, function);
-            return false;
-        }
-"""
-if verify_text.count(verify_anchor) != 1:
-    raise SystemExit(f"verifier instruction anchor mismatch: {verify_text.count(verify_anchor)}")
-verify_text = verify_text.replace(verify_anchor, verify_insert, 1)
-terminator_anchor = """    return terminator_is_valid(function, &block->terminator, available_values);
-}
-"""
-terminator_insert = """    if (!terminator_is_valid(function, &block->terminator, available_values)) {
-        (void)fprintf(stderr,
-                      "CORE_M116_VERIFY_TERMINATOR function=%s block=%u kind=%d\\n",
-                      function->name != NULL ? function->name : "<unnamed>",
-                      (unsigned int)block_id,
-                      (int)block->terminator.kind);
-        (void)minic_core_function_dump(stderr, function);
-        return false;
-    }
-    return true;
-}
-"""
-if verify_text.count(terminator_anchor) != 1:
-    raise SystemExit(f"verifier terminator anchor mismatch: {verify_text.count(terminator_anchor)}")
-verify_text = verify_text.replace(terminator_anchor, terminator_insert, 1)
-verify_path.write_text(verify_text)
