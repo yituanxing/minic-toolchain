@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from pathlib import Path
 
+# M131 census trigger: keep semantic source untouched; this file only stages diagnostics.
 path = Path('src/core/core_lower.c')
 text = path.read_text()
 marker = 'M131_STATIC_LOCAL_SUBSCRIPT_TRACE'
