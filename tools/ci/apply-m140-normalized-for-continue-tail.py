@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from pathlib import Path
 
+# M140_PRODUCTIZER_TRIGGER_V1: synchronize after registering the productizer.
 core_path = Path('src/core/core_lower.c')
 core = core_path.read_text()
 marker = 'M140_NORMALIZED_FOR_CONTINUE_TAIL_OWNER'
