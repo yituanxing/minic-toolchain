@@ -83,6 +83,30 @@ static bool core_memory_scalar_type(MinicType type) {
     return minic_type_is_integer(type) || minic_type_is_pointer(type);
 }
 
+
+/* M152_UNSIGNED_ENUM_BIT_FIELD_OWNER: enum bit-fields keep their semantic enum
+   type in AST/Core values, while C gives every complete enum a compatible
+   integer type.  The existing bit-field RMW is intentionally restricted to
+   unsigned storage semantics; admit an enum only when its frontend-owned
+   compatible integer type is unsigned.  This preserves the signed-bit-field
+   fail-closed boundary and avoids inventing enum-specific Core opcodes. */
+static bool core_unsigned_bit_field_semantic_type(const MinicCoreLowerContext *context,
+                                                  MinicType type) {
+    MinicType effective_type;
+
+    if (!minic_type_is_integer(type)) {
+        return false;
+    }
+    if (minic_type_is_unsigned_integer(type)) {
+        return true;
+    }
+    return minic_type_is_enum(type) && context != NULL && context->body != NULL &&
+           context->body->program != NULL &&
+           minic_c0_type_effective_integer_type(
+               context->body->program, type, &effective_type) &&
+           minic_type_is_unsigned_integer(effective_type);
+}
+
 /* A bit-field's C value width is not necessarily the width of the memory
    allocation unit containing it. _Bool is the important case: its semantic
    integer width is one bit, while DataLayout allocates one byte. Keep the
@@ -4867,7 +4891,7 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                 bit_field->bit_width == 0U || minic_type_is_const(bit_target->type) ||
                 !minic_type_unqualified(bit_target->type, &bit_value_type) ||
                 !minic_type_is_integer(bit_value_type) ||
-                !minic_type_is_unsigned_integer(bit_value_type) ||
+                !core_unsigned_bit_field_semantic_type(context, bit_value_type) ||
                 !minic_type_is_integer(bit_source->type) || context->target == NULL ||
                 !minic_type_unqualified(expression->type, &bit_expression_value_type) ||
                 !minic_type_equal(bit_expression_value_type, bit_value_type) ||
@@ -5537,7 +5561,7 @@ static MinicCoreLowerStatus lower_assignment_pair(MinicCoreLowerContext *context
             if (base == NULL || record == NULL || field->bit_width == 0U ||
                 !minic_type_unqualified(target->type, &value_type) ||
                 !minic_type_is_integer(value_type) ||
-                !minic_type_is_unsigned_integer(value_type) ||
+                !core_unsigned_bit_field_semantic_type(context, value_type) ||
                 minic_type_is_const(target->type) ||
                 !core_bit_field_storage_type(
                     context, value_type, &storage_type, &storage_width) ||
