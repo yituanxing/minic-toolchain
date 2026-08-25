@@ -2,6 +2,7 @@
 from pathlib import Path
 import re
 
+# M138_TRIGGER_V1: synchronize after workflow registration.
 path = Path('src/core/core_lower.c')
 text = path.read_text()
 marker = 'M138_ERROR_OWNER_TRACE'
@@ -23,7 +24,6 @@ call_pattern = re.compile(
 match = call_pattern.search(text)
 if match is None:
     raise SystemExit('M138 direct-call diagnostic seam changed')
-old = match.group(0)
 body = match.group('body')
 new = '''        if (status != MINIC_CORE_LOWER_OK) {
             /* M138_ERROR_OWNER_TRACE: expose the failing call-argument AST leaf. */
@@ -75,8 +75,6 @@ def replace_return(match):
     site += 1
     indent = match.group('indent')
     status = match.group('status')
-    # Print the original source line containing this return during script apply;
-    # workflow logs then provide the static site -> source mapping.
     line_start = region.rfind('\n', 0, match.start()) + 1
     line_end = region.find('\n', match.end())
     if line_end < 0:
