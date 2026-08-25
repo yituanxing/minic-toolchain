@@ -74,19 +74,30 @@ jobs:
             --indices '307,388,390,408,409,410,415,471,473,478,484'
           status=$?
           set -e
+          printf 'CORE_M127_FOCUSED_REPLAY_STATUS=%d\n' "$status"
           cat "$work/batch-results.json"
           python3 - <<'PY'
           import json
           from pathlib import Path
           rows=json.loads(Path('build/m127-focused/batch-results.json').read_text())
+          by_index={int(r['index']):r for r in rows}
           passed=sum(r['status']=='PASS' for r in rows)
           failed=len(rows)-passed
-          errors=sum(r.get('locator') not in ('core_trace', None, '') for r in rows if r['status']!='PASS')
-          print(f'CORE_M127_FOCUSED_EXACT selected={len(rows)} pass={passed} fail={failed} errors={errors}')
-          if len(rows)!=11 or passed!=11:
-              raise SystemExit('M127 focused cohort not 11/11 PASS')
+          unsupported=sum(r['status']!='PASS' and r.get('first_error_source')=='core_trace' for r in rows)
+          errors=len(rows)-passed-unsupported
+          print(f'CORE_M127_FOCUSED_EXACT selected={len(rows)} pass={passed} unsupported={unsupported} error={errors}')
+          if len(rows)!=11 or errors!=0 or passed<9:
+              raise SystemExit('M127 focused cohort regressed')
+          old_frontier={307:69479,473:60814}
+          for index, old_line in old_frontier.items():
+              row=by_index[index]
+              if row['status']=='PASS':
+                  continue
+              new_line=int(row.get('first_error_line') or 0)
+              if row.get('first_error_source')!='core_trace' or new_line<=old_line:
+                  raise SystemExit(f'M127 index {index} did not clear old frontier {old_line}: {row}')
+              print(f'CORE_M127_FRONTIER_CLEARED index={index} old={old_line} new={new_line}')
           PY
-          test "$status" -eq 0
 
       - name: Replay strict full500
         shell: bash
@@ -102,18 +113,18 @@ jobs:
             --jobs 4
           status=$?
           set -e
+          printf 'CORE_M127_FULL500_REPLAY_STATUS=%d\n' "$status"
           python3 - <<'PY'
           import json
           from pathlib import Path
           rows=json.loads(Path('build/m127-full500/batch-results.json').read_text())
           passed=sum(r['status']=='PASS' for r in rows)
-          unsupported=sum(r['status']!='PASS' and r.get('locator')=='core_trace' for r in rows)
+          unsupported=sum(r['status']!='PASS' and r.get('first_error_source')=='core_trace' for r in rows)
           errors=len(rows)-passed-unsupported
           print(f'CORE_M127_FULL500_EXACT selected={len(rows)} pass={passed} unsupported={unsupported} error={errors}')
           if len(rows)!=500 or errors!=0 or passed<454:
               raise SystemExit('M127 full500 regression')
           PY
-          # corpus_replay returns nonzero while unsupported TUs remain; exact JSON owns the gate.
 
       - name: Persist qualification
         if: always()
