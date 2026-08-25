@@ -1,0 +1,196 @@
+name: Core M131 Zero Size Pointer Stride Productizer
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  productize:
+    if: github.head_ref == 'refactor/declaration-sema-v1'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/declaration-sema-v1
+          fetch-depth: 0
+
+      - name: Detect already-productized M131
+        id: state
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if grep -Fq 'M131_ZERO_SIZE_POINTER_STRIDE' src/frontend/expression_semantics.c; then
+            echo 'needs_patch=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'needs_patch=true' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Restore frozen Linux corpus
+        if: steps.state.outputs.needs_patch == 'true'
+        id: corpus
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-focus-corpus
+          key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+
+      - name: Require frozen corpus
+        if: steps.state.outputs.needs_patch == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.corpus.outputs.cache-hit }}" = true
+          test -s build/linux-focus-corpus/selected-tus.txt
+
+      - name: Apply M131 zero-size stride owner
+        if: steps.state.outputs.needs_patch == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tools/ci/apply-m131-zero-size-pointer-stride.py
+          git diff --check
+          grep -Fq 'M131_ZERO_SIZE_POINTER_STRIDE' src/frontend/expression_semantics.c
+          test -s tests/compiler/c0/m131_zero_size_record_subscript.c
+
+      - name: Build exact patched compiler
+        if: steps.state.outputs.needs_patch == 'true'
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m131-product-compiler
+
+      - name: Run fast regression gate
+        if: steps.state.outputs.needs_patch == 'true'
+        run: make -j4 check-fast MODE=release CFLAGS=-Werror BUILD_DIR=build/m131-product-check
+
+      - name: Run isolated M131 strict regression
+        if: steps.state.outputs.needs_patch == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/m131-product-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/m131-product-regression"
+          mkdir -p "$work"
+          cc -E -P -std=gnu11 -x c tests/compiler/c0/m131_zero_size_record_subscript.c -o "$work/zero-size.i"
+          MINIC_CORE_IR=strict "$compiler" -S "$work/zero-size.i" -o "$work/zero-size.s"
+          grep -F 'call next_index' "$work/zero-size.s" >/dev/null
+          printf '%s\n' 'CORE_M131_STRICT_REGRESSION zero-size-record-stride=PASS side-effecting-index=PASS'
+
+      - name: Replay M131 focused frontier
+        if: steps.state.outputs.needs_patch == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/m131-product-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/m131-product-focused"
+          set +e
+          MINIC_CORE_IR=strict CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
+            --minic "$compiler" \
+            --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
+            --work "$work" \
+            --jobs 2 \
+            --indices '137'
+          replay_status=$?
+          set -e
+          printf 'CORE_M131_PRODUCT_FOCUSED_REPLAY_STATUS=%d\n' "$replay_status"
+          python3 tools/ci/classify-core-strict-frontier.py \
+            "$work/batch-results.json" \
+            --stderr-root "$work/minic-stderr" \
+            --ast-header "$GITHUB_WORKSPACE/src/frontend/ast.h" \
+            --examples 8 \
+            --json-out "$work/frontier-summary.json" \
+            --reason-text-out "$work/reason-summary.txt" \
+            --require-no-errors
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          work=Path('build/m131-product-focused')
+          rows=json.loads((work/'batch-results.json').read_text())
+          summary=json.loads((work/'frontier-summary.json').read_text())
+          if summary['selected'] != 1 or summary['error'] != 0 or summary['preprocess_missing'] != 0:
+              raise SystemExit(f'M131 focused ERROR/missing: {summary}')
+          row=rows[0]
+          print(f"CORE_M131_INDEX_137 status={row['status']} line={row.get('first_error_line')} message={row.get('message')}")
+          if row['status'] != 'PASS':
+              old_line=70934
+              new_line=int(row.get('first_error_line') or 0)
+              if new_line <= old_line or 'rcu_init_one' not in (row.get('message') or ''):
+                  raise SystemExit(f'M131 did not clear/advance zero-size stride frontier: {row}')
+          print((work/'reason-summary.txt').read_text())
+          PY
+
+      - name: Replay strict full500
+        if: steps.state.outputs.needs_patch == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler="$GITHUB_WORKSPACE/build/m131-product-compiler/bin/minic"
+          work="$GITHUB_WORKSPACE/build/m131-product-full500"
+          set +e
+          MINIC_CORE_IR=strict CORE_FAST_TRACE=1 python3 tests/external/linux/corpus_replay.py \
+            --minic "$compiler" \
+            --corpus "$GITHUB_WORKSPACE/build/linux-focus-corpus" \
+            --work "$work" \
+            --jobs 4 \
+            --offset 0 \
+            --limit 500 \
+            --sample-count 0
+          replay_status=$?
+          set -e
+          printf 'CORE_M131_PRODUCT_FULL500_REPLAY_STATUS=%d\n' "$replay_status"
+          python3 tools/ci/classify-core-strict-frontier.py \
+            "$work/batch-results.json" \
+            --stderr-root "$work/minic-stderr" \
+            --ast-header "$GITHUB_WORKSPACE/src/frontend/ast.h" \
+            --examples 30 \
+            --json-out "$work/frontier-summary.json" \
+            --reason-text-out "$work/reason-summary.txt" \
+            --require-no-errors
+          python3 tools/ci/summarize-core-frontier-progress.py \
+            "$work/batch-results.json" \
+            --expect-selected 500 \
+            --json-out "$work/progress-summary.json" \
+            --text-out "$work/progress-summary.txt"
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          work=Path('build/m131-product-full500')
+          summary=json.loads((work/'frontier-summary.json').read_text())
+          if summary['selected'] != 500 or summary['error'] != 0 or summary['preprocess_missing'] != 0:
+              raise SystemExit(f'M131 full500 ERROR/missing: {summary}')
+          if summary['pass'] <= 478:
+              raise SystemExit(f"M131 produced no strict500 gain: pass={summary['pass']} baseline=478")
+          print(f"CORE_M131_PRODUCT_FULL500 selected=500 pass={summary['pass']} unsupported={summary['unsupported']} error=0")
+          print((work/'progress-summary.txt').read_text())
+          print((work/'reason-summary.txt').read_text())
+          PY
+
+      - name: Commit M131 semantic batch
+        if: steps.state.outputs.needs_patch == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/frontend/expression_semantics.c tests/compiler/c0/m131_zero_size_record_subscript.c
+          git diff --cached --quiet && { echo 'no M131 semantic changes'; exit 1; }
+          git commit -m 'frontend: allow zero-size pointer arithmetic stride'
+          git push origin HEAD:refactor/declaration-sema-v1
+
+      - name: Persist M131 results
+        if: always() && steps.state.outputs.needs_patch == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-m131-zero-size-stride-${{ github.sha }}
+          path: |
+            build/m131-product-regression/**
+            build/m131-product-focused/batch-results.json
+            build/m131-product-focused/frontier-summary.json
+            build/m131-product-focused/reason-summary.txt
+            build/m131-product-focused/minic-stderr/**
+            build/m131-product-full500/batch-results.json
+            build/m131-product-full500/frontier-summary.json
+            build/m131-product-full500/reason-summary.txt
+            build/m131-product-full500/progress-summary.json
+            build/m131-product-full500/progress-summary.txt
+            build/m131-product-full500/minic-stderr/**
+          if-no-files-found: warn
