@@ -1183,7 +1183,10 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
 
             binding = &instruction->value.structured_inline_asm.operands[operand_index];
             if (binding->operand_index > 9U || used_indices[binding->operand_index] ||
-                binding->value >= function->value_count || !available_values[binding->value]) {
+                binding->value >= function->value_count || !available_values[binding->value] ||
+                (binding->early_clobber &&
+                 binding->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT &&
+                 binding->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE)) {
                 return false;
             }
             used_indices[binding->operand_index] = true;

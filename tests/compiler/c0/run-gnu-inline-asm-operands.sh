@@ -44,6 +44,42 @@ MINIC_CORE_IR=strict "$minic" -S "$work/core-memory-input.i" \
 grep -F '.type core_memory_input_linux_shape, @function' "$work/core-memory-input.s" >/dev/null
 grep -F 'lw t1, (t2)' "$work/core-memory-input.s" >/dev/null
 
+cat >"$work/core-generic-structured.c" <<'EOF'
+static long output_three_inputs(long a, long b, long c) {
+    long out;
+    __asm__ __volatile__("add %0, %1, %2\n\txor %0, %0, %3"
+                         : "=&r"(out) : "r"(a), "r"(b), "r"(c) : "memory");
+    return out;
+}
+
+static void three_inputs_a0_clobber(long a, long b, long c) {
+    __asm__ __volatile__("add t0, %0, %1\n\txor t0, t0, %2"
+                         : : "r"(a), "r"(b), "r"(c) : "a0");
+}
+
+static long five_early_outputs(long seed) {
+    long a = seed, b = seed, c = seed, d = seed, e = seed;
+    __asm__ __volatile__("add %0, %2, %3\n\tadd %1, %4, zero"
+                         : "=&r"(a), "=&r"(b), "+&r"(c), "+&r"(d), "+&r"(e)
+                         : : "memory");
+    return a + b + c + d + e;
+}
+
+static long mixed_atomic(long *p, long a, long b, long c, long d) {
+    __asm__ __volatile__("amoadd.d %1, %3, %0\n\tadd %2, %2, %4"
+                         : "+A"(*p), "+r"(a), "+r"(b) : "r"(c), "r"(d) : "memory");
+    return a + b;
+}
+EOF
+"$host_cc" -E -P -std=gnu11 -x c "$work/core-generic-structured.c" \
+    -o "$work/core-generic-structured.i"
+MINIC_CORE_IR=strict "$minic" -S "$work/core-generic-structured.i" \
+    -o "$work/core-generic-structured.s"
+grep -F 'add t0, t3, t4' "$work/core-generic-structured.s" >/dev/null
+grep -F 'xor t0, t0, t5' "$work/core-generic-structured.s" >/dev/null
+grep -F 'add t0, t3, t4' "$work/core-generic-structured.s" >/dev/null
+grep -F 'amoadd.d t0, t3, (t2)' "$work/core-generic-structured.s" >/dev/null
+
 grep -F 'addi t3, zero, 7' "$assembly" >/dev/null
 grep -F 'add t0, t0, t3' "$assembly" >/dev/null
 grep -F 'add t0, t1, t4' "$assembly" >/dev/null

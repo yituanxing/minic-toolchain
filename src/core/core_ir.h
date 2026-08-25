@@ -223,6 +223,9 @@ typedef struct MinicCoreStructuredInlineAsmOperand {
        the selected backend resolves the binding when materializing asm operands. */
     size_t fixed_register_binding_id;
     bool has_fixed_register_binding;
+    /* M126A_GENERIC_STRUCTURED_ASM: preserve GCC `&` early-clobber semantics
+       as target-neutral scheduling/allocation metadata. */
+    bool early_clobber;
 } MinicCoreStructuredInlineAsmOperand;
 
 typedef struct MinicCoreInstruction {
