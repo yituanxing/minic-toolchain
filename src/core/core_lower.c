@@ -5561,7 +5561,8 @@ static MinicCoreLowerStatus lower_assignment_pair(MinicCoreLowerContext *context
             if (base == NULL || record == NULL || field->bit_width == 0U ||
                 !minic_type_unqualified(target->type, &value_type) ||
                 !minic_type_is_integer(value_type) ||
-                !core_unsigned_bit_field_semantic_type(context, value_type) ||
+                (!core_unsigned_bit_field_semantic_type(context, value_type) &&
+                 !minic_type_is_signed_integer(value_type)) ||
                 minic_type_is_const(target->type) ||
                 !core_bit_field_storage_type(
                     context, value_type, &storage_type, &storage_width) ||
@@ -5676,6 +5677,50 @@ static MinicCoreLowerStatus lower_assignment_pair(MinicCoreLowerContext *context
                     context, span, value_type, field_storage, &assigned_value);
                 if (bit_status != MINIC_CORE_LOWER_OK) {
                     return bit_status;
+                }
+            }
+            /* M153_SIGNED_BIT_FIELD_WRITE_OWNER: storage is merged through an
+               unsigned allocation unit.  For a signed field, reconstruct the
+               assignment-expression value from the truncated field bits using
+               the same shift-left/arithmetic-shift-right sign extension as the
+               established M103 read path.  The stored bits themselves remain
+               the masked two's-complement representation. */
+            if (minic_type_is_signed_integer(value_type) &&
+                field->bit_width < storage_width) {
+                MinicCoreValueId shift;
+                uint64_t shift_bits = (uint64_t)(storage_width - field->bit_width);
+
+                (void)memset(&operation, 0, sizeof(operation));
+                operation.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+                operation.span = span;
+                operation.type = minic_type_unsigned_int();
+                operation.result = MINIC_CORE_VALUE_INVALID;
+                (void)memcpy(&operation.value.integer_value, &shift_bits, sizeof(shift_bits));
+                if (!minic_core_function_append_value_instruction(
+                        context->function, context->block_id, &operation, &shift)) {
+                    return MINIC_CORE_LOWER_ERROR;
+                }
+                (void)memset(&operation, 0, sizeof(operation));
+                operation.kind = MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT;
+                operation.span = span;
+                operation.type = value_type;
+                operation.result = MINIC_CORE_VALUE_INVALID;
+                operation.value.binary.left = assigned_value;
+                operation.value.binary.right = shift;
+                if (!minic_core_function_append_value_instruction(
+                        context->function, context->block_id, &operation, &assigned_value)) {
+                    return MINIC_CORE_LOWER_ERROR;
+                }
+                (void)memset(&operation, 0, sizeof(operation));
+                operation.kind = MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT;
+                operation.span = span;
+                operation.type = value_type;
+                operation.result = MINIC_CORE_VALUE_INVALID;
+                operation.value.binary.left = assigned_value;
+                operation.value.binary.right = shift;
+                if (!minic_core_function_append_value_instruction(
+                        context->function, context->block_id, &operation, &assigned_value)) {
+                    return MINIC_CORE_LOWER_ERROR;
                 }
             }
             if (bit_offset != 0U) {
