@@ -1,98 +1,105 @@
 #!/usr/bin/env python3
 from pathlib import Path
 
-marker = "M152_UNSIGNED_ENUM_BIT_FIELD_OWNER"
+marker = "M153_SIGNED_BIT_FIELD_WRITE_OWNER"
 path = Path("src/core/core_lower.c")
 text = path.read_text()
 
 if marker in text:
-    print("M152 unsigned enum bit-field owner already staged")
+    print("M153 signed bit-field write owner already staged")
     raise SystemExit(0)
-if "M151_INDIRECT_CALL_BATCH_OWNER" not in text:
-    raise SystemExit("M152 requires the productized M151 Core baseline")
-if "M152_NESTED_RECORD_MEMBER_ADDRESS_OWNER" in text:
-    raise SystemExit("obsolete M152 nested-member candidate is unexpectedly productized")
+if "M152_UNSIGNED_ENUM_BIT_FIELD_OWNER" not in text:
+    raise SystemExit("M153 requires productized M152")
 
-anchor = """static bool core_memory_scalar_type(MinicType type) {\n    return minic_type_is_integer(type) || minic_type_is_pointer(type);\n}\n"""
-helper = anchor + r'''
+function_start = text.find("static MinicCoreLowerStatus lower_assignment_pair(")
+function_end = text.find("\nstatic MinicCoreLowerStatus lower_assignment(", function_start)
+if function_start < 0 or function_end < 0:
+    raise SystemExit("M153 could not locate lower_assignment_pair")
+body = text[function_start:function_end]
 
-/* M152_UNSIGNED_ENUM_BIT_FIELD_OWNER: enum bit-fields keep their semantic enum
-   type in AST/Core values, while C gives every complete enum a compatible
-   integer type.  The existing bit-field RMW is intentionally restricted to
-   unsigned storage semantics; admit an enum only when its frontend-owned
-   compatible integer type is unsigned.  This preserves the signed-bit-field
-   fail-closed boundary and avoids inventing enum-specific Core opcodes. */
-static bool core_unsigned_bit_field_semantic_type(const MinicCoreLowerContext *context,
-                                                  MinicType type) {
-    MinicType effective_type;
+gate_old = """                !minic_type_is_integer(value_type) ||\n                !core_unsigned_bit_field_semantic_type(context, value_type) ||\n                minic_type_is_const(target->type) ||\n"""
+gate_new = """                !minic_type_is_integer(value_type) ||\n                (!core_unsigned_bit_field_semantic_type(context, value_type) &&\n                 !minic_type_is_signed_integer(value_type)) ||\n                minic_type_is_const(target->type) ||\n"""
+if body.count(gate_old) != 1:
+    raise SystemExit("M153 could not locate simple bit-field gate")
+body = body.replace(gate_old, gate_new, 1)
 
-    if (!minic_type_is_integer(type)) {
-        return false;
-    }
-    if (minic_type_is_unsigned_integer(type)) {
-        return true;
-    }
-    return minic_type_is_enum(type) && context != NULL && context->body != NULL &&
-           context->body->program != NULL &&
-           minic_c0_type_effective_integer_type(
-               context->body->program, type, &effective_type) &&
-           minic_type_is_unsigned_integer(effective_type);
-}
+assigned_old = """            if (minic_type_equal(storage_type, value_type)) {\n                assigned_value = field_storage;\n            } else {\n                bit_status = append_integer_conversion(\n                    context, span, value_type, field_storage, &assigned_value);\n                if (bit_status != MINIC_CORE_LOWER_OK) {\n                    return bit_status;\n                }\n            }\n"""
+assigned_new = r'''            if (minic_type_equal(storage_type, value_type)) {
+                assigned_value = field_storage;
+            } else {
+                bit_status = append_integer_conversion(
+                    context, span, value_type, field_storage, &assigned_value);
+                if (bit_status != MINIC_CORE_LOWER_OK) {
+                    return bit_status;
+                }
+            }
+            /* M153_SIGNED_BIT_FIELD_WRITE_OWNER: storage is merged through an
+               unsigned allocation unit.  For a signed field, reconstruct the
+               assignment-expression value from the truncated field bits using
+               the same shift-left/arithmetic-shift-right sign extension as the
+               established M103 read path.  The stored bits themselves remain
+               the masked two's-complement representation. */
+            if (minic_type_is_signed_integer(value_type) &&
+                field->bit_width < storage_width) {
+                MinicCoreValueId shift;
+                uint64_t shift_bits = (uint64_t)(storage_width - field->bit_width);
+
+                (void)memset(&operation, 0, sizeof(operation));
+                operation.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+                operation.span = span;
+                operation.type = minic_type_unsigned_int();
+                operation.result = MINIC_CORE_VALUE_INVALID;
+                (void)memcpy(&operation.value.integer_value, &shift_bits, sizeof(shift_bits));
+                if (!minic_core_function_append_value_instruction(
+                        context->function, context->block_id, &operation, &shift)) {
+                    return MINIC_CORE_LOWER_ERROR;
+                }
+                (void)memset(&operation, 0, sizeof(operation));
+                operation.kind = MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT;
+                operation.span = span;
+                operation.type = value_type;
+                operation.result = MINIC_CORE_VALUE_INVALID;
+                operation.value.binary.left = assigned_value;
+                operation.value.binary.right = shift;
+                if (!minic_core_function_append_value_instruction(
+                        context->function, context->block_id, &operation, &assigned_value)) {
+                    return MINIC_CORE_LOWER_ERROR;
+                }
+                (void)memset(&operation, 0, sizeof(operation));
+                operation.kind = MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT;
+                operation.span = span;
+                operation.type = value_type;
+                operation.result = MINIC_CORE_VALUE_INVALID;
+                operation.value.binary.left = assigned_value;
+                operation.value.binary.right = shift;
+                if (!minic_core_function_append_value_instruction(
+                        context->function, context->block_id, &operation, &assigned_value)) {
+                    return MINIC_CORE_LOWER_ERROR;
+                }
+            }
 '''
-if text.count(anchor) != 1:
-    raise SystemExit("M152 could not locate core_memory_scalar_type anchor")
-text = text.replace(anchor, helper, 1)
-
-simple_old = """                !minic_type_is_integer(value_type) ||\n                !minic_type_is_unsigned_integer(value_type) ||\n                minic_type_is_const(target->type) ||\n"""
-simple_new = """                !minic_type_is_integer(value_type) ||\n                !core_unsigned_bit_field_semantic_type(context, value_type) ||\n                minic_type_is_const(target->type) ||\n"""
-if text.count(simple_old) != 1:
-    raise SystemExit("M152 could not locate simple bit-field unsigned gate")
-text = text.replace(simple_old, simple_new, 1)
-
-compound_old = """                !minic_type_is_integer(bit_value_type) ||\n                !minic_type_is_unsigned_integer(bit_value_type) ||\n                !minic_type_is_integer(bit_source->type) || context->target == NULL ||\n"""
-compound_new = """                !minic_type_is_integer(bit_value_type) ||\n                !core_unsigned_bit_field_semantic_type(context, bit_value_type) ||\n                !minic_type_is_integer(bit_source->type) || context->target == NULL ||\n"""
-if text.count(compound_old) != 1:
-    raise SystemExit("M152 could not locate compound bit-field unsigned gate")
-text = text.replace(compound_old, compound_new, 1)
+if body.count(assigned_old) != 1:
+    raise SystemExit("M153 could not locate assignment-result conversion")
+body = body.replace(assigned_old, assigned_new, 1)
+text = text[:function_start] + body + text[function_end:]
 path.write_text(text)
 
-regression = Path("tests/compiler/c0/m152_enum_bit_field_write.c")
-regression.write_text(r'''enum iter_state {
-    ITER_INVALID,
-    ITER_ACTIVE,
-    ITER_DRAINED,
+regression = Path("tests/compiler/c0/m153_signed_bit_field_write.c")
+regression.write_text(r'''struct signed_bits {
+    unsigned int tag : 2;
+    int depth : 30;
 };
 
-struct outer_state {
-    int prefix;
-    struct {
-        void *btf;
-        unsigned int btf_id;
-        enum iter_state state : 2;
-        int depth : 30;
-    } iter;
-};
-
-enum value_type {
-    VALUE_UNDEFINED,
-    VALUE_FLAG,
-    VALUE_STRING,
-};
-
-struct parameter {
-    const char *key;
-    enum value_type type : 8;
-    char *string;
-};
-
-void set_iter_state(struct outer_state *st) {
-    st->iter.state = ITER_ACTIVE;
+void clear_depth(struct signed_bits *p) {
+    p->depth = 0;
 }
 
-int set_parameter_type(void) {
-    struct parameter param;
-    param.type = VALUE_FLAG;
-    return 0;
+void set_negative_depth(struct signed_bits *p) {
+    p->depth = -1;
+}
+
+int assigned_signed_depth(struct signed_bits *p) {
+    return (p->depth = -3);
 }
 ''')
-print("staged M152 unsigned enum bit-field owner")
+print("staged M153 signed bit-field write owner")
