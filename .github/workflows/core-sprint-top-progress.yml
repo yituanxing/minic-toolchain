@@ -6,6 +6,9 @@ on:
       - '.github/workflows/**'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   strict500:
     if: github.event_name == 'workflow_dispatch' || github.head_ref == 'refactor/declaration-sema-v1'
@@ -29,6 +32,19 @@ jobs:
           set -Eeuo pipefail
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
+
+      - name: Stage M120 single-iteration do-while-zero CFG
+        id: m120
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if grep -Fq 'M120_DO_WHILE_ZERO_SINGLE_ITERATION_CFG' src/core/core_lower.c; then
+            echo 'staged=false' >> "$GITHUB_OUTPUT"
+          else
+            python3 tools/ci/apply-m120-single-iteration-do-while-zero.py
+            git diff --check
+            echo 'staged=true' >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Validate census tooling
         run: python3 -m py_compile tools/ci/classify-core-strict-frontier.py
@@ -93,6 +109,53 @@ jobs:
           if frontier['error'] != 0:
               print(f"CORE_STRICT500_ERRORS {frontier.get('errors', [])}")
           PY
+
+      - name: Validate staged M120 globally
+        if: steps.m120.outputs.staged == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          work = Path('build/strict500')
+          rows = json.loads((work / 'batch-results.json').read_text())
+          frontier = json.loads((work / 'frontier-summary.json').read_text())
+          by_index = {int(row['index']): row for row in rows}
+          required_pass = {113,120,135,185,192,240,261,290,348,357,372,374,416,465,470,494}
+          bad = {idx: by_index.get(idx) for idx in required_pass
+                 if by_index.get(idx, {}).get('status') != 'PASS'}
+          stale_break = [family for family in frontier.get('feature_families', [])
+                         if family.get('family') == 'statement:MINIC_STATEMENT_BREAK']
+          if frontier['error'] != 0 or frontier['preprocess_missing'] != 0:
+              raise SystemExit(
+                  f"M120 global ERROR/missing: error={frontier['error']} "
+                  f"missing={frontier['preprocess_missing']}"
+              )
+          if frontier['pass'] < 373:
+              raise SystemExit(f"M120 global pass regression: {frontier['pass']} < 373")
+          if bad:
+              raise SystemExit(f"M120 required PASS regressions: {bad}")
+          if stale_break:
+              raise SystemExit(f"M120 stale BREAK frontier remains: {stale_break}")
+          print(
+              f"CORE_M120_GLOBAL_ACCEPT pass={frontier['pass']} "
+              f"unsupported={frontier['unsupported']} error=0"
+          )
+          PY
+
+      - name: Commit globally validated M120 semantic fix
+        if: steps.m120.outputs.staged == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/core/core_lower.c
+          git diff --cached --quiet && { echo 'no M120 semantic changes'; exit 1; }
+          git commit -m 'core: lower do-while-zero as single-iteration CFG'
+          git push origin HEAD:refactor/declaration-sema-v1
 
       - name: Persist strict500 result
         if: always()
