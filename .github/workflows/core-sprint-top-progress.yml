@@ -33,28 +33,15 @@ jobs:
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
 
-      - name: Stage M122 discarded comma sequencing
-        id: m122
+      - name: Stage M124 indirect function designator
+        id: m124
         shell: bash
         run: |
           set -Eeuo pipefail
-          if grep -Fq 'M122_DISCARDED_COMMA_EFFECT_SEQUENCE' src/core/core_lower.c; then
+          if grep -Fq 'M124_INDIRECT_FUNCTION_DESIGNATOR' src/core/core_lower.c; then
             echo 'staged=false' >> "$GITHUB_OUTPUT"
           else
-            python3 tools/ci/apply-m122-discarded-comma.py
-            git diff --check
-            echo 'staged=true' >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Stage M123 variadic builtin ownership
-        id: m123
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          if grep -Fq 'M123_VARIADIC_ARGUMENT_ADDRESS' src/core/core_ir.h; then
-            echo 'staged=false' >> "$GITHUB_OUTPUT"
-          else
-            python3 tools/ci/apply-m123-variadic-builtins.py
+            python3 tools/ci/apply-m124-indirect-function-designator.py
             git diff --check
             echo 'staged=true' >> "$GITHUB_OUTPUT"
           fi
@@ -126,8 +113,8 @@ jobs:
               print(f"CORE_STRICT500_ERRORS {frontier.get('errors', [])}")
           PY
 
-      - name: Validate staged M122 globally
-        if: steps.m122.outputs.staged == 'true'
+      - name: Validate staged M124 globally
+        if: steps.m124.outputs.staged == 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -137,85 +124,37 @@ jobs:
 
           work = Path('build/strict500')
           frontier = json.loads((work / 'frontier-summary.json').read_text())
-          binary_gate = sum(
+          stale_designator = sum(
               int(item.get('count', 0))
               for item in frontier.get('reason_fingerprints', [])
-              if 'route=scalar-type-gate expression_kind=MINIC_EXPRESSION_BINARY' in
+              if 'reason=callee-shape callee_kind=MINIC_EXPRESSION_DEREFERENCE' in
                  str(item.get('fingerprint', ''))
           )
           if frontier['error'] != 0 or frontier['preprocess_missing'] != 0:
               raise SystemExit(
-                  f"M122 global ERROR/missing: error={frontier['error']} "
+                  f"M124 global ERROR/missing: error={frontier['error']} "
                   f"missing={frontier['preprocess_missing']}"
               )
-          if frontier['pass'] < 374:
-              raise SystemExit(f"M122 global pass regression: {frontier['pass']} < 374")
-          if binary_gate >= 37:
-              raise SystemExit(f"M122 discarded-comma frontier did not improve: {binary_gate} >= 37")
+          if frontier['pass'] < 418:
+              raise SystemExit(f"M124 global pass regression: {frontier['pass']} < 418")
+          if stale_designator != 0:
+              raise SystemExit(f"M124 stale dereference-callee frontier remains: {stale_designator}")
           print(
-              f"CORE_M122_GLOBAL_ACCEPT pass={frontier['pass']} "
-              f"unsupported={frontier['unsupported']} error=0 binary_gate={binary_gate}"
+              f"CORE_M124_GLOBAL_ACCEPT pass={frontier['pass']} "
+              f"unsupported={frontier['unsupported']} error=0 deref_callee={stale_designator}"
           )
           PY
 
-      - name: Validate staged M123 globally
-        if: steps.m123.outputs.staged == 'true'
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-
-          work = Path('build/strict500')
-          frontier = json.loads((work / 'frontier-summary.json').read_text())
-          stale_va_start = sum(
-              int(item.get('count', 0))
-              for item in frontier.get('reason_fingerprints', [])
-              if 'MINIC_EXPRESSION_BUILTIN_VA_START' in str(item.get('fingerprint', ''))
-          )
-          if frontier['error'] != 0 or frontier['preprocess_missing'] != 0:
-              raise SystemExit(
-                  f"M123 global ERROR/missing: error={frontier['error']} "
-                  f"missing={frontier['preprocess_missing']}"
-              )
-          if frontier['pass'] < 407:
-              raise SystemExit(f"M123 global pass regression: {frontier['pass']} < 407")
-          if stale_va_start != 0:
-              raise SystemExit(f"M123 stale va_start frontier remains: {stale_va_start}")
-          print(
-              f"CORE_M123_GLOBAL_ACCEPT pass={frontier['pass']} "
-              f"unsupported={frontier['unsupported']} error=0 va_start={stale_va_start}"
-          )
-          PY
-
-      - name: Commit globally validated M122 semantic fix
-        if: steps.m122.outputs.staged == 'true'
+      - name: Commit globally validated M124 semantic fix
+        if: steps.m124.outputs.staged == 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add src/core/core_lower.c
-          git diff --cached --quiet && { echo 'no M122 semantic changes'; exit 1; }
-          git commit -m 'core: sequence discarded comma expressions'
-
-      - name: Commit globally validated M123 semantic fix
-        if: steps.m123.outputs.staged == 'true'
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add src/core/core_ir.h src/core/core_ir.c src/core/core_lower.c src/target/riscv64/core_codegen.c
-          git diff --cached --quiet && { echo 'no M123 semantic changes'; exit 1; }
-          git commit -m 'core: own variadic builtin cursor semantics'
-
-      - name: Push globally validated semantic fixes
-        if: steps.m122.outputs.staged == 'true' || steps.m123.outputs.staged == 'true'
-        shell: bash
-        run: |
-          set -Eeuo pipefail
+          git diff --cached --quiet && { echo 'no M124 semantic changes'; exit 1; }
+          git commit -m 'core: normalize indirect function designators'
           git push origin HEAD:refactor/declaration-sema-v1
 
       - name: Persist strict500 result
