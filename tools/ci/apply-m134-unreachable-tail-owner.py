@@ -17,18 +17,27 @@ helper = '''/* M134_UNREACHABLE_TAIL_OWNER: once a structured path has a Core
    not make strict lowering fail merely because their expression/control-flow
    owner is unsupported. A nested ordinary label is different: C labels have
    function scope and a goto may re-enter that otherwise unreachable subtree.
-   Keep such subtrees fail-closed until Core owns jump-into-nested-block CFG. */
-static bool core_block_contains_label(const MinicCoreLowerContext *context,
-                                      MinicBlockId block_id) {
+   Keep such subtrees fail-closed until Core owns jump-into-nested-block CFG.
+   Normalized loop blocks may form a graph, so label discovery must be
+   cycle-safe rather than recursively assuming an AST tree. */
+static bool core_block_contains_label_visit(const MinicCoreLowerContext *context,
+                                            MinicBlockId block_id,
+                                            bool *visited,
+                                            size_t visited_count) {
     const MinicBlock *block;
     size_t statement_index;
 
     if (block_id == MINIC_BLOCK_INVALID) {
         return false;
     }
-    if (context == NULL || context->body == NULL || context->body->program == NULL) {
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        visited == NULL || block_id >= visited_count) {
         return true;
     }
+    if (visited[block_id]) {
+        return false;
+    }
+    visited[block_id] = true;
     block = minic_c0_program_block(context->body->program, block_id);
     if (block == NULL) {
         return true;
@@ -42,8 +51,10 @@ static bool core_block_contains_label(const MinicCoreLowerContext *context,
             return true;
         }
         if (statement->kind == MINIC_STATEMENT_LABEL ||
-            core_block_contains_label(context, statement->then_block) ||
-            core_block_contains_label(context, statement->else_block)) {
+            core_block_contains_label_visit(
+                context, statement->then_block, visited, visited_count) ||
+            core_block_contains_label_visit(
+                context, statement->else_block, visited, visited_count)) {
             return true;
         }
     }
@@ -52,11 +63,32 @@ static bool core_block_contains_label(const MinicCoreLowerContext *context,
 
 static bool core_unreachable_statement_contains_label(
     const MinicCoreLowerContext *context, const MinicStatement *statement) {
-    if (statement == NULL) {
+    const MinicC0Program *program;
+    bool *visited;
+    bool contains_label;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        statement == NULL) {
         return true;
     }
-    return core_block_contains_label(context, statement->then_block) ||
-           core_block_contains_label(context, statement->else_block);
+    program = context->body->program;
+    if (program->block_count == 0U) {
+        return false;
+    }
+    if (program->block_count > SIZE_MAX / sizeof(*visited)) {
+        return true;
+    }
+    visited = (bool *)calloc(program->block_count, sizeof(*visited));
+    if (visited == NULL) {
+        return true;
+    }
+    contains_label =
+        core_block_contains_label_visit(
+            context, statement->then_block, visited, program->block_count) ||
+        core_block_contains_label_visit(
+            context, statement->else_block, visited, program->block_count);
+    free(visited);
+    return contains_label;
 }
 
 static MinicCoreLowerStatus
