@@ -186,6 +186,17 @@ static bool core_scalar_expression_value_type(const MinicFunctionBodyView *body,
         expression->kind == MINIC_EXPRESSION_CONVERSION) {
         return minic_type_unqualified(expression->type, value_type);
     }
+    /* M116_POINTER_ARITH_RVALUE_TYPE: pointer-valued +/- is a transported
+       scalar value just like a conditional/conversion result.  The semantic AST
+       may retain a top-level qualifier inherited from the source object, but
+       every Core consumer (calls, returns, nested arithmetic, stores) must see
+       the same unqualified rvalue type.  Keep pointee qualifiers intact. */
+    if (expression->kind == MINIC_EXPRESSION_BINARY &&
+        minic_type_is_pointer(expression->type) &&
+        (expression->value.binary.operator_kind == MINIC_BINARY_ADD ||
+         expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT)) {
+        return minic_type_unqualified(expression->type, value_type);
+    }
     if (expression->value_category == MINIC_VALUE_LVALUE) {
         return minic_type_unqualified(expression->type, value_type);
     }
@@ -4010,6 +4021,16 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                     return status;
                 }
             }
+            /* M117_BLOCK_LOCAL_POINTER_RELATIONAL: lowering the right operand
+               may create a new Core block. Spill the normalized left pointer so
+               the eventual POINTER_LESS never references an SSA value owned by
+               a predecessor block. */
+            MinicCoreObjectId left_object;
+            status = spill_scalar_value(
+                context, left_expression->span, common_type, left, &left_object);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
             status = lower_expression(context, expression->value.binary.right, &right);
             if (status != MINIC_CORE_LOWER_OK) {
                 return status;
@@ -4023,6 +4044,14 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                 if (status != MINIC_CORE_LOWER_OK) {
                     return status;
                 }
+            }
+            /* M117_BLOCK_LOCAL_POINTER_RELATIONAL: reload only after the right
+               operand is fully lowered and normalized, in the final comparison
+               block. */
+            status = reload_scalar_value(
+                context, left_expression->span, common_type, left_object, &left);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
             }
             swap = expression->value.binary.operator_kind == MINIC_BINARY_GREATER ||
                    expression->value.binary.operator_kind == MINIC_BINARY_LESS_EQUAL;
@@ -4305,6 +4334,7 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         MinicCoreValueId offset_value;
         MinicCoreLowerStatus status;
         MinicType expression_value_type;
+        MinicType pointer_source_type;
         MinicType pointer_value_type;
         MinicType index_value_type;
         size_t element_size;
@@ -4338,8 +4368,15 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
            lvalue-to-rvalue result is the unqualified scalar value transported
            by Core.  Use the shared value-type seam for both operands instead
            of comparing emitted values against raw expression storage types. */
+        /* M116_POINTER_ARITH_RVALUE_TYPE: pointer arithmetic consumes and
+           produces C scalar values.  A nested arithmetic expression may retain
+           a top-level qualifier in the semantic AST spelling, but that qualifier
+           belongs to the source object, not the transported rvalue.  Canonicalize
+           only the pointer operand's top-level qualifier here; pointee qualifiers
+           remain part of the pointer type. */
         if (!core_scalar_expression_value_type(
-                context->body, pointer_expression, &pointer_value_type) ||
+                context->body, pointer_expression, &pointer_source_type) ||
+            !minic_type_unqualified(pointer_source_type, &pointer_value_type) ||
             !core_scalar_expression_value_type(
                 context->body, index_expression, &index_value_type) ||
             !minic_type_is_pointer(pointer_value_type) ||
@@ -4389,22 +4426,19 @@ static MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         instruction.value.pointer_offset.base = pointer_value;
         instruction.value.pointer_offset.index = index_value;
         instruction.value.pointer_offset.element_size = element_size;
-        /* Pointer arithmetic computes in the lvalue-to-rvalue pointer type.
-           If the semantic expression retains a top-level pointer qualifier,
-           represent that result spelling with Core's pointer bitcast rather
-           than making POINTER_OFFSET violate its base/result type invariant. */
+        /* M116_POINTER_ARITH_RVALUE_TYPE: POINTER_OFFSET already has the
+           canonical lvalue-to-rvalue pointer type.  Do not re-attach a top-level
+           qualifier merely because the AST keeps that source spelling; nested
+           pointer arithmetic and return/assignment conversion consume the value
+           type, not the storage-qualified spelling. */
         instruction.value.pointer_offset.subtract =
             expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT;
         if (!minic_core_function_append_value_instruction(
                 context->function, context->block_id, &instruction, &offset_value)) {
             return MINIC_CORE_LOWER_ERROR;
         }
-        if (minic_type_equal(pointer_value_type, expression->type)) {
-            *value_id = offset_value;
-            return MINIC_CORE_LOWER_OK;
-        }
-        return append_scalar_bitcast(
-            context, expression->span, expression->type, offset_value, value_id);
+        *value_id = offset_value;
+        return MINIC_CORE_LOWER_OK;
     }
     if (expression->kind == MINIC_EXPRESSION_BINARY &&
         (expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT ||
