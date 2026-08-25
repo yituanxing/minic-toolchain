@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from pathlib import Path
 
+# M136_TRIGGER_V1: post-registration change so pull_request CI runs the census.
 path = Path('src/core/core_lower.c')
 text = path.read_text()
 marker = 'M136_SILENT_STATEMENT_CENSUS'
