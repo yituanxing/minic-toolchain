@@ -6104,6 +6104,25 @@ static MinicCoreLowerStatus lower_scalar_update(MinicCoreLowerContext *context,
     return MINIC_CORE_LOWER_OK;
 }
 
+static MinicCoreLowerStatus core_trace_expression_statement_status(
+    const MinicCoreLowerContext *context,
+    const MinicExpression *expression,
+    const char *route,
+    MinicCoreLowerStatus status) {
+    if (status == MINIC_CORE_LOWER_UNSUPPORTED && context != NULL &&
+        context->source_function != NULL && context->source_function->name != NULL &&
+        expression != NULL && route != NULL) {
+        (void)fprintf(stderr,
+                      "CORE_EXPR_STMT_DETAIL function=%s route=%s expression_kind=%d "
+                      "value_category=%d\n",
+                      context->source_function->name,
+                      route,
+                      (int)expression->kind,
+                      (int)expression->value_category);
+    }
+    return status;
+}
+
 static MinicCoreLowerStatus lower_expression_statement(MinicCoreLowerContext *context,
                                                        const MinicStatement *statement) {
     const MinicExpression *expression;
@@ -6184,8 +6203,10 @@ static MinicCoreLowerStatus lower_expression_statement(MinicCoreLowerContext *co
         }
         {
             MinicCoreValueId discarded_value;
+            MinicCoreLowerStatus status;
 
-            return lower_expression(context, statement->expression, &discarded_value);
+            status = lower_expression(context, statement->expression, &discarded_value);
+            return core_trace_expression_statement_status(context, expression, "call", status);
         }
     }
     /* M54_VOID_CONDITIONAL_STATEMENT: expression statements are only an
@@ -6205,13 +6226,18 @@ static MinicCoreLowerStatus lower_expression_statement(MinicCoreLowerContext *co
     }
     if (expression->kind == MINIC_EXPRESSION_COMPOUND_ASSIGNMENT) {
         MinicCoreValueId discarded_value;
+        MinicCoreLowerStatus status;
 
-        return lower_expression(context, statement->expression, &discarded_value);
+        status = lower_expression(context, statement->expression, &discarded_value);
+        return core_trace_expression_statement_status(
+            context, expression, "compound-assignment", status);
     }
     if (expression->kind == MINIC_EXPRESSION_DISCARD) {
         MinicCoreValueId discarded_value;
+        MinicCoreLowerStatus status;
 
-        return lower_expression(context, statement->expression, &discarded_value);
+        status = lower_expression(context, statement->expression, &discarded_value);
+        return core_trace_expression_statement_status(context, expression, "discard", status);
     }
     if (expression->kind == MINIC_EXPRESSION_UNARY &&
         (expression->value.unary.operator_kind == MINIC_UNARY_POST_INCREMENT ||
@@ -6220,7 +6246,11 @@ static MinicCoreLowerStatus lower_expression_statement(MinicCoreLowerContext *co
          expression->value.unary.operator_kind == MINIC_UNARY_PRE_DECREMENT)) {
         MinicCoreValueId discarded_value;
 
-        return lower_scalar_update(context, expression, &discarded_value);
+        return core_trace_expression_statement_status(
+            context,
+            expression,
+            "scalar-update",
+            lower_scalar_update(context, expression, &discarded_value));
     }
     if (expression->kind != MINIC_EXPRESSION_ASSIGNMENT) {
         MinicCoreValueId discarded_value;
@@ -6259,14 +6289,23 @@ static MinicCoreLowerStatus lower_expression_statement(MinicCoreLowerContext *co
                                     &discarded_value);
         }
         if (!core_scalar_expression_value_type(context->body, expression, &discarded_type)) {
-            return MINIC_CORE_LOWER_UNSUPPORTED;
+            return core_trace_expression_statement_status(
+                context, expression, "scalar-type-gate", MINIC_CORE_LOWER_UNSUPPORTED);
         }
         (void)discarded_type;
-        return lower_expression(context, statement->expression, &discarded_value);
+        return core_trace_expression_statement_status(
+            context,
+            expression,
+            "generic-scalar",
+            lower_expression(context, statement->expression, &discarded_value));
     }
     target_id = expression->value.binary.left;
     source_id = expression->value.binary.right;
-    return lower_assignment_pair(context, target_id, source_id, expression->span, NULL);
+    return core_trace_expression_statement_status(
+        context,
+        expression,
+        "assignment",
+        lower_assignment_pair(context, target_id, source_id, expression->span, NULL));
 }
 
 static bool core_is_materialized_cleanup_statement(
