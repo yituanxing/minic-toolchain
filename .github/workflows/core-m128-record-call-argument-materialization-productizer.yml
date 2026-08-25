@@ -51,7 +51,9 @@ jobs:
           python3 tools/ci/apply-m128-record-call-argument-materialization.py
           git diff --check
           grep -Fq 'M128_RECORD_CALL_ARGUMENT_MATERIALIZATION' src/core/core_lower.c
-          grep -Fq 'strict-core=1' tests/compiler/c0/run-record-conditional-materialization.sh
+          grep -Fq 'record_call_argument_materialization.c' tests/compiler/c0/run-record-conditional-materialization.sh
+          grep -Fq 'strict-call-argument=1' tests/compiler/c0/run-record-conditional-materialization.sh
+          test -s tests/compiler/c0/record_call_argument_materialization.c
 
       - name: Build exact patched compiler
         if: steps.state.outputs.needs_patch == 'true'
@@ -61,7 +63,7 @@ jobs:
         if: steps.state.outputs.needs_patch == 'true'
         run: make -j4 check-fast MODE=release CFLAGS=-Werror BUILD_DIR=build/m128-product-check
 
-      - name: Run strict aggregate composition regression
+      - name: Run strict aggregate call composition regression
         if: steps.state.outputs.needs_patch == 'true'
         shell: bash
         run: |
@@ -166,7 +168,8 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add src/core/core_lower.c \
-                  tests/compiler/c0/run-record-conditional-materialization.sh
+                  tests/compiler/c0/run-record-conditional-materialization.sh \
+                  tests/compiler/c0/record_call_argument_materialization.c
           git diff --cached --quiet && { echo 'no M128 semantic changes'; exit 1; }
           git commit -m 'core: materialize by-value record call arguments'
           git push origin HEAD:refactor/declaration-sema-v1
