@@ -35,8 +35,10 @@ jobs:
         run: |
           set -Eeuo pipefail
           python3 tools/ci/apply-m131-static-local-subscript-trace.py
+          python3 tools/ci/apply-m131-array-guard-trace.py
           git diff --check
           grep -Fq 'M131_STATIC_LOCAL_SUBSCRIPT_TRACE' src/core/core_lower.c
+          grep -Fq 'M131_ARRAY_GUARD_TRACE' src/core/core_lower.c
 
       - name: Build diagnostic compiler
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/m131-subscript-compiler
@@ -65,7 +67,7 @@ jobs:
             --json-out "$work/frontier-summary.json" \
             --reason-text-out "$work/reason-summary.txt" \
             --require-no-errors
-          grep -R 'CORE_M131_SUBSCRIPT_DETAIL' "$work/minic-stderr" || true
+          grep -R -E 'CORE_M131_(SUBSCRIPT_DETAIL|ADDRESS_DETAIL|ARRAY_GUARD)' "$work/minic-stderr" || true
           cat "$work/reason-summary.txt"
 
       - name: Persist M131 census
