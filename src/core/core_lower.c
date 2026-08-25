@@ -6767,72 +6767,6 @@ static bool core_cleanup_edge_is_empty(const MinicStatement *statement) {
            statement->cleanup_context == statement->cleanup_stop_context;
 }
 
-static bool normalized_do_while_zero_body(const MinicCoreLowerContext *context,
-                                          const MinicStatement *loop,
-                                          const MinicBlock *body,
-                                          MinicBlock *single_iteration_body) {
-    const MinicExpression *loop_condition;
-    const MinicExpression *negated_condition;
-    const MinicExpression *source_condition;
-    const MinicStatement *continue_label;
-    const MinicStatement *condition_check;
-    const MinicStatement *break_statement;
-    const MinicBlock *break_block;
-
-    if (context == NULL || context->body == NULL || context->body->program == NULL ||
-        loop == NULL || body == NULL || single_iteration_body == NULL ||
-        body->statement_count < 2U) {
-        return false;
-    }
-    loop_condition = minic_c0_program_expression(context->body->program, loop->expression);
-    continue_label = minic_c0_program_statement(context->body->program,
-                                                body->statements[body->statement_count - 2U]);
-    condition_check = minic_c0_program_statement(context->body->program,
-                                                 body->statements[body->statement_count - 1U]);
-    if (loop_condition == NULL || loop_condition->kind != MINIC_EXPRESSION_INTEGER ||
-        !minic_type_is_integer(loop_condition->type) || loop_condition->value.integer_value != 1 ||
-        continue_label == NULL || continue_label->kind != MINIC_STATEMENT_LABEL ||
-        continue_label->target_expression != MINIC_EXPRESSION_INVALID ||
-        continue_label->expression != MINIC_EXPRESSION_INVALID ||
-        continue_label->target_statement != MINIC_STATEMENT_INVALID ||
-        !source_position_equal(continue_label->span.begin, loop->span.begin) ||
-        condition_check == NULL || condition_check->kind != MINIC_STATEMENT_IF ||
-        condition_check->expression == MINIC_EXPRESSION_INVALID ||
-        condition_check->then_block == MINIC_BLOCK_INVALID ||
-        condition_check->else_block != MINIC_BLOCK_INVALID ||
-        !source_position_equal(condition_check->span.begin, loop->span.begin)) {
-        return false;
-    }
-    negated_condition =
-        minic_c0_program_expression(context->body->program, condition_check->expression);
-    if (negated_condition == NULL || negated_condition->kind != MINIC_EXPRESSION_UNARY ||
-        negated_condition->value.unary.operator_kind != MINIC_UNARY_LOGICAL_NOT) {
-        return false;
-    }
-    source_condition =
-        minic_c0_program_expression(context->body->program, negated_condition->value.unary.operand);
-    if (source_condition == NULL || source_condition->kind != MINIC_EXPRESSION_INTEGER ||
-        !minic_type_is_integer(source_condition->type) ||
-        source_condition->value.integer_value != 0) {
-        return false;
-    }
-    break_block = minic_c0_program_block(context->body->program, condition_check->then_block);
-    if (break_block == NULL || break_block->statement_count != 1U) {
-        return false;
-    }
-    break_statement =
-        minic_c0_program_statement(context->body->program, break_block->statements[0]);
-    if (break_statement == NULL || break_statement->kind != MINIC_STATEMENT_BREAK ||
-        !core_cleanup_edge_is_empty(break_statement) ||
-        !source_position_equal(break_statement->span.begin, loop->span.begin)) {
-        return false;
-    }
-
-    *single_iteration_body = *body;
-    single_iteration_body->statement_count -= 2U;
-    return true;
-}
-
 /* M78_OMITTED_FOR_CONDITION: parse_for represents a missing source
    condition as MINIC_EXPRESSION_INVALID and appends its synthetic continue
    label to the loop body. Recognize the no-update variant explicitly so Core
@@ -6944,20 +6878,12 @@ lower_while(MinicCoreLowerContext *context,
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
     }
-    {
-        MinicBlock single_iteration_body;
-
-        if (normalized_do_while_zero_body(
-                context, statement, body_source, &single_iteration_body)) {
-            status = lower_block(context, &single_iteration_body, &body_terminated);
-            if (status != MINIC_CORE_LOWER_OK) {
-                return status;
-            }
-            *terminated = body_terminated;
-            return MINIC_CORE_LOWER_OK;
-        }
-    }
-
+    /* M119_GENERAL_DO_WHILE_ZERO_CFG: do not flatten normalized do-while(0)
+       bodies ahead of the ordinary loop CFG. The old shortcut lowered the body
+       before creating the loop exit block and therefore left legitimate break
+       statements with MINIC_CORE_BLOCK_INVALID as their target. The standard
+       lower_while path already owns condition/body/exit blocks, break routing,
+       continue binding and normalized-for tails, so keep one control-flow owner. */
     iteration_source = body_source;
     for_update = NULL;
     normalized_for = false;
