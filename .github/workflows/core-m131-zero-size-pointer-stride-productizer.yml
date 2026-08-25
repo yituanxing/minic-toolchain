@@ -21,7 +21,9 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          if grep -Fq 'M131_ZERO_SIZE_POINTER_STRIDE' src/frontend/expression_semantics.c; then
+          if grep -Fq 'M131_ZERO_SIZE_POINTER_STRIDE' src/frontend/expression_semantics.c && \
+             grep -Fq 'M131_ZERO_STRIDE_POINTER_OFFSET' src/core/core_ir.c && \
+             grep -Fq 'M131_ZERO_STRIDE_POINTER_DIFFERENCE_FAIL_CLOSED' src/core/core_lower.c; then
             echo 'needs_patch=false' >> "$GITHUB_OUTPUT"
           else
             echo 'needs_patch=true' >> "$GITHUB_OUTPUT"
@@ -43,7 +45,7 @@ jobs:
           test "${{ steps.corpus.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
 
-      - name: Apply M131 zero-size stride owner
+      - name: Apply M131 shared zero-stride owner
         if: steps.state.outputs.needs_patch == 'true'
         shell: bash
         run: |
@@ -51,6 +53,8 @@ jobs:
           python3 tools/ci/apply-m131-zero-size-pointer-stride.py
           git diff --check
           grep -Fq 'M131_ZERO_SIZE_POINTER_STRIDE' src/frontend/expression_semantics.c
+          grep -Fq 'M131_ZERO_STRIDE_POINTER_OFFSET' src/core/core_ir.c
+          grep -Fq 'M131_ZERO_STRIDE_POINTER_DIFFERENCE_FAIL_CLOSED' src/core/core_lower.c
           test -s tests/compiler/c0/m131_zero_size_record_subscript.c
 
       - name: Build exact patched compiler
@@ -71,8 +75,8 @@ jobs:
           mkdir -p "$work"
           cc -E -P -std=gnu11 -x c tests/compiler/c0/m131_zero_size_record_subscript.c -o "$work/zero-size.i"
           MINIC_CORE_IR=strict "$compiler" -S "$work/zero-size.i" -o "$work/zero-size.s"
-          grep -F 'call next_index' "$work/zero-size.s" >/dev/null
-          printf '%s\n' 'CORE_M131_STRICT_REGRESSION zero-size-record-stride=PASS side-effecting-index=PASS'
+          grep -F 'zero_stride:' "$work/zero-size.s" >/dev/null
+          printf '%s\n' 'CORE_M131_STRICT_REGRESSION zero-stride-pointer-offset=PASS'
 
       - name: Replay M131 focused frontier
         if: steps.state.outputs.needs_patch == 'true'
@@ -110,11 +114,8 @@ jobs:
           row=rows[0]
           print(f"CORE_M131_INDEX_137 status={row['status']} line={row.get('first_error_line')} message={row.get('message')}")
           if row['status'] != 'PASS':
-              old_line=70934
-              new_line=int(row.get('first_error_line') or 0)
-              if new_line <= old_line or 'rcu_init_one' not in (row.get('message') or ''):
-                  raise SystemExit(f'M131 did not clear/advance zero-size stride frontier: {row}')
-          print((work/'reason-summary.txt').read_text())
+              raise SystemExit(f'M131 must convert #137 to PASS before full500: {row}')
+          print('CORE_M131_PRODUCT_FOCUSED selected=1 pass=1 unsupported=0 error=0')
           PY
 
       - name: Replay strict full500
@@ -171,9 +172,13 @@ jobs:
           git diff --check
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add src/frontend/expression_semantics.c tests/compiler/c0/m131_zero_size_record_subscript.c
+          git add \
+            src/frontend/expression_semantics.c \
+            src/core/core_ir.c \
+            src/core/core_lower.c \
+            tests/compiler/c0/m131_zero_size_record_subscript.c
           git diff --cached --quiet && { echo 'no M131 semantic changes'; exit 1; }
-          git commit -m 'frontend: allow zero-size pointer arithmetic stride'
+          git commit -m 'core: support zero-stride pointer offsets'
           git push origin HEAD:refactor/declaration-sema-v1
 
       - name: Persist M131 results
@@ -183,14 +188,6 @@ jobs:
           name: core-m131-zero-size-stride-${{ github.sha }}
           path: |
             build/m131-product-regression/**
-            build/m131-product-focused/batch-results.json
-            build/m131-product-focused/frontier-summary.json
-            build/m131-product-focused/reason-summary.txt
-            build/m131-product-focused/minic-stderr/**
-            build/m131-product-full500/batch-results.json
-            build/m131-product-full500/frontier-summary.json
-            build/m131-product-full500/reason-summary.txt
-            build/m131-product-full500/progress-summary.json
-            build/m131-product-full500/progress-summary.txt
-            build/m131-product-full500/minic-stderr/**
+            build/m131-product-focused/**
+            build/m131-product-full500/**
           if-no-files-found: warn
