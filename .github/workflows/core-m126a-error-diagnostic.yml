@@ -27,11 +27,12 @@ jobs:
           test "${{ steps.linux-corpus-cache.outputs.cache-hit }}" = true
           test -s build/linux-focus-corpus/selected-tus.txt
 
-      - name: Apply M126A plus diagnostic
+      - name: Apply M126A plus transactional fix and diagnostic
         shell: bash
         run: |
           set -Eeuo pipefail
           python3 tools/ci/apply-m126a-generic-structured-asm.py
+          python3 tools/ci/apply-m126a-transactional-lowering.py
           python3 tools/ci/apply-m126a-error-diagnostic.py
           git diff --check
 
