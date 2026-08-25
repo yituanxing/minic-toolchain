@@ -5871,12 +5871,12 @@ static MinicCoreLowerStatus lower_assignment(MinicCoreLowerContext *context,
     return lower_assignment_pair(context, target_id, source_id, statement->span, NULL);
 }
 
-/* M102_UNSIGNED_BIT_FIELD_SCALAR_UPDATE: prefix/postfix ++/-- on a
-   bit-field cannot use the ordinary addressable-lvalue update path. Evaluate
-   the member base once, extract the unsigned field from its storage unit,
-   apply the integer promotion and +/-1, convert the result back to the field
-   type, then merge it into the original storage unit with one RMW. */
-static MinicCoreLowerStatus lower_unsigned_bit_field_update(
+/* M102_UNSIGNED_BIT_FIELD_SCALAR_UPDATE / M154_SIGNED_BIT_FIELD_UPDATE_OWNER:
+   prefix/postfix ++/-- on an integer bit-field cannot use the ordinary
+   addressable-lvalue update path.  Keep the allocation-unit RMW unsigned,
+   but reconstruct signed field values from their declared width before
+   promotion and after truncating the updated value. */
+static MinicCoreLowerStatus lower_integer_bit_field_update(
     MinicCoreLowerContext *context,
     const MinicExpression *expression,
     const MinicExpression *operand,
@@ -5926,7 +5926,9 @@ static MinicCoreLowerStatus lower_unsigned_bit_field_update(
     if (record == NULL || field == NULL || !field->is_bit_field || base == NULL ||
         field->bit_width == 0U ||
         !minic_type_unqualified(operand->type, &value_type) ||
-        !minic_type_is_integer(value_type) || !minic_type_is_unsigned_integer(value_type) ||
+        !minic_type_is_integer(value_type) ||
+        (!core_unsigned_bit_field_semantic_type(context, value_type) &&
+         !minic_type_is_signed_integer(value_type)) ||
         minic_type_is_bool_integer(value_type) ||
         !minic_type_unqualified(expression->type, &expression_value_type) ||
         !minic_type_equal(expression_value_type, value_type) ||
@@ -6044,6 +6046,47 @@ static MinicCoreLowerStatus lower_unsigned_bit_field_update(
             return status;
         }
     }
+    /* M154_SIGNED_BIT_FIELD_UPDATE_OWNER: the extracted storage bits are an
+       unsigned bit pattern.  Reconstruct the signed field value before integer
+       promotion, matching M103 signed bit-field reads and preserving postfix
+       result semantics. */
+    if (minic_type_is_signed_integer(value_type) && field->bit_width < storage_width) {
+        MinicCoreValueId sign_shift;
+        uint64_t sign_shift_bits = (uint64_t)(storage_width - field->bit_width);
+
+        (void)memset(&instruction, 0, sizeof(instruction));
+        instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+        instruction.span = operand->span;
+        instruction.type = minic_type_unsigned_int();
+        instruction.result = MINIC_CORE_VALUE_INVALID;
+        (void)memcpy(&instruction.value.integer_value, &sign_shift_bits, sizeof(sign_shift_bits));
+        if (!minic_core_function_append_value_instruction(
+                context->function, context->block_id, &instruction, &sign_shift)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        (void)memset(&instruction, 0, sizeof(instruction));
+        instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT;
+        instruction.span = operand->span;
+        instruction.type = value_type;
+        instruction.result = MINIC_CORE_VALUE_INVALID;
+        instruction.value.binary.left = current_field;
+        instruction.value.binary.right = sign_shift;
+        if (!minic_core_function_append_value_instruction(
+                context->function, context->block_id, &instruction, &current_field)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        (void)memset(&instruction, 0, sizeof(instruction));
+        instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT;
+        instruction.span = operand->span;
+        instruction.type = value_type;
+        instruction.result = MINIC_CORE_VALUE_INVALID;
+        instruction.value.binary.left = current_field;
+        instruction.value.binary.right = sign_shift;
+        if (!minic_core_function_append_value_instruction(
+                context->function, context->block_id, &instruction, &current_field)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+    }
     status = append_integer_conversion(
         context, operand->span, promoted_type, current_field, &current_promoted);
     if (status != MINIC_CORE_LOWER_OK) {
@@ -6105,6 +6148,55 @@ static MinicCoreLowerStatus lower_unsigned_bit_field_update(
         instruction.value.binary.right = constant;
         if (!minic_core_function_append_value_instruction(
                 context->function, context->block_id, &instruction, &field_storage)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+    }
+    /* Prefix update yields the value actually stored in the bit-field, not an
+       untruncated arithmetic temporary.  Rebuild that value from the masked
+       storage bits; signed fields then use the same width sign extension. */
+    if (minic_type_equal(storage_type, value_type)) {
+        updated_value = field_storage;
+    } else {
+        status = append_integer_conversion(
+            context, expression->span, value_type, field_storage, &updated_value);
+        if (status != MINIC_CORE_LOWER_OK) {
+            return status;
+        }
+    }
+    if (minic_type_is_signed_integer(value_type) && field->bit_width < storage_width) {
+        MinicCoreValueId sign_shift;
+        uint64_t sign_shift_bits = (uint64_t)(storage_width - field->bit_width);
+
+        (void)memset(&instruction, 0, sizeof(instruction));
+        instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+        instruction.span = expression->span;
+        instruction.type = minic_type_unsigned_int();
+        instruction.result = MINIC_CORE_VALUE_INVALID;
+        (void)memcpy(&instruction.value.integer_value, &sign_shift_bits, sizeof(sign_shift_bits));
+        if (!minic_core_function_append_value_instruction(
+                context->function, context->block_id, &instruction, &sign_shift)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        (void)memset(&instruction, 0, sizeof(instruction));
+        instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT;
+        instruction.span = expression->span;
+        instruction.type = value_type;
+        instruction.result = MINIC_CORE_VALUE_INVALID;
+        instruction.value.binary.left = updated_value;
+        instruction.value.binary.right = sign_shift;
+        if (!minic_core_function_append_value_instruction(
+                context->function, context->block_id, &instruction, &updated_value)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        (void)memset(&instruction, 0, sizeof(instruction));
+        instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT;
+        instruction.span = expression->span;
+        instruction.type = value_type;
+        instruction.result = MINIC_CORE_VALUE_INVALID;
+        instruction.value.binary.left = updated_value;
+        instruction.value.binary.right = sign_shift;
+        if (!minic_core_function_append_value_instruction(
+                context->function, context->block_id, &instruction, &updated_value)) {
             return MINIC_CORE_LOWER_ERROR;
         }
     }
@@ -6241,7 +6333,7 @@ static MinicCoreLowerStatus lower_scalar_update(MinicCoreLowerContext *context,
             minic_c0_record_field(update_record, operand->value.member.field_index);
 
         if (update_field != NULL && update_field->is_bit_field) {
-            return lower_unsigned_bit_field_update(
+            return lower_integer_bit_field_update(
                 context, expression, operand, increment, prefix, value_id);
         }
     }
