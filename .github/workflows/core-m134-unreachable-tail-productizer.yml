@@ -84,7 +84,7 @@ jobs:
           rc=$?
           set -e
           test "$rc" -ne 0
-          grep -F 'Core IR shadow does not yet support function' "$work/nested-label.stderr" >/dev/null
+          grep -F 'Core IR shadow lowering failed for function' "$work/nested-label.stderr" >/dev/null
           printf '%s\n' 'CORE_M134_STRICT_REGRESSION unreachable-tail=PASS nested-label=FAIL-CLOSED'
 
       - name: Replay M134 focused frontier
